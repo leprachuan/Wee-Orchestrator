@@ -1,0 +1,23 @@
+# Test configuration for n8n-copilot-shim
+# This file defines test settings and behavior
+
+# Test discovery pattern
+TEST_PATTERN=test_*.py
+
+# Test directory
+TEST_DIR=tests
+
+# Minimum Python version required for tests
+MIN_PYTHON_VERSION=3.8
+
+# Enable verbose output by default (set to 'true' or 'false')
+VERBOSE=false
+
+# Generate coverage reports (set to 'true' or 'false')
+COVERAGE=false
+
+# Stop on first failure (set to 'true' or 'false')
+FAIL_FAST=false
+
+# Test timeout in seconds (0 = no timeout)
+TEST_TIMEOUT=30

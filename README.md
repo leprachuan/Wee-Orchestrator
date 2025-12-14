@@ -11,6 +11,77 @@ This shim provides a flexible framework to:
 - Configure agents via JSON config files instead of hardcoding
 - Support multiple AI models and runtimes
 
+## Requirements
+
+This project requires one or more of the following AI CLI tools to be installed:
+
+### Claude Code CLI
+
+**Prerequisites:**
+- Node.js 18+ (for npm installation) OR native binary support
+- Anthropic API key for authentication
+
+**Installation:**
+
+Native binary (recommended):
+```bash
+curl -fsSL https://claude.ai/install.sh | bash
+```
+
+Or via npm:
+```bash
+npm install -g @anthropic-ai/claude-code
+```
+
+**Supported Systems:** macOS 10.15+, Linux (Ubuntu 20.04+/Debian 10+, Alpine), Windows 10+ (via WSL)
+
+**Reference:** [Claude Code Quickstart Documentation](https://code.claude.com/docs/en/quickstart)
+
+### GitHub Copilot CLI
+
+**Prerequisites:**
+- Node.js 22 or higher
+- Active GitHub Copilot subscription (Pro, Pro+, Business, or Enterprise plan)
+- GitHub account for authentication
+
+**Installation:**
+
+```bash
+npm install -g @github/copilot
+copilot  # Launch and authenticate
+```
+
+For authentication, use the `/login` command or set `GH_TOKEN` environment variable with a fine-grained PAT.
+
+**Supported Systems:** macOS, Linux, Windows (via WSL)
+
+**Reference:** [GitHub Copilot CLI Installation Guide](https://docs.github.com/en/copilot/how-tos/set-up/install-copilot-cli)
+
+### OpenCode CLI
+
+**Prerequisites:**
+- Node.js or compatible runtime
+
+**Installation (Recommended):**
+
+```bash
+curl -fsSL https://opencode.ai/install | bash
+```
+
+Or via npm:
+```bash
+npm i -g opencode-ai@latest
+```
+
+Alternative package managers:
+- Homebrew: `brew install opencode`
+- Scoop (Windows): `scoop bucket add extras && scoop install extras/opencode`
+- Arch Linux: `paru -S opencode-bin`
+
+**Supported Systems:** Windows, macOS, Linux
+
+**Reference:** [OpenCode Documentation](https://opencode.ai/docs/)
+
 ## Configuration
 
 ### Agent Configuration
@@ -180,14 +251,87 @@ Automatically removes CLI metadata from output:
 - Token usage statistics
 - Session headers and banners
 
+## Testing
+
+A comprehensive test suite is included to ensure code quality and prevent regressions when making changes.
+
+### Running Tests
+
+#### Quick Start
+
+```bash
+# Run all tests
+./run_tests.sh
+
+# Or using Python directly
+python3 -m unittest discover -s tests -p "test_*.py" -v
+```
+
+#### Test Options
+
+```bash
+# Run with verbose output
+./run_tests.sh -v
+
+# Run specific test class
+./run_tests.sh -t tests.test_agent_manager.TestSlashCommands
+
+# Generate coverage report
+./run_tests.sh -c
+```
+
+### Test Coverage
+
+The test suite includes 31 tests covering:
+
+- **Session Management** (5 tests) - Creating, resuming, and persisting sessions
+- **Agent Configuration** (4 tests) - Loading and managing agent configurations
+- **Slash Commands** (9 tests) - All interactive commands (`/help`, `/runtime`, `/model`, `/agent`, `/session`)
+- **Model Resolution** (5 tests) - Converting model names/aliases to full IDs
+- **Metadata Stripping** (3 tests) - Cleaning CLI output from different runtimes
+- **Agent Switching** (3 tests) - Changing agents and session context
+- **Session Existence** (2 tests) - Checking session state file existence
+
+### Test Results
+
+All tests pass with no external CLI dependencies required:
+
+```
+Ran 31 tests in 0.021s
+OK
+```
+
+Tests use mocking to isolate functionality and avoid:
+- Executing real CLI commands (Copilot, OpenCode, Claude)
+- Modifying user's home directory
+- Making real API calls
+
+### Adding Tests
+
+When adding new features to `agent_manager.py`:
+
+1. Add corresponding test cases to `tests/test_agent_manager.py`
+2. Run the full test suite to ensure no regressions
+3. Aim for high coverage of new functionality
+
+For detailed testing documentation, see [tests/README.md](tests/README.md).
+
 ## File Structure
 
 ```
 n8n-copilot-shim-1/
-├── agent_manager.py       # Main agent manager script
-├── agents.json            # Agent configuration (git-ignored)
-├── agents.example.json    # Example configuration template
-└── README.md              # This file
+├── agent_manager.py           # Main agent manager script
+├── agents.json                # Agent configuration (git-ignored)
+├── agents.example.json        # Example configuration template
+├── run_tests.sh               # Test runner script
+├── .testrc                    # Test configuration
+├── EXAMPLE_WORKFLOW.json      # N8N workflow example
+├── README.md                  # This file
+├── tests/
+│   ├── __init__.py            # Test package marker
+│   ├── test_agent_manager.py  # Comprehensive unit tests
+│   └── README.md              # Testing documentation
+└── .gitignore                 # Git configuration
 ```
 
 ## Architecture

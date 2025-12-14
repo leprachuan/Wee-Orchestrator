@@ -1,0 +1,124 @@
+{
+  "name": "Agent Manager Chat Workflow Example",
+  "description": "Example N8N workflow showing how to integrate the agent_manager.py script for a simple chat interface",
+  "nodes": [
+    {
+      "parameters": {
+        "options": {}
+      },
+      "id": "chat-trigger-id",
+      "name": "When chat message received",
+      "type": "@n8n/n8n-nodes-langchain.chatTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        -368,
+        80
+      ],
+      "webhookId": "agent-chat"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "output-field",
+              "name": "output",
+              "value": "={{ $json.stdout || $json.stderr || 'No response' }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "format-response-id",
+      "name": "Format Response",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        368,
+        -32
+      ]
+    },
+    {
+      "parameters": {
+        "workflowInputs": {
+          "values": [
+            {
+              "name": "chatInput"
+            },
+            {
+              "name": "sessionId"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        -368,
+        -128
+      ],
+      "id": "workflow-trigger-id",
+      "name": "When Executed by Another Workflow"
+    },
+    {
+      "parameters": {
+        "command": "=cd /opt/n8n-copilot-shim && git pull --quiet 2>/dev/null; \\\npython3 agent_manager.py \"{{ $json.chatInput }}\" \"{{ $json.sessionId }}\""
+      },
+      "id": "ssh-execute-id",
+      "name": "Agent Manager SSH",
+      "type": "n8n-nodes-base.ssh",
+      "typeVersion": 1,
+      "position": [
+        48,
+        -32
+      ],
+      "credentials": {
+        "sshPassword": "YOUR_SSH_CREDENTIAL_NAME"
+      }
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "When chat message received": {
+      "main": [
+        [
+          {
+            "node": "Agent Manager SSH",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "When Executed by Another Workflow": {
+      "main": [
+        [
+          {
+            "node": "Agent Manager SSH",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Agent Manager SSH": {
+      "main": [
+        [
+          {
+            "node": "Format Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
+  },
+  "tags": []
+}
