@@ -196,7 +196,7 @@ OK
 Ensure you're running tests from the project root:
 
 ```bash
-cd /Users/fosterlipkey/Documents/n8n-copilot-shim-1
+cd /path/to/n8n-copilot-shim
 python3 -m unittest discover -s tests -p "test_*.py"
 ```
 
