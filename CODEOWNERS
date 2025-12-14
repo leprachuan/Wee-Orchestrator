@@ -1,0 +1,8 @@
+# Default owners for entire repository
+* @leprachuan
+
+# Test files
+/tests/ @leprachuan
+
+# Documentation
+/*.md @leparchuan
