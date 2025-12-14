@@ -1,0 +1,24 @@
+{
+  "agents": [
+    {
+      "name": "devops",
+      "description": "DevOps and infrastructure management. Handles cluster management, deployments, and monitoring.",
+      "path": "/opt/MyHomeDevops"
+    },
+    {
+      "name": "family",
+      "description": "Family knowledge and recipes. Shared family documentation and cooking recipes.",
+      "path": "/opt/family_knowledge"
+    },
+    {
+      "name": "web-app",
+      "description": "Web application development project. Frontend and backend code for main web app.",
+      "path": "/home/user/projects/my-web-app"
+    },
+    {
+      "name": "ml-research",
+      "description": "Machine learning research projects. Data science experiments and model development.",
+      "path": "/home/user/projects/ml-research"
+    }
+  ]
+}
