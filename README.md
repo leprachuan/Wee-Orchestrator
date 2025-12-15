@@ -143,6 +143,65 @@ The system loads agents from `agents.json` or a custom config file. Each agent r
 - `description` (required): Brief human-readable description of the agent
 - `path` (required): Full path to the repository or project directory
 
+### Environment Configuration
+
+The default agent, model, and runtime can be customized via environment variables. This is useful for:
+- Different users having different defaults
+- Docker container configuration
+- CI/CD pipeline customization
+- Development vs. production setups
+
+**Available Environment Variables:**
+
+```bash
+# Default agent for new sessions
+COPILOT_DEFAULT_AGENT=orchestrator        # Default: orchestrator
+
+# Default model for new sessions  
+COPILOT_DEFAULT_MODEL=gpt-5-mini          # Default: gpt-5-mini
+
+# Default runtime for new sessions
+COPILOT_DEFAULT_RUNTIME=copilot           # Default: copilot
+```
+
+**Usage Examples:**
+
+```bash
+# Set orchestrator as default
+export COPILOT_DEFAULT_AGENT=orchestrator
+export COPILOT_DEFAULT_RUNTIME=copilot
+
+# Or set family agent with Claude runtime
+export COPILOT_DEFAULT_AGENT=family
+export COPILOT_DEFAULT_MODEL=claude-sonnet
+export COPILOT_DEFAULT_RUNTIME=claude
+
+# Run the agent
+python3 agent_manager.py "Your prompt" "session_id"
+```
+
+**Docker Example:**
+
+```dockerfile
+ENV COPILOT_DEFAULT_AGENT=orchestrator
+ENV COPILOT_DEFAULT_MODEL=gpt-5-mini
+ENV COPILOT_DEFAULT_RUNTIME=copilot
+```
+
+**Reference Configuration:**
+
+Copy `.env.example` to `.env` and customize:
+
+```bash
+cp .env.example .env
+# Edit .env with your defaults
+```
+
+When environment variables are not set, the system uses these hardcoded defaults:
+- Agent: `orchestrator`
+- Model: `gpt-5-mini`
+- Runtime: `copilot`
+
 ### Setup
 
 1. **Copy the agent manager script:**
