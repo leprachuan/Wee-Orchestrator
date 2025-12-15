@@ -19,6 +19,11 @@
       "name": "ml-research",
       "description": "Machine learning research projects. Data science experiments and model development.",
       "path": "/home/user/projects/ml-research"
+    },
+    {
+      "name": "n8n-copilot-shim",
+      "description": "N8N Copilot Shim - AI runtime orchestration and management. Supports multiple AI backends (Copilot, OpenCode, Claude, Gemini, CODEX) with unified session management.",
+      "path": "/opt/n8n-copilot-shim"
     }
   ]
 }
