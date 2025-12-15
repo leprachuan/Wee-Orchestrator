@@ -41,6 +41,15 @@ class SessionManager:
         ]
     }
 
+    # CODEX models configuration
+    CODEX_MODELS = {
+        'OpenAI Models': [
+            ('gpt-5.1-codex-max', 'GPT-5.1 Codex Max', ['gpt-5.1', 'codex-max']),
+            ('gpt-5-codex', 'GPT-5 Codex', ['gpt-5', 'codex']),
+            ('gpt-4-turbo', 'GPT-4 Turbo', ['gpt-4-turbo-preview', 'gpt-4']),
+        ]
+    }
+
     def __init__(self, config_file: str | None = None):
         # Copilot Paths
         self.copilot_home = Path.home() / ".copilot"
@@ -61,6 +70,10 @@ class SessionManager:
         self.gemini_home = Path.home() / ".gemini"
         self.gemini_session_dir = self.gemini_home / "sessions"
 
+        # CODEX Paths
+        self.codex_home = Path.home() / ".codex"
+        self.codex_session_dir = self.codex_home / "sessions"
+
         # Ensure directories exist
         self.copilot_home.mkdir(exist_ok=True)
         self.session_state_dir.mkdir(exist_ok=True)
@@ -69,6 +82,8 @@ class SessionManager:
         self.claude_home.mkdir(exist_ok=True)
         self.gemini_home.mkdir(exist_ok=True)
         self.gemini_session_dir.mkdir(exist_ok=True)
+        self.codex_home.mkdir(exist_ok=True)
+        self.codex_session_dir.mkdir(exist_ok=True)
 
         # Load agents from config file
         self.AGENTS = self._load_agents_config(config_file)
@@ -340,6 +355,14 @@ class SessionManager:
                         return model_id
             return None
 
+        if runtime == 'codex':
+            for category, models in self.CODEX_MODELS.items():
+                for model_id, desc, aliases in models:
+                    aliases_lower = [a.lower() for a in aliases]
+                    if name_lower == model_id.lower() or name_lower in aliases_lower:
+                        return model_id
+            return None
+
         all_models = []
         if runtime == 'opencode':
             models_by_provider = self.fetch_opencode_models()
@@ -437,6 +460,48 @@ class SessionManager:
                 ]):
                     continue
                 result.append(line)
+
+        elif runtime == 'codex':
+            skip_until_codex_marker = False
+            in_response_section = False
+            
+            for i, line in enumerate(lines):
+                line_lower = line.lower()
+                
+                # Skip header section (OpenAI Codex info and dashes)
+                if i == 0 and 'openai codex' in line_lower:
+                    skip_until_codex_marker = True
+                    continue
+                
+                # Skip everything until we see "codex" marker
+                if skip_until_codex_marker:
+                    if 'codex' in line_lower and i > 0:
+                        in_response_section = True
+                        skip_until_codex_marker = False
+                        # Skip the "codex" marker line itself
+                        continue
+                    elif '--------' in line or line.startswith('workdir:') or line.startswith('model:'):
+                        continue
+                    elif not line.strip():
+                        continue
+                    else:
+                        skip_until_codex_marker = False
+                        in_response_section = True
+                
+                # Skip metadata lines after we've started the response
+                if in_response_section and any(k in line_lower for k in [
+                    'tokens used:', 'mcp startup:', 'thinking', 'reasoning'
+                ]):
+                    continue
+                
+                # Skip trailing metadata section
+                if 'tokens used:' in line_lower:
+                    in_response_section = False
+                    continue
+                
+                # Append non-metadata lines
+                if line.strip() or (result and result[-1].strip()):
+                    result.append(line)
 
         # Remove trailing empty lines
         while result and not result[-1].strip():
@@ -587,6 +652,45 @@ class SessionManager:
         except subprocess.CalledProcessError as e:
             return f"Error: Gemini command failed with exit code {e.returncode}"
 
+    def run_codex(self, prompt: str, model: str, agent: str, session_id: str | None, resume: bool, n8n_session_id: str) -> str:
+        """Execute CODEX CLI"""
+        agent_dir = self.AGENTS.get(agent, self.AGENTS['devops'])['path']
+        context_prompt = f"[Session ID: {n8n_session_id}]\n\n{prompt}"
+        
+        if resume and session_id:
+            # Resume existing session
+            cmd = [
+                'codex',
+                'exec',
+                'resume',
+                session_id,
+                context_prompt
+            ]
+            print(f"[Session] Resuming CODEX session: {session_id}", file=sys.stderr)
+        else:
+            # Start new session
+            cmd = [
+                'codex',
+                'exec',
+                context_prompt,
+                '--dangerously-bypass-approvals-and-sandbox'
+            ]
+            print(f"[Session] Starting new CODEX session", file=sys.stderr)
+
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=120, cwd=agent_dir)
+            output = result.stdout + (result.stderr if result.stderr else "")
+            
+            if result.returncode != 0:
+                print(f"[Error] CODEX command failed (exit {result.returncode}): {output}", file=sys.stderr)
+                return f"Error: CODEX command failed: {output}"
+
+            return self.strip_metadata(output, 'codex')
+        except subprocess.TimeoutExpired:
+            return "Error: CODEX command timed out"
+        except subprocess.CalledProcessError as e:
+            return f"Error: CODEX command failed with exit code {e.returncode}"
+
     def session_exists(self, session_id: str, runtime: str) -> bool:
         """Check if session state exists for runtime"""
         if runtime == 'copilot':
@@ -599,6 +703,17 @@ class SessionManager:
             return path.exists()
         elif runtime == 'gemini':
             return (self.gemini_session_dir / f"{session_id}.json").exists()
+        elif runtime == 'codex':
+            # CODEX stores sessions in nested date-based directories
+            # Format: ~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl
+            # We check if any file exists with this session ID
+            try:
+                for session_file in self.codex_session_dir.glob('*/*/*/rollout-**.jsonl'):
+                    if session_id in session_file.name:
+                        return True
+            except Exception:
+                pass
+            return False
         return False
 
     def get_most_recent_session_id(self, runtime: str, agent: str = 'devops') -> str | None:
@@ -636,6 +751,17 @@ class SessionManager:
             elif runtime == 'gemini':
                 files = sorted(self.gemini_session_dir.glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True)
                 return files[0].stem if files else None
+            elif runtime == 'codex':
+                # CODEX stores sessions in nested date directories
+                # Filenames: rollout-YYYY-MM-DDTHH-MM-SS-SESSION_ID.jsonl
+                files = sorted(self.codex_session_dir.glob('*/*/*/rollout-*.jsonl'), key=lambda p: p.stat().st_mtime, reverse=True)
+                if files:
+                    # Extract session ID from filename (last part after last dash)
+                    filename = files[0].name
+                    # Format: rollout-2025-12-15T22-39-34-019b242b-476d-7f90-8bfa-4eb0c7095532.jsonl
+                    session_id = filename.split('-', 4)[-1].replace('.jsonl', '')
+                    return session_id
+                return None
         except Exception as e:
             print(f"Error getting recent session ID: {e}", file=sys.stderr)
             return None
@@ -678,13 +804,13 @@ class SessionManager:
         elif command == '/runtime':
             if not argument: return "Usage: /runtime <list|set|current>"
             if argument == 'list':
-                return "🤖 **Available Runtimes**\n\n• `copilot` (GitHub Copilot)\n• `opencode` (OpenCode CLI)\n• `claude` (Claude Code CLI)\n• `gemini` (Google Gemini CLI)"
+                return "🤖 **Available Runtimes**\n\n• `copilot` (GitHub Copilot)\n• `opencode` (OpenCode CLI)\n• `claude` (Claude Code CLI)\n• `gemini` (Google Gemini CLI)\n• `codex` (Codex CLI)"
             elif argument == 'current':
                 return f"🤖 **Current Runtime:** `{current_runtime}`"
             elif argument.startswith('set '):
                 new_runtime = argument[4:].strip().lower()
-                if new_runtime not in ['copilot', 'opencode', 'claude', 'gemini']:
-                    return f"Unknown runtime: '{new_runtime}'. Use 'copilot', 'opencode', 'claude', or 'gemini'."
+                if new_runtime not in ['copilot', 'opencode', 'claude', 'gemini', 'codex']:
+                    return f"Unknown runtime: '{new_runtime}'. Use 'copilot', 'opencode', 'claude', 'gemini', or 'codex'."
                 self.update_session_field(n8n_session_id, "runtime", new_runtime)
                 # When switching runtime, we should probably reset the model to a default for that runtime
                 default_model = "gpt-5-mini"  # Default fallback
@@ -692,6 +818,7 @@ class SessionManager:
                 elif new_runtime == 'opencode': default_model = "opencode/gpt-5-nano"
                 elif new_runtime == 'claude': default_model = "haiku"
                 elif new_runtime == 'gemini': default_model = "gemini-1.5-flash"
+                elif new_runtime == 'codex': default_model = "gpt-5.1-codex-max"
                 
                 self.update_session_field(n8n_session_id, "model", default_model)
                 return f"✓ Switched runtime to **{new_runtime}**. Model set to `{default_model}`."
@@ -725,15 +852,22 @@ class SessionManager:
                             out += f"  • `{model_id}`\n"
                     return out
                 elif current_runtime == 'claude':
-                     out = f"📋 **Available Models ({current_runtime})**\n\n"
-                     for cat, models in self.CLAUDE_MODELS.items():
-                         out += f"**{cat}:**\n"
-                         for mid, desc, _ in models:
-                             out += f"  • `{mid}` - {desc}\n"
-                     return out
+                    out = f"📋 **Available Models ({current_runtime})**\n\n"
+                    for cat, models in self.CLAUDE_MODELS.items():
+                        out += f"**{cat}:**\n"
+                        for mid, desc, _ in models:
+                            out += f"  • `{mid}` - {desc}\n"
+                    return out
                 elif current_runtime == 'gemini':
                     out = f"📋 **Available Models ({current_runtime})**\n\n"
                     for cat, models in self.GEMINI_MODELS.items():
+                        out += f"**{cat}:**\n"
+                        for mid, desc, _ in models:
+                            out += f"  • `{mid}` - {desc}\n"
+                    return out
+                elif current_runtime == 'codex':
+                    out = f"📋 **Available Models ({current_runtime})**\n\n"
+                    for cat, models in self.CODEX_MODELS.items():
                         out += f"**{cat}:**\n"
                         for mid, desc, _ in models:
                             out += f"  • `{mid}` - {desc}\n"
@@ -807,9 +941,9 @@ class SessionManager:
                      self.update_session_field(n8n_session_id, "session_id", new_id)
                      
         elif current_runtime == 'claude':
-             if can_resume:
+            if can_resume:
                 output = self.run_claude(prompt, model, agent, session_id, True, n8n_session_id)
-             else:
+            else:
                 output = self.run_claude(prompt, model, agent, session_id, False, n8n_session_id)
 
         elif current_runtime == 'gemini':
@@ -817,7 +951,17 @@ class SessionManager:
                 output = self.run_gemini(prompt, model, agent, session_id, True, n8n_session_id)
             else:
                 output = self.run_gemini(prompt, model, agent, session_id, False, n8n_session_id)
-        
+
+        elif current_runtime == 'codex':
+            if can_resume:
+                output = self.run_codex(prompt, model, agent, session_id, True, n8n_session_id)
+            else:
+                output = self.run_codex(prompt, model, agent, None, False, n8n_session_id)
+                # CODEX auto-generates session IDs, we need to find and map it
+                new_id = self.get_most_recent_session_id('codex', agent)
+                if new_id:
+                    self.update_session_field(n8n_session_id, "session_id", new_id)
+         
         return output
 
 def main():
