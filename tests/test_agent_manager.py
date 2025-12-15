@@ -9,6 +9,11 @@ Tests cover:
 - Model resolution and switching
 - Metadata stripping
 - Runtime management
+
+Environment Variables:
+- TEST_WITH_RUNTIMES: Set to "1" or "true" to run real runtime tests.
+  These tests require CLI tools (copilot, opencode, claude, gemini, codex)
+  to be installed and available in PATH. Default: disabled (safe for CI/CD)
 """
 
 import unittest
@@ -16,6 +21,8 @@ import tempfile
 import json
 import os
 import sys
+import shutil
+import subprocess
 from pathlib import Path
 from unittest.mock import Mock, patch, MagicMock
 
@@ -23,6 +30,29 @@ from unittest.mock import Mock, patch, MagicMock
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from agent_manager import SessionManager
+
+# Check if we should run tests that require actual CLI runtimes
+ENABLE_RUNTIME_TESTS = os.environ.get('TEST_WITH_RUNTIMES', '').lower() in ('1', 'true', 'yes')
+
+# Helper to skip tests based on runtime availability
+def requires_runtime(*runtimes):
+    """Decorator to skip test if runtime is not available or tests are disabled"""
+    def decorator(test_func):
+        def wrapper(*args, **kwargs):
+            if not ENABLE_RUNTIME_TESTS:
+                return unittest.skip("Runtime tests disabled. Set TEST_WITH_RUNTIMES=1 to enable.")(test_func)(*args, **kwargs)
+            
+            for runtime in runtimes:
+                if not shutil.which(runtime):
+                    return unittest.skip(f"Runtime '{runtime}' not found in PATH")(test_func)(*args, **kwargs)
+            
+            return test_func(*args, **kwargs)
+        return wrapper
+    return decorator
+
+def has_runtime(runtime):
+    """Check if a runtime CLI tool is available"""
+    return shutil.which(runtime) is not None
 
 
 class TestSessionManager(unittest.TestCase):
@@ -593,5 +623,313 @@ class TestGeminiSupport(unittest.TestCase):
         self.assertEqual(session_data["model"], "gemini-1.5-pro")
 
 
+class TestRealRuntimeExecution(unittest.TestCase):
+    """Test actual CLI runtime execution (requires runtimes to be installed)
+    
+    These tests are only run when TEST_WITH_RUNTIMES=1 environment variable is set.
+    This allows safe CI/CD runs without requiring all runtimes to be available.
+    """
+
+    def setUp(self):
+        """Set up test environment with real home directories"""
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.temp_path = Path(self.temp_dir.name)
+        
+        # Create test agent directories
+        self.test_agent_dir = self.temp_path / "test_agent"
+        self.test_agent_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Create agents config
+        self.agents_config = {
+            "agents": [
+                {
+                    "name": "test_agent",
+                    "description": "Test agent for runtime execution",
+                    "path": str(self.test_agent_dir)
+                }
+            ]
+        }
+        self.config_file = self.temp_path / "agents.json"
+        with open(self.config_file, 'w') as f:
+            json.dump(self.agents_config, f)
+        
+        self.patcher = patch('agent_manager.Path.home')
+        self.mock_home = self.patcher.start()
+        self.mock_home.return_value = self.temp_path
+        
+        self.manager = SessionManager(str(self.config_file))
+
+    def tearDown(self):
+        """Clean up"""
+        self.patcher.stop()
+        self.temp_dir.cleanup()
+
+    @requires_runtime('copilot')
+    def test_copilot_simple_prompt(self):
+        """Test executing a simple prompt with Copilot CLI"""
+        self.manager.execute("/runtime set copilot", "test_copilot")
+        
+        # Execute a simple prompt
+        result = self.manager.execute("Say hello", "test_copilot")
+        
+        # Should return something (not error)
+        self.assertIsNotNone(result)
+        self.assertGreater(len(result), 0)
+        # Should not be an error message
+        self.assertNotIn("Error:", result)
+
+    @requires_runtime('opencode')
+    def test_opencode_simple_prompt(self):
+        """Test executing a simple prompt with OpenCode CLI"""
+        self.manager.execute("/runtime set opencode", "test_opencode")
+        
+        # Execute a simple prompt
+        result = self.manager.execute("Say hello", "test_opencode")
+        
+        # Should return something (not error)
+        self.assertIsNotNone(result)
+        self.assertGreater(len(result), 0)
+        # Should not be an error message
+        self.assertNotIn("Error:", result)
+
+    @requires_runtime('claude')
+    def test_claude_simple_prompt(self):
+        """Test executing a simple prompt with Claude CLI"""
+        self.manager.execute("/runtime set claude", "test_claude")
+        
+        # Execute a simple prompt
+        result = self.manager.execute("Say hello", "test_claude")
+        
+        # Should return something (not error)
+        self.assertIsNotNone(result)
+        self.assertGreater(len(result), 0)
+        # Should not be an error message
+        self.assertNotIn("Error:", result)
+
+    @requires_runtime('gemini')
+    def test_gemini_simple_prompt(self):
+        """Test executing a simple prompt with Gemini CLI"""
+        self.manager.execute("/runtime set gemini", "test_gemini")
+        
+        # Execute a simple prompt
+        result = self.manager.execute("Say hello", "test_gemini")
+        
+        # Should return something (not error)
+        self.assertIsNotNone(result)
+        self.assertGreater(len(result), 0)
+        # Should not be an error message
+        self.assertNotIn("Error:", result)
+
+    @requires_runtime('codex')
+    def test_codex_simple_prompt(self):
+        """Test executing a simple prompt with CODEX CLI"""
+        self.manager.execute("/runtime set codex", "test_codex")
+        
+        # Execute a simple prompt
+        result = self.manager.execute("Say hello", "test_codex")
+        
+        # Should return something (not error)
+        self.assertIsNotNone(result)
+        self.assertGreater(len(result), 0)
+        # Should not be an error message
+        self.assertNotIn("Error:", result)
+
+
+class TestRuntimeIntegration(unittest.TestCase):
+    """Test runtime switching and session management with real CLIs"""
+
+    def setUp(self):
+        """Set up test environment"""
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.temp_path = Path(self.temp_dir.name)
+        
+        self.test_agent_dir = self.temp_path / "test_agent"
+        self.test_agent_dir.mkdir(parents=True, exist_ok=True)
+        
+        self.agents_config = {
+            "agents": [
+                {
+                    "name": "test_agent",
+                    "description": "Test agent",
+                    "path": str(self.test_agent_dir)
+                }
+            ]
+        }
+        self.config_file = self.temp_path / "agents.json"
+        with open(self.config_file, 'w') as f:
+            json.dump(self.agents_config, f)
+        
+        self.patcher = patch('agent_manager.Path.home')
+        self.mock_home = self.patcher.start()
+        self.mock_home.return_value = self.temp_path
+        
+        self.manager = SessionManager(str(self.config_file))
+
+    def tearDown(self):
+        """Clean up"""
+        self.patcher.stop()
+        self.temp_dir.cleanup()
+
+    @requires_runtime('copilot')
+    def test_runtime_switching_with_copilot(self):
+        """Test switching between runtimes with actual Copilot available"""
+        # Start with copilot
+        self.manager.execute("/runtime set copilot", "test_switch")
+        session_data = self.manager.get_or_create_session_data("test_switch")
+        self.assertEqual(session_data["runtime"], "copilot")
+        
+        # Switch to another runtime if available
+        if has_runtime('claude'):
+            self.manager.execute("/runtime set claude", "test_switch")
+            session_data = self.manager.get_or_create_session_data("test_switch")
+            self.assertEqual(session_data["runtime"], "claude")
+
+    @requires_runtime('copilot', 'opencode')
+    def test_multi_runtime_session_isolation(self):
+        """Test that switching between runtimes maintains session isolation"""
+        # Create two different sessions with different runtimes
+        self.manager.execute("/runtime set copilot", "copilot_session")
+        self.manager.execute("/runtime set opencode", "opencode_session")
+        
+        # Verify they are isolated
+        copilot_data = self.manager.get_or_create_session_data("copilot_session")
+        opencode_data = self.manager.get_or_create_session_data("opencode_session")
+        
+        self.assertEqual(copilot_data["runtime"], "copilot")
+        self.assertEqual(opencode_data["runtime"], "opencode")
+        self.assertNotEqual(copilot_data["session_id"], opencode_data["session_id"])
+
+    @requires_runtime('copilot')
+    def test_session_resumption_with_real_cli(self):
+        """Test that sessions can be created and tracked with real CLI"""
+        # Execute a prompt to create a real session
+        result = self.manager.execute("List current directory files", "test_resume")
+        
+        # Session should have been created
+        session_data = self.manager.get_or_create_session_data("test_resume")
+        self.assertIn("session_id", session_data)
+        self.assertIsNotNone(session_data["session_id"])
+        
+        # Result should not be empty
+        self.assertGreater(len(result), 0)
+
+    @requires_runtime('copilot')
+    def test_metadata_stripping_with_real_output(self):
+        """Test that metadata stripping works with real CLI output"""
+        # Execute a simple prompt
+        result = self.manager.execute("Print 'Hello'", "test_metadata")
+        
+        # Should not contain CLI metadata markers
+        self.assertNotIn("Total usage est:", result)
+        self.assertNotIn("Total duration", result)
+        
+        # Should contain actual response
+        self.assertGreater(len(result), 0)
+
+
+class TestCapabilityDiscovery(unittest.TestCase):
+    """Test dynamic capability discovery feature"""
+
+    def setUp(self):
+        """Set up test environment"""
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.temp_path = Path(self.temp_dir.name)
+        
+        self.agents_config = {
+            "agents": [
+                {
+                    "name": "infrastructure",
+                    "description": "Infrastructure and DevOps management",
+                    "path": "/tmp/infra"
+                },
+                {
+                    "name": "data_science",
+                    "description": "Data analysis and ML experimentation",
+                    "path": "/tmp/data_sci"
+                },
+                {
+                    "name": "documentation",
+                    "description": "Knowledge and documentation management",
+                    "path": "/tmp/docs"
+                }
+            ]
+        }
+        self.config_file = self.temp_path / "agents.json"
+        with open(self.config_file, 'w') as f:
+            json.dump(self.agents_config, f)
+        
+        self.manager = SessionManager(str(self.config_file))
+
+    def tearDown(self):
+        """Clean up"""
+        self.temp_dir.cleanup()
+
+    def test_capabilities_command(self):
+        """Test /capabilities command displays all agents"""
+        result = self.manager.execute("/capabilities", "test_cap")
+        
+        self.assertIn("Orchestrator Capabilities", result)
+        self.assertIn("infrastructure", result)
+        self.assertIn("data_science", result)
+        self.assertIn("documentation", result)
+        self.assertIn("Infrastructure and DevOps", result)
+
+    def test_capabilities_include_descriptions(self):
+        """Test that capabilities include agent descriptions"""
+        result = self.manager.execute("/capabilities", "test_cap")
+        
+        self.assertIn("Infrastructure and DevOps management", result)
+        self.assertIn("Data analysis and ML experimentation", result)
+        self.assertIn("Knowledge and documentation management", result)
+
+    def test_capabilities_dynamic_discovery(self):
+        """Test that capabilities are dynamically discovered from agents.json"""
+        capabilities = self.manager.get_capabilities()
+        
+        # Should include all agents
+        self.assertIn("infrastructure", capabilities)
+        self.assertIn("data_science", capabilities)
+        self.assertIn("documentation", capabilities)
+        
+        # Should include their descriptions
+        self.assertIn("Infrastructure and DevOps", capabilities)
+
+    def test_capabilities_empty_agents(self):
+        """Test capabilities when no agents are configured"""
+        empty_config = {
+            "agents": []
+        }
+        config_file = self.temp_path / "empty.json"
+        with open(config_file, 'w') as f:
+            json.dump(empty_config, f)
+        
+        manager = SessionManager(str(config_file))
+        result = manager.execute("/capabilities", "test_empty")
+        
+        self.assertIn("No agents", result)
+
+    def test_help_includes_capabilities_command(self):
+        """Test that /help includes the /capabilities command"""
+        result = self.manager.execute("/help", "test_help")
+        
+        self.assertIn("/capabilities", result)
+        self.assertIn("Show what the orchestrator can help with", result)
+
+
 if __name__ == '__main__':
+    # Print test configuration info
+    if ENABLE_RUNTIME_TESTS:
+        print("\n=== TEST CONFIGURATION ===")
+        print("✓ Runtime tests ENABLED (TEST_WITH_RUNTIMES=1)")
+        print("\nAvailable runtimes:")
+        for runtime in ['copilot', 'opencode', 'claude', 'gemini', 'codex']:
+            available = "✓ AVAILABLE" if has_runtime(runtime) else "✗ NOT FOUND"
+            print(f"  {runtime:12} {available}")
+        print("========================\n")
+    else:
+        print("\n=== TEST CONFIGURATION ===")
+        print("✓ Runtime tests DISABLED (safe for CI/CD)")
+        print("  To enable: set TEST_WITH_RUNTIMES=1")
+        print("========================\n")
+    
     unittest.main()
