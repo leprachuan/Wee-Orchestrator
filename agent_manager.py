@@ -308,16 +308,15 @@ class SessionManager:
         if not self.AGENTS:
             return "No agents configured. Add agents to agents.json to extend capabilities."
         
-        out = "🤖 **Orchestrator Capabilities**\n\n"
-        out += "I can help with:\n\n"
-        
+        out = "# 🤖 Orchestrator Capabilities\n\n"
+        out += "I can help with the following agents:\n\n"
         for agent_name, agent_info in self.AGENTS.items():
             description = agent_info.get('description', 'No description')
-            out += f"• **{agent_name}**: {description}\n"
-        
-        out += "\n**How to use:**\n"
-        out += "Use `/agent set <agent_name>` to switch to an agent and work with it.\n"
-        out += "Use `/agent list` to see all available agents and their locations.\n"
+            path = agent_info.get('path', '')
+            out += f"### {agent_name}\n- **Description:** {description}\n- **Location:** `{path}`\n\n"
+        out += "#### How to use\n"
+        out += "- `/agent set <agent_name>` — switch to an agent and work with it.\n"
+        out += "- `/agent list` — show all available agents and their locations.\n"
         
         return out
 
@@ -997,9 +996,9 @@ You can mention an agent in your prompt and it will auto-delegate:
         elif command == '/agent':
             if not argument: return "Usage: /agent <list|set|current|invoke>"
             if argument == 'list':
-                out = "🤖 **Available Agents**\n\n"
+                out = "# 🤖 Available Agents\n\n"
                 for k, v in self.AGENTS.items():
-                    out += f"**{k}** - {v['description']}\n  Location: `{v['path']}`\n\n"
+                    out += f"### {k}\n{v['description']}\n\n**Location:** `{v['path']}`\n\n"
                 return out
             elif argument == 'current':
                 ag = session_data.get('agent', 'devops')
