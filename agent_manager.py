@@ -343,6 +343,54 @@ class SessionManager:
         print(f"[Agent] Switched to '{agent}' agent. New backend session: {new_backend_session_id}", file=sys.stderr)
         return f"✓ Switched to **{agent}** agent\n\n{agent_info['description']}\n\nLocation: `{agent_info['path']}`"
 
+    def detect_agent_delegation(self, prompt: str) -> tuple[str | None, str]:
+        """Detect if user is asking for a specific agent to help with something
+        
+        Patterns detected:
+        - "ask the family agent..."
+        - "have the devops agent..."
+        - "this is in the family agent"
+        - "in the projects agent..."
+        - "from the family agent..."
+        
+        Returns: (agent_name, modified_prompt) or (None, original_prompt)
+        """
+        prompt_lower = prompt.lower()
+        
+        # List of agent names to detect
+        agent_keywords = {
+            'family': ['family agent', 'family knowledge'],
+            'devops': ['devops agent', 'devops'],
+            'projects': ['projects agent', 'projects'],
+            'orchestrator': ['orchestrator agent', 'orchestrator']
+        }
+        
+        # Delegation phrases
+        delegation_phrases = [
+            'ask the', 'have the', 'this is in the', 'in the', 'from the',
+            'use the', 'check the', 'find in the', 'search the'
+        ]
+        
+        # Check if prompt contains delegation request
+        for agent_name, keywords in agent_keywords.items():
+            for keyword in keywords:
+                if keyword in prompt_lower:
+                    # Check if it's a delegation request
+                    for phrase in delegation_phrases:
+                        pattern = f"{phrase} {keyword}"
+                        if pattern in prompt_lower:
+                            # Extract just the actual question part
+                            # Remove the "ask the family agent" part
+                            modified = re.sub(
+                                rf'\b{phrase}\s+{re.escape(keyword)}[,.]?\s*',
+                                '',
+                                prompt,
+                                flags=re.IGNORECASE
+                            )
+                            return agent_name, modified
+        
+        return None, prompt
+
     def parse_slash_command(self, prompt: str) -> tuple[str | None, str | None]:
         """Parse slash commands from the prompt."""
         if not prompt.startswith('/'):
@@ -843,9 +891,26 @@ User Request:
 
     def execute(self, prompt: str, n8n_session_id: str) -> str:
         """Main execution logic"""
-        command, argument = self.parse_slash_command(prompt)
+        # Get session data first
         session_data = self.get_or_create_session_data(n8n_session_id)
         current_runtime = session_data.get("runtime", "copilot")
+        
+        # First check for explicit slash commands
+        command, argument = self.parse_slash_command(prompt)
+        
+        # If not a slash command, check for implicit agent delegation
+        if command is None:
+            delegated_agent, cleaned_prompt = self.detect_agent_delegation(prompt)
+            if delegated_agent and delegated_agent in self.AGENTS:
+                # User asked for specific agent help - auto-delegate
+                print(f"[Auto-Delegate] Detected request for '{delegated_agent}' agent", file=sys.stderr)
+                return self._execute_with_context(cleaned_prompt, {
+                    "session_id": str(uuid4()),
+                    "model": session_data.get("model", "gpt-5-mini"),
+                    "agent": delegated_agent,
+                    "runtime": current_runtime,
+                    "is_delegation": True
+                }, n8n_session_id)
 
         # --- Slash Commands ---
         
@@ -874,12 +939,20 @@ User Request:
 **Session:**
    • `/session reset` - Reset current session
 
+**Auto-Delegation:**
+You can mention an agent in your prompt and it will auto-delegate:
+   • \"ask the family agent for Parker's Christmas ideas\"
+   • \"have the devops agent check production status\"
+   • \"this is in the projects agent, find the auth code\"
+
 **Examples:**
    /capabilities
    /runtime set gemini
    /model set \"gpt-5.2\"
    /agent set \"family\"
    /agent invoke family \"Find Christmas ideas for Parker\"
+   ask the family agent what are Parker's Christmas ideas
+   have the devops agent check the server status
 """
 
         elif command == '/capabilities':
