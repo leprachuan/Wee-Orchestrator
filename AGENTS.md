@@ -22,6 +22,43 @@ The orchestrator:
 - Manages agent sessions and context
 - Tracks execution across multiple agents
 - Provides a unified interface for N8N
+- **Exposes subagent capabilities** to users
+- **Dynamically reports capabilities** based on configured agents
+
+## Orchestrator Capabilities
+
+The orchestrator can help with any task that its subagents can complete. When asked "What can you do?", the orchestrator will:
+
+1. **Discover available agents** from `agents.json`
+2. **Report subagent capabilities** based on agent descriptions
+3. **Route requests** to the most appropriate subagent
+4. **Execute multi-agent workflows** combining multiple subagent capabilities
+
+### Exposing Subagent Capabilities
+
+The orchestrator's capabilities are **dynamically determined** by the configured subagents. For example:
+
+```bash
+# Ask what the orchestrator can do
+"What can you help me with?"
+
+# The orchestrator responds with capabilities like:
+# - Infrastructure & Deployment (via devops agent)
+# - Knowledge & Documentation (via family agent)
+# - Software Development (via projects agent)
+# - Code Improvements & Evolution (via orchestrator agent)
+```
+
+### Agent-Specific Capabilities
+
+Each subagent has specialized capabilities:
+
+- **devops agent**: Infrastructure management, deployment, monitoring, cluster management
+- **family agent**: Knowledge management, documentation, recipes, planning
+- **projects agent**: Software development, code repositories, experimentation
+- **orchestrator agent**: Code improvements, self-evolution, feature additions
+
+Users can ask the orchestrator to help with any of these capabilities, and it will automatically route to the appropriate subagent.
 
 ## Agent Discovery
 
@@ -52,6 +89,20 @@ The system comes with these default agents (configured in `agents.json`):
 | `orchestrator` | Self-Improvement & Code Evolution | `/opt/n8n-copilot-shim` |
 
 **Note**: This table is for reference only. The actual agents are defined in `agents.json` and loaded dynamically.
+
+## Discovering Orchestrator Capabilities
+
+Since agents are dynamically loaded from `agents.json`, the orchestrator's capabilities are not hardcoded. Instead:
+
+1. **Query Available Agents**: Use `/agent list` to see all available subagents and their descriptions
+2. **Understand Each Agent's Purpose**: Each agent's description indicates what it can help with
+3. **Ask the Orchestrator**: Simply ask "What can you do?" or "What can you help me with?" and the orchestrator will report its capabilities based on available subagents
+4. **Route Your Request**: The orchestrator will understand your needs and route to the appropriate subagent
+
+This dynamic approach means:
+- **Adding new agents** automatically extends the orchestrator's capabilities
+- **Removing agents** reduces capabilities
+- **No documentation updates needed** when agents change (capabilities are discovered at runtime)
 
 ## Working with Agents
 
@@ -390,6 +441,8 @@ Create specialized agents for your workflows:
   "path": "/home/user/data-projects"
 }
 ```
+
+Once added to `agents.json`, the new agent's capabilities are immediately available to the orchestrator. Users asking "What can you do?" will automatically see that the orchestrator can now help with data science tasks.
 
 ## Summary
 
