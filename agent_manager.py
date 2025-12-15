@@ -529,10 +529,64 @@ class SessionManager:
 
         return '\n'.join(result)
 
+    def _execute_with_context(self, prompt: str, delegation_data: dict, n8n_session_id: str) -> str:
+        """Execute a prompt with specific agent context (for sub-agent delegation)"""
+        session_id = delegation_data.get("session_id")
+        model = delegation_data.get("model", "gpt-5-mini")
+        agent = delegation_data.get("agent", "devops")
+        runtime = delegation_data.get("runtime", "copilot")
+        
+        # Check if we can resume (for delegation, usually no)
+        can_resume = False
+        
+        output = ""
+        if runtime == 'copilot':
+            output = self.run_copilot(prompt, model, agent, None, False, n8n_session_id)
+        elif runtime == 'opencode':
+            output = self.run_opencode(prompt, model, agent, None, False, n8n_session_id)
+        elif runtime == 'claude':
+            output = self.run_claude(prompt, model, agent, session_id, False, n8n_session_id)
+        elif runtime == 'gemini':
+            output = self.run_gemini(prompt, model, agent, session_id, False, n8n_session_id)
+        elif runtime == 'codex':
+            output = self.run_codex(prompt, model, agent, None, False, n8n_session_id)
+        
+        return output
+
+    def build_agent_context_prompt(self, agent: str, prompt: str, n8n_session_id: str) -> str:
+        """Build a context-aware prompt that includes agent information"""
+        if agent not in self.AGENTS:
+            agent = 'devops'
+        
+        agent_info = self.AGENTS[agent]
+        agent_name = agent
+        agent_desc = agent_info.get('description', 'No description')
+        agent_path = agent_info.get('path', '')
+        
+        # Try to list files in agent directory for context
+        files_context = ""
+        try:
+            agent_path_obj = Path(agent_path)
+            if agent_path_obj.exists():
+                files = list(agent_path_obj.glob('*'))[:10]  # First 10 items
+                if files:
+                    files_list = "\n".join([f"  - {f.name}" for f in files])
+                    files_context = f"\n\nAvailable resources in this agent's workspace:\n{files_list}"
+        except Exception:
+            pass
+        
+        context = f"""[Session ID: {n8n_session_id}]
+[Agent Context: {agent_name}]
+{agent_desc}{files_context}
+
+User Request:
+{prompt}"""
+        return context
+
     def run_copilot(self, prompt: str, model: str, agent: str, session_id: str | None, resume: bool, n8n_session_id: str) -> str:
         """Execute Copilot CLI"""
         agent_dir = self.AGENTS.get(agent, self.AGENTS['devops'])['path']
-        context_prompt = f"[Session ID: {n8n_session_id}]\n\n{prompt}"
+        context_prompt = self.build_agent_context_prompt(agent, prompt, n8n_session_id)
         
         cmd = [
             '/usr/bin/copilot',
@@ -561,6 +615,7 @@ class SessionManager:
     def run_opencode(self, prompt: str, model: str, agent: str, session_id: str | None, resume: bool, n8n_session_id: str) -> str:
         """Execute OpenCode CLI"""
         agent_dir = self.AGENTS.get(agent, self.AGENTS['devops'])['path']
+        context_prompt = self.build_agent_context_prompt(agent, prompt, n8n_session_id)
         
         cmd = [
             str(self.opencode_bin),
@@ -574,7 +629,7 @@ class SessionManager:
         else:
             print(f"[Session] Starting new OpenCode session", file=sys.stderr)
 
-        cmd.append(prompt)
+        cmd.append(context_prompt)
 
         try:
             # Note: OpenCode wrapper used os.getcwd(), here we use agent_dir
@@ -605,7 +660,7 @@ class SessionManager:
     def run_claude(self, prompt: str, model: str, agent: str, session_id: str | None, resume: bool, n8n_session_id: str) -> str:
         """Execute Claude CLI"""
         agent_dir = self.AGENTS.get(agent, self.AGENTS['devops'])['path']
-        context_prompt = f"[Session ID: {n8n_session_id}]\n\n{prompt}"
+        context_prompt = self.build_agent_context_prompt(agent, prompt, n8n_session_id)
         
         cmd = [
             '/usr/bin/claude',
@@ -641,7 +696,7 @@ class SessionManager:
     def run_gemini(self, prompt: str, model: str, agent: str, session_id: str | None, resume: bool, n8n_session_id: str) -> str:
         """Execute Gemini CLI"""
         agent_dir = self.AGENTS.get(agent, self.AGENTS['devops'])['path']
-        context_prompt = f"[Session ID: {n8n_session_id}]\n\n{prompt}"
+        context_prompt = self.build_agent_context_prompt(agent, prompt, n8n_session_id)
         
         cmd = [
             'gemini',
@@ -675,7 +730,7 @@ class SessionManager:
     def run_codex(self, prompt: str, model: str, agent: str, session_id: str | None, resume: bool, n8n_session_id: str) -> str:
         """Execute CODEX CLI"""
         agent_dir = self.AGENTS.get(agent, self.AGENTS['devops'])['path']
-        context_prompt = f"[Session ID: {n8n_session_id}]\n\n{prompt}"
+        context_prompt = self.build_agent_context_prompt(agent, prompt, n8n_session_id)
         
         if resume and session_id:
             # Resume existing session
@@ -814,6 +869,7 @@ class SessionManager:
    • `/agent list` - Show available agents
    • `/agent set \"<agent>\"` - Switch agent
    • `/agent current` - Show current agent
+   • `/agent invoke \"<agent>\" \"<prompt>\"` - Delegate to sub-agent
 
 **Session:**
    • `/session reset` - Reset current session
@@ -823,6 +879,7 @@ class SessionManager:
    /runtime set gemini
    /model set \"gpt-5.2\"
    /agent set \"family\"
+   /agent invoke family \"Find Christmas ideas for Parker\"
 """
 
         elif command == '/capabilities':
@@ -851,7 +908,7 @@ class SessionManager:
                 return f"✓ Switched runtime to **{new_runtime}**. Model set to `{default_model}`."
         
         elif command == '/agent':
-            if not argument: return "Usage: /agent <list|set|current>"
+            if not argument: return "Usage: /agent <list|set|current|invoke>"
             if argument == 'list':
                 out = "🤖 **Available Agents**\n\n"
                 for k, v in self.AGENTS.items():
@@ -864,6 +921,35 @@ class SessionManager:
             elif argument.startswith('set '):
                 agent = argument[4:].strip().strip('"\'')
                 return self.set_agent(n8n_session_id, agent)
+            elif argument.startswith('invoke '):
+                # Parse: /agent invoke <agent_name> <prompt...>
+                invoke_args = argument[7:].strip()  # Remove 'invoke '
+                parts = invoke_args.split(None, 1)  # Split on first space
+                if len(parts) < 2:
+                    return "Usage: /agent invoke <agent_name> <prompt>"
+                
+                agent_name = parts[0].strip('"\'')
+                sub_prompt = parts[1]
+                
+                if agent_name not in self.AGENTS:
+                    available = ", ".join(self.AGENTS.keys())
+                    return f"Unknown agent: '{agent_name}'. Available: {available}"
+                
+                # Invoke the sub-agent with a new session
+                print(f"[Agent] Invoking sub-agent '{agent_name}' with delegation", file=sys.stderr)
+                sub_session_id = str(uuid4())
+                
+                # Save delegation context
+                delegation_data = {
+                    "session_id": sub_session_id,
+                    "model": session_data.get("model", "gpt-5-mini"),
+                    "agent": agent_name,
+                    "runtime": current_runtime,
+                    "is_delegation": True
+                }
+                
+                # Execute in sub-agent context
+                return self._execute_with_context(sub_prompt, delegation_data, n8n_session_id)
 
         elif command == '/model':
             if not argument: argument = 'list'  # Default to list if no argument provided
