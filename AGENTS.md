@@ -9,11 +9,11 @@ The n8n-copilot-shim is an **orchestration agent** that manages multiple special
 ```
 N8N Chat User
     ↓
-n8n-copilot-shim (Orchestrator)
+orchestrator (N8N Copilot Shim)
     ├→ devops (Infrastructure & Deployment)
     ├→ family (Knowledge & Documentation)
     ├→ projects (Software Development)
-    ├→ n8n-copilot-shim (Self-Improvement)
+    ├→ orchestrator (Self-Improvement)
     └→ [Custom Agents] (User-Defined)
 ```
 
@@ -49,7 +49,7 @@ The system comes with these default agents (configured in `agents.json`):
 | `devops` | Infrastructure & Deployment | `/opt/MyHomeDevops` |
 | `family` | Knowledge & Documentation | `/opt/family_knowledge` |
 | `projects` | Software Development | `//Users/fosterlipkey/Documents/projects` |
-| `n8n-copilot-shim` | Self-Improvement & Code Evolution | `/opt/n8n-copilot-shim` |
+| `orchestrator` | Self-Improvement & Code Evolution | `/opt/n8n-copilot-shim` |
 
 **Note**: This table is for reference only. The actual agents are defined in `agents.json` and loaded dynamically.
 
@@ -149,8 +149,8 @@ You can choose which AI runtime to use with agents:
 ### Example 3: Self-Improvement
 
 ```bash
-# Switch to n8n-copilot-shim agent
-/agent set n8n-copilot-shim
+# Switch to orchestrator agent
+/agent set orchestrator
 
 # Request code improvements
 "Add support for retry logic with exponential backoff in the run_codex() method"
@@ -174,7 +174,7 @@ You can create complex workflows by orchestrating multiple agents:
 "Update our infrastructure status: [results from step 1]"
 
 # 3. Improve code if needed
-/agent set n8n-copilot-shim
+/agent set orchestrator
 "Add monitoring for the new service we just deployed"
 ```
 
@@ -275,7 +275,7 @@ All agents support:
    - devops → infrastructure work
    - family → knowledge management
    - projects → software development
-   - n8n-copilot-shim → code improvements
+   - orchestrator → code improvements
 
 2. **Provide Clear Context**
    ```bash
@@ -346,7 +346,7 @@ if infrastructure_task:
 else if knowledge_task:
   /agent set family
 else if code_task:
-  /agent set n8n-copilot-shim
+  /agent set orchestrator
 ```
 
 ### Error Recovery

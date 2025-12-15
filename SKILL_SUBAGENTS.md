@@ -93,8 +93,8 @@ This will dynamically display all available subagents from your `agents.json` co
       "path": "/opt/family_knowledge"
     },
     {
-      "name": "n8n-copilot-shim",
-      "description": "N8N Copilot Shim - AI runtime orchestration",
+      "name": "orchestrator",
+      "description": "AI runtime orchestration and management",
       "path": "/opt/n8n-copilot-shim"
     }
   ]
@@ -126,8 +126,8 @@ You can create complex workflows by calling multiple subagents:
 /agent set family
 "Log this infrastructure update to our knowledge base"
 
-# 3. Switch to n8n-copilot-shim for code changes
-/agent set n8n-copilot-shim
+# 3. Switch to orchestrator for code changes
+/agent set orchestrator
 "Add support for the new service to agent_manager.py"
 ```
 
@@ -218,7 +218,7 @@ Route to different agents based on task type:
 /agent set family
 
 # Code improvement tasks
-/agent set n8n-copilot-shim
+/agent set orchestrator
 ```
 
 ### Parallel Agent Execution (Simulated)
@@ -234,7 +234,7 @@ While true parallel execution isn't available in this model, you can simulate it
 /agent set family
 "What family tasks are pending?"
 
-/agent set n8n-copilot-shim
+/agent set orchestrator
 "What code improvements have been requested?"
 
 # Aggregate results manually
@@ -269,7 +269,7 @@ This resets the current agent's session for a fresh start.
 1. **Clear Separation of Concerns**: Use agents for their intended purpose
    - devops agent → infrastructure tasks
    - family agent → knowledge management
-   - n8n-copilot-shim agent → code improvements
+   - orchestrator agent → code improvements
 
 2. **Document Context**: When switching agents, explain the context
    ```bash

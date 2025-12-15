@@ -21,8 +21,8 @@
       "path": "/home/user/projects/ml-research"
     },
     {
-      "name": "n8n-copilot-shim",
-      "description": "N8N Copilot Shim - AI runtime orchestration and management. Supports multiple AI backends (Copilot, OpenCode, Claude, Gemini, CODEX) with unified session management.",
+      "name": "orchestrator",
+      "description": "AI runtime orchestration and management. Supports multiple AI backends (Copilot, OpenCode, Claude, Gemini, CODEX) with unified session management and subagent coordination.",
       "path": "/opt/n8n-copilot-shim"
     }
   ]
