@@ -361,7 +361,6 @@ Please retry with a different approach."
 
 - `SKILL_SUBAGENTS.md` - Detailed subagent orchestration guide
 - `README.md` - Main project documentation
-- `GEMINI_QUICK_REFERENCE.md` - Gemini runtime reference
 - `agents.json` - Agent configuration file
 - `agent_manager.py` - Core implementation
 
