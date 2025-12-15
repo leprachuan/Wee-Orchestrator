@@ -238,7 +238,7 @@ class SessionManager:
         default_data = {
             "session_id": str(uuid4()),
             "model": "gpt-5-mini",
-            "agent": "devops",
+            "agent": "orchestrator",
             "runtime": "copilot"
         }
 
@@ -274,12 +274,12 @@ class SessionManager:
 
         if isinstance(session_map[n8n_session_id], str):
              # Convert old string format to dict
-            session_map[n8n_session_id] = {
-                "session_id": session_map[n8n_session_id],
-                "model": "gpt-5-mini",
-                "agent": "devops",
-                "runtime": "copilot"
-            }
+             session_map[n8n_session_id] = {
+                 "session_id": session_map[n8n_session_id],
+                 "model": "gpt-5-mini",
+                 "agent": "orchestrator",
+                 "runtime": "copilot"
+             }
 
         session_map[n8n_session_id][field] = value
         
@@ -581,7 +581,7 @@ class SessionManager:
         """Execute a prompt with specific agent context (for sub-agent delegation)"""
         session_id = delegation_data.get("session_id")
         model = delegation_data.get("model", "gpt-5-mini")
-        agent = delegation_data.get("agent", "devops")
+        agent = delegation_data.get("agent", "orchestrator")
         runtime = delegation_data.get("runtime", "copilot")
         
         # Check if we can resume (for delegation, usually no)
@@ -633,7 +633,7 @@ User Request:
 
     def run_copilot(self, prompt: str, model: str, agent: str, session_id: str | None, resume: bool, n8n_session_id: str) -> str:
         """Execute Copilot CLI"""
-        agent_dir = self.AGENTS.get(agent, self.AGENTS['devops'])['path']
+        agent_dir = self.AGENTS.get(agent, self.AGENTS['orchestrator'])['path']
         context_prompt = self.build_agent_context_prompt(agent, prompt, n8n_session_id)
         
         cmd = [
@@ -662,7 +662,7 @@ User Request:
 
     def run_opencode(self, prompt: str, model: str, agent: str, session_id: str | None, resume: bool, n8n_session_id: str) -> str:
         """Execute OpenCode CLI"""
-        agent_dir = self.AGENTS.get(agent, self.AGENTS['devops'])['path']
+        agent_dir = self.AGENTS.get(agent, self.AGENTS['orchestrator'])['path']
         context_prompt = self.build_agent_context_prompt(agent, prompt, n8n_session_id)
         
         cmd = [
@@ -707,7 +707,7 @@ User Request:
 
     def run_claude(self, prompt: str, model: str, agent: str, session_id: str | None, resume: bool, n8n_session_id: str) -> str:
         """Execute Claude CLI"""
-        agent_dir = self.AGENTS.get(agent, self.AGENTS['devops'])['path']
+        agent_dir = self.AGENTS.get(agent, self.AGENTS['orchestrator'])['path']
         context_prompt = self.build_agent_context_prompt(agent, prompt, n8n_session_id)
         
         cmd = [
@@ -743,7 +743,7 @@ User Request:
 
     def run_gemini(self, prompt: str, model: str, agent: str, session_id: str | None, resume: bool, n8n_session_id: str) -> str:
         """Execute Gemini CLI"""
-        agent_dir = self.AGENTS.get(agent, self.AGENTS['devops'])['path']
+        agent_dir = self.AGENTS.get(agent, self.AGENTS['orchestrator'])['path']
         context_prompt = self.build_agent_context_prompt(agent, prompt, n8n_session_id)
         
         cmd = [
@@ -777,7 +777,7 @@ User Request:
 
     def run_codex(self, prompt: str, model: str, agent: str, session_id: str | None, resume: bool, n8n_session_id: str) -> str:
         """Execute CODEX CLI"""
-        agent_dir = self.AGENTS.get(agent, self.AGENTS['devops'])['path']
+        agent_dir = self.AGENTS.get(agent, self.AGENTS['orchestrator'])['path']
         context_prompt = self.build_agent_context_prompt(agent, prompt, n8n_session_id)
         
         if resume and session_id:
@@ -847,7 +847,7 @@ User Request:
                 return files[0].stem if files else None
             elif runtime == 'opencode':
                 # For OpenCode, we list sessions in the agent's directory
-                agent_dir = self.AGENTS.get(agent, self.AGENTS['devops'])['path']
+                agent_dir = self.AGENTS.get(agent, self.AGENTS['orchestrator'])['path']
                 
                 # Use | cat to bypass pager by setting PAGER env var
                 env = os.environ.copy()
@@ -989,7 +989,7 @@ You can mention an agent in your prompt and it will auto-delegate:
                 return out
             elif argument == 'current':
                 ag = session_data.get('agent', 'devops')
-                info = self.AGENTS.get(ag, self.AGENTS['devops'])
+                info = self.AGENTS.get(ag, self.AGENTS['orchestrator'])
                 return f"Current Agent: **{ag}**\n{info['description']}"
             elif argument.startswith('set '):
                 agent = argument[4:].strip().strip('"\'')
@@ -1093,7 +1093,7 @@ You can mention an agent in your prompt and it will auto-delegate:
         # Prepare for execution
         session_id = session_data.get("session_id")
         model = session_data.get("model", "gpt-5-mini")
-        agent = session_data.get("agent", "devops")
+        agent = session_data.get("agent", "orchestrator")
         
         # Check if we can resume
         can_resume = self.session_exists(session_id, current_runtime) if session_id else False
