@@ -462,46 +462,48 @@ class SessionManager:
                 result.append(line)
 
         elif runtime == 'codex':
-            skip_until_codex_marker = False
-            in_response_section = False
+            # CODEX output format (when stripped of headers):
+            # [optional: user prompt content]
+            # [optional: thinking section]
+            # [optional: "codex" marker]
+            # [actual response content]
+            # tokens used: ###
+            
+            found_response = False
+            response_lines = []
             
             for i, line in enumerate(lines):
                 line_lower = line.lower()
                 
-                # Skip header section (OpenAI Codex info and dashes)
-                if i == 0 and 'openai codex' in line_lower:
-                    skip_until_codex_marker = True
-                    continue
-                
-                # Skip everything until we see "codex" marker
-                if skip_until_codex_marker:
-                    if 'codex' in line_lower and i > 0:
-                        in_response_section = True
-                        skip_until_codex_marker = False
-                        # Skip the "codex" marker line itself
-                        continue
-                    elif '--------' in line or line.startswith('workdir:') or line.startswith('model:'):
-                        continue
-                    elif not line.strip():
-                        continue
-                    else:
-                        skip_until_codex_marker = False
-                        in_response_section = True
-                
-                # Skip metadata lines after we've started the response
-                if in_response_section and any(k in line_lower for k in [
-                    'tokens used:', 'mcp startup:', 'thinking', 'reasoning'
+                # Skip all metadata/header markers
+                if any(marker in line_lower for marker in [
+                    'openai codex', '--------', 'workdir:', 'model:', 'provider:',
+                    'approval:', 'sandbox:', 'reasoning', 'session id:', 'mcp startup:',
+                    'thinking', 'user', 'codex'
                 ]):
                     continue
                 
-                # Skip trailing metadata section
-                if 'tokens used:' in line_lower:
-                    in_response_section = False
+                # Stop at tokens metadata
+                if 'tokens' in line_lower or 'used:' in line_lower:
+                    break
+                
+                # Skip empty lines before we find content
+                if not line.strip() and not found_response:
                     continue
                 
-                # Append non-metadata lines
-                if line.strip() or (result and result[-1].strip()):
-                    result.append(line)
+                # Track response content
+                if line.strip():
+                    found_response = True
+                    response_lines.append(line)
+                elif found_response:
+                    # Keep blank lines within response
+                    response_lines.append(line)
+            
+            # Clean up trailing empty lines
+            while response_lines and not response_lines[-1].strip():
+                response_lines.pop()
+            
+            result.extend(response_lines)
 
         # Remove trailing empty lines
         while result and not result[-1].strip():
