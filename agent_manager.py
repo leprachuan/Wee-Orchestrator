@@ -424,14 +424,16 @@ class SessionManager:
 
         elif runtime == 'gemini':
             for line in lines:
-                # Skip common Gemini CLI metadata patterns
+                # Skip Gemini CLI metadata patterns - be very specific to avoid false positives
                 line_lower = line.lower()
-                # Skip startup profiler messages, metrics, loaded credentials, and other metadata
-                if any(k in line_lower for k in [
-                    'session:', 'model:', 'tokens:', 'usage:',
-                    'startup', 'startupprofile', 'recording metric',
-                    'loaded cached credentials',
-                    'mcp', 'discover', 'authenticate'
+                
+                # Skip lines that are clearly debug/startup output
+                # Must match Gemini's specific debug format to avoid filtering user content
+                if any(pattern in line_lower for pattern in [
+                    '[startup]',                    # Gemini startup profiler messages
+                    'recording metric for phase:',  # Startup metrics
+                    'loaded cached credentials',    # Authentication logs
+                    'session:', 'model:', 'tokens:', 'usage:',  # Standard metadata
                 ]):
                     continue
                 result.append(line)
