@@ -14,6 +14,20 @@ from pathlib import Path
 from uuid import uuid4
 
 
+# Environment-based configuration
+def get_default_agent() -> str:
+    """Get default agent from environment or use orchestrator"""
+    return os.environ.get('COPILOT_DEFAULT_AGENT', 'orchestrator')
+
+def get_default_model() -> str:
+    """Get default model from environment or use gpt-5-mini"""
+    return os.environ.get('COPILOT_DEFAULT_MODEL', 'gpt-5-mini')
+
+def get_default_runtime() -> str:
+    """Get default runtime from environment or use copilot"""
+    return os.environ.get('COPILOT_DEFAULT_RUNTIME', 'copilot')
+
+
 class SessionManager:
     """Manages AI CLI sessions (Copilot & OpenCode) for N8N integration"""
 
@@ -237,9 +251,9 @@ class SessionManager:
         
         default_data = {
             "session_id": str(uuid4()),
-            "model": "gpt-5-mini",
-            "agent": "orchestrator",
-            "runtime": "copilot"
+            "model": get_default_model(),
+            "agent": get_default_agent(),
+            "runtime": get_default_runtime()
         }
 
         if n8n_session_id in session_map:
@@ -273,13 +287,13 @@ class SessionManager:
             session_map = self.load_session_map()
 
         if isinstance(session_map[n8n_session_id], str):
-             # Convert old string format to dict
-             session_map[n8n_session_id] = {
-                 "session_id": session_map[n8n_session_id],
-                 "model": "gpt-5-mini",
-                 "agent": "orchestrator",
-                 "runtime": "copilot"
-             }
+            # Convert old string format to dict
+            session_map[n8n_session_id] = {
+                "session_id": session_map[n8n_session_id],
+                "model": get_default_model(),
+                "agent": get_default_agent(),
+                "runtime": get_default_runtime()
+            }
 
         session_map[n8n_session_id][field] = value
         
