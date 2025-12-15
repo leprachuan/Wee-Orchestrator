@@ -380,3 +380,125 @@ A: The agent defaults to `/opt/MyHomeDevops`. You should fix the path in `agents
 **Q: Can agents access each other's directories?**
 A: Only through their working directory (cwd). Each agent's default context is its own directory.
 
+
+## Method 3: Natural Language Auto-Delegation (NEW!)
+
+The system now automatically detects when you mention a specific agent in your prompt and routes to that agent without requiring explicit commands.
+
+### Auto-Delegation Examples
+
+Simply mention the agent naturally in your request:
+
+```bash
+# Instead of: /agent invoke family "What are Parker's Christmas ideas?"
+You can say: "Find Parker's Christmas ideas this is in the family agent"
+
+# Instead of: /agent invoke devops "Check production status"
+You can say: "Have the devops agent check the production status"
+
+# Instead of: /agent invoke projects "Show authentication code"
+You can say: "Ask the projects agent for the authentication logic"
+```
+
+### Recognized Delegation Phrases
+
+The system recognizes these patterns:
+- "**ask the** [agent] ..."
+- "**have the** [agent] ..."
+- "**this is in the** [agent] ..."
+- "**in the** [agent] ..."
+- "**from the** [agent] ..."
+- "**use the** [agent] ..."
+- "**check the** [agent] ..."
+- "**find in the** [agent] ..."
+- "**search the** [agent] ..."
+
+### How It Works
+
+1. **Detection**: System scans your prompt for agent mentions
+2. **Extraction**: Identifies which agent you're referring to
+3. **Cleaning**: Removes the agent reference from your prompt
+4. **Delegation**: Routes to the appropriate sub-agent
+5. **Execution**: Runs your request in that agent's context
+
+Example flow:
+```
+User: "find Parker's Christmas ideas this is in the family agent"
+       ↓
+System detects: family agent
+Cleans prompt: "find Parker's Christmas ideas"
+       ↓
+Routes to family agent with cleaned prompt
+Family agent executes in /opt/family_knowledge
+       ↓
+Returns Parker's gift ideas
+```
+
+### Real-World Example
+
+Your original request that now works:
+```
+"ok can you please find what we have on the list for ideas for parker for 
+christmas 2025 this is in the family agent"
+```
+
+**What happens:**
+1. System detects "this is in the family agent"
+2. Routes to family agent automatically
+3. Family agent executes in `/opt/family_knowledge`
+4. Searches for Christmas 2025 list
+5. Finds Parker section
+6. Returns all gift ideas
+
+### Comparison of Methods
+
+| Method | Syntax | Best For |
+|--------|--------|----------|
+| Explicit Invoke | `/agent invoke family "..."` | Quick, structured commands |
+| Persistent Switch | `/agent set family` then `"..."` | Multiple related questions |
+| Natural Language | `"... this is in the family agent"` | Conversational, natural requests |
+
+### Benefits
+
+✓ **Natural**: Talk like you normally would
+✓ **Intuitive**: No special syntax required
+✓ **Flexible**: Multiple phrasings work
+✓ **Automatic**: No explicit commands needed
+✓ **Smart**: Cleans up the prompt automatically
+
+### Tips
+
+1. **Use Natural Phrases**
+   - Good: "ask the family agent for recipes"
+   - Good: "this is in the family agent"
+   - Works: "find ideas in the family agent"
+
+2. **Be Clear About the Agent**
+   - Good: "have the family agent find..."
+   - Avoid: "find this" (no agent mentioned)
+   - Avoid: "agent about..." (unclear which agent)
+
+3. **Combine with Other Methods**
+   - Start with auto-delegation for initial question
+   - Switch to explicit invoke for follow-ups if needed
+   - Mix approaches as needed
+
+### Troubleshooting
+
+**Issue**: Auto-delegation didn't work
+
+**Solution**: Make sure you clearly mention an agent:
+- ❌ "Find Christmas ideas" (no agent mentioned)
+- ✅ "Find Christmas ideas in the family agent"
+
+**Issue**: Wrong agent was selected
+
+**Solution**: Be explicit about which agent:
+- ❌ "this is in the agent" (ambiguous)
+- ✅ "this is in the family agent" (clear)
+
+**Issue**: Your prompt was modified incorrectly
+
+**Solution**: Use explicit `/agent invoke` instead:
+- Use: `/agent invoke family "Find Christmas ideas"`
+
