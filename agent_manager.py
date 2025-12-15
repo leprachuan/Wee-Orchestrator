@@ -289,6 +289,24 @@ class SessionManager:
 
         self.save_session_map(session_map)
 
+    def get_capabilities(self) -> str:
+        """Get available capabilities based on configured agents"""
+        if not self.AGENTS:
+            return "No agents configured. Add agents to agents.json to extend capabilities."
+        
+        out = "🤖 **Orchestrator Capabilities**\n\n"
+        out += "I can help with:\n\n"
+        
+        for agent_name, agent_info in self.AGENTS.items():
+            description = agent_info.get('description', 'No description')
+            out += f"• **{agent_name}**: {description}\n"
+        
+        out += "\n**How to use:**\n"
+        out += "Use `/agent set <agent_name>` to switch to an agent and work with it.\n"
+        out += "Use `/agent list` to see all available agents and their locations.\n"
+        
+        return out
+
     def set_agent(self, n8n_session_id: str, agent: str) -> str:
         """Switch to a different agent"""
         if agent not in self.AGENTS:
@@ -779,29 +797,36 @@ class SessionManager:
         if command == '/help':
             return """🆘 **Available Commands**
 
+**Orchestrator:**
+   • `/capabilities` - Show what the orchestrator can help with
+
 **Runtime Management:**
-  • `/runtime list` - Show available runtimes
-  • `/runtime set <copilot|opencode|claude|gemini>` - Switch runtime
-  • `/runtime current` - Show current runtime
+   • `/runtime list` - Show available runtimes
+   • `/runtime set <copilot|opencode|claude|gemini>` - Switch runtime
+   • `/runtime current` - Show current runtime
 
 **Model Management:**
-  • `/model list` - Show available models for current runtime
-  • `/model set \"<model>\"` - Switch model
-  • `/model current` - Show current model
+   • `/model list` - Show available models for current runtime
+   • `/model set \"<model>\"` - Switch model
+   • `/model current` - Show current model
 
 **Agent Management:**
-  • `/agent list` - Show available agents
-  • `/agent set \"<agent>\"` - Switch agent
-  • `/agent current` - Show current agent
+   • `/agent list` - Show available agents
+   • `/agent set \"<agent>\"` - Switch agent
+   • `/agent current` - Show current agent
 
 **Session:**
-  • `/session reset` - Reset current session
+   • `/session reset` - Reset current session
 
 **Examples:**
-  /runtime set gemini
-  /model set \"gpt-5.2\"
-  /agent set \"family\"
+   /capabilities
+   /runtime set gemini
+   /model set \"gpt-5.2\"
+   /agent set \"family\"
 """
+
+        elif command == '/capabilities':
+            return self.get_capabilities()
 
         elif command == '/runtime':
             if not argument: return "Usage: /runtime <list|set|current>"
