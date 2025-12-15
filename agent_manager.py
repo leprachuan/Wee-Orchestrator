@@ -30,6 +30,17 @@ class SessionManager:
 
     OPENCODE_MODELS = {}
 
+    # Gemini models configuration
+    # Note: These are common Gemini models; the CLI may support additional models
+    GEMINI_MODELS = {
+        'Google Models': [
+            ('gemini-2.0-flash-exp', 'Gemini 2.0 Flash (Experimental)', ['gemini-2.0-flash', 'flash-2.0']),
+            ('gemini-1.5-pro', 'Gemini 1.5 Pro', ['gemini-pro-1.5', 'pro-1.5']),
+            ('gemini-1.5-flash', 'Gemini 1.5 Flash', ['gemini-flash-1.5', 'flash-1.5']),
+            ('gemini-pro', 'Gemini Pro', ['gemini-1.0-pro']),
+        ]
+    }
+
     def __init__(self, config_file: str | None = None):
         # Copilot Paths
         self.copilot_home = Path.home() / ".copilot"
@@ -46,12 +57,18 @@ class SessionManager:
         self.claude_home = Path.home() / ".claude"
         self.claude_debug_dir = self.claude_home / "debug"
 
+        # Gemini Paths
+        self.gemini_home = Path.home() / ".gemini"
+        self.gemini_session_dir = self.gemini_home / "sessions"
+
         # Ensure directories exist
         self.copilot_home.mkdir(exist_ok=True)
         self.session_state_dir.mkdir(exist_ok=True)
         self.logs_dir.mkdir(exist_ok=True)
         self.opencode_home.mkdir(exist_ok=True)
         self.claude_home.mkdir(exist_ok=True)
+        self.gemini_home.mkdir(exist_ok=True)
+        self.gemini_session_dir.mkdir(exist_ok=True)
 
         # Load agents from config file
         self.AGENTS = self._load_agents_config(config_file)
@@ -315,6 +332,14 @@ class SessionManager:
                         return model_id
             return None
 
+        if runtime == 'gemini':
+            for category, models in self.GEMINI_MODELS.items():
+                for model_id, desc, aliases in models:
+                    aliases_lower = [a.lower() for a in aliases]
+                    if name_lower == model_id.lower() or name_lower in aliases_lower:
+                        return model_id
+            return None
+
         all_models = []
         if runtime == 'opencode':
             models_by_provider = self.fetch_opencode_models()
@@ -395,6 +420,14 @@ class SessionManager:
 
         elif runtime == 'claude':
             for line in lines:
+                result.append(line)
+
+        elif runtime == 'gemini':
+            for line in lines:
+                # Skip common Gemini CLI metadata patterns
+                line_lower = line.lower()
+                if any(k in line_lower for k in ['session:', 'model:', 'tokens:', 'usage:']):
+                    continue
                 result.append(line)
 
         # Remove trailing empty lines
@@ -512,6 +545,42 @@ class SessionManager:
         except subprocess.CalledProcessError as e:
             return f"Error: Claude command failed with exit code {e.returncode}"
 
+    def run_gemini(self, prompt: str, model: str, agent: str, session_id: str | None, resume: bool, n8n_session_id: str) -> str:
+        """Execute Gemini CLI"""
+        agent_dir = self.AGENTS.get(agent, self.AGENTS['devops'])['path']
+        context_prompt = f"[Session ID: {n8n_session_id}]\n\n{prompt}"
+        
+        cmd = [
+            'gemini',
+            'chat',
+            '--model', model,
+            '--prompt', context_prompt
+        ]
+
+        if resume and session_id:
+            cmd.extend(['--session', session_id])
+            print(f"[Session] Resuming Gemini session: {session_id}", file=sys.stderr)
+        elif session_id:
+            # Force specific session ID for new session
+            cmd.extend(['--session', session_id])
+            print(f"[Session] Starting new Gemini session: {session_id}", file=sys.stderr)
+        else:
+            print(f"[Session] Starting new Gemini session (auto-ID)", file=sys.stderr)
+
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=120, cwd=agent_dir)
+            output = result.stdout + (result.stderr if result.stderr else "")
+            
+            if result.returncode != 0:
+                print(f"[Error] Gemini command failed (exit {result.returncode}): {output}", file=sys.stderr)
+                return f"Error: Gemini command failed: {output}"
+
+            return self.strip_metadata(output, 'gemini')
+        except subprocess.TimeoutExpired:
+            return "Error: Gemini command timed out"
+        except subprocess.CalledProcessError as e:
+            return f"Error: Gemini command failed with exit code {e.returncode}"
+
     def session_exists(self, session_id: str, runtime: str) -> bool:
         """Check if session state exists for runtime"""
         if runtime == 'copilot':
@@ -522,6 +591,8 @@ class SessionManager:
             path = self.claude_debug_dir / f"{session_id}.txt"
             # print(f"DEBUG: checking claude session at {path} -> {path.exists()}", file=sys.stderr)
             return path.exists()
+        elif runtime == 'gemini':
+            return (self.gemini_session_dir / f"{session_id}.json").exists()
         return False
 
     def get_most_recent_session_id(self, runtime: str, agent: str = 'devops') -> str | None:
@@ -556,6 +627,9 @@ class SessionManager:
                         return line.split()[0]
                         
                 return None
+            elif runtime == 'gemini':
+                files = sorted(self.gemini_session_dir.glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True)
+                return files[0].stem if files else None
         except Exception as e:
             print(f"Error getting recent session ID: {e}", file=sys.stderr)
             return None
@@ -573,7 +647,7 @@ class SessionManager:
 
 **Runtime Management:**
   • `/runtime list` - Show available runtimes
-  • `/runtime set <copilot|opencode>` - Switch runtime
+  • `/runtime set <copilot|opencode|claude|gemini>` - Switch runtime
   • `/runtime current` - Show current runtime
 
 **Model Management:**
@@ -590,7 +664,7 @@ class SessionManager:
   • `/session reset` - Reset current session
 
 **Examples:**
-  /runtime set opencode
+  /runtime set gemini
   /model set \"gpt-5.2\"
   /agent set \"family\"
 """
@@ -598,18 +672,19 @@ class SessionManager:
         elif command == '/runtime':
             if not argument: return "Usage: /runtime <list|set|current>"
             if argument == 'list':
-                return "🤖 **Available Runtimes**\n\n• `copilot` (GitHub Copilot)\n• `opencode` (OpenCode CLI)\n• `claude` (Claude Code CLI)"
+                return "🤖 **Available Runtimes**\n\n• `copilot` (GitHub Copilot)\n• `opencode` (OpenCode CLI)\n• `claude` (Claude Code CLI)\n• `gemini` (Google Gemini CLI)"
             elif argument == 'current':
                 return f"🤖 **Current Runtime:** `{current_runtime}`"
             elif argument.startswith('set '):
                 new_runtime = argument[4:].strip().lower()
-                if new_runtime not in ['copilot', 'opencode', 'claude']:
-                    return f"Unknown runtime: '{new_runtime}'. Use 'copilot', 'opencode' or 'claude'."
+                if new_runtime not in ['copilot', 'opencode', 'claude', 'gemini']:
+                    return f"Unknown runtime: '{new_runtime}'. Use 'copilot', 'opencode', 'claude', or 'gemini'."
                 self.update_session_field(n8n_session_id, "runtime", new_runtime)
                 # When switching runtime, we should probably reset the model to a default for that runtime
                 if new_runtime == 'copilot': default_model = "gpt-5-mini"
                 elif new_runtime == 'opencode': default_model = "opencode/gpt-5-nano"
                 elif new_runtime == 'claude': default_model = "haiku"
+                elif new_runtime == 'gemini': default_model = "gemini-1.5-flash"
                 
                 self.update_session_field(n8n_session_id, "model", default_model)
                 return f"✓ Switched runtime to **{new_runtime}**. Model set to `{default_model}`."
@@ -649,6 +724,13 @@ class SessionManager:
                          for mid, desc, _ in models:
                              out += f"  • `{mid}` - {desc}\n"
                      return out
+                elif current_runtime == 'gemini':
+                    out = f"📋 **Available Models ({current_runtime})**\n\n"
+                    for cat, models in self.GEMINI_MODELS.items():
+                        out += f"**{cat}:**\n"
+                        for mid, desc, _ in models:
+                            out += f"  • `{mid}` - {desc}\n"
+                    return out
                 else:
                     models_dict = self.fetch_copilot_models()
                     out = f"📋 **Available Models ({current_runtime})**\n\n"
@@ -722,6 +804,12 @@ class SessionManager:
                 output = self.run_claude(prompt, model, agent, session_id, True, n8n_session_id)
              else:
                 output = self.run_claude(prompt, model, agent, session_id, False, n8n_session_id)
+
+        elif current_runtime == 'gemini':
+            if can_resume:
+                output = self.run_gemini(prompt, model, agent, session_id, True, n8n_session_id)
+            else:
+                output = self.run_gemini(prompt, model, agent, session_id, False, n8n_session_id)
         
         return output
 

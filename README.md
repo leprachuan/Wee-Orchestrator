@@ -1,11 +1,11 @@
 # n8n-copilot-shim
 
-A unified AI agent manager that bridges N8N workflows with multiple AI CLI tools (GitHub Copilot, OpenCode, Claude Code). Features session management, multi-agent support with dynamic configuration, and model switching.
+A unified AI agent manager that bridges N8N workflows with multiple AI CLI tools (GitHub Copilot, OpenCode, Claude Code, Google Gemini). Features session management, multi-agent support with dynamic configuration, and model switching.
 
 ## Overview
 
 This shim provides a flexible framework to:
-- Call AI CLIs (Copilot, OpenCode, Claude Code) from N8N workflows
+- Call AI CLIs (Copilot, OpenCode, Claude Code, Gemini) from N8N workflows
 - Maintain session affinity across multiple conversation turns
 - Switch between different agent repositories dynamically
 - Configure agents via JSON config files instead of hardcoding
@@ -81,6 +81,38 @@ Alternative package managers:
 **Supported Systems:** Windows, macOS, Linux
 
 **Reference:** [OpenCode Documentation](https://opencode.ai/docs/)
+
+### Google Gemini CLI
+
+**Prerequisites:**
+- Python 3.7 or higher
+- Google Cloud account with Gemini API access
+- Google API key for authentication
+
+**Installation:**
+
+```bash
+pip install google-generativeai
+# Or using the CLI wrapper
+pip install gemini-cli
+```
+
+**Authentication:**
+
+Set your API key as an environment variable:
+```bash
+export GOOGLE_API_KEY='your-api-key-here'
+```
+
+Or configure it in your shell profile:
+```bash
+echo 'export GOOGLE_API_KEY="your-api-key-here"' >> ~/.bashrc
+source ~/.bashrc
+```
+
+**Supported Systems:** Windows, macOS, Linux
+
+**Reference:** [Google Gemini API Documentation](https://ai.google.dev/tutorials/python_quickstart)
 
 ## Configuration
 
@@ -160,8 +192,8 @@ Interact with the agent manager using slash commands:
 
 #### Runtime Management
 ```
-/runtime list              # Show available runtimes (copilot, opencode, claude)
-/runtime set <runtime>     # Switch runtime (e.g., /runtime set claude)
+/runtime list              # Show available runtimes (copilot, opencode, claude, gemini)
+/runtime set <runtime>     # Switch runtime (e.g., /runtime set gemini)
 /runtime current           # Show current runtime
 ```
 
@@ -210,10 +242,11 @@ Sessions are automatically tracked and stored in:
 - **Copilot:** `~/.copilot/n8n-session-map.json`
 - **OpenCode:** `~/.opencode/n8n-session-map.json`
 - **Claude:** `~/.claude/` (debug directory)
+- **Gemini:** `~/.gemini/sessions/`
 
 Each N8N session ID is mapped to:
 - A unique backend session ID (for resuming AI CLI sessions)
-- Current runtime (copilot/opencode/claude)
+- Current runtime (copilot/opencode/claude/gemini)
 - Current model
 - Current agent
 
@@ -223,7 +256,7 @@ Session data persists across requests, allowing multi-turn conversations.
 
 When creating a new session:
 - **Runtime:** copilot (use `/runtime set` to change)
-- **Model:** gpt-5-mini (Copilot) / opencode/gpt-5-nano (OpenCode) / haiku (Claude)
+- **Model:** gpt-5-mini (Copilot) / opencode/gpt-5-nano (OpenCode) / haiku (Claude) / gemini-1.5-flash (Gemini)
 - **Agent:** devops (or first available agent from config)
 
 ## Advanced Features
@@ -366,10 +399,11 @@ The core class that manages:
   - `~/.copilot/session-state/`
   - `~/.local/share/opencode/storage/session/global/`
   - `~/.claude/debug/`
+  - `~/.gemini/sessions/`
 
 ### CLI not found
-- Ensure copilot, opencode, and claude binaries are in PATH or at expected locations
-- Check `/usr/bin/copilot`, `/usr/bin/claude`, `~/.opencode/bin/opencode`
+- Ensure copilot, opencode, claude, and gemini binaries are in PATH or at expected locations
+- Check `/usr/bin/copilot`, `/usr/bin/claude`, `~/.opencode/bin/opencode`, and `gemini` in PATH
 
 ## Migration from Original Script
 

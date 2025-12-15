@@ -479,5 +479,119 @@ class TestSessionExistence(unittest.TestCase):
         self.assertFalse(result)
 
 
+class TestGeminiSupport(unittest.TestCase):
+    """Test Gemini CLI support"""
+
+    def setUp(self):
+        """Set up test environment"""
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.temp_path = Path(self.temp_dir.name)
+
+        self.agents_config = {
+            "agents": [
+                {"name": "test_devops", "description": "Test DevOps", "path": "/tmp/test"}
+            ]
+        }
+        self.config_file = self.temp_path / "agents.json"
+        with open(self.config_file, 'w') as f:
+            json.dump(self.agents_config, f)
+
+        self.patcher = patch('agent_manager.Path.home')
+        self.mock_home = self.patcher.start()
+        self.mock_home.return_value = self.temp_path
+
+        self.manager = SessionManager(str(self.config_file))
+
+    def tearDown(self):
+        """Clean up"""
+        self.patcher.stop()
+        self.temp_dir.cleanup()
+
+    def test_gemini_models_defined(self):
+        """Test that Gemini models are properly defined"""
+        self.assertIn('Google Models', self.manager.GEMINI_MODELS)
+        models = self.manager.GEMINI_MODELS['Google Models']
+        self.assertGreater(len(models), 0)
+        
+        # Check structure of first model
+        model_id, desc, aliases = models[0]
+        self.assertIsInstance(model_id, str)
+        self.assertIsInstance(desc, str)
+        self.assertIsInstance(aliases, list)
+
+    def test_runtime_list_includes_gemini(self):
+        """Test that /runtime list includes gemini"""
+        result = self.manager.execute("/runtime list", "test_session")
+        self.assertIn("gemini", result.lower())
+
+    def test_runtime_set_gemini(self):
+        """Test switching to Gemini runtime"""
+        result = self.manager.execute("/runtime set gemini", "test_session")
+        self.assertIn("gemini", result.lower())
+        
+        # Verify it was set
+        session_data = self.manager.get_or_create_session_data("test_session")
+        self.assertEqual(session_data["runtime"], "gemini")
+        self.assertEqual(session_data["model"], "gemini-1.5-flash")
+
+    def test_get_gemini_model_by_name(self):
+        """Test resolving Gemini models by name"""
+        result = self.manager.get_model_from_name("gemini-1.5-flash", "gemini")
+        self.assertEqual(result, "gemini-1.5-flash")
+        
+        result = self.manager.get_model_from_name("gemini-pro", "gemini")
+        self.assertEqual(result, "gemini-pro")
+
+    def test_get_gemini_model_by_alias(self):
+        """Test resolving Gemini models by alias"""
+        result = self.manager.get_model_from_name("flash-1.5", "gemini")
+        self.assertEqual(result, "gemini-1.5-flash")
+        
+        result = self.manager.get_model_from_name("pro-1.5", "gemini")
+        self.assertEqual(result, "gemini-1.5-pro")
+
+    def test_gemini_session_directory_created(self):
+        """Test that Gemini session directory is created"""
+        gemini_session_dir = self.temp_path / ".gemini" / "sessions"
+        self.assertTrue(gemini_session_dir.exists())
+
+    def test_gemini_session_exists(self):
+        """Test session_exists for Gemini runtime"""
+        # Create a fake session file
+        gemini_session_dir = self.temp_path / ".gemini" / "sessions"
+        test_session_file = gemini_session_dir / "test-session-123.json"
+        test_session_file.write_text('{}')
+        
+        result = self.manager.session_exists("test-session-123", "gemini")
+        self.assertTrue(result)
+        
+        # Test non-existent session
+        result = self.manager.session_exists("nonexistent-session", "gemini")
+        self.assertFalse(result)
+
+    def test_model_list_gemini(self):
+        """Test /model list command for Gemini runtime"""
+        # Switch to Gemini runtime
+        self.manager.execute("/runtime set gemini", "test_session")
+        
+        # List models
+        result = self.manager.execute("/model list", "test_session")
+        self.assertIn("gemini", result.lower())
+        self.assertIn("Google Models", result)
+
+    def test_model_set_gemini(self):
+        """Test /model set command for Gemini runtime"""
+        # Switch to Gemini runtime
+        self.manager.execute("/runtime set gemini", "test_session")
+        
+        # Set a specific model
+        result = self.manager.execute('/model set "gemini-1.5-pro"', "test_session")
+        self.assertIn("gemini-1.5-pro", result)
+        
+        # Verify it was set
+        session_data = self.manager.get_or_create_session_data("test_session")
+        self.assertEqual(session_data["model"], "gemini-1.5-pro")
+
+
 if __name__ == '__main__':
     unittest.main()
