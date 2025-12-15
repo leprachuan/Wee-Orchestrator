@@ -426,7 +426,13 @@ class SessionManager:
             for line in lines:
                 # Skip common Gemini CLI metadata patterns
                 line_lower = line.lower()
-                if any(k in line_lower for k in ['session:', 'model:', 'tokens:', 'usage:']):
+                # Skip startup profiler messages, metrics, loaded credentials, and other metadata
+                if any(k in line_lower for k in [
+                    'session:', 'model:', 'tokens:', 'usage:',
+                    'startup', 'startupprofile', 'recording metric',
+                    'loaded cached credentials',
+                    'mcp', 'discover', 'authenticate'
+                ]):
                     continue
                 result.append(line)
 
