@@ -552,20 +552,18 @@ class SessionManager:
         
         cmd = [
             'gemini',
-            'chat',
-            '--model', model,
-            '--prompt', context_prompt
+            context_prompt
         ]
 
+        # Note: Gemini CLI appears to have model handling issues with specified model names
+        # For now, we use the default model and do not pass --model flag
+        # TODO: Investigate correct model names for --model flag with Gemini CLI
+
         if resume and session_id:
-            cmd.extend(['--session', session_id])
-            print(f"[Session] Resuming Gemini session: {session_id}", file=sys.stderr)
-        elif session_id:
-            # Force specific session ID for new session
-            cmd.extend(['--session', session_id])
-            print(f"[Session] Starting new Gemini session: {session_id}", file=sys.stderr)
+            cmd.extend(['--resume', 'latest'])
+            print(f"[Session] Resuming Gemini session (latest)", file=sys.stderr)
         else:
-            print(f"[Session] Starting new Gemini session (auto-ID)", file=sys.stderr)
+            print(f"[Session] Starting new Gemini session", file=sys.stderr)
 
         try:
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=120, cwd=agent_dir)
@@ -681,6 +679,7 @@ class SessionManager:
                     return f"Unknown runtime: '{new_runtime}'. Use 'copilot', 'opencode', 'claude', or 'gemini'."
                 self.update_session_field(n8n_session_id, "runtime", new_runtime)
                 # When switching runtime, we should probably reset the model to a default for that runtime
+                default_model = "gpt-5-mini"  # Default fallback
                 if new_runtime == 'copilot': default_model = "gpt-5-mini"
                 elif new_runtime == 'opencode': default_model = "opencode/gpt-5-nano"
                 elif new_runtime == 'claude': default_model = "haiku"
@@ -769,7 +768,7 @@ class SessionManager:
         agent = session_data.get("agent", "devops")
         
         # Check if we can resume
-        can_resume = self.session_exists(session_id, current_runtime)
+        can_resume = self.session_exists(session_id, current_runtime) if session_id else False
         
         output = ""
         if current_runtime == 'copilot':
