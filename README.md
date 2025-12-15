@@ -431,3 +431,32 @@ To migrate:
 1. Copy `agent_manager.py` to your environment
 2. Create `agents.json` with your agent definitions
 3. No code changes needed - same interface as before
+
+## Agent Orchestration
+
+This project supports multi-agent orchestration with dynamic agent discovery. See the comprehensive agent documentation:
+
+- **[AGENTS.md](./AGENTS.md)** - Agent orchestration overview and usage guide
+- **[SKILL_SUBAGENTS.md](./SKILL_SUBAGENTS.md)** - Detailed subagent management and advanced patterns
+- **[agents.json](./agents.json)** - Agent configuration file (controls available agents)
+
+### Quick Agent Start
+
+```bash
+# List available agents
+/agent list
+
+# Switch to an agent
+/agent set devops
+
+# Execute in agent context
+"Deploy the latest version"
+
+# Resume agent session
+"What's the status?"
+
+# Switch to different agent
+/agent set family
+```
+
+All agents are loaded dynamically from `agents.json`, enabling easy expansion and customization.
