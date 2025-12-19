@@ -1,0 +1,41 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "n8n-copilot-shim"
+version = "0.1.0"
+description = "A unified AI agent manager that bridges N8N workflows with multiple AI CLI tools"
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.8"
+authors = [
+    {name = "N8N Community", email = "support@n8n.io"}
+]
+keywords = ["n8n", "ai", "agent", "copilot", "opencode", "claude", "gemini"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Operating System :: OS Independent",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: System :: Shells",
+]
+
+[project.urls]
+Homepage = "https://github.com/n8n-io/n8n-copilot-shim"
+Documentation = "https://github.com/n8n-io/n8n-copilot-shim#readme"
+Repository = "https://github.com/n8n-io/n8n-copilot-shim.git"
+Issues = "https://github.com/n8n-io/n8n-copilot-shim/issues"
+
+[project.scripts]
+n8n-copilot-shim = "agent_manager:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["agent_manager.py"]
