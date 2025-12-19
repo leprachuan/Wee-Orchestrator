@@ -785,7 +785,12 @@ User Request:
         resume: bool,
         n8n_session_id: str,
     ) -> str:
-        """Execute Copilot CLI"""
+        """Execute Copilot CLI with full tool access
+        
+        Uses --allow-all-tools and --allow-all-paths to enable:
+        - Read/write/execute permissions for all files and directories
+        - All MCP tools and shell commands without approval prompts
+        """
         agent_dir = self.AGENTS.get(agent, self.AGENTS["orchestrator"])["path"]
         context_prompt = self.build_agent_context_prompt(agent, prompt, n8n_session_id)
 
@@ -794,6 +799,7 @@ User Request:
             "-p",
             context_prompt,
             "--allow-all-tools",
+            "--allow-all-paths",
             "--no-color",
             "--silent",
             "--model",
@@ -827,7 +833,15 @@ User Request:
         resume: bool,
         n8n_session_id: str,
     ) -> str:
-        """Execute OpenCode CLI"""
+        """Execute OpenCode CLI with full tool access
+        
+        OpenCode uses opencode.json for permission configuration.
+        By default, it should allow read/write/edit/bash execution.
+        The configuration file should be set up with:
+        - "edit": "allow"
+        - "write": "allow"
+        - "bash": "allow"
+        """
         agent_dir = self.AGENTS.get(agent, self.AGENTS["orchestrator"])["path"]
         context_prompt = self.build_agent_context_prompt(agent, prompt, n8n_session_id)
 
@@ -885,7 +899,14 @@ User Request:
         resume: bool,
         n8n_session_id: str,
     ) -> str:
-        """Execute Claude CLI"""
+        """Execute Claude CLI with full tool access
+        
+        Uses --permission-mode dontAsk (equivalent to bypassPermissions/YOLO mode) to:
+        - Auto-approve all file edits, writes, and reads
+        - Execute shell commands without approval
+        - Access web/network tools without prompts
+        Note: This is also known as YOLO mode in Claude Code
+        """
         agent_dir = self.AGENTS.get(agent, self.AGENTS["orchestrator"])["path"]
         context_prompt = self.build_agent_context_prompt(agent, prompt, n8n_session_id)
 
@@ -940,11 +961,19 @@ User Request:
         resume: bool,
         n8n_session_id: str,
     ) -> str:
-        """Execute Gemini CLI"""
+        """Execute Gemini CLI with full tool access
+        
+        Gemini CLI tools (read_file, write_file, run_shell_command) are enabled by default.
+        For maximum automation without prompts, use --yolo flag to auto-approve all actions.
+        This enables:
+        - Read/write file operations without confirmation
+        - Shell command execution without approval
+        - All built-in tools unrestricted access
+        """
         agent_dir = self.AGENTS.get(agent, self.AGENTS["orchestrator"])["path"]
         context_prompt = self.build_agent_context_prompt(agent, prompt, n8n_session_id)
 
-        cmd = ["gemini", context_prompt]
+        cmd = ["gemini", "--yolo", context_prompt]
 
         # Note: Gemini CLI appears to have model handling issues with specified model names
         # For now, we use the default model and do not pass --model flag
@@ -985,16 +1014,26 @@ User Request:
         resume: bool,
         n8n_session_id: str,
     ) -> str:
-        """Execute CODEX CLI"""
+        """Execute CODEX CLI with full tool access
+        
+        Uses --dangerously-bypass-approvals-and-sandbox (also known as --yolo) to:
+        - Disable all approval prompts
+        - Remove sandbox restrictions (full file system access)
+        - Enable read/write/execute for all files and directories
+        - Allow all shell commands and tools without confirmation
+        
+        This provides maximum automation but should only be used in trusted environments.
+        """
         agent_dir = self.AGENTS.get(agent, self.AGENTS["orchestrator"])["path"]
         context_prompt = self.build_agent_context_prompt(agent, prompt, n8n_session_id)
 
         if resume and session_id:
             # Resume existing session
+            # Note: Resume mode may not support the bypass flag, depends on CODEX version
             cmd = ["codex", "exec", "resume", session_id, context_prompt]
             print(f"[Session] Resuming CODEX session: {session_id}", file=sys.stderr)
         else:
-            # Start new session
+            # Start new session with full permissions
             cmd = [
                 "codex",
                 "exec",

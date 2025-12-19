@@ -114,6 +114,79 @@ source ~/.bashrc
 
 **Reference:** [Google Gemini API Documentation](https://ai.google.dev/tutorials/python_quickstart)
 
+## Tool Permissions & Access Control
+
+All AI runtimes in this system are configured with **full tool access** to enable read, write, and execute operations without approval prompts. This provides maximum automation capabilities.
+
+### Permission Configuration by Runtime
+
+#### GitHub Copilot CLI
+- **Flags Used:** `--allow-all-tools --allow-all-paths`
+- **Enables:** 
+  - All MCP tools and shell commands without approval
+  - Read/write/execute permissions for all files and directories
+- **Security Note:** Gives Copilot the same permissions as your user account
+
+#### Claude Code CLI
+- **Flags Used:** `--permission-mode dontAsk`
+- **Enables:**
+  - Auto-approve all file edits, writes, and reads
+  - Execute shell commands without approval
+  - Access web/network tools without prompts
+- **Also Known As:** YOLO mode or bypassPermissions mode
+
+#### OpenCode CLI
+- **Configuration:** Uses `opencode.json` file for permission settings
+- **Required Setup:**
+  1. Copy the example config: `cp opencode.example.json opencode.json`
+  2. Place `opencode.json` in your agent directories or project root
+- **Permissions Enabled:**
+  - `edit`: allow
+  - `write`: allow
+  - `bash`: allow
+  - `read`: allow
+  - `webfetch`: allow
+- **Reference:** [OpenCode Permissions Documentation](https://opencode.ai/docs/permissions/)
+
+#### Google Gemini CLI
+- **Flags Used:** `--yolo`
+- **Enables:**
+  - Read/write file operations without confirmation
+  - Shell command execution without approval
+  - All built-in tools with unrestricted access
+- **Built-in Tools:** read_file, write_file, run_shell_command
+
+#### OpenAI Codex CLI
+- **Flags Used:** `--dangerously-bypass-approvals-and-sandbox`
+- **Enables:**
+  - Disables all approval prompts
+  - Removes sandbox restrictions (full file system access)
+  - Allows all shell commands and tools without confirmation
+- **Security Note:** Only use in trusted, controlled environments
+
+### Security Considerations
+
+⚠️ **Warning:** These configurations grant AI agents extensive system access:
+
+- **Full file system access:** Can read, modify, or delete any file your user can access
+- **Command execution:** Can run any shell command with your user privileges
+- **No safety prompts:** All operations execute automatically without confirmation
+
+**Best Practices:**
+1. **Use in controlled environments:** Development containers, VMs, or sandboxed systems
+2. **Regular backups:** Maintain backups of critical files and directories
+3. **Code review:** Review AI-generated changes before committing to production
+4. **Limit agent scope:** Configure agents to work in specific project directories
+5. **Monitor activity:** Review session logs and agent outputs regularly
+
+**Recommended Use Cases:**
+- ✅ Development and testing environments
+- ✅ Automated CI/CD pipelines in isolated containers
+- ✅ Personal projects with version control
+- ❌ Production systems without review
+- ❌ Shared systems with sensitive data
+- ❌ Public or untrusted environments
+
 ## Configuration
 
 ### Agent Configuration

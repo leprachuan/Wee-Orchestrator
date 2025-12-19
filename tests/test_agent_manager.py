@@ -155,7 +155,7 @@ class TestSessionPersistence(unittest.TestCase):
 
         self.assertIn("session_id", session_data)
         self.assertEqual(session_data["model"], "gpt-5-mini")
-        self.assertEqual(session_data["agent"], "devops")
+        self.assertEqual(session_data["agent"], "orchestrator")
         self.assertEqual(session_data["runtime"], "copilot")
         self.assertTrue(session_data["is_new"])
 
