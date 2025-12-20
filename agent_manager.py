@@ -963,11 +963,14 @@ HOW TO FORMAT:
         else:  # text (default)
             render_instruction = ""
 
-        # Add timeout/deadline information
+        # Add timeout/deadline information with 15% buffer for overhead
         timeout_instruction = ""
         if timeout is not None:
-            timeout_min = timeout / 60
-            timeout_instruction = f"\n[⏱️ EXECUTION DEADLINE: You have {timeout} seconds ({timeout_min:.1f} minutes) to complete this task. Plan your approach efficiently and wrap up before this deadline. If an operation might take too long, skip it or provide a summary instead.]"
+            # Apply 15% buffer to account for subprocess overhead, I/O, etc.
+            buffer_percent = 0.15
+            agent_timeout = timeout * (1 - buffer_percent)
+            agent_timeout_min = agent_timeout / 60
+            timeout_instruction = f"\n[⏱️ EXECUTION DEADLINE: You have {agent_timeout:.0f} seconds ({agent_timeout_min:.1f} minutes) to complete this task. Plan your approach efficiently and wrap up before this deadline. If an operation might take too long, skip it or provide a summary instead.]"
 
         context = f"""[Session ID: {n8n_session_id}]
 [Agent Context: {agent_name}]
