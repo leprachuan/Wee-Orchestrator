@@ -1290,7 +1290,13 @@ You can mention an agent in your prompt and it will auto-delegate:
                 ]:
                     return f"Unknown runtime: '{new_runtime}'. Use 'copilot', 'opencode', 'claude', 'gemini', or 'codex'."
                 self.update_session_field(n8n_session_id, "runtime", new_runtime)
-                # When switching runtime, we should probably reset the model to a default for that runtime
+
+                # When switching runtime, reset the session ID to a new UUID since session formats are incompatible
+                # (e.g., OpenCode uses "ses_*" format, Claude uses UUID format, CODEX uses UUID format, etc.)
+                new_session_id = str(uuid4())
+                self.update_session_field(n8n_session_id, "session_id", new_session_id)
+
+                # When switching runtime, also reset the model to a default for that runtime
                 default_model = "gpt-5-mini"  # Default fallback
                 if new_runtime == "copilot":
                     default_model = "gpt-5-mini"
@@ -1304,7 +1310,7 @@ You can mention an agent in your prompt and it will auto-delegate:
                     default_model = "gpt-5.1-codex-max"
 
                 self.update_session_field(n8n_session_id, "model", default_model)
-                return f"✓ Switched runtime to **{new_runtime}**. Model set to `{default_model}`."
+                return f"✓ Switched runtime to **{new_runtime}**. Model set to `{default_model}`. Session reset."
 
         elif command == "/agent":
             if not argument:
