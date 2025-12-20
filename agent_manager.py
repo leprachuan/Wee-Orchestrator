@@ -382,6 +382,20 @@ class SessionManager:
                     ):
                         merged["model"] = "gpt-5.1-codex-max"
 
+                # Validate and fix session_id if corrupted
+                # OpenCode uses "ses_*" format, others use UUID format
+                session_id = merged.get("session_id", "")
+                if runtime in ["claude", "gemini", "codex", "copilot"]:
+                    # These should be UUIDs (36 chars with dashes)
+                    if not session_id or not (
+                        len(session_id) == 36 and "-" in session_id
+                    ):
+                        merged["session_id"] = str(uuid4())
+                elif runtime == "opencode":
+                    # OpenCode should be "ses_*" format
+                    if not session_id or not session_id.startswith("ses_"):
+                        merged["session_id"] = str(uuid4())
+
                 # If we had to add/change fields, save it back
                 if merged != data:
                     session_map[n8n_session_id] = merged
