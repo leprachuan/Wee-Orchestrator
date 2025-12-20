@@ -452,6 +452,106 @@ class SessionManager:
         """Get the render type for a session (session-specific or default)"""
         return session_data.get("render_type", "text")
 
+    def validate_telegram_html(self, text: str) -> tuple[bool, str]:
+        """
+        Validate that text only uses Telegram-supported HTML tags.
+        Returns (is_valid, error_message)
+        """
+        import re
+
+        # Supported tags in Telegram HTML mode
+        supported_tags = {
+            "b",
+            "strong",
+            "i",
+            "em",
+            "u",
+            "ins",
+            "s",
+            "strike",
+            "del",
+            "span",
+            "a",
+            "code",
+            "pre",
+            "blockquote",
+            "tg-spoiler",
+            "tg-emoji",
+        }
+
+        # Find all HTML-like tags in the text
+        # Pattern: <tag_name ...> or <tag_name>
+        tag_pattern = r"</?([a-zA-Z][a-zA-Z0-9\-]*)"
+        matches = re.finditer(tag_pattern, text)
+
+        unsupported_tags = set()
+        for match in matches:
+            tag_name = match.group(1).lower()
+            # For span with class, check if it's tg-spoiler
+            if (
+                tag_name == "span"
+                and "tg-spoiler" in text[match.start() : match.start() + 50]
+            ):
+                continue
+            if tag_name not in supported_tags:
+                unsupported_tags.add(tag_name)
+
+        if unsupported_tags:
+            return (
+                False,
+                f"Unsupported HTML tags for Telegram: {', '.join(sorted(unsupported_tags))}",
+            )
+
+        return True, ""
+
+    def sanitize_telegram_html(self, text: str) -> str:
+        """
+        Remove or escape unsupported HTML tags for Telegram compatibility.
+        This is a fallback when the model generates unsupported tags.
+        """
+        import re
+
+        # Supported tags
+        supported_tags = {
+            "b",
+            "strong",
+            "i",
+            "em",
+            "u",
+            "ins",
+            "s",
+            "strike",
+            "del",
+            "span",
+            "a",
+            "code",
+            "pre",
+            "blockquote",
+            "tg-spoiler",
+            "tg-emoji",
+        }
+
+        # Pattern to find tags
+        def replace_tag(match):
+            tag_full = match.group(0)
+            tag_name = match.group(1).lower()
+
+            # Check if this is a supported tag
+            if tag_name in supported_tags:
+                return tag_full  # Keep supported tags
+
+            # For unsupported tags, convert to escaped text or remove
+            # If it's a closing tag, just remove it
+            if tag_full.startswith("</"):
+                return ""
+
+            # For opening tags, escape the angle brackets
+            return tag_full.replace("<", "&lt;").replace(">", "&gt;")
+
+        # Replace all tags
+        result = re.sub(r"</?([a-zA-Z][a-zA-Z0-9\-:]*)[^>]*>", replace_tag, text)
+        return result
+
     def get_capabilities(self) -> str:
         """Get available capabilities based on configured agents"""
         if not self.AGENTS:
@@ -831,22 +931,30 @@ class SessionManager:
             render_instruction = "\n[Output Format: html]"
         elif render_type == "telegram_html":
             render_instruction = """
-[Output Format: Telegram HTML]
-Use ONLY these supported HTML tags in your response:
-- <b> or <strong> for bold
-- <i> or <em> for italic
-- <u> or <ins> for underline
-- <s>, <strike>, or <del> for strikethrough
-- <span class="tg-spoiler"> or <tg-spoiler> for spoiler text
-- <a href="URL"> for links
-- <code> for inline code
-- <pre> for code blocks
-- <blockquote> for block quotes
-- <blockquote expandable> for collapsible block quotes
-- <tg-emoji emoji-id="ID"> for custom emoji
+[Output Format: Telegram HTML - STRICT]
+⚠️ CRITICAL: You MUST use ONLY these exact supported HTML tags:
+1. <b>text</b> or <strong>text</strong> - bold
+2. <i>text</i> or <em>text</em> - italic
+3. <u>text</u> or <ins>text</ins> - underline
+4. <s>text</s>, <strike>text</strike>, or <del>text</del> - strikethrough
+5. <tg-spoiler>text</tg-spoiler> or <span class="tg-spoiler">text</span> - spoiler/hidden
+6. <a href="URL">text</a> - hyperlinks (URL must be valid)
+7. <code>text</code> - inline code/monospace
+8. <pre>code block</pre> - multiline code blocks
+9. <blockquote>text</blockquote> - quotes
+10. <blockquote expandable>text</blockquote> - collapsible quotes
+11. <tg-emoji emoji-id="ID">🎉</tg-emoji> - custom emoji
 
-IMPORTANT: Do NOT use <p> tags or other unsupported HTML tags. Use line breaks (\n) for paragraphs instead.
-Escape special HTML characters: < becomes &lt;, > becomes &gt;, & becomes &amp;]"""
+ABSOLUTELY NO OTHER TAGS ALLOWED:
+❌ Do NOT use: <p>, <div>, <span> (without class="tg-spoiler"), <br>, <status>, or any custom tags
+❌ Never create new tag names like <proxmox-node>, <b-Status>, <code-block>, etc.
+❌ Do NOT nest unsupported tags inside supported ones
+
+HOW TO FORMAT:
+- Use \n (newline) to separate paragraphs, NOT <p> tags
+- Escape these characters: < becomes &lt;, > becomes &gt;, & becomes &amp;
+- Always close tags properly: <b>text</b> not <b>text<b>
+- For line breaks in output, use plain \n characters]"""
         else:  # text (default)
             render_instruction = ""
 
@@ -1786,6 +1894,11 @@ You can mention an agent in your prompt and it will auto-delegate:
                 new_id = self.get_most_recent_session_id("codex", agent)
                 if new_id:
                     self.update_session_field(n8n_session_id, "session_id", new_id)
+
+        # Post-process output for telegram_html to ensure Telegram compatibility
+        if render_type == "telegram_html":
+            # Sanitize output to remove unsupported tags
+            output = self.sanitize_telegram_html(output)
 
         return output
 
