@@ -995,6 +995,8 @@ User Request:
         - All MCP tools and shell commands without approval prompts
         """
         agent_dir = self.AGENTS.get(agent, self.AGENTS["orchestrator"])["path"]
+        effective_timeout = timeout if timeout is not None else self.command_timeout
+
         context_prompt = self.build_agent_context_prompt(
             agent, prompt, n8n_session_id, render_type, effective_timeout
         )
@@ -1055,6 +1057,8 @@ User Request:
         - "bash": "allow"
         """
         agent_dir = self.AGENTS.get(agent, self.AGENTS["orchestrator"])["path"]
+        effective_timeout = timeout if timeout is not None else self.command_timeout
+
         context_prompt = self.build_agent_context_prompt(
             agent, prompt, n8n_session_id, render_type, effective_timeout
         )
@@ -1068,8 +1072,6 @@ User Request:
             print(f"[Session] Starting new OpenCode session", file=sys.stderr)
 
         cmd.append(context_prompt)
-
-        effective_timeout = timeout if timeout is not None else self.command_timeout
         try:
             # Note: OpenCode wrapper used os.getcwd(), here we use agent_dir
             result = subprocess.run(
@@ -1129,6 +1131,8 @@ User Request:
         Note: This is also known as YOLO mode in Claude Code
         """
         agent_dir = self.AGENTS.get(agent, self.AGENTS["orchestrator"])["path"]
+        effective_timeout = timeout if timeout is not None else self.command_timeout
+
         context_prompt = self.build_agent_context_prompt(
             agent, prompt, n8n_session_id, render_type, effective_timeout
         )
@@ -1201,6 +1205,8 @@ User Request:
         - All built-in tools unrestricted access
         """
         agent_dir = self.AGENTS.get(agent, self.AGENTS["orchestrator"])["path"]
+        effective_timeout = timeout if timeout is not None else self.command_timeout
+
         context_prompt = self.build_agent_context_prompt(
             agent, prompt, n8n_session_id, render_type, effective_timeout
         )
@@ -1264,6 +1270,8 @@ User Request:
         This provides maximum automation but should only be used in trusted environments.
         """
         agent_dir = self.AGENTS.get(agent, self.AGENTS["orchestrator"])["path"]
+        effective_timeout = timeout if timeout is not None else self.command_timeout
+
         context_prompt = self.build_agent_context_prompt(
             agent, prompt, n8n_session_id, render_type, effective_timeout
         )
