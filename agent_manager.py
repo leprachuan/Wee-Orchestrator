@@ -1079,7 +1079,23 @@ User Request:
         if runtime == "copilot":
             return (self.session_state_dir / f"{session_id}.jsonl").exists()
         elif runtime == "opencode":
-            return (self.opencode_session_storage / f"{session_id}.json").exists()
+            # OpenCode stores sessions in nested directories: ~/.local/share/opencode/storage/session/HASH/ses_*.json
+            # We need to search for the session file in any project directory
+            try:
+                session_dir = (
+                    Path.home()
+                    / ".local"
+                    / "share"
+                    / "opencode"
+                    / "storage"
+                    / "session"
+                )
+                if session_dir.exists():
+                    for session_file in session_dir.glob(f"*/{session_id}.json"):
+                        return True
+            except Exception:
+                pass
+            return False
         elif runtime == "claude":
             path = self.claude_debug_dir / f"{session_id}.txt"
             # print(f"DEBUG: checking claude session at {path} -> {path.exists()}", file=sys.stderr)
