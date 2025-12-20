@@ -651,54 +651,41 @@ class SessionManager:
 
         elif runtime == "codex":
             # CODEX output format (when stripped of headers):
-            # [optional: user prompt content]
-            # [optional: thinking section]
-            # [optional: "codex" marker]
-            # [actual response content]
-            # tokens used: ###
+            # 1. First response line (often echoed/repeated)
+            # 2. Header section (OpenAI Codex...)
+            # 3. Metadata (workdir, model, etc.)
+            # 4. "user" marker + user input/context
+            # 5. File listings
+            # 6. "thinking" marker + reasoning
+            # 7. "codex" marker + actual response(s)
+            # 8. "tokens used" metadata
 
-            found_response = False
+            found_codex_marker = False
             response_lines = []
+            skip_next_n_lines = 0
 
             for i, line in enumerate(lines):
                 line_lower = line.lower()
 
-                # Skip all metadata/header markers
-                if any(
-                    marker in line_lower
-                    for marker in [
-                        "openai codex",
-                        "--------",
-                        "workdir:",
-                        "model:",
-                        "provider:",
-                        "approval:",
-                        "sandbox:",
-                        "reasoning",
-                        "session id:",
-                        "mcp startup:",
-                        "thinking",
-                        "user",
-                        "codex",
-                    ]
-                ):
+                # Track if we've hit the "codex" marker - only keep content after this
+                if line_lower.strip() == "codex":
+                    found_codex_marker = True
                     continue
 
                 # Stop at tokens metadata
-                if "tokens" in line_lower or "used:" in line_lower:
+                if "tokens" in line_lower and "used" in line_lower:
                     break
 
-                # Skip empty lines before we find content
-                if not line.strip() and not found_response:
+                # Before codex marker, skip everything
+                if not found_codex_marker:
                     continue
 
-                # Track response content
-                if line.strip():
-                    found_response = True
-                    response_lines.append(line)
-                elif found_response:
-                    # Keep blank lines within response
-                    response_lines.append(line)
+                # After codex marker, skip empty lines at start
+                if not line.strip() and not response_lines:
+                    continue
+
+                # Keep the actual response content
+                response_lines.append(line)
 
             # Clean up trailing empty lines
             while response_lines and not response_lines[-1].strip():
@@ -736,9 +723,7 @@ class SessionManager:
                 prompt, model, agent, session_id, False, n8n_session_id
             )
         elif runtime == "gemini":
-            output = self.run_gemini(
-                prompt, model, agent, None, False, n8n_session_id
-            )
+            output = self.run_gemini(prompt, model, agent, None, False, n8n_session_id)
         elif runtime == "codex":
             output = self.run_codex(prompt, model, agent, None, False, n8n_session_id)
 
@@ -786,7 +771,7 @@ User Request:
         n8n_session_id: str,
     ) -> str:
         """Execute Copilot CLI with full tool access
-        
+
         Uses --allow-all-tools and --allow-all-paths to enable:
         - Read/write/execute permissions for all files and directories
         - All MCP tools and shell commands without approval prompts
@@ -814,7 +799,11 @@ User Request:
 
         try:
             result = subprocess.run(
-                cmd, capture_output=True, text=True, timeout=self.command_timeout, cwd=agent_dir
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=self.command_timeout,
+                cwd=agent_dir,
             )
             output = result.stdout + (result.stderr if result.stderr else "")
             return self.strip_metadata(output, "copilot")
@@ -834,7 +823,7 @@ User Request:
         n8n_session_id: str,
     ) -> str:
         """Execute OpenCode CLI with full tool access
-        
+
         OpenCode uses opencode.json for permission configuration.
         By default, it should allow read/write/edit/bash execution.
         The configuration file should be set up with:
@@ -858,7 +847,11 @@ User Request:
         try:
             # Note: OpenCode wrapper used os.getcwd(), here we use agent_dir
             result = subprocess.run(
-                cmd, capture_output=True, text=True, timeout=self.command_timeout, cwd=agent_dir
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=self.command_timeout,
+                cwd=agent_dir,
             )
             output = result.stdout
             if result.stderr:
@@ -900,7 +893,7 @@ User Request:
         n8n_session_id: str,
     ) -> str:
         """Execute Claude CLI with full tool access
-        
+
         Uses --permission-mode dontAsk (equivalent to bypassPermissions/YOLO mode) to:
         - Auto-approve all file edits, writes, and reads
         - Execute shell commands without approval
@@ -934,7 +927,11 @@ User Request:
 
         try:
             result = subprocess.run(
-                cmd, capture_output=True, text=True, timeout=self.command_timeout, cwd=agent_dir
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=self.command_timeout,
+                cwd=agent_dir,
             )
             output = result.stdout + (result.stderr if result.stderr else "")
 
@@ -962,7 +959,7 @@ User Request:
         n8n_session_id: str,
     ) -> str:
         """Execute Gemini CLI with full tool access
-        
+
         Gemini CLI tools (read_file, write_file, run_shell_command) are enabled by default.
         For maximum automation without prompts, use --yolo flag to auto-approve all actions.
         This enables:
@@ -987,7 +984,11 @@ User Request:
 
         try:
             result = subprocess.run(
-                cmd, capture_output=True, text=True, timeout=self.command_timeout, cwd=agent_dir
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=self.command_timeout,
+                cwd=agent_dir,
             )
             output = result.stdout + (result.stderr if result.stderr else "")
 
@@ -1015,13 +1016,13 @@ User Request:
         n8n_session_id: str,
     ) -> str:
         """Execute CODEX CLI with full tool access
-        
+
         Uses --dangerously-bypass-approvals-and-sandbox (also known as --yolo) to:
         - Disable all approval prompts
         - Remove sandbox restrictions (full file system access)
         - Enable read/write/execute for all files and directories
         - Allow all shell commands and tools without confirmation
-        
+
         This provides maximum automation but should only be used in trusted environments.
         """
         agent_dir = self.AGENTS.get(agent, self.AGENTS["orchestrator"])["path"]
@@ -1029,8 +1030,15 @@ User Request:
 
         if resume and session_id:
             # Resume existing session
-            # Note: Resume mode may not support the bypass flag, depends on CODEX version
-            cmd = ["codex", "exec", "resume", session_id, context_prompt]
+            # Usage: codex exec resume [SESSION_ID] [PROMPT]
+            # Note: resume does not support --dangerously-bypass-approvals-and-sandbox flag
+            cmd = [
+                "codex",
+                "exec",
+                "resume",
+                session_id,
+                context_prompt,
+            ]
             print(f"[Session] Resuming CODEX session: {session_id}", file=sys.stderr)
         else:
             # Start new session with full permissions
@@ -1044,7 +1052,11 @@ User Request:
 
         try:
             result = subprocess.run(
-                cmd, capture_output=True, text=True, timeout=self.command_timeout, cwd=agent_dir
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=self.command_timeout,
+                cwd=agent_dir,
             )
             output = result.stdout + (result.stderr if result.stderr else "")
 
@@ -1076,13 +1088,18 @@ User Request:
             return (self.gemini_session_dir / f"{session_id}.json").exists()
         elif runtime == "codex":
             # CODEX stores sessions in nested date-based directories
-            # Format: ~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl
-            # We check if any file exists with this session ID
+            # Format: ~/.codex/sessions/YYYY/MM/DD/rollout-YYYY-MM-DDTHH-MM-SS-SESSION_ID.jsonl
+            # Session ID is a UUID at the end of the filename
             try:
                 for session_file in self.codex_session_dir.glob(
                     "*/*/*/rollout-*.jsonl"
                 ):
-                    if session_id in session_file.name:
+                    # Extract the UUID from the filename (last 36 chars before .jsonl)
+                    filename = session_file.name.replace(".jsonl", "")
+                    file_session_id = (
+                        filename[-36:] if len(filename) >= 36 else filename
+                    )
+                    if file_session_id == session_id:
                         return True
             except Exception:
                 pass
@@ -1145,10 +1162,18 @@ User Request:
                     reverse=True,
                 )
                 if files:
-                    # Extract session ID from filename (last part after last dash)
-                    filename = files[0].name
+                    # Extract session ID from filename
                     # Format: rollout-2025-12-15T22-39-34-019b242b-476d-7f90-8bfa-4eb0c7095532.jsonl
-                    session_id = filename.split("-", 4)[-1].replace(".jsonl", "")
+                    # The session ID is the UUID at the end (last 36 chars before .jsonl)
+                    filename = files[0].name
+                    # Remove .jsonl extension and get the last 36 characters (UUID)
+                    name_without_ext = filename.replace(".jsonl", "")
+                    # Session ID should be the last UUID-like part
+                    session_id = (
+                        name_without_ext[-36:]
+                        if len(name_without_ext) >= 36
+                        else name_without_ext
+                    )
                     return session_id
                 return None
         except Exception as e:
