@@ -448,6 +448,10 @@ class SessionManager:
                 pass
         return self.command_timeout
 
+    def get_render_type(self, session_data: dict) -> str:
+        """Get the render type for a session (session-specific or default)"""
+        return session_data.get("render_type", "text")
+
     def get_capabilities(self) -> str:
         """Get available capabilities based on configured agents"""
         if not self.AGENTS:
@@ -796,7 +800,7 @@ class SessionManager:
         return output
 
     def build_agent_context_prompt(
-        self, agent: str, prompt: str, n8n_session_id: str
+        self, agent: str, prompt: str, n8n_session_id: str, render_type: str = "text"
     ) -> str:
         """Build a context-aware prompt that includes agent information"""
         if agent not in self.AGENTS:
@@ -819,9 +823,18 @@ class SessionManager:
         except Exception:
             pass
 
+        # Add render type instruction to the context
+        render_instruction = ""
+        if render_type == "markdown":
+            render_instruction = "\n[Output Format: markdown]"
+        elif render_type == "html":
+            render_instruction = "\n[Output Format: html]"
+        else:  # text (default)
+            render_instruction = ""
+
         context = f"""[Session ID: {n8n_session_id}]
 [Agent Context: {agent_name}]
-{agent_desc}{files_context}
+{agent_desc}{files_context}{render_instruction}
 
 User Request:
 {prompt}"""
@@ -836,6 +849,7 @@ User Request:
         resume: bool,
         n8n_session_id: str,
         timeout: int | None = None,
+        render_type: str = "text",
     ) -> str:
         """Execute Copilot CLI with full tool access
 
@@ -844,7 +858,9 @@ User Request:
         - All MCP tools and shell commands without approval prompts
         """
         agent_dir = self.AGENTS.get(agent, self.AGENTS["orchestrator"])["path"]
-        context_prompt = self.build_agent_context_prompt(agent, prompt, n8n_session_id)
+        context_prompt = self.build_agent_context_prompt(
+            agent, prompt, n8n_session_id, render_type
+        )
 
         cmd = [
             "/usr/bin/copilot",
@@ -890,6 +906,7 @@ User Request:
         resume: bool,
         n8n_session_id: str,
         timeout: int | None = None,
+        render_type: str = "text",
     ) -> str:
         """Execute OpenCode CLI with full tool access
 
@@ -901,7 +918,9 @@ User Request:
         - "bash": "allow"
         """
         agent_dir = self.AGENTS.get(agent, self.AGENTS["orchestrator"])["path"]
-        context_prompt = self.build_agent_context_prompt(agent, prompt, n8n_session_id)
+        context_prompt = self.build_agent_context_prompt(
+            agent, prompt, n8n_session_id, render_type
+        )
 
         cmd = [str(self.opencode_bin), "run", "--model", model]
 
@@ -962,6 +981,7 @@ User Request:
         resume: bool,
         n8n_session_id: str,
         timeout: int | None = None,
+        render_type: str = "text",
     ) -> str:
         """Execute Claude CLI with full tool access
 
@@ -972,7 +992,9 @@ User Request:
         Note: This is also known as YOLO mode in Claude Code
         """
         agent_dir = self.AGENTS.get(agent, self.AGENTS["orchestrator"])["path"]
-        context_prompt = self.build_agent_context_prompt(agent, prompt, n8n_session_id)
+        context_prompt = self.build_agent_context_prompt(
+            agent, prompt, n8n_session_id, render_type
+        )
 
         cmd = [
             "/usr/bin/claude",
@@ -1030,6 +1052,7 @@ User Request:
         resume: bool,
         n8n_session_id: str,
         timeout: int | None = None,
+        render_type: str = "text",
     ) -> str:
         """Execute Gemini CLI with full tool access
 
@@ -1041,7 +1064,9 @@ User Request:
         - All built-in tools unrestricted access
         """
         agent_dir = self.AGENTS.get(agent, self.AGENTS["orchestrator"])["path"]
-        context_prompt = self.build_agent_context_prompt(agent, prompt, n8n_session_id)
+        context_prompt = self.build_agent_context_prompt(
+            agent, prompt, n8n_session_id, render_type
+        )
 
         cmd = ["gemini", "--yolo", context_prompt]
 
@@ -1089,6 +1114,7 @@ User Request:
         resume: bool,
         n8n_session_id: str,
         timeout: int | None = None,
+        render_type: str = "text",
     ) -> str:
         """Execute CODEX CLI with full tool access
 
@@ -1101,7 +1127,9 @@ User Request:
         This provides maximum automation but should only be used in trusted environments.
         """
         agent_dir = self.AGENTS.get(agent, self.AGENTS["orchestrator"])["path"]
-        context_prompt = self.build_agent_context_prompt(agent, prompt, n8n_session_id)
+        context_prompt = self.build_agent_context_prompt(
+            agent, prompt, n8n_session_id, render_type
+        )
 
         if resume and session_id:
             # Resume existing session
@@ -1330,6 +1358,8 @@ User Request:
    • `/session reset` - Reset current session
    • `/timeout` or `/timeout current` - Show current timeout
    • `/timeout set <seconds>` - Set timeout (30-900 seconds)
+   • `/render` or `/render current` - Show current render type
+   • `/render set <text|markdown|html>` - Set render type
 
 **Auto-Delegation:**
 You can mention an agent in your prompt and it will auto-delegate:
@@ -1548,6 +1578,27 @@ You can mention an agent in your prompt and it will auto-delegate:
             else:
                 return "Usage: `/timeout` or `/timeout current` to show current timeout\n       `/timeout set <seconds>` to set a new timeout (30-900 seconds)"
 
+        elif command == "/render":
+            if not argument:
+                argument = "current"  # Default to showing current render type
+
+            if argument == "current":
+                # Get render type from session, or show default
+                render_type = session_data.get("render_type", "text")
+                return f"🎨 **Current Render Type:** `{render_type}`"
+
+            elif argument.startswith("set "):
+                render_type = argument[4:].strip().lower()
+                valid_types = ["text", "markdown", "html"]
+                if render_type not in valid_types:
+                    return f"❌ Invalid render type '{render_type}'. Valid options: {', '.join(valid_types)}"
+
+                # Store render type in session
+                self.update_session_field(n8n_session_id, "render_type", render_type)
+                return f"✓ Render type set to `{render_type}` for this session"
+            else:
+                return "Usage: `/render` or `/render current` to show current render type\n       `/render set <text|markdown|html>` to set render type"
+
         # --- Execution ---
 
         # Prepare for execution
@@ -1555,6 +1606,7 @@ You can mention an agent in your prompt and it will auto-delegate:
         model = session_data.get("model", "gpt-5-mini")
         agent = session_data.get("agent", "orchestrator")
         effective_timeout = self.get_effective_timeout(session_data)
+        render_type = self.get_render_type(session_data)
 
         # Check if we can resume
         can_resume = (
@@ -1572,10 +1624,18 @@ You can mention an agent in your prompt and it will auto-delegate:
                     True,
                     n8n_session_id,
                     effective_timeout,
+                    render_type,
                 )
             else:
                 output = self.run_copilot(
-                    prompt, model, agent, None, False, n8n_session_id, effective_timeout
+                    prompt,
+                    model,
+                    agent,
+                    None,
+                    False,
+                    n8n_session_id,
+                    effective_timeout,
+                    render_type,
                 )
                 # Copilot auto-generates session ID, we need to find it and map it
                 # Logic: Copilot writes to session-state dir. We find newest file.
@@ -1593,6 +1653,7 @@ You can mention an agent in your prompt and it will auto-delegate:
                     True,
                     n8n_session_id,
                     effective_timeout,
+                    render_type,
                 )
                 # Check for session loss / resource not found
                 if "Resource not found" in output or "NotFoundError" in output:
@@ -1608,13 +1669,21 @@ You can mention an agent in your prompt and it will auto-delegate:
                         False,
                         n8n_session_id,
                         effective_timeout,
+                        render_type,
                     )
                     new_id = self.get_most_recent_session_id("opencode", agent)
                     if new_id:
                         self.update_session_field(n8n_session_id, "session_id", new_id)
             else:
                 output = self.run_opencode(
-                    prompt, model, agent, None, False, n8n_session_id, effective_timeout
+                    prompt,
+                    model,
+                    agent,
+                    None,
+                    False,
+                    n8n_session_id,
+                    effective_timeout,
+                    render_type,
                 )
                 new_id = self.get_most_recent_session_id("opencode", agent)
                 if new_id:
@@ -1630,6 +1699,7 @@ You can mention an agent in your prompt and it will auto-delegate:
                     True,
                     n8n_session_id,
                     effective_timeout,
+                    render_type,
                 )
             else:
                 output = self.run_claude(
@@ -1640,6 +1710,7 @@ You can mention an agent in your prompt and it will auto-delegate:
                     False,
                     n8n_session_id,
                     effective_timeout,
+                    render_type,
                 )
 
         elif current_runtime == "gemini":
@@ -1652,10 +1723,18 @@ You can mention an agent in your prompt and it will auto-delegate:
                     True,
                     n8n_session_id,
                     effective_timeout,
+                    render_type,
                 )
             else:
                 output = self.run_gemini(
-                    prompt, model, agent, None, False, n8n_session_id, effective_timeout
+                    prompt,
+                    model,
+                    agent,
+                    None,
+                    False,
+                    n8n_session_id,
+                    effective_timeout,
+                    render_type,
                 )
                 # Gemini auto-generates session IDs, we need to find and map it
                 new_id = self.get_most_recent_session_id("gemini", agent)
@@ -1672,10 +1751,18 @@ You can mention an agent in your prompt and it will auto-delegate:
                     True,
                     n8n_session_id,
                     effective_timeout,
+                    render_type,
                 )
             else:
                 output = self.run_codex(
-                    prompt, model, agent, None, False, n8n_session_id, effective_timeout
+                    prompt,
+                    model,
+                    agent,
+                    None,
+                    False,
+                    n8n_session_id,
+                    effective_timeout,
+                    render_type,
                 )
                 # CODEX auto-generates session IDs, we need to find and map it
                 new_id = self.get_most_recent_session_id("codex", agent)
