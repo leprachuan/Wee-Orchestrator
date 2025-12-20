@@ -900,9 +900,14 @@ class SessionManager:
         return output
 
     def build_agent_context_prompt(
-        self, agent: str, prompt: str, n8n_session_id: str, render_type: str = "text"
+        self,
+        agent: str,
+        prompt: str,
+        n8n_session_id: str,
+        render_type: str = "text",
+        timeout: int | None = None,
     ) -> str:
-        """Build a context-aware prompt that includes agent information"""
+        """Build a context-aware prompt that includes agent information and execution deadline"""
         if agent not in self.AGENTS:
             agent = "devops"
 
@@ -958,9 +963,15 @@ HOW TO FORMAT:
         else:  # text (default)
             render_instruction = ""
 
+        # Add timeout/deadline information
+        timeout_instruction = ""
+        if timeout is not None:
+            timeout_min = timeout / 60
+            timeout_instruction = f"\n[⏱️ EXECUTION DEADLINE: You have {timeout} seconds ({timeout_min:.1f} minutes) to complete this task. Plan your approach efficiently and wrap up before this deadline. If an operation might take too long, skip it or provide a summary instead.]"
+
         context = f"""[Session ID: {n8n_session_id}]
 [Agent Context: {agent_name}]
-{agent_desc}{files_context}{render_instruction}
+{agent_desc}{files_context}{render_instruction}{timeout_instruction}
 
 User Request:
 {prompt}"""
@@ -985,7 +996,7 @@ User Request:
         """
         agent_dir = self.AGENTS.get(agent, self.AGENTS["orchestrator"])["path"]
         context_prompt = self.build_agent_context_prompt(
-            agent, prompt, n8n_session_id, render_type
+            agent, prompt, n8n_session_id, render_type, effective_timeout
         )
 
         cmd = [
@@ -1045,7 +1056,7 @@ User Request:
         """
         agent_dir = self.AGENTS.get(agent, self.AGENTS["orchestrator"])["path"]
         context_prompt = self.build_agent_context_prompt(
-            agent, prompt, n8n_session_id, render_type
+            agent, prompt, n8n_session_id, render_type, effective_timeout
         )
 
         cmd = [str(self.opencode_bin), "run", "--model", model]
@@ -1119,7 +1130,7 @@ User Request:
         """
         agent_dir = self.AGENTS.get(agent, self.AGENTS["orchestrator"])["path"]
         context_prompt = self.build_agent_context_prompt(
-            agent, prompt, n8n_session_id, render_type
+            agent, prompt, n8n_session_id, render_type, effective_timeout
         )
 
         cmd = [
@@ -1191,7 +1202,7 @@ User Request:
         """
         agent_dir = self.AGENTS.get(agent, self.AGENTS["orchestrator"])["path"]
         context_prompt = self.build_agent_context_prompt(
-            agent, prompt, n8n_session_id, render_type
+            agent, prompt, n8n_session_id, render_type, effective_timeout
         )
 
         cmd = ["gemini", "--yolo", context_prompt]
@@ -1254,7 +1265,7 @@ User Request:
         """
         agent_dir = self.AGENTS.get(agent, self.AGENTS["orchestrator"])["path"]
         context_prompt = self.build_agent_context_prompt(
-            agent, prompt, n8n_session_id, render_type
+            agent, prompt, n8n_session_id, render_type, effective_timeout
         )
 
         if resume and session_id:
