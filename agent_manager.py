@@ -737,7 +737,7 @@ class SessionManager:
             )
         elif runtime == "gemini":
             output = self.run_gemini(
-                prompt, model, agent, session_id, False, n8n_session_id
+                prompt, model, agent, None, False, n8n_session_id
             )
         elif runtime == "codex":
             output = self.run_codex(prompt, model, agent, None, False, n8n_session_id)
@@ -980,8 +980,8 @@ User Request:
         # TODO: Investigate correct model names for --model flag with Gemini CLI
 
         if resume and session_id:
-            cmd.extend(["--resume", "latest"])
-            print(f"[Session] Resuming Gemini session (latest)", file=sys.stderr)
+            cmd.extend(["--resume", session_id])
+            print(f"[Session] Resuming Gemini session: {session_id}", file=sys.stderr)
         else:
             print(f"[Session] Starting new Gemini session", file=sys.stderr)
 
@@ -1080,7 +1080,7 @@ User Request:
             # We check if any file exists with this session ID
             try:
                 for session_file in self.codex_session_dir.glob(
-                    "*/*/*/rollout-**.jsonl"
+                    "*/*/*/rollout-*.jsonl"
                 ):
                     if session_id in session_file.name:
                         return True
@@ -1459,8 +1459,12 @@ You can mention an agent in your prompt and it will auto-delegate:
                 )
             else:
                 output = self.run_gemini(
-                    prompt, model, agent, session_id, False, n8n_session_id
+                    prompt, model, agent, None, False, n8n_session_id
                 )
+                # Gemini auto-generates session IDs, we need to find and map it
+                new_id = self.get_most_recent_session_id("gemini", agent)
+                if new_id:
+                    self.update_session_field(n8n_session_id, "session_id", new_id)
 
         elif current_runtime == "codex":
             if can_resume:
