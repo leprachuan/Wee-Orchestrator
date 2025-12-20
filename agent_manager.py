@@ -829,6 +829,24 @@ class SessionManager:
             render_instruction = "\n[Output Format: markdown]"
         elif render_type == "html":
             render_instruction = "\n[Output Format: html]"
+        elif render_type == "telegram_html":
+            render_instruction = """
+[Output Format: Telegram HTML]
+Use ONLY these supported HTML tags in your response:
+- <b> or <strong> for bold
+- <i> or <em> for italic
+- <u> or <ins> for underline
+- <s>, <strike>, or <del> for strikethrough
+- <span class="tg-spoiler"> or <tg-spoiler> for spoiler text
+- <a href="URL"> for links
+- <code> for inline code
+- <pre> for code blocks
+- <blockquote> for block quotes
+- <blockquote expandable> for collapsible block quotes
+- <tg-emoji emoji-id="ID"> for custom emoji
+
+IMPORTANT: Do NOT use <p> tags or other unsupported HTML tags. Use line breaks (\n) for paragraphs instead.
+Escape special HTML characters: < becomes &lt;, > becomes &gt;, & becomes &amp;]"""
         else:  # text (default)
             render_instruction = ""
 
@@ -1357,9 +1375,9 @@ User Request:
 **Session:**
    • `/session reset` - Reset current session
    • `/timeout` or `/timeout current` - Show current timeout
-   • `/timeout set <seconds>` - Set timeout (30-900 seconds)
+   • `/timeout set [seconds]` - Set timeout (30-900 seconds)
    • `/render` or `/render current` - Show current render type
-   • `/render set <text|markdown|html>` - Set render type
+   • `/render set [text|markdown|html|telegram_html]` - Set render type
 
 **Auto-Delegation:**
 You can mention an agent in your prompt and it will auto-delegate:
@@ -1382,7 +1400,7 @@ You can mention an agent in your prompt and it will auto-delegate:
 
         elif command == "/runtime":
             if not argument:
-                return "Usage: /runtime <list|set|current>"
+                return "Usage: /runtime [list|set|current]"
             if argument == "list":
                 return "🤖 **Available Runtimes**\n\n• `copilot` (GitHub Copilot)\n• `opencode` (OpenCode CLI)\n• `claude` (Claude Code CLI)\n• `gemini` (Google Gemini CLI)\n• `codex` (Codex CLI)"
             elif argument == "current":
@@ -1422,7 +1440,7 @@ You can mention an agent in your prompt and it will auto-delegate:
 
         elif command == "/agent":
             if not argument:
-                return "Usage: /agent <list|set|current|invoke>"
+                return "Usage: /agent [list|set|current|invoke]"
             if argument == "list":
                 out = "# 🤖 Available Agents\n\n"
                 for k, v in self.AGENTS.items():
@@ -1440,7 +1458,7 @@ You can mention an agent in your prompt and it will auto-delegate:
                 invoke_args = argument[7:].strip()  # Remove 'invoke '
                 parts = invoke_args.split(None, 1)  # Split on first space
                 if len(parts) < 2:
-                    return "Usage: /agent invoke <agent_name> <prompt>"
+                    return "Usage: /agent invoke [agent_name] [prompt]"
 
                 agent_name = parts[0].strip("\"'")
                 sub_prompt = parts[1]
@@ -1576,7 +1594,7 @@ You can mention an agent in your prompt and it will auto-delegate:
                 except ValueError:
                     return f"❌ Invalid timeout value '{timeout_str}'. Please provide a number (30-600 seconds)"
             else:
-                return "Usage: `/timeout` or `/timeout current` to show current timeout\n       `/timeout set <seconds>` to set a new timeout (30-900 seconds)"
+                return "Usage: `/timeout` or `/timeout current` to show current timeout\n       `/timeout set [seconds]` to set a new timeout (30-900 seconds)"
 
         elif command == "/render":
             if not argument:
@@ -1589,7 +1607,7 @@ You can mention an agent in your prompt and it will auto-delegate:
 
             elif argument.startswith("set "):
                 render_type = argument[4:].strip().lower()
-                valid_types = ["text", "markdown", "html"]
+                valid_types = ["text", "markdown", "html", "telegram_html"]
                 if render_type not in valid_types:
                     return f"❌ Invalid render type '{render_type}'. Valid options: {', '.join(valid_types)}"
 
@@ -1597,7 +1615,7 @@ You can mention an agent in your prompt and it will auto-delegate:
                 self.update_session_field(n8n_session_id, "render_type", render_type)
                 return f"✓ Render type set to `{render_type}` for this session"
             else:
-                return "Usage: `/render` or `/render current` to show current render type\n       `/render set <text|markdown|html>` to set render type"
+                return "Usage: `/render` or `/render current` to show current render type\n       `/render set [text|markdown|html|telegram_html]` to set render type"
 
         # --- Execution ---
 
@@ -1775,7 +1793,7 @@ You can mention an agent in your prompt and it will auto-delegate:
 def main():
     if len(sys.argv) < 2:
         print(
-            "Usage: agent-manager.py <prompt> [session_id] [config_file]",
+            "Usage: agent-manager.py [prompt] [session_id] [config_file]",
             file=sys.stderr,
         )
         sys.exit(1)
