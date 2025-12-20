@@ -1329,7 +1329,7 @@ User Request:
 **Session:**
    • `/session reset` - Reset current session
    • `/timeout` or `/timeout current` - Show current timeout
-   • `/timeout set <seconds>` - Set timeout (30-600 seconds)
+   • `/timeout set <seconds>` - Set timeout (30-900 seconds)
 
 **Auto-Delegation:**
 You can mention an agent in your prompt and it will auto-delegate:
@@ -1530,11 +1530,11 @@ You can mention an agent in your prompt and it will auto-delegate:
                 timeout_str = argument[4:].strip()
                 try:
                     timeout_seconds = int(timeout_str)
-                    # Validate timeout (minimum 30 seconds, maximum 600 seconds / 10 minutes)
+                    # Validate timeout (minimum 30 seconds, maximum 900 seconds / 15 minutes)
                     if timeout_seconds < 30:
                         return f"❌ Timeout must be at least 30 seconds. You specified: {timeout_seconds}s"
-                    if timeout_seconds > 600:
-                        return f"❌ Timeout must not exceed 600 seconds (10 minutes). You specified: {timeout_seconds}s"
+                    if timeout_seconds > 900:
+                        return f"❌ Timeout must not exceed 900 seconds (15 minutes). You specified: {timeout_seconds}s"
 
                     # Store timeout in session
                     self.update_session_field(
@@ -1546,7 +1546,7 @@ You can mention an agent in your prompt and it will auto-delegate:
                 except ValueError:
                     return f"❌ Invalid timeout value '{timeout_str}'. Please provide a number (30-600 seconds)"
             else:
-                return "Usage: `/timeout` or `/timeout current` to show current timeout\n       `/timeout set <seconds>` to set a new timeout (30-600 seconds)"
+                return "Usage: `/timeout` or `/timeout current` to show current timeout\n       `/timeout set <seconds>` to set a new timeout (30-900 seconds)"
 
         # --- Execution ---
 
