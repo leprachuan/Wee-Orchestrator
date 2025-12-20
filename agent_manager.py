@@ -325,11 +325,25 @@ class SessionManager:
         """
         session_map = self.load_session_map()
 
+        default_runtime = get_default_runtime()
+        default_model = get_default_model()
+
+        # Adjust default model based on runtime if using defaults
+        # This handles the case where a new session is created with a non-Copilot runtime
+        if default_runtime == "claude":
+            default_model = "haiku"
+        elif default_runtime == "opencode":
+            default_model = "opencode/gpt-5-nano"
+        elif default_runtime == "gemini":
+            default_model = "gemini-1.5-flash"
+        elif default_runtime == "codex":
+            default_model = "gpt-5.1-codex-max"
+
         default_data = {
             "session_id": str(uuid4()),
-            "model": get_default_model(),
+            "model": default_model,
             "agent": get_default_agent(),
-            "runtime": get_default_runtime(),
+            "runtime": default_runtime,
         }
 
         if n8n_session_id in session_map:
@@ -340,7 +354,35 @@ class SessionManager:
             elif isinstance(data, dict):
                 # Ensure all fields exist
                 merged = {**default_data, **data}
-                # If we had to add fields, save it back
+
+                # If the runtime is set but model isn't (or is wrong for the runtime),
+                # set a model appropriate for that runtime
+                runtime = merged.get("runtime", default_runtime)
+                if runtime == "claude":
+                    if (
+                        not merged.get("model")
+                        or "gpt" in merged.get("model", "").lower()
+                    ):
+                        merged["model"] = "haiku"
+                elif runtime == "opencode":
+                    if not merged.get("model") or not merged.get(
+                        "model", ""
+                    ).startswith("opencode"):
+                        merged["model"] = "opencode/gpt-5-nano"
+                elif runtime == "gemini":
+                    if (
+                        not merged.get("model")
+                        or "gemini" not in merged.get("model", "").lower()
+                    ):
+                        merged["model"] = "gemini-1.5-flash"
+                elif runtime == "codex":
+                    if (
+                        not merged.get("model")
+                        or "codex" not in merged.get("model", "").lower()
+                    ):
+                        merged["model"] = "gpt-5.1-codex-max"
+
+                # If we had to add/change fields, save it back
                 if merged != data:
                     session_map[n8n_session_id] = merged
                     self.save_session_map(session_map)
