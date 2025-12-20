@@ -508,6 +508,12 @@ class SessionManager:
         """
         Remove or escape unsupported HTML tags for Telegram compatibility.
         This is a fallback when the model generates unsupported tags.
+
+        Escapes:
+        - Double angle brackets (<<, >>) used in bash/scripting
+        - Unsupported HTML tags
+        Preserves:
+        - Supported Telegram HTML tags
         """
         import re
 
@@ -531,7 +537,13 @@ class SessionManager:
             "tg-emoji",
         }
 
-        # Pattern to find tags
+        # First, escape double angle brackets (<<EOF, >>, etc.) that are used in scripting
+        # Replace << with &lt;&lt; and >> with &gt;&gt;
+        text = text.replace("<<", "&lt;&lt;")
+        text = text.replace(">>", "&gt;&gt;")
+
+        # Pattern to find HTML-like tags (single < followed by tag name, not double)
+        # This won't match &lt; or already-escaped sequences
         def replace_tag(match):
             tag_full = match.group(0)
             tag_name = match.group(1).lower()
@@ -548,8 +560,9 @@ class SessionManager:
             # For opening tags, escape the angle brackets
             return tag_full.replace("<", "&lt;").replace(">", "&gt;")
 
-        # Replace all tags
-        result = re.sub(r"</?([a-zA-Z][a-zA-Z0-9\-:]*)[^>]*>", replace_tag, text)
+        # Replace all tags - only match single < not preceded by &
+        # This matches proper HTML tags but not &lt; or <<
+        result = re.sub(r"(?<!&)</?([a-zA-Z][a-zA-Z0-9\-:]*)[^>]*>", replace_tag, text)
         return result
 
     def get_capabilities(self) -> str:
