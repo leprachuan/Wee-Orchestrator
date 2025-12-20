@@ -438,6 +438,16 @@ class SessionManager:
 
         self.save_session_map(session_map)
 
+    def get_effective_timeout(self, session_data: dict) -> int:
+        """Get the effective timeout for a session (session-specific or default)"""
+        session_timeout = session_data.get("timeout")
+        if session_timeout:
+            try:
+                return int(session_timeout)
+            except ValueError:
+                pass
+        return self.command_timeout
+
     def get_capabilities(self) -> str:
         """Get available capabilities based on configured agents"""
         if not self.AGENTS:
@@ -825,6 +835,7 @@ User Request:
         session_id: str | None,
         resume: bool,
         n8n_session_id: str,
+        timeout: int | None = None,
     ) -> str:
         """Execute Copilot CLI with full tool access
 
@@ -853,19 +864,20 @@ User Request:
         else:
             print(f"[Session] Starting new Copilot session", file=sys.stderr)
 
+        effective_timeout = timeout if timeout is not None else self.command_timeout
         try:
             result = subprocess.run(
                 cmd,
                 capture_output=True,
                 text=True,
-                timeout=self.command_timeout,
+                timeout=effective_timeout,
                 cwd=agent_dir,
             )
             output = result.stdout + (result.stderr if result.stderr else "")
             return self.strip_metadata(output, "copilot")
         except subprocess.TimeoutExpired:
-            timeout_min = self.command_timeout / 60
-            return f"Error: Copilot command timed out (exceeded {self.command_timeout}s / {timeout_min:.1f}min)"
+            timeout_min = effective_timeout / 60
+            return f"Error: Copilot command timed out (exceeded {effective_timeout}s / {timeout_min:.1f}min)"
         except subprocess.CalledProcessError as e:
             return f"Error: Copilot command failed with exit code {e.returncode}"
 
@@ -877,6 +889,7 @@ User Request:
         session_id: str | None,
         resume: bool,
         n8n_session_id: str,
+        timeout: int | None = None,
     ) -> str:
         """Execute OpenCode CLI with full tool access
 
@@ -900,13 +913,14 @@ User Request:
 
         cmd.append(context_prompt)
 
+        effective_timeout = timeout if timeout is not None else self.command_timeout
         try:
             # Note: OpenCode wrapper used os.getcwd(), here we use agent_dir
             result = subprocess.run(
                 cmd,
                 capture_output=True,
                 text=True,
-                timeout=self.command_timeout,
+                timeout=effective_timeout,
                 cwd=agent_dir,
             )
             output = result.stdout
@@ -934,8 +948,8 @@ User Request:
 
             if "NotFoundError" in partial_out or "Resource not found" in partial_out:
                 return f"NotFoundError: {partial_out}"
-            timeout_min = self.command_timeout / 60
-            return f"Error: OpenCode command timed out (exceeded {self.command_timeout}s / {timeout_min:.1f}min)"
+            timeout_min = effective_timeout / 60
+            return f"Error: OpenCode command timed out (exceeded {effective_timeout}s / {timeout_min:.1f}min)"
         except subprocess.CalledProcessError as e:
             return f"Error: OpenCode command failed with exit code {e.returncode}"
 
@@ -947,6 +961,7 @@ User Request:
         session_id: str | None,
         resume: bool,
         n8n_session_id: str,
+        timeout: int | None = None,
     ) -> str:
         """Execute Claude CLI with full tool access
 
@@ -981,12 +996,13 @@ User Request:
         else:
             print(f"[Session] Starting new Claude session (auto-ID)", file=sys.stderr)
 
+        effective_timeout = timeout if timeout is not None else self.command_timeout
         try:
             result = subprocess.run(
                 cmd,
                 capture_output=True,
                 text=True,
-                timeout=self.command_timeout,
+                timeout=effective_timeout,
                 cwd=agent_dir,
             )
             output = result.stdout + (result.stderr if result.stderr else "")
@@ -1000,8 +1016,8 @@ User Request:
 
             return self.strip_metadata(output, "claude")
         except subprocess.TimeoutExpired:
-            timeout_min = self.command_timeout / 60
-            return f"Error: Claude command timed out (exceeded {self.command_timeout}s / {timeout_min:.1f}min)"
+            timeout_min = effective_timeout / 60
+            return f"Error: Claude command timed out (exceeded {effective_timeout}s / {timeout_min:.1f}min)"
         except subprocess.CalledProcessError as e:
             return f"Error: Claude command failed with exit code {e.returncode}"
 
@@ -1013,6 +1029,7 @@ User Request:
         session_id: str | None,
         resume: bool,
         n8n_session_id: str,
+        timeout: int | None = None,
     ) -> str:
         """Execute Gemini CLI with full tool access
 
@@ -1038,12 +1055,13 @@ User Request:
         else:
             print(f"[Session] Starting new Gemini session", file=sys.stderr)
 
+        effective_timeout = timeout if timeout is not None else self.command_timeout
         try:
             result = subprocess.run(
                 cmd,
                 capture_output=True,
                 text=True,
-                timeout=self.command_timeout,
+                timeout=effective_timeout,
                 cwd=agent_dir,
             )
             output = result.stdout + (result.stderr if result.stderr else "")
@@ -1057,8 +1075,8 @@ User Request:
 
             return self.strip_metadata(output, "gemini")
         except subprocess.TimeoutExpired:
-            timeout_min = self.command_timeout / 60
-            return f"Error: Gemini command timed out (exceeded {self.command_timeout}s / {timeout_min:.1f}min)"
+            timeout_min = effective_timeout / 60
+            return f"Error: Gemini command timed out (exceeded {effective_timeout}s / {timeout_min:.1f}min)"
         except subprocess.CalledProcessError as e:
             return f"Error: Gemini command failed with exit code {e.returncode}"
 
@@ -1070,6 +1088,7 @@ User Request:
         session_id: str | None,
         resume: bool,
         n8n_session_id: str,
+        timeout: int | None = None,
     ) -> str:
         """Execute CODEX CLI with full tool access
 
@@ -1106,12 +1125,13 @@ User Request:
             ]
             print(f"[Session] Starting new CODEX session", file=sys.stderr)
 
+        effective_timeout = timeout if timeout is not None else self.command_timeout
         try:
             result = subprocess.run(
                 cmd,
                 capture_output=True,
                 text=True,
-                timeout=self.command_timeout,
+                timeout=effective_timeout,
                 cwd=agent_dir,
             )
             output = result.stdout + (result.stderr if result.stderr else "")
@@ -1125,8 +1145,8 @@ User Request:
 
             return self.strip_metadata(output, "codex")
         except subprocess.TimeoutExpired:
-            timeout_min = self.command_timeout / 60
-            return f"Error: CODEX command timed out (exceeded {self.command_timeout}s / {timeout_min:.1f}min)"
+            timeout_min = effective_timeout / 60
+            return f"Error: CODEX command timed out (exceeded {effective_timeout}s / {timeout_min:.1f}min)"
         except subprocess.CalledProcessError as e:
             return f"Error: CODEX command failed with exit code {e.returncode}"
 
@@ -1308,6 +1328,8 @@ User Request:
 
 **Session:**
    • `/session reset` - Reset current session
+   • `/timeout` or `/timeout current` - Show current timeout
+   • `/timeout set <seconds>` - Set timeout (30-600 seconds)
 
 **Auto-Delegation:**
 You can mention an agent in your prompt and it will auto-delegate:
@@ -1492,12 +1514,47 @@ You can mention an agent in your prompt and it will auto-delegate:
                     self.save_session_map(session_map)
                 return "✓ Session reset. Next message starts fresh."
 
+        elif command == "/timeout":
+            if not argument:
+                argument = "current"  # Default to showing current timeout
+
+            if argument == "current":
+                # Get timeout from session, or show default
+                session_timeout = session_data.get("timeout")
+                if session_timeout:
+                    return f"⏱️ **Current Timeout:** `{session_timeout}` seconds"
+                else:
+                    return f"⏱️ **Current Timeout:** `{self.command_timeout}` seconds (default)"
+
+            elif argument.startswith("set "):
+                timeout_str = argument[4:].strip()
+                try:
+                    timeout_seconds = int(timeout_str)
+                    # Validate timeout (minimum 30 seconds, maximum 600 seconds / 10 minutes)
+                    if timeout_seconds < 30:
+                        return f"❌ Timeout must be at least 30 seconds. You specified: {timeout_seconds}s"
+                    if timeout_seconds > 600:
+                        return f"❌ Timeout must not exceed 600 seconds (10 minutes). You specified: {timeout_seconds}s"
+
+                    # Store timeout in session
+                    self.update_session_field(
+                        n8n_session_id, "timeout", str(timeout_seconds)
+                    )
+                    return (
+                        f"✓ Timeout set to `{timeout_seconds}` seconds for this session"
+                    )
+                except ValueError:
+                    return f"❌ Invalid timeout value '{timeout_str}'. Please provide a number (30-600 seconds)"
+            else:
+                return "Usage: `/timeout` or `/timeout current` to show current timeout\n       `/timeout set <seconds>` to set a new timeout (30-600 seconds)"
+
         # --- Execution ---
 
         # Prepare for execution
         session_id = session_data.get("session_id")
         model = session_data.get("model", "gpt-5-mini")
         agent = session_data.get("agent", "orchestrator")
+        effective_timeout = self.get_effective_timeout(session_data)
 
         # Check if we can resume
         can_resume = (
@@ -1508,11 +1565,17 @@ You can mention an agent in your prompt and it will auto-delegate:
         if current_runtime == "copilot":
             if can_resume:
                 output = self.run_copilot(
-                    prompt, model, agent, session_id, True, n8n_session_id
+                    prompt,
+                    model,
+                    agent,
+                    session_id,
+                    True,
+                    n8n_session_id,
+                    effective_timeout,
                 )
             else:
                 output = self.run_copilot(
-                    prompt, model, agent, None, False, n8n_session_id
+                    prompt, model, agent, None, False, n8n_session_id, effective_timeout
                 )
                 # Copilot auto-generates session ID, we need to find it and map it
                 # Logic: Copilot writes to session-state dir. We find newest file.
@@ -1523,7 +1586,13 @@ You can mention an agent in your prompt and it will auto-delegate:
         elif current_runtime == "opencode":
             if can_resume:
                 output = self.run_opencode(
-                    prompt, model, agent, session_id, True, n8n_session_id
+                    prompt,
+                    model,
+                    agent,
+                    session_id,
+                    True,
+                    n8n_session_id,
+                    effective_timeout,
                 )
                 # Check for session loss / resource not found
                 if "Resource not found" in output or "NotFoundError" in output:
@@ -1532,14 +1601,20 @@ You can mention an agent in your prompt and it will auto-delegate:
                         file=sys.stderr,
                     )
                     output = self.run_opencode(
-                        prompt, model, agent, None, False, n8n_session_id
+                        prompt,
+                        model,
+                        agent,
+                        None,
+                        False,
+                        n8n_session_id,
+                        effective_timeout,
                     )
                     new_id = self.get_most_recent_session_id("opencode", agent)
                     if new_id:
                         self.update_session_field(n8n_session_id, "session_id", new_id)
             else:
                 output = self.run_opencode(
-                    prompt, model, agent, None, False, n8n_session_id
+                    prompt, model, agent, None, False, n8n_session_id, effective_timeout
                 )
                 new_id = self.get_most_recent_session_id("opencode", agent)
                 if new_id:
@@ -1548,21 +1623,39 @@ You can mention an agent in your prompt and it will auto-delegate:
         elif current_runtime == "claude":
             if can_resume:
                 output = self.run_claude(
-                    prompt, model, agent, session_id, True, n8n_session_id
+                    prompt,
+                    model,
+                    agent,
+                    session_id,
+                    True,
+                    n8n_session_id,
+                    effective_timeout,
                 )
             else:
                 output = self.run_claude(
-                    prompt, model, agent, session_id, False, n8n_session_id
+                    prompt,
+                    model,
+                    agent,
+                    session_id,
+                    False,
+                    n8n_session_id,
+                    effective_timeout,
                 )
 
         elif current_runtime == "gemini":
             if can_resume:
                 output = self.run_gemini(
-                    prompt, model, agent, session_id, True, n8n_session_id
+                    prompt,
+                    model,
+                    agent,
+                    session_id,
+                    True,
+                    n8n_session_id,
+                    effective_timeout,
                 )
             else:
                 output = self.run_gemini(
-                    prompt, model, agent, None, False, n8n_session_id
+                    prompt, model, agent, None, False, n8n_session_id, effective_timeout
                 )
                 # Gemini auto-generates session IDs, we need to find and map it
                 new_id = self.get_most_recent_session_id("gemini", agent)
@@ -1572,11 +1665,17 @@ You can mention an agent in your prompt and it will auto-delegate:
         elif current_runtime == "codex":
             if can_resume:
                 output = self.run_codex(
-                    prompt, model, agent, session_id, True, n8n_session_id
+                    prompt,
+                    model,
+                    agent,
+                    session_id,
+                    True,
+                    n8n_session_id,
+                    effective_timeout,
                 )
             else:
                 output = self.run_codex(
-                    prompt, model, agent, None, False, n8n_session_id
+                    prompt, model, agent, None, False, n8n_session_id, effective_timeout
                 )
                 # CODEX auto-generates session IDs, we need to find and map it
                 new_id = self.get_most_recent_session_id("codex", agent)
