@@ -299,6 +299,43 @@ class TestSlashCommands(unittest.TestCase):
         new_session = self.manager.get_or_create_session_data("test_session_reset")
         self.assertTrue(new_session["is_new"])
 
+    def test_bash_command_pwd(self):
+        """Test bash command execution with !pwd"""
+        result = self.manager.execute("!pwd", "test_bash_session")
+        # Should return current working directory
+        self.assertIsNotNone(result)
+        self.assertNotIn("Error", result)
+
+    def test_bash_command_echo(self):
+        """Test bash command execution with !echo"""
+        result = self.manager.execute("!echo 'Hello World'", "test_bash_session")
+        self.assertIn("Hello World", result)
+
+    def test_bash_command_ls(self):
+        """Test bash command execution with !ls"""
+        result = self.manager.execute("!ls", "test_bash_session")
+        # Should list files in current directory
+        self.assertIsNotNone(result)
+        self.assertNotIn("Error", result)
+
+    def test_bash_command_empty(self):
+        """Test bash command with empty command"""
+        result = self.manager.execute("!", "test_bash_session")
+        self.assertIn("Error", result)
+        self.assertIn("No command provided", result)
+
+    def test_bash_command_nonexistent(self):
+        """Test bash command with nonexistent command"""
+        result = self.manager.execute("!nonexistentcommand12345", "test_bash_session")
+        # Should contain an error or stderr output
+        self.assertIsNotNone(result)
+
+    def test_bash_command_exit_code(self):
+        """Test bash command that returns non-zero exit code"""
+        result = self.manager.execute("!false", "test_bash_session")
+        # Should indicate failure
+        self.assertIn("exit code", result.lower())
+
 
 class TestMetadataStripping(unittest.TestCase):
     """Test metadata stripping from CLI output"""

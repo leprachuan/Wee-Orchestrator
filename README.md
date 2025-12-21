@@ -10,6 +10,7 @@ This shim provides a flexible framework to:
 - Switch between different agent repositories dynamically
 - Configure agents via JSON config files instead of hardcoding
 - Support multiple AI models and runtimes
+- Execute bash commands directly with `!` prefix
 
 ## Requirements
 
@@ -321,6 +322,28 @@ python agent_manager.py "Deploy the app" "session-456" "/etc/agents.json"
 ### Slash Commands
 
 Interact with the agent manager using slash commands:
+
+#### Bash Commands
+```
+!<command>                 # Execute bash command directly (e.g., !pwd, !ls -la)
+```
+
+**Examples:**
+```bash
+!pwd                       # Show current working directory
+!echo "Hello World"        # Echo a message
+!ls -lh                    # List files with details
+!date                      # Show current date/time
+!git status                # Run git commands
+!python3 --version         # Check installed versions
+```
+
+**Features:**
+- Commands execute directly without hitting any AI runtime
+- 10-second timeout for safety
+- Runs in current working directory
+- Supports pipes, redirects, and command chaining (&&, ||, |)
+- Returns stdout/stderr output
 
 #### Runtime Management
 ```

@@ -964,6 +964,48 @@ class SessionManager:
 
         return "\n".join(result)
 
+    def _execute_bash_command(self, command: str) -> str:
+        """Execute a bash command directly without hitting any runtime
+        
+        Args:
+            command: The bash command to execute (without the ! prefix)
+            
+        Returns:
+            The output from stdout/stderr, or an error message
+        """
+        if not command:
+            return "Error: No command provided. Usage: !<command>"
+        
+        try:
+            # Execute the command with a reasonable timeout (10 seconds)
+            result = subprocess.run(
+                command,
+                shell=True,
+                capture_output=True,
+                text=True,
+                timeout=10,
+                cwd=os.getcwd()
+            )
+            
+            # Combine stdout and stderr
+            output = result.stdout
+            if result.stderr:
+                output += result.stderr
+            
+            # If there's no output, indicate success
+            if not output.strip():
+                if result.returncode == 0:
+                    output = f"✓ Command executed successfully (exit code: 0)"
+                else:
+                    output = f"✗ Command failed with exit code: {result.returncode}"
+            
+            return output.strip()
+            
+        except subprocess.TimeoutExpired:
+            return f"Error: Command timed out after 10 seconds"
+        except Exception as e:
+            return f"Error executing command: {str(e)}"
+
     def _execute_with_context(
         self, prompt: str, delegation_data: dict, n8n_session_id: str
     ) -> str:
@@ -1515,6 +1557,10 @@ User Request:
         session_data = self.get_or_create_session_data(n8n_session_id)
         current_runtime = session_data.get("runtime", "copilot")
 
+        # Check for bash command (prompts starting with !)
+        if prompt.startswith("!"):
+            return self._execute_bash_command(prompt[1:].strip())
+
         # First check for explicit slash commands
         command, argument = self.parse_slash_command(prompt)
 
@@ -1546,6 +1592,10 @@ User Request:
 
 **Orchestrator:**
    • `/capabilities` - Show what the orchestrator can help with
+
+**Bash Commands:**
+   • `!<command>` - Execute bash command directly (e.g., !pwd, !ls -la)
+   • Commands run in current working directory with 10s timeout
 
 **Runtime Management:**
    • `/runtime list` - Show available runtimes
@@ -1582,6 +1632,9 @@ You can mention an agent in your prompt and it will auto-delegate:
 
 **Examples:**
    /capabilities
+   !pwd
+   !echo "Hello World"
+   !ls -la
    /runtime set gemini
    /model set \"gpt-5.2\"
    /agent set \"family\"
