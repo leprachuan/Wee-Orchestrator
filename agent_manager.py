@@ -16,7 +16,6 @@ from pathlib import Path
 from uuid import uuid4
 
 
-
 # Environment-based configuration
 def get_default_agent() -> str:
     """Get default agent from environment or use orchestrator"""
@@ -208,7 +207,7 @@ class SessionManager:
         """Load the running queries tracking data"""
         if not self.running_queries_file.exists():
             return {}
-        
+
         try:
             with open(self.running_queries_file, "r") as f:
                 return json.load(f)
@@ -229,18 +228,23 @@ class SessionManager:
             "pid": pid,
             "runtime": runtime,
             "agent": agent,
-            "prompt": prompt[:self.MAX_PROMPT_LENGTH],
+            "prompt": prompt[: self.MAX_PROMPT_LENGTH],
             "start_time": time.time(),
             "last_output": "",
         }
         self.save_running_queries(queries)
-        print(f"[Track] Started tracking query for session {n8n_session_id}, PID: {pid}", file=sys.stderr)
+        print(
+            f"[Track] Started tracking query for session {n8n_session_id}, PID: {pid}",
+            file=sys.stderr,
+        )
 
     def update_query_output(self, n8n_session_id: str, output_snippet: str):
         """Update the last output snippet for a running query"""
         queries = self.load_running_queries()
         if n8n_session_id in queries:
-            queries[n8n_session_id]["last_output"] = output_snippet[-self.MAX_OUTPUT_LENGTH:]
+            queries[n8n_session_id]["last_output"] = output_snippet[
+                -self.MAX_OUTPUT_LENGTH :
+            ]
             self.save_running_queries(queries)
 
     def clear_running_query(self, n8n_session_id: str):
@@ -249,7 +253,10 @@ class SessionManager:
         if n8n_session_id in queries:
             del queries[n8n_session_id]
             self.save_running_queries(queries)
-            print(f"[Track] Cleared tracking for session {n8n_session_id}", file=sys.stderr)
+            print(
+                f"[Track] Cleared tracking for session {n8n_session_id}",
+                file=sys.stderr,
+            )
 
     def get_running_query(self, n8n_session_id: str) -> dict | None:
         """Get tracking info for a running query"""
@@ -258,7 +265,7 @@ class SessionManager:
 
     def is_process_running(self, pid: int) -> bool:
         """Check if a process with given PID is still running
-        
+
         Uses os.kill with signal 0 to test process existence without
         actually sending a signal to the process.
         """
@@ -966,16 +973,16 @@ class SessionManager:
 
     def _execute_bash_command(self, command: str) -> str:
         """Execute a bash command directly without hitting any runtime
-        
+
         Args:
             command: The bash command to execute (without the ! prefix)
-            
+
         Returns:
             The output from stdout/stderr, or an error message
         """
         if not command:
             return "Error: No command provided. Usage: !<command>"
-        
+
         try:
             # Execute the command with a reasonable timeout (10 seconds)
             result = subprocess.run(
@@ -984,23 +991,23 @@ class SessionManager:
                 capture_output=True,
                 text=True,
                 timeout=10,
-                cwd=os.getcwd()
+                cwd=os.getcwd(),
             )
-            
+
             # Combine stdout and stderr
             output = result.stdout
             if result.stderr:
                 output += result.stderr
-            
+
             # If there's no output, indicate success
             if not output.strip():
                 if result.returncode == 0:
                     output = f"✓ Command executed successfully (exit code: 0)"
                 else:
                     output = f"✗ Command failed with exit code: {result.returncode}"
-            
+
             return output.strip()
-            
+
         except subprocess.TimeoutExpired:
             return f"Error: Command timed out after 10 seconds"
         except Exception as e:
@@ -1128,7 +1135,7 @@ User Request:
         n8n_session_id: str,
     ) -> str:
         """Execute a subprocess with PID tracking
-        
+
         This method:
         1. Starts the process with Popen to get the PID
         2. Tracks the running query
@@ -1144,18 +1151,20 @@ User Request:
                 text=True,
                 cwd=cwd,
             )
-            
+
             # Track the running query
-            self.track_running_query(n8n_session_id, process.pid, runtime, agent, prompt)
-            
+            self.track_running_query(
+                n8n_session_id, process.pid, runtime, agent, prompt
+            )
+
             # Wait for completion with timeout
             try:
                 stdout, stderr = process.communicate(timeout=timeout)
                 output = stdout + (stderr if stderr else "")
-                
+
                 # Update with final output snippet
                 self.update_query_output(n8n_session_id, output)
-                
+
                 return output
             except subprocess.TimeoutExpired:
                 # Process timed out, kill it and wait for termination
@@ -1166,7 +1175,7 @@ User Request:
             finally:
                 # Always clear tracking when done (success or failure)
                 self.clear_running_query(n8n_session_id)
-                
+
         except Exception as e:
             self.clear_running_query(n8n_session_id)
             return f"Error: Failed to execute command: {e}"
@@ -1254,15 +1263,15 @@ User Request:
             print(f"[Session] Starting new OpenCode session", file=sys.stderr)
 
         cmd.append(context_prompt)
-        
+
         output = self._execute_subprocess_with_tracking(
             cmd, agent_dir, effective_timeout, "opencode", agent, prompt, n8n_session_id
         )
-        
+
         # Check for session errors
         if "NotFoundError" in output or "Resource not found" in output:
             return f"NotFoundError: {output}"
-        
+
         return self.strip_metadata(output, "opencode")
 
     def run_claude(
@@ -1316,10 +1325,10 @@ User Request:
         output = self._execute_subprocess_with_tracking(
             cmd, agent_dir, effective_timeout, "claude", agent, prompt, n8n_session_id
         )
-        
+
         if "Error: Claude command failed" in output:
             return output
-            
+
         return self.strip_metadata(output, "claude")
 
     def run_gemini(
@@ -1364,10 +1373,10 @@ User Request:
         output = self._execute_subprocess_with_tracking(
             cmd, agent_dir, effective_timeout, "gemini", agent, prompt, n8n_session_id
         )
-        
+
         if "Error: Gemini command failed" in output:
             return output
-            
+
         return self.strip_metadata(output, "gemini")
 
     def run_codex(
@@ -1423,10 +1432,10 @@ User Request:
         output = self._execute_subprocess_with_tracking(
             cmd, agent_dir, effective_timeout, "codex", agent, prompt, n8n_session_id
         )
-        
+
         if "Error: CODEX command failed" in output:
             return output
-            
+
         return self.strip_metadata(output, "codex")
 
     def session_exists(self, session_id: str, runtime: str) -> bool:
@@ -1615,8 +1624,8 @@ User Request:
 
 **Session:**
    • `/session reset` - Reset current session
-   • `/timeout` or `/timeout current` - Show current timeout
-   • `/timeout set [seconds]` - Set timeout (30-900 seconds)
+    • `/timeout` or `/timeout current` - Show current timeout
+    • `/timeout set [seconds]` - Set timeout (30-3600 seconds / 1 hour max)
    • `/render` or `/render current` - Show current render type
    • `/render set [text|markdown|html|telegram_html]` - Set render type
 
@@ -1646,17 +1655,17 @@ You can mention an agent in your prompt and it will auto-delegate:
         elif command == "/status":
             # Check if there's a running query for this session
             query_info = self.get_running_query(n8n_session_id)
-            
+
             if not query_info:
                 return "✓ No running query for this session"
-            
+
             # Check if process is still running
             pid = query_info["pid"]
             if not self.is_process_running(pid):
                 # Process finished but tracking wasn't cleaned up
                 self.clear_running_query(n8n_session_id)
                 return "✓ No running query for this session (last query has completed)"
-            
+
             # Process is running - show status
             runtime = query_info.get("runtime", "unknown")
             agent = query_info.get("agent", "unknown")
@@ -1666,7 +1675,7 @@ You can mention an agent in your prompt and it will auto-delegate:
             elapsed_min = elapsed // 60
             elapsed_sec = elapsed % 60
             last_output = query_info.get("last_output", "")
-            
+
             status_msg = f"""🔄 **Query Running**
 
 **Runtime:** {runtime}
@@ -1676,24 +1685,24 @@ You can mention an agent in your prompt and it will auto-delegate:
 **Prompt:** {prompt_snippet}...
 
 **Recent Output:**
-{last_output[-self.MAX_OUTPUT_DISPLAY:] if last_output else "(no output yet)"}
+{last_output[-self.MAX_OUTPUT_DISPLAY :] if last_output else "(no output yet)"}
 """
             return status_msg
 
         elif command == "/cancel":
             # Find and cancel running query
             query_info = self.get_running_query(n8n_session_id)
-            
+
             if not query_info:
                 return "❌ No running query to cancel for this session"
-            
+
             pid = query_info["pid"]
-            
+
             # Check if process is still running
             if not self.is_process_running(pid):
                 self.clear_running_query(n8n_session_id)
                 return "✓ No running query to cancel (query has already completed)"
-            
+
             # Kill the process
             if self.kill_process(pid):
                 self.clear_running_query(n8n_session_id)
@@ -1885,11 +1894,11 @@ You can mention an agent in your prompt and it will auto-delegate:
                 timeout_str = argument[4:].strip()
                 try:
                     timeout_seconds = int(timeout_str)
-                    # Validate timeout (minimum 30 seconds, maximum 900 seconds / 15 minutes)
+                    # Validate timeout (minimum 30 seconds, maximum 3600 seconds / 1 hour)
                     if timeout_seconds < 30:
                         return f"❌ Timeout must be at least 30 seconds. You specified: {timeout_seconds}s"
-                    if timeout_seconds > 900:
-                        return f"❌ Timeout must not exceed 900 seconds (15 minutes). You specified: {timeout_seconds}s"
+                    if timeout_seconds > 3600:
+                        return f"❌ Timeout must not exceed 3600 seconds (1 hour). You specified: {timeout_seconds}s"
 
                     # Store timeout in session
                     self.update_session_field(
@@ -1901,7 +1910,7 @@ You can mention an agent in your prompt and it will auto-delegate:
                 except ValueError:
                     return f"❌ Invalid timeout value '{timeout_str}'. Please provide a number (30-600 seconds)"
             else:
-                return "Usage: `/timeout` or `/timeout current` to show current timeout\n       `/timeout set [seconds]` to set a new timeout (30-900 seconds)"
+                return "Usage: `/timeout` or `/timeout current` to show current timeout\n       `/timeout set [seconds]` to set a new timeout (30-3600 seconds)"
 
         elif command == "/render":
             if not argument:
