@@ -879,6 +879,12 @@ class SessionManager:
                     continue
                 skip_banner = False
 
+                # Skip tool invocation lines (e.g., "|  Glob", "|  Read", "|  Write", etc.)
+                if re.match(
+                    r"^\|\s+(Glob|Read|Write|Bash|Edit|bash|grep|find)", clean_line
+                ):
+                    continue
+
                 # Skip stats
                 if any(
                     k in clean_line.lower()
