@@ -916,6 +916,115 @@ class TestCapabilityDiscovery(unittest.TestCase):
         self.assertIn("Show what the orchestrator can help with", result)
 
 
+class TestQueryTracking(unittest.TestCase):
+    """Test query tracking functionality for /status and /cancel commands"""
+
+    def setUp(self):
+        """Set up test environment"""
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.temp_path = Path(self.temp_dir.name)
+        
+        self.agents_config = {
+            "agents": [
+                {"name": "test_agent", "description": "Test agent", "path": "/tmp/test"}
+            ]
+        }
+        self.config_file = self.temp_path / "agents.json"
+        with open(self.config_file, 'w') as f:
+            json.dump(self.agents_config, f)
+        
+        self.patcher = patch('agent_manager.Path.home')
+        self.mock_home = self.patcher.start()
+        self.mock_home.return_value = self.temp_path
+        
+        self.manager = SessionManager(str(self.config_file))
+
+    def tearDown(self):
+        """Clean up"""
+        self.patcher.stop()
+        self.temp_dir.cleanup()
+
+    def test_track_running_query(self):
+        """Test tracking a running query"""
+        self.manager.track_running_query("test_session", 12345, "copilot", "test_agent", "test prompt")
+        
+        query = self.manager.get_running_query("test_session")
+        self.assertIsNotNone(query)
+        self.assertEqual(query["pid"], 12345)
+        self.assertEqual(query["runtime"], "copilot")
+        self.assertEqual(query["agent"], "test_agent")
+        self.assertIn("test prompt", query["prompt"])
+
+    def test_update_query_output(self):
+        """Test updating query output"""
+        self.manager.track_running_query("test_session", 12345, "copilot", "test_agent", "test prompt")
+        self.manager.update_query_output("test_session", "Some output from the query")
+        
+        query = self.manager.get_running_query("test_session")
+        self.assertIn("Some output", query["last_output"])
+
+    def test_clear_running_query(self):
+        """Test clearing a running query"""
+        self.manager.track_running_query("test_session", 12345, "copilot", "test_agent", "test prompt")
+        self.manager.clear_running_query("test_session")
+        
+        query = self.manager.get_running_query("test_session")
+        self.assertIsNone(query)
+
+    def test_status_command_no_running_query(self):
+        """Test /status when no query is running"""
+        result = self.manager.execute("/status", "test_session")
+        self.assertIn("No running query", result)
+
+    def test_cancel_command_no_running_query(self):
+        """Test /cancel when no query is running"""
+        result = self.manager.execute("/cancel", "test_session")
+        self.assertIn("No running query to cancel", result)
+
+    @patch('agent_manager.SessionManager.is_process_running')
+    def test_status_command_with_running_query(self, mock_is_running):
+        """Test /status with a running query"""
+        mock_is_running.return_value = True
+        
+        # Track a fake running query
+        self.manager.track_running_query("test_session", 12345, "copilot", "test_agent", "test prompt for query")
+        self.manager.update_query_output("test_session", "Recent output from the agent")
+        
+        result = self.manager.execute("/status", "test_session")
+        self.assertIn("Query Running", result)
+        self.assertIn("12345", result)  # PID
+        self.assertIn("copilot", result)  # Runtime
+        self.assertIn("test_agent", result)  # Agent
+        self.assertIn("Recent output", result)  # Last output
+
+    @patch('agent_manager.SessionManager.is_process_running')
+    @patch('agent_manager.SessionManager.kill_process')
+    def test_cancel_command_with_running_query(self, mock_kill, mock_is_running):
+        """Test /cancel with a running query"""
+        mock_is_running.return_value = True
+        mock_kill.return_value = True
+        
+        # Track a fake running query
+        self.manager.track_running_query("test_session", 12345, "copilot", "test_agent", "test prompt")
+        
+        result = self.manager.execute("/cancel", "test_session")
+        self.assertIn("Cancelled running query", result)
+        self.assertIn("12345", result)  # PID
+        
+        # Verify tracking was cleared
+        query = self.manager.get_running_query("test_session")
+        self.assertIsNone(query)
+
+    def test_help_includes_status_and_cancel(self):
+        """Test that /help includes /status and /cancel commands"""
+        result = self.manager.execute("/help", "test_session")
+        
+        self.assertIn("/status", result)
+        self.assertIn("/cancel", result)
+        self.assertIn("Check status of running query", result)
+        self.assertIn("Cancel running query", result)
+
+
 if __name__ == '__main__':
     # Print test configuration info
     if ENABLE_RUNTIME_TESTS:

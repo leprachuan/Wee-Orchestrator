@@ -10,8 +10,11 @@ import os
 import json
 import subprocess
 import re
+import signal
+import time
 from pathlib import Path
 from uuid import uuid4
+
 
 
 # Environment-based configuration
@@ -53,6 +56,11 @@ def get_command_timeout() -> int:
 
 class SessionManager:
     """Manages AI CLI sessions (Copilot & OpenCode) for N8N integration"""
+
+    # Query tracking constants
+    MAX_PROMPT_LENGTH = 200  # Maximum chars to store from prompt
+    MAX_OUTPUT_LENGTH = 500  # Maximum chars to store from output
+    MAX_OUTPUT_DISPLAY = 300  # Maximum chars to display in status output
 
     # Model configurations
     # Note: Claude Code CLI does not support dynamic model listing via flag.
@@ -109,6 +117,7 @@ class SessionManager:
         self.session_map_file = self.copilot_home / "n8n-session-map.json"
         self.session_state_dir = self.copilot_home / "session-state"
         self.logs_dir = self.copilot_home / "logs"
+        self.running_queries_file = self.copilot_home / "running-queries.json"
 
         # OpenCode Paths
         self.opencode_home = Path.home() / ".opencode"
@@ -194,6 +203,79 @@ class SessionManager:
         except Exception as e:
             print(f"[Error] Failed to load agents config: {e}", file=sys.stderr)
             return {}
+
+    def load_running_queries(self) -> dict:
+        """Load the running queries tracking data"""
+        if not self.running_queries_file.exists():
+            return {}
+        
+        try:
+            with open(self.running_queries_file, "r") as f:
+                return json.load(f)
+        except (json.JSONDecodeError, IOError):
+            return {}
+
+    def save_running_queries(self, queries: dict):
+        """Save the running queries tracking data"""
+        with open(self.running_queries_file, "w") as f:
+            json.dump(queries, f, indent=2)
+
+    def track_running_query(
+        self, n8n_session_id: str, pid: int, runtime: str, agent: str, prompt: str
+    ):
+        """Track a running query with its PID and session info"""
+        queries = self.load_running_queries()
+        queries[n8n_session_id] = {
+            "pid": pid,
+            "runtime": runtime,
+            "agent": agent,
+            "prompt": prompt[:self.MAX_PROMPT_LENGTH],
+            "start_time": time.time(),
+            "last_output": "",
+        }
+        self.save_running_queries(queries)
+        print(f"[Track] Started tracking query for session {n8n_session_id}, PID: {pid}", file=sys.stderr)
+
+    def update_query_output(self, n8n_session_id: str, output_snippet: str):
+        """Update the last output snippet for a running query"""
+        queries = self.load_running_queries()
+        if n8n_session_id in queries:
+            queries[n8n_session_id]["last_output"] = output_snippet[-self.MAX_OUTPUT_LENGTH:]
+            self.save_running_queries(queries)
+
+    def clear_running_query(self, n8n_session_id: str):
+        """Clear tracking for a completed/cancelled query"""
+        queries = self.load_running_queries()
+        if n8n_session_id in queries:
+            del queries[n8n_session_id]
+            self.save_running_queries(queries)
+            print(f"[Track] Cleared tracking for session {n8n_session_id}", file=sys.stderr)
+
+    def get_running_query(self, n8n_session_id: str) -> dict | None:
+        """Get tracking info for a running query"""
+        queries = self.load_running_queries()
+        return queries.get(n8n_session_id)
+
+    def is_process_running(self, pid: int) -> bool:
+        """Check if a process with given PID is still running
+        
+        Uses os.kill with signal 0 to test process existence without
+        actually sending a signal to the process.
+        """
+        try:
+            os.kill(pid, 0)  # Signal 0 tests existence without affecting the process
+            return True
+        except OSError:
+            return False
+
+    def kill_process(self, pid: int) -> bool:
+        """Kill a process with given PID"""
+        try:
+            os.kill(pid, signal.SIGKILL)
+            return True
+        except OSError as e:
+            print(f"[Error] Failed to kill process {pid}: {e}", file=sys.stderr)
+            return False
 
     def fetch_copilot_models(self) -> dict:
         """Fetch available models from copilot CLI help text"""
@@ -993,6 +1075,60 @@ User Request:
 {prompt}"""
         return context
 
+    def _execute_subprocess_with_tracking(
+        self,
+        cmd: list,
+        cwd: str,
+        timeout: int,
+        runtime: str,
+        agent: str,
+        prompt: str,
+        n8n_session_id: str,
+    ) -> str:
+        """Execute a subprocess with PID tracking
+        
+        This method:
+        1. Starts the process with Popen to get the PID
+        2. Tracks the running query
+        3. Waits for completion with timeout
+        4. Cleans up tracking when done
+        """
+        try:
+            # Start process and get PID
+            process = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                cwd=cwd,
+            )
+            
+            # Track the running query
+            self.track_running_query(n8n_session_id, process.pid, runtime, agent, prompt)
+            
+            # Wait for completion with timeout
+            try:
+                stdout, stderr = process.communicate(timeout=timeout)
+                output = stdout + (stderr if stderr else "")
+                
+                # Update with final output snippet
+                self.update_query_output(n8n_session_id, output)
+                
+                return output
+            except subprocess.TimeoutExpired:
+                # Process timed out, kill it and wait for termination
+                process.kill()
+                process.wait()  # Wait for process to actually terminate
+                timeout_min = timeout / 60
+                return f"Error: Command timed out (exceeded {timeout}s / {timeout_min:.1f}min)"
+            finally:
+                # Always clear tracking when done (success or failure)
+                self.clear_running_query(n8n_session_id)
+                
+        except Exception as e:
+            self.clear_running_query(n8n_session_id)
+            return f"Error: Failed to execute command: {e}"
+
     def run_copilot(
         self,
         prompt: str,
@@ -1035,22 +1171,10 @@ User Request:
         else:
             print(f"[Session] Starting new Copilot session", file=sys.stderr)
 
-        effective_timeout = timeout if timeout is not None else self.command_timeout
-        try:
-            result = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                timeout=effective_timeout,
-                cwd=agent_dir,
-            )
-            output = result.stdout + (result.stderr if result.stderr else "")
-            return self.strip_metadata(output, "copilot")
-        except subprocess.TimeoutExpired:
-            timeout_min = effective_timeout / 60
-            return f"Error: Copilot command timed out (exceeded {effective_timeout}s / {timeout_min:.1f}min)"
-        except subprocess.CalledProcessError as e:
-            return f"Error: Copilot command failed with exit code {e.returncode}"
+        output = self._execute_subprocess_with_tracking(
+            cmd, agent_dir, effective_timeout, "copilot", agent, prompt, n8n_session_id
+        )
+        return self.strip_metadata(output, "copilot")
 
     def run_opencode(
         self,
@@ -1088,44 +1212,16 @@ User Request:
             print(f"[Session] Starting new OpenCode session", file=sys.stderr)
 
         cmd.append(context_prompt)
-        try:
-            # Note: OpenCode wrapper used os.getcwd(), here we use agent_dir
-            result = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                timeout=effective_timeout,
-                cwd=agent_dir,
-            )
-            output = result.stdout
-            if result.stderr:
-                # Filter purely session logs from stderr
-                err_lines = [
-                    l
-                    for l in result.stderr.split("\n")
-                    if not l.startswith("[Session]")
-                ]
-                if err_lines:
-                    output += "\n" + "\n".join(err_lines)
-            return self.strip_metadata(output, "opencode")
-        except subprocess.TimeoutExpired as e:
-            # Check if we have partial output indicating the specific session error
-            # OpenCode might hang on error, so we check partial output
-            def to_str(s):
-                if isinstance(s, bytes):
-                    return s.decode("utf-8", errors="replace")
-                if s is None:
-                    return ""
-                return str(s)
-
-            partial_out = to_str(e.stdout) + "\n" + to_str(e.stderr)
-
-            if "NotFoundError" in partial_out or "Resource not found" in partial_out:
-                return f"NotFoundError: {partial_out}"
-            timeout_min = effective_timeout / 60
-            return f"Error: OpenCode command timed out (exceeded {effective_timeout}s / {timeout_min:.1f}min)"
-        except subprocess.CalledProcessError as e:
-            return f"Error: OpenCode command failed with exit code {e.returncode}"
+        
+        output = self._execute_subprocess_with_tracking(
+            cmd, agent_dir, effective_timeout, "opencode", agent, prompt, n8n_session_id
+        )
+        
+        # Check for session errors
+        if "NotFoundError" in output or "Resource not found" in output:
+            return f"NotFoundError: {output}"
+        
+        return self.strip_metadata(output, "opencode")
 
     def run_claude(
         self,
@@ -1175,30 +1271,14 @@ User Request:
         else:
             print(f"[Session] Starting new Claude session (auto-ID)", file=sys.stderr)
 
-        effective_timeout = timeout if timeout is not None else self.command_timeout
-        try:
-            result = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                timeout=effective_timeout,
-                cwd=agent_dir,
-            )
-            output = result.stdout + (result.stderr if result.stderr else "")
-
-            if result.returncode != 0:
-                print(
-                    f"[Error] Claude command failed (exit {result.returncode}): {output}",
-                    file=sys.stderr,
-                )
-                return f"Error: Claude command failed: {output}"
-
-            return self.strip_metadata(output, "claude")
-        except subprocess.TimeoutExpired:
-            timeout_min = effective_timeout / 60
-            return f"Error: Claude command timed out (exceeded {effective_timeout}s / {timeout_min:.1f}min)"
-        except subprocess.CalledProcessError as e:
-            return f"Error: Claude command failed with exit code {e.returncode}"
+        output = self._execute_subprocess_with_tracking(
+            cmd, agent_dir, effective_timeout, "claude", agent, prompt, n8n_session_id
+        )
+        
+        if "Error: Claude command failed" in output:
+            return output
+            
+        return self.strip_metadata(output, "claude")
 
     def run_gemini(
         self,
@@ -1239,30 +1319,14 @@ User Request:
         else:
             print(f"[Session] Starting new Gemini session", file=sys.stderr)
 
-        effective_timeout = timeout if timeout is not None else self.command_timeout
-        try:
-            result = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                timeout=effective_timeout,
-                cwd=agent_dir,
-            )
-            output = result.stdout + (result.stderr if result.stderr else "")
-
-            if result.returncode != 0:
-                print(
-                    f"[Error] Gemini command failed (exit {result.returncode}): {output}",
-                    file=sys.stderr,
-                )
-                return f"Error: Gemini command failed: {output}"
-
-            return self.strip_metadata(output, "gemini")
-        except subprocess.TimeoutExpired:
-            timeout_min = effective_timeout / 60
-            return f"Error: Gemini command timed out (exceeded {effective_timeout}s / {timeout_min:.1f}min)"
-        except subprocess.CalledProcessError as e:
-            return f"Error: Gemini command failed with exit code {e.returncode}"
+        output = self._execute_subprocess_with_tracking(
+            cmd, agent_dir, effective_timeout, "gemini", agent, prompt, n8n_session_id
+        )
+        
+        if "Error: Gemini command failed" in output:
+            return output
+            
+        return self.strip_metadata(output, "gemini")
 
     def run_codex(
         self,
@@ -1314,30 +1378,14 @@ User Request:
             ]
             print(f"[Session] Starting new CODEX session", file=sys.stderr)
 
-        effective_timeout = timeout if timeout is not None else self.command_timeout
-        try:
-            result = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                timeout=effective_timeout,
-                cwd=agent_dir,
-            )
-            output = result.stdout + (result.stderr if result.stderr else "")
-
-            if result.returncode != 0:
-                print(
-                    f"[Error] CODEX command failed (exit {result.returncode}): {output}",
-                    file=sys.stderr,
-                )
-                return f"Error: CODEX command failed: {output}"
-
-            return self.strip_metadata(output, "codex")
-        except subprocess.TimeoutExpired:
-            timeout_min = effective_timeout / 60
-            return f"Error: CODEX command timed out (exceeded {effective_timeout}s / {timeout_min:.1f}min)"
-        except subprocess.CalledProcessError as e:
-            return f"Error: CODEX command failed with exit code {e.returncode}"
+        output = self._execute_subprocess_with_tracking(
+            cmd, agent_dir, effective_timeout, "codex", agent, prompt, n8n_session_id
+        )
+        
+        if "Error: CODEX command failed" in output:
+            return output
+            
+        return self.strip_metadata(output, "codex")
 
     def session_exists(self, session_id: str, runtime: str) -> bool:
         """Check if session state exists for runtime"""
@@ -1522,6 +1570,10 @@ User Request:
    • `/render` or `/render current` - Show current render type
    • `/render set [text|markdown|html|telegram_html]` - Set render type
 
+**Query Management:**
+   • `/status` - Check status of running query for this session
+   • `/cancel` - Cancel running query for this session
+
 **Auto-Delegation:**
 You can mention an agent in your prompt and it will auto-delegate:
    • \"ask the family agent for Parker's Christmas ideas\"
@@ -1537,6 +1589,65 @@ You can mention an agent in your prompt and it will auto-delegate:
    ask the family agent what are Parker's Christmas ideas
    have the devops agent check the server status
 """
+
+        elif command == "/status":
+            # Check if there's a running query for this session
+            query_info = self.get_running_query(n8n_session_id)
+            
+            if not query_info:
+                return "✓ No running query for this session"
+            
+            # Check if process is still running
+            pid = query_info["pid"]
+            if not self.is_process_running(pid):
+                # Process finished but tracking wasn't cleaned up
+                self.clear_running_query(n8n_session_id)
+                return "✓ No running query for this session (last query has completed)"
+            
+            # Process is running - show status
+            runtime = query_info.get("runtime", "unknown")
+            agent = query_info.get("agent", "unknown")
+            prompt_snippet = query_info.get("prompt", "")[:100]
+            start_time = query_info.get("start_time", 0)
+            elapsed = int(time.time() - start_time)
+            elapsed_min = elapsed // 60
+            elapsed_sec = elapsed % 60
+            last_output = query_info.get("last_output", "")
+            
+            status_msg = f"""🔄 **Query Running**
+
+**Runtime:** {runtime}
+**Agent:** {agent}
+**PID:** {pid}
+**Elapsed Time:** {elapsed_min}m {elapsed_sec}s
+**Prompt:** {prompt_snippet}...
+
+**Recent Output:**
+{last_output[-self.MAX_OUTPUT_DISPLAY:] if last_output else "(no output yet)"}
+"""
+            return status_msg
+
+        elif command == "/cancel":
+            # Find and cancel running query
+            query_info = self.get_running_query(n8n_session_id)
+            
+            if not query_info:
+                return "❌ No running query to cancel for this session"
+            
+            pid = query_info["pid"]
+            
+            # Check if process is still running
+            if not self.is_process_running(pid):
+                self.clear_running_query(n8n_session_id)
+                return "✓ No running query to cancel (query has already completed)"
+            
+            # Kill the process
+            if self.kill_process(pid):
+                self.clear_running_query(n8n_session_id)
+                runtime = query_info.get("runtime", "unknown")
+                return f"✓ Cancelled running query (PID: {pid}, Runtime: {runtime})"
+            else:
+                return f"❌ Failed to cancel query (PID: {pid}). Process may have already terminated."
 
         elif command == "/capabilities":
             return self.get_capabilities()

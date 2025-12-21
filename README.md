@@ -349,6 +349,14 @@ Interact with the agent manager using slash commands:
 /help                      # Show all available commands
 ```
 
+#### Query Management
+```
+/status                    # Check status of running query for this session
+/cancel                    # Cancel running query for this session
+```
+
+**Query Tracking**: When a query is executing, the agent manager tracks its process ID (PID), runtime, agent, and output. Use `/status` to check if a query is running and see recent output, or `/cancel` to terminate a long-running query.
+
 ### N8N Integration
 
 Use in an N8N workflow:
@@ -383,6 +391,17 @@ Each N8N session ID is mapped to:
 - Current agent
 
 Session data persists across requests, allowing multi-turn conversations.
+
+### Query Tracking
+
+Running queries are tracked in `~/.copilot/running-queries.json` with:
+- **PID**: Process ID for the running query
+- **Runtime**: Which AI runtime is executing the query
+- **Agent**: Which agent context is being used
+- **Start Time**: When the query started
+- **Last Output**: Recent output snippet (last 500 characters)
+
+This enables the `/status` and `/cancel` commands to monitor and control long-running queries.
 
 ## Default Behavior
 
@@ -447,13 +466,14 @@ python3 -m unittest discover -s tests -p "test_*.py" -v
 
 ### Test Coverage
 
-The test suite includes 31 tests covering:
+The test suite includes 62 tests covering:
 
 - **Session Management** (5 tests) - Creating, resuming, and persisting sessions
 - **Agent Configuration** (4 tests) - Loading and managing agent configurations
 - **Slash Commands** (9 tests) - All interactive commands (`/help`, `/runtime`, `/model`, `/agent`, `/session`)
+- **Query Tracking** (8 tests) - Process tracking for `/status` and `/cancel` commands
 - **Model Resolution** (5 tests) - Converting model names/aliases to full IDs
-- **Metadata Stripping** (3 tests) - Cleaning CLI output from different runtimes
+- **Metadata Stripping** (4 tests) - Cleaning CLI output from different runtimes
 - **Agent Switching** (3 tests) - Changing agents and session context
 - **Session Existence** (2 tests) - Checking session state file existence
 
