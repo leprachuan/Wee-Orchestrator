@@ -32,23 +32,36 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from agent_manager import SessionManager
 
 # Check if we should run tests that require actual CLI runtimes
-ENABLE_RUNTIME_TESTS = os.environ.get('TEST_WITH_RUNTIMES', '').lower() in ('1', 'true', 'yes')
+ENABLE_RUNTIME_TESTS = os.environ.get("TEST_WITH_RUNTIMES", "").lower() in (
+    "1",
+    "true",
+    "yes",
+)
+
 
 # Helper to skip tests based on runtime availability
 def requires_runtime(*runtimes):
     """Decorator to skip test if runtime is not available or tests are disabled"""
+
     def decorator(test_func):
         def wrapper(*args, **kwargs):
             if not ENABLE_RUNTIME_TESTS:
-                return unittest.skip("Runtime tests disabled. Set TEST_WITH_RUNTIMES=1 to enable.")(test_func)(*args, **kwargs)
-            
+                return unittest.skip(
+                    "Runtime tests disabled. Set TEST_WITH_RUNTIMES=1 to enable."
+                )(test_func)(*args, **kwargs)
+
             for runtime in runtimes:
                 if not shutil.which(runtime):
-                    return unittest.skip(f"Runtime '{runtime}' not found in PATH")(test_func)(*args, **kwargs)
-            
+                    return unittest.skip(f"Runtime '{runtime}' not found in PATH")(
+                        test_func
+                    )(*args, **kwargs)
+
             return test_func(*args, **kwargs)
+
         return wrapper
+
     return decorator
+
 
 def has_runtime(runtime):
     """Check if a runtime CLI tool is available"""
@@ -69,18 +82,18 @@ class TestSessionManager(unittest.TestCase):
                 {
                     "name": "test_devops",
                     "description": "Test DevOps agent",
-                    "path": "/tmp/test_devops"
+                    "path": "/tmp/test_devops",
                 },
                 {
                     "name": "test_projects",
                     "description": "Test Projects agent",
-                    "path": "/tmp/test_projects"
-                }
+                    "path": "/tmp/test_projects",
+                },
             ]
         }
 
         self.config_file = self.temp_path / "agents.json"
-        with open(self.config_file, 'w') as f:
+        with open(self.config_file, "w") as f:
             json.dump(self.agents_config, f)
 
     def tearDown(self):
@@ -99,10 +112,10 @@ class TestSessionManager(unittest.TestCase):
         manager = SessionManager(str(self.config_file))
         agents = manager.AGENTS
 
-        self.assertIn('test_devops', agents)
-        self.assertIn('test_projects', agents)
-        self.assertEqual(agents['test_devops']['path'], "/tmp/test_devops")
-        self.assertEqual(agents['test_projects']['description'], "Test Projects agent")
+        self.assertIn("test_devops", agents)
+        self.assertIn("test_projects", agents)
+        self.assertEqual(agents["test_devops"]["path"], "/tmp/test_devops")
+        self.assertEqual(agents["test_projects"]["description"], "Test Projects agent")
 
     def test_load_agents_config_missing_file(self):
         """Test handling of missing config file"""
@@ -113,7 +126,7 @@ class TestSessionManager(unittest.TestCase):
     def test_load_agents_config_invalid_json(self):
         """Test handling of invalid JSON in config file"""
         bad_config = self.temp_path / "bad.json"
-        with open(bad_config, 'w') as f:
+        with open(bad_config, "w") as f:
             f.write("{invalid json")
 
         manager = SessionManager(str(bad_config))
@@ -135,11 +148,11 @@ class TestSessionPersistence(unittest.TestCase):
             ]
         }
         self.config_file = self.temp_path / "agents.json"
-        with open(self.config_file, 'w') as f:
+        with open(self.config_file, "w") as f:
             json.dump(self.agents_config, f)
 
         # Mock home directory for session storage
-        self.patcher = patch('agent_manager.Path.home')
+        self.patcher = patch("agent_manager.Path.home")
         self.mock_home = self.patcher.start()
         self.mock_home.return_value = self.temp_path
 
@@ -206,14 +219,18 @@ class TestSlashCommands(unittest.TestCase):
 
         self.agents_config = {
             "agents": [
-                {"name": "test_devops", "description": "Test DevOps", "path": "/tmp/test"}
+                {
+                    "name": "test_devops",
+                    "description": "Test DevOps",
+                    "path": "/tmp/test",
+                }
             ]
         }
         self.config_file = self.temp_path / "agents.json"
-        with open(self.config_file, 'w') as f:
+        with open(self.config_file, "w") as f:
             json.dump(self.agents_config, f)
 
-        self.patcher = patch('agent_manager.Path.home')
+        self.patcher = patch("agent_manager.Path.home")
         self.mock_home = self.patcher.start()
         self.mock_home.return_value = self.temp_path
 
@@ -347,7 +364,7 @@ class TestMetadataStripping(unittest.TestCase):
 
         self.agents_config = {"agents": []}
         self.config_file = self.temp_path / "agents.json"
-        with open(self.config_file, 'w') as f:
+        with open(self.config_file, "w") as f:
             json.dump(self.agents_config, f)
 
         self.manager = SessionManager(str(self.config_file))
@@ -368,7 +385,7 @@ class TestMetadataStripping(unittest.TestCase):
     def test_strip_copilot_metadata(self):
         """Test stripping Copilot metadata"""
         text = "Output here\nTotal usage est: 100 tokens\nTotal duration: 5s"
-        result = self.manager.strip_metadata(text, 'copilot')
+        result = self.manager.strip_metadata(text, "copilot")
         self.assertIn("Output here", result)
         self.assertNotIn("Total usage", result)
         self.assertNotIn("Total duration", result)
@@ -376,14 +393,14 @@ class TestMetadataStripping(unittest.TestCase):
     def test_strip_opencode_metadata(self):
         """Test stripping OpenCode metadata"""
         text = "█████ OpenCode Banner\nActual output\nTokens used: 50"
-        result = self.manager.strip_metadata(text, 'opencode')
+        result = self.manager.strip_metadata(text, "opencode")
         self.assertIn("Actual output", result)
         self.assertNotIn("Tokens used", result)
 
     def test_strip_claude_metadata(self):
         """Test Claude metadata handling (should pass through)"""
         text = "Claude output\nSome response"
-        result = self.manager.strip_metadata(text, 'claude')
+        result = self.manager.strip_metadata(text, "claude")
         self.assertIn("Claude output", result)
         self.assertIn("Some response", result)
 
@@ -398,7 +415,7 @@ class TestModelResolution(unittest.TestCase):
 
         self.agents_config = {"agents": []}
         self.config_file = self.temp_path / "agents.json"
-        with open(self.config_file, 'w') as f:
+        with open(self.config_file, "w") as f:
             json.dump(self.agents_config, f)
 
         self.manager = SessionManager(str(self.config_file))
@@ -425,23 +442,23 @@ class TestModelResolution(unittest.TestCase):
         result = self.manager.get_model_from_name("nonexistent-model", "claude")
         self.assertIsNone(result)
 
-    @patch.object(SessionManager, 'fetch_copilot_models')
+    @patch.object(SessionManager, "fetch_copilot_models")
     def test_get_copilot_model_exact_match(self, mock_fetch):
         """Test exact model name matching for Copilot"""
         mock_fetch.return_value = {
-            'GPT Models': ['gpt-5', 'gpt-4'],
-            'Other': ['gemini-pro']
+            "GPT Models": ["gpt-5", "gpt-4"],
+            "Other": ["gemini-pro"],
         }
 
         result = self.manager.get_model_from_name("gpt-5", "copilot")
         self.assertEqual(result, "gpt-5")
 
-    @patch.object(SessionManager, 'fetch_copilot_models')
+    @patch.object(SessionManager, "fetch_copilot_models")
     def test_get_copilot_model_substring_match(self, mock_fetch):
         """Test substring matching for Copilot models"""
         mock_fetch.return_value = {
-            'GPT Models': ['gpt-5.2', 'gpt-4'],
-            'Other': ['gemini-pro']
+            "GPT Models": ["gpt-5.2", "gpt-4"],
+            "Other": ["gemini-pro"],
         }
 
         result = self.manager.get_model_from_name("5.2", "copilot")
@@ -459,14 +476,14 @@ class TestAgentSwitching(unittest.TestCase):
         self.agents_config = {
             "agents": [
                 {"name": "agent1", "description": "Agent 1", "path": "/tmp/agent1"},
-                {"name": "agent2", "description": "Agent 2", "path": "/tmp/agent2"}
+                {"name": "agent2", "description": "Agent 2", "path": "/tmp/agent2"},
             ]
         }
         self.config_file = self.temp_path / "agents.json"
-        with open(self.config_file, 'w') as f:
+        with open(self.config_file, "w") as f:
             json.dump(self.agents_config, f)
 
-        self.patcher = patch('agent_manager.Path.home')
+        self.patcher = patch("agent_manager.Path.home")
         self.mock_home = self.patcher.start()
         self.mock_home.return_value = self.temp_path
 
@@ -511,10 +528,10 @@ class TestSessionExistence(unittest.TestCase):
 
         self.agents_config = {"agents": []}
         self.config_file = self.temp_path / "agents.json"
-        with open(self.config_file, 'w') as f:
+        with open(self.config_file, "w") as f:
             json.dump(self.agents_config, f)
 
-        self.patcher = patch('agent_manager.Path.home')
+        self.patcher = patch("agent_manager.Path.home")
         self.mock_home = self.patcher.start()
         self.mock_home.return_value = self.temp_path
 
@@ -556,14 +573,18 @@ class TestGeminiSupport(unittest.TestCase):
 
         self.agents_config = {
             "agents": [
-                {"name": "test_devops", "description": "Test DevOps", "path": "/tmp/test"}
+                {
+                    "name": "test_devops",
+                    "description": "Test DevOps",
+                    "path": "/tmp/test",
+                }
             ]
         }
         self.config_file = self.temp_path / "agents.json"
-        with open(self.config_file, 'w') as f:
+        with open(self.config_file, "w") as f:
             json.dump(self.agents_config, f)
 
-        self.patcher = patch('agent_manager.Path.home')
+        self.patcher = patch("agent_manager.Path.home")
         self.mock_home = self.patcher.start()
         self.mock_home.return_value = self.temp_path
 
@@ -576,10 +597,10 @@ class TestGeminiSupport(unittest.TestCase):
 
     def test_gemini_models_defined(self):
         """Test that Gemini models are properly defined"""
-        self.assertIn('Google Models', self.manager.GEMINI_MODELS)
-        models = self.manager.GEMINI_MODELS['Google Models']
+        self.assertIn("Google Models", self.manager.GEMINI_MODELS)
+        models = self.manager.GEMINI_MODELS["Google Models"]
         self.assertGreater(len(models), 0)
-        
+
         # Check structure of first model
         model_id, desc, aliases = models[0]
         self.assertIsInstance(model_id, str)
@@ -595,7 +616,7 @@ class TestGeminiSupport(unittest.TestCase):
         """Test switching to Gemini runtime"""
         result = self.manager.execute("/runtime set gemini", "test_session")
         self.assertIn("gemini", result.lower())
-        
+
         # Verify it was set
         session_data = self.manager.get_or_create_session_data("test_session")
         self.assertEqual(session_data["runtime"], "gemini")
@@ -605,7 +626,7 @@ class TestGeminiSupport(unittest.TestCase):
         """Test resolving Gemini models by name"""
         result = self.manager.get_model_from_name("gemini-1.5-flash", "gemini")
         self.assertEqual(result, "gemini-1.5-flash")
-        
+
         result = self.manager.get_model_from_name("gemini-pro", "gemini")
         self.assertEqual(result, "gemini-pro")
 
@@ -613,7 +634,7 @@ class TestGeminiSupport(unittest.TestCase):
         """Test resolving Gemini models by alias"""
         result = self.manager.get_model_from_name("flash-1.5", "gemini")
         self.assertEqual(result, "gemini-1.5-flash")
-        
+
         result = self.manager.get_model_from_name("pro-1.5", "gemini")
         self.assertEqual(result, "gemini-1.5-pro")
 
@@ -627,11 +648,11 @@ class TestGeminiSupport(unittest.TestCase):
         # Create a fake session file
         gemini_session_dir = self.temp_path / ".gemini" / "sessions"
         test_session_file = gemini_session_dir / "test-session-123.json"
-        test_session_file.write_text('{}')
-        
+        test_session_file.write_text("{}")
+
         result = self.manager.session_exists("test-session-123", "gemini")
         self.assertTrue(result)
-        
+
         # Test non-existent session
         result = self.manager.session_exists("nonexistent-session", "gemini")
         self.assertFalse(result)
@@ -640,7 +661,7 @@ class TestGeminiSupport(unittest.TestCase):
         """Test /model list command for Gemini runtime"""
         # Switch to Gemini runtime
         self.manager.execute("/runtime set gemini", "test_session")
-        
+
         # List models
         result = self.manager.execute("/model list", "test_session")
         self.assertIn("gemini", result.lower())
@@ -650,11 +671,11 @@ class TestGeminiSupport(unittest.TestCase):
         """Test /model set command for Gemini runtime"""
         # Switch to Gemini runtime
         self.manager.execute("/runtime set gemini", "test_session")
-        
+
         # Set a specific model
         result = self.manager.execute('/model set "gemini-1.5-pro"', "test_session")
         self.assertIn("gemini-1.5-pro", result)
-        
+
         # Verify it was set
         session_data = self.manager.get_or_create_session_data("test_session")
         self.assertEqual(session_data["model"], "gemini-1.5-pro")
@@ -662,7 +683,7 @@ class TestGeminiSupport(unittest.TestCase):
 
 class TestRealRuntimeExecution(unittest.TestCase):
     """Test actual CLI runtime execution (requires runtimes to be installed)
-    
+
     These tests are only run when TEST_WITH_RUNTIMES=1 environment variable is set.
     This allows safe CI/CD runs without requiring all runtimes to be available.
     """
@@ -671,29 +692,38 @@ class TestRealRuntimeExecution(unittest.TestCase):
         """Set up test environment with real home directories"""
         self.temp_dir = tempfile.TemporaryDirectory()
         self.temp_path = Path(self.temp_dir.name)
-        
+
         # Create test agent directories
         self.test_agent_dir = self.temp_path / "test_agent"
         self.test_agent_dir.mkdir(parents=True, exist_ok=True)
-        
+
+        # Create test orchestrator directory
+        self.orchestrator_dir = self.temp_path / "orchestrator"
+        self.orchestrator_dir.mkdir(parents=True, exist_ok=True)
+
         # Create agents config
         self.agents_config = {
             "agents": [
                 {
                     "name": "test_agent",
                     "description": "Test agent for runtime execution",
-                    "path": str(self.test_agent_dir)
-                }
+                    "path": str(self.test_agent_dir),
+                },
+                {
+                    "name": "orchestrator",
+                    "description": "Orchestrator agent",
+                    "path": str(self.orchestrator_dir),
+                },
             ]
         }
         self.config_file = self.temp_path / "agents.json"
-        with open(self.config_file, 'w') as f:
+        with open(self.config_file, "w") as f:
             json.dump(self.agents_config, f)
-        
-        self.patcher = patch('agent_manager.Path.home')
+
+        self.patcher = patch("agent_manager.Path.home")
         self.mock_home = self.patcher.start()
         self.mock_home.return_value = self.temp_path
-        
+
         self.manager = SessionManager(str(self.config_file))
 
     def tearDown(self):
@@ -701,70 +731,70 @@ class TestRealRuntimeExecution(unittest.TestCase):
         self.patcher.stop()
         self.temp_dir.cleanup()
 
-    @requires_runtime('copilot')
+    @requires_runtime("copilot")
     def test_copilot_simple_prompt(self):
         """Test executing a simple prompt with Copilot CLI"""
         self.manager.execute("/runtime set copilot", "test_copilot")
-        
+
         # Execute a simple prompt
         result = self.manager.execute("Say hello", "test_copilot")
-        
+
         # Should return something (not error)
         self.assertIsNotNone(result)
         self.assertGreater(len(result), 0)
         # Should not be an error message
         self.assertNotIn("Error:", result)
 
-    @requires_runtime('opencode')
+    @requires_runtime("opencode")
     def test_opencode_simple_prompt(self):
         """Test executing a simple prompt with OpenCode CLI"""
         self.manager.execute("/runtime set opencode", "test_opencode")
-        
+
         # Execute a simple prompt
         result = self.manager.execute("Say hello", "test_opencode")
-        
+
         # Should return something (not error)
         self.assertIsNotNone(result)
         self.assertGreater(len(result), 0)
         # Should not be an error message
         self.assertNotIn("Error:", result)
 
-    @requires_runtime('claude')
+    @requires_runtime("claude")
     def test_claude_simple_prompt(self):
         """Test executing a simple prompt with Claude CLI"""
         self.manager.execute("/runtime set claude", "test_claude")
-        
+
         # Execute a simple prompt
         result = self.manager.execute("Say hello", "test_claude")
-        
+
         # Should return something (not error)
         self.assertIsNotNone(result)
         self.assertGreater(len(result), 0)
         # Should not be an error message
         self.assertNotIn("Error:", result)
 
-    @requires_runtime('gemini')
+    @requires_runtime("gemini")
     def test_gemini_simple_prompt(self):
         """Test executing a simple prompt with Gemini CLI"""
         self.manager.execute("/runtime set gemini", "test_gemini")
-        
+
         # Execute a simple prompt
         result = self.manager.execute("Say hello", "test_gemini")
-        
+
         # Should return something (not error)
         self.assertIsNotNone(result)
         self.assertGreater(len(result), 0)
         # Should not be an error message
         self.assertNotIn("Error:", result)
 
-    @requires_runtime('codex')
+    @requires_runtime("codex")
     def test_codex_simple_prompt(self):
         """Test executing a simple prompt with CODEX CLI"""
         self.manager.execute("/runtime set codex", "test_codex")
-        
+
         # Execute a simple prompt
         result = self.manager.execute("Say hello", "test_codex")
-        
+
         # Should return something (not error)
         self.assertIsNotNone(result)
         self.assertGreater(len(result), 0)
@@ -779,27 +809,35 @@ class TestRuntimeIntegration(unittest.TestCase):
         """Set up test environment"""
         self.temp_dir = tempfile.TemporaryDirectory()
         self.temp_path = Path(self.temp_dir.name)
-        
+
         self.test_agent_dir = self.temp_path / "test_agent"
         self.test_agent_dir.mkdir(parents=True, exist_ok=True)
-        
+
+        self.orchestrator_dir = self.temp_path / "orchestrator"
+        self.orchestrator_dir.mkdir(parents=True, exist_ok=True)
+
         self.agents_config = {
             "agents": [
                 {
                     "name": "test_agent",
                     "description": "Test agent",
-                    "path": str(self.test_agent_dir)
-                }
+                    "path": str(self.test_agent_dir),
+                },
+                {
+                    "name": "orchestrator",
+                    "description": "Orchestrator agent",
+                    "path": str(self.orchestrator_dir),
+                },
             ]
         }
         self.config_file = self.temp_path / "agents.json"
-        with open(self.config_file, 'w') as f:
+        with open(self.config_file, "w") as f:
             json.dump(self.agents_config, f)
-        
-        self.patcher = patch('agent_manager.Path.home')
+
+        self.patcher = patch("agent_manager.Path.home")
         self.mock_home = self.patcher.start()
         self.mock_home.return_value = self.temp_path
-        
+
         self.manager = SessionManager(str(self.config_file))
 
     def tearDown(self):
@@ -807,59 +845,59 @@ class TestRuntimeIntegration(unittest.TestCase):
         self.patcher.stop()
         self.temp_dir.cleanup()
 
-    @requires_runtime('copilot')
+    @requires_runtime("copilot")
     def test_runtime_switching_with_copilot(self):
         """Test switching between runtimes with actual Copilot available"""
         # Start with copilot
         self.manager.execute("/runtime set copilot", "test_switch")
         session_data = self.manager.get_or_create_session_data("test_switch")
         self.assertEqual(session_data["runtime"], "copilot")
-        
+
         # Switch to another runtime if available
-        if has_runtime('claude'):
+        if has_runtime("claude"):
             self.manager.execute("/runtime set claude", "test_switch")
             session_data = self.manager.get_or_create_session_data("test_switch")
             self.assertEqual(session_data["runtime"], "claude")
 
-    @requires_runtime('copilot', 'opencode')
+    @requires_runtime("copilot", "opencode")
     def test_multi_runtime_session_isolation(self):
         """Test that switching between runtimes maintains session isolation"""
         # Create two different sessions with different runtimes
         self.manager.execute("/runtime set copilot", "copilot_session")
         self.manager.execute("/runtime set opencode", "opencode_session")
-        
+
         # Verify they are isolated
         copilot_data = self.manager.get_or_create_session_data("copilot_session")
         opencode_data = self.manager.get_or_create_session_data("opencode_session")
-        
+
         self.assertEqual(copilot_data["runtime"], "copilot")
         self.assertEqual(opencode_data["runtime"], "opencode")
         self.assertNotEqual(copilot_data["session_id"], opencode_data["session_id"])
 
-    @requires_runtime('copilot')
+    @requires_runtime("copilot")
     def test_session_resumption_with_real_cli(self):
         """Test that sessions can be created and tracked with real CLI"""
         # Execute a prompt to create a real session
         result = self.manager.execute("List current directory files", "test_resume")
-        
+
         # Session should have been created
         session_data = self.manager.get_or_create_session_data("test_resume")
         self.assertIn("session_id", session_data)
         self.assertIsNotNone(session_data["session_id"])
-        
+
         # Result should not be empty
         self.assertGreater(len(result), 0)
 
-    @requires_runtime('copilot')
+    @requires_runtime("copilot")
     def test_metadata_stripping_with_real_output(self):
         """Test that metadata stripping works with real CLI output"""
         # Execute a simple prompt
         result = self.manager.execute("Print 'Hello'", "test_metadata")
-        
+
         # Should not contain CLI metadata markers
         self.assertNotIn("Total usage est:", result)
         self.assertNotIn("Total duration", result)
-        
+
         # Should contain actual response
         self.assertGreater(len(result), 0)
 
@@ -871,30 +909,30 @@ class TestCapabilityDiscovery(unittest.TestCase):
         """Set up test environment"""
         self.temp_dir = tempfile.TemporaryDirectory()
         self.temp_path = Path(self.temp_dir.name)
-        
+
         self.agents_config = {
             "agents": [
                 {
                     "name": "infrastructure",
                     "description": "Infrastructure and DevOps management",
-                    "path": "/tmp/infra"
+                    "path": "/tmp/infra",
                 },
                 {
                     "name": "data_science",
                     "description": "Data analysis and ML experimentation",
-                    "path": "/tmp/data_sci"
+                    "path": "/tmp/data_sci",
                 },
                 {
                     "name": "documentation",
                     "description": "Knowledge and documentation management",
-                    "path": "/tmp/docs"
-                }
+                    "path": "/tmp/docs",
+                },
             ]
         }
         self.config_file = self.temp_path / "agents.json"
-        with open(self.config_file, 'w') as f:
+        with open(self.config_file, "w") as f:
             json.dump(self.agents_config, f)
-        
+
         self.manager = SessionManager(str(self.config_file))
 
     def tearDown(self):
@@ -904,7 +942,7 @@ class TestCapabilityDiscovery(unittest.TestCase):
     def test_capabilities_command(self):
         """Test /capabilities command displays all agents"""
         result = self.manager.execute("/capabilities", "test_cap")
-        
+
         self.assertIn("Orchestrator Capabilities", result)
         self.assertIn("infrastructure", result)
         self.assertIn("data_science", result)
@@ -914,7 +952,7 @@ class TestCapabilityDiscovery(unittest.TestCase):
     def test_capabilities_include_descriptions(self):
         """Test that capabilities include agent descriptions"""
         result = self.manager.execute("/capabilities", "test_cap")
-        
+
         self.assertIn("Infrastructure and DevOps management", result)
         self.assertIn("Data analysis and ML experimentation", result)
         self.assertIn("Knowledge and documentation management", result)
@@ -922,33 +960,31 @@ class TestCapabilityDiscovery(unittest.TestCase):
     def test_capabilities_dynamic_discovery(self):
         """Test that capabilities are dynamically discovered from agents.json"""
         capabilities = self.manager.get_capabilities()
-        
+
         # Should include all agents
         self.assertIn("infrastructure", capabilities)
         self.assertIn("data_science", capabilities)
         self.assertIn("documentation", capabilities)
-        
+
         # Should include their descriptions
         self.assertIn("Infrastructure and DevOps", capabilities)
 
     def test_capabilities_empty_agents(self):
         """Test capabilities when no agents are configured"""
-        empty_config = {
-            "agents": []
-        }
+        empty_config = {"agents": []}
         config_file = self.temp_path / "empty.json"
-        with open(config_file, 'w') as f:
+        with open(config_file, "w") as f:
             json.dump(empty_config, f)
-        
+
         manager = SessionManager(str(config_file))
         result = manager.execute("/capabilities", "test_empty")
-        
+
         self.assertIn("No agents", result)
 
     def test_help_includes_capabilities_command(self):
         """Test that /help includes the /capabilities command"""
         result = self.manager.execute("/help", "test_help")
-        
+
         self.assertIn("/capabilities", result)
         self.assertIn("Show what the orchestrator can help with", result)
 
@@ -960,20 +996,20 @@ class TestQueryTracking(unittest.TestCase):
         """Set up test environment"""
         self.temp_dir = tempfile.TemporaryDirectory()
         self.temp_path = Path(self.temp_dir.name)
-        
+
         self.agents_config = {
             "agents": [
                 {"name": "test_agent", "description": "Test agent", "path": "/tmp/test"}
             ]
         }
         self.config_file = self.temp_path / "agents.json"
-        with open(self.config_file, 'w') as f:
+        with open(self.config_file, "w") as f:
             json.dump(self.agents_config, f)
-        
-        self.patcher = patch('agent_manager.Path.home')
+
+        self.patcher = patch("agent_manager.Path.home")
         self.mock_home = self.patcher.start()
         self.mock_home.return_value = self.temp_path
-        
+
         self.manager = SessionManager(str(self.config_file))
 
     def tearDown(self):
@@ -983,8 +1019,10 @@ class TestQueryTracking(unittest.TestCase):
 
     def test_track_running_query(self):
         """Test tracking a running query"""
-        self.manager.track_running_query("test_session", 12345, "copilot", "test_agent", "test prompt")
-        
+        self.manager.track_running_query(
+            "test_session", 12345, "copilot", "test_agent", "test prompt"
+        )
+
         query = self.manager.get_running_query("test_session")
         self.assertIsNotNone(query)
         self.assertEqual(query["pid"], 12345)
@@ -994,17 +1032,21 @@ class TestQueryTracking(unittest.TestCase):
 
     def test_update_query_output(self):
         """Test updating query output"""
-        self.manager.track_running_query("test_session", 12345, "copilot", "test_agent", "test prompt")
+        self.manager.track_running_query(
+            "test_session", 12345, "copilot", "test_agent", "test prompt"
+        )
         self.manager.update_query_output("test_session", "Some output from the query")
-        
+
         query = self.manager.get_running_query("test_session")
         self.assertIn("Some output", query["last_output"])
 
     def test_clear_running_query(self):
         """Test clearing a running query"""
-        self.manager.track_running_query("test_session", 12345, "copilot", "test_agent", "test prompt")
+        self.manager.track_running_query(
+            "test_session", 12345, "copilot", "test_agent", "test prompt"
+        )
         self.manager.clear_running_query("test_session")
-        
+
         query = self.manager.get_running_query("test_session")
         self.assertIsNone(query)
 
@@ -1018,15 +1060,17 @@ class TestQueryTracking(unittest.TestCase):
         result = self.manager.execute("/cancel", "test_session")
         self.assertIn("No running query to cancel", result)
 
-    @patch('agent_manager.SessionManager.is_process_running')
+    @patch("agent_manager.SessionManager.is_process_running")
     def test_status_command_with_running_query(self, mock_is_running):
         """Test /status with a running query"""
         mock_is_running.return_value = True
-        
+
         # Track a fake running query
-        self.manager.track_running_query("test_session", 12345, "copilot", "test_agent", "test prompt for query")
+        self.manager.track_running_query(
+            "test_session", 12345, "copilot", "test_agent", "test prompt for query"
+        )
         self.manager.update_query_output("test_session", "Recent output from the agent")
-        
+
         result = self.manager.execute("/status", "test_session")
         self.assertIn("Query Running", result)
         self.assertIn("12345", result)  # PID
@@ -1034,20 +1078,22 @@ class TestQueryTracking(unittest.TestCase):
         self.assertIn("test_agent", result)  # Agent
         self.assertIn("Recent output", result)  # Last output
 
-    @patch('agent_manager.SessionManager.is_process_running')
-    @patch('agent_manager.SessionManager.kill_process')
+    @patch("agent_manager.SessionManager.is_process_running")
+    @patch("agent_manager.SessionManager.kill_process")
     def test_cancel_command_with_running_query(self, mock_kill, mock_is_running):
         """Test /cancel with a running query"""
         mock_is_running.return_value = True
         mock_kill.return_value = True
-        
+
         # Track a fake running query
-        self.manager.track_running_query("test_session", 12345, "copilot", "test_agent", "test prompt")
-        
+        self.manager.track_running_query(
+            "test_session", 12345, "copilot", "test_agent", "test prompt"
+        )
+
         result = self.manager.execute("/cancel", "test_session")
         self.assertIn("Cancelled running query", result)
         self.assertIn("12345", result)  # PID
-        
+
         # Verify tracking was cleared
         query = self.manager.get_running_query("test_session")
         self.assertIsNone(query)
@@ -1055,20 +1101,20 @@ class TestQueryTracking(unittest.TestCase):
     def test_help_includes_status_and_cancel(self):
         """Test that /help includes /status and /cancel commands"""
         result = self.manager.execute("/help", "test_session")
-        
+
         self.assertIn("/status", result)
         self.assertIn("/cancel", result)
         self.assertIn("Check status of running query", result)
         self.assertIn("Cancel running query", result)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     # Print test configuration info
     if ENABLE_RUNTIME_TESTS:
         print("\n=== TEST CONFIGURATION ===")
         print("✓ Runtime tests ENABLED (TEST_WITH_RUNTIMES=1)")
         print("\nAvailable runtimes:")
-        for runtime in ['copilot', 'opencode', 'claude', 'gemini', 'codex']:
+        for runtime in ["copilot", "opencode", "claude", "gemini", "codex"]:
             available = "✓ AVAILABLE" if has_runtime(runtime) else "✗ NOT FOUND"
             print(f"  {runtime:12} {available}")
         print("========================\n")
@@ -1077,5 +1123,5 @@ if __name__ == '__main__':
         print("✓ Runtime tests DISABLED (safe for CI/CD)")
         print("  To enable: set TEST_WITH_RUNTIMES=1")
         print("========================\n")
-    
+
     unittest.main()
