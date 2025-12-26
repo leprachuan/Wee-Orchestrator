@@ -1350,6 +1350,26 @@ class TestCLIArguments(unittest.TestCase):
         self.assertEqual(result["exit_code"], 0)
         self.assertIn("test_agent", result["stdout"])
 
+    def test_runtime_with_list_models(self):
+        """Test that --runtime affects --list-models"""
+        # Test with gemini runtime
+        result = self.run_cli("--runtime", "gemini", "--list-models")
+
+        self.assertEqual(result["exit_code"], 0)
+        self.assertIn("gemini", result["stdout"].lower())
+        # Should show Gemini models, not copilot models
+        self.assertIn("Google Models", result["stdout"])
+
+    def test_runtime_with_list_models_claude(self):
+        """Test that --runtime claude shows Claude models"""
+        result = self.run_cli("--runtime", "claude", "--list-models")
+
+        self.assertEqual(result["exit_code"], 0)
+        self.assertIn("claude", result["stdout"].lower())
+        # Should show Claude models
+        self.assertIn("Anthropic Models", result["stdout"])
+        self.assertIn("sonnet", result["stdout"].lower())
+
 
 if __name__ == "__main__":
     # Print test configuration info
