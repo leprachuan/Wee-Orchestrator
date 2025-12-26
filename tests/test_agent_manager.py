@@ -23,9 +23,9 @@ import os
 import sys
 import shutil
 import subprocess
+from io import StringIO
 from pathlib import Path
 from unittest.mock import Mock, patch, MagicMock
-from io import StringIO
 
 # Add parent directory to path to import agent_manager
 sys.path.insert(0, str(Path(__file__).parent.parent))
