@@ -2133,8 +2133,14 @@ Examples:
   # Set model and runtime via CLI
   %(prog)s --runtime gemini --model gemini-1.5-pro "Analyze this code"
   
+  # Use custom configuration file
+  %(prog)s --config my-agents.json "What can you do?"
+  
   # List available agents
   %(prog)s --list-agents
+  
+  # List available agents with custom config
+  %(prog)s --list-agents --config my-agents.json
   
   # List available models for current runtime
   %(prog)s --list-models
@@ -2144,6 +2150,9 @@ Examples:
   
   # Combine multiple options
   %(prog)s --agent family --runtime claude --model sonnet "Find recipes"
+  
+  # Backwards compatible: positional arguments
+  %(prog)s "What's the weather?" my_session my-config.json
 """,
     )
 
@@ -2159,8 +2168,18 @@ Examples:
         default="default",
         help="N8N session ID (default: 'default')",
     )
+
+    # Configuration file - can be positional or named
     parser.add_argument(
-        "config_file", nargs="?", help="Path to agents.json configuration file"
+        "config_file_positional",
+        nargs="?",
+        help=argparse.SUPPRESS,  # Hide from help as we have --config below
+    )
+    parser.add_argument(
+        "-c",
+        "--config",
+        dest="config_file",
+        help="Path to agents.json configuration file",
     )
 
     # Agent options
@@ -2200,6 +2219,10 @@ Examples:
     )
 
     args = parser.parse_args()
+
+    # Handle backwards compatibility: if config_file_positional is provided, use it
+    if args.config_file_positional and not args.config_file:
+        args.config_file = args.config_file_positional
 
     # Initialize manager
     manager = SessionManager(args.config_file)
