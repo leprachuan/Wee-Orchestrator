@@ -1108,6 +1108,249 @@ class TestQueryTracking(unittest.TestCase):
         self.assertIn("Cancel running query", result)
 
 
+class TestCLIArguments(unittest.TestCase):
+    """Test command-line argument parsing and execution"""
+
+    def setUp(self):
+        """Set up test environment"""
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.temp_path = Path(self.temp_dir.name)
+
+        self.agents_config = {
+            "agents": [
+                {
+                    "name": "test_agent",
+                    "description": "Test agent for CLI",
+                    "path": "/tmp/test_agent",
+                },
+                {
+                    "name": "another_agent",
+                    "description": "Another test agent",
+                    "path": "/tmp/another_agent",
+                },
+                {
+                    "name": "orchestrator",
+                    "description": "Orchestrator agent",
+                    "path": "/tmp/orchestrator",
+                },
+            ]
+        }
+        self.config_file = self.temp_path / "agents.json"
+        with open(self.config_file, "w") as f:
+            json.dump(self.agents_config, f)
+
+    def tearDown(self):
+        """Clean up"""
+        self.temp_dir.cleanup()
+
+    def run_cli(self, *args):
+        """Helper to run agent_manager.py with arguments"""
+        import agent_manager
+
+        # Build command line args
+        sys.argv = ["agent_manager.py"] + list(args)
+
+        # Capture stdout and stderr
+        from io import StringIO
+
+        old_stdout = sys.stdout
+        old_stderr = sys.stderr
+        stdout_capture = StringIO()
+        stderr_capture = StringIO()
+
+        try:
+            sys.stdout = stdout_capture
+            sys.stderr = stderr_capture
+            agent_manager.main()
+            exit_code = 0
+        except SystemExit as e:
+            exit_code = e.code
+        finally:
+            sys.stdout = old_stdout
+            sys.stderr = old_stderr
+
+        return {
+            "stdout": stdout_capture.getvalue(),
+            "stderr": stderr_capture.getvalue(),
+            "exit_code": exit_code,
+        }
+
+    def test_help_argument(self):
+        """Test --help displays usage information"""
+        result = self.run_cli("--help")
+
+        self.assertEqual(result["exit_code"], 0)
+        self.assertIn("--agent", result["stdout"])
+        self.assertIn("--model", result["stdout"])
+        self.assertIn("--runtime", result["stdout"])
+        self.assertIn("--list-agents", result["stdout"])
+        self.assertIn("--list-models", result["stdout"])
+        self.assertIn("--list-runtimes", result["stdout"])
+
+    def test_list_agents_argument(self):
+        """Test --list-agents displays available agents"""
+        result = self.run_cli("--list-agents", "--config", str(self.config_file))
+
+        self.assertEqual(result["exit_code"], 0)
+        self.assertIn("test_agent", result["stdout"])
+        self.assertIn("another_agent", result["stdout"])
+        self.assertIn("Test agent for CLI", result["stdout"])
+
+    def test_list_runtimes_argument(self):
+        """Test --list-runtimes displays available runtimes"""
+        result = self.run_cli("--list-runtimes", "--config", str(self.config_file))
+
+        self.assertEqual(result["exit_code"], 0)
+        self.assertIn("copilot", result["stdout"])
+        self.assertIn("opencode", result["stdout"])
+        self.assertIn("claude", result["stdout"])
+        self.assertIn("gemini", result["stdout"])
+        self.assertIn("codex", result["stdout"])
+
+    def test_list_models_argument(self):
+        """Test --list-models displays available models"""
+        result = self.run_cli("--list-models", "--config", str(self.config_file))
+
+        self.assertEqual(result["exit_code"], 0)
+        # Should show some kind of model list or error
+        self.assertTrue(
+            len(result["stdout"]) > 0 or "No models available" in result["stdout"]
+        )
+
+    def test_agent_argument(self):
+        """Test --agent sets the agent"""
+        result = self.run_cli(
+            "--agent",
+            "test_agent",
+            "--config",
+            str(self.config_file),
+            "/agent current",
+            "test_session",
+        )
+
+        self.assertEqual(result["exit_code"], 0)
+        self.assertIn("test_agent", result["stdout"])
+        self.assertIn("Test agent for CLI", result["stdout"])
+
+    def test_runtime_argument(self):
+        """Test --runtime sets the runtime"""
+        result = self.run_cli(
+            "--runtime",
+            "gemini",
+            "--config",
+            str(self.config_file),
+            "/runtime current",
+            "test_session",
+        )
+
+        self.assertEqual(result["exit_code"], 0)
+        self.assertIn("gemini", result["stdout"])
+
+    def test_model_argument(self):
+        """Test --model sets the model"""
+        result = self.run_cli(
+            "--runtime",
+            "claude",
+            "--model",
+            "haiku",
+            "--config",
+            str(self.config_file),
+            "/model current",
+            "test_session",
+        )
+
+        self.assertEqual(result["exit_code"], 0)
+        self.assertIn("haiku", result["stdout"])
+
+    def test_combined_arguments(self):
+        """Test combining multiple CLI arguments"""
+        result = self.run_cli(
+            "--agent",
+            "test_agent",
+            "--runtime",
+            "gemini",
+            "--model",
+            "gemini-1.5-flash",
+            "--config",
+            str(self.config_file),
+            "/agent current",
+            "test_session",
+        )
+
+        self.assertEqual(result["exit_code"], 0)
+        self.assertIn("test_agent", result["stdout"])
+
+    def test_invalid_agent_error(self):
+        """Test error handling for invalid agent"""
+        result = self.run_cli(
+            "--agent",
+            "nonexistent_agent",
+            "--config",
+            str(self.config_file),
+            "/agent current",
+            "test_session",
+        )
+
+        self.assertEqual(result["exit_code"], 1)
+        self.assertIn("Unknown agent", result["stderr"])
+        self.assertIn("nonexistent_agent", result["stderr"])
+
+    def test_invalid_runtime_error(self):
+        """Test error handling for invalid runtime"""
+        # Invalid runtime should be caught by argparse choices
+        result = self.run_cli(
+            "--runtime",
+            "invalid_runtime",
+            "--config",
+            str(self.config_file),
+            "test",
+            "test_session",
+        )
+
+        self.assertNotEqual(result["exit_code"], 0)
+        # Should show an error about invalid choice
+        self.assertTrue(
+            "invalid choice" in result["stderr"] or "error" in result["stderr"]
+        )
+
+    def test_invalid_model_error(self):
+        """Test error handling for invalid model"""
+        result = self.run_cli(
+            "--runtime",
+            "claude",
+            "--model",
+            "nonexistent_model",
+            "--config",
+            str(self.config_file),
+            "test",
+            "test_session",
+        )
+
+        self.assertEqual(result["exit_code"], 1)
+        self.assertIn("Unknown model", result["stderr"])
+
+    def test_missing_prompt_error(self):
+        """Test error when prompt is missing and no list command"""
+        result = self.run_cli()
+
+        self.assertNotEqual(result["exit_code"], 0)
+        self.assertIn("prompt is required", result["stderr"])
+
+    def test_backwards_compatibility_positional(self):
+        """Test backwards compatibility with positional arguments"""
+        result = self.run_cli("/help", "test_session", str(self.config_file))
+
+        self.assertEqual(result["exit_code"], 0)
+        self.assertIn("Available Commands", result["stdout"])
+
+    def test_prompt_with_session_id(self):
+        """Test executing prompt with explicit session ID"""
+        result = self.run_cli("/agent list", "custom_session", str(self.config_file))
+
+        self.assertEqual(result["exit_code"], 0)
+        self.assertIn("test_agent", result["stdout"])
+
+
 if __name__ == "__main__":
     # Print test configuration info
     if ENABLE_RUNTIME_TESTS:
