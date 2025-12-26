@@ -25,11 +25,13 @@ import shutil
 import subprocess
 from pathlib import Path
 from unittest.mock import Mock, patch, MagicMock
+from io import StringIO
 
 # Add parent directory to path to import agent_manager
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from agent_manager import SessionManager
+import agent_manager
 
 # Check if we should run tests that require actual CLI runtimes
 ENABLE_RUNTIME_TESTS = os.environ.get("TEST_WITH_RUNTIMES", "").lower() in (
@@ -1145,14 +1147,10 @@ class TestCLIArguments(unittest.TestCase):
 
     def run_cli(self, *args):
         """Helper to run agent_manager.py with arguments"""
-        import agent_manager
-
         # Build command line args
         sys.argv = ["agent_manager.py"] + list(args)
 
         # Capture stdout and stderr
-        from io import StringIO
-
         old_stdout = sys.stdout
         old_stderr = sys.stderr
         stdout_capture = StringIO()

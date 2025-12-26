@@ -2118,6 +2118,22 @@ You can mention an agent in your prompt and it will auto-delegate:
         return output
 
 
+def _check_command_result(result: str, error_keywords: list[str]) -> None:
+    """Helper function to check command results and exit on error
+    
+    Args:
+        result: The output from executing a command
+        error_keywords: List of keywords that indicate an error occurred
+    
+    Raises:
+        SystemExit: If any error keywords are found in the result
+    """
+    for keyword in error_keywords:
+        if keyword in result:
+            print(result, file=sys.stderr)
+            sys.exit(1)
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="AI Session Wrapper for N8N Integration",
@@ -2230,18 +2246,12 @@ Examples:
     # Apply runtime setting first if provided (so list commands use the correct runtime)
     if args.runtime:
         result = manager.execute(f"/runtime set {args.runtime}", args.session_id)
-        # Check if runtime change failed
-        if "Unknown runtime" in result or "Error" in result:
-            print(result, file=sys.stderr)
-            sys.exit(1)
+        _check_command_result(result, ["Unknown runtime", "Error"])
 
     # Apply agent setting if provided (so list commands use the correct agent context)
     if args.agent:
         result = manager.execute(f'/agent set "{args.agent}"', args.session_id)
-        # Check if agent change failed
-        if "Unknown agent" in result or "Error" in result:
-            print(result, file=sys.stderr)
-            sys.exit(1)
+        _check_command_result(result, ["Unknown agent", "Error"])
 
     # Handle list commands (these don't require a prompt but may use runtime/agent settings)
     if args.list_agents:
@@ -2266,10 +2276,7 @@ Examples:
     # Apply model setting if provided (after list commands since we don't need it for lists)
     if args.model:
         result = manager.execute(f'/model set "{args.model}"', args.session_id)
-        # Check if model change failed
-        if "Unknown model" in result or "Error" in result:
-            print(result, file=sys.stderr)
-            sys.exit(1)
+        _check_command_result(result, ["Unknown model", "Error"])
 
     # Execute the main prompt
     output = manager.execute(args.prompt, args.session_id)
