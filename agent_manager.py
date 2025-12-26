@@ -12,6 +12,7 @@ import subprocess
 import re
 import signal
 import time
+import argparse
 from pathlib import Path
 from uuid import uuid4
 
@@ -2118,19 +2119,137 @@ You can mention an agent in your prompt and it will auto-delegate:
 
 
 def main():
-    if len(sys.argv) < 2:
-        print(
-            "Usage: agent-manager.py [prompt] [session_id] [config_file]",
-            file=sys.stderr,
-        )
-        sys.exit(1)
+    parser = argparse.ArgumentParser(
+        description="AI Session Wrapper for N8N Integration",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  # Execute a prompt with default settings
+  %(prog)s "What is the status of the cluster?"
+  
+  # Set agent via CLI
+  %(prog)s --agent devops "Check server status"
+  
+  # Set model and runtime via CLI
+  %(prog)s --runtime gemini --model gemini-1.5-pro "Analyze this code"
+  
+  # List available agents
+  %(prog)s --list-agents
+  
+  # List available models for current runtime
+  %(prog)s --list-models
+  
+  # List available runtimes
+  %(prog)s --list-runtimes
+  
+  # Combine multiple options
+  %(prog)s --agent family --runtime claude --model sonnet "Find recipes"
+""",
+    )
 
-    prompt = sys.argv[1]
-    n8n_session_id = sys.argv[2] if len(sys.argv) > 2 else "default"
-    config_file = sys.argv[3] if len(sys.argv) > 3 else None
+    # Positional arguments (for backwards compatibility)
+    parser.add_argument(
+        "prompt",
+        nargs="?",
+        help="The prompt to execute (required unless using --list-* options)",
+    )
+    parser.add_argument(
+        "session_id",
+        nargs="?",
+        default="default",
+        help="N8N session ID (default: 'default')",
+    )
+    parser.add_argument(
+        "config_file", nargs="?", help="Path to agents.json configuration file"
+    )
 
-    manager = SessionManager(config_file)
-    print(manager.execute(prompt, n8n_session_id))
+    # Agent options
+    agent_group = parser.add_argument_group("agent options")
+    agent_group.add_argument(
+        "--agent",
+        metavar="NAME",
+        help="Set the agent to use (e.g., devops, family, projects)",
+    )
+    agent_group.add_argument(
+        "--list-agents", action="store_true", help="List all available agents and exit"
+    )
+
+    # Model options
+    model_group = parser.add_argument_group("model options")
+    model_group.add_argument(
+        "--model", metavar="NAME", help="Set the model to use (e.g., gpt-5, sonnet)"
+    )
+    model_group.add_argument(
+        "--list-models",
+        action="store_true",
+        help="List all available models for current runtime and exit",
+    )
+
+    # Runtime options
+    runtime_group = parser.add_argument_group("runtime options")
+    runtime_group.add_argument(
+        "--runtime",
+        metavar="NAME",
+        choices=["copilot", "opencode", "claude", "gemini", "codex"],
+        help="Set the runtime to use (choices: copilot, opencode, claude, gemini, codex)",
+    )
+    runtime_group.add_argument(
+        "--list-runtimes",
+        action="store_true",
+        help="List all available runtimes and exit",
+    )
+
+    args = parser.parse_args()
+
+    # Initialize manager
+    manager = SessionManager(args.config_file)
+
+    # Handle list commands (these don't require a prompt)
+    if args.list_agents:
+        output = manager.execute("/agent list", args.session_id)
+        print(output)
+        sys.exit(0)
+
+    if args.list_models:
+        output = manager.execute("/model list", args.session_id)
+        print(output)
+        sys.exit(0)
+
+    if args.list_runtimes:
+        output = manager.execute("/runtime list", args.session_id)
+        print(output)
+        sys.exit(0)
+
+    # If no prompt provided and no list command, show error
+    if not args.prompt:
+        parser.error("prompt is required unless using --list-* options")
+
+    # Apply CLI settings by executing corresponding slash commands
+    # These modify the session state before executing the main prompt
+    if args.runtime:
+        result = manager.execute(f"/runtime set {args.runtime}", args.session_id)
+        # Check if runtime change failed
+        if "Unknown runtime" in result or "Error" in result:
+            print(result, file=sys.stderr)
+            sys.exit(1)
+
+    if args.agent:
+        result = manager.execute(f'/agent set "{args.agent}"', args.session_id)
+        # Check if agent change failed
+        if "Unknown agent" in result or "Error" in result:
+            print(result, file=sys.stderr)
+            sys.exit(1)
+
+    if args.model:
+        result = manager.execute(f'/model set "{args.model}"', args.session_id)
+        # Check if model change failed
+        if "Unknown model" in result or "Error" in result:
+            print(result, file=sys.stderr)
+            sys.exit(1)
+
+    # Execute the main prompt
+    output = manager.execute(args.prompt, args.session_id)
+    print(output)
 
 
 if __name__ == "__main__":
