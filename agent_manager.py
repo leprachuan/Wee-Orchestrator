@@ -2227,7 +2227,23 @@ Examples:
     # Initialize manager
     manager = SessionManager(args.config_file)
 
-    # Handle list commands (these don't require a prompt)
+    # Apply runtime setting first if provided (so list commands use the correct runtime)
+    if args.runtime:
+        result = manager.execute(f"/runtime set {args.runtime}", args.session_id)
+        # Check if runtime change failed
+        if "Unknown runtime" in result or "Error" in result:
+            print(result, file=sys.stderr)
+            sys.exit(1)
+
+    # Apply agent setting if provided (so list commands use the correct agent context)
+    if args.agent:
+        result = manager.execute(f'/agent set "{args.agent}"', args.session_id)
+        # Check if agent change failed
+        if "Unknown agent" in result or "Error" in result:
+            print(result, file=sys.stderr)
+            sys.exit(1)
+
+    # Handle list commands (these don't require a prompt but may use runtime/agent settings)
     if args.list_agents:
         output = manager.execute("/agent list", args.session_id)
         print(output)
@@ -2247,22 +2263,7 @@ Examples:
     if not args.prompt:
         parser.error("prompt is required unless using --list-* options")
 
-    # Apply CLI settings by executing corresponding slash commands
-    # These modify the session state before executing the main prompt
-    if args.runtime:
-        result = manager.execute(f"/runtime set {args.runtime}", args.session_id)
-        # Check if runtime change failed
-        if "Unknown runtime" in result or "Error" in result:
-            print(result, file=sys.stderr)
-            sys.exit(1)
-
-    if args.agent:
-        result = manager.execute(f'/agent set "{args.agent}"', args.session_id)
-        # Check if agent change failed
-        if "Unknown agent" in result or "Error" in result:
-            print(result, file=sys.stderr)
-            sys.exit(1)
-
+    # Apply model setting if provided (after list commands since we don't need it for lists)
     if args.model:
         result = manager.execute(f'/model set "{args.model}"', args.session_id)
         # Check if model change failed
