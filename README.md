@@ -298,6 +298,10 @@ When environment variables are not set, the system uses these hardcoded defaults
 
 ### Command Line
 
+The agent manager supports both positional arguments (for backwards compatibility) and named options for more flexibility.
+
+#### Basic Usage (Positional Arguments)
+
 ```bash
 python agent_manager.py "<prompt>" [session_id] [config_file]
 ```
@@ -317,6 +321,65 @@ python agent_manager.py "Continue debugging the issue" "session-123"
 
 # With custom config file
 python agent_manager.py "Deploy the app" "session-456" "/etc/agents.json"
+```
+
+#### Advanced Usage (Named Arguments)
+
+```bash
+python agent_manager.py [options] "<prompt>" [session_id]
+```
+
+**Options:**
+
+Agent Options:
+- `--agent NAME` - Set the agent to use (e.g., devops, family, projects)
+- `--list-agents` - List all available agents and exit
+
+Model Options:
+- `--model NAME` - Set the model to use (e.g., gpt-5, sonnet, gemini-1.5-pro)
+- `--list-models` - List all available models for current runtime and exit
+
+Runtime Options:
+- `--runtime NAME` - Set the runtime to use (choices: copilot, opencode, claude, gemini, codex)
+- `--list-runtimes` - List all available runtimes and exit
+
+Configuration:
+- `--config FILE` or `-c FILE` - Path to agents.json configuration file
+
+**Examples:**
+
+```bash
+# List available agents
+python agent_manager.py --list-agents
+
+# List available agents with custom config
+python agent_manager.py --list-agents --config my-agents.json
+
+# List available runtimes
+python agent_manager.py --list-runtimes
+
+# List available models
+python agent_manager.py --list-models
+
+# Set agent via CLI
+python agent_manager.py --agent devops "Check server status"
+
+# Set runtime and model via CLI
+python agent_manager.py --runtime gemini --model gemini-1.5-pro "Analyze this code"
+
+# Combine multiple options
+python agent_manager.py --agent family --runtime claude --model sonnet "Find recipes for dinner"
+
+# Use custom configuration file
+python agent_manager.py --config /etc/my-agents.json --agent projects "Review pull requests"
+
+# All options together
+python agent_manager.py --config my-agents.json --agent devops --runtime claude --model haiku "Deploy to production" "session-123"
+```
+
+**Getting Help:**
+```bash
+python agent_manager.py --help
 ```
 
 ### Slash Commands
@@ -384,6 +447,7 @@ Interact with the agent manager using slash commands:
 
 Use in an N8N workflow:
 
+#### Basic N8N Integration (Positional Arguments)
 ```javascript
 // Execute the agent manager from N8N
 const { exec } = require('child_process');
@@ -394,6 +458,39 @@ const configFile = "/path/to/agents.json";
 exec(`python agent_manager.py "${prompt}" "${sessionId}" "${configFile}"`,
   (error, stdout, stderr) => {
     if (error) console.error(error);
+    console.log(stdout);
+  }
+);
+```
+
+#### Advanced N8N Integration (Named Arguments)
+```javascript
+// Execute with specific agent, runtime, and model
+const { exec } = require('child_process');
+const agent = "devops";
+const runtime = "claude";
+const model = "sonnet";
+const prompt = "Check production status";
+const sessionId = "n8n_session_123";
+
+const cmd = `python agent_manager.py --agent ${agent} --runtime ${runtime} --model ${model} "${prompt}" "${sessionId}"`;
+
+exec(cmd, (error, stdout, stderr) => {
+  if (error) console.error(error);
+  console.log(stdout);
+});
+```
+
+#### List Agents from N8N
+```javascript
+// Get available agents dynamically
+const { exec } = require('child_process');
+const configFile = "/path/to/agents.json";
+
+exec(`python agent_manager.py --list-agents --config ${configFile}`,
+  (error, stdout, stderr) => {
+    if (error) console.error(error);
+    // Parse stdout to get agent list
     console.log(stdout);
   }
 );
