@@ -1304,11 +1304,11 @@ User Request:
     ) -> str:
         """Execute Claude CLI with full tool access
 
-        Uses --permission-mode dontAsk (equivalent to bypassPermissions/YOLO mode) to:
+        Uses --permission-mode bypassPermissions to:
         - Auto-approve all file edits, writes, and reads
         - Execute shell commands without approval
         - Access web/network tools without prompts
-        Note: This is also known as YOLO mode in Claude Code
+        Note: This is equivalent to YOLO mode in Claude Code and dontAsk mode
         """
         agent_dir = self.AGENTS.get(agent, self.AGENTS["orchestrator"])["path"]
         effective_timeout = timeout if timeout is not None else self.command_timeout
@@ -1322,7 +1322,7 @@ User Request:
             "-p",
             context_prompt,
             "--permission-mode",
-            "dontAsk",
+            "bypassPermissions",
             "--model",
             model,
         ]
@@ -2131,11 +2131,11 @@ You can mention an agent in your prompt and it will auto-delegate:
 
 def _check_command_result(result: str, error_keywords: list[str]) -> None:
     """Helper function to check command results and exit on error
-    
+
     Args:
         result: The output from executing a command
         error_keywords: List of keywords that indicate an error occurred
-    
+
     Raises:
         SystemExit: If any error keywords are found in the result
     """

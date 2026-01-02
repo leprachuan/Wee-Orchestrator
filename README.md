@@ -129,12 +129,12 @@ All AI runtimes in this system are configured with **full tool access** to enabl
 - **Security Note:** Gives Copilot the same permissions as your user account
 
 #### Claude Code CLI
-- **Flags Used:** `--permission-mode dontAsk`
+- **Flags Used:** `--permission-mode bypassPermissions`
 - **Enables:**
   - Auto-approve all file edits, writes, and reads
   - Execute shell commands without approval
   - Access web/network tools without prompts
-- **Also Known As:** YOLO mode or bypassPermissions mode
+- **Also Known As:** YOLO mode or dontAsk mode
 
 #### OpenCode CLI
 - **Configuration:** Uses `opencode.json` file for permission settings
