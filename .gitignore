@@ -1,6 +1,9 @@
 # Agent configuration (contains local paths)
 agents.json
 
+# OpenCode configuration (contains local permissions)
+opencode.json
+
 # Python
 __pycache__/
 *.py[cod]

@@ -1,0 +1,13 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "permission": {
+    "edit": "allow",
+    "write": "allow",
+    "bash": "allow",
+    "read": "allow",
+    "webfetch": "allow",
+    "doom_loop": "allow",
+    "external_directory": "allow"
+  },
+  "description": "Full permissions configuration for OpenCode CLI. Copy this to opencode.json in your project or agent directory to enable all tool access for the AI agent."
+}
