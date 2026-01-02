@@ -618,12 +618,12 @@ class SessionManager:
         """Build a context-aware prompt that includes agent information"""
         if agent not in self.AGENTS:
             agent = 'devops'
-        
+
         agent_info = self.AGENTS[agent]
         agent_name = agent
         agent_desc = agent_info.get('description', 'No description')
         agent_path = agent_info.get('path', '')
-        
+
         # Try to list files in agent directory for context
         files_context = ""
         try:
@@ -635,9 +635,10 @@ class SessionManager:
                     files_context = f"\n\nAvailable resources in this agent's workspace:\n{files_list}"
         except Exception:
             pass
-        
+
         context = f"""[Session ID: {n8n_session_id}]
 [Agent Context: {agent_name}]
+[Working Directory: {agent_path}]
 {agent_desc}{files_context}
 
 User Request:
@@ -646,7 +647,12 @@ User Request:
 
     def run_copilot(self, prompt: str, model: str, agent: str, session_id: str | None, resume: bool, n8n_session_id: str) -> str:
         """Execute Copilot CLI"""
-        agent_dir = self.AGENTS.get(agent, self.AGENTS['orchestrator'])['path']
+        agent_info = self.AGENTS.get(agent)
+        if not agent_info:
+            # Default to current directory if agent not found
+            agent_dir = str(Path.cwd())
+        else:
+            agent_dir = agent_info['path']
         context_prompt = self.build_agent_context_prompt(agent, prompt, n8n_session_id)
         
         cmd = [
@@ -675,7 +681,12 @@ User Request:
 
     def run_opencode(self, prompt: str, model: str, agent: str, session_id: str | None, resume: bool, n8n_session_id: str) -> str:
         """Execute OpenCode CLI"""
-        agent_dir = self.AGENTS.get(agent, self.AGENTS['orchestrator'])['path']
+        agent_info = self.AGENTS.get(agent)
+        if not agent_info:
+            # Default to current directory if agent not found
+            agent_dir = str(Path.cwd())
+        else:
+            agent_dir = agent_info['path']
         context_prompt = self.build_agent_context_prompt(agent, prompt, n8n_session_id)
         
         cmd = [
@@ -720,7 +731,12 @@ User Request:
 
     def run_claude(self, prompt: str, model: str, agent: str, session_id: str | None, resume: bool, n8n_session_id: str) -> str:
         """Execute Claude CLI"""
-        agent_dir = self.AGENTS.get(agent, self.AGENTS['orchestrator'])['path']
+        agent_info = self.AGENTS.get(agent)
+        if not agent_info:
+            # Default to current directory if agent not found
+            agent_dir = str(Path.cwd())
+        else:
+            agent_dir = agent_info['path']
         context_prompt = self.build_agent_context_prompt(agent, prompt, n8n_session_id)
         
         cmd = [
@@ -756,7 +772,12 @@ User Request:
 
     def run_gemini(self, prompt: str, model: str, agent: str, session_id: str | None, resume: bool, n8n_session_id: str) -> str:
         """Execute Gemini CLI"""
-        agent_dir = self.AGENTS.get(agent, self.AGENTS['orchestrator'])['path']
+        agent_info = self.AGENTS.get(agent)
+        if not agent_info:
+            # Default to current directory if agent not found
+            agent_dir = str(Path.cwd())
+        else:
+            agent_dir = agent_info['path']
         context_prompt = self.build_agent_context_prompt(agent, prompt, n8n_session_id)
         
         cmd = [
@@ -790,7 +811,12 @@ User Request:
 
     def run_codex(self, prompt: str, model: str, agent: str, session_id: str | None, resume: bool, n8n_session_id: str) -> str:
         """Execute CODEX CLI"""
-        agent_dir = self.AGENTS.get(agent, self.AGENTS['orchestrator'])['path']
+        agent_info = self.AGENTS.get(agent)
+        if not agent_info:
+            # Default to current directory if agent not found
+            agent_dir = str(Path.cwd())
+        else:
+            agent_dir = agent_info['path']
         context_prompt = self.build_agent_context_prompt(agent, prompt, n8n_session_id)
         
         if resume and session_id:
@@ -860,7 +886,11 @@ User Request:
                 return files[0].stem if files else None
             elif runtime == 'opencode':
                 # For OpenCode, we list sessions in the agent's directory
-                agent_dir = self.AGENTS.get(agent, self.AGENTS['orchestrator'])['path']
+                agent_info = self.AGENTS.get(agent)
+                if not agent_info:
+                    agent_dir = str(Path.cwd())
+                else:
+                    agent_dir = agent_info['path']
                 
                 # Use | cat to bypass pager by setting PAGER env var
                 env = os.environ.copy()
@@ -907,10 +937,44 @@ User Request:
         # Get session data first
         session_data = self.get_or_create_session_data(n8n_session_id)
         current_runtime = session_data.get("runtime", "copilot")
-        
+        current_agent = session_data.get("agent", "orchestrator")
+
+        # Check for shell command execution (starts with !)
+        if prompt.strip().startswith('!'):
+            shell_cmd = prompt.strip()[1:].strip()  # Remove the ! and trim
+
+            # Get agent directory
+            agent_info = self.AGENTS.get(current_agent)
+            if not agent_info:
+                agent_dir = str(Path.cwd())
+            else:
+                agent_dir = agent_info['path']
+
+            print(f"[Shell] Executing in {agent_dir}: {shell_cmd}", file=sys.stderr)
+
+            try:
+                result = subprocess.run(
+                    shell_cmd,
+                    shell=True,
+                    capture_output=True,
+                    text=True,
+                    timeout=120,
+                    cwd=agent_dir
+                )
+                output = result.stdout
+                if result.stderr:
+                    output += "\n" + result.stderr
+                if result.returncode != 0:
+                    output = f"Command exited with code {result.returncode}\n\n{output}"
+                return output.strip() if output else "(no output)"
+            except subprocess.TimeoutExpired:
+                return "Error: Command timed out after 120 seconds"
+            except Exception as e:
+                return f"Error executing command: {e}"
+
         # First check for explicit slash commands
         command, argument = self.parse_slash_command(prompt)
-        
+
         # If not a slash command, check for implicit agent delegation
         if command is None:
             delegated_agent, cleaned_prompt = self.detect_agent_delegation(prompt)
@@ -932,6 +996,10 @@ User Request:
 
 **Orchestrator:**
    • `/capabilities` - Show what the orchestrator can help with
+
+**Shell Commands:**
+   • `!<command>` - Execute shell command in current agent's directory
+   • Example: `!ls -la` or `!pwd`
 
 **Runtime Management:**
    • `/runtime list` - Show available runtimes
@@ -1002,7 +1070,9 @@ You can mention an agent in your prompt and it will auto-delegate:
                 return out
             elif argument == 'current':
                 ag = session_data.get('agent', 'devops')
-                info = self.AGENTS.get(ag, self.AGENTS['orchestrator'])
+                info = self.AGENTS.get(ag)
+                if not info:
+                    return f"Current Agent: **{ag}** (agent not found in configuration)"
                 return f"Current Agent: **{ag}**\n{info['description']}"
             elif argument.startswith('set '):
                 agent = argument[4:].strip().strip('"\'')
