@@ -10,6 +10,7 @@ This shim provides a flexible framework to:
 - Switch between different agent repositories dynamically
 - Configure agents via JSON config files instead of hardcoding
 - Support multiple AI models and runtimes
+- Execute bash commands directly with `!` prefix
 
 ## Requirements
 
@@ -113,6 +114,79 @@ source ~/.bashrc
 **Supported Systems:** Windows, macOS, Linux
 
 **Reference:** [Google Gemini API Documentation](https://ai.google.dev/tutorials/python_quickstart)
+
+## Tool Permissions & Access Control
+
+All AI runtimes in this system are configured with **full tool access** to enable read, write, and execute operations without approval prompts. This provides maximum automation capabilities.
+
+### Permission Configuration by Runtime
+
+#### GitHub Copilot CLI
+- **Flags Used:** `--allow-all-tools --allow-all-paths`
+- **Enables:** 
+  - All MCP tools and shell commands without approval
+  - Read/write/execute permissions for all files and directories
+- **Security Note:** Gives Copilot the same permissions as your user account
+
+#### Claude Code CLI
+- **Flags Used:** `--permission-mode dontAsk`
+- **Enables:**
+  - Auto-approve all file edits, writes, and reads
+  - Execute shell commands without approval
+  - Access web/network tools without prompts
+- **Also Known As:** YOLO mode or bypassPermissions mode
+
+#### OpenCode CLI
+- **Configuration:** Uses `opencode.json` file for permission settings
+- **Required Setup:**
+  1. Copy the example config: `cp opencode.example.json opencode.json`
+  2. Place `opencode.json` in your agent directories or project root
+- **Permissions Enabled:**
+  - `edit`: allow
+  - `write`: allow
+  - `bash`: allow
+  - `read`: allow
+  - `webfetch`: allow
+- **Reference:** [OpenCode Permissions Documentation](https://opencode.ai/docs/permissions/)
+
+#### Google Gemini CLI
+- **Flags Used:** `--yolo`
+- **Enables:**
+  - Read/write file operations without confirmation
+  - Shell command execution without approval
+  - All built-in tools with unrestricted access
+- **Built-in Tools:** read_file, write_file, run_shell_command
+
+#### OpenAI Codex CLI
+- **Flags Used:** `--dangerously-bypass-approvals-and-sandbox`
+- **Enables:**
+  - Disables all approval prompts
+  - Removes sandbox restrictions (full file system access)
+  - Allows all shell commands and tools without confirmation
+- **Security Note:** Only use in trusted, controlled environments
+
+### Security Considerations
+
+⚠️ **Warning:** These configurations grant AI agents extensive system access:
+
+- **Full file system access:** Can read, modify, or delete any file your user can access
+- **Command execution:** Can run any shell command with your user privileges
+- **No safety prompts:** All operations execute automatically without confirmation
+
+**Best Practices:**
+1. **Use in controlled environments:** Development containers, VMs, or sandboxed systems
+2. **Regular backups:** Maintain backups of critical files and directories
+3. **Code review:** Review AI-generated changes before committing to production
+4. **Limit agent scope:** Configure agents to work in specific project directories
+5. **Monitor activity:** Review session logs and agent outputs regularly
+
+**Recommended Use Cases:**
+- ✅ Development and testing environments
+- ✅ Automated CI/CD pipelines in isolated containers
+- ✅ Personal projects with version control
+- ❌ Production systems without review
+- ❌ Shared systems with sensitive data
+- ❌ Public or untrusted environments
 
 ## Configuration
 
@@ -224,6 +298,10 @@ When environment variables are not set, the system uses these hardcoded defaults
 
 ### Command Line
 
+The agent manager supports both positional arguments (for backwards compatibility) and named options for more flexibility.
+
+#### Basic Usage (Positional Arguments)
+
 ```bash
 python agent_manager.py "<prompt>" [session_id] [config_file]
 ```
@@ -245,9 +323,90 @@ python agent_manager.py "Continue debugging the issue" "session-123"
 python agent_manager.py "Deploy the app" "session-456" "/etc/agents.json"
 ```
 
+#### Advanced Usage (Named Arguments)
+
+```bash
+python agent_manager.py [options] "<prompt>" [session_id]
+```
+
+**Options:**
+
+Agent Options:
+- `--agent NAME` - Set the agent to use (e.g., devops, family, projects)
+- `--list-agents` - List all available agents and exit
+
+Model Options:
+- `--model NAME` - Set the model to use (e.g., gpt-5, sonnet, gemini-1.5-pro)
+- `--list-models` - List all available models for current runtime and exit
+
+Runtime Options:
+- `--runtime NAME` - Set the runtime to use (choices: copilot, opencode, claude, gemini, codex)
+- `--list-runtimes` - List all available runtimes and exit
+
+Configuration:
+- `--config FILE` or `-c FILE` - Path to agents.json configuration file
+
+**Examples:**
+
+```bash
+# List available agents
+python agent_manager.py --list-agents
+
+# List available agents with custom config
+python agent_manager.py --list-agents --config my-agents.json
+
+# List available runtimes
+python agent_manager.py --list-runtimes
+
+# List available models
+python agent_manager.py --list-models
+
+# Set agent via CLI
+python agent_manager.py --agent devops "Check server status"
+
+# Set runtime and model via CLI
+python agent_manager.py --runtime gemini --model gemini-1.5-pro "Analyze this code"
+
+# Combine multiple options
+python agent_manager.py --agent family --runtime claude --model sonnet "Find recipes for dinner"
+
+# Use custom configuration file
+python agent_manager.py --config /etc/my-agents.json --agent projects "Review pull requests"
+
+# All options together
+python agent_manager.py --config my-agents.json --agent devops --runtime claude --model haiku "Deploy to production" "session-123"
+```
+
+**Getting Help:**
+```bash
+python agent_manager.py --help
+```
+
 ### Slash Commands
 
 Interact with the agent manager using slash commands:
+
+#### Bash Commands
+```
+!<command>                 # Execute bash command directly (e.g., !pwd, !ls -la)
+```
+
+**Examples:**
+```bash
+!pwd                       # Show current working directory
+!echo "Hello World"        # Echo a message
+!ls -lh                    # List files with details
+!date                      # Show current date/time
+!git status                # Run git commands
+!python3 --version         # Check installed versions
+```
+
+**Features:**
+- Commands execute directly without hitting any AI runtime
+- 10-second timeout for safety
+- Runs in current working directory
+- Supports pipes, redirects, and command chaining (&&, ||, |)
+- Returns stdout/stderr output
 
 #### Runtime Management
 ```
@@ -276,10 +435,19 @@ Interact with the agent manager using slash commands:
 /help                      # Show all available commands
 ```
 
+#### Query Management
+```
+/status                    # Check status of running query for this session
+/cancel                    # Cancel running query for this session
+```
+
+**Query Tracking**: When a query is executing, the agent manager tracks its process ID (PID), runtime, agent, and output. Use `/status` to check if a query is running and see recent output, or `/cancel` to terminate a long-running query.
+
 ### N8N Integration
 
 Use in an N8N workflow:
 
+#### Basic N8N Integration (Positional Arguments)
 ```javascript
 // Execute the agent manager from N8N
 const { exec } = require('child_process');
@@ -290,6 +458,39 @@ const configFile = "/path/to/agents.json";
 exec(`python agent_manager.py "${prompt}" "${sessionId}" "${configFile}"`,
   (error, stdout, stderr) => {
     if (error) console.error(error);
+    console.log(stdout);
+  }
+);
+```
+
+#### Advanced N8N Integration (Named Arguments)
+```javascript
+// Execute with specific agent, runtime, and model
+const { exec } = require('child_process');
+const agent = "devops";
+const runtime = "claude";
+const model = "sonnet";
+const prompt = "Check production status";
+const sessionId = "n8n_session_123";
+
+const cmd = `python agent_manager.py --agent ${agent} --runtime ${runtime} --model ${model} "${prompt}" "${sessionId}"`;
+
+exec(cmd, (error, stdout, stderr) => {
+  if (error) console.error(error);
+  console.log(stdout);
+});
+```
+
+#### List Agents from N8N
+```javascript
+// Get available agents dynamically
+const { exec } = require('child_process');
+const configFile = "/path/to/agents.json";
+
+exec(`python agent_manager.py --list-agents --config ${configFile}`,
+  (error, stdout, stderr) => {
+    if (error) console.error(error);
+    // Parse stdout to get agent list
     console.log(stdout);
   }
 );
@@ -310,6 +511,17 @@ Each N8N session ID is mapped to:
 - Current agent
 
 Session data persists across requests, allowing multi-turn conversations.
+
+### Query Tracking
+
+Running queries are tracked in `~/.copilot/running-queries.json` with:
+- **PID**: Process ID for the running query
+- **Runtime**: Which AI runtime is executing the query
+- **Agent**: Which agent context is being used
+- **Start Time**: When the query started
+- **Last Output**: Recent output snippet (last 500 characters)
+
+This enables the `/status` and `/cancel` commands to monitor and control long-running queries.
 
 ## Default Behavior
 
@@ -374,13 +586,14 @@ python3 -m unittest discover -s tests -p "test_*.py" -v
 
 ### Test Coverage
 
-The test suite includes 31 tests covering:
+The test suite includes 62 tests covering:
 
 - **Session Management** (5 tests) - Creating, resuming, and persisting sessions
 - **Agent Configuration** (4 tests) - Loading and managing agent configurations
 - **Slash Commands** (9 tests) - All interactive commands (`/help`, `/runtime`, `/model`, `/agent`, `/session`)
+- **Query Tracking** (8 tests) - Process tracking for `/status` and `/cancel` commands
 - **Model Resolution** (5 tests) - Converting model names/aliases to full IDs
-- **Metadata Stripping** (3 tests) - Cleaning CLI output from different runtimes
+- **Metadata Stripping** (4 tests) - Cleaning CLI output from different runtimes
 - **Agent Switching** (3 tests) - Changing agents and session context
 - **Session Existence** (2 tests) - Checking session state file existence
 
