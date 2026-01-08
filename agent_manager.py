@@ -13,8 +13,44 @@ import re
 import signal
 import time
 import argparse
+import shutil
 from pathlib import Path
 from uuid import uuid4
+
+
+# Executable resolution
+def find_executable(name: str) -> str | None:
+    """Find executable in multiple common locations
+
+    Searches in order:
+    1. System PATH (using shutil.which)
+    2. Homebrew ARM64 (M1/M2 Macs): /opt/homebrew/bin/
+    3. Homebrew Intel: /usr/local/bin/
+    4. Standard system bin: /usr/bin/
+
+    Args:
+        name: Name of the executable (e.g., "copilot", "claude")
+
+    Returns:
+        Full path to executable if found, None otherwise
+    """
+    # First try system PATH
+    which_result = shutil.which(name)
+    if which_result:
+        return which_result
+
+    # Search additional common locations
+    search_paths = [
+        Path("/opt/homebrew/bin") / name,  # Homebrew ARM64 (M1/M2 Macs)
+        Path("/usr/local/bin") / name,      # Homebrew Intel / manual installs
+        Path("/usr/bin") / name,            # Standard system location
+    ]
+
+    for path in search_paths:
+        if path.exists() and os.access(path, os.X_OK):
+            return str(path)
+
+    return None
 
 
 # Environment-based configuration
@@ -143,6 +179,10 @@ class SessionManager:
         # CODEX Paths
         self.codex_home = Path.home() / ".codex"
         self.codex_session_dir = self.codex_home / "sessions"
+
+        # Executable paths (resolved dynamically)
+        self.copilot_bin = find_executable("copilot")
+        self.claude_bin = find_executable("claude")
 
         # Ensure directories exist
         self.copilot_home.mkdir(exist_ok=True)
@@ -287,9 +327,13 @@ class SessionManager:
 
     def fetch_copilot_models(self) -> dict:
         """Fetch available models from copilot CLI help text"""
+        if not self.copilot_bin:
+            print("Copilot executable not found in any search paths", file=sys.stderr)
+            return {}
+
         try:
             # Use --no-color to ensure clean text
-            cmd = ["/usr/bin/copilot", "--help", "--no-color"]
+            cmd = [self.copilot_bin, "--help", "--no-color"]
             result = subprocess.run(cmd, capture_output=True, text=True)
             if result.returncode != 0:
                 print(f"Copilot help command failed: {result.stderr}", file=sys.stderr)
@@ -1214,6 +1258,9 @@ User Request:
         - Read/write/execute permissions for all files and directories
         - All MCP tools and shell commands without approval prompts
         """
+        if not self.copilot_bin:
+            return "Error: Copilot executable not found. Please install copilot or ensure it's in PATH, /opt/homebrew/bin/, /usr/local/bin/, or /usr/bin/"
+
         agent_dir = self.AGENTS.get(agent, self.AGENTS["orchestrator"])["path"]
         effective_timeout = timeout if timeout is not None else self.command_timeout
 
@@ -1222,7 +1269,7 @@ User Request:
         )
 
         cmd = [
-            "/usr/bin/copilot",
+            self.copilot_bin,
             "-p",
             context_prompt,
             "--allow-all-tools",
@@ -1310,6 +1357,9 @@ User Request:
         - Access web/network tools without prompts
         Note: This is equivalent to YOLO mode in Claude Code and dontAsk mode
         """
+        if not self.claude_bin:
+            return "Error: Claude executable not found. Please install claude or ensure it's in PATH, /opt/homebrew/bin/, /usr/local/bin/, or /usr/bin/"
+
         agent_dir = self.AGENTS.get(agent, self.AGENTS["orchestrator"])["path"]
         effective_timeout = timeout if timeout is not None else self.command_timeout
 
@@ -1318,7 +1368,7 @@ User Request:
         )
 
         cmd = [
-            "/usr/bin/claude",
+            self.claude_bin,
             "-p",
             context_prompt,
             "--permission-mode",
