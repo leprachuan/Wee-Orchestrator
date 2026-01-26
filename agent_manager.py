@@ -7,6 +7,7 @@ Manages session ID mapping between N8N chat sessions and AI backend sessions
 
 import sys
 import os
+import shutil
 import json
 import subprocess
 import re
@@ -1161,12 +1162,17 @@ User Request:
         """
         try:
             # Start process and get PID
+            env = os.environ.copy()
+            if '/home/n8n/.local/bin' not in env.get('PATH', ''):
+                env['PATH'] = '/home/n8n/.local/bin:' + env.get('PATH', '')
+            
             process = subprocess.Popen(
                 cmd,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True,
                 cwd=cwd,
+                env=env,
             )
 
             # Track the running query
@@ -1318,7 +1324,7 @@ User Request:
         )
 
         cmd = [
-            "/usr/bin/claude",
+            shutil.which("claude") or "/home/n8n/.local/bin/claude",
             "-p",
             context_prompt,
             "--permission-mode",
