@@ -128,6 +128,31 @@ class SessionManager:
     GEMINI_MODELS = {
         "Google Models": [
             (
+                "gemini-3-pro-preview",
+                "Gemini 3 Pro (Preview)",
+                ["gemini-3-pro", "pro-3"],
+            ),
+            (
+                "gemini-3-flash-preview",
+                "Gemini 3 Flash (Preview)",
+                ["gemini-3-flash", "flash-3"],
+            ),
+            (
+                "gemini-2.5-pro",
+                "Gemini 2.5 Pro",
+                ["gemini-pro-2.5", "pro-2.5"],
+            ),
+            (
+                "gemini-2.5-flash",
+                "Gemini 2.5 Flash",
+                ["gemini-flash-2.5", "flash-2.5"],
+            ),
+            (
+                "gemini-2.5-flash-lite",
+                "Gemini 2.5 Flash Lite",
+                ["gemini-flash-lite-2.5", "flash-lite-2.5"],
+            ),
+            (
                 "gemini-2.0-flash-exp",
                 "Gemini 2.0 Flash (Experimental)",
                 ["gemini-2.0-flash", "flash-2.0"],
@@ -1508,6 +1533,11 @@ User Request:
     def session_exists(self, session_id: str, runtime: str) -> bool:
         """Check if session state exists for runtime"""
         if runtime == "copilot":
+            # Modern Copilot stores sessions as directories with events.jsonl inside
+            session_dir = self.session_state_dir / session_id
+            if session_dir.is_dir() and (session_dir / "events.jsonl").exists():
+                return True
+            # Legacy: also check for old .jsonl format at root level
             return (self.session_state_dir / f"{session_id}.jsonl").exists()
         elif runtime == "opencode":
             # OpenCode stores sessions in nested directories: ~/.local/share/opencode/storage/session/HASH/ses_*.json
@@ -1559,6 +1589,20 @@ User Request:
         """Get most recent session ID from storage or CLI"""
         try:
             if runtime == "copilot":
+                # Modern Copilot: sessions are directories with events.jsonl inside
+                session_dirs = [
+                    d for d in self.session_state_dir.iterdir()
+                    if d.is_dir() and (d / "events.jsonl").exists()
+                ]
+                if session_dirs:
+                    # Sort by modification time of events.jsonl
+                    dirs_sorted = sorted(
+                        session_dirs,
+                        key=lambda d: (d / "events.jsonl").stat().st_mtime,
+                        reverse=True,
+                    )
+                    return dirs_sorted[0].name
+                # Legacy fallback: check for old .jsonl format
                 files = sorted(
                     self.session_state_dir.glob("*.jsonl"),
                     key=lambda p: p.stat().st_mtime,
