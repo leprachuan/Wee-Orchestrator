@@ -1714,44 +1714,44 @@ User Request:
             return """🆘 **Available Commands**
 
 **Orchestrator:**
-   • `/capabilities` - Show what the orchestrator can help with
+   • /capabilities - Show what the orchestrator can help with
 
 **Bash Commands:**
-   • `!<command>` - Execute bash command directly (e.g., !pwd, !ls -la)
+   • !command - Execute bash command directly (e.g., !pwd, !ls -la)
    • Commands run in current agent's directory with 10s timeout
 
 **Runtime Management:**
-   • `/runtime list` - Show available runtimes
-   • `/runtime set <copilot|opencode|claude|gemini>` - Switch runtime
-   • `/runtime current` - Show current runtime
+   • /runtime list - Show available runtimes
+   • /runtime set (copilot|opencode|claude|gemini) - Switch runtime
+   • /runtime current - Show current runtime
 
 **Model Management:**
-   • `/model list` - Show available models for current runtime
-   • `/model set \"<model>\"` - Switch model
-   • `/model current` - Show current model
+   • /model list - Show available models for current runtime
+   • /model set "model_name" - Switch model
+   • /model current - Show current model
 
 **Agent Management:**
-   • `/agent list` - Show available agents
-   • `/agent set \"<agent>\"` - Switch agent
-   • `/agent current` - Show current agent
-   • `/agent invoke \"<agent>\" \"<prompt>\"` - Delegate to sub-agent
+   • /agent list - Show available agents
+   • /agent set "agent_name" - Switch agent
+   • /agent current - Show current agent
+   • /agent invoke "agent_name" "prompt" - Delegate to sub-agent
 
 **Session:**
-   • `/session reset` - Reset current session
-    • `/timeout` or `/timeout current` - Show current timeout
-    • `/timeout set [seconds]` - Set timeout (30-3600 seconds / 1 hour max)
-   • `/render` or `/render current` - Show current render type
-   • `/render set [text|markdown|html|telegram_html]` - Set render type
+   • /session reset - Reset current session
+   • /timeout or /timeout current - Show current timeout
+   • /timeout set [seconds] - Set timeout (30-3600 seconds / 1 hour max)
+   • /render or /render current - Show current render type
+   • /render set [text|markdown|html|telegram_html] - Set render type
 
 **Query Management:**
-   • `/status` - Check status of running query for this session
-   • `/cancel` - Cancel running query for this session
+   • /status - Check status of running query for this session
+   • /cancel - Cancel running query for this session
 
 **Auto-Delegation:**
 You can mention an agent in your prompt and it will auto-delegate:
-   • \"ask the family agent for Parker's Christmas ideas\"
-   • \"have the devops agent check production status\"
-   • \"this is in the projects agent, find the auth code\"
+   • ask the family agent for Parkers Christmas ideas
+   • have the devops agent check production status
+   • this is in the projects agent, find the auth code
 
 **Examples:**
    /capabilities
@@ -1759,10 +1759,10 @@ You can mention an agent in your prompt and it will auto-delegate:
    !echo "Hello World"
    !ls -la
    /runtime set gemini
-   /model set \"gpt-5.2\"
-   /agent set \"family\"
-   /agent invoke family \"Find Christmas ideas for Parker\"
-   ask the family agent what are Parker's Christmas ideas
+   /model set "gpt-5.2"
+   /agent set "family"
+   /agent invoke family "Find Christmas ideas for Parker"
+   ask the family agent what are Parkers Christmas ideas
    have the devops agent check the server status
 """
 
