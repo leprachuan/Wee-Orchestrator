@@ -1,6 +1,11 @@
 {
   "agents": [
     {
+      "name": "fosterbot",
+      "description": "Main orchestrator agent. Coordinates multi-agent workflows and routes tasks to specialized sub-agents (email_triage, family_knowledge, opencode, smart_home, MyHomeDevops). Manages skill definitions for Claude, Gemini, and Copilot CLI.",
+      "path": "/opt/fosterbot-home"
+    },
+    {
       "name": "devops",
       "description": "DevOps and infrastructure management. Handles cluster management, deployments, and monitoring.",
       "path": "/opt/MyHomeDevops"
