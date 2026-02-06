@@ -9,6 +9,9 @@ description = "A unified AI agent manager that bridges N8N workflows with multip
 readme = "README.md"
 license = {text = "MIT"}
 requires-python = ">=3.8"
+dependencies = [
+    "requests>=2.28.0",
+]
 authors = [
     {name = "N8N Community", email = "support@n8n.io"}
 ]
@@ -36,6 +39,7 @@ Issues = "https://github.com/n8n-io/n8n-copilot-shim/issues"
 
 [project.scripts]
 n8n-copilot-shim = "agent_manager:main"
+n8n-telegram-connector = "telegram_connector:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["agent_manager.py"]
