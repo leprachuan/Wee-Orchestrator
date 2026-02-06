@@ -42,6 +42,9 @@ env/
 # Claude Code
 .claude/
 
+# Telegram Configuration (contains tokens)
+telegram_config.json
+
 # OS
 .DS_Store
 .DS_Store?
