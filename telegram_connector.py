@@ -232,9 +232,9 @@ class TelegramConnector:
     def send_photo(self, chat_id: int, photo_url: str, caption: str = "") -> Optional[int]:
         """Send a photo to Telegram chat via URL. Returns message_id."""
         try:
+            print(f"[DEBUG] Attempting sendPhoto with URL: {photo_url}", file=sys.stderr)
             data = {"chat_id": chat_id, "photo": photo_url}
             if caption:
-                # Telegram caption limit is 1024 chars
                 data["caption"] = caption[:1024]
                 data["parse_mode"] = "HTML"
             resp = requests.post(
@@ -243,18 +243,20 @@ class TelegramConnector:
                 timeout=30,
             )
             if resp.status_code != 200:
-                # Fallback: try without parse_mode
                 if caption:
                     data.pop("parse_mode", None)
                     resp = requests.post(f"{self.api_url}/sendPhoto", json=data, timeout=30)
                 if resp.status_code != 200:
                     print(f"[WARN] sendPhoto failed ({resp.status_code}): {resp.text[:200]}", file=sys.stderr)
+                    # Fallback: send URL as clickable link
+                    self.send_message(chat_id, f'<a href="{photo_url}">📷 Image link</a>')
                     return None
             result = resp.json()
             if result.get("ok"):
                 return result["result"]["message_id"]
         except Exception as e:
             print(f"Error sending photo: {e}", file=sys.stderr)
+            self.send_message(chat_id, f'<a href="{photo_url}">📷 Image link</a>')
         return None
 
     def extract_image_urls(self, text: str) -> tuple:
