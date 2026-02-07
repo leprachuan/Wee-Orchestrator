@@ -1165,11 +1165,11 @@ class SessionManager:
         if render_type == "markdown":
             render_instruction = """
 [Output Format: markdown]
-[Media: When the user asks for images or pictures, search the web and include them using markdown image syntax: ![description](https://actual-image-url). Always use real, publicly accessible image URLs. You can also include hyperlinks using [text](url) syntax.]"""
+[Media: When the user asks for images or pictures, use your web search tool to find a real, publicly accessible image URL (e.g. from Wikipedia, Unsplash, Pexels). Include it using markdown: ![description](https://real-url.jpg). Do NOT create, generate, or save image files locally. Do NOT create SVGs. Only use real URLs from the web. You can also include hyperlinks using [text](url) syntax.]"""
         elif render_type == "html":
             render_instruction = """
 [Output Format: html]
-[Media: When the user asks for images or pictures, search the web and include them using <img src="https://actual-image-url" alt="description"> tags. Always use real, publicly accessible image URLs. You can also include hyperlinks using <a href="url">text</a> tags.]"""
+[Media: When the user asks for images or pictures, use your web search tool to find a real, publicly accessible image URL (e.g. from Wikipedia, Unsplash, Pexels). Include it using <img src="https://real-url.jpg" alt="description">. Do NOT create, generate, or save image files locally. Do NOT create SVGs. Only use real URLs from the web. You can also include hyperlinks using <a href="url">text</a> tags.]"""
         elif render_type == "telegram_html":
             render_instruction = """
 [Output Format: Telegram HTML - STRICT]
@@ -1197,7 +1197,7 @@ HOW TO FORMAT:
 - Always close tags properly: <b>text</b> not <b>text<b>
 - For line breaks in output, use plain \\n characters
 
-[Media: When the user asks for images or pictures, search the web for a real image URL and include it on its own line as a bare URL like: https://example.com/image.jpg — do NOT use <img> tags (unsupported). The system will automatically detect image URLs and send them as photos. You can include hyperlinks using <a href="url">text</a>.]"""
+[Media: When the user asks for images or pictures, use your web search tool to find a real, publicly accessible image URL (e.g. from Wikipedia, Unsplash, Pexels). Include it on its own line as a bare URL like: https://upload.wikimedia.org/example.jpg — do NOT use <img> tags (unsupported). Do NOT create, generate, or save image files locally. Do NOT create SVGs. Only use real URLs from the web. The system will automatically detect image URLs and send them as photos. You can include hyperlinks using <a href="url">text</a>.]"""
         else:  # text (default)
             render_instruction = ""
 
