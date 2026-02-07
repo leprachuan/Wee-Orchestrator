@@ -1163,9 +1163,13 @@ class SessionManager:
         # Add render type instruction to the context
         render_instruction = ""
         if render_type == "markdown":
-            render_instruction = "\n[Output Format: markdown]"
+            render_instruction = """
+[Output Format: markdown]
+[Media: When the user asks for images or pictures, search the web and include them using markdown image syntax: ![description](https://actual-image-url). Always use real, publicly accessible image URLs. You can also include hyperlinks using [text](url) syntax.]"""
         elif render_type == "html":
-            render_instruction = "\n[Output Format: html]"
+            render_instruction = """
+[Output Format: html]
+[Media: When the user asks for images or pictures, search the web and include them using <img src="https://actual-image-url" alt="description"> tags. Always use real, publicly accessible image URLs. You can also include hyperlinks using <a href="url">text</a> tags.]"""
         elif render_type == "telegram_html":
             render_instruction = """
 [Output Format: Telegram HTML - STRICT]
@@ -1188,10 +1192,12 @@ ABSOLUTELY NO OTHER TAGS ALLOWED:
 ❌ Do NOT nest unsupported tags inside supported ones
 
 HOW TO FORMAT:
-- Use \n (newline) to separate paragraphs, NOT <p> tags
+- Use \\n (newline) to separate paragraphs, NOT <p> tags
 - Escape these characters: < becomes &lt;, > becomes &gt;, & becomes &amp;
 - Always close tags properly: <b>text</b> not <b>text<b>
-- For line breaks in output, use plain \n characters]"""
+- For line breaks in output, use plain \\n characters
+
+[Media: When the user asks for images or pictures, search the web for a real image URL and include it on its own line as a bare URL like: https://example.com/image.jpg — do NOT use <img> tags (unsupported). The system will automatically detect image URLs and send them as photos. You can include hyperlinks using <a href="url">text</a>.]"""
         else:  # text (default)
             render_instruction = ""
 
