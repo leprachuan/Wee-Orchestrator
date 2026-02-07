@@ -129,6 +129,12 @@ class TelegramConnector:
             self.session_managers[session_id] = SessionManager()
         return self.session_managers[session_id]
 
+    def _evict_session_manager(self, session_id: str):
+        """Remove cached SessionManager so next call gets a fresh one"""
+        if session_id in self.session_managers:
+            del self.session_managers[session_id]
+            print(f"[DEBUG] Evicted cached SessionManager for: {session_id}", file=sys.stderr)
+
     def get_updates(self, timeout: int = 30) -> List[Dict]:
         """Fetch new messages from Telegram"""
         try:
@@ -380,6 +386,10 @@ class TelegramConnector:
                     timeout = self.config.get_user_timeout(user_id)
                     response = self._execute_command(text, session_id, timeout)
                     self.send_message(chat_id, response)
+                    # Evict cached SessionManager on session-affecting commands
+                    cmd_lower = text.lower().strip()
+                    if cmd_lower.startswith("/session reset") or cmd_lower.startswith("/runtime set"):
+                        self._evict_session_manager(session_id)
             else:
                 # Check for bash command (!)
                 if text.startswith("!"):
@@ -418,9 +428,7 @@ class TelegramConnector:
         def run_command():
             """Run command in background thread"""
             try:
-                from agent_manager import SessionManager
-                
-                session_mgr = SessionManager()
+                session_mgr = self.get_session_manager(session_id)
                 result_container["response"] = session_mgr.execute(command, session_id)
                 result_container["done"] = True
             except Exception as e:
