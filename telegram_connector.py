@@ -109,6 +109,9 @@ class TelegramConnector:
         """
         self.token = token
         self.config = TelegramConfig(config_file)
+        
+        # Keep persistent SessionManager per session_id for context persistence
+        self.session_managers = {}  # {session_id: SessionManager}
 
         # Set token in config if provided
         if token and not self.config.config.get("token"):
@@ -118,6 +121,13 @@ class TelegramConnector:
         self.api_url = f"https://api.telegram.org/bot{self.token}"
         self.offset = 0
         self.running = False
+    
+    def get_session_manager(self, session_id: str):
+        """Get or create SessionManager for session_id"""
+        if session_id not in self.session_managers:
+            from agent_manager import SessionManager
+            self.session_managers[session_id] = SessionManager()
+        return self.session_managers[session_id]
 
     def get_updates(self, timeout: int = 30) -> List[Dict]:
         """Fetch new messages from Telegram"""
@@ -138,16 +148,68 @@ class TelegramConnector:
             print(f"Error fetching updates: {e}", file=sys.stderr)
             return []
 
-    def send_message(self, chat_id: int, text: str):
-        """Send message to Telegram chat"""
+    def send_message(self, chat_id: int, text: str) -> Optional[int]:
+        """Send message to Telegram chat with HTML formatting, fallback to plain text. Returns message_id."""
         try:
-            requests.post(
-                f"{self.api_url}/sendMessage",
-                json={"chat_id": chat_id, "text": text},
-                timeout=10,
-            )
+            # Split long messages (Telegram limit is 4096 chars)
+            max_len = 4096
+            chunks = [text[i:i + max_len] for i in range(0, len(text), max_len)] if text else ["No response"]
+            
+            last_msg_id = None
+            for chunk in chunks:
+                # Try HTML first
+                resp = requests.post(
+                    f"{self.api_url}/sendMessage",
+                    json={"chat_id": chat_id, "text": chunk, "parse_mode": "HTML"},
+                    timeout=10,
+                )
+                if resp.status_code != 200:
+                    # HTML failed, fallback to plain text
+                    print(f"[WARN] HTML send failed ({resp.status_code}), falling back to plain text", file=sys.stderr)
+                    resp = requests.post(
+                        f"{self.api_url}/sendMessage",
+                        json={"chat_id": chat_id, "text": chunk},
+                        timeout=10,
+                    )
+                    if resp.status_code != 200:
+                        print(f"[ERROR] Plain text send also failed ({resp.status_code}): {resp.text[:200]}", file=sys.stderr)
+                
+                if resp.status_code == 200:
+                    result = resp.json()
+                    if result.get("ok"):
+                        last_msg_id = result["result"]["message_id"]
+            return last_msg_id
         except Exception as e:
             print(f"Error sending message: {e}", file=sys.stderr)
+            return None
+
+    def edit_message(self, chat_id: int, message_id: int, text: str):
+        """Edit an existing message with HTML formatting, fallback to plain text.
+        Handles long messages by editing the first chunk and sending the rest."""
+        try:
+            max_len = 4096
+            chunks = [text[i:i + max_len] for i in range(0, len(text), max_len)] if text else ["No response"]
+            
+            # Edit with first chunk (try HTML, fallback to plain)
+            resp = requests.post(
+                f"{self.api_url}/editMessageText",
+                json={"chat_id": chat_id, "message_id": message_id, "text": chunks[0], "parse_mode": "HTML"},
+                timeout=10,
+            )
+            if resp.status_code != 200:
+                resp = requests.post(
+                    f"{self.api_url}/editMessageText",
+                    json={"chat_id": chat_id, "message_id": message_id, "text": chunks[0]},
+                    timeout=10,
+                )
+                if resp.status_code != 200:
+                    print(f"[WARN] Edit message failed ({resp.status_code}): {resp.text[:200]}", file=sys.stderr)
+            
+            # Send remaining chunks as new messages
+            for chunk in chunks[1:]:
+                self.send_message(chat_id, chunk)
+        except Exception as e:
+            print(f"Error editing message: {e}", file=sys.stderr)
 
     def send_typing(self, chat_id: int):
         """Send typing indicator to chat"""
@@ -328,10 +390,14 @@ class TelegramConnector:
                 else:
                     # Route regular messages to agent_manager with status updates
                     timeout = self.config.get_user_timeout(user_id)
-                    response = self._query_agent_with_status(
+                    response, status_msg_id = self._query_agent_with_status(
                         text, session_info["agent"], session_info["model"], user_id, chat_id, timeout
                     )
-                    self.send_message(chat_id, response)
+                    if status_msg_id:
+                        # Edit the status message with the final response
+                        self.edit_message(chat_id, status_msg_id, response)
+                    else:
+                        self.send_message(chat_id, response)
             
             # Cleanup temp files after query
             self.cleanup_files(user_id)
@@ -381,8 +447,12 @@ class TelegramConnector:
 
     def _query_agent_with_status(
         self, query: str, agent: str, model: str, user_id: int, chat_id: int, timeout: int = 300
-    ) -> str:
-        """Query agent with status updates at 10s, 30s, 60s, etc."""
+    ) -> tuple:
+        """Query agent with status updates at 30s intervals.
+        
+        Returns (response_text, status_msg_id) where status_msg_id is the
+        message to edit with the final response, or None if no status was sent.
+        """
         # Container for result and thread control
         result_container = {"response": None, "done": False}
         
@@ -409,15 +479,25 @@ class TelegramConnector:
         # Wait for result with status updates
         elapsed = 0
         status_idx = 0
+        status_msg_id = None  # Track the status message to edit it
         while not result_container["done"] and elapsed < timeout:
-            if elapsed == 10:
-                # First status at 10s
-                self.send_message(chat_id, status_msgs[0])
+            # Re-send typing every 5 seconds to keep indicator alive
+            if elapsed % 5 == 0:
+                self.send_typing(chat_id)
+            
+            if elapsed == 30:
+                # First status at 30s - send new message
+                status_msg_id = self.send_message(chat_id, status_msgs[0])
+                self.send_typing(chat_id)
                 status_idx = 1
-            elif elapsed > 10 and (elapsed - 10) % 30 == 0:
-                # Status every 30s after initial 10s
+            elif elapsed > 30 and (elapsed - 30) % 30 == 0:
+                # Edit existing status message
                 msg = status_msgs[status_idx % len(status_msgs)]
-                self.send_message(chat_id, msg)
+                if status_msg_id:
+                    self.edit_message(chat_id, status_msg_id, msg)
+                else:
+                    status_msg_id = self.send_message(chat_id, msg)
+                self.send_typing(chat_id)
                 status_idx += 1
             
             time.sleep(1)
@@ -426,34 +506,24 @@ class TelegramConnector:
         # Wait for thread to complete (with timeout)
         query_thread.join(timeout=5)
         
-        return result_container["response"] or "Error: Query timed out"
+        return (result_container["response"] or "Error: Query timed out", status_msg_id)
 
     def _query_agent(
         self, query: str, agent: str, model: str, user_id: int, timeout: int = 300
     ) -> str:
         """Query the agent_manager with user session tied to user ID"""
         try:
-            from agent_manager import SessionManager
-            
             # Session ID tied to user ID
             session_id = f"telegram_{user_id}"
             
-            # Create session manager (uses default config)
-            session_mgr = SessionManager()
+            # Use persistent session manager
+            session_mgr = self.get_session_manager(session_id)
             
             # Debug: log session info
-            print(f"[DEBUG] Using session_id: {session_id}, resume=True", file=sys.stderr)
+            print(f"[DEBUG] Using persistent session_mgr for: {session_id}", file=sys.stderr)
             
-            # Run the query through the agent with user's configured timeout
-            result = session_mgr.run_copilot(
-                prompt=query,
-                model=model,
-                agent=agent,
-                session_id=session_id,
-                resume=True,  # Resume existing session if available
-                n8n_session_id=session_id,
-                timeout=timeout
-            )
+            # Use execute() which routes to the correct runtime automatically
+            result = session_mgr.execute(query, session_id)
             
             return result if result else "No response from agent"
         except Exception as e:
