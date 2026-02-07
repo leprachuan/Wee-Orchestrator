@@ -314,16 +314,24 @@ class TelegramConnector:
                         response = "Invalid timeout command. Use: /timeout current or /timeout set <seconds>"
                     self.send_message(chat_id, response)
                 else:
-                    # Regular slash commands
-                    response = self._execute_command(text, session_id)
+                    # Regular slash commands - get user timeout
+                    timeout = self.config.get_user_timeout(user_id)
+                    response = self._execute_command(text, session_id, timeout)
                     self.send_message(chat_id, response)
             else:
-                # Route regular messages to agent_manager with status updates
-                timeout = self.config.get_user_timeout(user_id)
-                response = self._query_agent_with_status(
-                    text, session_info["agent"], session_info["model"], user_id, chat_id, timeout
-                )
-                self.send_message(chat_id, response)
+                # Check for bash command (!)
+                if text.startswith("!"):
+                    # Bash commands - get user timeout
+                    timeout = self.config.get_user_timeout(user_id)
+                    response = self._execute_command(text, session_id, timeout)
+                    self.send_message(chat_id, response)
+                else:
+                    # Route regular messages to agent_manager with status updates
+                    timeout = self.config.get_user_timeout(user_id)
+                    response = self._query_agent_with_status(
+                        text, session_info["agent"], session_info["model"], user_id, chat_id, timeout
+                    )
+                    self.send_message(chat_id, response)
             
             # Cleanup temp files after query
             self.cleanup_files(user_id)
@@ -336,19 +344,40 @@ class TelegramConnector:
         """Handle Telegram commands - DEPRECATED: Commands now pass to agent_manager"""
         pass  # Commands are now routed to agent_manager
 
-    def _execute_command(self, command: str, session_id: str) -> str:
-        """Execute slash command via agent_manager.execute()"""
-        try:
-            from agent_manager import SessionManager
-            
-            session_mgr = SessionManager()
-            result = session_mgr.execute(command, session_id)
-            return result if result else "No response from command"
-        except Exception as e:
-            import traceback
-            tb_str = traceback.format_exc()
-            print(f"Error in _execute_command: {tb_str}", file=sys.stderr)
-            return f"Error: {str(e)[:150]}"
+    def _execute_command(self, command: str, session_id: str, timeout: int = 300) -> str:
+        """Execute slash command via agent_manager.execute() with timeout support"""
+        # Container for result and thread control
+        result_container = {"response": None, "done": False}
+        
+        def run_command():
+            """Run command in background thread"""
+            try:
+                from agent_manager import SessionManager
+                
+                session_mgr = SessionManager()
+                result_container["response"] = session_mgr.execute(command, session_id)
+                result_container["done"] = True
+            except Exception as e:
+                import traceback
+                tb_str = traceback.format_exc()
+                print(f"Error in _execute_command: {tb_str}", file=sys.stderr)
+                result_container["response"] = f"Error: {str(e)[:150]}"
+                result_container["done"] = True
+        
+        # Start command in background
+        cmd_thread = threading.Thread(target=run_command, daemon=True)
+        cmd_thread.start()
+        
+        # Wait for result with timeout
+        elapsed = 0
+        while not result_container["done"] and elapsed < timeout:
+            time.sleep(1)
+            elapsed += 1
+        
+        # Wait for thread to complete
+        cmd_thread.join(timeout=5)
+        
+        return result_container["response"] or "Error: Command timed out"
 
     def _query_agent_with_status(
         self, query: str, agent: str, model: str, user_id: int, chat_id: int, timeout: int = 300
@@ -370,7 +399,7 @@ class TelegramConnector:
             """Run query in background thread"""
             # Log what's being sent
             print(f"[DEBUG] Query to agent: {query[:200]}", file=sys.stderr)
-            result_container["response"] = self._query_agent(query, agent, model, user_id)
+            result_container["response"] = self._query_agent(query, agent, model, user_id, timeout)
             result_container["done"] = True
         
         # Start query in background
@@ -400,7 +429,7 @@ class TelegramConnector:
         return result_container["response"] or "Error: Query timed out"
 
     def _query_agent(
-        self, query: str, agent: str, model: str, user_id: int
+        self, query: str, agent: str, model: str, user_id: int, timeout: int = 300
     ) -> str:
         """Query the agent_manager with user session tied to user ID"""
         try:
@@ -412,7 +441,10 @@ class TelegramConnector:
             # Create session manager (uses default config)
             session_mgr = SessionManager()
             
-            # Run the query through the agent
+            # Debug: log session info
+            print(f"[DEBUG] Using session_id: {session_id}, resume=True", file=sys.stderr)
+            
+            # Run the query through the agent with user's configured timeout
             result = session_mgr.run_copilot(
                 prompt=query,
                 model=model,
@@ -420,7 +452,7 @@ class TelegramConnector:
                 session_id=session_id,
                 resume=True,  # Resume existing session if available
                 n8n_session_id=session_id,
-                timeout=30
+                timeout=timeout
             )
             
             return result if result else "No response from agent"
