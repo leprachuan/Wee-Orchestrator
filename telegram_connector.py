@@ -156,36 +156,91 @@ class TelegramConnector:
             return []
 
     def sanitize_telegram_html(self, text: str) -> str:
-        """Sanitize HTML to only contain Telegram-supported tags."""
-        # Replace <pre><code class="..."> with just <pre>
-        text = re.sub(r'<pre><code[^>]*>', '<pre>', text)
-        text = re.sub(r'</code></pre>', '</pre>', text)
-        # Remove class/language attributes from code tags
-        text = re.sub(r'<code[^>]*>', '<code>', text)
-        # Remove unsupported tags but keep content
-        unsupported = r'</?(?:p|div|span|br|h[1-6]|ul|ol|li|table|tr|td|th|thead|tbody|img|hr)[^>]*>'
-        text = re.sub(unsupported, '', text, flags=re.IGNORECASE)
-        # Replace <br> variants with newline
+        """Sanitize HTML to only contain Telegram-supported tags.
+        Telegram supports: b, strong, i, em, u, ins, s, strike, del, a, code, pre, blockquote, tg-spoiler"""
+        # Supported Telegram tags (opening and closing)
+        supported_tags = {'b', 'strong', 'i', 'em', 'u', 'ins', 's', 'strike', 'del',
+                          'a', 'code', 'pre', 'blockquote', 'tg-spoiler', 'tg-emoji'}
+        
+        # Replace <br> with newline before processing
         text = re.sub(r'<br\s*/?>', '\n', text, flags=re.IGNORECASE)
+        
+        # Replace <pre><code class="..."> with just <pre>
+        text = re.sub(r'<pre>\s*<code[^>]*>', '<pre>', text)
+        text = re.sub(r'</code>\s*</pre>', '</pre>', text)
+        
+        # Remove attributes from all tags except <a> (which needs href) and <blockquote> (expandable)
+        def clean_tag(match):
+            full = match.group(0)
+            # Closing tags
+            if full.startswith('</'):
+                tag_name = re.match(r'</(\w[\w-]*)', full)
+                if tag_name and tag_name.group(1).lower() in supported_tags:
+                    return f'</{tag_name.group(1)}>'
+                return ''  # Remove unsupported closing tag
+            # Opening tags
+            tag_match = re.match(r'<(\w[\w-]*)([\s>])', full)
+            if not tag_match:
+                # Self-closing or malformed - remove
+                return ''
+            tag_name = tag_match.group(1).lower()
+            if tag_name not in supported_tags:
+                return ''  # Remove unsupported tag
+            if tag_name == 'a':
+                # Keep href attribute
+                href = re.search(r'href=["\']([^"\']*)["\']', full, re.IGNORECASE)
+                if href:
+                    return f'<a href="{href.group(1)}">'
+                return ''  # <a> without href is useless
+            if tag_name == 'blockquote':
+                if 'expandable' in full:
+                    return '<blockquote expandable>'
+                return '<blockquote>'
+            # All other supported tags - strip attributes
+            return f'<{tag_name}>'
+        
+        text = re.sub(r'</?[\w][\w-]*(?:\s[^>]*)?\s*/?>', clean_tag, text)
+        
+        # Escape stray < and > that aren't part of valid tags
+        # First protect valid tags, then escape strays, then restore
+        import html as html_mod
+        parts = re.split(r'(</?(?:' + '|'.join(supported_tags) + r')(?:\s[^>]*)?>)', text)
+        result = []
+        for i, part in enumerate(parts):
+            if i % 2 == 0:
+                # Not a tag - escape any remaining < >
+                part = part.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+            result.append(part)
+        text = ''.join(result)
+        
         return text
 
     def send_message(self, chat_id: int, text: str) -> Optional[int]:
-        """Send message to Telegram chat as plain text. Returns message_id."""
+        """Send message to Telegram chat with HTML formatting, fallback to plain text. Returns message_id."""
         try:
+            sanitized = self.sanitize_telegram_html(text)
             max_len = 4096
-            # Strip any HTML tags for clean plain text
-            clean = re.sub(r'<[^>]+>', '', text) if text else "No response"
-            chunks = [clean[i:i + max_len] for i in range(0, len(clean), max_len)] if clean else ["No response"]
+            chunks = [sanitized[i:i + max_len] for i in range(0, len(sanitized), max_len)] if sanitized else ["No response"]
             
             last_msg_id = None
             for chunk in chunks:
                 resp = requests.post(
                     f"{self.api_url}/sendMessage",
-                    json={"chat_id": chat_id, "text": chunk},
+                    json={"chat_id": chat_id, "text": chunk, "parse_mode": "HTML"},
                     timeout=10,
                 )
                 if resp.status_code != 200:
-                    print(f"[ERROR] Send failed ({resp.status_code}): {resp.text[:200]}", file=sys.stderr)
+                    print(f"[WARN] HTML send failed ({resp.status_code}): {resp.text[:200]}", file=sys.stderr)
+                    # Fallback to plain text
+                    plain = re.sub(r'<[^>]+>', '', chunk)
+                    plain = plain.replace('&amp;', '&').replace('&lt;', '<').replace('&gt;', '>')
+                    resp = requests.post(
+                        f"{self.api_url}/sendMessage",
+                        json={"chat_id": chat_id, "text": plain},
+                        timeout=10,
+                    )
+                    if resp.status_code != 200:
+                        print(f"[ERROR] Plain text also failed ({resp.status_code}): {resp.text[:200]}", file=sys.stderr)
                 
                 if resp.status_code == 200:
                     result = resp.json()
@@ -197,22 +252,29 @@ class TelegramConnector:
             return None
 
     def edit_message(self, chat_id: int, message_id: int, text: str):
-        """Edit an existing message as plain text.
-        Handles long messages by editing the first chunk and sending the rest."""
+        """Edit an existing message with HTML formatting, fallback to plain text."""
         try:
-            clean = re.sub(r'<[^>]+>', '', text) if text else "No response"
+            sanitized = self.sanitize_telegram_html(text)
             max_len = 4096
-            chunks = [clean[i:i + max_len] for i in range(0, len(clean), max_len)] if clean else ["No response"]
+            chunks = [sanitized[i:i + max_len] for i in range(0, len(sanitized), max_len)] if sanitized else ["No response"]
             
             resp = requests.post(
                 f"{self.api_url}/editMessageText",
-                json={"chat_id": chat_id, "message_id": message_id, "text": chunks[0]},
+                json={"chat_id": chat_id, "message_id": message_id, "text": chunks[0], "parse_mode": "HTML"},
                 timeout=10,
             )
             if resp.status_code != 200:
-                print(f"[WARN] Edit message failed ({resp.status_code}): {resp.text[:200]}", file=sys.stderr)
+                # Fallback to plain text
+                plain = re.sub(r'<[^>]+>', '', chunks[0])
+                plain = plain.replace('&amp;', '&').replace('&lt;', '<').replace('&gt;', '>')
+                resp = requests.post(
+                    f"{self.api_url}/editMessageText",
+                    json={"chat_id": chat_id, "message_id": message_id, "text": plain},
+                    timeout=10,
+                )
+                if resp.status_code != 200:
+                    print(f"[WARN] Edit failed ({resp.status_code}): {resp.text[:200]}", file=sys.stderr)
             
-            # Send remaining chunks as new messages
             for chunk in chunks[1:]:
                 self.send_message(chat_id, chunk)
         except Exception as e:
