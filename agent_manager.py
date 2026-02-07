@@ -1291,9 +1291,13 @@ User Request:
         agent_dir = self.AGENTS.get(agent, self.AGENTS["orchestrator"])["path"]
         effective_timeout = timeout if timeout is not None else self.command_timeout
 
-        context_prompt = self.build_agent_context_prompt(
-            agent, prompt, n8n_session_id, render_type, effective_timeout
-        )
+        # Only inject full context on new sessions; resumed sessions already have it
+        if resume and session_id:
+            context_prompt = prompt
+        else:
+            context_prompt = self.build_agent_context_prompt(
+                agent, prompt, n8n_session_id, render_type, effective_timeout
+            )
 
         cmd = [
             self.copilot_bin,
@@ -1341,9 +1345,13 @@ User Request:
         agent_dir = self.AGENTS.get(agent, self.AGENTS["orchestrator"])["path"]
         effective_timeout = timeout if timeout is not None else self.command_timeout
 
-        context_prompt = self.build_agent_context_prompt(
-            agent, prompt, n8n_session_id, render_type, effective_timeout
-        )
+        # Only inject full context on new sessions; resumed sessions already have it
+        if resume and session_id:
+            context_prompt = prompt
+        else:
+            context_prompt = self.build_agent_context_prompt(
+                agent, prompt, n8n_session_id, render_type, effective_timeout
+            )
 
         cmd = [str(self.opencode_bin), "run", "--model", model]
 
@@ -1390,9 +1398,13 @@ User Request:
         agent_dir = self.AGENTS.get(agent, self.AGENTS["orchestrator"])["path"]
         effective_timeout = timeout if timeout is not None else self.command_timeout
 
-        context_prompt = self.build_agent_context_prompt(
-            agent, prompt, n8n_session_id, render_type, effective_timeout
-        )
+        # Only inject full context on new sessions; resumed sessions already have it
+        if resume and session_id:
+            context_prompt = prompt
+        else:
+            context_prompt = self.build_agent_context_prompt(
+                agent, prompt, n8n_session_id, render_type, effective_timeout
+            )
 
         cmd = [
             self.claude_bin,
@@ -1448,9 +1460,13 @@ User Request:
         agent_dir = self.AGENTS.get(agent, self.AGENTS["orchestrator"])["path"]
         effective_timeout = timeout if timeout is not None else self.command_timeout
 
-        context_prompt = self.build_agent_context_prompt(
-            agent, prompt, n8n_session_id, render_type, effective_timeout
-        )
+        # Only inject full context on new sessions; resumed sessions already have it
+        if resume and session_id:
+            context_prompt = prompt
+        else:
+            context_prompt = self.build_agent_context_prompt(
+                agent, prompt, n8n_session_id, render_type, effective_timeout
+            )
 
         cmd = ["gemini", "--yolo", context_prompt]
 
@@ -1497,9 +1513,13 @@ User Request:
         agent_dir = self.AGENTS.get(agent, self.AGENTS["orchestrator"])["path"]
         effective_timeout = timeout if timeout is not None else self.command_timeout
 
-        context_prompt = self.build_agent_context_prompt(
-            agent, prompt, n8n_session_id, render_type, effective_timeout
-        )
+        # Only inject full context on new sessions; resumed sessions already have it
+        if resume and session_id:
+            context_prompt = prompt
+        else:
+            context_prompt = self.build_agent_context_prompt(
+                agent, prompt, n8n_session_id, render_type, effective_timeout
+            )
 
         if resume and session_id:
             # Resume existing session
