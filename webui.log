@@ -1,0 +1,28 @@
+
+> n8n-copilot-shim-webui@0.1.0 dev
+> tsx server/agent-proxy.ts
+
+[agent-proxy] Loaded 4 agents from agents.json
+[agent-proxy] Starting default agent: devops
+[agent-proxy] Starting OpenCode for agent: devops in /opt/MyHomeDevops
+[agent-proxy] Management API listening on http://localhost:3001
+[agent-proxy][devops] opencode server listening on http://127.0.0.1:34221
+[agent-proxy] Default agent devops is ready
+[agent-proxy] Starting Vite in /opt/n8n-copilot-shim/webui
+Port 3000 is in use, trying another one...
+Port 3001 is in use, trying another one...
+
+  VITE v6.4.1  ready in 236 ms
+
+  ➜  Local:   http://localhost:3002/
+  ➜  Network: http://192.168.1.100:3002/
+  ➜  Network: http://100.95.63.94:3002/
+[agent-proxy][devops] Routing GET /event -> http://127.0.0.1:34221
+[agent-proxy] Path rewrite: /event -> /event
+(node:870678) [DEP0060] DeprecationWarning: The `util._extend` API is deprecated. Please use Object.assign() instead.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+[baseline-browser-mapping] The data in this module is over two months old.  To ensure accurate Baseline data, please update: `npm i baseline-browser-mapping@latest -D`
+/*! 🌼 daisyUI 5.3.7 */
+[agent-proxy] Vite exited with code null
+[agent-proxy] Stopping all agent instances...
+[agent-proxy] Stopping devops...
