@@ -170,32 +170,22 @@ class TelegramConnector:
         return text
 
     def send_message(self, chat_id: int, text: str) -> Optional[int]:
-        """Send message to Telegram chat with HTML formatting, fallback to plain text. Returns message_id."""
+        """Send message to Telegram chat as plain text. Returns message_id."""
         try:
-            # Sanitize HTML for Telegram compatibility
-            sanitized = self.sanitize_telegram_html(text)
-            # Split long messages (Telegram limit is 4096 chars)
             max_len = 4096
-            chunks = [sanitized[i:i + max_len] for i in range(0, len(sanitized), max_len)] if sanitized else ["No response"]
+            # Strip any HTML tags for clean plain text
+            clean = re.sub(r'<[^>]+>', '', text) if text else "No response"
+            chunks = [clean[i:i + max_len] for i in range(0, len(clean), max_len)] if clean else ["No response"]
             
             last_msg_id = None
             for chunk in chunks:
-                # Try HTML first
                 resp = requests.post(
                     f"{self.api_url}/sendMessage",
-                    json={"chat_id": chat_id, "text": chunk, "parse_mode": "HTML"},
+                    json={"chat_id": chat_id, "text": chunk},
                     timeout=10,
                 )
                 if resp.status_code != 200:
-                    # HTML failed, fallback to plain text
-                    print(f"[WARN] HTML send failed ({resp.status_code}), falling back to plain text", file=sys.stderr)
-                    resp = requests.post(
-                        f"{self.api_url}/sendMessage",
-                        json={"chat_id": chat_id, "text": chunk},
-                        timeout=10,
-                    )
-                    if resp.status_code != 200:
-                        print(f"[ERROR] Plain text send also failed ({resp.status_code}): {resp.text[:200]}", file=sys.stderr)
+                    print(f"[ERROR] Send failed ({resp.status_code}): {resp.text[:200]}", file=sys.stderr)
                 
                 if resp.status_code == 200:
                     result = resp.json()
@@ -207,27 +197,20 @@ class TelegramConnector:
             return None
 
     def edit_message(self, chat_id: int, message_id: int, text: str):
-        """Edit an existing message with HTML formatting, fallback to plain text.
+        """Edit an existing message as plain text.
         Handles long messages by editing the first chunk and sending the rest."""
         try:
-            sanitized = self.sanitize_telegram_html(text)
+            clean = re.sub(r'<[^>]+>', '', text) if text else "No response"
             max_len = 4096
-            chunks = [sanitized[i:i + max_len] for i in range(0, len(sanitized), max_len)] if sanitized else ["No response"]
+            chunks = [clean[i:i + max_len] for i in range(0, len(clean), max_len)] if clean else ["No response"]
             
-            # Edit with first chunk (try HTML, fallback to plain)
             resp = requests.post(
                 f"{self.api_url}/editMessageText",
-                json={"chat_id": chat_id, "message_id": message_id, "text": chunks[0], "parse_mode": "HTML"},
+                json={"chat_id": chat_id, "message_id": message_id, "text": chunks[0]},
                 timeout=10,
             )
             if resp.status_code != 200:
-                resp = requests.post(
-                    f"{self.api_url}/editMessageText",
-                    json={"chat_id": chat_id, "message_id": message_id, "text": chunks[0]},
-                    timeout=10,
-                )
-                if resp.status_code != 200:
-                    print(f"[WARN] Edit message failed ({resp.status_code}): {resp.text[:200]}", file=sys.stderr)
+                print(f"[WARN] Edit message failed ({resp.status_code}): {resp.text[:200]}", file=sys.stderr)
             
             # Send remaining chunks as new messages
             for chunk in chunks[1:]:
