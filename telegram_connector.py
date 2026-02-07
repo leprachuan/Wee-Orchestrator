@@ -155,12 +155,28 @@ class TelegramConnector:
             print(f"Error fetching updates: {e}", file=sys.stderr)
             return []
 
+    def sanitize_telegram_html(self, text: str) -> str:
+        """Sanitize HTML to only contain Telegram-supported tags."""
+        # Replace <pre><code class="..."> with just <pre>
+        text = re.sub(r'<pre><code[^>]*>', '<pre>', text)
+        text = re.sub(r'</code></pre>', '</pre>', text)
+        # Remove class/language attributes from code tags
+        text = re.sub(r'<code[^>]*>', '<code>', text)
+        # Remove unsupported tags but keep content
+        unsupported = r'</?(?:p|div|span|br|h[1-6]|ul|ol|li|table|tr|td|th|thead|tbody|img|hr)[^>]*>'
+        text = re.sub(unsupported, '', text, flags=re.IGNORECASE)
+        # Replace <br> variants with newline
+        text = re.sub(r'<br\s*/?>', '\n', text, flags=re.IGNORECASE)
+        return text
+
     def send_message(self, chat_id: int, text: str) -> Optional[int]:
         """Send message to Telegram chat with HTML formatting, fallback to plain text. Returns message_id."""
         try:
+            # Sanitize HTML for Telegram compatibility
+            sanitized = self.sanitize_telegram_html(text)
             # Split long messages (Telegram limit is 4096 chars)
             max_len = 4096
-            chunks = [text[i:i + max_len] for i in range(0, len(text), max_len)] if text else ["No response"]
+            chunks = [sanitized[i:i + max_len] for i in range(0, len(sanitized), max_len)] if sanitized else ["No response"]
             
             last_msg_id = None
             for chunk in chunks:
@@ -194,8 +210,9 @@ class TelegramConnector:
         """Edit an existing message with HTML formatting, fallback to plain text.
         Handles long messages by editing the first chunk and sending the rest."""
         try:
+            sanitized = self.sanitize_telegram_html(text)
             max_len = 4096
-            chunks = [text[i:i + max_len] for i in range(0, len(text), max_len)] if text else ["No response"]
+            chunks = [sanitized[i:i + max_len] for i in range(0, len(sanitized), max_len)] if sanitized else ["No response"]
             
             # Edit with first chunk (try HTML, fallback to plain)
             resp = requests.post(
