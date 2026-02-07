@@ -8,6 +8,7 @@ Handles user pairing, message routing, and configuration
 import sys
 import os
 import json
+import re
 import requests
 import threading
 import time
@@ -228,6 +229,95 @@ class TelegramConnector:
         except Exception as e:
             print(f"Error sending typing indicator: {e}", file=sys.stderr)
 
+    def send_photo(self, chat_id: int, photo_url: str, caption: str = "") -> Optional[int]:
+        """Send a photo to Telegram chat via URL. Returns message_id."""
+        try:
+            data = {"chat_id": chat_id, "photo": photo_url}
+            if caption:
+                # Telegram caption limit is 1024 chars
+                data["caption"] = caption[:1024]
+                data["parse_mode"] = "HTML"
+            resp = requests.post(
+                f"{self.api_url}/sendPhoto",
+                json=data,
+                timeout=30,
+            )
+            if resp.status_code != 200:
+                # Fallback: try without parse_mode
+                if caption:
+                    data.pop("parse_mode", None)
+                    resp = requests.post(f"{self.api_url}/sendPhoto", json=data, timeout=30)
+                if resp.status_code != 200:
+                    print(f"[WARN] sendPhoto failed ({resp.status_code}): {resp.text[:200]}", file=sys.stderr)
+                    return None
+            result = resp.json()
+            if result.get("ok"):
+                return result["result"]["message_id"]
+        except Exception as e:
+            print(f"Error sending photo: {e}", file=sys.stderr)
+        return None
+
+    def extract_image_urls(self, text: str) -> tuple:
+        """Extract image URLs from text/HTML. Returns (image_urls, remaining_text)."""
+        image_extensions = r'\.(jpg|jpeg|png|gif|webp|bmp|svg)(\?[^\s"<>]*)?'
+        
+        # Match <img> tags
+        img_tag_pattern = r'<img\s+[^>]*src=["\']([^"\']+)["\'][^>]*/?\s*>'
+        # Match bare image URLs
+        bare_url_pattern = r'(https?://[^\s"<>]+' + image_extensions + r')'
+        
+        image_urls = []
+        remaining = text
+        
+        # Extract from <img> tags
+        for match in re.finditer(img_tag_pattern, text, re.IGNORECASE):
+            url = match.group(1)
+            if url not in image_urls:
+                image_urls.append(url)
+            remaining = remaining.replace(match.group(0), "").strip()
+        
+        # Extract bare image URLs
+        for match in re.finditer(bare_url_pattern, remaining, re.IGNORECASE):
+            url = match.group(1)
+            if url not in image_urls:
+                image_urls.append(url)
+                remaining = remaining.replace(url, "").strip()
+        
+        return image_urls, remaining
+
+    def send_response(self, chat_id: int, text: str, status_msg_id: Optional[int] = None):
+        """Send response, detecting image URLs and using sendPhoto when appropriate."""
+        image_urls, remaining_text = self.extract_image_urls(text)
+        
+        if image_urls:
+            # If there was a status message, edit it with the text portion
+            if remaining_text.strip() and status_msg_id:
+                self.edit_message(chat_id, status_msg_id, remaining_text)
+                status_msg_id = None  # Already used
+            elif remaining_text.strip():
+                self.send_message(chat_id, remaining_text)
+            elif status_msg_id:
+                # No text, just images — delete the status message
+                try:
+                    requests.post(
+                        f"{self.api_url}/deleteMessage",
+                        json={"chat_id": chat_id, "message_id": status_msg_id},
+                        timeout=5,
+                    )
+                except Exception:
+                    pass
+                status_msg_id = None
+            
+            # Send each image
+            for url in image_urls:
+                self.send_photo(chat_id, url)
+        else:
+            # No images — normal text response
+            if status_msg_id:
+                self.edit_message(chat_id, status_msg_id, text)
+            else:
+                self.send_message(chat_id, text)
+
     def download_file(self, file_id: str, user_id: int) -> Optional[str]:
         """Download file from Telegram and store it. Returns file path or None."""
         try:
@@ -403,11 +493,7 @@ class TelegramConnector:
                     response, status_msg_id = self._query_agent_with_status(
                         text, session_info["agent"], session_info["model"], user_id, chat_id, timeout
                     )
-                    if status_msg_id:
-                        # Edit the status message with the final response
-                        self.edit_message(chat_id, status_msg_id, response)
-                    else:
-                        self.send_message(chat_id, response)
+                    self.send_response(chat_id, response, status_msg_id)
             
             # Cleanup temp files after query
             self.cleanup_files(user_id)
