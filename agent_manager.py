@@ -16,10 +16,11 @@ import argparse
 import shutil
 from pathlib import Path
 from uuid import uuid4
+from typing import Optional, Tuple, Dict
 
 
 # Executable resolution
-def find_executable(name: str) -> str | None:
+def find_executable(name: str) -> Optional[str]:
     """Find executable in multiple common locations
 
     Searches in order:
@@ -324,7 +325,7 @@ class SessionManager:
                 file=sys.stderr,
             )
 
-    def get_running_query(self, n8n_session_id: str) -> dict | None:
+    def get_running_query(self, n8n_session_id: str) -> Optional[Dict]:
         """Get tracking info for a running query"""
         queries = self.load_running_queries()
         return queries.get(n8n_session_id)
@@ -782,7 +783,7 @@ class SessionManager:
         )
         return f"✓ Switched to **{agent}** agent\n\n{agent_info['description']}\n\nLocation: `{agent_info['path']}`"
 
-    def detect_agent_delegation(self, prompt: str) -> tuple[str | None, str]:
+    def detect_agent_delegation(self, prompt: str) -> Tuple[Optional[str], str]:
         """Detect if user is asking for a specific agent to help with something
 
         Patterns detected:
@@ -837,7 +838,7 @@ class SessionManager:
 
         return None, prompt
 
-    def parse_slash_command(self, prompt: str) -> tuple[str | None, str | None]:
+    def parse_slash_command(self, prompt: str) -> Tuple[Optional[str], Optional[str]]:
         """Parse slash commands from the prompt."""
         if not prompt.startswith("/"):
             return None, None
@@ -848,7 +849,7 @@ class SessionManager:
 
         return command, argument
 
-    def get_model_from_name(self, name: str, runtime: str) -> str | None:
+    def get_model_from_name(self, name: str, runtime: str) -> Optional[str]:
         """Convert model name/alias to full model ID based on runtime."""
         name_lower = name.lower().strip("\"'")
 
@@ -1639,7 +1640,7 @@ User Request:
 
     def get_most_recent_session_id(
         self, runtime: str, agent: str = "devops"
-    ) -> str | None:
+    ) -> Optional[str]:
         """Get most recent session ID from storage or CLI"""
         try:
             if runtime == "copilot":
