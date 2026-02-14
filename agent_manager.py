@@ -1783,9 +1783,14 @@ User Request:
    • /model set "model_name" - Switch model
    • /model current - Show current model
 
+**Mode Management:**
+   • /mode current - Show current mode
+   • /mode yolo - Enable auto-approval (no prompts)
+   • /mode off - Disable auto-approval (normal mode)
+
 **Agent Management:**
-   • /agent list - Show available agents
-   • /agent set "agent_name" - Switch agent
+   • /agent list - Show all available agents and their locations
+   • /agent set <agent_name> — switch to an agent and work with it.
    • /agent current - Show current agent
    • /agent invoke "agent_name" "prompt" - Delegate to sub-agent
 
@@ -1811,6 +1816,7 @@ You can mention an agent in your prompt and it will auto-delegate:
    !pwd
    !echo "Hello World"
    !ls -la
+   /mode yolo
    /runtime set gemini
    /model set "gpt-5.2"
    /agent set "family"
@@ -2099,6 +2105,25 @@ You can mention an agent in your prompt and it will auto-delegate:
                 return f"✓ Render type set to `{render_type}` for this session"
             else:
                 return "Usage: `/render` or `/render current` to show current render type\n       `/render set [text|markdown|html|telegram_html]` to set render type"
+
+        elif command == "/mode":
+            if not argument:
+                argument = "current"  # Default to showing current mode
+
+            if argument == "current":
+                mode = session_data.get("yolo_mode", "off")
+                return f"⚡ **Current Mode:** `{mode}`"
+
+            elif argument == "yolo":
+                self.update_session_field(n8n_session_id, "yolo_mode", "on")
+                return "✓ YOLO mode enabled - auto-approving actions without prompts"
+
+            elif argument == "off":
+                self.update_session_field(n8n_session_id, "yolo_mode", "off")
+                return "✓ YOLO mode disabled - normal prompts enabled"
+
+            else:
+                return "Usage: `/mode current` - Show current mode\n       `/mode yolo` - Enable auto-approval mode\n       `/mode off` - Disable auto-approval mode"
 
         # --- Execution ---
 
