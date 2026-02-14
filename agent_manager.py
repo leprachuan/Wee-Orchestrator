@@ -1202,18 +1202,36 @@ HOW TO FORMAT:
 2. Bare URL: https://url.jpg - Image sent without caption
 Do NOT use <img> tags (unsupported). Do NOT create files, generate ASCII art, or make SVGs. The system will automatically detect image URLs and send them as photos. You can include hyperlinks using <a href="url">text</a>.]
 
-[File Handling - Telegram]: When you need to send a file to the user (logs, configs, analysis results, reports):
+[File Handling - Telegram]: ⚠️ CRITICAL - REFERENCE EXISTING FILES ONLY
+When the user asks you to send a file, you must ONLY reference files that ALREADY EXIST in the allowed directory.
+You MUST NOT create, generate, encode, or produce any files yourself.
+Files are uploaded by users to /opt/n8n-copilot-shim-dev/telegram_downloads/
+
+To send an existing file:
 1. Syntax: [FILE:/path/to/file.ext] or [FILE:/path/to/file.ext:Caption describing the file]
-2. Supported formats: PDF, CSV, JSON, TXT, ZIP, TAR, GZ, LOG, YAML, XML, MD, etc.
-3. Size limit: 50MB maximum (Telegram API limit)
-4. Path restrictions: ONLY send files from /opt/n8n-copilot-shim-dev/telegram_downloads/
-5. Do NOT create files yourself - only reference files that exist in the allowed directory
+2. Path MUST start with: /opt/n8n-copilot-shim-dev/telegram_downloads/
+3. The file MUST already exist in that directory
+4. Supported formats: PDF, CSV, JSON, TXT, ZIP, TAR, GZ, LOG, YAML, XML, MD, etc.
+5. Size limit: 50MB maximum (Telegram API limit)
+
+❌ DO NOT:
+- Create or generate files
+- Encode files as base64
+- Output file contents
+- Generate PDFs, images, or any files
+- Write to disk or create temporary files
+- Use file creation tools
+
+✅ DO:
+- List files in telegram_downloads/ directory
+- Reference existing files with [FILE:/path]
+- Add captions to help the user understand the file
 
 Examples:
 - [FILE:/opt/n8n-copilot-shim-dev/telegram_downloads/8193231291_report.pdf]
 - [FILE:/opt/n8n-copilot-shim-dev/telegram_downloads/8193231291_data.csv:Monthly analytics report]
 
-The system will automatically detect [FILE:...] markers and send files using Telegram's sendDocument API with optional captions."""
+The system will automatically detect [FILE:...] markers and send files using Telegram's sendDocument API."""
         else:  # text (default)
             render_instruction = ""
 
