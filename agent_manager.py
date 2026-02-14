@@ -1786,7 +1786,8 @@ User Request:
 **Mode Management:**
    • /mode current - Show current mode
    • /mode yolo - Enable auto-approval (no prompts)
-   • /mode off - Disable auto-approval (normal mode)
+   • /mode restricted - Disable auto-approval (restricted mode)
+   • /mode list - Show available modes
 
 **Agent Management:**
    • /agent list - Show all available agents and their locations
@@ -2111,19 +2112,28 @@ You can mention an agent in your prompt and it will auto-delegate:
                 argument = "current"  # Default to showing current mode
 
             if argument == "current":
-                mode = session_data.get("yolo_mode", "off")
+                mode = session_data.get("yolo_mode", "restricted")
                 return f"⚡ **Current Mode:** `{mode}`"
+
+            elif argument == "list":
+                return (
+                    "📋 **Available Modes:**\n\n"
+                    "• `yolo` - Enable auto-approval (no prompts)\n"
+                    "• `restricted` - Disable auto-approval (restricted prompts)"
+                )
 
             elif argument == "yolo":
                 self.update_session_field(n8n_session_id, "yolo_mode", "on")
                 return "✓ YOLO mode enabled - auto-approving actions without prompts"
 
-            elif argument == "off":
-                self.update_session_field(n8n_session_id, "yolo_mode", "off")
-                return "✓ YOLO mode disabled - normal prompts enabled"
+            elif argument == "restricted":
+                self.update_session_field(n8n_session_id, "yolo_mode", "restricted")
+                return "✓ Restricted mode enabled - normal prompts enabled"
 
             else:
-                return "Usage: `/mode current` - Show current mode\n       `/mode yolo` - Enable auto-approval mode\n       `/mode off` - Disable auto-approval mode"
+                return (
+                    "Usage: `/mode current` - Show current mode\n       `/mode list` - Show available modes\n       `/mode yolo` - Enable auto-approval mode\n       `/mode restricted` - Disable auto-approval mode"
+                )
 
         # --- Execution ---
 
