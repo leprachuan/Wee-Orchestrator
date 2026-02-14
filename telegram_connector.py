@@ -12,6 +12,7 @@ import re
 import requests
 import threading
 import time
+import mimetypes
 from pathlib import Path
 from typing import Optional, Dict, List
 from datetime import datetime
@@ -323,6 +324,39 @@ class TelegramConnector:
             print(f"Error pinning message: {e}", file=sys.stderr)
             return False
 
+    def _is_safe_file_path(self, file_path: str) -> bool:
+        """Validate file path for security.
+
+        Checks:
+        - File exists
+        - File is within allowed directory (telegram_downloads)
+        - No path traversal attacks
+        - File size within limits (50MB)
+        """
+        try:
+            allowed_dir = Path("/opt/n8n-copilot-shim-dev/telegram_downloads").resolve()
+            file_path_obj = Path(file_path).resolve()
+
+            # Check file exists
+            if not file_path_obj.exists():
+                print(f"[WARN] File does not exist: {file_path}", file=sys.stderr)
+                return False
+
+            # Check file is in allowed directory
+            if not file_path_obj.is_relative_to(allowed_dir):
+                print(f"[WARN] File outside allowed directory: {file_path}", file=sys.stderr)
+                return False
+
+            # Check file size (50MB limit)
+            if file_path_obj.stat().st_size > 50 * 1024 * 1024:
+                print(f"[WARN] File exceeds 50MB limit: {file_path}", file=sys.stderr)
+                return False
+
+            return True
+        except Exception as e:
+            print(f"[WARN] Error validating file path: {e}", file=sys.stderr)
+            return False
+
     def send_photo(self, chat_id: int, photo_url: str, caption: str = "") -> Optional[int]:
         """Send a photo to Telegram chat via URL. Returns message_id."""
         try:
@@ -353,6 +387,65 @@ class TelegramConnector:
         except Exception as e:
             print(f"Error sending photo: {e}", file=sys.stderr)
             self.send_message(chat_id, f'<a href="{photo_url}">📷 Image link</a>')
+        return None
+
+    def send_document(self, chat_id: int, file_path: str, caption: str = "", filename: str = None) -> Optional[int]:
+        """Send a document to Telegram chat via multipart upload. Returns message_id."""
+        try:
+            # Security validation
+            if not self._is_safe_file_path(file_path):
+                self.send_message(chat_id, f"⚠️ Cannot send file: {file_path} (security check failed)")
+                return None
+
+            print(f"[DEBUG] Attempting sendDocument with file: {file_path}", file=sys.stderr)
+
+            # Detect MIME type
+            mime_type, _ = mimetypes.guess_type(file_path)
+            if not mime_type:
+                mime_type = "application/octet-stream"
+
+            # Upload file via multipart
+            with open(file_path, 'rb') as f:
+                files = {
+                    'document': (filename or Path(file_path).name, f, mime_type)
+                }
+                data = {'chat_id': chat_id}
+
+                if caption:
+                    # Sanitize caption (same as images)
+                    sanitized_caption = self.sanitize_telegram_html(caption.strip())
+                    data['caption'] = sanitized_caption[:1024]  # Telegram limit
+                    data['parse_mode'] = 'HTML'
+
+                resp = requests.post(
+                    f"{self.api_url}/sendDocument",
+                    data=data,
+                    files=files,
+                    timeout=60  # Longer timeout for file uploads
+                )
+
+                if resp.status_code != 200:
+                    # Retry without HTML parse_mode if caption failed
+                    if caption:
+                        data.pop('parse_mode', None)
+                        resp = requests.post(
+                            f"{self.api_url}/sendDocument",
+                            data=data,
+                            files={'document': (filename or Path(file_path).name, open(file_path, 'rb'), mime_type)},
+                            timeout=60
+                        )
+
+                    if resp.status_code != 200:
+                        print(f"[WARN] sendDocument failed ({resp.status_code}): {resp.text[:200]}", file=sys.stderr)
+                        self.send_message(chat_id, f"⚠️ Failed to send file: {Path(file_path).name}")
+                        return None
+
+                result = resp.json()
+                if result.get("ok"):
+                    return result["result"]["message_id"]
+        except Exception as e:
+            print(f"Error sending document: {e}", file=sys.stderr)
+            self.send_message(chat_id, f"⚠️ Error sending file: {str(e)}")
         return None
 
     def extract_image_urls(self, text: str) -> tuple:
@@ -404,38 +497,73 @@ class TelegramConnector:
 
         return image_data, remaining
 
-    def send_response(self, chat_id: int, text: str, status_msg_id: Optional[int] = None):
-        """Send response, detecting image URLs and using sendPhoto when appropriate."""
-        image_data, remaining_text = self.extract_image_urls(text)
+    def extract_file_paths(self, text: str) -> tuple:
+        """Extract file paths from [FILE:...] markers.
 
-        if image_data:
-            # If there was a status message, edit it with the text portion
-            if remaining_text.strip() and status_msg_id:
-                self.edit_message(chat_id, status_msg_id, remaining_text)
-                status_msg_id = None  # Already used
-            elif remaining_text.strip():
-                self.send_message(chat_id, remaining_text)
-            elif status_msg_id:
-                # No text, just images — delete the status message
-                try:
-                    requests.post(
-                        f"{self.api_url}/deleteMessage",
-                        json={"chat_id": chat_id, "message_id": status_msg_id},
-                        timeout=5,
-                    )
-                except Exception:
-                    pass
-                status_msg_id = None
-            
-            # Send each image with its caption
-            for url, caption in image_data:
-                self.send_photo(chat_id, url, caption)
-        else:
-            # No images — normal text response
-            if status_msg_id:
-                self.edit_message(chat_id, status_msg_id, text)
+        Supports:
+        - [FILE:/path/to/file.ext] - file without caption
+        - [FILE:/path/to/file.ext:Caption text] - file with caption
+
+        Returns:
+            Tuple of (file_data, remaining_text) where:
+            - file_data: List of (path, caption) tuples
+            - remaining_text: Text with all file references removed
+        """
+        # Match [FILE:path] or [FILE:path:caption]
+        file_pattern = r'\[FILE:([^\]:]+)(?::([^\]]*))?\]'
+
+        file_data = []  # List of (path, caption) tuples
+        remaining = text
+
+        for match in re.finditer(file_pattern, remaining):
+            file_path = match.group(1).strip()
+            caption = match.group(2).strip() if match.group(2) else ""
+
+            # Validate path before adding
+            if self._is_safe_file_path(file_path):
+                file_data.append((file_path, caption))
+                remaining = remaining.replace(match.group(0), "").strip()
             else:
-                self.send_message(chat_id, text)
+                # Keep marker in text as error indicator
+                print(f"[WARN] Unsafe file path rejected: {file_path}", file=sys.stderr)
+
+        return file_data, remaining
+
+    def send_response(self, chat_id: int, text: str, status_msg_id: Optional[int] = None):
+        """Send response, detecting image URLs and file paths."""
+        # Extract images first, then files from remaining text
+        image_data, text_after_images = self.extract_image_urls(text)
+        file_data, remaining_text = self.extract_file_paths(text_after_images)
+
+        # Handle text portion
+        if remaining_text.strip():
+            if status_msg_id:
+                self.edit_message(chat_id, status_msg_id, remaining_text)
+                status_msg_id = None
+            else:
+                self.send_message(chat_id, remaining_text)
+        elif status_msg_id and (image_data or file_data):
+            # No text, just media - delete status message
+            try:
+                requests.post(
+                    f"{self.api_url}/deleteMessage",
+                    json={"chat_id": chat_id, "message_id": status_msg_id},
+                    timeout=5,
+                )
+            except Exception:
+                pass
+            status_msg_id = None
+        elif status_msg_id:
+            # No text, no media - edit status message with default text
+            self.edit_message(chat_id, status_msg_id, "✓")
+
+        # Send images
+        for url, caption in image_data:
+            self.send_photo(chat_id, url, caption)
+
+        # Send files
+        for file_path, caption in file_data:
+            self.send_document(chat_id, file_path, caption)
 
     def download_file(self, file_id: str, user_id: int) -> Optional[str]:
         """Download file from Telegram and store it. Returns file path or None."""
