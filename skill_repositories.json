@@ -1,0 +1,17 @@
+{
+  "repositories": [
+    {
+      "name": "Anthropic Official",
+      "url": "https://github.com/anthropics/skills.git",
+      "description": "Official Anthropic skills repository with production-ready skills",
+      "enabled": true
+    },
+    {
+      "name": "VoltAgent Awesome Skills",
+      "url": "https://github.com/VoltAgent/awesome-agent-skills.git",
+      "description": "Community-contributed agent skills (300+ skills)",
+      "enabled": true
+    }
+  ],
+  "default_repository": "Anthropic Official"
+}
