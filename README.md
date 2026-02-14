@@ -732,3 +732,42 @@ This project supports multi-agent orchestration with dynamic agent discovery. Se
 ```
 
 All agents are loaded dynamically from `agents.json`, enabling easy expansion and customization.
+
+## Telegram Connector
+
+The Telegram connector bridges Telegram chat with your N8N Copilot Shim agents.
+
+### Features
+
+- 💬 Receive messages from Telegram users
+- 👤 User pairing by Telegram user ID
+- 🔐 User access control (whitelist/blacklist)
+- 🎯 Route to any configured agent
+- ⚙️ Per-user session management
+
+### Quick Start
+
+```bash
+# With environment variable
+export TELEGRAM_BOT_TOKEN="your-token-here"
+python telegram_connector.py
+
+# Or with token argument
+python telegram_connector.py --token "your-token-here"
+```
+
+### Managing Users
+
+```bash
+# Allow specific user
+python telegram_connector.py --token TOKEN --allow-user 123456789
+
+# Deny user
+python telegram_connector.py --token TOKEN --deny-user 123456789
+
+# List allowed users
+python telegram_connector.py --token TOKEN --list-users
+```
+
+See **[TELEGRAM_CONNECTOR.md](./TELEGRAM_CONNECTOR.md)** for full documentation.
+

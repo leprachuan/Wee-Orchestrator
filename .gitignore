@@ -32,6 +32,10 @@ venv/
 ENV/
 env/
 
+# Node modules
+node_modules/
+webui/node_modules/
+
 # IDE
 .vscode/
 .idea/
@@ -41,6 +45,15 @@ env/
 
 # Claude Code
 .claude/
+
+# Telegram Configuration (contains tokens)
+telegram_config.json
+telegram_connector.log
+
+# Environment-specific files
+webui.pid
+webui.log
+setup_summary
 
 # OS
 .DS_Store
