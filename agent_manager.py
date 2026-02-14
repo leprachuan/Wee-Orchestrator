@@ -1668,7 +1668,55 @@ How to Discover Skills:
    - You verify it exists in available repositories and describe its capabilities
    - System automatically clones and installs the skill
    - Skill documentation becomes available immediately
-   - User can use the skill's features in subsequent interactions"""
+   - User can use the skill's features in subsequent interactions
+
+[Configuring Custom Skill Repositories]
+To add custom skill repositories or manage repository settings:
+
+1. Create or edit `skill_repositories.json` in the project root directory
+
+2. Repository configuration structure:
+{{
+  "repositories": [
+    {{
+      "name": "Anthropic Official",
+      "url": "https://github.com/anthropics/skills.git",
+      "description": "Official Anthropic skills repository with production-ready skills",
+      "enabled": true
+    }},
+    {{
+      "name": "Community Skills",
+      "url": "https://github.com/VoltAgent/awesome-agent-skills.git",
+      "description": "Community-contributed agent skills (300+ skills)",
+      "enabled": false
+    }},
+    {{
+      "name": "Your Custom Skills",
+      "url": "https://github.com/your-org/custom-skills.git",
+      "description": "Organization-specific skills",
+      "enabled": false
+    }}
+  ],
+  "default_repository": "Anthropic Official"
+}}
+
+3. Field explanations:
+   - name: Human-readable repository name
+   - url: Git repository URL (must end with .git)
+   - description: Brief description of the repository
+   - enabled: Set to true to enable, false to disable (without deleting config)
+
+4. Popular community repositories to add:
+   - VoltAgent/awesome-agent-skills: https://github.com/VoltAgent/awesome-agent-skills.git (300+ skills)
+   - karanb192/awesome-claude-skills: https://github.com/karanb192/awesome-claude-skills.git (50+ verified)
+   - travisvn/awesome-claude-skills: https://github.com/travisvn/awesome-claude-skills.git (curated list)
+   - abubakarsiddik31/claude-skills-collection: https://github.com/abubakarsiddik31/claude-skills-collection.git (organized by category)
+
+5. After updating skill_repositories.json:
+   - The new repositories become available immediately on next session start
+   - Agents will see all enabled repositories in their context
+   - Users can discover and load skills from all enabled repositories
+   - Existing skills continue to work without changes"""
 
         context = f"""[Session ID: {n8n_session_id}]
 {runtime_instruction}{agent_desc}{files_context}{render_instruction}{timeout_instruction}
