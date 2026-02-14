@@ -985,6 +985,25 @@ class SessionManager:
         text = re.sub(r"<think>.*", "", text, flags=re.DOTALL)
         return text.strip()
 
+    def _parse_mode_command(self, prompt: str) -> tuple[str, str]:
+        """Parse /mode command from prompt. Returns (cleaned_prompt, mode).
+        
+        Modes:
+        - 'restricted': Keep bounded to agent directory (default)
+        - 'yolo': Allow all paths (--allow-all-paths)
+        """
+        # Check for /mode command at start or after newline
+        mode_pattern = r'(?:^|\n)\s*/mode\s+(restricted|yolo)\s*(?:\n|$)'
+        match = re.search(mode_pattern, prompt, re.IGNORECASE)
+        
+        if match:
+            mode = match.group(1).lower()
+            # Remove the command from prompt
+            cleaned = re.sub(mode_pattern, '\n', prompt, flags=re.IGNORECASE).strip()
+            return cleaned, mode
+        
+        return prompt, "restricted"  # default to restricted
+
     def strip_metadata(self, text: str, runtime: str) -> str:
         """Remove CLI metadata from output"""
         # First, strip thinking tags from the raw output
@@ -1792,14 +1811,17 @@ User Request:
         timeout: Optional[int] = None,
         render_type: str = "text",
     ) -> str:
-        """Execute Copilot CLI with full tool access
+        """Execute Copilot CLI with configurable path access
 
-        Uses --allow-all-tools and --allow-all-paths to enable:
-        - Read/write/execute permissions for all files and directories
-        - All MCP tools and shell commands without approval prompts
+        Uses --allow-all-tools for MCP tool access. Path access depends on /mode command:
+        - /mode restricted: Bounded to agent directory (default)
+        - /mode yolo: Allow all paths (--allow-all-paths)
         """
         if not self.copilot_bin:
             return "Error: Copilot executable not found. Please install copilot or ensure it's in PATH, /opt/homebrew/bin/, /usr/local/bin/, or /usr/bin/"
+
+        # Parse /mode command from prompt
+        prompt, mode = self._parse_mode_command(prompt)
 
         agent_dir = self.AGENTS.get(agent, self.AGENTS["orchestrator"])["path"]
         effective_timeout = timeout if timeout is not None else self.command_timeout
@@ -1817,18 +1839,21 @@ User Request:
             "-p",
             context_prompt,
             "--allow-all-tools",
-            "--allow-all-paths",
             "--no-color",
             "--silent",
             "--model",
             model,
         ]
 
+        # Add --allow-all-paths only if mode is yolo
+        if mode == "yolo":
+            cmd.insert(4, "--allow-all-paths")
+
         if resume and session_id:
             cmd.extend(["--resume", session_id])
             print(f"[Session] Resuming Copilot session: {session_id}", file=sys.stderr)
         else:
-            print(f"[Session] Starting new Copilot session", file=sys.stderr)
+            print(f"[Session] Starting new Copilot session in {mode} mode", file=sys.stderr)
 
         output = self._execute_subprocess_with_tracking(
             cmd, agent_dir, effective_timeout, "copilot", agent, prompt, n8n_session_id
@@ -1846,15 +1871,15 @@ User Request:
         timeout: Optional[int] = None,
         render_type: str = "text",
     ) -> str:
-        """Execute OpenCode CLI with full tool access
+        """Execute OpenCode CLI with configurable path access
 
         OpenCode uses opencode.json for permission configuration.
-        By default, it should allow read/write/edit/bash execution.
-        The configuration file should be set up with:
-        - "edit": "allow"
-        - "write": "allow"
-        - "bash": "allow"
+        Default permissions: edit/write/bash allowed, bounded to agent directory.
+        /mode yolo enables full path access via configuration.
         """
+        # Parse /mode command from prompt
+        prompt, mode = self._parse_mode_command(prompt)
+
         agent_dir = self.AGENTS.get(agent, self.AGENTS["orchestrator"])["path"]
         effective_timeout = timeout if timeout is not None else self.command_timeout
 
@@ -1872,7 +1897,7 @@ User Request:
             cmd.extend(["--session", session_id])
             print(f"[Session] Resuming OpenCode session: {session_id}", file=sys.stderr)
         else:
-            print(f"[Session] Starting new OpenCode session", file=sys.stderr)
+            print(f"[Session] Starting new OpenCode session in {mode} mode", file=sys.stderr)
 
         cmd.append(context_prompt)
 
@@ -1897,16 +1922,16 @@ User Request:
         timeout: Optional[int] = None,
         render_type: str = "text",
     ) -> str:
-        """Execute Claude CLI with full tool access
+        """Execute Claude CLI with configurable path access
 
-        Uses --permission-mode bypassPermissions to:
-        - Auto-approve all file edits, writes, and reads
-        - Execute shell commands without approval
-        - Access web/network tools without prompts
-        Note: This is equivalent to YOLO mode in Claude Code and dontAsk mode
+        Uses --permission-mode restricted by default (bounded to agent directory).
+        /mode yolo uses bypassPermissions for full file/shell access without prompts.
         """
         if not self.claude_bin:
             return "Error: Claude executable not found. Please install claude or ensure it's in PATH, /opt/homebrew/bin/, /usr/local/bin/, or /usr/bin/"
+
+        # Parse /mode command from prompt
+        prompt, mode = self._parse_mode_command(prompt)
 
         agent_dir = self.AGENTS.get(agent, self.AGENTS["orchestrator"])["path"]
         effective_timeout = timeout if timeout is not None else self.command_timeout
@@ -1919,12 +1944,14 @@ User Request:
                 agent, prompt, n8n_session_id, render_type, effective_timeout, "claude", model
             )
 
+        permission_mode = "bypassPermissions" if mode == "yolo" else "ask"
+
         cmd = [
             self.claude_bin,
             "-p",
             context_prompt,
             "--permission-mode",
-            "bypassPermissions",
+            permission_mode,
             "--model",
             model,
         ]
@@ -1933,13 +1960,10 @@ User Request:
             cmd.extend(["--resume", session_id])
             print(f"[Session] Resuming Claude session: {session_id}", file=sys.stderr)
         elif session_id:
-            # Force specific session ID for new session
             cmd.extend(["--session-id", session_id])
-            print(
-                f"[Session] Starting new Claude session: {session_id}", file=sys.stderr
-            )
+            print(f"[Session] Starting new Claude session: {session_id} in {mode} mode", file=sys.stderr)
         else:
-            print(f"[Session] Starting new Claude session (auto-ID)", file=sys.stderr)
+            print(f"[Session] Starting new Claude session (auto-ID) in {mode} mode", file=sys.stderr)
 
         output = self._execute_subprocess_with_tracking(
             cmd, agent_dir, effective_timeout, "claude", agent, prompt, n8n_session_id
@@ -1963,13 +1987,15 @@ User Request:
     ) -> str:
         """Execute Gemini CLI with full tool access
 
-        Gemini CLI tools (read_file, write_file, run_shell_command) are enabled by default.
-        For maximum automation without prompts, use --yolo flag to auto-approve all actions.
-        This enables:
+        Gemini CLI with configurable access
+        Default: bounded to agent directory.
+        /mode yolo enables --yolo flag for auto-approval.
         - Read/write file operations without confirmation
-        - Shell command execution without approval
-        - All built-in tools unrestricted access
+
         """
+        # Parse /mode command from prompt
+        prompt, mode = self._parse_mode_command(prompt)
+
         agent_dir = self.AGENTS.get(agent, self.AGENTS["orchestrator"])["path"]
         effective_timeout = timeout if timeout is not None else self.command_timeout
 
@@ -1981,7 +2007,10 @@ User Request:
                 agent, prompt, n8n_session_id, render_type, effective_timeout, "gemini", model
             )
 
-        cmd = ["gemini", "--yolo", context_prompt]
+        cmd = ["gemini"]
+        if mode == "yolo":
+            cmd.append("--yolo")
+        cmd.append(context_prompt)
 
         # Note: Gemini CLI appears to have model handling issues with specified model names
         # For now, we use the default model and do not pass --model flag
@@ -1991,7 +2020,7 @@ User Request:
             cmd.extend(["--resume", session_id])
             print(f"[Session] Resuming Gemini session: {session_id}", file=sys.stderr)
         else:
-            print(f"[Session] Starting new Gemini session", file=sys.stderr)
+            print(f"[Session] Starting new Gemini session in {mode} mode", file=sys.stderr)
 
         output = self._execute_subprocess_with_tracking(
             cmd, agent_dir, effective_timeout, "gemini", agent, prompt, n8n_session_id
@@ -2013,7 +2042,7 @@ User Request:
         timeout: Optional[int] = None,
         render_type: str = "text",
     ) -> str:
-        """Execute CODEX CLI with full tool access
+        """Execute CODEX CLI with configurable access
 
         Uses --dangerously-bypass-approvals-and-sandbox (also known as --yolo) to:
         - Disable all approval prompts
@@ -2021,8 +2050,10 @@ User Request:
         - Enable read/write/execute for all files and directories
         - Allow all shell commands and tools without confirmation
 
-        This provides maximum automation but should only be used in trusted environments.
         """
+        # Parse /mode command from prompt
+        prompt, mode = self._parse_mode_command(prompt)
+
         agent_dir = self.AGENTS.get(agent, self.AGENTS["orchestrator"])["path"]
         effective_timeout = timeout if timeout is not None else self.command_timeout
 
