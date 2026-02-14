@@ -1227,6 +1227,151 @@ Example skill structure:
 
         return skills_context
 
+    def discover_anthropic_skills(self, query: str = "") -> str:
+        """Discover available skills from Anthropic's official repository.
+
+        Searches the Anthropic skills repository at https://github.com/anthropics/skills
+        and returns a list of available skills and their descriptions.
+
+        Args:
+            query: Optional search term to filter skills (e.g., "helm", "kubernetes")
+
+        Returns:
+            Formatted string listing available skills or error message
+        """
+        try:
+            import subprocess
+
+            # List available skills from Anthropic repository
+            # We'll use git to clone and list available skills
+            repo_url = "https://github.com/anthropics/skills.git"
+            temp_dir = "/tmp/anthropic-skills-discovery"
+
+            # Clean up old temp directory if it exists
+            subprocess.run(["rm", "-rf", temp_dir], capture_output=True, timeout=5)
+
+            # Clone the repository (shallow clone for speed)
+            result = subprocess.run(
+                ["git", "clone", "--depth", "1", repo_url, temp_dir],
+                capture_output=True,
+                text=True,
+                timeout=30
+            )
+
+            if result.returncode != 0:
+                return "Error: Could not access Anthropic skills repository. Please check your internet connection."
+
+            # List available skills
+            skills_dir = Path(temp_dir)
+            available_skills = []
+
+            for skill_dir in skills_dir.iterdir():
+                if skill_dir.is_dir() and not skill_dir.name.startswith('.'):
+                    readme = skill_dir / "README.md"
+                    if readme.exists():
+                        try:
+                            content = readme.read_text()
+                            # Extract first line as description
+                            lines = content.split('\n')
+                            desc = next((line.strip('# ').strip() for line in lines if line.strip()), "No description")
+
+                            if not query or query.lower() in skill_dir.name.lower() or query.lower() in desc.lower():
+                                available_skills.append({
+                                    "name": skill_dir.name,
+                                    "description": desc[:100]
+                                })
+                        except Exception:
+                            pass
+
+            # Clean up
+            subprocess.run(["rm", "-rf", temp_dir], capture_output=True, timeout=5)
+
+            if not available_skills:
+                return f"No skills found matching '{query}' in Anthropic's repository."
+
+            # Format results
+            result_text = f"Available skills in Anthropic repository {f'(matching \"{query}\")' if query else ''}:\n\n"
+            for skill in sorted(available_skills, key=lambda x: x['name']):
+                result_text += f"• **{skill['name']}** - {skill['description']}\n"
+
+            result_text += f"\nTo load any of these skills, use: /load-skill <skill-name>"
+            return result_text
+
+        except Exception as e:
+            return f"Error discovering skills: {str(e)}"
+
+    def load_anthropic_skill(self, skill_name: str, agent: str = "orchestrator") -> str:
+        """Load a skill from Anthropic's repository into the agent's .github/skills directory.
+
+        Args:
+            skill_name: Name of the skill to load (e.g., "helm-deploy")
+            agent: Agent to load the skill into (default: orchestrator)
+
+        Returns:
+            Status message indicating success or failure
+        """
+        try:
+            import subprocess
+            import shutil
+
+            if agent not in self.AGENTS:
+                return f"Error: Unknown agent '{agent}'. Available agents: {', '.join(self.AGENTS.keys())}"
+
+            agent_path = Path(self.AGENTS[agent]["path"])
+            skills_dir = agent_path / ".github" / "skills"
+            skill_target = skills_dir / skill_name
+
+            # Check if skill already exists
+            if skill_target.exists():
+                return f"✓ Skill '{skill_name}' is already loaded in {agent}."
+
+            # Create skills directory if it doesn't exist
+            skills_dir.mkdir(parents=True, exist_ok=True)
+
+            # Clone Anthropic repository (shallow clone)
+            repo_url = "https://github.com/anthropics/skills.git"
+            temp_dir = "/tmp/anthropic-skills-load"
+
+            # Clean up old temp directory
+            subprocess.run(["rm", "-rf", temp_dir], capture_output=True, timeout=5)
+
+            # Clone repository
+            result = subprocess.run(
+                ["git", "clone", "--depth", "1", repo_url, temp_dir],
+                capture_output=True,
+                text=True,
+                timeout=30
+            )
+
+            if result.returncode != 0:
+                return "Error: Could not access Anthropic skills repository."
+
+            # Find and copy the skill
+            source_skill = Path(temp_dir) / skill_name
+            if not source_skill.exists():
+                # Clean up
+                subprocess.run(["rm", "-rf", temp_dir], capture_output=True, timeout=5)
+                return f"Error: Skill '{skill_name}' not found in Anthropic repository."
+
+            # Copy skill to agent's skills directory
+            shutil.copytree(source_skill, skill_target)
+
+            # Clean up temp directory
+            subprocess.run(["rm", "-rf", temp_dir], capture_output=True, timeout=5)
+
+            # Verify installation
+            if skill_target.exists():
+                skill_md = skill_target / "SKILL.md"
+                if skill_md.exists():
+                    return f"✓ Successfully loaded skill '{skill_name}' into {agent} agent. The skill is now available and will be included in context on the next session."
+                else:
+                    return f"⚠️ Skill '{skill_name}' was copied but SKILL.md not found. The skill may not work properly."
+            else:
+                return f"Error: Failed to copy skill '{skill_name}' to {agent}."
+
+        except Exception as e:
+            return f"Error loading skill: {str(e)}"
+
     def _execute_with_context(
         self, prompt: str, delegation_data: dict, n8n_session_id: str
     ) -> str:
@@ -1264,8 +1409,10 @@ Example skill structure:
         n8n_session_id: str,
         render_type: str = "text",
         timeout: Optional[int] = None,
+        runtime: str = "copilot",
+        model: str = "gpt-5-mini",
     ) -> str:
-        """Build a context-aware prompt that includes agent information and execution deadline"""
+        """Build a context-aware prompt that includes agent information, runtime, model, and execution deadline"""
         if agent not in self.AGENTS:
             agent = "devops"
 
@@ -1364,9 +1511,57 @@ The system will automatically detect [FILE:...] markers and send files to the us
             agent_timeout_min = agent_timeout / 60
             timeout_instruction = f"\n[⏱️ EXECUTION DEADLINE: You have {agent_timeout:.0f} seconds ({agent_timeout_min:.1f} minutes) to complete this task. Plan your approach efficiently and wrap up before this deadline. If an operation might take too long, skip it or provide a summary instead.]"
 
+        # Add runtime, model, and slash commands information
+        runtime_instruction = f"""
+[System Configuration]
+- Runtime: {runtime}
+- Model: {model}
+- Agent: {agent_name}
+
+[Available Slash Commands]
+These commands allow you to control the agent's behavior and are processed by the system (not the model):
+- /agent <name> - Switch to a different agent (e.g., /agent devops, /agent orchestrator)
+- /model <model> - Change the AI model (e.g., /model gpt-5-sonnet, /model haiku)
+- /runtime <runtime> - Change execution runtime (e.g., /runtime claude, /runtime opencode)
+- /timeout <seconds> - Adjust execution timeout (e.g., /timeout 600)
+- /render <format> - Change output format (e.g., /render markdown, /render html, /render telegram_html)
+- /session <id> - Continue a specific session (e.g., /session abc123)
+- /status - Check running tasks status
+- /cancel - Cancel the current running task
+- /help - Show available commands and agent capabilities
+- /discover-skills [query] - Discover available skills from Anthropic repository (optional search term)
+- /load-skill <name> - Load a skill from Anthropic repository into this agent's .github/skills directory
+
+[Skills Discovery & Management]
+You can help users discover and load additional skills for this agent from Anthropic's official repository:
+
+Current Skills Loaded:
+{skills_context}
+
+How to Discover Skills:
+1. When a user asks about available skills or requests a specific skill:
+   - Inform them you can search the Anthropic skills repository at https://github.com/anthropics/skills
+   - List relevant skills and their purposes
+   - Explain what each skill does and when it's useful
+
+2. When a user wants to load a specific skill:
+   - Verify the skill exists in Anthropic's repository
+   - Explain what the skill provides and how to use it
+   - Guide them on how to load it (system will auto-install when requested)
+   - Skills are installed to: {agent_path}/.github/skills/
+   - Skills become available immediately in the next session
+
+3. Skill Loading Process:
+   - User requests: "load the helm-deploy skill" or similar
+   - You verify it exists and describe its capabilities
+   - System automatically clones and installs the skill
+   - Skill documentation becomes available immediately
+   - User can use the skill's features in subsequent interactions
+
+Available Anthropic Skills Repository: https://github.com/anthropics/skills"""
+
         context = f"""[Session ID: {n8n_session_id}]
-[Agent Context: {agent_name}]
-{agent_desc}{files_context}{skills_context}{render_instruction}{timeout_instruction}
+{runtime_instruction}{agent_desc}{files_context}{render_instruction}{timeout_instruction}
 
 User Request:
 {prompt}"""
@@ -1456,7 +1651,7 @@ User Request:
             context_prompt = prompt
         else:
             context_prompt = self.build_agent_context_prompt(
-                agent, prompt, n8n_session_id, render_type, effective_timeout
+                agent, prompt, n8n_session_id, render_type, effective_timeout, "copilot", model
             )
 
         cmd = [
@@ -1510,7 +1705,7 @@ User Request:
             context_prompt = prompt
         else:
             context_prompt = self.build_agent_context_prompt(
-                agent, prompt, n8n_session_id, render_type, effective_timeout
+                agent, prompt, n8n_session_id, render_type, effective_timeout, "opencode", model
             )
 
         cmd = [str(self.opencode_bin), "run", "--model", model]
@@ -1563,7 +1758,7 @@ User Request:
             context_prompt = prompt
         else:
             context_prompt = self.build_agent_context_prompt(
-                agent, prompt, n8n_session_id, render_type, effective_timeout
+                agent, prompt, n8n_session_id, render_type, effective_timeout, "claude", model
             )
 
         cmd = [
@@ -1625,7 +1820,7 @@ User Request:
             context_prompt = prompt
         else:
             context_prompt = self.build_agent_context_prompt(
-                agent, prompt, n8n_session_id, render_type, effective_timeout
+                agent, prompt, n8n_session_id, render_type, effective_timeout, "gemini", model
             )
 
         cmd = ["gemini", "--yolo", context_prompt]
@@ -1678,7 +1873,7 @@ User Request:
             context_prompt = prompt
         else:
             context_prompt = self.build_agent_context_prompt(
-                agent, prompt, n8n_session_id, render_type, effective_timeout
+                agent, prompt, n8n_session_id, render_type, effective_timeout, "codex", model
             )
 
         if resume and session_id:
