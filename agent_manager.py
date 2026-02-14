@@ -1200,7 +1200,20 @@ HOW TO FORMAT:
 [Media: When the user asks for images or pictures, you MUST use the web_search tool to search for the image. Find a real, publicly accessible image URL ending in .jpg, .png, .gif, or .webp (e.g. from Wikipedia Commons, Unsplash, Pexels). You can provide images in two ways:
 1. Markdown syntax: ![caption text](https://url.jpg) - Caption will appear below the image
 2. Bare URL: https://url.jpg - Image sent without caption
-Do NOT use <img> tags (unsupported). Do NOT create files, generate ASCII art, or make SVGs. The system will automatically detect image URLs and send them as photos. You can include hyperlinks using <a href="url">text</a>.]"""
+Do NOT use <img> tags (unsupported). Do NOT create files, generate ASCII art, or make SVGs. The system will automatically detect image URLs and send them as photos. You can include hyperlinks using <a href="url">text</a>.]
+
+[File Handling - Telegram]: When you need to send a file to the user (logs, configs, analysis results, reports):
+1. Syntax: [FILE:/path/to/file.ext] or [FILE:/path/to/file.ext:Caption describing the file]
+2. Supported formats: PDF, CSV, JSON, TXT, ZIP, TAR, GZ, LOG, YAML, XML, MD, etc.
+3. Size limit: 50MB maximum (Telegram API limit)
+4. Path restrictions: ONLY send files from /opt/n8n-copilot-shim-dev/telegram_downloads/
+5. Do NOT create files yourself - only reference files that exist in the allowed directory
+
+Examples:
+- [FILE:/opt/n8n-copilot-shim-dev/telegram_downloads/8193231291_report.pdf]
+- [FILE:/opt/n8n-copilot-shim-dev/telegram_downloads/8193231291_data.csv:Monthly analytics report]
+
+The system will automatically detect [FILE:...] markers and send files using Telegram's sendDocument API with optional captions."""
         else:  # text (default)
             render_instruction = ""
 
