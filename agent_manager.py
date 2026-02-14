@@ -1202,36 +1202,28 @@ HOW TO FORMAT:
 2. Bare URL: https://url.jpg - Image sent without caption
 Do NOT use <img> tags (unsupported). Do NOT create files, generate ASCII art, or make SVGs. The system will automatically detect image URLs and send them as photos. You can include hyperlinks using <a href="url">text</a>.]
 
-[File Handling - Telegram]: ⚠️ CRITICAL - REFERENCE EXISTING FILES ONLY
-When the user asks you to send a file, you must ONLY reference files that ALREADY EXIST in the allowed directory.
-You MUST NOT create, generate, encode, or produce any files yourself.
-Files are uploaded by users to /opt/n8n-copilot-shim-dev/telegram_downloads/
+[File Handling - Telegram]: When the user asks for a file, report, export, or any output as a file:
+1. Generate the file content in the format requested (PDF, CSV, JSON, TXT, ZIP, etc.)
+2. Save the file to: /opt/n8n-copilot-shim-dev/telegram_downloads/
+3. Use this naming format: {user_id}_{filename} (e.g., 8193231291_report.pdf)
+4. Then reference it using: [FILE:/opt/n8n-copilot-shim-dev/telegram_downloads/{user_id}_{filename}:Caption describing the file]
 
-To send an existing file:
-1. Syntax: [FILE:/path/to/file.ext] or [FILE:/path/to/file.ext:Caption describing the file]
-2. Path MUST start with: /opt/n8n-copilot-shim-dev/telegram_downloads/
-3. The file MUST already exist in that directory
-4. Supported formats: PDF, CSV, JSON, TXT, ZIP, TAR, GZ, LOG, YAML, XML, MD, etc.
-5. Size limit: 50MB maximum (Telegram API limit)
-
-❌ DO NOT:
-- Create or generate files
-- Encode files as base64
-- Output file contents
-- Generate PDFs, images, or any files
-- Write to disk or create temporary files
-- Use file creation tools
-
-✅ DO:
-- List files in telegram_downloads/ directory
-- Reference existing files with [FILE:/path]
-- Add captions to help the user understand the file
+Supported file types: PDF (reports, documents), CSV (data exports), JSON (structured data), TXT (text), ZIP (archives), YAML, XML, MD, and any other text/binary format.
+Size limit: 50MB maximum (Telegram API limit)
+Important: Keep user_id in path to avoid conflicts with other users' files.
 
 Examples:
-- [FILE:/opt/n8n-copilot-shim-dev/telegram_downloads/8193231291_report.pdf]
-- [FILE:/opt/n8n-copilot-shim-dev/telegram_downloads/8193231291_data.csv:Monthly analytics report]
+1. User asks for "monthly sales report as PDF":
+   - Generate PDF with sales data
+   - Save to: /opt/n8n-copilot-shim-dev/telegram_downloads/8193231291_sales_report.pdf
+   - Reference: [FILE:/opt/n8n-copilot-shim-dev/telegram_downloads/8193231291_sales_report.pdf:Monthly Sales Report - Jan 2026]
 
-The system will automatically detect [FILE:...] markers and send files using Telegram's sendDocument API."""
+2. User asks for "export this data as CSV":
+   - Create CSV with the data
+   - Save to: /opt/n8n-copilot-shim-dev/telegram_downloads/8193231291_data_export.csv
+   - Reference: [FILE:/opt/n8n-copilot-shim-dev/telegram_downloads/8193231291_data_export.csv:Data Export - All Records]
+
+The system will automatically detect [FILE:...] markers and send files to the user via Telegram's sendDocument API with captions."""
         else:  # text (default)
             render_instruction = ""
 
