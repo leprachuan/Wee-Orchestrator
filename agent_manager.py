@@ -224,6 +224,9 @@ class SessionManager:
         # Load agents from config file
         self.AGENTS = self._load_agents_config(config_file)
 
+        # Load skill repositories from configuration
+        self.skill_repositories = self._load_skill_repositories()
+
         # Load command timeout from environment
         self.command_timeout = get_command_timeout()
 
@@ -269,6 +272,67 @@ class SessionManager:
         except Exception as e:
             print(f"[Error] Failed to load agents config: {e}", file=sys.stderr)
             return {}
+
+    def _load_skill_repositories(self) -> List[Dict]:
+        """Load skill repositories from configuration file.
+
+        Looks for skill_repositories.json in the script directory or current directory.
+        Returns a list of enabled repository configurations.
+        """
+        config_paths = [
+            Path.cwd() / "skill_repositories.json",
+            Path(__file__).parent / "skill_repositories.json",
+        ]
+
+        for config_path in config_paths:
+            if config_path.exists():
+                try:
+                    with open(config_path, "r") as f:
+                        config = json.load(f)
+                        # Filter to only enabled repositories
+                        repositories = [
+                            repo for repo in config.get("repositories", [])
+                            if repo.get("enabled", False)
+                        ]
+                        if repositories:
+                            print(
+                                f"[Info] Loaded {len(repositories)} skill repositories from {config_path}",
+                                file=sys.stderr
+                            )
+                            return repositories
+                except Exception as e:
+                    print(
+                        f"[Warning] Failed to load skill repositories from {config_path}: {e}",
+                        file=sys.stderr
+                    )
+                    continue
+
+        # Return default Anthropic repository if no config found
+        print(
+            "[Info] No skill_repositories.json found, using default Anthropic repository",
+            file=sys.stderr
+        )
+        return [{
+            "name": "Anthropic Official",
+            "url": "https://github.com/anthropics/skills.git",
+            "description": "Official Anthropic skills repository",
+            "enabled": True
+        }]
+
+    def _format_repository_info(self) -> str:
+        """Format available skill repositories for display in context."""
+        if not self.skill_repositories:
+            return "No skill repositories configured."
+
+        repo_text = ""
+        for repo in self.skill_repositories:
+            name = repo.get("name", "Unknown")
+            desc = repo.get("description", "No description")
+            url = repo.get("url", "")
+            repo_text += f"• **{name}** - {desc}\n"
+            if url:
+                repo_text += f"  URL: {url}\n"
+        return repo_text
 
     def load_running_queries(self) -> Dict:
         """Load the running queries tracking data"""
@@ -1227,14 +1291,14 @@ Example skill structure:
 
         return skills_context
 
-    def discover_anthropic_skills(self, query: str = "") -> str:
-        """Discover available skills from Anthropic's official repository.
+    def discover_skills(self, query: str = "", repository: Optional[str] = None) -> str:
+        """Discover available skills from configured repositories.
 
-        Searches the Anthropic skills repository at https://github.com/anthropics/skills
-        and returns a list of available skills and their descriptions.
+        Searches skill repositories (Anthropic or custom) and returns available skills.
 
         Args:
             query: Optional search term to filter skills (e.g., "helm", "kubernetes")
+            repository: Optional repository name to search in specific repo (e.g., "Anthropic Official")
 
         Returns:
             Formatted string listing available skills or error message
@@ -1242,70 +1306,94 @@ Example skill structure:
         try:
             import subprocess
 
-            # List available skills from Anthropic repository
-            # We'll use git to clone and list available skills
-            repo_url = "https://github.com/anthropics/skills.git"
-            temp_dir = "/tmp/anthropic-skills-discovery"
+            # Determine which repositories to search
+            repos_to_search = []
+            if repository:
+                # Search specific repository
+                repos_to_search = [r for r in self.skill_repositories if r.get("name") == repository]
+                if not repos_to_search:
+                    return f"Error: Repository '{repository}' not found. Available: {', '.join(r.get('name') for r in self.skill_repositories)}"
+            else:
+                # Search all repositories
+                repos_to_search = self.skill_repositories
 
-            # Clean up old temp directory if it exists
-            subprocess.run(["rm", "-rf", temp_dir], capture_output=True, timeout=5)
+            all_skills = []
 
-            # Clone the repository (shallow clone for speed)
-            result = subprocess.run(
-                ["git", "clone", "--depth", "1", repo_url, temp_dir],
-                capture_output=True,
-                text=True,
-                timeout=30
-            )
+            for repo in repos_to_search:
+                repo_url = repo.get("url")
+                repo_name = repo.get("name")
+                temp_dir = f"/tmp/skills-discovery-{repo_name.lower().replace(' ', '-')}"
 
-            if result.returncode != 0:
-                return "Error: Could not access Anthropic skills repository. Please check your internet connection."
+                try:
+                    # Clean up old temp directory
+                    subprocess.run(["rm", "-rf", temp_dir], capture_output=True, timeout=5)
 
-            # List available skills
-            skills_dir = Path(temp_dir)
-            available_skills = []
+                    # Clone the repository (shallow clone for speed)
+                    result = subprocess.run(
+                        ["git", "clone", "--depth", "1", repo_url, temp_dir],
+                        capture_output=True,
+                        text=True,
+                        timeout=30
+                    )
 
-            for skill_dir in skills_dir.iterdir():
-                if skill_dir.is_dir() and not skill_dir.name.startswith('.'):
-                    readme = skill_dir / "README.md"
-                    if readme.exists():
-                        try:
-                            content = readme.read_text()
-                            # Extract first line as description
-                            lines = content.split('\n')
-                            desc = next((line.strip('# ').strip() for line in lines if line.strip()), "No description")
+                    if result.returncode != 0:
+                        print(f"[Warn] Could not access {repo_name} repository", file=sys.stderr)
+                        continue
 
-                            if not query or query.lower() in skill_dir.name.lower() or query.lower() in desc.lower():
-                                available_skills.append({
-                                    "name": skill_dir.name,
-                                    "description": desc[:100]
-                                })
-                        except Exception:
-                            pass
+                    # List available skills in this repository
+                    skills_dir = Path(temp_dir)
 
-            # Clean up
-            subprocess.run(["rm", "-rf", temp_dir], capture_output=True, timeout=5)
+                    for skill_dir in skills_dir.iterdir():
+                        if skill_dir.is_dir() and not skill_dir.name.startswith('.'):
+                            readme = skill_dir / "README.md"
+                            if readme.exists():
+                                try:
+                                    content = readme.read_text()
+                                    # Extract first line as description
+                                    lines = content.split('\n')
+                                    desc = next((line.strip('# ').strip() for line in lines if line.strip()), "No description")
 
-            if not available_skills:
-                return f"No skills found matching '{query}' in Anthropic's repository."
+                                    if not query or query.lower() in skill_dir.name.lower() or query.lower() in desc.lower():
+                                        all_skills.append({
+                                            "name": skill_dir.name,
+                                            "description": desc[:100],
+                                            "repository": repo_name
+                                        })
+                                except Exception:
+                                    pass
 
-            # Format results
-            result_text = f"Available skills in Anthropic repository {f'(matching \"{query}\")' if query else ''}:\n\n"
-            for skill in sorted(available_skills, key=lambda x: x['name']):
-                result_text += f"• **{skill['name']}** - {skill['description']}\n"
+                    # Clean up
+                    subprocess.run(["rm", "-rf", temp_dir], capture_output=True, timeout=5)
 
-            result_text += f"\nTo load any of these skills, use: /load-skill <skill-name>"
+                except Exception as e:
+                    print(f"[Warn] Error searching {repo_name}: {e}", file=sys.stderr)
+                    continue
+
+            if not all_skills:
+                return f"No skills found matching '{query}'."
+
+            # Format results grouped by repository
+            result_text = f"Available skills {f'(matching \"{query}\")' if query else ''}:\n\n"
+            current_repo = None
+            for skill in sorted(all_skills, key=lambda x: (x.get("repository"), x.get("name"))):
+                if skill.get("repository") != current_repo:
+                    current_repo = skill.get("repository")
+                    result_text += f"\n**{current_repo}:**\n"
+                result_text += f"  • {skill['name']} - {skill['description']}\n"
+
+            result_text += f"\nTo load any skill, use: /load-skill <skill-name> [repository-name]"
             return result_text
 
         except Exception as e:
             return f"Error discovering skills: {str(e)}"
 
-    def load_anthropic_skill(self, skill_name: str, agent: str = "orchestrator") -> str:
-        """Load a skill from Anthropic's repository into the agent's .github/skills directory.
+    def load_skill(self, skill_name: str, agent: str = "orchestrator", repository: Optional[str] = None) -> str:
+        """Load a skill from configured repositories into the agent's .github/skills directory.
 
         Args:
             skill_name: Name of the skill to load (e.g., "helm-deploy")
             agent: Agent to load the skill into (default: orchestrator)
+            repository: Optional repository name to search in (if None, searches all repositories)
 
         Returns:
             Status message indicating success or failure
@@ -1328,46 +1416,66 @@ Example skill structure:
             # Create skills directory if it doesn't exist
             skills_dir.mkdir(parents=True, exist_ok=True)
 
-            # Clone Anthropic repository (shallow clone)
-            repo_url = "https://github.com/anthropics/skills.git"
-            temp_dir = "/tmp/anthropic-skills-load"
-
-            # Clean up old temp directory
-            subprocess.run(["rm", "-rf", temp_dir], capture_output=True, timeout=5)
-
-            # Clone repository
-            result = subprocess.run(
-                ["git", "clone", "--depth", "1", repo_url, temp_dir],
-                capture_output=True,
-                text=True,
-                timeout=30
-            )
-
-            if result.returncode != 0:
-                return "Error: Could not access Anthropic skills repository."
-
-            # Find and copy the skill
-            source_skill = Path(temp_dir) / skill_name
-            if not source_skill.exists():
-                # Clean up
-                subprocess.run(["rm", "-rf", temp_dir], capture_output=True, timeout=5)
-                return f"Error: Skill '{skill_name}' not found in Anthropic repository."
-
-            # Copy skill to agent's skills directory
-            shutil.copytree(source_skill, skill_target)
-
-            # Clean up temp directory
-            subprocess.run(["rm", "-rf", temp_dir], capture_output=True, timeout=5)
-
-            # Verify installation
-            if skill_target.exists():
-                skill_md = skill_target / "SKILL.md"
-                if skill_md.exists():
-                    return f"✓ Successfully loaded skill '{skill_name}' into {agent} agent. The skill is now available and will be included in context on the next session."
-                else:
-                    return f"⚠️ Skill '{skill_name}' was copied but SKILL.md not found. The skill may not work properly."
+            # Determine which repositories to search
+            repos_to_search = []
+            if repository:
+                repos_to_search = [r for r in self.skill_repositories if r.get("name") == repository]
+                if not repos_to_search:
+                    return f"Error: Repository '{repository}' not found. Available: {', '.join(r.get('name') for r in self.skill_repositories)}"
             else:
-                return f"Error: Failed to copy skill '{skill_name}' to {agent}."
+                repos_to_search = self.skill_repositories
+
+            # Try to find and load the skill from one of the repositories
+            for repo in repos_to_search:
+                repo_url = repo.get("url")
+                repo_name = repo.get("name")
+                temp_dir = f"/tmp/skills-load-{repo_name.lower().replace(' ', '-')}"
+
+                try:
+                    # Clean up old temp directory
+                    subprocess.run(["rm", "-rf", temp_dir], capture_output=True, timeout=5)
+
+                    # Clone repository (shallow clone)
+                    result = subprocess.run(
+                        ["git", "clone", "--depth", "1", repo_url, temp_dir],
+                        capture_output=True,
+                        text=True,
+                        timeout=30
+                    )
+
+                    if result.returncode != 0:
+                        print(f"[Warn] Could not access {repo_name} repository", file=sys.stderr)
+                        continue
+
+                    # Find the skill
+                    source_skill = Path(temp_dir) / skill_name
+                    if not source_skill.exists():
+                        print(f"[Info] Skill '{skill_name}' not found in {repo_name}", file=sys.stderr)
+                        subprocess.run(["rm", "-rf", temp_dir], capture_output=True, timeout=5)
+                        continue
+
+                    # Copy skill to agent's skills directory
+                    shutil.copytree(source_skill, skill_target)
+
+                    # Clean up temp directory
+                    subprocess.run(["rm", "-rf", temp_dir], capture_output=True, timeout=5)
+
+                    # Verify installation
+                    if skill_target.exists():
+                        skill_md = skill_target / "SKILL.md"
+                        if skill_md.exists():
+                            return f"✓ Successfully loaded skill '{skill_name}' from {repo_name} into {agent} agent. The skill is now available and will be included in context on the next session."
+                        else:
+                            return f"⚠️ Skill '{skill_name}' was copied but SKILL.md not found. The skill may not work properly."
+                    else:
+                        return f"Error: Failed to copy skill '{skill_name}' to {agent}."
+
+                except Exception as e:
+                    print(f"[Warn] Error loading from {repo_name}: {e}", file=sys.stderr)
+                    continue
+
+            # If we get here, skill wasn't found in any repository
+            return f"Error: Skill '{skill_name}' not found in any configured repository."
 
         except Exception as e:
             return f"Error loading skill: {str(e)}"
@@ -1529,23 +1637,27 @@ These commands allow you to control the agent's behavior and are processed by th
 - /status - Check running tasks status
 - /cancel - Cancel the current running task
 - /help - Show available commands and agent capabilities
-- /discover-skills [query] - Discover available skills from Anthropic repository (optional search term)
-- /load-skill <name> - Load a skill from Anthropic repository into this agent's .github/skills directory
+- /discover-skills [query] - Discover available skills from configured repositories (optional search term)
+- /load-skill <name> [repo] - Load a skill into this agent's .github/skills directory (optional repository name)
 
 [Skills Discovery & Management]
-You can help users discover and load additional skills for this agent from Anthropic's official repository:
+You can help users discover and load additional skills for this agent from configured skill repositories.
+
+Configured Skill Repositories:
+{self._format_repository_info()}
 
 Current Skills Loaded:
 {skills_context}
 
 How to Discover Skills:
 1. When a user asks about available skills or requests a specific skill:
-   - Inform them you can search the Anthropic skills repository at https://github.com/anthropics/skills
+   - Search available repositories for matching skills
    - List relevant skills and their purposes
    - Explain what each skill does and when it's useful
+   - Indicate which repository each skill comes from
 
 2. When a user wants to load a specific skill:
-   - Verify the skill exists in Anthropic's repository
+   - Verify the skill exists in one of the available repositories
    - Explain what the skill provides and how to use it
    - Guide them on how to load it (system will auto-install when requested)
    - Skills are installed to: {agent_path}/.github/skills/
@@ -1553,12 +1665,10 @@ How to Discover Skills:
 
 3. Skill Loading Process:
    - User requests: "load the helm-deploy skill" or similar
-   - You verify it exists and describe its capabilities
+   - You verify it exists in available repositories and describe its capabilities
    - System automatically clones and installs the skill
    - Skill documentation becomes available immediately
-   - User can use the skill's features in subsequent interactions
-
-Available Anthropic Skills Repository: https://github.com/anthropics/skills"""
+   - User can use the skill's features in subsequent interactions"""
 
         context = f"""[Session ID: {n8n_session_id}]
 {runtime_instruction}{agent_desc}{files_context}{render_instruction}{timeout_instruction}

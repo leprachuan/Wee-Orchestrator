@@ -1,0 +1,17 @@
+{
+  "repositories": [
+    {
+      "name": "Anthropic Official",
+      "url": "https://github.com/anthropics/skills.git",
+      "description": "Official Anthropic skills repository with production-ready skills",
+      "enabled": true
+    },
+    {
+      "name": "Custom Skills",
+      "url": "https://github.com/your-org/custom-skills.git",
+      "description": "Organization-specific custom skills",
+      "enabled": false
+    }
+  ],
+  "default_repository": "Anthropic Official"
+}
