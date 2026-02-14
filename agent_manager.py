@@ -1102,6 +1102,131 @@ class SessionManager:
         except Exception as e:
             return f"Error executing command: {str(e)}"
 
+    def load_agent_skills(self, agent_path: str) -> str:
+        """Load all SKILL.md files from agent's .github/skills/ directory.
+
+        Looks for skills in this order:
+        1. {agent_path}/.github/skills/
+        2. {agent_path}/.claude/skills/
+
+        Returns formatted skills context or empty string if no skills found.
+        """
+        skills_context = ""
+        agent_path_obj = Path(agent_path)
+
+        # Try both .github and .claude skill locations
+        skill_dirs = [
+            agent_path_obj / ".github" / "skills",
+            agent_path_obj / ".claude" / "skills"
+        ]
+
+        available_skills = []
+
+        for skill_dir in skill_dirs:
+            if not skill_dir.exists():
+                continue
+
+            # Find all SKILL.md files
+            skill_files = list(skill_dir.glob("*/SKILL.md"))
+
+            for skill_file in skill_files:
+                try:
+                    content = skill_file.read_text()
+
+                    # Extract name and description from YAML frontmatter
+                    if content.startswith("---"):
+                        parts = content.split("---")
+                        if len(parts) >= 2:
+                            frontmatter = parts[1]
+                            # Simple YAML parsing
+                            name = None
+                            description = None
+                            for line in frontmatter.split("\n"):
+                                if line.startswith("name:"):
+                                    name = line.replace("name:", "").strip().strip("'\"")
+                                elif line.startswith("description:"):
+                                    description = line.replace("description:", "").strip().strip("'\"")
+
+                            if name:
+                                available_skills.append({
+                                    "name": name,
+                                    "description": description or "No description",
+                                    "path": str(skill_file.parent)
+                                })
+                except Exception as e:
+                    print(f"[WARN] Error loading skill {skill_file}: {e}", file=sys.stderr)
+
+        if available_skills:
+            skills_context = "\n[Agent Skills - Available]\n"
+            for skill in available_skills:
+                skills_context += f"- {skill['name']}: {skill['description']}\n"
+            skills_context += """
+To use these skills, simply reference them in your work. The system will automatically load the appropriate skill instructions.
+
+To add new skills to this agent:
+1. Create a directory in .github/skills/{skill-name}/
+2. Add a SKILL.md file with YAML frontmatter:
+   ---
+   name: skill-name
+   description: What this skill does and when to use it
+   ---
+
+   # Skill Instructions
+   Detailed instructions, guidelines, and examples...
+
+3. Add supporting files (scripts, references, templates, assets)
+4. Skills are auto-discovered on next session start
+
+To get skills from Anthropic's official repository:
+- Visit: https://github.com/anthropics/skills
+- Clone skills you want to use
+- Copy them to .github/skills/ or .claude/skills/
+- Run: git clone https://github.com/anthropics/skills {agent_path}/.github/skills/anthropic-skills
+"""
+        else:
+            skills_context = """
+[Agent Skills - Setup Instructions]
+
+You can add custom skills to this agent to extend its capabilities across all runtimes.
+
+How to add skills:
+1. Create a directory: {agent_path}/.github/skills/{skill-name}/
+2. Add a SKILL.md file with YAML frontmatter:
+   ---
+   name: my-skill
+   description: Brief description of what this skill does
+   ---
+
+   # Skill Instructions
+   Detailed instructions for how to use this skill...
+
+3. Optionally add supporting files:
+   - scripts/: Executable scripts and code templates
+   - references/: Documentation and guides
+   - templates/: Starter code and configurations
+   - assets/: Static files, images, etc.
+
+4. Skills are auto-discovered on next session start
+
+Getting skills from Anthropic's repository:
+- Official skills: https://github.com/anthropics/skills
+- Community skills: Look for repos tagged with "agent-skills"
+- Clone and copy to .github/skills/ folder in this agent
+
+Example skill structure:
+  .github/skills/my-skill/
+  ├── SKILL.md              # Required: skill definition
+  ├── scripts/
+  │   ├── helper.py
+  │   └── setup.sh
+  ├── references/
+  │   └── api-docs.md
+  └── templates/
+      └── config-template.yaml
+"""
+
+        return skills_context
+
     def _execute_with_context(
         self, prompt: str, delegation_data: dict, n8n_session_id: str
     ) -> str:
@@ -1149,7 +1274,9 @@ class SessionManager:
         agent_desc = agent_info.get("description", "No description")
         agent_path = agent_info.get("path", "")
 
-        # Try to list files in agent directory for context
+        # Load agent skills and workspace context
+        skills_context = self.load_agent_skills(agent_path)
+
         files_context = ""
         try:
             agent_path_obj = Path(agent_path)
@@ -1239,7 +1366,7 @@ The system will automatically detect [FILE:...] markers and send files to the us
 
         context = f"""[Session ID: {n8n_session_id}]
 [Agent Context: {agent_name}]
-{agent_desc}{files_context}{render_instruction}{timeout_instruction}
+{agent_desc}{files_context}{skills_context}{render_instruction}{timeout_instruction}
 
 User Request:
 {prompt}"""
