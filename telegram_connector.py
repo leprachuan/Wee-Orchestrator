@@ -329,7 +329,9 @@ class TelegramConnector:
             print(f"[DEBUG] Attempting sendPhoto with URL: {photo_url}", file=sys.stderr)
             data = {"chat_id": chat_id, "photo": photo_url}
             if caption:
-                data["caption"] = caption[:1024]
+                # Sanitize caption to support safe HTML formatting
+                sanitized_caption = self.sanitize_telegram_html(caption.strip())
+                data["caption"] = sanitized_caption[:1024]  # Telegram limit
                 data["parse_mode"] = "HTML"
             resp = requests.post(
                 f"{self.api_url}/sendPhoto",
@@ -354,38 +356,59 @@ class TelegramConnector:
         return None
 
     def extract_image_urls(self, text: str) -> tuple:
-        """Extract image URLs from text/HTML. Returns (image_urls, remaining_text)."""
+        """Extract image URLs from text/HTML/Markdown.
+
+        Supports:
+        - Markdown: ![alt text](URL) - extracts URL and alt text as caption
+        - HTML: <img src="URL"/> - extracts URL, no caption
+        - Bare URLs: https://example.com/image.png - extracts URL, no caption
+
+        Returns:
+            Tuple of (image_data, remaining_text) where:
+            - image_data: List of (url, caption) tuples
+            - remaining_text: Text with all image references removed
+        """
         image_extensions = r'\.(jpg|jpeg|png|gif|webp|bmp|svg)(\?[^\s"<>]*)?'
-        
+
+        # Match markdown images: ![alt text](url)
+        md_img_pattern = r'!\[([^\]]*)\]\(([^)]+)\)'
         # Match <img> tags
         img_tag_pattern = r'<img\s+[^>]*src=["\']([^"\']+)["\'][^>]*/?\s*>'
         # Match bare image URLs
         bare_url_pattern = r'(https?://[^\s"<>]+' + image_extensions + r')'
-        
-        image_urls = []
+
+        image_data = []  # List of (url, caption) tuples
         remaining = text
-        
-        # Extract from <img> tags
-        for match in re.finditer(img_tag_pattern, text, re.IGNORECASE):
-            url = match.group(1)
-            if url not in image_urls:
-                image_urls.append(url)
+
+        # Extract from markdown images FIRST (preserves alt text before bare URL pattern strips it)
+        for match in re.finditer(md_img_pattern, remaining, re.IGNORECASE):
+            alt_text = match.group(1).strip()
+            url = match.group(2).strip()
+            if url not in [img[0] for img in image_data]:
+                image_data.append((url, alt_text))
             remaining = remaining.replace(match.group(0), "").strip()
-        
+
+        # Extract from <img> tags
+        for match in re.finditer(img_tag_pattern, remaining, re.IGNORECASE):
+            url = match.group(1)
+            if url not in [img[0] for img in image_data]:
+                image_data.append((url, ""))  # Empty caption
+            remaining = remaining.replace(match.group(0), "").strip()
+
         # Extract bare image URLs
         for match in re.finditer(bare_url_pattern, remaining, re.IGNORECASE):
             url = match.group(1)
-            if url not in image_urls:
-                image_urls.append(url)
+            if url not in [img[0] for img in image_data]:
+                image_data.append((url, ""))  # Empty caption
                 remaining = remaining.replace(url, "").strip()
-        
-        return image_urls, remaining
+
+        return image_data, remaining
 
     def send_response(self, chat_id: int, text: str, status_msg_id: Optional[int] = None):
         """Send response, detecting image URLs and using sendPhoto when appropriate."""
-        image_urls, remaining_text = self.extract_image_urls(text)
-        
-        if image_urls:
+        image_data, remaining_text = self.extract_image_urls(text)
+
+        if image_data:
             # If there was a status message, edit it with the text portion
             if remaining_text.strip() and status_msg_id:
                 self.edit_message(chat_id, status_msg_id, remaining_text)
@@ -404,9 +427,9 @@ class TelegramConnector:
                     pass
                 status_msg_id = None
             
-            # Send each image
-            for url in image_urls:
-                self.send_photo(chat_id, url)
+            # Send each image with its caption
+            for url, caption in image_data:
+                self.send_photo(chat_id, url, caption)
         else:
             # No images — normal text response
             if status_msg_id:
