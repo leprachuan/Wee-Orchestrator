@@ -227,7 +227,7 @@ class SessionManager:
         # Load command timeout from environment
         self.command_timeout = get_command_timeout()
 
-    def _load_agents_config(self, config_file: Optional[str] = None) -> dict:
+    def _load_agents_config(self, config_file: Optional[str] = None) -> Dict:
         """Load agents configuration from JSON file"""
         if config_file is None:
             # Look for agents.json in current directory or script directory
@@ -270,7 +270,7 @@ class SessionManager:
             print(f"[Error] Failed to load agents config: {e}", file=sys.stderr)
             return {}
 
-    def load_running_queries(self) -> dict:
+    def load_running_queries(self) -> Dict:
         """Load the running queries tracking data"""
         if not self.running_queries_file.exists():
             return {}
@@ -351,7 +351,7 @@ class SessionManager:
             print(f"[Error] Failed to kill process {pid}: {e}", file=sys.stderr)
             return False
 
-    def fetch_copilot_models(self) -> dict:
+    def fetch_copilot_models(self) -> Dict:
         """Fetch available models from copilot CLI help text"""
         if not self.copilot_bin:
             print("Copilot executable not found in any search paths", file=sys.stderr)
@@ -415,7 +415,7 @@ class SessionManager:
             print(f"Error fetching copilot models: {e}", file=sys.stderr)
             return {}
 
-    def fetch_opencode_models(self) -> dict:
+    def fetch_opencode_models(self) -> Dict:
         """Fetch available models from opencode CLI"""
         try:
             cmd = [str(self.opencode_bin), "models"]
@@ -462,7 +462,7 @@ class SessionManager:
             print(f"Error fetching opencode models: {e}", file=sys.stderr)
             return {}
 
-    def load_session_map(self) -> dict:
+    def load_session_map(self) -> Dict:
         """Load the N8N -> Session ID mapping"""
         if not self.session_map_file.exists():
             return {}
@@ -478,7 +478,7 @@ class SessionManager:
         with open(self.session_map_file, "w") as f:
             json.dump(session_map, f, indent=2)
 
-    def get_or_create_session_data(self, n8n_session_id: str) -> dict:
+    def get_or_create_session_data(self, n8n_session_id: str) -> Dict:
         """
         Get existing session data or create new default
         Returns dict with keys: session_id, model, agent, runtime
@@ -614,7 +614,7 @@ class SessionManager:
         """Get the render type for a session (session-specific or default)"""
         return session_data.get("render_type", "text")
 
-    def validate_telegram_html(self, text: str) -> tuple[bool, str]:
+    def validate_telegram_html(self, text: str)  -> Tuple[bool, str]:
         """
         Validate that text only uses Telegram-supported HTML tags.
         Returns (is_valid, error_message)
