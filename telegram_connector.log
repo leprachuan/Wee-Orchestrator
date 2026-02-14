@@ -1,0 +1,1 @@
+Error: Telegram bot token required (--token or TELEGRAM_BOT_TOKEN env var)
