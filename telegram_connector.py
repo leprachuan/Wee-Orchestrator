@@ -554,6 +554,7 @@ class TelegramConnector:
                     "paired_at": datetime.now().isoformat(),
                     "agent": self.config.config["default_agent"],
                     "model": self.config.config["default_model"],
+                    "render_type": "telegram_html",  # Default render type with markdown image support
                 }
                 self.config.set_user_session(user_id, session_info)
 
