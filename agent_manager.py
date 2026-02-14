@@ -224,6 +224,9 @@ class SessionManager:
         # Load agents from config file
         self.AGENTS = self._load_agents_config(config_file)
 
+        # Load skill repositories from configuration
+        self.skill_repositories = self._load_skill_repositories()
+
         # Load command timeout from environment
         self.command_timeout = get_command_timeout()
 
@@ -269,6 +272,67 @@ class SessionManager:
         except Exception as e:
             print(f"[Error] Failed to load agents config: {e}", file=sys.stderr)
             return {}
+
+    def _load_skill_repositories(self) -> List[Dict]:
+        """Load skill repositories from configuration file.
+
+        Looks for skill_repositories.json in the script directory or current directory.
+        Returns a list of enabled repository configurations.
+        """
+        config_paths = [
+            Path.cwd() / "skill_repositories.json",
+            Path(__file__).parent / "skill_repositories.json",
+        ]
+
+        for config_path in config_paths:
+            if config_path.exists():
+                try:
+                    with open(config_path, "r") as f:
+                        config = json.load(f)
+                        # Filter to only enabled repositories
+                        repositories = [
+                            repo for repo in config.get("repositories", [])
+                            if repo.get("enabled", False)
+                        ]
+                        if repositories:
+                            print(
+                                f"[Info] Loaded {len(repositories)} skill repositories from {config_path}",
+                                file=sys.stderr
+                            )
+                            return repositories
+                except Exception as e:
+                    print(
+                        f"[Warning] Failed to load skill repositories from {config_path}: {e}",
+                        file=sys.stderr
+                    )
+                    continue
+
+        # Return default Anthropic repository if no config found
+        print(
+            "[Info] No skill_repositories.json found, using default Anthropic repository",
+            file=sys.stderr
+        )
+        return [{
+            "name": "Anthropic Official",
+            "url": "https://github.com/anthropics/skills.git",
+            "description": "Official Anthropic skills repository",
+            "enabled": True
+        }]
+
+    def _format_repository_info(self) -> str:
+        """Format available skill repositories for display in context."""
+        if not self.skill_repositories:
+            return "No skill repositories configured."
+
+        repo_text = ""
+        for repo in self.skill_repositories:
+            name = repo.get("name", "Unknown")
+            desc = repo.get("description", "No description")
+            url = repo.get("url", "")
+            repo_text += f"• **{name}** - {desc}\n"
+            if url:
+                repo_text += f"  URL: {url}\n"
+        return repo_text
 
     def load_running_queries(self) -> Dict:
         """Load the running queries tracking data"""
@@ -1102,6 +1166,320 @@ class SessionManager:
         except Exception as e:
             return f"Error executing command: {str(e)}"
 
+    def load_agent_skills(self, agent_path: str) -> str:
+        """Load all SKILL.md files from agent's .github/skills/ directory.
+
+        Looks for skills in this order:
+        1. {agent_path}/.github/skills/
+        2. {agent_path}/.claude/skills/
+
+        Returns formatted skills context or empty string if no skills found.
+        """
+        skills_context = ""
+        agent_path_obj = Path(agent_path)
+
+        # Try both .github and .claude skill locations
+        skill_dirs = [
+            agent_path_obj / ".github" / "skills",
+            agent_path_obj / ".claude" / "skills"
+        ]
+
+        available_skills = []
+
+        for skill_dir in skill_dirs:
+            if not skill_dir.exists():
+                continue
+
+            # Find all SKILL.md files
+            skill_files = list(skill_dir.glob("*/SKILL.md"))
+
+            for skill_file in skill_files:
+                try:
+                    content = skill_file.read_text()
+
+                    # Extract name and description from YAML frontmatter
+                    if content.startswith("---"):
+                        parts = content.split("---")
+                        if len(parts) >= 2:
+                            frontmatter = parts[1]
+                            # Simple YAML parsing
+                            name = None
+                            description = None
+                            for line in frontmatter.split("\n"):
+                                if line.startswith("name:"):
+                                    name = line.replace("name:", "").strip().strip("'\"")
+                                elif line.startswith("description:"):
+                                    description = line.replace("description:", "").strip().strip("'\"")
+
+                            if name:
+                                available_skills.append({
+                                    "name": name,
+                                    "description": description or "No description",
+                                    "path": str(skill_file.parent)
+                                })
+                except Exception as e:
+                    print(f"[WARN] Error loading skill {skill_file}: {e}", file=sys.stderr)
+
+        if available_skills:
+            skills_context = "\n[Agent Skills - Available]\n"
+            for skill in available_skills:
+                skills_context += f"- {skill['name']}: {skill['description']}\n"
+            skills_context += """
+To use these skills, simply reference them in your work. The system will automatically load the appropriate skill instructions.
+
+To add new skills to this agent:
+1. Create a directory in .github/skills/{skill-name}/
+2. Add a SKILL.md file with YAML frontmatter:
+   ---
+   name: skill-name
+   description: What this skill does and when to use it
+   ---
+
+   # Skill Instructions
+   Detailed instructions, guidelines, and examples...
+
+3. Add supporting files (scripts, references, templates, assets)
+4. Skills are auto-discovered on next session start
+
+To get skills from Anthropic's official repository:
+- Visit: https://github.com/anthropics/skills
+- Clone skills you want to use
+- Copy them to .github/skills/ or .claude/skills/
+- Run: git clone https://github.com/anthropics/skills {agent_path}/.github/skills/anthropic-skills
+"""
+        else:
+            skills_context = """
+[Agent Skills - Setup Instructions]
+
+You can add custom skills to this agent to extend its capabilities across all runtimes.
+
+How to add skills:
+1. Create a directory: {agent_path}/.github/skills/{skill-name}/
+2. Add a SKILL.md file with YAML frontmatter:
+   ---
+   name: my-skill
+   description: Brief description of what this skill does
+   ---
+
+   # Skill Instructions
+   Detailed instructions for how to use this skill...
+
+3. Optionally add supporting files:
+   - scripts/: Executable scripts and code templates
+   - references/: Documentation and guides
+   - templates/: Starter code and configurations
+   - assets/: Static files, images, etc.
+
+4. Skills are auto-discovered on next session start
+
+Getting skills from Anthropic's repository:
+- Official skills: https://github.com/anthropics/skills
+- Community skills: Look for repos tagged with "agent-skills"
+- Clone and copy to .github/skills/ folder in this agent
+
+Example skill structure:
+  .github/skills/my-skill/
+  ├── SKILL.md              # Required: skill definition
+  ├── scripts/
+  │   ├── helper.py
+  │   └── setup.sh
+  ├── references/
+  │   └── api-docs.md
+  └── templates/
+      └── config-template.yaml
+"""
+
+        return skills_context
+
+    def discover_skills(self, query: str = "", repository: Optional[str] = None) -> str:
+        """Discover available skills from configured repositories.
+
+        Searches skill repositories (Anthropic or custom) and returns available skills.
+
+        Args:
+            query: Optional search term to filter skills (e.g., "helm", "kubernetes")
+            repository: Optional repository name to search in specific repo (e.g., "Anthropic Official")
+
+        Returns:
+            Formatted string listing available skills or error message
+        """
+        try:
+            import subprocess
+
+            # Determine which repositories to search
+            repos_to_search = []
+            if repository:
+                # Search specific repository
+                repos_to_search = [r for r in self.skill_repositories if r.get("name") == repository]
+                if not repos_to_search:
+                    return f"Error: Repository '{repository}' not found. Available: {', '.join(r.get('name') for r in self.skill_repositories)}"
+            else:
+                # Search all repositories
+                repos_to_search = self.skill_repositories
+
+            all_skills = []
+
+            for repo in repos_to_search:
+                repo_url = repo.get("url")
+                repo_name = repo.get("name")
+                temp_dir = f"/tmp/skills-discovery-{repo_name.lower().replace(' ', '-')}"
+
+                try:
+                    # Clean up old temp directory
+                    subprocess.run(["rm", "-rf", temp_dir], capture_output=True, timeout=5)
+
+                    # Clone the repository (shallow clone for speed)
+                    result = subprocess.run(
+                        ["git", "clone", "--depth", "1", repo_url, temp_dir],
+                        capture_output=True,
+                        text=True,
+                        timeout=30
+                    )
+
+                    if result.returncode != 0:
+                        print(f"[Warn] Could not access {repo_name} repository", file=sys.stderr)
+                        continue
+
+                    # List available skills in this repository
+                    skills_dir = Path(temp_dir)
+
+                    for skill_dir in skills_dir.iterdir():
+                        if skill_dir.is_dir() and not skill_dir.name.startswith('.'):
+                            readme = skill_dir / "README.md"
+                            if readme.exists():
+                                try:
+                                    content = readme.read_text()
+                                    # Extract first line as description
+                                    lines = content.split('\n')
+                                    desc = next((line.strip('# ').strip() for line in lines if line.strip()), "No description")
+
+                                    if not query or query.lower() in skill_dir.name.lower() or query.lower() in desc.lower():
+                                        all_skills.append({
+                                            "name": skill_dir.name,
+                                            "description": desc[:100],
+                                            "repository": repo_name
+                                        })
+                                except Exception:
+                                    pass
+
+                    # Clean up
+                    subprocess.run(["rm", "-rf", temp_dir], capture_output=True, timeout=5)
+
+                except Exception as e:
+                    print(f"[Warn] Error searching {repo_name}: {e}", file=sys.stderr)
+                    continue
+
+            if not all_skills:
+                return f"No skills found matching '{query}'."
+
+            # Format results grouped by repository
+            result_text = f"Available skills {f'(matching \"{query}\")' if query else ''}:\n\n"
+            current_repo = None
+            for skill in sorted(all_skills, key=lambda x: (x.get("repository"), x.get("name"))):
+                if skill.get("repository") != current_repo:
+                    current_repo = skill.get("repository")
+                    result_text += f"\n**{current_repo}:**\n"
+                result_text += f"  • {skill['name']} - {skill['description']}\n"
+
+            result_text += f"\nTo load any skill, use: /load-skill <skill-name> [repository-name]"
+            return result_text
+
+        except Exception as e:
+            return f"Error discovering skills: {str(e)}"
+
+    def load_skill(self, skill_name: str, agent: str = "orchestrator", repository: Optional[str] = None) -> str:
+        """Load a skill from configured repositories into the agent's .github/skills directory.
+
+        Args:
+            skill_name: Name of the skill to load (e.g., "helm-deploy")
+            agent: Agent to load the skill into (default: orchestrator)
+            repository: Optional repository name to search in (if None, searches all repositories)
+
+        Returns:
+            Status message indicating success or failure
+        """
+        try:
+            import subprocess
+            import shutil
+
+            if agent not in self.AGENTS:
+                return f"Error: Unknown agent '{agent}'. Available agents: {', '.join(self.AGENTS.keys())}"
+
+            agent_path = Path(self.AGENTS[agent]["path"])
+            skills_dir = agent_path / ".github" / "skills"
+            skill_target = skills_dir / skill_name
+
+            # Check if skill already exists
+            if skill_target.exists():
+                return f"✓ Skill '{skill_name}' is already loaded in {agent}."
+
+            # Create skills directory if it doesn't exist
+            skills_dir.mkdir(parents=True, exist_ok=True)
+
+            # Determine which repositories to search
+            repos_to_search = []
+            if repository:
+                repos_to_search = [r for r in self.skill_repositories if r.get("name") == repository]
+                if not repos_to_search:
+                    return f"Error: Repository '{repository}' not found. Available: {', '.join(r.get('name') for r in self.skill_repositories)}"
+            else:
+                repos_to_search = self.skill_repositories
+
+            # Try to find and load the skill from one of the repositories
+            for repo in repos_to_search:
+                repo_url = repo.get("url")
+                repo_name = repo.get("name")
+                temp_dir = f"/tmp/skills-load-{repo_name.lower().replace(' ', '-')}"
+
+                try:
+                    # Clean up old temp directory
+                    subprocess.run(["rm", "-rf", temp_dir], capture_output=True, timeout=5)
+
+                    # Clone repository (shallow clone)
+                    result = subprocess.run(
+                        ["git", "clone", "--depth", "1", repo_url, temp_dir],
+                        capture_output=True,
+                        text=True,
+                        timeout=30
+                    )
+
+                    if result.returncode != 0:
+                        print(f"[Warn] Could not access {repo_name} repository", file=sys.stderr)
+                        continue
+
+                    # Find the skill
+                    source_skill = Path(temp_dir) / skill_name
+                    if not source_skill.exists():
+                        print(f"[Info] Skill '{skill_name}' not found in {repo_name}", file=sys.stderr)
+                        subprocess.run(["rm", "-rf", temp_dir], capture_output=True, timeout=5)
+                        continue
+
+                    # Copy skill to agent's skills directory
+                    shutil.copytree(source_skill, skill_target)
+
+                    # Clean up temp directory
+                    subprocess.run(["rm", "-rf", temp_dir], capture_output=True, timeout=5)
+
+                    # Verify installation
+                    if skill_target.exists():
+                        skill_md = skill_target / "SKILL.md"
+                        if skill_md.exists():
+                            return f"✓ Successfully loaded skill '{skill_name}' from {repo_name} into {agent} agent. The skill is now available and will be included in context on the next session."
+                        else:
+                            return f"⚠️ Skill '{skill_name}' was copied but SKILL.md not found. The skill may not work properly."
+                    else:
+                        return f"Error: Failed to copy skill '{skill_name}' to {agent}."
+
+                except Exception as e:
+                    print(f"[Warn] Error loading from {repo_name}: {e}", file=sys.stderr)
+                    continue
+
+            # If we get here, skill wasn't found in any repository
+            return f"Error: Skill '{skill_name}' not found in any configured repository."
+
+        except Exception as e:
+            return f"Error loading skill: {str(e)}"
+
     def _execute_with_context(
         self, prompt: str, delegation_data: dict, n8n_session_id: str
     ) -> str:
@@ -1139,8 +1517,10 @@ class SessionManager:
         n8n_session_id: str,
         render_type: str = "text",
         timeout: Optional[int] = None,
+        runtime: str = "copilot",
+        model: str = "gpt-5-mini",
     ) -> str:
-        """Build a context-aware prompt that includes agent information and execution deadline"""
+        """Build a context-aware prompt that includes agent information, runtime, model, and execution deadline"""
         if agent not in self.AGENTS:
             agent = "devops"
 
@@ -1149,7 +1529,9 @@ class SessionManager:
         agent_desc = agent_info.get("description", "No description")
         agent_path = agent_info.get("path", "")
 
-        # Try to list files in agent directory for context
+        # Load agent skills and workspace context
+        skills_context = self.load_agent_skills(agent_path)
+
         files_context = ""
         try:
             agent_path_obj = Path(agent_path)
@@ -1237,9 +1619,107 @@ The system will automatically detect [FILE:...] markers and send files to the us
             agent_timeout_min = agent_timeout / 60
             timeout_instruction = f"\n[⏱️ EXECUTION DEADLINE: You have {agent_timeout:.0f} seconds ({agent_timeout_min:.1f} minutes) to complete this task. Plan your approach efficiently and wrap up before this deadline. If an operation might take too long, skip it or provide a summary instead.]"
 
+        # Add runtime, model, and slash commands information
+        runtime_instruction = f"""
+[System Configuration]
+- Runtime: {runtime}
+- Model: {model}
+- Agent: {agent_name}
+
+[Available Slash Commands]
+These commands allow you to control the agent's behavior and are processed by the system (not the model):
+- /agent <name> - Switch to a different agent (e.g., /agent devops, /agent orchestrator)
+- /model <model> - Change the AI model (e.g., /model gpt-5-sonnet, /model haiku)
+- /runtime <runtime> - Change execution runtime (e.g., /runtime claude, /runtime opencode)
+- /timeout <seconds> - Adjust execution timeout (e.g., /timeout 600)
+- /render <format> - Change output format (e.g., /render markdown, /render html, /render telegram_html)
+- /session <id> - Continue a specific session (e.g., /session abc123)
+- /status - Check running tasks status
+- /cancel - Cancel the current running task
+- /help - Show available commands and agent capabilities
+- /discover-skills [query] - Discover available skills from configured repositories (optional search term)
+- /load-skill <name> [repo] - Load a skill into this agent's .github/skills directory (optional repository name)
+
+[Skills Discovery & Management]
+You can help users discover and load additional skills for this agent from configured skill repositories.
+
+Configured Skill Repositories:
+{self._format_repository_info()}
+
+Current Skills Loaded:
+{skills_context}
+
+How to Discover Skills:
+1. When a user asks about available skills or requests a specific skill:
+   - Search available repositories for matching skills
+   - List relevant skills and their purposes
+   - Explain what each skill does and when it's useful
+   - Indicate which repository each skill comes from
+
+2. When a user wants to load a specific skill:
+   - Verify the skill exists in one of the available repositories
+   - Explain what the skill provides and how to use it
+   - Guide them on how to load it (system will auto-install when requested)
+   - Skills are installed to: {agent_path}/.github/skills/
+   - Skills become available immediately in the next session
+
+3. Skill Loading Process:
+   - User requests: "load the helm-deploy skill" or similar
+   - You verify it exists in available repositories and describe its capabilities
+   - System automatically clones and installs the skill
+   - Skill documentation becomes available immediately
+   - User can use the skill's features in subsequent interactions
+
+[Configuring Custom Skill Repositories]
+To add custom skill repositories or manage repository settings:
+
+1. Create or edit `skill_repositories.json` in the project root directory
+
+2. Repository configuration structure:
+{{
+  "repositories": [
+    {{
+      "name": "Anthropic Official",
+      "url": "https://github.com/anthropics/skills.git",
+      "description": "Official Anthropic skills repository with production-ready skills",
+      "enabled": true
+    }},
+    {{
+      "name": "Community Skills",
+      "url": "https://github.com/VoltAgent/awesome-agent-skills.git",
+      "description": "Community-contributed agent skills (300+ skills)",
+      "enabled": false
+    }},
+    {{
+      "name": "Your Custom Skills",
+      "url": "https://github.com/your-org/custom-skills.git",
+      "description": "Organization-specific skills",
+      "enabled": false
+    }}
+  ],
+  "default_repository": "Anthropic Official"
+}}
+
+3. Field explanations:
+   - name: Human-readable repository name
+   - url: Git repository URL (must end with .git)
+   - description: Brief description of the repository
+   - enabled: Set to true to enable, false to disable (without deleting config)
+
+4. Popular community repositories to add:
+   - VoltAgent/awesome-agent-skills: https://github.com/VoltAgent/awesome-agent-skills.git (300+ skills)
+   - karanb192/awesome-claude-skills: https://github.com/karanb192/awesome-claude-skills.git (50+ verified)
+   - travisvn/awesome-claude-skills: https://github.com/travisvn/awesome-claude-skills.git (curated list)
+   - abubakarsiddik31/claude-skills-collection: https://github.com/abubakarsiddik31/claude-skills-collection.git (organized by category)
+
+5. After updating skill_repositories.json:
+   - The new repositories become available immediately on next session start
+   - Agents will see all enabled repositories in their context
+   - Users can discover and load skills from all enabled repositories
+   - Existing skills continue to work without changes"""
+
         context = f"""[Session ID: {n8n_session_id}]
-[Agent Context: {agent_name}]
-{agent_desc}{files_context}{render_instruction}{timeout_instruction}
+{runtime_instruction}{agent_desc}{files_context}{render_instruction}{timeout_instruction}
 
 User Request:
 {prompt}"""
@@ -1329,7 +1809,7 @@ User Request:
             context_prompt = prompt
         else:
             context_prompt = self.build_agent_context_prompt(
-                agent, prompt, n8n_session_id, render_type, effective_timeout
+                agent, prompt, n8n_session_id, render_type, effective_timeout, "copilot", model
             )
 
         cmd = [
@@ -1383,7 +1863,7 @@ User Request:
             context_prompt = prompt
         else:
             context_prompt = self.build_agent_context_prompt(
-                agent, prompt, n8n_session_id, render_type, effective_timeout
+                agent, prompt, n8n_session_id, render_type, effective_timeout, "opencode", model
             )
 
         cmd = [str(self.opencode_bin), "run", "--model", model]
@@ -1436,7 +1916,7 @@ User Request:
             context_prompt = prompt
         else:
             context_prompt = self.build_agent_context_prompt(
-                agent, prompt, n8n_session_id, render_type, effective_timeout
+                agent, prompt, n8n_session_id, render_type, effective_timeout, "claude", model
             )
 
         cmd = [
@@ -1498,7 +1978,7 @@ User Request:
             context_prompt = prompt
         else:
             context_prompt = self.build_agent_context_prompt(
-                agent, prompt, n8n_session_id, render_type, effective_timeout
+                agent, prompt, n8n_session_id, render_type, effective_timeout, "gemini", model
             )
 
         cmd = ["gemini", "--yolo", context_prompt]
@@ -1551,7 +2031,7 @@ User Request:
             context_prompt = prompt
         else:
             context_prompt = self.build_agent_context_prompt(
-                agent, prompt, n8n_session_id, render_type, effective_timeout
+                agent, prompt, n8n_session_id, render_type, effective_timeout, "codex", model
             )
 
         if resume and session_id:
