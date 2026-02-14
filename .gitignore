@@ -1,8 +1,7 @@
-# Agent configuration (contains local paths)
+# Configuration files (user-configurable, environment-specific)
 agents.json
-
-# OpenCode configuration (contains local permissions)
 opencode.json
+skill_repositories.json
 
 # Python
 __pycache__/
