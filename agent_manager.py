@@ -1163,9 +1163,13 @@ class SessionManager:
         # Add render type instruction to the context
         render_instruction = ""
         if render_type == "markdown":
-            render_instruction = "\n[Output Format: markdown]"
+            render_instruction = """
+[Output Format: markdown]
+[Media: When the user asks for images or pictures, you MUST use the web_search tool to search for the image. Find a real, publicly accessible image URL ending in .jpg, .png, .gif, or .webp (e.g. from Wikipedia Commons, Unsplash, Pexels). Include it using markdown: ![description](https://real-url.jpg). Do NOT create files, generate ASCII art, or make SVGs. Only use real URLs found via web_search. You can also include hyperlinks using [text](url) syntax.]"""
         elif render_type == "html":
-            render_instruction = "\n[Output Format: html]"
+            render_instruction = """
+[Output Format: html]
+[Media: When the user asks for images or pictures, you MUST use the web_search tool to search for the image. Find a real, publicly accessible image URL ending in .jpg, .png, .gif, or .webp (e.g. from Wikipedia Commons, Unsplash, Pexels). Include it using <img src="https://real-url.jpg" alt="description">. Do NOT create files, generate ASCII art, or make SVGs. Only use real URLs found via web_search. You can also include hyperlinks using <a href="url">text</a> tags.]"""
         elif render_type == "telegram_html":
             render_instruction = """
 [Output Format: Telegram HTML - STRICT]
@@ -1188,10 +1192,12 @@ ABSOLUTELY NO OTHER TAGS ALLOWED:
 ❌ Do NOT nest unsupported tags inside supported ones
 
 HOW TO FORMAT:
-- Use \n (newline) to separate paragraphs, NOT <p> tags
+- Use \\n (newline) to separate paragraphs, NOT <p> tags
 - Escape these characters: < becomes &lt;, > becomes &gt;, & becomes &amp;
 - Always close tags properly: <b>text</b> not <b>text<b>
-- For line breaks in output, use plain \n characters]"""
+- For line breaks in output, use plain \\n characters
+
+[Media: When the user asks for images or pictures, you MUST use the web_search tool to search for the image. Find a real, publicly accessible image URL ending in .jpg, .png, .gif, or .webp (e.g. from Wikipedia Commons, Unsplash, Pexels). Include the URL on its own line as a bare URL like: https://upload.wikimedia.org/wikipedia/commons/example.jpg — do NOT use <img> tags (unsupported). Do NOT create files, generate ASCII art, or make SVGs. The system will automatically detect image URLs and send them as photos. You can include hyperlinks using <a href="url">text</a>.]"""
         else:  # text (default)
             render_instruction = ""
 
@@ -1291,9 +1297,13 @@ User Request:
         agent_dir = self.AGENTS.get(agent, self.AGENTS["orchestrator"])["path"]
         effective_timeout = timeout if timeout is not None else self.command_timeout
 
-        context_prompt = self.build_agent_context_prompt(
-            agent, prompt, n8n_session_id, render_type, effective_timeout
-        )
+        # Only inject full context on new sessions; resumed sessions already have it
+        if resume and session_id:
+            context_prompt = prompt
+        else:
+            context_prompt = self.build_agent_context_prompt(
+                agent, prompt, n8n_session_id, render_type, effective_timeout
+            )
 
         cmd = [
             self.copilot_bin,
@@ -1341,9 +1351,13 @@ User Request:
         agent_dir = self.AGENTS.get(agent, self.AGENTS["orchestrator"])["path"]
         effective_timeout = timeout if timeout is not None else self.command_timeout
 
-        context_prompt = self.build_agent_context_prompt(
-            agent, prompt, n8n_session_id, render_type, effective_timeout
-        )
+        # Only inject full context on new sessions; resumed sessions already have it
+        if resume and session_id:
+            context_prompt = prompt
+        else:
+            context_prompt = self.build_agent_context_prompt(
+                agent, prompt, n8n_session_id, render_type, effective_timeout
+            )
 
         cmd = [str(self.opencode_bin), "run", "--model", model]
 
@@ -1390,9 +1404,13 @@ User Request:
         agent_dir = self.AGENTS.get(agent, self.AGENTS["orchestrator"])["path"]
         effective_timeout = timeout if timeout is not None else self.command_timeout
 
-        context_prompt = self.build_agent_context_prompt(
-            agent, prompt, n8n_session_id, render_type, effective_timeout
-        )
+        # Only inject full context on new sessions; resumed sessions already have it
+        if resume and session_id:
+            context_prompt = prompt
+        else:
+            context_prompt = self.build_agent_context_prompt(
+                agent, prompt, n8n_session_id, render_type, effective_timeout
+            )
 
         cmd = [
             self.claude_bin,
@@ -1448,9 +1466,13 @@ User Request:
         agent_dir = self.AGENTS.get(agent, self.AGENTS["orchestrator"])["path"]
         effective_timeout = timeout if timeout is not None else self.command_timeout
 
-        context_prompt = self.build_agent_context_prompt(
-            agent, prompt, n8n_session_id, render_type, effective_timeout
-        )
+        # Only inject full context on new sessions; resumed sessions already have it
+        if resume and session_id:
+            context_prompt = prompt
+        else:
+            context_prompt = self.build_agent_context_prompt(
+                agent, prompt, n8n_session_id, render_type, effective_timeout
+            )
 
         cmd = ["gemini", "--yolo", context_prompt]
 
@@ -1497,9 +1519,13 @@ User Request:
         agent_dir = self.AGENTS.get(agent, self.AGENTS["orchestrator"])["path"]
         effective_timeout = timeout if timeout is not None else self.command_timeout
 
-        context_prompt = self.build_agent_context_prompt(
-            agent, prompt, n8n_session_id, render_type, effective_timeout
-        )
+        # Only inject full context on new sessions; resumed sessions already have it
+        if resume and session_id:
+            context_prompt = prompt
+        else:
+            context_prompt = self.build_agent_context_prompt(
+                agent, prompt, n8n_session_id, render_type, effective_timeout
+            )
 
         if resume and session_id:
             # Resume existing session
