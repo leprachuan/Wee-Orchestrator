@@ -342,8 +342,15 @@ class TelegramConnector:
                 print(f"[WARN] File does not exist: {file_path}", file=sys.stderr)
                 return False
 
-            # Check file is in allowed directory
-            if not file_path_obj.is_relative_to(allowed_dir):
+            # Check file is in allowed directory (compatible with Python 3.8+)
+            try:
+                # Python 3.9+
+                is_safe = file_path_obj.is_relative_to(allowed_dir)
+            except AttributeError:
+                # Python 3.8 fallback: check if resolved path starts with allowed dir
+                is_safe = str(file_path_obj).startswith(str(allowed_dir))
+
+            if not is_safe:
                 print(f"[WARN] File outside allowed directory: {file_path}", file=sys.stderr)
                 return False
 
