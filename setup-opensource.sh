@@ -43,20 +43,18 @@ echo ""
 
 # Step 1: Make repository public
 echo "Step 1/5: Making repository public..."
-gh repo edit "$REPO" --visibility public && echo "✓ Repository is now public" || echo "⚠ Could not modify visibility (may already be public)"
+gh repo edit "$REPO" --visibility public --accept-visibility-change-consequences && echo "✓ Repository is now public" || echo "⚠ Could not modify visibility (may already be public)"
 echo ""
 
 # Step 2: Set up branch protection for main
 echo "Step 2/5: Setting up branch protection rules for 'main'..."
 gh api repos/"$REPO"/branches/main/protection \
   -X PUT \
-  -f "required_status_checks={strict:true,contexts:[]}" \
-  -f "enforce_admins=true" \
-  -f "required_pull_request_reviews={dismissal_restrictions:{},dismiss_stale_reviews:true,require_code_owner_reviews:true,required_approving_review_count:1}" \
-  -f "restrictions=null" \
-  -f "allow_force_pushes=false" \
-  -f "allow_deletions=false" \
-  -f "required_linear_history=false" && echo "✓ Branch protection enabled" || echo "⚠ Could not set branch protection"
+  -F 'required_status_checks={"strict":true,"contexts":[]}' \
+  -F 'enforce_admins=true' \
+  -F 'required_pull_request_reviews={"dismissal_restrictions":{},"dismiss_stale_reviews":true,"require_code_owner_reviews":true,"required_approving_review_count":1}' \
+  -F 'allow_force_pushes=false' \
+  -F 'allow_deletions=false' && echo "✓ Branch protection enabled" || echo "⚠ Could not set branch protection"
 echo ""
 
 # Step 3: Create CODEOWNERS file
@@ -70,7 +68,7 @@ cat > CODEOWNERS << 'CODEOWNERS_EOF'
 
 # Documentation
 /*.md @leprachuan
-EOF
+CODEOWNERS_EOF
 git add CODEOWNERS
 git commit -m "Add CODEOWNERS file for code review management" || echo "⚠ CODEOWNERS already exists"
 echo "✓ CODEOWNERS file created"
