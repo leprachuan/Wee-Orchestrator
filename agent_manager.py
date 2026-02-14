@@ -16,10 +16,11 @@ import argparse
 import shutil
 from pathlib import Path
 from uuid import uuid4
+from typing import Optional, Tuple, Dict, List
 
 
 # Executable resolution
-def find_executable(name: str) -> str | None:
+def find_executable(name: str) -> Optional[str]:
     """Find executable in multiple common locations
 
     Searches in order:
@@ -172,7 +173,7 @@ class SessionManager:
         ]
     }
 
-    def __init__(self, config_file: str | None = None):
+    def __init__(self, config_file: Optional[str] = None):
         # Copilot Paths
         self.copilot_home = Path.home() / ".copilot"
         self.session_map_file = self.copilot_home / "n8n-session-map.json"
@@ -226,7 +227,7 @@ class SessionManager:
         # Load command timeout from environment
         self.command_timeout = get_command_timeout()
 
-    def _load_agents_config(self, config_file: str | None = None) -> dict:
+    def _load_agents_config(self, config_file: Optional[str] = None) -> Dict:
         """Load agents configuration from JSON file"""
         if config_file is None:
             # Look for agents.json in current directory or script directory
@@ -269,7 +270,7 @@ class SessionManager:
             print(f"[Error] Failed to load agents config: {e}", file=sys.stderr)
             return {}
 
-    def load_running_queries(self) -> dict:
+    def load_running_queries(self) -> Dict:
         """Load the running queries tracking data"""
         if not self.running_queries_file.exists():
             return {}
@@ -324,7 +325,7 @@ class SessionManager:
                 file=sys.stderr,
             )
 
-    def get_running_query(self, n8n_session_id: str) -> dict | None:
+    def get_running_query(self, n8n_session_id: str) -> Optional[Dict]:
         """Get tracking info for a running query"""
         queries = self.load_running_queries()
         return queries.get(n8n_session_id)
@@ -350,7 +351,7 @@ class SessionManager:
             print(f"[Error] Failed to kill process {pid}: {e}", file=sys.stderr)
             return False
 
-    def fetch_copilot_models(self) -> dict:
+    def fetch_copilot_models(self) -> Dict:
         """Fetch available models from copilot CLI help text"""
         if not self.copilot_bin:
             print("Copilot executable not found in any search paths", file=sys.stderr)
@@ -414,7 +415,7 @@ class SessionManager:
             print(f"Error fetching copilot models: {e}", file=sys.stderr)
             return {}
 
-    def fetch_opencode_models(self) -> dict:
+    def fetch_opencode_models(self) -> Dict:
         """Fetch available models from opencode CLI"""
         try:
             cmd = [str(self.opencode_bin), "models"]
@@ -461,7 +462,7 @@ class SessionManager:
             print(f"Error fetching opencode models: {e}", file=sys.stderr)
             return {}
 
-    def load_session_map(self) -> dict:
+    def load_session_map(self) -> Dict:
         """Load the N8N -> Session ID mapping"""
         if not self.session_map_file.exists():
             return {}
@@ -477,7 +478,7 @@ class SessionManager:
         with open(self.session_map_file, "w") as f:
             json.dump(session_map, f, indent=2)
 
-    def get_or_create_session_data(self, n8n_session_id: str) -> dict:
+    def get_or_create_session_data(self, n8n_session_id: str) -> Dict:
         """
         Get existing session data or create new default
         Returns dict with keys: session_id, model, agent, runtime
@@ -613,7 +614,7 @@ class SessionManager:
         """Get the render type for a session (session-specific or default)"""
         return session_data.get("render_type", "text")
 
-    def validate_telegram_html(self, text: str) -> tuple[bool, str]:
+    def validate_telegram_html(self, text: str)  -> Tuple[bool, str]:
         """
         Validate that text only uses Telegram-supported HTML tags.
         Returns (is_valid, error_message)
@@ -782,7 +783,7 @@ class SessionManager:
         )
         return f"✓ Switched to **{agent}** agent\n\n{agent_info['description']}\n\nLocation: `{agent_info['path']}`"
 
-    def detect_agent_delegation(self, prompt: str) -> tuple[str | None, str]:
+    def detect_agent_delegation(self, prompt: str) -> Tuple[Optional[str], str]:
         """Detect if user is asking for a specific agent to help with something
 
         Patterns detected:
@@ -837,7 +838,7 @@ class SessionManager:
 
         return None, prompt
 
-    def parse_slash_command(self, prompt: str) -> tuple[str | None, str | None]:
+    def parse_slash_command(self, prompt: str) -> Tuple[Optional[str], Optional[str]]:
         """Parse slash commands from the prompt."""
         if not prompt.startswith("/"):
             return None, None
@@ -848,7 +849,7 @@ class SessionManager:
 
         return command, argument
 
-    def get_model_from_name(self, name: str, runtime: str) -> str | None:
+    def get_model_from_name(self, name: str, runtime: str) -> Optional[str]:
         """Convert model name/alias to full model ID based on runtime."""
         name_lower = name.lower().strip("\"'")
 
@@ -1137,7 +1138,7 @@ class SessionManager:
         prompt: str,
         n8n_session_id: str,
         render_type: str = "text",
-        timeout: int | None = None,
+        timeout: Optional[int] = None,
     ) -> str:
         """Build a context-aware prompt that includes agent information and execution deadline"""
         if agent not in self.AGENTS:
@@ -1165,11 +1166,11 @@ class SessionManager:
         if render_type == "markdown":
             render_instruction = """
 [Output Format: markdown]
-[Media: When the user asks for images or pictures, you MUST use the web_search tool to search for the image. Find a real, publicly accessible image URL ending in .jpg, .png, .gif, or .webp (e.g. from Wikipedia Commons, Unsplash, Pexels). Include it using markdown: ![description](https://real-url.jpg). Do NOT create files, generate ASCII art, or make SVGs. Only use real URLs found via web_search. You can also include hyperlinks using [text](url) syntax.]"""
+[Media: When the user asks for images or pictures, you MUST use the web_search tool to search for the image. Find a real, publicly accessible image URL ending in .jpg, .png, .gif, or .webp (e.g. from Wikipedia Commons, Unsplash, Pexels). Include it using markdown: ![caption text](https://real-url.jpg). The text in brackets will appear as the image caption. Do NOT create files, generate ASCII art, or make SVGs. Only use real URLs found via web_search. You can also include hyperlinks using [text](url) syntax.]"""
         elif render_type == "html":
             render_instruction = """
 [Output Format: html]
-[Media: When the user asks for images or pictures, you MUST use the web_search tool to search for the image. Find a real, publicly accessible image URL ending in .jpg, .png, .gif, or .webp (e.g. from Wikipedia Commons, Unsplash, Pexels). Include it using <img src="https://real-url.jpg" alt="description">. Do NOT create files, generate ASCII art, or make SVGs. Only use real URLs found via web_search. You can also include hyperlinks using <a href="url">text</a> tags.]"""
+[Media: When the user asks for images or pictures, you MUST use the web_search tool to search for the image. Find a real, publicly accessible image URL ending in .jpg, .png, .gif, or .webp (e.g. from Wikipedia Commons, Unsplash, Pexels). Include it using <img src="https://real-url.jpg" alt="caption text">. The alt attribute will appear as the image caption. Do NOT create files, generate ASCII art, or make SVGs. Only use real URLs found via web_search. You can also include hyperlinks using <a href="url">text</a> tags.]"""
         elif render_type == "telegram_html":
             render_instruction = """
 [Output Format: Telegram HTML - STRICT]
@@ -1197,7 +1198,33 @@ HOW TO FORMAT:
 - Always close tags properly: <b>text</b> not <b>text<b>
 - For line breaks in output, use plain \\n characters
 
-[Media: When the user asks for images or pictures, you MUST use the web_search tool to search for the image. Find a real, publicly accessible image URL ending in .jpg, .png, .gif, or .webp (e.g. from Wikipedia Commons, Unsplash, Pexels). Include the URL on its own line as a bare URL like: https://upload.wikimedia.org/wikipedia/commons/example.jpg — do NOT use <img> tags (unsupported). Do NOT create files, generate ASCII art, or make SVGs. The system will automatically detect image URLs and send them as photos. You can include hyperlinks using <a href="url">text</a>.]"""
+[Media: When the user asks for images or pictures, you MUST use the web_search tool to search for the image. Find a real, publicly accessible image URL ending in .jpg, .png, .gif, or .webp (e.g. from Wikipedia Commons, Unsplash, Pexels). You can provide images in two ways:
+1. Markdown syntax: ![caption text](https://url.jpg) - Caption will appear below the image
+2. Bare URL: https://url.jpg - Image sent without caption
+Do NOT use <img> tags (unsupported). Do NOT create files, generate ASCII art, or make SVGs. The system will automatically detect image URLs and send them as photos. You can include hyperlinks using <a href="url">text</a>.]
+
+[File Handling - Telegram]: When the user asks for a file, report, export, or any output as a file:
+1. Generate the file content in the format requested (PDF, CSV, JSON, TXT, ZIP, etc.)
+2. Save the file to: /opt/n8n-copilot-shim-dev/telegram_downloads/
+3. Use this naming format: {user_id}_{filename} (e.g., 8193231291_report.pdf)
+4. Then reference it using: [FILE:/opt/n8n-copilot-shim-dev/telegram_downloads/{user_id}_{filename}:Caption describing the file]
+
+Supported file types: PDF (reports, documents), CSV (data exports), JSON (structured data), TXT (text), ZIP (archives), YAML, XML, MD, and any other text/binary format.
+Size limit: 50MB maximum (Telegram API limit)
+Important: Keep user_id in path to avoid conflicts with other users' files.
+
+Examples:
+1. User asks for "monthly sales report as PDF":
+   - Generate PDF with sales data
+   - Save to: /opt/n8n-copilot-shim-dev/telegram_downloads/8193231291_sales_report.pdf
+   - Reference: [FILE:/opt/n8n-copilot-shim-dev/telegram_downloads/8193231291_sales_report.pdf:Monthly Sales Report - Jan 2026]
+
+2. User asks for "export this data as CSV":
+   - Create CSV with the data
+   - Save to: /opt/n8n-copilot-shim-dev/telegram_downloads/8193231291_data_export.csv
+   - Reference: [FILE:/opt/n8n-copilot-shim-dev/telegram_downloads/8193231291_data_export.csv:Data Export - All Records]
+
+The system will automatically detect [FILE:...] markers and send files to the user via Telegram's sendDocument API with captions."""
         else:  # text (default)
             render_instruction = ""
 
@@ -1279,10 +1306,10 @@ User Request:
         prompt: str,
         model: str,
         agent: str,
-        session_id: str | None,
+        session_id: Optional[str],
         resume: bool,
         n8n_session_id: str,
-        timeout: int | None = None,
+        timeout: Optional[int] = None,
         render_type: str = "text",
     ) -> str:
         """Execute Copilot CLI with full tool access
@@ -1333,10 +1360,10 @@ User Request:
         prompt: str,
         model: str,
         agent: str,
-        session_id: str | None,
+        session_id: Optional[str],
         resume: bool,
         n8n_session_id: str,
-        timeout: int | None = None,
+        timeout: Optional[int] = None,
         render_type: str = "text",
     ) -> str:
         """Execute OpenCode CLI with full tool access
@@ -1384,10 +1411,10 @@ User Request:
         prompt: str,
         model: str,
         agent: str,
-        session_id: str | None,
+        session_id: Optional[str],
         resume: bool,
         n8n_session_id: str,
-        timeout: int | None = None,
+        timeout: Optional[int] = None,
         render_type: str = "text",
     ) -> str:
         """Execute Claude CLI with full tool access
@@ -1448,10 +1475,10 @@ User Request:
         prompt: str,
         model: str,
         agent: str,
-        session_id: str | None,
+        session_id: Optional[str],
         resume: bool,
         n8n_session_id: str,
-        timeout: int | None = None,
+        timeout: Optional[int] = None,
         render_type: str = "text",
     ) -> str:
         """Execute Gemini CLI with full tool access
@@ -1500,10 +1527,10 @@ User Request:
         prompt: str,
         model: str,
         agent: str,
-        session_id: str | None,
+        session_id: Optional[str],
         resume: bool,
         n8n_session_id: str,
-        timeout: int | None = None,
+        timeout: Optional[int] = None,
         render_type: str = "text",
     ) -> str:
         """Execute CODEX CLI with full tool access
@@ -1613,7 +1640,7 @@ User Request:
 
     def get_most_recent_session_id(
         self, runtime: str, agent: str = "devops"
-    ) -> str | None:
+    ) -> Optional[str]:
         """Get most recent session ID from storage or CLI"""
         try:
             if runtime == "copilot":
@@ -2251,7 +2278,7 @@ You can mention an agent in your prompt and it will auto-delegate:
         return output
 
 
-def _check_command_result(result: str, error_keywords: list[str]) -> None:
+def _check_command_result(result: str, error_keywords: List[str]) -> None:
     """Helper function to check command results and exit on error
 
     Args:

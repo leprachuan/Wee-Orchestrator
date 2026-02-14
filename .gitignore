@@ -55,6 +55,9 @@ webui.pid
 webui.log
 setup_summary
 
+# Local documentation (contains sensitive credentials)
+TELEGRAM_DEV_SETUP.md
+
 # OS
 .DS_Store
 .DS_Store?
