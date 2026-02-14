@@ -16,7 +16,7 @@ import argparse
 import shutil
 from pathlib import Path
 from uuid import uuid4
-from typing import Optional, Tuple, Dict
+from typing import Optional, Tuple, Dict, List
 
 
 # Executable resolution
@@ -2278,7 +2278,7 @@ You can mention an agent in your prompt and it will auto-delegate:
         return output
 
 
-def _check_command_result(result: str, error_keywords: list[str]) -> None:
+def _check_command_result(result: str, error_keywords: List[str]) -> None:
     """Helper function to check command results and exit on error
 
     Args:
