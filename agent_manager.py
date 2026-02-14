@@ -418,8 +418,8 @@ class SessionManager:
         """Fetch available models from opencode CLI"""
         try:
             cmd = [str(self.opencode_bin), "models"]
-            # Increased timeout to 30s as remote checks might be slow
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+            # Use configured command timeout (may be set via COMMAND_TIMEOUT)
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=self.command_timeout)
 
             if result.returncode != 0:
                 print(
@@ -454,7 +454,7 @@ class SessionManager:
             return models_by_provider
         except subprocess.TimeoutExpired:
             print(
-                "[Error] opencode models command timed out after 30s", file=sys.stderr
+                f"[Error] opencode models command timed out after {self.command_timeout}s", file=sys.stderr
             )
             return {}
         except Exception as e:
@@ -1072,13 +1072,13 @@ class SessionManager:
         print(f"[Shell] Executing in {agent_dir}: {command}", file=sys.stderr)
 
         try:
-            # Execute the command with a reasonable timeout (10 seconds)
+            # Execute the command with the configured timeout
             result = subprocess.run(
                 command,
                 shell=True,
                 capture_output=True,
                 text=True,
-                timeout=10,
+                timeout=self.command_timeout,
                 cwd=agent_dir,
             )
 
@@ -1097,7 +1097,7 @@ class SessionManager:
             return output.strip()
 
         except subprocess.TimeoutExpired:
-            return f"Error: Command timed out after 10 seconds"
+            return f"Error: Command timed out after {self.command_timeout} seconds"
         except Exception as e:
             return f"Error executing command: {str(e)}"
 
