@@ -173,7 +173,7 @@ class SessionManager:
         ]
     }
 
-    def __init__(self, config_file: str | None = None):
+    def __init__(self, config_file: Optional[str] = None):
         # Copilot Paths
         self.copilot_home = Path.home() / ".copilot"
         self.session_map_file = self.copilot_home / "n8n-session-map.json"
@@ -227,7 +227,7 @@ class SessionManager:
         # Load command timeout from environment
         self.command_timeout = get_command_timeout()
 
-    def _load_agents_config(self, config_file: str | None = None) -> dict:
+    def _load_agents_config(self, config_file: Optional[str] = None) -> dict:
         """Load agents configuration from JSON file"""
         if config_file is None:
             # Look for agents.json in current directory or script directory
@@ -1138,7 +1138,7 @@ class SessionManager:
         prompt: str,
         n8n_session_id: str,
         render_type: str = "text",
-        timeout: int | None = None,
+        timeout: Optional[int] = None,
     ) -> str:
         """Build a context-aware prompt that includes agent information and execution deadline"""
         if agent not in self.AGENTS:
@@ -1306,10 +1306,10 @@ User Request:
         prompt: str,
         model: str,
         agent: str,
-        session_id: str | None,
+        session_id: Optional[str],
         resume: bool,
         n8n_session_id: str,
-        timeout: int | None = None,
+        timeout: Optional[int] = None,
         render_type: str = "text",
     ) -> str:
         """Execute Copilot CLI with full tool access
@@ -1360,10 +1360,10 @@ User Request:
         prompt: str,
         model: str,
         agent: str,
-        session_id: str | None,
+        session_id: Optional[str],
         resume: bool,
         n8n_session_id: str,
-        timeout: int | None = None,
+        timeout: Optional[int] = None,
         render_type: str = "text",
     ) -> str:
         """Execute OpenCode CLI with full tool access
@@ -1411,10 +1411,10 @@ User Request:
         prompt: str,
         model: str,
         agent: str,
-        session_id: str | None,
+        session_id: Optional[str],
         resume: bool,
         n8n_session_id: str,
-        timeout: int | None = None,
+        timeout: Optional[int] = None,
         render_type: str = "text",
     ) -> str:
         """Execute Claude CLI with full tool access
@@ -1475,10 +1475,10 @@ User Request:
         prompt: str,
         model: str,
         agent: str,
-        session_id: str | None,
+        session_id: Optional[str],
         resume: bool,
         n8n_session_id: str,
-        timeout: int | None = None,
+        timeout: Optional[int] = None,
         render_type: str = "text",
     ) -> str:
         """Execute Gemini CLI with full tool access
@@ -1527,10 +1527,10 @@ User Request:
         prompt: str,
         model: str,
         agent: str,
-        session_id: str | None,
+        session_id: Optional[str],
         resume: bool,
         n8n_session_id: str,
-        timeout: int | None = None,
+        timeout: Optional[int] = None,
         render_type: str = "text",
     ) -> str:
         """Execute CODEX CLI with full tool access
