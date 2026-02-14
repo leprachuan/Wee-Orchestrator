@@ -291,6 +291,38 @@ class TelegramConnector:
         except Exception as e:
             print(f"Error sending typing indicator: {e}", file=sys.stderr)
 
+    def unpin_all_messages(self, chat_id: int) -> bool:
+        """Unpin all messages in the chat."""
+        try:
+            resp = requests.post(
+                f"{self.api_url}/unpinAllChatMessages",
+                json={"chat_id": chat_id},
+                timeout=5,
+            )
+            if resp.status_code == 200 and resp.json().get("ok"):
+                return True
+            print(f"[DEBUG] unpinAllChatMessages status: {resp.status_code}", file=sys.stderr)
+            return False
+        except Exception as e:
+            print(f"Error unpinning all messages: {e}", file=sys.stderr)
+            return False
+
+    def pin_message(self, chat_id: int, message_id: int) -> bool:
+        """Pin a message in the chat. Returns True if successful."""
+        try:
+            resp = requests.post(
+                f"{self.api_url}/pinChatMessage",
+                json={"chat_id": chat_id, "message_id": message_id},
+                timeout=5,
+            )
+            if resp.status_code == 200 and resp.json().get("ok"):
+                return True
+            print(f"[WARN] Failed to pin message ({resp.status_code}): {resp.text[:200]}", file=sys.stderr)
+            return False
+        except Exception as e:
+            print(f"Error pinning message: {e}", file=sys.stderr)
+            return False
+
     def send_photo(self, chat_id: int, photo_url: str, caption: str = "") -> Optional[int]:
         """Send a photo to Telegram chat via URL. Returns message_id."""
         try:
@@ -539,9 +571,15 @@ class TelegramConnector:
                     # Regular slash commands - get user timeout
                     timeout = self.config.get_user_timeout(user_id)
                     response = self._execute_command(text, session_id, timeout)
-                    self.send_message(chat_id, response)
-                    # Evict cached SessionManager on session-affecting commands
+                    msg_id = self.send_message(chat_id, response)
+
+                    # Pin agent set messages so user always knows which agent they're talking to
                     cmd_lower = text.lower().strip()
+                    if cmd_lower.startswith("/agent set") and msg_id:
+                        self.unpin_all_messages(chat_id)
+                        self.pin_message(chat_id, msg_id)
+
+                    # Evict cached SessionManager on session-affecting commands
                     if cmd_lower.startswith("/session reset") or cmd_lower.startswith("/runtime set"):
                         self._evict_session_manager(session_id)
             else:
