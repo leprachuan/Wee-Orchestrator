@@ -282,6 +282,57 @@ class WebEXConnector:
             print(f"[DEBUG] Typing indicator not available: {e}", file=sys.stderr)
             return False
 
+    def pin_message(self, message_id: str, room_id: str) -> bool:
+        """Pin a message in WebEX room. Returns True if successful."""
+        try:
+            headers = {
+                "Authorization": f"Bearer {self.token}",
+                "Content-Type": "application/json"
+            }
+
+            data = {"roomId": room_id}
+
+            response = requests.post(
+                f"https://webexapis.com/v1/messages/{message_id}/pin",
+                headers=headers,
+                json=data,
+                timeout=10
+            )
+
+            if response.status_code == 200:
+                print(f"[DEBUG] Message pinned successfully", file=sys.stderr)
+                return True
+            else:
+                print(f"[DEBUG] WebEX pin failed ({response.status_code}): {response.text[:200]}", file=sys.stderr)
+                return False
+        except Exception as e:
+            print(f"[DEBUG] Pin not available: {e}", file=sys.stderr)
+            return False
+
+    def unpin_all_messages(self, room_id: str) -> bool:
+        """Unpin all messages in a room. Returns True if successful."""
+        try:
+            headers = {
+                "Authorization": f"Bearer {self.token}",
+                "Content-Type": "application/json"
+            }
+
+            response = requests.post(
+                f"https://webexapis.com/v1/rooms/{room_id}/unpinAllMessages",
+                headers=headers,
+                timeout=10
+            )
+
+            if response.status_code == 204:
+                print(f"[DEBUG] All messages unpinned successfully", file=sys.stderr)
+                return True
+            else:
+                print(f"[DEBUG] WebEX unpin all failed ({response.status_code})", file=sys.stderr)
+                return False
+        except Exception as e:
+            print(f"[DEBUG] Unpin all not available: {e}", file=sys.stderr)
+            return False
+
     def get_person_info(self, person_id: str) -> Optional[Dict]:
         """Get WebEX person info by ID"""
         try:
@@ -375,15 +426,22 @@ class WebEXConnector:
                                 response = "Invalid timeout. Use: /timeout set <seconds>"
                     else:
                         response = "Invalid timeout command. Use: /timeout current or /timeout set <seconds>"
-                    self.send_message(room_id, response)
+                    msg_id = self.send_message(room_id, response)
                 else:
                     # Regular slash commands
                     timeout = self.config.get_user_timeout(person_id)
                     response = self._execute_command(text, session_id, timeout)
-                    self.send_message(room_id, response)
+                    msg_id = self.send_message(room_id, response)
+
+                    # Pin configuration commands (agent, runtime, model, session)
+                    cmd_lower = text.lower().strip()
+                    if msg_id and any(cmd_lower.startswith(cmd) for cmd in ["/agent set", "/runtime set", "/model set", "/session reset"]):
+                        # Unpin all existing messages and pin this new one
+                        self.unpin_all_messages(room_id)
+                        self.pin_message(msg_id, room_id)
+                        print(f"[DEBUG] Pinned configuration command message: {cmd_lower[:30]}", file=sys.stderr)
 
                     # Evict cached SessionManager on session-affecting commands
-                    cmd_lower = text.lower().strip()
                     if cmd_lower.startswith("/session reset") or cmd_lower.startswith("/runtime set"):
                         self._evict_session_manager(session_id)
             else:
