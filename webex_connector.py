@@ -222,24 +222,33 @@ class WebEXConnector:
             print(f"Error sending WebEX message: {e}", file=sys.stderr)
             return None
 
-    def delete_message(self, message_id: str) -> bool:
-        """Delete a message from WebEX. Returns True if successful."""
+    def edit_message(self, message_id: str, text: str) -> bool:
+        """Edit a message in WebEX. Returns True if successful."""
         try:
-            headers = {"Authorization": f"Bearer {self.token}"}
+            headers = {
+                "Authorization": f"Bearer {self.token}",
+                "Content-Type": "application/json"
+            }
 
-            response = requests.delete(
+            data = {
+                "text": text,
+                "markdown": text
+            }
+
+            response = requests.put(
                 f"https://webexapis.com/v1/messages/{message_id}",
                 headers=headers,
+                json=data,
                 timeout=10
             )
 
-            if response.status_code == 204:
+            if response.status_code == 200:
                 return True
             else:
-                print(f"[WARN] WebEX delete failed ({response.status_code}): {response.text[:200]}", file=sys.stderr)
+                print(f"[WARN] WebEX edit failed ({response.status_code}): {response.text[:200]}", file=sys.stderr)
                 return False
         except Exception as e:
-            print(f"Error deleting WebEX message: {e}", file=sys.stderr)
+            print(f"Error editing WebEX message: {e}", file=sys.stderr)
             return False
 
     def send_typing(self, room_id: str) -> bool:
@@ -287,15 +296,16 @@ class WebEXConnector:
     def send_response(self, room_id: str, text: str, status_msg_id: Optional[str] = None):
         """Send response, replacing the status message if it exists.
 
-        Mirrors Telegram pattern: if status_msg_id exists, deletes the status message
-        and sends the final response. Otherwise just sends the response.
+        Mirrors Telegram pattern: if status_msg_id exists, edits the status message
+        with the final response. Otherwise just sends the response.
         """
         if text and text.strip():
-            # If we have a status message ID, delete it first
+            # If we have a status message ID, edit it with the final response
             if status_msg_id:
-                self.delete_message(status_msg_id)
-            # Send the final response
-            self.send_message(room_id, text)
+                self.edit_message(status_msg_id, text)
+            else:
+                # No status message, just send the response normally
+                self.send_message(room_id, text)
 
     def handle_message(self, message_data: Dict):
         """Process incoming WebEX message from RabbitMQ"""
@@ -450,11 +460,12 @@ class WebEXConnector:
                 self.send_typing(room_id)
                 status_idx = 1
             elif elapsed > 30 and (elapsed - 30) % 30 == 0:
-                # Delete old status message and send new one every 30s
-                if status_msg_id:
-                    self.delete_message(status_msg_id)
+                # Edit status message every 30s with new message
                 msg = status_msgs[status_idx % len(status_msgs)]
-                status_msg_id = self.send_message(room_id, msg)
+                if status_msg_id:
+                    self.edit_message(status_msg_id, msg)
+                else:
+                    status_msg_id = self.send_message(room_id, msg)
                 self.send_typing(room_id)
                 status_idx += 1
 
