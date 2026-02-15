@@ -231,6 +231,15 @@ class WebEXConnector:
             print(f"Error getting person info: {e}", file=sys.stderr)
         return None
 
+    def send_response(self, room_id: str, text: str, status_msg_id: Optional[str] = None):
+        """Send response, optionally replacing the status message.
+
+        Mirrors Telegram pattern: if status_msg_id exists and text is available,
+        sends the text as a new message (WebEX doesn't support message editing).
+        """
+        if text and text.strip():
+            self.send_message(room_id, text)
+
     def handle_message(self, message_data: Dict):
         """Process incoming WebEX message from RabbitMQ"""
         try:
@@ -307,10 +316,10 @@ class WebEXConnector:
                 else:
                     # Route regular messages to agent_manager with status updates
                     timeout = self.config.get_user_timeout(person_id)
-                    response = self._query_agent_with_status(
+                    response, status_msg_id = self._query_agent_with_status(
                         text, session_info["agent"], session_info["model"], person_id, room_id, timeout
                     )
-                    self.send_message(room_id, response)
+                    self.send_response(room_id, response, status_msg_id)
 
         except Exception as e:
             print(f"Error handling message: {e}", file=sys.stderr)
@@ -346,8 +355,12 @@ class WebEXConnector:
 
     def _query_agent_with_status(
         self, query: str, agent: str, model: str, person_id: str, room_id: str, timeout: int = 300
-    ) -> str:
-        """Query agent with periodic updates"""
+    ) -> tuple:
+        """Query agent with status updates at 30s intervals.
+
+        Returns (response_text, status_msg_id) where status_msg_id tracks
+        the status message for potential editing with the final response.
+        """
         result_container = {"response": None, "done": False}
 
         status_msgs = [
@@ -368,11 +381,14 @@ class WebEXConnector:
 
         elapsed = 0
         status_idx = 0
+        status_msg_id = None  # Track the status message
         while not result_container["done"] and elapsed < timeout:
             if elapsed == 30:
-                self.send_message(room_id, status_msgs[0])
+                # First status at 30s - send new message
+                status_msg_id = self.send_message(room_id, status_msgs[0])
                 status_idx = 1
             elif elapsed > 30 and (elapsed - 30) % 30 == 0:
+                # Update status message every 30s
                 msg = status_msgs[status_idx % len(status_msgs)]
                 self.send_message(room_id, msg)
                 status_idx += 1
@@ -381,7 +397,7 @@ class WebEXConnector:
             elapsed += 1
 
         query_thread.join(timeout=5)
-        return result_container["response"] or "Error: Query timed out"
+        return (result_container["response"] or "Error: Query timed out", status_msg_id)
 
     def _query_agent(
         self, query: str, agent: str, model: str, person_id: str, timeout: int = 300
