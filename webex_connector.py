@@ -17,7 +17,7 @@ import mimetypes
 from pathlib import Path
 from urllib.parse import unquote
 from typing import Optional, Dict, List
-from datetime import datetime
+from datetime import datetime, timedelta
 import agent_manager
 
 
@@ -131,6 +131,7 @@ class WebEXConnector:
         self.running = False
         self.rabbitmq_connection = None
         self.rabbitmq_channel = None
+        self.cleanup_thread = None
 
     def get_session_manager(self, session_id: str):
         """Get or create SessionManager for session_id"""
@@ -430,30 +431,51 @@ class WebEXConnector:
             print(f"Error downloading file: {e}", file=sys.stderr)
             return None
 
-    def cleanup_files(self, person_id: str):
-        """Clean up downloaded files from various locations"""
-        try:
-            # Clean up original downloads
-            downloads_dir = Path("/opt/n8n-copilot-shim-dev/webex_downloads")
-            if downloads_dir.exists():
-                for file in downloads_dir.glob(f"{person_id}_*"):
-                    try:
-                        file.unlink()
-                        print(f"[DEBUG] Cleaned up file: {file}", file=sys.stderr)
-                    except Exception as e:
-                        print(f"[WARN] Could not delete {file}: {e}", file=sys.stderr)
+    def start_cleanup_background_task(self, interval_seconds: int = 300):
+        """Start background cleanup task (runs every 5 minutes by default).
 
-            # Clean up temp files in /tmp
-            tmp_dir = Path("/tmp")
-            if tmp_dir.exists():
-                for tmp_file in tmp_dir.glob(f"webex_{person_id}_*"):
-                    try:
-                        tmp_file.unlink()
-                        print(f"[DEBUG] Cleaned up temp file: {tmp_file}", file=sys.stderr)
-                    except Exception as e:
-                        print(f"[WARN] Could not delete temp file {tmp_file}: {e}", file=sys.stderr)
-        except Exception as e:
-            print(f"Error cleaning up files: {e}", file=sys.stderr)
+        Removes WebEX temp files older than 5 minutes from /tmp and webex_downloads/
+        This avoids race conditions with agents that are still processing files.
+        """
+        def cleanup_old_files():
+            while self.running:
+                try:
+                    current_time = datetime.now()
+                    max_age = timedelta(minutes=5)
+
+                    # Clean up temp files in /tmp
+                    tmp_dir = Path("/tmp")
+                    if tmp_dir.exists():
+                        for tmp_file in tmp_dir.glob("webex_*_*"):
+                            try:
+                                file_age = current_time - datetime.fromtimestamp(tmp_file.stat().st_mtime)
+                                if file_age > max_age:
+                                    tmp_file.unlink()
+                                    print(f"[DEBUG] Cleaned up old temp file: {tmp_file}", file=sys.stderr)
+                            except Exception as e:
+                                pass  # Silently ignore errors (file may have been deleted)
+
+                    # Clean up downloaded files in webex_downloads/
+                    downloads_dir = Path("/opt/n8n-copilot-shim-dev/webex_downloads")
+                    if downloads_dir.exists():
+                        for file in downloads_dir.glob("*_*"):
+                            try:
+                                file_age = current_time - datetime.fromtimestamp(file.stat().st_mtime)
+                                if file_age > max_age:
+                                    file.unlink()
+                                    print(f"[DEBUG] Cleaned up old download: {file}", file=sys.stderr)
+                            except Exception as e:
+                                pass  # Silently ignore errors
+
+                    # Sleep before next cleanup cycle
+                    time.sleep(interval_seconds)
+                except Exception as e:
+                    print(f"Error in cleanup thread: {e}", file=sys.stderr)
+                    time.sleep(interval_seconds)
+
+        self.cleanup_thread = threading.Thread(target=cleanup_old_files, daemon=True)
+        self.cleanup_thread.start()
+        print(f"[DEBUG] Started background cleanup task (interval: {interval_seconds}s)", file=sys.stderr)
 
     def pin_message(self, message_id: str, room_id: str) -> bool:
         """Pin a message in WebEX room and set as banner. Returns True if successful."""
@@ -650,11 +672,6 @@ class WebEXConnector:
                     )
                     self.send_response(room_id, response, status_msg_id)
 
-            # Cleanup temp files after query
-            # Add small delay to ensure agent finishes reading files
-            time.sleep(2)
-            self.cleanup_files(person_id)
-
         except Exception as e:
             print(f"Error handling message: {e}", file=sys.stderr)
             if room_id:
@@ -780,6 +797,9 @@ class WebEXConnector:
             if not self.connect_rabbitmq():
                 print("Failed to connect to RabbitMQ, exiting...", file=sys.stderr)
                 return
+
+            # Start background cleanup task (removes files older than 5 minutes)
+            self.start_cleanup_background_task(interval_seconds=300)
 
             self.rabbitmq_channel.basic_consume(
                 queue=self.config.config["rabbitmq_queue"],
