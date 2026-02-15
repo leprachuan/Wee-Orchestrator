@@ -431,7 +431,7 @@ class WebEXConnector:
             return None
 
     def cleanup_files(self, person_id: str):
-        """Clean up downloaded files and symlinks for user"""
+        """Clean up downloaded files from various locations"""
         try:
             # Clean up original downloads
             downloads_dir = Path("/opt/n8n-copilot-shim-dev/webex_downloads")
@@ -443,15 +443,15 @@ class WebEXConnector:
                     except Exception as e:
                         print(f"[WARN] Could not delete {file}: {e}", file=sys.stderr)
 
-            # Clean up symlinks in agent-downloads
-            agent_downloads_dir = Path("/opt/agent-downloads")
-            if agent_downloads_dir.exists():
-                for symlink in agent_downloads_dir.glob(f"{person_id}_*"):
+            # Clean up temp files in /tmp
+            tmp_dir = Path("/tmp")
+            if tmp_dir.exists():
+                for tmp_file in tmp_dir.glob(f"webex_{person_id}_*"):
                     try:
-                        symlink.unlink()
-                        print(f"[DEBUG] Cleaned up symlink: {symlink}", file=sys.stderr)
+                        tmp_file.unlink()
+                        print(f"[DEBUG] Cleaned up temp file: {tmp_file}", file=sys.stderr)
                     except Exception as e:
-                        print(f"[WARN] Could not delete symlink {symlink}: {e}", file=sys.stderr)
+                        print(f"[WARN] Could not delete temp file {tmp_file}: {e}", file=sys.stderr)
         except Exception as e:
             print(f"Error cleaning up files: {e}", file=sys.stderr)
 
@@ -547,25 +547,27 @@ class WebEXConnector:
 
                 if file_result:
                     file_path, file_name = file_result
-                    # Create agent-accessible symlink
-                    agent_downloads = Path("/opt/agent-downloads")
-                    agent_downloads.mkdir(exist_ok=True)
-
-                    symlink_path = agent_downloads / f"{person_id}_{file_name}"
+                    # Copy file to /tmp for universal accessibility
+                    # (avoids sandboxing issues with /opt)
+                    tmp_file_path = Path("/tmp") / f"webex_{person_id}_{file_name}"
                     try:
-                        # Remove old symlink if exists
-                        if symlink_path.exists():
-                            symlink_path.unlink()
-                        symlink_path.symlink_to(file_path)
+                        # Copy the file to /tmp
+                        with open(file_path, "rb") as src:
+                            with open(tmp_file_path, "wb") as dst:
+                                dst.write(src.read())
+
+                        # Make world readable
+                        os.chmod(tmp_file_path, 0o644)
+                        print(f"[DEBUG] File copied to temp: {tmp_file_path}", file=sys.stderr)
+                        file_path = tmp_file_path
                     except Exception as e:
-                        print(f"[WARN] Could not create symlink: {e}", file=sys.stderr)
-                        symlink_path = Path(file_path)
+                        print(f"[WARN] Could not copy to /tmp: {e}, using original path", file=sys.stderr)
 
                     # Auto-enable yolo mode for file access (agents need full path access)
                     if not text:
-                        text = f"/mode yolo\n\nPlease analyze this file: {symlink_path}"
+                        text = f"/mode yolo\n\nPlease analyze this file: {file_path}"
                     else:
-                        text = f"/mode yolo\n\n{text}\n\nFile to analyze: {symlink_path}"
+                        text = f"/mode yolo\n\n{text}\n\nFile to analyze: {file_path}"
                 else:
                     self.send_message(room_id, "❌ Failed to download file")
                     return
