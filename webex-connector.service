@@ -1,0 +1,35 @@
+[Unit]
+Description=WebEX Connector for N8N Copilot Shim
+Documentation=file:///opt/n8n-copilot-shim-dev/webex_connector.py
+After=network.target rabbitmq-server.service
+Wants=rabbitmq-server.service
+
+[Service]
+Type=simple
+User=n8n
+WorkingDirectory=/opt/n8n-copilot-shim-dev
+ExecStart=/usr/bin/python3 /opt/n8n-copilot-shim-dev/webex_connector.py
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=webex-connector
+
+# Environment variables (optional - can also use config file)
+Environment="WEBEX_BOT_TOKEN=MjRmMDVjMGUtNjYyYS00ZDk0LWI0N2EtOTc0YjAyODRkODU3NDAzN2QzNWItYjdh_PF84_1eb65fdf-9643-417f-9974-ad72cae0e10f"
+Environment="RABBITMQ_HOST=192.168.0.85"
+Environment="RABBITMQ_PORT=5672"
+Environment="RABBITMQ_USER=admin"
+Environment="RABBITMQ_PASSWORD=[REDACTED-RABBITMQ-PASSWORD]"
+Environment="RABBITMQ_QUEUE=webex"
+
+# Security
+NoNewPrivileges=true
+PrivateTmp=true
+
+# Resource limits
+MemoryMax=512M
+CPUQuota=50%
+
+[Install]
+WantedBy=multi-user.target
