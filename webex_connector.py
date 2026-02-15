@@ -196,7 +196,8 @@ class WebEXConnector:
             for chunk in chunks:
                 data = {
                     "roomId": room_id,
-                    "text": chunk
+                    "text": chunk,
+                    "markdown": chunk
                 }
 
                 response = requests.post(
