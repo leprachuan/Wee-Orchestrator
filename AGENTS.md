@@ -455,3 +455,109 @@ The n8n-copilot-shim is an orchestration system that:
 5. **Maintains isolation** while allowing agent chaining
 
 All agent configuration is stored in `agents.json`, making it easy to add, remove, or modify agents without changing the core codebase.
+
+---
+
+## Project Management & Issue Tracking
+
+### GitHub Issues as Single Source of Truth
+
+This project uses **GitHub Issues** exclusively for tracking all work items:
+
+| Item Type | Tracked In |
+|-----------|-----------|
+| Bug reports | GitHub Issues |
+| Feature requests | GitHub Issues |
+| TODOs | GitHub Issues |
+| Technical debt | GitHub Issues |
+| Documentation needs | GitHub Issues |
+| **NOT** in code comments | ❌ No TODO comments in code |
+
+### Why GitHub Issues?
+
+- 📌 **Centralized** - All work visible in one place
+- 🔗 **Linked** - Connected to commits, PRs, and code
+- 🏷️ **Searchable** - Easy to find related work
+- 👤 **Assignable** - Clear ownership and accountability
+- 📊 **Trackable** - Progress visible across the project
+- 🎯 **Prioritizable** - Labels and milestones for organization
+
+### Common Issue Labels
+
+```
+WebEX          - WebEX connector features/bugs
+Telegram       - Telegram connector features/bugs
+bug            - Defects and issues
+feature        - New functionality
+enhancement    - Improvements to existing features
+documentation  - Guides, README updates, etc.
+help wanted    - Open for contributions
+blocked        - Waiting on external dependencies
+in-progress    - Currently being worked on
+review-needed  - Needs code review
+```
+
+### Creating a New Issue
+
+When you identify work that needs to be done:
+
+```bash
+# Create a new issue
+gh issue create --title "Brief description" \
+  --body "Detailed description" \
+  --label "WebEX,feature"
+
+# Or use the web interface
+# Navigate to: https://github.com/leprachuan/Wee-Orchestrator/issues/new
+```
+
+### DO NOT Add TODOs in Code
+
+❌ **Never do this:**
+```python
+def handle_message(self, text):
+    # TODO: implement message pinning
+    # TODO: add rate limiting
+    # TODO: improve error handling
+    pass
+```
+
+✅ **Instead do this:**
+1. Create GitHub issue for each item
+2. Reference in commit message: `implement: resolves #42`
+3. Close issue when PR is merged
+
+### Example Issue Format
+
+**Title:** "Implement message pinning for group rooms"
+
+**Body:**
+```markdown
+## Description
+WebEX API supports pinning in group rooms but not direct messages.
+
+## Current Behavior
+Pin attempts in direct messages return 404 errors.
+
+## Expected Behavior
+Configuration messages should be pinned in group rooms.
+
+## Related
+- Blocks: User configuration visibility
+- Depends on: #50 (group room support)
+
+## Acceptance Criteria
+- [ ] Test pinning on group room
+- [ ] Document direct message limitation
+- [ ] Update WebEX documentation
+```
+
+### Outstanding Work
+
+See all outstanding work: [GitHub Issues Board](../../issues)
+
+Commonly referenced items:
+- **WebEX pinning in group rooms** - Test if pinning works outside direct messages
+- **Admin commands** - Implement /allow and /deny user commands
+- **Rate limiting** - Add throttling for agent queries
+- **Documentation** - Create user and admin guides
