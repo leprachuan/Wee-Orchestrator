@@ -2933,11 +2933,6 @@ Examples:
         result = manager.execute(f'/agent set "{args.agent}"', args.session_id)
         _check_command_result(result, ["Unknown agent", "Error"])
 
-    # Apply mode setting if provided (for Claude permission mode)
-    if args.mode:
-        result = manager.execute(f"/mode {args.mode}", args.session_id)
-        _check_command_result(result, ["Unknown mode", "Error"])
-
     # Handle list commands (these don't require a prompt but may use runtime/agent settings)
     if args.list_agents:
         output = manager.execute("/agent list", args.session_id)
@@ -2963,8 +2958,13 @@ Examples:
         result = manager.execute(f'/model set "{args.model}"', args.session_id)
         _check_command_result(result, ["Unknown model", "Error"])
 
+    # Inject /mode command into prompt if specified (so run_claude._parse_mode_command extracts it)
+    prompt = args.prompt
+    if args.mode:
+        prompt = f"/mode {args.mode}\n\n{prompt}"
+
     # Execute the main prompt
-    output = manager.execute(args.prompt, args.session_id)
+    output = manager.execute(prompt, args.session_id)
     print(output)
 
 
