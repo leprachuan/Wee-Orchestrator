@@ -2905,6 +2905,15 @@ Examples:
         help="List all available runtimes and exit",
     )
 
+    # Claude mode options
+    claude_group = parser.add_argument_group("claude options")
+    claude_group.add_argument(
+        "--mode",
+        metavar="MODE",
+        choices=["yolo", "restricted"],
+        help="Set Claude permission mode: yolo (auto-approve) or restricted (ask for permissions)",
+    )
+
     args = parser.parse_args()
 
     # Handle backwards compatibility: if config_file_positional is provided, use it
@@ -2949,8 +2958,14 @@ Examples:
         result = manager.execute(f'/model set "{args.model}"', args.session_id)
         _check_command_result(result, ["Unknown model", "Error"])
 
+    # Prepare the prompt with mode if specified
+    prompt = args.prompt
+    if args.mode:
+        # Inject /mode command at the start of the prompt
+        prompt = f"/mode {args.mode}\n\n{prompt}"
+
     # Execute the main prompt
-    output = manager.execute(args.prompt, args.session_id)
+    output = manager.execute(prompt, args.session_id)
     print(output)
 
 
