@@ -235,6 +235,7 @@ class WebEXConnector:
                 "markdown": text
             }
 
+            print(f"[DEBUG] Attempting to edit message {message_id} with text: {text[:100]}", file=sys.stderr)
             response = requests.put(
                 f"https://webexapis.com/v1/messages/{message_id}",
                 headers=headers,
@@ -242,13 +243,15 @@ class WebEXConnector:
                 timeout=10
             )
 
+            print(f"[DEBUG] Edit response status: {response.status_code}", file=sys.stderr)
             if response.status_code == 200:
+                print(f"[DEBUG] Message edit successful", file=sys.stderr)
                 return True
             else:
                 print(f"[WARN] WebEX edit failed ({response.status_code}): {response.text[:200]}", file=sys.stderr)
                 return False
         except Exception as e:
-            print(f"Error editing WebEX message: {e}", file=sys.stderr)
+            print(f"[ERROR] Error editing WebEX message: {e}", file=sys.stderr)
             return False
 
     def send_typing(self, room_id: str) -> bool:
@@ -300,11 +303,19 @@ class WebEXConnector:
         with the final response. Otherwise just sends the response.
         """
         if text and text.strip():
-            # If we have a status message ID, edit it with the final response
+            # If we have a status message ID, try to edit it with the final response
             if status_msg_id:
-                self.edit_message(status_msg_id, text)
+                print(f"[DEBUG] Editing status message {status_msg_id} with response", file=sys.stderr)
+                success = self.edit_message(status_msg_id, text)
+                if not success:
+                    # If edit fails, send as new message
+                    print(f"[WARN] Edit failed, sending final response as new message", file=sys.stderr)
+                    self.send_message(room_id, text)
+                else:
+                    print(f"[DEBUG] Successfully edited status message with final response", file=sys.stderr)
             else:
                 # No status message, just send the response normally
+                print(f"[DEBUG] No status message ID, sending response as new message", file=sys.stderr)
                 self.send_message(room_id, text)
 
     def handle_message(self, message_data: Dict):
