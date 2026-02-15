@@ -589,11 +589,11 @@ class WebEXConnector:
                     except Exception as e:
                         print(f"[WARN] Could not copy to /tmp: {e}, using original path", file=sys.stderr)
 
-                    # Auto-enable yolo mode for file access (agents need full path access)
+                    # Add file path to query
                     if not text:
-                        text = f"/mode yolo\n\nPlease analyze this file: {file_path}"
+                        text = f"Please analyze this file: {file_path}"
                     else:
-                        text = f"/mode yolo\n\n{text}\n\nFile to analyze: {file_path}"
+                        text = f"{text}\n\nFile to analyze: {file_path}"
                     print(f"[DEBUG] File query: {text[:200]}", file=sys.stderr)
                 else:
                     self.send_message(room_id, "❌ Failed to download file")
