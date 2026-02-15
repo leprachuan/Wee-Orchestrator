@@ -181,8 +181,8 @@ class WebEXConnector:
         except Exception as e:
             print(f"Error disconnecting from RabbitMQ: {e}", file=sys.stderr)
 
-    def send_message(self, room_id: str, text: str) -> bool:
-        """Send message to WebEX room via API"""
+    def send_message(self, room_id: str, text: str) -> Optional[str]:
+        """Send message to WebEX room via API. Returns message ID of last chunk sent."""
         try:
             headers = {
                 "Authorization": f"Bearer {self.token}",
@@ -193,6 +193,7 @@ class WebEXConnector:
             max_len = 4000  # WebEX message length limit
             chunks = [text[i:i + max_len] for i in range(0, len(text), max_len)] if text else ["No response"]
 
+            last_msg_id = None
             for chunk in chunks:
                 data = {
                     "roomId": room_id,
@@ -209,12 +210,78 @@ class WebEXConnector:
 
                 if response.status_code != 200:
                     print(f"[WARN] WebEX send failed ({response.status_code}): {response.text[:200]}", file=sys.stderr)
-                    return False
+                    return None
 
-            return True
+                # Extract message ID from response
+                resp_json = response.json()
+                if resp_json and "id" in resp_json:
+                    last_msg_id = resp_json["id"]
+
+            return last_msg_id
         except Exception as e:
             print(f"Error sending WebEX message: {e}", file=sys.stderr)
+            return None
+
+    def edit_message(self, message_id: str, room_id: str, text: str) -> bool:
+        """Edit a message in WebEX. Returns True if successful."""
+        try:
+            headers = {
+                "Authorization": f"Bearer {self.token}",
+                "Content-Type": "application/json"
+            }
+
+            data = {
+                "roomId": room_id,
+                "text": text,
+                "markdown": text
+            }
+
+            print(f"[DEBUG] Attempting to edit message {message_id} in room {room_id} with text: {text[:100]}", file=sys.stderr)
+            response = requests.put(
+                f"https://webexapis.com/v1/messages/{message_id}",
+                headers=headers,
+                json=data,
+                timeout=10
+            )
+
+            print(f"[DEBUG] Edit response status: {response.status_code}", file=sys.stderr)
+            if response.status_code == 200:
+                print(f"[DEBUG] Message edit successful", file=sys.stderr)
+                return True
+            else:
+                print(f"[WARN] WebEX edit failed ({response.status_code}): {response.text[:200]}", file=sys.stderr)
+                return False
+        except Exception as e:
+            print(f"[ERROR] Error editing WebEX message: {e}", file=sys.stderr)
             return False
+
+    def send_typing(self, room_id: str) -> bool:
+        """Send typing indicator to WebEX room. Returns True if successful."""
+        try:
+            headers = {
+                "Authorization": f"Bearer {self.token}",
+                "Content-Type": "application/json"
+            }
+
+            data = {"roomId": room_id}
+
+            response = requests.post(
+                "https://webexapis.com/v1/messages/typing",
+                headers=headers,
+                json=data,
+                timeout=10
+            )
+
+            if response.status_code == 204:
+                return True
+            else:
+                # Typing indicator might not be supported by all WebEX instances
+                print(f"[DEBUG] WebEX typing indicator: {response.status_code}", file=sys.stderr)
+                return False
+        except Exception as e:
+            print(f"[DEBUG] Typing indicator not available: {e}", file=sys.stderr)
+            return False
+
 
     def get_person_info(self, person_id: str) -> Optional[Dict]:
         """Get WebEX person info by ID"""
@@ -230,6 +297,79 @@ class WebEXConnector:
         except Exception as e:
             print(f"Error getting person info: {e}", file=sys.stderr)
         return None
+
+    def pin_message(self, message_id: str, room_id: str) -> bool:
+        """Pin a message in WebEX room and set as banner. Returns True if successful."""
+        try:
+            headers = {
+                "Authorization": f"Bearer {self.token}",
+                "Content-Type": "application/json"
+            }
+
+            # WebEX pinning: PUT /v1/messages/{id}/pin with roomId in body
+            data = {"roomId": room_id}
+            response = requests.put(
+                f"https://webexapis.com/v1/messages/{message_id}/pin",
+                headers=headers,
+                json=data,
+                timeout=10
+            )
+
+            if response.status_code in [200, 204]:
+                print(f"[DEBUG] Message pinned successfully", file=sys.stderr)
+                return True
+            else:
+                print(f"[DEBUG] WebEX pin failed ({response.status_code}): {response.text[:200]}", file=sys.stderr)
+                return False
+        except Exception as e:
+            print(f"[DEBUG] Pin error: {e}", file=sys.stderr)
+            return False
+
+    def unpin_all_messages(self, room_id: str) -> bool:
+        """Unpin all messages in a room. Returns True if successful."""
+        try:
+            headers = {
+                "Authorization": f"Bearer {self.token}",
+                "Content-Type": "application/json"
+            }
+
+            response = requests.put(
+                f"https://webexapis.com/v1/rooms/{room_id}/unpinAllMessages",
+                headers=headers,
+                timeout=10
+            )
+
+            if response.status_code in [200, 204]:
+                print(f"[DEBUG] All messages unpinned successfully", file=sys.stderr)
+                return True
+            else:
+                print(f"[DEBUG] WebEX unpin all failed ({response.status_code})", file=sys.stderr)
+                return False
+        except Exception as e:
+            print(f"[DEBUG] Unpin error: {e}", file=sys.stderr)
+            return False
+
+    def send_response(self, room_id: str, text: str, status_msg_id: Optional[str] = None):
+        """Send response, replacing the status message if it exists.
+
+        Mirrors Telegram pattern: if status_msg_id exists, edits the status message
+        with the final response. Otherwise just sends the response.
+        """
+        if text and text.strip():
+            # If we have a status message ID, try to edit it with the final response
+            if status_msg_id:
+                print(f"[DEBUG] Editing status message {status_msg_id} with response", file=sys.stderr)
+                success = self.edit_message(status_msg_id, room_id, text)
+                if not success:
+                    # If edit fails, send as new message
+                    print(f"[WARN] Edit failed, sending final response as new message", file=sys.stderr)
+                    self.send_message(room_id, text)
+                else:
+                    print(f"[DEBUG] Successfully edited status message with final response", file=sys.stderr)
+            else:
+                # No status message, just send the response normally
+                print(f"[DEBUG] No status message ID, sending response as new message", file=sys.stderr)
+                self.send_message(room_id, text)
 
     def handle_message(self, message_data: Dict):
         """Process incoming WebEX message from RabbitMQ"""
@@ -287,15 +427,20 @@ class WebEXConnector:
                                 response = "Invalid timeout. Use: /timeout set <seconds>"
                     else:
                         response = "Invalid timeout command. Use: /timeout current or /timeout set <seconds>"
-                    self.send_message(room_id, response)
+                    msg_id = self.send_message(room_id, response)
                 else:
                     # Regular slash commands
                     timeout = self.config.get_user_timeout(person_id)
                     response = self._execute_command(text, session_id, timeout)
-                    self.send_message(room_id, response)
+                    msg_id = self.send_message(room_id, response)
+
+                    # Pin configuration commands (agent, runtime, model, session)
+                    cmd_lower = text.lower().strip()
+                    if msg_id and any(cmd_lower.startswith(cmd) for cmd in ["/agent set", "/runtime set", "/model set", "/session reset"]):
+                        self.pin_message(msg_id, room_id)
+                        print(f"[DEBUG] Pinned configuration command message: {cmd_lower[:30]}", file=sys.stderr)
 
                     # Evict cached SessionManager on session-affecting commands
-                    cmd_lower = text.lower().strip()
                     if cmd_lower.startswith("/session reset") or cmd_lower.startswith("/runtime set"):
                         self._evict_session_manager(session_id)
             else:
@@ -307,10 +452,10 @@ class WebEXConnector:
                 else:
                     # Route regular messages to agent_manager with status updates
                     timeout = self.config.get_user_timeout(person_id)
-                    response = self._query_agent_with_status(
+                    response, status_msg_id = self._query_agent_with_status(
                         text, session_info["agent"], session_info["model"], person_id, room_id, timeout
                     )
-                    self.send_message(room_id, response)
+                    self.send_response(room_id, response, status_msg_id)
 
         except Exception as e:
             print(f"Error handling message: {e}", file=sys.stderr)
@@ -346,8 +491,12 @@ class WebEXConnector:
 
     def _query_agent_with_status(
         self, query: str, agent: str, model: str, person_id: str, room_id: str, timeout: int = 300
-    ) -> str:
-        """Query agent with periodic updates"""
+    ) -> tuple:
+        """Query agent with status updates at 30s intervals.
+
+        Returns (response_text, status_msg_id) where status_msg_id tracks
+        the status message for potential editing with the final response.
+        """
         result_container = {"response": None, "done": False}
 
         status_msgs = [
@@ -368,20 +517,32 @@ class WebEXConnector:
 
         elapsed = 0
         status_idx = 0
+        status_msg_id = None  # Track the status message
         while not result_container["done"] and elapsed < timeout:
+            # Send typing indicator every 5 seconds to keep it alive
+            if elapsed % 5 == 0:
+                self.send_typing(room_id)
+
             if elapsed == 30:
-                self.send_message(room_id, status_msgs[0])
+                # First status at 30s - send new message
+                status_msg_id = self.send_message(room_id, status_msgs[0])
+                self.send_typing(room_id)
                 status_idx = 1
             elif elapsed > 30 and (elapsed - 30) % 30 == 0:
+                # Edit status message every 30s with new message
                 msg = status_msgs[status_idx % len(status_msgs)]
-                self.send_message(room_id, msg)
+                if status_msg_id:
+                    self.edit_message(status_msg_id, room_id, msg)
+                else:
+                    status_msg_id = self.send_message(room_id, msg)
+                self.send_typing(room_id)
                 status_idx += 1
 
             time.sleep(1)
             elapsed += 1
 
         query_thread.join(timeout=5)
-        return result_container["response"] or "Error: Query timed out"
+        return (result_container["response"] or "Error: Query timed out", status_msg_id)
 
     def _query_agent(
         self, query: str, agent: str, model: str, person_id: str, timeout: int = 300
