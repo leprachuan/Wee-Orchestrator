@@ -181,8 +181,8 @@ class WebEXConnector:
         except Exception as e:
             print(f"Error disconnecting from RabbitMQ: {e}", file=sys.stderr)
 
-    def send_message(self, room_id: str, text: str) -> bool:
-        """Send message to WebEX room via API"""
+    def send_message(self, room_id: str, text: str) -> Optional[str]:
+        """Send message to WebEX room via API. Returns message ID of last chunk sent."""
         try:
             headers = {
                 "Authorization": f"Bearer {self.token}",
@@ -193,6 +193,7 @@ class WebEXConnector:
             max_len = 4000  # WebEX message length limit
             chunks = [text[i:i + max_len] for i in range(0, len(text), max_len)] if text else ["No response"]
 
+            last_msg_id = None
             for chunk in chunks:
                 data = {
                     "roomId": room_id,
@@ -209,11 +210,63 @@ class WebEXConnector:
 
                 if response.status_code != 200:
                     print(f"[WARN] WebEX send failed ({response.status_code}): {response.text[:200]}", file=sys.stderr)
-                    return False
+                    return None
 
-            return True
+                # Extract message ID from response
+                resp_json = response.json()
+                if resp_json and "id" in resp_json:
+                    last_msg_id = resp_json["id"]
+
+            return last_msg_id
         except Exception as e:
             print(f"Error sending WebEX message: {e}", file=sys.stderr)
+            return None
+
+    def delete_message(self, message_id: str) -> bool:
+        """Delete a message from WebEX. Returns True if successful."""
+        try:
+            headers = {"Authorization": f"Bearer {self.token}"}
+
+            response = requests.delete(
+                f"https://webexapis.com/v1/messages/{message_id}",
+                headers=headers,
+                timeout=10
+            )
+
+            if response.status_code == 204:
+                return True
+            else:
+                print(f"[WARN] WebEX delete failed ({response.status_code}): {response.text[:200]}", file=sys.stderr)
+                return False
+        except Exception as e:
+            print(f"Error deleting WebEX message: {e}", file=sys.stderr)
+            return False
+
+    def send_typing(self, room_id: str) -> bool:
+        """Send typing indicator to WebEX room. Returns True if successful."""
+        try:
+            headers = {
+                "Authorization": f"Bearer {self.token}",
+                "Content-Type": "application/json"
+            }
+
+            data = {"roomId": room_id}
+
+            response = requests.post(
+                "https://webexapis.com/v1/messages/typing",
+                headers=headers,
+                json=data,
+                timeout=10
+            )
+
+            if response.status_code == 204:
+                return True
+            else:
+                # Typing indicator might not be supported by all WebEX instances
+                print(f"[DEBUG] WebEX typing indicator: {response.status_code}", file=sys.stderr)
+                return False
+        except Exception as e:
+            print(f"[DEBUG] Typing indicator not available: {e}", file=sys.stderr)
             return False
 
     def get_person_info(self, person_id: str) -> Optional[Dict]:
@@ -232,12 +285,16 @@ class WebEXConnector:
         return None
 
     def send_response(self, room_id: str, text: str, status_msg_id: Optional[str] = None):
-        """Send response, optionally replacing the status message.
+        """Send response, replacing the status message if it exists.
 
-        Mirrors Telegram pattern: if status_msg_id exists and text is available,
-        sends the text as a new message (WebEX doesn't support message editing).
+        Mirrors Telegram pattern: if status_msg_id exists, deletes the status message
+        and sends the final response. Otherwise just sends the response.
         """
         if text and text.strip():
+            # If we have a status message ID, delete it first
+            if status_msg_id:
+                self.delete_message(status_msg_id)
+            # Send the final response
             self.send_message(room_id, text)
 
     def handle_message(self, message_data: Dict):
@@ -383,14 +440,22 @@ class WebEXConnector:
         status_idx = 0
         status_msg_id = None  # Track the status message
         while not result_container["done"] and elapsed < timeout:
+            # Send typing indicator every 5 seconds to keep it alive
+            if elapsed % 5 == 0:
+                self.send_typing(room_id)
+
             if elapsed == 30:
                 # First status at 30s - send new message
                 status_msg_id = self.send_message(room_id, status_msgs[0])
+                self.send_typing(room_id)
                 status_idx = 1
             elif elapsed > 30 and (elapsed - 30) % 30 == 0:
-                # Update status message every 30s
+                # Delete old status message and send new one every 30s
+                if status_msg_id:
+                    self.delete_message(status_msg_id)
                 msg = status_msgs[status_idx % len(status_msgs)]
-                self.send_message(room_id, msg)
+                status_msg_id = self.send_message(room_id, msg)
+                self.send_typing(room_id)
                 status_idx += 1
 
             time.sleep(1)
