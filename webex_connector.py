@@ -13,6 +13,7 @@ import requests
 import threading
 import time
 import pika
+import mimetypes
 from pathlib import Path
 from typing import Optional, Dict, List
 from datetime import datetime
@@ -298,6 +299,133 @@ class WebEXConnector:
             print(f"Error getting person info: {e}", file=sys.stderr)
         return None
 
+    def _is_safe_file_path(self, file_path: str) -> bool:
+        """Validate file path for security.
+
+        Checks:
+        - File exists
+        - File is within allowed directory (webex_downloads)
+        - No path traversal attacks
+        - File size within limits (100MB - WebEX limit)
+        """
+        try:
+            allowed_dir = Path("/opt/n8n-copilot-shim-dev/webex_downloads").resolve()
+            file_path_obj = Path(file_path).resolve()
+
+            # Check file exists
+            if not file_path_obj.exists():
+                print(f"[WARN] File does not exist: {file_path}", file=sys.stderr)
+                return False
+
+            # Check file is in allowed directory
+            try:
+                is_safe = file_path_obj.is_relative_to(allowed_dir)
+            except AttributeError:
+                # Python 3.8 fallback
+                is_safe = str(file_path_obj).startswith(str(allowed_dir))
+
+            if not is_safe:
+                print(f"[WARN] File outside allowed directory: {file_path}", file=sys.stderr)
+                return False
+
+            # Check file size (100MB limit - WebEX max)
+            if file_path_obj.stat().st_size > 100 * 1024 * 1024:
+                print(f"[WARN] File exceeds 100MB limit: {file_path}", file=sys.stderr)
+                return False
+
+            return True
+        except Exception as e:
+            print(f"[WARN] Error validating file path: {e}", file=sys.stderr)
+            return False
+
+    def download_file(self, file_url: str, person_id: str) -> Optional[str]:
+        """Download file from WebEX and store it. Returns file path or None."""
+        try:
+            headers = {
+                "Authorization": f"Bearer {self.token}"
+            }
+
+            print(f"[DEBUG] Downloading file from: {file_url}", file=sys.stderr)
+
+            # Download file (requires authentication)
+            response = requests.get(file_url, headers=headers, timeout=30)
+
+            if response.status_code == 200:
+                # Create downloads directory
+                downloads_dir = Path("/opt/n8n-copilot-shim-dev/webex_downloads")
+                downloads_dir.mkdir(exist_ok=True)
+
+                # Extract filename from Content-Disposition header
+                filename = "file"
+                content_disp = response.headers.get("Content-Disposition", "")
+                if "filename=" in content_disp:
+                    # Parse filename from header
+                    filename = content_disp.split("filename=")[1].strip('"').strip("'")
+                else:
+                    # Fallback: use timestamp
+                    filename = f"file_{int(time.time())}"
+
+                # Save with person_id prefix
+                local_path = downloads_dir / f"{person_id}_{filename}"
+                with open(local_path, "wb") as f:
+                    f.write(response.content)
+
+                # Make world readable
+                os.chmod(local_path, 0o644)
+
+                print(f"[DEBUG] File saved to: {local_path}", file=sys.stderr)
+                return str(local_path)
+
+            elif response.status_code == 410:
+                print(f"[WARN] File was infected and removed by WebEX", file=sys.stderr)
+                return None
+
+            elif response.status_code == 428:
+                # File is not scannable (encrypted) - retry with allow=unscannable
+                print(f"[DEBUG] File not scannable, retrying with allow=unscannable", file=sys.stderr)
+                response = requests.get(
+                    f"{file_url}?allow=unscannable",
+                    headers=headers,
+                    timeout=30
+                )
+                if response.status_code == 200:
+                    # Repeat save logic above
+                    downloads_dir = Path("/opt/n8n-copilot-shim-dev/webex_downloads")
+                    downloads_dir.mkdir(exist_ok=True)
+
+                    filename = "file"
+                    content_disp = response.headers.get("Content-Disposition", "")
+                    if "filename=" in content_disp:
+                        filename = content_disp.split("filename=")[1].strip('"').strip("'")
+                    else:
+                        filename = f"file_{int(time.time())}"
+
+                    local_path = downloads_dir / f"{person_id}_{filename}"
+                    with open(local_path, "wb") as f:
+                        f.write(response.content)
+
+                    os.chmod(local_path, 0o644)
+                    print(f"[DEBUG] Unscannable file saved to: {local_path}", file=sys.stderr)
+                    return str(local_path)
+
+            print(f"[WARN] File download failed: HTTP {response.status_code}", file=sys.stderr)
+            return None
+
+        except Exception as e:
+            print(f"Error downloading file: {e}", file=sys.stderr)
+            return None
+
+    def cleanup_files(self, person_id: str):
+        """Clean up downloaded files for user"""
+        try:
+            downloads_dir = Path("/opt/n8n-copilot-shim-dev/webex_downloads")
+            if downloads_dir.exists():
+                for file in downloads_dir.glob(f"{person_id}_*"):
+                    file.unlink()
+                    print(f"[DEBUG] Cleaned up file: {file}", file=sys.stderr)
+        except Exception as e:
+            print(f"Error cleaning up files: {e}", file=sys.stderr)
+
     def pin_message(self, message_id: str, room_id: str) -> bool:
         """Pin a message in WebEX room and set as banner. Returns True if successful."""
         try:
@@ -378,6 +506,23 @@ class WebEXConnector:
             room_id = message_data.get("roomId")
             text = message_data.get("text", "").strip()
             person_email = message_data.get("personEmail", "unknown")
+            files = message_data.get("files", [])
+
+            # Handle files with optional caption
+            file_path = None
+            if files:
+                # WebEX supports one file per message
+                file_url = files[0]
+                file_path = self.download_file(file_url, person_id)
+
+                if file_path:
+                    if not text:
+                        text = f"Please analyze this file: {file_path}"
+                    else:
+                        text = f"{text}\n\nFile to analyze: {file_path}"
+                else:
+                    self.send_message(room_id, "❌ Failed to download file")
+                    return
 
             if not person_id or not room_id or not text:
                 print(f"[DEBUG] Incomplete message: {message_data}", file=sys.stderr)
@@ -456,6 +601,9 @@ class WebEXConnector:
                         text, session_info["agent"], session_info["model"], person_id, room_id, timeout
                     )
                     self.send_response(room_id, response, status_msg_id)
+
+            # Cleanup temp files after query
+            self.cleanup_files(person_id)
 
         except Exception as e:
             print(f"Error handling message: {e}", file=sys.stderr)

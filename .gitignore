@@ -53,6 +53,7 @@ telegram_connector.log
 # WebEX Configuration (contains tokens)
 webex_config.json
 webex_connector.log
+webex_downloads/
 
 # Environment-specific files
 webui.pid
