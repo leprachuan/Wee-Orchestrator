@@ -14,7 +14,6 @@ import threading
 import time
 import pika
 import mimetypes
-import base64
 from pathlib import Path
 from urllib.parse import unquote
 from typing import Optional, Dict, List
@@ -340,77 +339,8 @@ class WebEXConnector:
             print(f"[WARN] Error validating file path: {e}", file=sys.stderr)
             return False
 
-    def _download_file_for_agent(self, file_url: str, person_id: str) -> Optional[tuple]:
-        """Download file from WebEX and return (data, filename) for agent embedding.
-
-        Returns tuple of (file_data: bytes, filename: str) or None on failure.
-        This embeds the file in the prompt so agents don't need file system access.
-        """
-        try:
-            headers = {
-                "Authorization": f"Bearer {self.token}"
-            }
-
-            print(f"[DEBUG] Downloading file for agent: {file_url}", file=sys.stderr)
-
-            # Download file (requires authentication)
-            response = requests.get(file_url, headers=headers, timeout=30)
-
-            if response.status_code == 200:
-                # Extract filename from Content-Disposition header
-                filename = "file"
-                content_disp = response.headers.get("Content-Disposition", "")
-                if "filename=" in content_disp:
-                    # Parse filename from header
-                    filename = content_disp.split("filename=")[1].strip('"').strip("'")
-                    # URL-decode the filename (handles %E2%80%AF, +, etc.)
-                    filename = unquote(filename).replace('+', ' ')
-
-                # Check file size (100MB limit - WebEX max)
-                if len(response.content) > 100 * 1024 * 1024:
-                    print(f"[WARN] File exceeds 100MB limit", file=sys.stderr)
-                    self.send_message(response.roomId or "", "❌ File is too large (>100MB)")
-                    return None
-
-                print(f"[DEBUG] File ready for agent: {filename}", file=sys.stderr)
-                return (response.content, filename)
-
-            elif response.status_code == 410:
-                print(f"[WARN] File was infected and removed by WebEX", file=sys.stderr)
-                return None
-
-            elif response.status_code == 428:
-                # File is not scannable (encrypted) - retry with allow=unscannable
-                print(f"[DEBUG] File not scannable, retrying with allow=unscannable", file=sys.stderr)
-                response = requests.get(
-                    f"{file_url}?allow=unscannable",
-                    headers=headers,
-                    timeout=30
-                )
-                if response.status_code == 200:
-                    filename = "file"
-                    content_disp = response.headers.get("Content-Disposition", "")
-                    if "filename=" in content_disp:
-                        filename = content_disp.split("filename=")[1].strip('"').strip("'")
-                        filename = unquote(filename).replace('+', ' ')
-
-                    # Check file size
-                    if len(response.content) > 100 * 1024 * 1024:
-                        print(f"[WARN] File exceeds 100MB limit", file=sys.stderr)
-                        return None
-
-                    print(f"[DEBUG] Unscannable file ready for agent: {filename}", file=sys.stderr)
-                    return (response.content, filename)
-
-            print(f"[WARN] File download failed: HTTP {response.status_code}", file=sys.stderr)
-            return None
-
-        except Exception as e:
-            print(f"Error downloading file for agent: {e}", file=sys.stderr)
-            return None
-
-    def download_file(self, file_url: str, person_id: str) -> Optional[str]:
-        """Download file from WebEX and store it. Returns file path or None."""
+    def download_file(self, file_url: str, person_id: str) -> Optional[tuple]:
+        """Download file from WebEX and store it. Returns (file_path, filename) tuple or None."""
         try:
             headers = {
                 "Authorization": f"Bearer {self.token}"
@@ -438,6 +368,11 @@ class WebEXConnector:
                     # Fallback: use timestamp
                     filename = f"file_{int(time.time())}"
 
+                # Check file size (100MB limit - WebEX max)
+                if len(response.content) > 100 * 1024 * 1024:
+                    print(f"[WARN] File exceeds 100MB limit", file=sys.stderr)
+                    return None
+
                 # Save with person_id prefix
                 local_path = downloads_dir / f"{person_id}_{filename}"
                 with open(local_path, "wb") as f:
@@ -447,7 +382,7 @@ class WebEXConnector:
                 os.chmod(local_path, 0o644)
 
                 print(f"[DEBUG] File saved to: {local_path}", file=sys.stderr)
-                return str(local_path)
+                return (str(local_path), filename)
 
             elif response.status_code == 410:
                 print(f"[WARN] File was infected and removed by WebEX", file=sys.stderr)
@@ -475,13 +410,18 @@ class WebEXConnector:
                     else:
                         filename = f"file_{int(time.time())}"
 
+                    # Check file size
+                    if len(response.content) > 100 * 1024 * 1024:
+                        print(f"[WARN] File exceeds 100MB limit", file=sys.stderr)
+                        return None
+
                     local_path = downloads_dir / f"{person_id}_{filename}"
                     with open(local_path, "wb") as f:
                         f.write(response.content)
 
                     os.chmod(local_path, 0o644)
                     print(f"[DEBUG] Unscannable file saved to: {local_path}", file=sys.stderr)
-                    return str(local_path)
+                    return (str(local_path), filename)
 
             print(f"[WARN] File download failed: HTTP {response.status_code}", file=sys.stderr)
             return None
@@ -491,13 +431,27 @@ class WebEXConnector:
             return None
 
     def cleanup_files(self, person_id: str):
-        """Clean up downloaded files for user"""
+        """Clean up downloaded files and symlinks for user"""
         try:
+            # Clean up original downloads
             downloads_dir = Path("/opt/n8n-copilot-shim-dev/webex_downloads")
             if downloads_dir.exists():
                 for file in downloads_dir.glob(f"{person_id}_*"):
-                    file.unlink()
-                    print(f"[DEBUG] Cleaned up file: {file}", file=sys.stderr)
+                    try:
+                        file.unlink()
+                        print(f"[DEBUG] Cleaned up file: {file}", file=sys.stderr)
+                    except Exception as e:
+                        print(f"[WARN] Could not delete {file}: {e}", file=sys.stderr)
+
+            # Clean up symlinks in agent-downloads
+            agent_downloads_dir = Path("/opt/agent-downloads")
+            if agent_downloads_dir.exists():
+                for symlink in agent_downloads_dir.glob(f"{person_id}_*"):
+                    try:
+                        symlink.unlink()
+                        print(f"[DEBUG] Cleaned up symlink: {symlink}", file=sys.stderr)
+                    except Exception as e:
+                        print(f"[WARN] Could not delete symlink {symlink}: {e}", file=sys.stderr)
         except Exception as e:
             print(f"Error cleaning up files: {e}", file=sys.stderr)
 
@@ -584,23 +538,33 @@ class WebEXConnector:
             files = message_data.get("files", [])
 
             # Handle files with optional caption
-            file_data = None
+            file_path = None
             file_name = None
             if files:
                 # WebEX supports one file per message
                 file_url = files[0]
-                file_response = self._download_file_for_agent(file_url, person_id)
+                file_result = self.download_file(file_url, person_id)
 
-                if file_response:
-                    file_data, file_name = file_response
+                if file_result:
+                    file_path, file_name = file_result
+                    # Create agent-accessible symlink
+                    agent_downloads = Path("/opt/agent-downloads")
+                    agent_downloads.mkdir(exist_ok=True)
+
+                    symlink_path = agent_downloads / f"{person_id}_{file_name}"
+                    try:
+                        # Remove old symlink if exists
+                        if symlink_path.exists():
+                            symlink_path.unlink()
+                        symlink_path.symlink_to(file_path)
+                    except Exception as e:
+                        print(f"[WARN] Could not create symlink: {e}", file=sys.stderr)
+                        symlink_path = Path(file_path)
+
                     if not text:
-                        text = f"Please analyze this file ({file_name}): [File data embedded below]\n\n"
+                        text = f"Please analyze this file: {symlink_path}"
                     else:
-                        text = f"{text}\n\n[File ({file_name}) attached below]\n\n"
-
-                    # Append file data as base64
-                    file_base64 = base64.b64encode(file_data).decode('utf-8')
-                    text += f"__FILE_DATA__\nFilename: {file_name}\nData: {file_base64}\n__END_FILE__"
+                        text = f"{text}\n\nFile to analyze: {symlink_path}"
                 else:
                     self.send_message(room_id, "❌ Failed to download file")
                     return
@@ -682,6 +646,9 @@ class WebEXConnector:
                         text, session_info["agent"], session_info["model"], person_id, room_id, timeout
                     )
                     self.send_response(room_id, response, status_msg_id)
+
+            # Cleanup temp files after query
+            self.cleanup_files(person_id)
 
         except Exception as e:
             print(f"Error handling message: {e}", file=sys.stderr)
