@@ -446,7 +446,7 @@ class WebEXConnector:
                     # Clean up temp files in /tmp
                     tmp_dir = Path("/tmp")
                     if tmp_dir.exists():
-                        for tmp_file in tmp_dir.glob("webex_*_*"):
+                        for tmp_file in tmp_dir.glob("webex_*.png"):
                             try:
                                 file_age = current_time - datetime.fromtimestamp(tmp_file.stat().st_mtime)
                                 if file_age > max_age:
@@ -569,9 +569,13 @@ class WebEXConnector:
 
                 if file_result:
                     file_path, file_name = file_result
+                    # Sanitize filename - remove spaces and special chars for shell safety
+                    # Keep extension, use underscores for safety
+                    safe_filename = f"webex_{person_id}_{int(time.time())}.png"
+
                     # Copy file to /tmp for universal accessibility
                     # (avoids sandboxing issues with /opt)
-                    tmp_file_path = Path("/tmp") / f"webex_{person_id}_{file_name}"
+                    tmp_file_path = Path("/tmp") / safe_filename
                     try:
                         # Copy the file to /tmp
                         with open(file_path, "rb") as src:
@@ -590,6 +594,7 @@ class WebEXConnector:
                         text = f"/mode yolo\n\nPlease analyze this file: {file_path}"
                     else:
                         text = f"/mode yolo\n\n{text}\n\nFile to analyze: {file_path}"
+                    print(f"[DEBUG] File query: {text[:200]}", file=sys.stderr)
                 else:
                     self.send_message(room_id, "❌ Failed to download file")
                     return
