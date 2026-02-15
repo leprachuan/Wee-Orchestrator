@@ -50,6 +50,10 @@ webui/node_modules/
 telegram_config.json
 telegram_connector.log
 
+# WebEX Configuration (contains tokens)
+webex_config.json
+webex_connector.log
+
 # Environment-specific files
 webui.pid
 webui.log
