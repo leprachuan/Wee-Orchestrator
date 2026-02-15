@@ -771,3 +771,83 @@ python telegram_connector.py --token TOKEN --list-users
 
 See **[TELEGRAM_CONNECTOR.md](./TELEGRAM_CONNECTOR.md)** for full documentation.
 
+## Contributing & Issue Tracking
+
+### GitHub Issues for Project Management
+
+This project uses **GitHub Issues** as the single source of truth for all TODOs, feature requests, and bug reports.
+
+**Why GitHub Issues?**
+- ✅ Centralized tracking across all sub-agents and features
+- ✅ Linked to code commits and pull requests
+- ✅ Searchable history of decisions and implementations
+- ✅ Clear ownership and assignment of work
+- ✅ Prioritization through labels and milestones
+
+### Issue Categories
+
+We use labels to organize work:
+
+| Label | Purpose | Example |
+|-------|---------|---------|
+| `bug` | Bugs and defects | "Message editing fails with 400 error" |
+| `feature` | New features | "Add message reaction support" |
+| `enhancement` | Improvements to existing features | "Improve error messages" |
+| `documentation` | Docs and guides | "Add user guide for slash commands" |
+| `WebEX` | WebEX connector specific | "Implement pinning in group rooms" |
+| `Telegram` | Telegram connector specific | "Add Telegram reactions" |
+| `help wanted` | Open for contributions | Any issue needing external help |
+| `blocked` | Blocked on external dependency | "Waiting for WebEX API update" |
+
+### Creating Issues
+
+Before starting work, check for existing issues:
+
+```bash
+# View all open issues
+gh issue list
+
+# View WebEX-related issues
+gh issue list --label WebEX
+
+# View bugs
+gh issue list --label bug
+```
+
+### When NOT to Use TODO Comments
+
+⚠️ **Do NOT** add TODO comments in code. Instead:
+
+1. **Create a GitHub issue** describing the work needed
+2. **Reference the issue** in commit messages: `fix: resolve #42`
+3. **Assign ownership** so it's tracked and visible
+4. **Move to In Progress** when you start work
+
+**Example:**
+```python
+# ❌ BAD - TODO in code
+def pin_message(self, msg_id, room_id):
+    # TODO: implement proper pinning when WebEX adds support
+    pass
+
+# ✅ GOOD - GitHub issue + clear code
+def pin_message(self, msg_id, room_id):
+    """Pin a message.
+
+    Note: WebEX API doesn't support pinning in direct messages.
+    See issue #42 for status on group room support.
+    """
+    pass
+```
+
+### Outstanding Work
+
+All outstanding work is tracked in GitHub Issues. Check the repository issues board to see:
+
+- **In Progress** - Work actively being done
+- **Backlog** - Planned but not started
+- **Help Wanted** - Open for contributions
+- **Blocked** - Waiting on dependencies
+
+Start here: [GitHub Issues](../../issues)
+
