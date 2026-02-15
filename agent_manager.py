@@ -210,6 +210,9 @@ class SessionManager:
         self.copilot_bin = find_executable("copilot")
         self.claude_bin = find_executable("claude")
 
+        # CLI mode setting for claude (yolo or restricted)
+        self.mode = None
+
         # Ensure directories exist
         self.copilot_home.mkdir(exist_ok=True)
         self.session_state_dir.mkdir(exist_ok=True)
@@ -1921,6 +1924,7 @@ User Request:
         n8n_session_id: str,
         timeout: Optional[int] = None,
         render_type: str = "text",
+        mode: Optional[str] = None,
     ) -> str:
         """Execute Claude CLI with configurable path access
 
@@ -1930,8 +1934,11 @@ User Request:
         if not self.claude_bin:
             return "Error: Claude executable not found. Please install claude or ensure it's in PATH, /opt/homebrew/bin/, /usr/local/bin/, or /usr/bin/"
 
-        # Parse /mode command from prompt
-        prompt, mode = self._parse_mode_command(prompt)
+        # Use mode from parameter, then instance var, then parse from prompt
+        if mode is None:
+            mode = self.mode
+        if mode is None:
+            prompt, mode = self._parse_mode_command(prompt)
 
         agent_dir = self.AGENTS.get(agent, self.AGENTS["orchestrator"])["path"]
         effective_timeout = timeout if timeout is not None else self.command_timeout
@@ -1944,6 +1951,7 @@ User Request:
                 agent, prompt, n8n_session_id, render_type, effective_timeout, "claude", model
             )
 
+        # Set permission mode: use bypassPermissions for yolo mode, otherwise ask
         permission_mode = "bypassPermissions" if mode == "yolo" else "ask"
 
         cmd = [
@@ -2993,14 +3001,12 @@ Examples:
         result = manager.execute(f'/model set "{args.model}"', args.session_id)
         _check_command_result(result, ["Unknown model", "Error"])
 
-    # Prepare the prompt with mode if specified
-    prompt = args.prompt
+    # Set mode if provided (will be used by run_claude to set --permission-mode)
     if args.mode:
-        # Inject /mode command at the start of the prompt
-        prompt = f"/mode {args.mode}\n\n{prompt}"
+        manager.mode = args.mode
 
     # Execute the main prompt
-    output = manager.execute(prompt, args.session_id)
+    output = manager.execute(args.prompt, args.session_id)
     print(output)
 
 
