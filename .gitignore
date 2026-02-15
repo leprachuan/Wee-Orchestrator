@@ -55,6 +55,9 @@ webex_config.json
 webex_connector.log
 webex_downloads/
 
+# Agent-accessible downloads (temporary files)
+/agent-downloads/
+
 # Environment-specific files
 webui.pid
 webui.log
