@@ -91,6 +91,20 @@ class WebEXConfig:
             session["timeout"] = max(30, min(timeout, 3600))  # Clamp 30-3600s
             self.set_user_session(person_id, session)
 
+    def get_config_message_id(self, person_id: str) -> Optional[str]:
+        """Get the current config message ID for a user"""
+        session = self.get_user_session(person_id)
+        if session:
+            return session.get("config_message_id")
+        return None
+
+    def set_config_message_id(self, person_id: str, msg_id: str):
+        """Store the current config message ID for a user"""
+        session = self.get_user_session(person_id)
+        if session:
+            session["config_message_id"] = msg_id
+            self.set_user_session(person_id, session)
+
     def allow_user(self, person_id: str):
         """Add user to allowed list"""
         if person_id not in self.config["allowed_users"]:
@@ -282,57 +296,6 @@ class WebEXConnector:
             print(f"[DEBUG] Typing indicator not available: {e}", file=sys.stderr)
             return False
 
-    def pin_message(self, message_id: str, room_id: str) -> bool:
-        """Pin a message in WebEX room. Returns True if successful."""
-        try:
-            headers = {
-                "Authorization": f"Bearer {self.token}",
-                "Content-Type": "application/json"
-            }
-
-            data = {"roomId": room_id}
-
-            response = requests.put(
-                f"https://webexapis.com/v1/messages/{message_id}/pin",
-                headers=headers,
-                json=data,
-                timeout=10
-            )
-
-            if response.status_code == 204:
-                print(f"[DEBUG] Message pinned successfully", file=sys.stderr)
-                return True
-            else:
-                print(f"[DEBUG] WebEX pin failed ({response.status_code}): {response.text[:200]}", file=sys.stderr)
-                return False
-        except Exception as e:
-            print(f"[DEBUG] Pin not available: {e}", file=sys.stderr)
-            return False
-
-    def unpin_all_messages(self, room_id: str) -> bool:
-        """Unpin all messages in a room. Returns True if successful."""
-        try:
-            headers = {
-                "Authorization": f"Bearer {self.token}",
-                "Content-Type": "application/json"
-            }
-
-            # Try PUT to unpinAllMessages endpoint
-            response = requests.put(
-                f"https://webexapis.com/v1/rooms/{room_id}/unpinAllMessages",
-                headers=headers,
-                timeout=10
-            )
-
-            if response.status_code == 204:
-                print(f"[DEBUG] All messages unpinned successfully", file=sys.stderr)
-                return True
-            else:
-                print(f"[DEBUG] WebEX unpin all failed ({response.status_code}): {response.text[:100] if response.text else 'No response'}", file=sys.stderr)
-                return False
-        except Exception as e:
-            print(f"[DEBUG] Unpin all not available: {e}", file=sys.stderr)
-            return False
 
     def get_person_info(self, person_id: str) -> Optional[Dict]:
         """Get WebEX person info by ID"""
@@ -434,15 +397,23 @@ class WebEXConnector:
                     response = self._execute_command(text, session_id, timeout)
                     msg_id = self.send_message(room_id, response)
 
-                    # Pin configuration commands (agent, runtime, model, session)
+                    # Track configuration commands (agent, runtime, model, session)
                     cmd_lower = text.lower().strip()
                     if msg_id and any(cmd_lower.startswith(cmd) for cmd in ["/agent set", "/runtime set", "/model set", "/session reset"]):
-                        # Pin this configuration message
-                        success = self.pin_message(msg_id, room_id)
-                        if success:
-                            print(f"[DEBUG] Pinned configuration command message: {cmd_lower[:30]}", file=sys.stderr)
-                        else:
-                            print(f"[WARN] Failed to pin configuration command: {cmd_lower[:30]}", file=sys.stderr)
+                        # Mark old config message as superseded
+                        old_config_id = self.config.get_config_message_id(person_id)
+                        if old_config_id:
+                            try:
+                                # Edit old message to show it's been superseded
+                                old_text = f"~~{text}~~ (superseded)"
+                                self.edit_message(old_config_id, room_id, old_text)
+                                print(f"[DEBUG] Marked old config message as superseded", file=sys.stderr)
+                            except Exception as e:
+                                print(f"[DEBUG] Could not mark old config as superseded: {e}", file=sys.stderr)
+
+                        # Store this message as the current config message
+                        self.config.set_config_message_id(person_id, msg_id)
+                        print(f"[DEBUG] Config message tracked: {cmd_lower[:30]}", file=sys.stderr)
 
                     # Evict cached SessionManager on session-affecting commands
                     if cmd_lower.startswith("/session reset") or cmd_lower.startswith("/runtime set"):
