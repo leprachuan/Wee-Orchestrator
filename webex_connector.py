@@ -222,7 +222,7 @@ class WebEXConnector:
             print(f"Error sending WebEX message: {e}", file=sys.stderr)
             return None
 
-    def edit_message(self, message_id: str, text: str) -> bool:
+    def edit_message(self, message_id: str, room_id: str, text: str) -> bool:
         """Edit a message in WebEX. Returns True if successful."""
         try:
             headers = {
@@ -231,11 +231,12 @@ class WebEXConnector:
             }
 
             data = {
+                "roomId": room_id,
                 "text": text,
                 "markdown": text
             }
 
-            print(f"[DEBUG] Attempting to edit message {message_id} with text: {text[:100]}", file=sys.stderr)
+            print(f"[DEBUG] Attempting to edit message {message_id} in room {room_id} with text: {text[:100]}", file=sys.stderr)
             response = requests.put(
                 f"https://webexapis.com/v1/messages/{message_id}",
                 headers=headers,
@@ -306,7 +307,7 @@ class WebEXConnector:
             # If we have a status message ID, try to edit it with the final response
             if status_msg_id:
                 print(f"[DEBUG] Editing status message {status_msg_id} with response", file=sys.stderr)
-                success = self.edit_message(status_msg_id, text)
+                success = self.edit_message(status_msg_id, room_id, text)
                 if not success:
                     # If edit fails, send as new message
                     print(f"[WARN] Edit failed, sending final response as new message", file=sys.stderr)
@@ -474,7 +475,7 @@ class WebEXConnector:
                 # Edit status message every 30s with new message
                 msg = status_msgs[status_idx % len(status_msgs)]
                 if status_msg_id:
-                    self.edit_message(status_msg_id, msg)
+                    self.edit_message(status_msg_id, room_id, msg)
                 else:
                     status_msg_id = self.send_message(room_id, msg)
                 self.send_typing(room_id)
