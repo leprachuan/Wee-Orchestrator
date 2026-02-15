@@ -14,7 +14,9 @@ import threading
 import time
 import pika
 import mimetypes
+import base64
 from pathlib import Path
+from urllib.parse import unquote
 from typing import Optional, Dict, List
 from datetime import datetime
 import agent_manager
@@ -338,6 +340,75 @@ class WebEXConnector:
             print(f"[WARN] Error validating file path: {e}", file=sys.stderr)
             return False
 
+    def _download_file_for_agent(self, file_url: str, person_id: str) -> Optional[tuple]:
+        """Download file from WebEX and return (data, filename) for agent embedding.
+
+        Returns tuple of (file_data: bytes, filename: str) or None on failure.
+        This embeds the file in the prompt so agents don't need file system access.
+        """
+        try:
+            headers = {
+                "Authorization": f"Bearer {self.token}"
+            }
+
+            print(f"[DEBUG] Downloading file for agent: {file_url}", file=sys.stderr)
+
+            # Download file (requires authentication)
+            response = requests.get(file_url, headers=headers, timeout=30)
+
+            if response.status_code == 200:
+                # Extract filename from Content-Disposition header
+                filename = "file"
+                content_disp = response.headers.get("Content-Disposition", "")
+                if "filename=" in content_disp:
+                    # Parse filename from header
+                    filename = content_disp.split("filename=")[1].strip('"').strip("'")
+                    # URL-decode the filename (handles %E2%80%AF, +, etc.)
+                    filename = unquote(filename).replace('+', ' ')
+
+                # Check file size (100MB limit - WebEX max)
+                if len(response.content) > 100 * 1024 * 1024:
+                    print(f"[WARN] File exceeds 100MB limit", file=sys.stderr)
+                    self.send_message(response.roomId or "", "❌ File is too large (>100MB)")
+                    return None
+
+                print(f"[DEBUG] File ready for agent: {filename}", file=sys.stderr)
+                return (response.content, filename)
+
+            elif response.status_code == 410:
+                print(f"[WARN] File was infected and removed by WebEX", file=sys.stderr)
+                return None
+
+            elif response.status_code == 428:
+                # File is not scannable (encrypted) - retry with allow=unscannable
+                print(f"[DEBUG] File not scannable, retrying with allow=unscannable", file=sys.stderr)
+                response = requests.get(
+                    f"{file_url}?allow=unscannable",
+                    headers=headers,
+                    timeout=30
+                )
+                if response.status_code == 200:
+                    filename = "file"
+                    content_disp = response.headers.get("Content-Disposition", "")
+                    if "filename=" in content_disp:
+                        filename = content_disp.split("filename=")[1].strip('"').strip("'")
+                        filename = unquote(filename).replace('+', ' ')
+
+                    # Check file size
+                    if len(response.content) > 100 * 1024 * 1024:
+                        print(f"[WARN] File exceeds 100MB limit", file=sys.stderr)
+                        return None
+
+                    print(f"[DEBUG] Unscannable file ready for agent: {filename}", file=sys.stderr)
+                    return (response.content, filename)
+
+            print(f"[WARN] File download failed: HTTP {response.status_code}", file=sys.stderr)
+            return None
+
+        except Exception as e:
+            print(f"Error downloading file for agent: {e}", file=sys.stderr)
+            return None
+
     def download_file(self, file_url: str, person_id: str) -> Optional[str]:
         """Download file from WebEX and store it. Returns file path or None."""
         try:
@@ -361,6 +432,8 @@ class WebEXConnector:
                 if "filename=" in content_disp:
                     # Parse filename from header
                     filename = content_disp.split("filename=")[1].strip('"').strip("'")
+                    # URL-decode the filename (handles %E2%80%AF, +, etc.)
+                    filename = unquote(filename).replace('+', ' ')
                 else:
                     # Fallback: use timestamp
                     filename = f"file_{int(time.time())}"
@@ -397,6 +470,8 @@ class WebEXConnector:
                     content_disp = response.headers.get("Content-Disposition", "")
                     if "filename=" in content_disp:
                         filename = content_disp.split("filename=")[1].strip('"').strip("'")
+                        # URL-decode the filename (handles %E2%80%AF, +, etc.)
+                        filename = unquote(filename).replace('+', ' ')
                     else:
                         filename = f"file_{int(time.time())}"
 
@@ -509,17 +584,23 @@ class WebEXConnector:
             files = message_data.get("files", [])
 
             # Handle files with optional caption
-            file_path = None
+            file_data = None
+            file_name = None
             if files:
                 # WebEX supports one file per message
                 file_url = files[0]
-                file_path = self.download_file(file_url, person_id)
+                file_response = self._download_file_for_agent(file_url, person_id)
 
-                if file_path:
+                if file_response:
+                    file_data, file_name = file_response
                     if not text:
-                        text = f"Please analyze this file: {file_path}"
+                        text = f"Please analyze this file ({file_name}): [File data embedded below]\n\n"
                     else:
-                        text = f"{text}\n\nFile to analyze: {file_path}"
+                        text = f"{text}\n\n[File ({file_name}) attached below]\n\n"
+
+                    # Append file data as base64
+                    file_base64 = base64.b64encode(file_data).decode('utf-8')
+                    text += f"__FILE_DATA__\nFilename: {file_name}\nData: {file_base64}\n__END_FILE__"
                 else:
                     self.send_message(room_id, "❌ Failed to download file")
                     return
@@ -601,9 +682,6 @@ class WebEXConnector:
                         text, session_info["agent"], session_info["model"], person_id, room_id, timeout
                     )
                     self.send_response(room_id, response, status_msg_id)
-
-            # Cleanup temp files after query
-            self.cleanup_files(person_id)
 
         except Exception as e:
             print(f"Error handling message: {e}", file=sys.stderr)
