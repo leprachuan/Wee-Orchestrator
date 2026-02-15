@@ -651,6 +651,8 @@ class WebEXConnector:
                     self.send_response(room_id, response, status_msg_id)
 
             # Cleanup temp files after query
+            # Add small delay to ensure agent finishes reading files
+            time.sleep(2)
             self.cleanup_files(person_id)
 
         except Exception as e:
