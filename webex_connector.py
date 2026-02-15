@@ -292,14 +292,14 @@ class WebEXConnector:
 
             data = {"roomId": room_id}
 
-            response = requests.post(
+            response = requests.put(
                 f"https://webexapis.com/v1/messages/{message_id}/pin",
                 headers=headers,
                 json=data,
                 timeout=10
             )
 
-            if response.status_code == 200:
+            if response.status_code == 204:
                 print(f"[DEBUG] Message pinned successfully", file=sys.stderr)
                 return True
             else:
@@ -317,7 +317,8 @@ class WebEXConnector:
                 "Content-Type": "application/json"
             }
 
-            response = requests.post(
+            # Try PUT to unpinAllMessages endpoint
+            response = requests.put(
                 f"https://webexapis.com/v1/rooms/{room_id}/unpinAllMessages",
                 headers=headers,
                 timeout=10
@@ -327,7 +328,7 @@ class WebEXConnector:
                 print(f"[DEBUG] All messages unpinned successfully", file=sys.stderr)
                 return True
             else:
-                print(f"[DEBUG] WebEX unpin all failed ({response.status_code})", file=sys.stderr)
+                print(f"[DEBUG] WebEX unpin all failed ({response.status_code}): {response.text[:100] if response.text else 'No response'}", file=sys.stderr)
                 return False
         except Exception as e:
             print(f"[DEBUG] Unpin all not available: {e}", file=sys.stderr)
@@ -436,10 +437,12 @@ class WebEXConnector:
                     # Pin configuration commands (agent, runtime, model, session)
                     cmd_lower = text.lower().strip()
                     if msg_id and any(cmd_lower.startswith(cmd) for cmd in ["/agent set", "/runtime set", "/model set", "/session reset"]):
-                        # Unpin all existing messages and pin this new one
-                        self.unpin_all_messages(room_id)
-                        self.pin_message(msg_id, room_id)
-                        print(f"[DEBUG] Pinned configuration command message: {cmd_lower[:30]}", file=sys.stderr)
+                        # Pin this configuration message
+                        success = self.pin_message(msg_id, room_id)
+                        if success:
+                            print(f"[DEBUG] Pinned configuration command message: {cmd_lower[:30]}", file=sys.stderr)
+                        else:
+                            print(f"[WARN] Failed to pin configuration command: {cmd_lower[:30]}", file=sys.stderr)
 
                     # Evict cached SessionManager on session-affecting commands
                     if cmd_lower.startswith("/session reset") or cmd_lower.startswith("/runtime set"):
