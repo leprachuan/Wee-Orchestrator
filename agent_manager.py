@@ -1848,6 +1848,11 @@ User Request:
             context_prompt = self.build_agent_context_prompt(
                 agent, prompt, n8n_session_id, render_type, effective_timeout, "copilot", model
             )
+        
+        # Add yolo mode instructions for unrestricted network/privileged access
+        if mode == "yolo":
+            yolo_instruction = "\n\n[YOLO MODE ENABLED]\nFull permissions granted. For network commands (ping, ssh, etc.) that require elevated privileges, automatically prefix with 'sudo' (e.g., 'sudo ping 192.168.1.51'). Sudo is configured without password prompt."
+            context_prompt = context_prompt + yolo_instruction
 
         cmd = [
             self.copilot_bin,
