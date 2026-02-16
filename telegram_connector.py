@@ -120,6 +120,11 @@ class TelegramConnector:
             self.config.config["token"] = token
             self.config.save()
 
+        # API mode configuration
+        self.use_api = os.getenv("USE_API", "false").lower() == "true"
+        self.api_url_copilot = os.getenv("API_URL", "http://127.0.0.1:8001")
+        self.api_shared_key = os.getenv("API_SHARED_KEY", "")
+
         self.api_url = f"https://api.telegram.org/bot{self.token}"
         self.offset = 0
         self.running = False
@@ -145,6 +150,44 @@ class TelegramConnector:
         if session_id in self.session_managers:
             del self.session_managers[session_id]
             print(f"[DEBUG] Evicted cached SessionManager for: {session_id}", file=sys.stderr)
+
+    def _execute_via_api(self, query: str, session_id: str, user_identity: str, channel: str) -> str:
+        """Execute query via API using shared key authentication."""
+        try:
+            headers = {
+                "Authorization": f"Bearer shared_{self.api_shared_key}",
+                "Content-Type": "application/json",
+                "X-User-Identity": user_identity,
+                "X-Auth-Channel": channel,
+            }
+
+            # Ensure session exists
+            requests.post(
+                f"{self.api_url_copilot}/api/v1/sessions/create",
+                headers=headers,
+                json={},
+                timeout=10,
+            )
+
+            # Execute the query
+            resp = requests.post(
+                f"{self.api_url_copilot}/api/v1/sessions/{session_id}/execute",
+                headers=headers,
+                json={"query": query},
+                timeout=self.config.get_user_timeout(int(user_identity.replace("telegram_", ""))) if "telegram_" in str(user_identity) else 600,
+            )
+
+            if resp.status_code == 200:
+                return resp.json().get("response", "No response from API")
+            else:
+                print(f"[WARN] API request failed ({resp.status_code}): {resp.text}", file=sys.stderr)
+                # Fallback to direct mode
+                session_mgr = self.get_session_manager(session_id)
+                return session_mgr.execute(query, session_id)
+        except Exception as e:
+            print(f"[WARN] API request exception: {e}, falling back to direct mode", file=sys.stderr)
+            session_mgr = self.get_session_manager(session_id)
+            return session_mgr.execute(query, session_id)
 
     def get_updates(self, timeout: int = 30) -> List[Dict]:
         """Fetch new messages from Telegram"""
@@ -807,12 +850,15 @@ class TelegramConnector:
         """Execute slash command via agent_manager.execute() with timeout support"""
         # Container for result and thread control
         result_container = {"response": None, "done": False}
-        
+
         def run_command():
             """Run command in background thread"""
             try:
-                session_mgr = self.get_session_manager(session_id)
-                result_container["response"] = session_mgr.execute(command, session_id)
+                if self.use_api:
+                    result_container["response"] = self._execute_via_api(command, session_id, session_id, "telegram")
+                else:
+                    session_mgr = self.get_session_manager(session_id)
+                    result_container["response"] = session_mgr.execute(command, session_id)
                 result_container["done"] = True
             except Exception as e:
                 import traceback
@@ -914,8 +960,11 @@ class TelegramConnector:
             print(f"[DEBUG] Using persistent session_mgr for: {session_id}", file=sys.stderr)
             
             # Use execute() which routes to the correct runtime automatically
-            result = session_mgr.execute(query, session_id)
-            
+            if self.use_api:
+                result = self._execute_via_api(query, session_id, session_id, "telegram")
+            else:
+                result = session_mgr.execute(query, session_id)
+
             return result if result else "No response from agent"
         except Exception as e:
             import traceback
