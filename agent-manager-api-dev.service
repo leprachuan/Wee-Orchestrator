@@ -1,0 +1,16 @@
+[Unit]
+Description=Agent Manager API Server (Development)
+After=network.target
+
+[Service]
+Type=simple
+User=n8n
+WorkingDirectory=/opt/n8n-copilot-shim-dev
+Environment=PATH=/usr/bin:/usr/local/bin
+EnvironmentFile=/opt/n8n-copilot-shim-dev/.env
+ExecStart=/usr/bin/python3 /opt/n8n-copilot-shim-dev/agent_manager.py --api
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
