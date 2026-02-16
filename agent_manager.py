@@ -1833,7 +1833,7 @@ User Request:
         
         # If mode not specified in prompt, check session setting
         if mode == "restricted":
-            session_data = self.load_session_data(n8n_session_id)
+            session_data = self.get_or_create_session_data(n8n_session_id)
             session_mode = session_data.get("yolo_mode", "restricted")
             if session_mode == "on":
                 mode = "yolo"
