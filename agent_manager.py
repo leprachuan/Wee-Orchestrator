@@ -1823,13 +1823,20 @@ User Request:
 
         Uses --allow-all-tools for MCP tool access. Path access depends on /mode command:
         - /mode restricted: Bounded to agent directory (default)
-        - /mode yolo: Allow all paths (--allow-all-paths)
+        - /mode yolo: Dangerous bypass with --yolo (auto-approve all operations)
         """
         if not self.copilot_bin:
             return "Error: Copilot executable not found. Please install copilot or ensure it's in PATH, /opt/homebrew/bin/, /usr/local/bin/, or /usr/bin/"
 
-        # Parse /mode command from prompt
+        # Parse /mode command from prompt, fall back to session setting
         prompt, mode = self._parse_mode_command(prompt)
+        
+        # If mode not specified in prompt, check session setting
+        if mode == "restricted":
+            session_data = self.get_or_create_session_data(n8n_session_id)
+            session_mode = session_data.get("yolo_mode", "restricted")
+            if session_mode == "on":
+                mode = "yolo"
 
         agent_dir = self.AGENTS.get(agent, self.AGENTS["orchestrator"])["path"]
         effective_timeout = timeout if timeout is not None else self.command_timeout
@@ -1841,6 +1848,11 @@ User Request:
             context_prompt = self.build_agent_context_prompt(
                 agent, prompt, n8n_session_id, render_type, effective_timeout, "copilot", model
             )
+        
+        # Add yolo mode instructions for unrestricted network/privileged access
+        if mode == "yolo":
+            yolo_instruction = "\n\n[YOLO MODE ENABLED]\nFull permissions granted. For network commands (ping, ssh, etc.) that require elevated privileges, automatically prefix with 'sudo' (e.g., 'sudo ping 192.168.1.51'). Sudo is configured without password prompt."
+            context_prompt = context_prompt + yolo_instruction
 
         cmd = [
             self.copilot_bin,
@@ -1853,9 +1865,10 @@ User Request:
             model,
         ]
 
-        # Add --allow-all-paths only if mode is yolo
+        # Add yolo flags if mode is yolo
         if mode == "yolo":
             cmd.insert(4, "--allow-all-paths")
+            cmd.append("--yolo")
 
         if resume and session_id:
             cmd.extend(["--resume", session_id])
@@ -1887,6 +1900,13 @@ User Request:
         """
         # Parse /mode command from prompt
         prompt, mode = self._parse_mode_command(prompt)
+
+        # If mode not specified in prompt, check session setting
+        if mode == "restricted":
+            session_data = self.get_or_create_session_data(n8n_session_id)
+            session_mode = session_data.get("yolo_mode", "restricted")
+            if session_mode == "on":
+                mode = "yolo"
 
         agent_dir = self.AGENTS.get(agent, self.AGENTS["orchestrator"])["path"]
         effective_timeout = timeout if timeout is not None else self.command_timeout
@@ -1956,8 +1976,8 @@ User Request:
                 agent, prompt, n8n_session_id, render_type, effective_timeout, "claude", model
             )
 
-        # Set permission mode: use bypassPermissions for yolo mode, otherwise ask
-        permission_mode = "bypassPermissions" if mode == "yolo" else "ask"
+        # Set permission mode: use bypassPermissions for yolo mode, otherwise default
+        permission_mode = "bypassPermissions" if mode == "yolo" else "default"
 
         cmd = [
             self.claude_bin,
@@ -2008,6 +2028,13 @@ User Request:
         """
         # Parse /mode command from prompt
         prompt, mode = self._parse_mode_command(prompt)
+
+        # If mode not specified in prompt, check session setting
+        if mode == "restricted":
+            session_data = self.get_or_create_session_data(n8n_session_id)
+            session_mode = session_data.get("yolo_mode", "restricted")
+            if session_mode == "on":
+                mode = "yolo"
 
         agent_dir = self.AGENTS.get(agent, self.AGENTS["orchestrator"])["path"]
         effective_timeout = timeout if timeout is not None else self.command_timeout
@@ -2067,6 +2094,13 @@ User Request:
         # Parse /mode command from prompt
         prompt, mode = self._parse_mode_command(prompt)
 
+        # If mode not specified in prompt, check session setting
+        if mode == "restricted":
+            session_data = self.get_or_create_session_data(n8n_session_id)
+            session_mode = session_data.get("yolo_mode", "restricted")
+            if session_mode == "on":
+                mode = "yolo"
+
         agent_dir = self.AGENTS.get(agent, self.AGENTS["orchestrator"])["path"]
         effective_timeout = timeout if timeout is not None else self.command_timeout
 
@@ -2089,16 +2123,17 @@ User Request:
                 session_id,
                 context_prompt,
             ]
-            print(f"[Session] Resuming CODEX session: {session_id}", file=sys.stderr)
+            print(f"[Session] Resuming CODEX session: {session_id} in {mode} mode", file=sys.stderr)
         else:
-            # Start new session with full permissions
+            # Start new session
             cmd = [
                 "codex",
                 "exec",
                 context_prompt,
-                "--dangerously-bypass-approvals-and-sandbox",
             ]
-            print(f"[Session] Starting new CODEX session", file=sys.stderr)
+            if mode == "yolo":
+                cmd.append("--dangerously-bypass-approvals-and-sandbox")
+            print(f"[Session] Starting new CODEX session in {mode} mode", file=sys.stderr)
 
         output = self._execute_subprocess_with_tracking(
             cmd, agent_dir, effective_timeout, "codex", agent, prompt, n8n_session_id
@@ -2667,6 +2702,8 @@ You can mention an agent in your prompt and it will auto-delegate:
         agent = session_data.get("agent", "orchestrator")
         effective_timeout = self.get_effective_timeout(session_data)
         render_type = self.get_render_type(session_data)
+        # Get mode for Claude runtime
+        mode = "yolo" if session_data.get("yolo_mode") == "on" else "restricted"
 
         # Check if we can resume
         can_resume = (
@@ -2760,6 +2797,7 @@ You can mention an agent in your prompt and it will auto-delegate:
                     n8n_session_id,
                     effective_timeout,
                     render_type,
+                    mode,
                 )
             else:
                 output = self.run_claude(
@@ -2771,6 +2809,7 @@ You can mention an agent in your prompt and it will auto-delegate:
                     n8n_session_id,
                     effective_timeout,
                     render_type,
+                    mode,
                 )
 
         elif current_runtime == "gemini":
