@@ -18,6 +18,14 @@ from typing import Optional, Dict, List
 from datetime import datetime
 import agent_manager
 
+# If production listener should be disabled to avoid duplicate responders, create the
+# sentinel file /opt/n8n-copilot-shim/PROD_DISABLED. When present, any process
+# started from the production path will exit immediately.
+_prod_disable_path = Path("/opt/n8n-copilot-shim/PROD_DISABLED")
+if os.path.abspath(__file__).startswith("/opt/n8n-copilot-shim/") and _prod_disable_path.exists():
+    print("Production Telegram connector disabled via PROD_DISABLED sentinel.", file=sys.stderr)
+    sys.exit(0)
+
 
 class TelegramConfig:
     """Manages Telegram connector configuration"""
