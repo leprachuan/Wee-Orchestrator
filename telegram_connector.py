@@ -639,6 +639,10 @@ class TelegramConnector:
         """Process incoming Telegram message"""
         try:
             message = update.get("message", {})
+
+            # Ignore messages from bots (including this bot) to avoid handling bot-sent updates which can cause duplicate responses
+            if message.get("from", {}).get("is_bot"):
+                return
             
             # Handle files with optional caption
             file_path = None
