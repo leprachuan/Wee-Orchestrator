@@ -1956,8 +1956,8 @@ User Request:
                 agent, prompt, n8n_session_id, render_type, effective_timeout, "claude", model
             )
 
-        # Set permission mode: use bypassPermissions for yolo mode, otherwise ask
-        permission_mode = "bypassPermissions" if mode == "yolo" else "ask"
+        # Set permission mode: use bypassPermissions for yolo mode, otherwise default
+        permission_mode = "bypassPermissions" if mode == "yolo" else "default"
 
         cmd = [
             self.claude_bin,
