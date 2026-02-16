@@ -128,7 +128,16 @@ class TelegramConnector:
         """Get or create SessionManager for session_id"""
         if session_id not in self.session_managers:
             from agent_manager import SessionManager
-            self.session_managers[session_id] = SessionManager()
+            mgr = SessionManager()
+            # Backwards compatibility: ensure older SessionManager implementations
+            # that expose load_session_map still satisfy callers expecting
+            # load_session_data
+            if not hasattr(mgr, "load_session_data"):
+                if hasattr(mgr, "load_session_map"):
+                    mgr.load_session_data = mgr.load_session_map
+                else:
+                    mgr.load_session_data = lambda sid: None
+            self.session_managers[session_id] = mgr
         return self.session_managers[session_id]
 
     def _evict_session_manager(self, session_id: str):
@@ -225,28 +234,37 @@ class TelegramConnector:
             
             last_msg_id = None
             for chunk in chunks:
+                # Log outbound attempt (short snippet)
+                print(f"[DEBUG OUTBOUND] send_message -> chat_id={chat_id} text_snippet={repr(chunk[:200])}", file=sys.stderr)
                 resp = requests.post(
                     f"{self.api_url}/sendMessage",
                     json={"chat_id": chat_id, "text": chunk, "parse_mode": "HTML"},
                     timeout=10,
                 )
+                print(f"[DEBUG OUTBOUND] send_message HTTP {resp.status_code} for chat_id={chat_id}", file=sys.stderr)
                 if resp.status_code != 200:
                     print(f"[WARN] HTML send failed ({resp.status_code}): {resp.text[:200]}", file=sys.stderr)
                     # Fallback to plain text
                     plain = re.sub(r'<[^>]+>', '', chunk)
                     plain = plain.replace('&amp;', '&').replace('&lt;', '<').replace('&gt;', '>')
+                    print(f"[DEBUG OUTBOUND] send_message falling back to plain text for chat_id={chat_id}", file=sys.stderr)
                     resp = requests.post(
                         f"{self.api_url}/sendMessage",
                         json={"chat_id": chat_id, "text": plain},
                         timeout=10,
                     )
+                    print(f"[DEBUG OUTBOUND] send_message fallback HTTP {resp.status_code} for chat_id={chat_id}", file=sys.stderr)
                     if resp.status_code != 200:
                         print(f"[ERROR] Plain text also failed ({resp.status_code}): {resp.text[:200]}", file=sys.stderr)
                 
                 if resp.status_code == 200:
-                    result = resp.json()
-                    if result.get("ok"):
-                        last_msg_id = result["result"]["message_id"]
+                    try:
+                        result = resp.json()
+                        if result.get("ok"):
+                            last_msg_id = result["result"]["message_id"]
+                            print(f"[DEBUG OUTBOUND] send_message succeeded message_id={last_msg_id} for chat_id={chat_id}", file=sys.stderr)
+                    except Exception as e:
+                        print(f"[WARN] send_message response JSON parse error: {e}", file=sys.stderr)
             return last_msg_id
         except Exception as e:
             print(f"Error sending message: {e}", file=sys.stderr)
@@ -259,20 +277,25 @@ class TelegramConnector:
             max_len = 4096
             chunks = [sanitized[i:i + max_len] for i in range(0, len(sanitized), max_len)] if sanitized else ["No response"]
             
+            # Log edit attempt
+            print(f"[DEBUG OUTBOUND] edit_message -> chat_id={chat_id} message_id={message_id} text_snippet={repr(chunks[0][:200])}", file=sys.stderr)
             resp = requests.post(
                 f"{self.api_url}/editMessageText",
                 json={"chat_id": chat_id, "message_id": message_id, "text": chunks[0], "parse_mode": "HTML"},
                 timeout=10,
             )
+            print(f"[DEBUG OUTBOUND] edit_message HTTP {resp.status_code} for chat_id={chat_id} message_id={message_id}", file=sys.stderr)
             if resp.status_code != 200:
                 # Fallback to plain text
                 plain = re.sub(r'<[^>]+>', '', chunks[0])
                 plain = plain.replace('&amp;', '&').replace('&lt;', '<').replace('&gt;', '>')
+                print(f"[DEBUG OUTBOUND] edit_message falling back to plain text for chat_id={chat_id} message_id={message_id}", file=sys.stderr)
                 resp = requests.post(
                     f"{self.api_url}/editMessageText",
                     json={"chat_id": chat_id, "message_id": message_id, "text": plain},
                     timeout=10,
                 )
+                print(f"[DEBUG OUTBOUND] edit_message fallback HTTP {resp.status_code} for chat_id={chat_id} message_id={message_id}", file=sys.stderr)
                 if resp.status_code != 200:
                     print(f"[WARN] Edit failed ({resp.status_code}): {resp.text[:200]}", file=sys.stderr)
             
@@ -284,11 +307,13 @@ class TelegramConnector:
     def send_typing(self, chat_id: int):
         """Send typing indicator to chat"""
         try:
-            requests.post(
+            print(f"[DEBUG OUTBOUND] send_typing -> chat_id={chat_id}", file=sys.stderr)
+            resp = requests.post(
                 f"{self.api_url}/sendChatAction",
                 json={"chat_id": chat_id, "action": "typing"},
                 timeout=5,
             )
+            print(f"[DEBUG OUTBOUND] send_typing HTTP {resp.status_code} for chat_id={chat_id}", file=sys.stderr)
         except Exception as e:
             print(f"Error sending typing indicator: {e}", file=sys.stderr)
 
@@ -538,6 +563,7 @@ class TelegramConnector:
 
     def send_response(self, chat_id: int, text: str, status_msg_id: Optional[int] = None):
         """Send response, detecting image URLs and file paths."""
+        print(f"[DEBUG OUTBOUND] send_response -> chat_id={chat_id} text_snippet={repr(text[:200])} status_msg_id={status_msg_id}", file=sys.stderr)
         # Extract images first, then files from remaining text
         image_data, text_after_images = self.extract_image_urls(text)
         file_data, remaining_text = self.extract_file_paths(text_after_images)
@@ -545,31 +571,37 @@ class TelegramConnector:
         # Handle text portion
         if remaining_text.strip():
             if status_msg_id:
+                print(f"[DEBUG OUTBOUND] send_response editing status message {status_msg_id} for chat_id={chat_id}", file=sys.stderr)
                 self.edit_message(chat_id, status_msg_id, remaining_text)
                 status_msg_id = None
             else:
+                print(f"[DEBUG OUTBOUND] send_response sending text to chat_id={chat_id}", file=sys.stderr)
                 self.send_message(chat_id, remaining_text)
         elif status_msg_id and (image_data or file_data):
             # No text, just media - delete status message
             try:
-                requests.post(
+                resp = requests.post(
                     f"{self.api_url}/deleteMessage",
                     json={"chat_id": chat_id, "message_id": status_msg_id},
                     timeout=5,
                 )
-            except Exception:
-                pass
+                print(f"[DEBUG OUTBOUND] deleteMessage HTTP {resp.status_code} for chat_id={chat_id} message_id={status_msg_id}", file=sys.stderr)
+            except Exception as e:
+                print(f"[WARN] deleteMessage failed: {e}", file=sys.stderr)
             status_msg_id = None
         elif status_msg_id:
             # No text, no media - edit status message with default text
+            print(f"[DEBUG OUTBOUND] send_response editing status message {status_msg_id} to checkmark for chat_id={chat_id}", file=sys.stderr)
             self.edit_message(chat_id, status_msg_id, "✓")
 
         # Send images
         for url, caption in image_data:
+            print(f"[DEBUG OUTBOUND] send_response sending photo URL={url} caption={repr(caption[:100])} to chat_id={chat_id}", file=sys.stderr)
             self.send_photo(chat_id, url, caption)
 
         # Send files
         for file_path, caption in file_data:
+            print(f"[DEBUG OUTBOUND] send_response sending document path={file_path} caption={repr(caption[:100])} to chat_id={chat_id}", file=sys.stderr)
             self.send_document(chat_id, file_path, caption)
 
     def download_file(self, file_id: str, user_id: int) -> Optional[str]:
