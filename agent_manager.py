@@ -1828,8 +1828,15 @@ User Request:
         if not self.copilot_bin:
             return "Error: Copilot executable not found. Please install copilot or ensure it's in PATH, /opt/homebrew/bin/, /usr/local/bin/, or /usr/bin/"
 
-        # Parse /mode command from prompt
+        # Parse /mode command from prompt, fall back to session setting
         prompt, mode = self._parse_mode_command(prompt)
+        
+        # If mode not specified in prompt, check session setting
+        if mode == "restricted":
+            session_data = self.load_session_data(n8n_session_id)
+            session_mode = session_data.get("yolo_mode", "restricted")
+            if session_mode == "on":
+                mode = "yolo"
 
         agent_dir = self.AGENTS.get(agent, self.AGENTS["orchestrator"])["path"]
         effective_timeout = timeout if timeout is not None else self.command_timeout
