@@ -545,10 +545,29 @@ class SessionManager:
         with open(self.session_map_file, "w") as f:
             json.dump(session_map, f, indent=2)
 
+    def load_session_data(self, n8n_session_id: str) -> Optional[Dict]:
+        """
+        Load existing session data without creating new ones.
+        Returns session data dict or None if not found.
+        """
+        session_map = self.load_session_map()
+        return session_map.get(n8n_session_id)
+
+    def _extract_bot_identifier(self, session_id: str) -> str:
+        """Extract bot identifier (last 4 chars of numeric part) from session ID"""
+        # Format: "telegram_<user_id>" or "webex_<connector_id>" or other
+        if "_" in session_id:
+            parts = session_id.split("_")
+            if len(parts) >= 2:
+                numeric_part = parts[-1]
+                # Extract last 4 characters or full if less than 4
+                return numeric_part[-4:] if len(numeric_part) >= 4 else numeric_part
+        return session_id[-4:] if len(session_id) >= 4 else session_id
+
     def get_or_create_session_data(self, n8n_session_id: str) -> Dict:
         """
         Get existing session data or create new default
-        Returns dict with keys: session_id, model, agent, runtime
+        Returns dict with keys: session_id, model, agent, runtime, bot_id
         """
         session_map = self.load_session_map()
 
@@ -565,11 +584,15 @@ class SessionManager:
         elif default_runtime == "codex":
             default_model = "gpt-5.1-codex-max"
 
+        # Extract bot identifier from session ID (last 4 chars of numeric part)
+        bot_id = self._extract_bot_identifier(n8n_session_id)
+
         default_data = {
             "session_id": str(uuid4()),
             "model": default_model,
             "agent": get_default_agent(),
             "runtime": default_runtime,
+            "bot_id": bot_id,
         }
 
         if n8n_session_id not in session_map:
@@ -625,6 +648,10 @@ class SessionManager:
                 if not session_id or not session_id.startswith("ses_"):
                     merged["session_id"] = str(uuid4())
 
+            # Ensure bot_id is set
+            if "bot_id" not in merged:
+                merged["bot_id"] = bot_id
+
             # Save back if changed
             if merged != data:
                 session_map[n8n_session_id] = merged
@@ -636,7 +663,7 @@ class SessionManager:
         session_map[n8n_session_id] = default_data
         self.save_session_map(session_map)
         print(
-            f"[Session] Created new session: {default_data['session_id']} (N8N: {n8n_session_id})",
+            f"[Session] Created new session: {default_data['session_id']} (N8N: {n8n_session_id}, Bot: {bot_id})",
             file=sys.stderr,
         )
         return {**default_data, "is_new": True}
