@@ -3033,6 +3033,282 @@ def _check_command_result(result: str, error_keywords: List[str]) -> None:
             sys.exit(1)
 
 
+# ---------------------------------------------------------------------------
+# FastAPI Application
+# ---------------------------------------------------------------------------
+
+_api_auth_manager: Optional["AuthManager"] = None
+
+
+def _send_pairing_code(channel: str, identity: str, code: str) -> None:
+    """Best-effort delivery of a pairing code via the appropriate connector."""
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    try:
+        if channel == "telegram":
+            from telegram_connector import TelegramConnector
+
+            config_path = os.path.join(script_dir, "telegram_config.json")
+            with open(config_path) as f:
+                cfg = json.load(f)
+            connector = TelegramConnector(cfg)
+            connector.send_message(
+                int(identity),
+                f"Your pairing code is: {code}\nIt expires in 5 minutes.",
+            )
+        elif channel == "webex":
+            from webex_connector import WebEXConnector
+
+            config_path = os.path.join(script_dir, "webex_config.json")
+            with open(config_path) as f:
+                cfg = json.load(f)
+            connector = WebEXConnector(cfg)
+            connector.send_message(
+                identity,
+                f"Your pairing code is: {code}\nIt expires in 5 minutes.",
+            )
+    except Exception as exc:  # noqa: BLE001
+        print(f"[API] Warning: could not send pairing code via {channel}: {exc}")
+
+
+def create_api_app():  # noqa: C901 – factory kept in one place intentionally
+    """Factory that builds and returns the FastAPI application."""
+    import asyncio
+    import concurrent.futures
+    from enum import Enum
+
+    from fastapi import FastAPI, Header, HTTPException, Request
+    from fastapi.responses import JSONResponse
+    from pydantic import BaseModel
+
+    global _api_auth_manager
+
+    # ---- configuration from environment ----
+    APP_ENV = os.environ.get("APP_ENV", "PROD").upper()
+    IS_PRODUCTION = APP_ENV != "DEV"
+    SHARED_KEY = os.environ.get("API_SHARED_KEY", "")
+    PAIRING_CODE_LENGTH = int(os.environ.get("PAIRING_CODE_LENGTH", "6"))
+    PAIRING_CODE_TTL = int(os.environ.get("PAIRING_CODE_TTL", "300"))
+    SESSION_TOKEN_TTL = int(os.environ.get("SESSION_TOKEN_TTL", "3600"))
+    CONFIG_FILE = os.environ.get("AGENT_CONFIG_FILE")
+
+    # ---- shared instances ----
+    auth_mgr = AuthManager(
+        shared_key=SHARED_KEY,
+        pairing_code_length=PAIRING_CODE_LENGTH,
+        pairing_code_ttl=PAIRING_CODE_TTL,
+        session_token_ttl=SESSION_TOKEN_TTL,
+    )
+    _api_auth_manager = auth_mgr
+    rate_limiter = RateLimiter()
+    session_mgr = SessionManager(config_file=CONFIG_FILE)
+
+    # ---- Pydantic models ----
+    class ChannelEnum(str, Enum):
+        telegram = "telegram"
+        webex = "webex"
+
+    class PairingRequest(BaseModel):
+        identity: str
+        channel: ChannelEnum
+
+    class PairingVerification(BaseModel):
+        code: str
+        identity: str
+
+    class SessionCreate(BaseModel):
+        agent: Optional[str] = None
+        runtime: Optional[str] = None
+
+    class ExecuteRequest(BaseModel):
+        query: str
+
+    # ---- authentication dependency ----
+    async def authenticate(
+        request: Request,
+        authorization: Optional[str] = Header(None),
+        x_user_identity: Optional[str] = Header(None),
+        x_auth_channel: Optional[str] = Header(None),
+    ) -> dict:
+        if not authorization or not authorization.startswith("Bearer "):
+            raise HTTPException(status_code=401, detail="Missing or invalid authorization header")
+
+        token = authorization[7:]
+
+        if token.startswith("shared_"):
+            if not auth_mgr.validate_shared_key(token):
+                raise HTTPException(status_code=401, detail="Invalid shared key")
+            return {
+                "identity": x_user_identity or "shared",
+                "channel": x_auth_channel or "api",
+                "auth_type": "shared_key",
+            }
+
+        if token.startswith("session_"):
+            token_data = auth_mgr.validate_session_token(token)
+            if not token_data:
+                raise HTTPException(status_code=401, detail="Invalid or expired session token")
+            return {
+                "identity": token_data["identity"],
+                "channel": token_data["channel"],
+                "auth_type": "session_token",
+            }
+
+        raise HTTPException(status_code=401, detail="Unrecognized token type")
+
+    # ---- lifespan for background cleanup ----
+    from contextlib import asynccontextmanager
+
+    @asynccontextmanager
+    async def _lifespan(app):
+        async def _periodic_cleanup():
+            while True:
+                await asyncio.sleep(300)
+                auth_mgr.cleanup_expired()
+                rate_limiter.cleanup()
+
+        task = asyncio.ensure_future(_periodic_cleanup())
+        yield
+        task.cancel()
+
+    # ---- FastAPI app ----
+    app = FastAPI(
+        title="Wee-Orchestrator API",
+        version="1.0.0",
+        docs_url="/api/v1/docs" if not IS_PRODUCTION else None,
+        redoc_url="/api/v1/redoc" if not IS_PRODUCTION else None,
+        lifespan=_lifespan,
+    )
+
+    # ---- generic exception handler ----
+    @app.exception_handler(Exception)
+    async def _global_exception_handler(request: Request, exc: Exception):
+        if IS_PRODUCTION:
+            return JSONResponse(status_code=500, content={"detail": "Internal server error"})
+        return JSONResponse(status_code=500, content={"detail": str(exc)})
+
+    # ---- endpoints ----
+
+    @app.get("/api/v1/health")
+    async def health():
+        return {
+            "status": "ok",
+            "environment": APP_ENV,
+            "version": "1.0.0",
+        }
+
+    @app.post("/api/v1/auth/request-pairing")
+    async def request_pairing(body: PairingRequest, request: Request):
+        client_ip = request.client.host if request.client else "unknown"
+        if not rate_limiter.check(client_ip, "pairing", max_requests=5, window=900):
+            raise HTTPException(status_code=429, detail="Rate limit exceeded")
+
+        code = auth_mgr.generate_pairing_code(body.identity, body.channel.value)
+        _send_pairing_code(body.channel.value, body.identity, code)
+        return {
+            "message": f"Pairing code sent via {body.channel.value}",
+            "expires_in": PAIRING_CODE_TTL,
+        }
+
+    @app.post("/api/v1/auth/verify-pairing")
+    async def verify_pairing(body: PairingVerification):
+        token = auth_mgr.verify_pairing_code(body.code, body.identity)
+        if not token:
+            raise HTTPException(status_code=400, detail="Invalid or expired pairing code")
+        return {"token": token, "expires_in": SESSION_TOKEN_TTL}
+
+    @app.post("/api/v1/sessions/create")
+    async def create_session(
+        body: SessionCreate,
+        user: dict = Header(None),
+        request: Request = None,
+    ):
+        # Manual auth – FastAPI Depends() isn't used here so we call directly
+        user = await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        session_id = str(uuid4())[:8]
+        session_mgr.get_or_create_session_data(session_id)
+
+        if body.agent:
+            session_mgr.update_session_field(session_id, "agent", body.agent)
+        if body.runtime:
+            session_mgr.update_session_field(session_id, "runtime", body.runtime)
+
+        return {
+            "session_id": session_id,
+            "identity": user["identity"],
+            "channel": user["channel"],
+        }
+
+    @app.post("/api/v1/sessions/{session_id}/execute")
+    async def execute_session(session_id: str, body: ExecuteRequest, request: Request):
+        user = await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+
+        client_ip = request.client.host if request.client else "unknown"
+        if not rate_limiter.check(client_ip, "execute", max_requests=60, window=60):
+            raise HTTPException(status_code=429, detail="Rate limit exceeded")
+
+        existing = session_mgr.load_session_data(session_id)
+        if not existing:
+            raise HTTPException(status_code=404, detail="Session not found")
+
+        loop = asyncio.get_event_loop()
+        with concurrent.futures.ThreadPoolExecutor() as pool:
+            result = await loop.run_in_executor(
+                pool, session_mgr.execute, body.query, session_id
+            )
+
+        return {"session_id": session_id, "result": result}
+
+    @app.get("/api/v1/sessions/{session_id}/status")
+    async def session_status(session_id: str, request: Request):
+        user = await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+
+        data = session_mgr.load_session_data(session_id)
+        if not data:
+            raise HTTPException(status_code=404, detail="Session not found")
+
+        return {
+            "session_id": session_id,
+            "agent": data.get("agent"),
+            "runtime": data.get("runtime"),
+            "model": data.get("model"),
+        }
+
+    return app
+
+
+def start_api_server():
+    """Load dotenv, create the FastAPI app, and run uvicorn."""
+    try:
+        from dotenv import load_dotenv
+
+        env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
+        load_dotenv(env_path)
+    except ImportError:
+        pass
+
+    import uvicorn
+
+    app = create_api_app()
+    port = int(os.environ.get("API_PORT", "8080"))
+    host = os.environ.get("API_HOST", "0.0.0.0")
+    uvicorn.run(app, host=host, port=port)
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="AI Session Wrapper for N8N Integration",
@@ -3196,4 +3472,7 @@ Examples:
 
 
 if __name__ == "__main__":
-    main()
+    if "--api" in sys.argv:
+        start_api_server()
+    else:
+        main()
