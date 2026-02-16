@@ -1,5 +1,20 @@
 # N8N Copilot Shim - Agent Orchestration
 
+## Environments
+
+The Wee-Orchestrator runs in two separate environments:
+
+| Environment | Purpose | Location |
+|-------------|---------|----------|
+| **Production** | Live system serving N8N users | `/opt/n8n-copilot-shim` |
+| **Development** | Testing and feature development | `/opt/n8n-copilot-shim-dev` |
+
+Changes should be tested in the **dev** environment before being merged to **production**. Each environment maintains its own:
+- Agent configurations (`agents.json`)
+- Runtime sessions
+- Connector instances (Telegram, WebEX, etc.)
+- Skill repositories
+
 ## Overview
 
 The n8n-copilot-shim is an **orchestration agent** that manages multiple specialized subagents, each configured to handle specific domains and tasks. This document describes the agent system architecture and how to work with agents.
