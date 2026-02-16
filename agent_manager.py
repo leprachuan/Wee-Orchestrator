@@ -17,6 +17,125 @@ import shutil
 from pathlib import Path
 from uuid import uuid4
 from typing import Optional, Tuple, Dict, List
+import secrets as _secrets
+import threading
+
+
+class RateLimiter:
+    """In-memory per-IP rate limiter with sliding window."""
+
+    def __init__(self):
+        self.records: Dict[str, Dict[str, List[float]]] = {}
+        self._lock = threading.Lock()
+
+    def check(self, ip: str, endpoint: str, max_requests: int, window: int) -> bool:
+        """Return True if request is allowed, False if rate limited."""
+        now = time.time()
+        with self._lock:
+            ep_list = self.records.setdefault(ip, {}).setdefault(endpoint, [])
+            ep_list[:] = [t for t in ep_list if now - t < window]
+            if len(ep_list) >= max_requests:
+                return False
+            ep_list.append(now)
+            return True
+
+    def cleanup(self):
+        """Remove all empty entries."""
+        with self._lock:
+            for ip in list(self.records):
+                for ep in list(self.records[ip]):
+                    if not self.records[ip][ep]:
+                        del self.records[ip][ep]
+                if not self.records[ip]:
+                    del self.records[ip]
+
+
+class AuthManager:
+    """Manages pairing codes, session tokens, and shared key validation."""
+
+    def __init__(
+        self,
+        shared_key: str,
+        pairing_code_length: int = 6,
+        pairing_code_ttl: int = 300,
+        session_token_ttl: int = 3600,
+    ):
+        self.shared_key = shared_key
+        self.pairing_code_length = pairing_code_length
+        self.pairing_code_ttl = pairing_code_ttl
+        self.session_token_ttl = session_token_ttl
+        self.pairing_codes: Dict[str, dict] = {}
+        self.session_tokens: Dict[str, dict] = {}
+        self._lock = threading.Lock()
+
+    def validate_shared_key(self, token: str) -> bool:
+        """Validate a Bearer token as a shared key. Expects 'shared_<key>'."""
+        if not token.startswith("shared_"):
+            return False
+        return token[7:] == self.shared_key
+
+    def generate_pairing_code(self, identity: str, channel: str) -> str:
+        """Generate a numeric pairing code and store it."""
+        code = "".join(
+            [str(_secrets.randbelow(10)) for _ in range(self.pairing_code_length)]
+        )
+        now = time.time()
+        with self._lock:
+            self.pairing_codes[code] = {
+                "identity": identity,
+                "channel": channel,
+                "created_at": now,
+                "expires_at": now + self.pairing_code_ttl,
+            }
+        return code
+
+    def verify_pairing_code(self, code: str, identity: str) -> Optional[str]:
+        """Verify pairing code. Returns session token on success, None on failure."""
+        with self._lock:
+            entry = self.pairing_codes.get(code)
+            if not entry:
+                return None
+            if entry["identity"] != identity:
+                return None
+            if time.time() > entry["expires_at"]:
+                del self.pairing_codes[code]
+                return None
+            del self.pairing_codes[code]
+        token = f"session_{_secrets.token_urlsafe(32)}"
+        now = time.time()
+        with self._lock:
+            self.session_tokens[token] = {
+                "identity": identity,
+                "channel": entry["channel"],
+                "created_at": now,
+                "last_used": now,
+                "expires_at": now + self.session_token_ttl,
+            }
+        return token
+
+    def validate_session_token(self, token: str) -> Optional[dict]:
+        """Validate session token. Returns identity info or None."""
+        with self._lock:
+            entry = self.session_tokens.get(token)
+            if not entry:
+                return None
+            if time.time() > entry["expires_at"]:
+                del self.session_tokens[token]
+                return None
+            entry["last_used"] = time.time()
+            entry["expires_at"] = time.time() + self.session_token_ttl
+            return {"identity": entry["identity"], "channel": entry["channel"]}
+
+    def cleanup_expired(self):
+        """Remove expired pairing codes and session tokens."""
+        now = time.time()
+        with self._lock:
+            for code in list(self.pairing_codes):
+                if now > self.pairing_codes[code]["expires_at"]:
+                    del self.pairing_codes[code]
+            for token in list(self.session_tokens):
+                if now > self.session_tokens[token]["expires_at"]:
+                    del self.session_tokens[token]
 
 
 # Executable resolution
