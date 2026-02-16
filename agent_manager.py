@@ -3078,7 +3078,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
 
     from fastapi import FastAPI, Header, HTTPException, Request
     from fastapi.responses import JSONResponse
-    from pydantic import BaseModel
+    from pydantic import BaseModel, field_validator
 
     global _api_auth_manager
 
@@ -3117,10 +3117,19 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
 
     class SessionCreate(BaseModel):
         agent: Optional[str] = None
+        model: Optional[str] = None
         runtime: Optional[str] = None
 
     class ExecuteRequest(BaseModel):
         query: str
+        timeout: Optional[int] = None
+
+        @field_validator("query")
+        @classmethod
+        def validate_query_length(cls, v):
+            if len(v) > 10000:
+                raise ValueError("Query must be 10,000 characters or less")
+            return v
 
     # ---- authentication dependency ----
     async def authenticate(
@@ -3234,13 +3243,17 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
 
         if body.agent:
             session_mgr.update_session_field(session_id, "agent", body.agent)
+        if body.model:
+            session_mgr.update_session_field(session_id, "model", body.model)
         if body.runtime:
             session_mgr.update_session_field(session_id, "runtime", body.runtime)
 
+        session_data = session_mgr.get_or_create_session_data(session_id)
         return {
             "session_id": session_id,
-            "identity": user["identity"],
-            "channel": user["channel"],
+            "agent": session_data.get("agent", "orchestrator"),
+            "model": session_data.get("model"),
+            "runtime": session_data.get("runtime"),
         }
 
     @app.post("/api/v1/sessions/{session_id}/execute")
@@ -3266,7 +3279,13 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 pool, session_mgr.execute, body.query, session_id
             )
 
-        return {"session_id": session_id, "result": result}
+        session_data = session_mgr.get_or_create_session_data(session_id)
+        return {
+            "session_id": session_id,
+            "response": result,
+            "runtime": session_data.get("runtime"),
+            "model": session_data.get("model"),
+        }
 
     @app.get("/api/v1/sessions/{session_id}/status")
     async def session_status(session_id: str, request: Request):

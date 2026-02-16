@@ -26,6 +26,7 @@ class TestAPIEndpoints(unittest.TestCase):
         data = resp.json()
         self.assertEqual(data["status"], "ok")
         self.assertIn("environment", data)
+        self.assertEqual(data["version"], "1.0.0")
 
     def test_request_pairing_success(self):
         resp = self.client.post(
