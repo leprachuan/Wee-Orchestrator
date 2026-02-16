@@ -545,6 +545,11 @@ class SessionManager:
         with open(self.session_map_file, "w") as f:
             json.dump(session_map, f, indent=2)
 
+    # Backwards compatibility: older callers used load_session_data
+    def load_session_data(self) -> Dict:
+        """Compatibility wrapper for older code expecting load_session_data()."""
+        return self.load_session_map()
+
     def get_or_create_session_data(self, n8n_session_id: str) -> Dict:
         """
         Get existing session data or create new default
