@@ -1952,7 +1952,7 @@ User Request:
             )
 
         # Set permission mode: use bypassPermissions for yolo mode, otherwise ask
-        permission_mode = "bypassPermissions" if mode == "yolo" else "ask"
+        permission_mode = "bypassPermissions" if mode == "yolo" else "default"
 
         cmd = [
             self.claude_bin,
