@@ -7,6 +7,12 @@
       "enabled": true
     },
     {
+      "name": "VoltAgent Awesome Skills",
+      "url": "https://github.com/VoltAgent/awesome-agent-skills.git",
+      "description": "Community-contributed agent skills (300+ skills)",
+      "enabled": true
+    },
+    {
       "name": "Custom Skills",
       "url": "https://github.com/your-org/custom-skills.git",
       "description": "Organization-specific custom skills",
