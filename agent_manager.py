@@ -1818,7 +1818,7 @@ User Request:
 
         Uses --allow-all-tools for MCP tool access. Path access depends on /mode command:
         - /mode restricted: Bounded to agent directory (default)
-        - /mode yolo: Dangerous bypass with --yolo (auto-approve all operations)
+        - /mode yolo: Allow all paths (--allow-all-paths)
         """
         if not self.copilot_bin:
             return "Error: Copilot executable not found. Please install copilot or ensure it's in PATH, /opt/homebrew/bin/, /usr/local/bin/, or /usr/bin/"
@@ -1848,10 +1848,9 @@ User Request:
             model,
         ]
 
-        # Add yolo flags if mode is yolo
+        # Add --allow-all-paths only if mode is yolo
         if mode == "yolo":
             cmd.insert(4, "--allow-all-paths")
-            cmd.append("--yolo")
 
         if resume and session_id:
             cmd.extend(["--resume", session_id])
