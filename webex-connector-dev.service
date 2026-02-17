@@ -1,28 +1,28 @@
 [Unit]
-Description=WebEX Connector for N8N Copilot Shim
-Documentation=file:///opt/n8n-copilot-shim/webex_connector.py
+Description=WebEX Connector Dev for N8N Copilot Shim
+Documentation=file:///opt/n8n-copilot-shim-dev/webex_connector.py
 After=network.target rabbitmq-server.service
 Wants=rabbitmq-server.service
 
 [Service]
 Type=simple
 User=n8n
-WorkingDirectory=/opt/n8n-copilot-shim
-EnvironmentFile=/opt/n8n-copilot-shim/.env
-ExecStart=/usr/bin/python3 /opt/n8n-copilot-shim/webex_connector.py
+WorkingDirectory=/opt/n8n-copilot-shim-dev
+EnvironmentFile=/opt/n8n-copilot-shim-dev/.env
+ExecStart=/usr/bin/python3 /opt/n8n-copilot-shim-dev/webex_connector.py
 Restart=always
 RestartSec=10
 StandardOutput=journal
 StandardError=journal
-SyslogIdentifier=webex-connector
+SyslogIdentifier=webex-connector-dev
 
 # Environment variables (optional - can also use config file)
-Environment="WEBEX_BOT_TOKEN=MjRmMDVjMGUtNjYyYS00ZDk0LWI0N2EtOTc0YjAyODRkODU3NDAzN2QzNWItYjdh_PF84_1eb65fdf-9643-417f-9974-ad72cae0e10f"
+Environment="WEBEX_BOT_TOKEN=[REDACTED-WEBEX-TOKEN]_PF84_1eb65fdf-9643-417f-9974-ad72cae0e10f"
 Environment="RABBITMQ_HOST=192.168.0.85"
 Environment="RABBITMQ_PORT=5672"
 Environment="RABBITMQ_USER=admin"
 Environment="RABBITMQ_PASSWORD=[REDACTED-RABBITMQ-PASSWORD]"
-Environment="RABBITMQ_QUEUE=webex"
+Environment="RABBITMQ_QUEUE=webex-dev"
 
 # Security
 NoNewPrivileges=true
