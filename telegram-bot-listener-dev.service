@@ -1,0 +1,20 @@
+[Unit]
+Description=N8N Copilot Telegram Connector (Development)
+After=network.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=n8n
+WorkingDirectory=/opt/n8n-copilot-shim-dev
+EnvironmentFile=/opt/n8n-copilot-shim-dev/.env
+Environment="TELEGRAM_BOT_TOKEN=8594875048:AAEcvAxxVFQSI-yVZDIV-PTK1wHEYLKGuYU"
+ExecStart=/usr/bin/python3 /opt/n8n-copilot-shim-dev/telegram_connector.py
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=telegram-connector-dev
+
+[Install]
+WantedBy=multi-user.target
