@@ -54,6 +54,8 @@ class WebEXConfig:
             "enable_auto_pair": False,  # Auto-pair new users
             "default_agent": os.environ.get("COPILOT_DEFAULT_AGENT", "orchestrator"),
             "default_model": os.environ.get("COPILOT_DEFAULT_MODEL", "gpt-5-mini"),
+            "pinned_users": {},       # Maps person_id (str) to {"agent": "name"} - locks user to that agent
+            "yolo_allowed_users": [], # Person IDs permitted to enable /mode yolo; empty = all allowed
         }
 
     def save(self):
@@ -105,6 +107,39 @@ class WebEXConfig:
             self.config["allowed_users"].remove(person_id)
             self.save()
 
+    def is_user_pinned(self, person_id: str) -> bool:
+        """Check if user is pinned to a specific agent"""
+        return person_id in self.config.get("pinned_users", {})
+
+    def get_pinned_agent(self, person_id: str) -> Optional[str]:
+        """Get the pinned agent for a user, or None if not pinned"""
+        pinned = self.config.get("pinned_users", {}).get(person_id)
+        if pinned:
+            return pinned.get("agent")
+        return None
+
+    def get_pinned_runtime(self, person_id: str) -> Optional[str]:
+        """Get the pinned runtime for a user, or None if not set"""
+        pinned = self.config.get("pinned_users", {}).get(person_id)
+        if pinned:
+            return pinned.get("runtime")
+        return None
+
+    def get_pinned_model(self, person_id: str) -> Optional[str]:
+        """Get the pinned model for a user, or None if not set"""
+        pinned = self.config.get("pinned_users", {}).get(person_id)
+        if pinned:
+            return pinned.get("model")
+        return None
+
+    def is_yolo_allowed(self, person_id: str) -> bool:
+        """Check if user is permitted to enable /mode yolo.
+        If yolo_allowed_users is empty, all users are allowed (backward compatible)."""
+        yolo_users = self.config.get("yolo_allowed_users", [])
+        if not yolo_users:
+            return True
+        return person_id in yolo_users
+
 
 class WebEXConnector:
     """Main WebEX connector class - listens to RabbitMQ queue"""
@@ -128,6 +163,11 @@ class WebEXConnector:
             self.config.config["token"] = token
             self.config.save()
 
+        # API mode configuration
+        self.use_api = os.getenv("USE_API", "false").lower() == "true"
+        self.api_url = os.getenv("API_URL", "http://127.0.0.1:8001")
+        self.api_shared_key = os.getenv("API_SHARED_KEY", "")
+
         self.running = False
         self.rabbitmq_connection = None
         self.rabbitmq_channel = None
@@ -145,6 +185,60 @@ class WebEXConnector:
         if session_id in self.session_managers:
             del self.session_managers[session_id]
             print(f"[DEBUG] Evicted cached SessionManager for: {session_id}", file=sys.stderr)
+
+    def _enforce_pinned_session(self, person_id: str, session_id: str):
+        """For pinned users, push pinned agent/runtime/model into the SessionManager.
+        Must be called before every query or command so the SessionManager's session
+        data always reflects the pinned values regardless of what the user has set."""
+        if not self.config.is_user_pinned(person_id):
+            return
+        session_mgr = self.get_session_manager(session_id)
+        pinned_agent = self.config.get_pinned_agent(person_id)
+        if pinned_agent:
+            session_mgr.update_session_field(session_id, "agent", pinned_agent)
+        pinned_runtime = self.config.get_pinned_runtime(person_id)
+        if pinned_runtime:
+            session_mgr.update_session_field(session_id, "runtime", pinned_runtime)
+        pinned_model = self.config.get_pinned_model(person_id)
+        if pinned_model:
+            session_mgr.update_session_field(session_id, "model", pinned_model)
+
+    def _execute_via_api(self, query: str, session_id: str, user_identity: str, channel: str) -> str:
+        """Execute query via API using shared key authentication."""
+        try:
+            headers = {
+                "Authorization": f"Bearer shared_{self.api_shared_key}",
+                "Content-Type": "application/json",
+                "X-User-Identity": user_identity,
+                "X-Auth-Channel": channel,
+            }
+
+            # Ensure session exists
+            requests.post(
+                f"{self.api_url}/api/v1/sessions/create",
+                headers=headers,
+                json={},
+                timeout=10,
+            )
+
+            # Execute the query
+            resp = requests.post(
+                f"{self.api_url}/api/v1/sessions/{session_id}/execute",
+                headers=headers,
+                json={"query": query},
+                timeout=600,
+            )
+
+            if resp.status_code == 200:
+                return resp.json().get("response", "No response from API")
+            else:
+                print(f"[WARN] API request failed ({resp.status_code}): {resp.text}", file=sys.stderr)
+                session_mgr = self.get_session_manager(session_id)
+                return session_mgr.execute(query, session_id)
+        except Exception as e:
+            print(f"[WARN] API request exception: {e}, falling back to direct mode", file=sys.stderr)
+            session_mgr = self.get_session_manager(session_id)
+            return session_mgr.execute(query, session_id)
 
     def connect_rabbitmq(self) -> bool:
         """Connect to RabbitMQ"""
@@ -285,6 +379,124 @@ class WebEXConnector:
             print(f"[DEBUG] Typing indicator not available: {e}", file=sys.stderr)
             return False
 
+    def send_file(self, room_id: str, file_path: str, caption: str = "") -> Optional[str]:
+        """Send a file to WebEX room via multipart upload. Returns message ID."""
+        try:
+            # Security validation
+            if not self._is_safe_file_path(file_path):
+                self.send_message(room_id, f"⚠️ Cannot send file: {file_path} (security check failed)")
+                return None
+
+            print(f"[DEBUG] Attempting to send file to WebEX: {file_path}", file=sys.stderr)
+
+            # Detect MIME type
+            mime_type, _ = mimetypes.guess_type(file_path)
+            if not mime_type:
+                mime_type = "application/octet-stream"
+
+            headers = {
+                "Authorization": f"Bearer {self.token}",
+            }
+
+            # Upload file via multipart
+            with open(file_path, 'rb') as f:
+                files = {
+                    'files': (Path(file_path).name, f, mime_type)
+                }
+                data = {'roomId': room_id}
+
+                if caption:
+                    data['text'] = caption
+
+                response = requests.post(
+                    "https://webexapis.com/v1/messages",
+                    headers=headers,
+                    data=data,
+                    files=files,
+                    timeout=60  # Longer timeout for file uploads
+                )
+
+                if response.status_code != 200:
+                    print(f"[WARN] WebEX file send failed ({response.status_code}): {response.text[:200]}", file=sys.stderr)
+                    self.send_message(room_id, f"⚠️ Failed to send file: {Path(file_path).name}")
+                    return None
+
+                result = response.json()
+                if result and "id" in result:
+                    return result["id"]
+        except Exception as e:
+            print(f"Error sending file to WebEX: {e}", file=sys.stderr)
+            self.send_message(room_id, f"⚠️ Error sending file: {str(e)}")
+        return None
+
+    def extract_image_urls(self, text: str) -> tuple:
+        """Extract image URLs from text and return (image_data, remaining_text).
+        
+        Supports:
+        - ![caption](url) - Markdown syntax with caption
+        - Bare URL - https://example.com/image.jpg
+        
+        Returns:
+            Tuple of (image_data, remaining_text) where:
+            - image_data: List of (url, caption) tuples
+            - remaining_text: Text with image references removed
+        """
+        image_data = []
+        remaining = text
+
+        # Match markdown syntax: ![caption](url)
+        md_pattern = r'!\[([^\]]*)\]\(([^)]+)\)'
+        for match in re.finditer(md_pattern, remaining):
+            caption = match.group(1).strip()
+            url = match.group(2).strip()
+            
+            # Validate URL
+            if url.startswith(('http://', 'https://')):
+                image_data.append((url, caption))
+                remaining = remaining.replace(match.group(0), "").strip()
+
+        # Match bare URLs (http/https ending in image extensions)
+        url_pattern = r'(https?://[^\s\[\]]+\.(?:jpg|jpeg|png|gif|webp))'
+        for match in re.finditer(url_pattern, remaining, re.IGNORECASE):
+            url = match.group(1)
+            # Avoid duplicate URLs
+            if not any(img_url == url for img_url, _ in image_data):
+                image_data.append((url, ""))  # Empty caption
+                remaining = remaining.replace(url, "").strip()
+
+        return image_data, remaining
+
+    def extract_file_paths(self, text: str) -> tuple:
+        """Extract file paths from [FILE:...] markers.
+
+        Supports:
+        - [FILE:/path/to/file.ext] - file without caption
+        - [FILE:/path/to/file.ext:Caption text] - file with caption
+
+        Returns:
+            Tuple of (file_data, remaining_text) where:
+            - file_data: List of (path, caption) tuples
+            - remaining_text: Text with all file references removed
+        """
+        # Match [FILE:path] or [FILE:path:caption]
+        file_pattern = r'\[FILE:([^\]:]+)(?::([^\]]*))?\]'
+
+        file_data = []  # List of (path, caption) tuples
+        remaining = text
+
+        for match in re.finditer(file_pattern, remaining):
+            file_path = match.group(1).strip()
+            caption = match.group(2).strip() if match.group(2) else ""
+
+            # Validate path before adding
+            if self._is_safe_file_path(file_path):
+                file_data.append((file_path, caption))
+                remaining = remaining.replace(match.group(0), "").strip()
+            else:
+                # Keep marker in text as error indicator
+                print(f"[WARN] Unsafe file path rejected: {file_path}", file=sys.stderr)
+
+        return file_data, remaining
 
     def get_person_info(self, person_id: str) -> Optional[Dict]:
         """Get WebEX person info by ID"""
@@ -529,26 +741,50 @@ class WebEXConnector:
             return False
 
     def send_response(self, room_id: str, text: str, status_msg_id: Optional[str] = None):
-        """Send response, replacing the status message if it exists.
-
-        Mirrors Telegram pattern: if status_msg_id exists, edits the status message
-        with the final response. Otherwise just sends the response.
+        """Send response, detecting image URLs and file paths.
+        
+        Mirrors Telegram pattern: extracts images and files, sends text portion first,
+        then sends media items. If status_msg_id exists, edits it with text portion.
         """
-        if text and text.strip():
-            # If we have a status message ID, try to edit it with the final response
+        print(f"[DEBUG OUTBOUND] send_response -> room_id={room_id} text_snippet={repr(text[:200])} status_msg_id={status_msg_id}", file=sys.stderr)
+        
+        # Extract images first, then files from remaining text
+        image_data, text_after_images = self.extract_image_urls(text)
+        file_data, remaining_text = self.extract_file_paths(text_after_images)
+
+        # Handle text portion
+        if remaining_text.strip():
             if status_msg_id:
-                print(f"[DEBUG] Editing status message {status_msg_id} with response", file=sys.stderr)
-                success = self.edit_message(status_msg_id, room_id, text)
-                if not success:
-                    # If edit fails, send as new message
-                    print(f"[WARN] Edit failed, sending final response as new message", file=sys.stderr)
-                    self.send_message(room_id, text)
-                else:
-                    print(f"[DEBUG] Successfully edited status message with final response", file=sys.stderr)
+                print(f"[DEBUG OUTBOUND] send_response editing status message {status_msg_id} for room_id={room_id}", file=sys.stderr)
+                self.edit_message(status_msg_id, room_id, remaining_text)
+                status_msg_id = None
             else:
-                # No status message, just send the response normally
-                print(f"[DEBUG] No status message ID, sending response as new message", file=sys.stderr)
-                self.send_message(room_id, text)
+                print(f"[DEBUG OUTBOUND] send_response sending text to room_id={room_id}", file=sys.stderr)
+                self.send_message(room_id, remaining_text)
+        elif status_msg_id and (image_data or file_data):
+            # No text, just media - delete status message by editing to empty
+            try:
+                # WebEX doesn't support deleting messages, so edit to indicate completion
+                self.edit_message(status_msg_id, room_id, "✓")
+                print(f"[DEBUG OUTBOUND] Edited status message to checkmark for room_id={room_id}", file=sys.stderr)
+            except Exception as e:
+                print(f"[WARN] Could not edit status message: {e}", file=sys.stderr)
+            status_msg_id = None
+        elif status_msg_id:
+            # No text, no media - edit status message with default text
+            print(f"[DEBUG OUTBOUND] send_response editing status message {status_msg_id} to checkmark for room_id={room_id}", file=sys.stderr)
+            self.edit_message(status_msg_id, room_id, "✓")
+
+        # Send images
+        for url, caption in image_data:
+            print(f"[DEBUG OUTBOUND] send_response sending image URL={url} caption={repr(caption[:100])} to room_id={room_id}", file=sys.stderr)
+            self.send_file(room_id, url, caption) if url.startswith('/') else self.send_message(room_id, f"[Image]({url})" + (f" - {caption}" if caption else ""))
+
+        # Send files
+        for file_path, caption in file_data:
+            print(f"[DEBUG OUTBOUND] send_response sending file path={file_path} caption={repr(caption[:100])} to room_id={room_id}", file=sys.stderr)
+            self.send_file(room_id, file_path, caption)
+
 
     def handle_message(self, message_data: Dict):
         """Process incoming WebEX message from RabbitMQ"""
@@ -611,21 +847,35 @@ class WebEXConnector:
             # Get or create user session
             session_info = self.config.get_user_session(person_id)
             if not session_info:
-                # Create new session
+                # Create new session - use pinned agent if configured
+                default_agent = self.config.config["default_agent"]
+                pinned_agent = self.config.get_pinned_agent(person_id)
+                if pinned_agent:
+                    default_agent = pinned_agent
                 session_info = {
                     "person_id": person_id,
                     "email": person_email,
                     "paired_at": datetime.now().isoformat(),
-                    "agent": self.config.config["default_agent"],
+                    "agent": default_agent,
                     "model": self.config.config["default_model"],
                 }
                 self.config.set_user_session(person_id, session_info)
+            elif self.config.is_user_pinned(person_id):
+                # Enforce pinned agent even for existing sessions
+                pinned_agent = self.config.get_pinned_agent(person_id)
+                if pinned_agent and session_info.get("agent") != pinned_agent:
+                    session_info["agent"] = pinned_agent
+                    self.config.set_user_session(person_id, session_info)
 
             session_id = f"webex_{person_id}"
 
+            # Push pinned agent/runtime/model into SessionManager before every message
+            self._enforce_pinned_session(person_id, session_id)
+
             # Handle slash commands
             if text.startswith("/"):
-                if text.lower().startswith("/timeout"):
+                cmd_lower = text.lower().strip()
+                if cmd_lower.startswith("/timeout"):
                     parts = text.split()
                     if len(parts) == 1 or (len(parts) > 1 and parts[1].lower() == "current"):
                         current = self.config.get_user_timeout(person_id)
@@ -648,6 +898,30 @@ class WebEXConnector:
                     else:
                         response = "Invalid timeout command. Use: /timeout current or /timeout set <seconds>"
                     msg_id = self.send_message(room_id, response)
+                # Block pinned users from changing their agent
+                elif cmd_lower.startswith("/agent set") and self.config.is_user_pinned(person_id):
+                    pinned_agent = self.config.get_pinned_agent(person_id)
+                    self.send_message(
+                        room_id,
+                        f"❌ Your agent is pinned to **{pinned_agent}** by an administrator. You cannot change agents.",
+                    )
+                # Block pinned users from changing their runtime (if a runtime is pinned)
+                elif cmd_lower.startswith("/runtime set") and self.config.get_pinned_runtime(person_id):
+                    pinned_runtime = self.config.get_pinned_runtime(person_id)
+                    self.send_message(
+                        room_id,
+                        f"❌ Your runtime is pinned to **{pinned_runtime}** by an administrator. You cannot change runtimes.",
+                    )
+                # Block pinned users from changing their model (if a model is pinned)
+                elif cmd_lower.startswith("/model set") and self.config.get_pinned_model(person_id):
+                    pinned_model = self.config.get_pinned_model(person_id)
+                    self.send_message(
+                        room_id,
+                        f"❌ Your model is pinned to **{pinned_model}** by an administrator. You cannot change models.",
+                    )
+                # Block unauthorized users from enabling yolo mode
+                elif cmd_lower.startswith("/mode yolo") and not self.config.is_yolo_allowed(person_id):
+                    self.send_message(room_id, "❌ You are not authorized to enable YOLO mode.")
                 else:
                     # Regular slash commands
                     timeout = self.config.get_user_timeout(person_id)
@@ -655,7 +929,6 @@ class WebEXConnector:
                     msg_id = self.send_message(room_id, response)
 
                     # Pin configuration commands (agent, runtime, model, session)
-                    cmd_lower = text.lower().strip()
                     if msg_id and any(cmd_lower.startswith(cmd) for cmd in ["/agent set", "/runtime set", "/model set", "/session reset"]):
                         self.pin_message(msg_id, room_id)
                         print(f"[DEBUG] Pinned configuration command message: {cmd_lower[:30]}", file=sys.stderr)
@@ -688,8 +961,11 @@ class WebEXConnector:
 
         def run_command():
             try:
-                session_mgr = self.get_session_manager(session_id)
-                result_container["response"] = session_mgr.execute(command, session_id)
+                if self.use_api:
+                    result_container["response"] = self._execute_via_api(command, session_id, session_id, "webex")
+                else:
+                    session_mgr = self.get_session_manager(session_id)
+                    result_container["response"] = session_mgr.execute(command, session_id)
                 result_container["done"] = True
             except Exception as e:
                 import traceback
@@ -770,10 +1046,14 @@ class WebEXConnector:
         """Query the agent_manager with user session tied to person ID"""
         try:
             session_id = f"webex_{person_id}"
-            session_mgr = self.get_session_manager(session_id)
 
             print(f"[DEBUG] Using persistent session_mgr for: {session_id}", file=sys.stderr)
-            result = session_mgr.execute(query, session_id)
+
+            if self.use_api:
+                result = self._execute_via_api(query, session_id, session_id, "webex")
+            else:
+                session_mgr = self.get_session_manager(session_id)
+                result = session_mgr.execute(query, session_id)
 
             return result if result else "No response from agent"
         except Exception as e:
