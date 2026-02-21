@@ -240,12 +240,12 @@ const PILL_OPTIONS = {
   'meta-model': {
     label: 'Switch Model',
     options: [
-      { label: 'claude-sonnet-4-5',         cmd: '/model set "claude-sonnet-4-5"' },
-      { label: 'claude-opus-4',             cmd: '/model set "claude-opus-4"' },
-      { label: 'claude-haiku-4-5',          cmd: '/model set "claude-haiku-4-5"' },
-      { label: 'gpt-4o',                    cmd: '/model set "gpt-4o"' },
-      { label: 'gpt-4o-mini',              cmd: '/model set "gpt-4o-mini"' },
-      { label: 'gemini-1.5-pro',            cmd: '/model set "gemini-1.5-pro"' },
+      { label: 'claude-sonnet-4.5',         cmd: '/model set claude-sonnet-4.5' },
+      { label: 'claude-opus-4',             cmd: '/model set claude-opus-4' },
+      { label: 'claude-haiku-4.5',          cmd: '/model set claude-haiku-4.5' },
+      { label: 'gpt-4o',                    cmd: '/model set gpt-4o' },
+      { label: 'gpt-4o-mini',              cmd: '/model set gpt-4o-mini' },
+      { label: 'gemini-1.5-pro',            cmd: '/model set gemini-1.5-pro' },
       { label: '📋 list models',            cmd: '/model list' },
     ],
   },
