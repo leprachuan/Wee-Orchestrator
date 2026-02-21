@@ -35,6 +35,10 @@ env/
 node_modules/
 webui/node_modules/
 
+# WebUI static assets — track dist/ even though dist/ is globally ignored
+!webui/dist/
+!webui/dist/**
+
 # IDE
 .vscode/
 .idea/
