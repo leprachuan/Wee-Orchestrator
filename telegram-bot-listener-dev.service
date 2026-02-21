@@ -1,0 +1,23 @@
+[Unit]
+Description=N8N Copilot Telegram Connector (Development)
+After=network.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=flipkey
+WorkingDirectory=/opt/n8n-copilot-shim-dev
+EnvironmentFile=/opt/n8n-copilot-shim-dev/.env
+Environment="PATH=/home/flipkey/.local/bin:/home/flipkey/.nvm/versions/node/v22.22.0/bin:/usr/local/bin:/usr/bin:/bin"
+Environment="DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus"
+Environment="XDG_RUNTIME_DIR=/run/user/1000"
+Environment="TELEGRAM_BOT_TOKEN=[REDACTED-TELEGRAM-TOKEN]"
+ExecStart=/usr/bin/python3 /opt/n8n-copilot-shim-dev/telegram_connector.py
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=telegram-connector-dev
+
+[Install]
+WantedBy=multi-user.target

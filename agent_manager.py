@@ -17,6 +17,125 @@ import shutil
 from pathlib import Path
 from uuid import uuid4
 from typing import Optional, Tuple, Dict, List
+import secrets as _secrets
+import threading
+
+
+class RateLimiter:
+    """In-memory per-IP rate limiter with sliding window."""
+
+    def __init__(self):
+        self.records: Dict[str, Dict[str, List[float]]] = {}
+        self._lock = threading.Lock()
+
+    def check(self, ip: str, endpoint: str, max_requests: int, window: int) -> bool:
+        """Return True if request is allowed, False if rate limited."""
+        now = time.time()
+        with self._lock:
+            ep_list = self.records.setdefault(ip, {}).setdefault(endpoint, [])
+            ep_list[:] = [t for t in ep_list if now - t < window]
+            if len(ep_list) >= max_requests:
+                return False
+            ep_list.append(now)
+            return True
+
+    def cleanup(self):
+        """Remove all empty entries."""
+        with self._lock:
+            for ip in list(self.records):
+                for ep in list(self.records[ip]):
+                    if not self.records[ip][ep]:
+                        del self.records[ip][ep]
+                if not self.records[ip]:
+                    del self.records[ip]
+
+
+class AuthManager:
+    """Manages pairing codes, session tokens, and shared key validation."""
+
+    def __init__(
+        self,
+        shared_key: str,
+        pairing_code_length: int = 6,
+        pairing_code_ttl: int = 300,
+        session_token_ttl: int = 3600,
+    ):
+        self.shared_key = shared_key
+        self.pairing_code_length = pairing_code_length
+        self.pairing_code_ttl = pairing_code_ttl
+        self.session_token_ttl = session_token_ttl
+        self.pairing_codes: Dict[str, dict] = {}
+        self.session_tokens: Dict[str, dict] = {}
+        self._lock = threading.Lock()
+
+    def validate_shared_key(self, token: str) -> bool:
+        """Validate a Bearer token as a shared key. Expects 'shared_<key>'."""
+        if not token.startswith("shared_"):
+            return False
+        return token[7:] == self.shared_key
+
+    def generate_pairing_code(self, identity: str, channel: str) -> str:
+        """Generate a numeric pairing code and store it."""
+        code = "".join(
+            [str(_secrets.randbelow(10)) for _ in range(self.pairing_code_length)]
+        )
+        now = time.time()
+        with self._lock:
+            self.pairing_codes[code] = {
+                "identity": identity,
+                "channel": channel,
+                "created_at": now,
+                "expires_at": now + self.pairing_code_ttl,
+            }
+        return code
+
+    def verify_pairing_code(self, code: str, identity: str) -> Optional[str]:
+        """Verify pairing code. Returns session token on success, None on failure."""
+        with self._lock:
+            entry = self.pairing_codes.get(code)
+            if not entry:
+                return None
+            if entry["identity"] != identity:
+                return None
+            if time.time() > entry["expires_at"]:
+                del self.pairing_codes[code]
+                return None
+            del self.pairing_codes[code]
+        token = f"session_{_secrets.token_urlsafe(32)}"
+        now = time.time()
+        with self._lock:
+            self.session_tokens[token] = {
+                "identity": identity,
+                "channel": entry["channel"],
+                "created_at": now,
+                "last_used": now,
+                "expires_at": now + self.session_token_ttl,
+            }
+        return token
+
+    def validate_session_token(self, token: str) -> Optional[dict]:
+        """Validate session token. Returns identity info or None."""
+        with self._lock:
+            entry = self.session_tokens.get(token)
+            if not entry:
+                return None
+            if time.time() > entry["expires_at"]:
+                del self.session_tokens[token]
+                return None
+            entry["last_used"] = time.time()
+            entry["expires_at"] = time.time() + self.session_token_ttl
+            return {"identity": entry["identity"], "channel": entry["channel"]}
+
+    def cleanup_expired(self):
+        """Remove expired pairing codes and session tokens."""
+        now = time.time()
+        with self._lock:
+            for code in list(self.pairing_codes):
+                if now > self.pairing_codes[code]["expires_at"]:
+                    del self.pairing_codes[code]
+            for token in list(self.session_tokens):
+                if now > self.session_tokens[token]["expires_at"]:
+                    del self.session_tokens[token]
 
 
 # Executable resolution
@@ -89,6 +208,134 @@ def get_command_timeout() -> int:
             file=sys.stderr,
         )
         return 300
+
+
+class HistoryManager:
+    """Persists per-user chat history in ~/.copilot/chat-history.json."""
+
+    MAX_SESSIONS_PER_USER = 100
+    MAX_MESSAGES_PER_SESSION = 500
+
+    def __init__(self):
+        home = os.path.expanduser("~")
+        copilot_dir = os.path.join(home, ".copilot")
+        os.makedirs(copilot_dir, exist_ok=True)
+        self._path = os.path.join(copilot_dir, "chat-history.json")
+        self._lock = threading.Lock()
+        if not os.path.exists(self._path):
+            self._save({})
+
+    def _user_key(self, channel: str, identity: str) -> str:
+        return f"{channel}_{identity}"
+
+    def _load(self) -> dict:
+        try:
+            with open(self._path) as f:
+                return json.load(f)
+        except Exception:
+            return {}
+
+    def _save(self, data: dict) -> None:
+        with open(self._path, "w") as f:
+            json.dump(data, f, indent=2)
+
+    def get_sessions(self, channel: str, identity: str) -> list:
+        """Return session list (no messages) sorted newest-first."""
+        with self._lock:
+            data = self._load()
+            key = self._user_key(channel, identity)
+            sessions = data.get(key, {}).get("sessions", [])
+            # Return without messages, sorted newest-first
+            result = []
+            for s in sorted(sessions, key=lambda x: x.get("updated_at", 0), reverse=True):
+                result.append({k: v for k, v in s.items() if k != "messages"})
+            return result
+
+    def get_session_messages(self, channel: str, identity: str, session_id: str):
+        """Return messages for a session, or None if not found."""
+        with self._lock:
+            data = self._load()
+            key = self._user_key(channel, identity)
+            for s in data.get(key, {}).get("sessions", []):
+                if s["session_id"] == session_id:
+                    return s.get("messages", [])
+        return None
+
+    def create_session(self, channel: str, identity: str, session_id: str) -> dict:
+        """Create a new session entry, pruning oldest if over cap."""
+        with self._lock:
+            data = self._load()
+            key = self._user_key(channel, identity)
+            user_data = data.setdefault(key, {"sessions": []})
+            sessions = user_data["sessions"]
+            # Prune if at cap
+            if len(sessions) >= self.MAX_SESSIONS_PER_USER:
+                sessions.sort(key=lambda x: x.get("updated_at", 0))
+                sessions = sessions[-(self.MAX_SESSIONS_PER_USER - 1):]
+                user_data["sessions"] = sessions
+            now = time.time()
+            session = {
+                "session_id": session_id,
+                "title": "",
+                "preview": "",
+                "created_at": now,
+                "updated_at": now,
+                "messages": [],
+            }
+            sessions.append(session)
+            self._save(data)
+            return session
+
+    def append_message(
+        self,
+        channel: str,
+        identity: str,
+        session_id: str,
+        role: str,
+        content: str,
+        files=None,
+    ) -> bool:
+        """Append a message to a session. Returns False if session not found."""
+        with self._lock:
+            data = self._load()
+            key = self._user_key(channel, identity)
+            for s in data.get(key, {}).get("sessions", []):
+                if s["session_id"] == session_id:
+                    msg: dict = {
+                        "role": role,
+                        "content": content,
+                        "timestamp": time.time(),
+                    }
+                    if files:
+                        msg["files"] = files
+                    messages = s.setdefault("messages", [])
+                    messages.append(msg)
+                    # Auto-set title from first user message
+                    if role == "user" and not s.get("title"):
+                        s["title"] = content[:60]
+                    # Auto-set preview from first assistant message
+                    if role == "assistant" and not s.get("preview"):
+                        s["preview"] = content[:120]
+                    # Prune if too many messages
+                    if len(messages) > self.MAX_MESSAGES_PER_SESSION:
+                        s["messages"] = messages[-self.MAX_MESSAGES_PER_SESSION:]
+                    s["updated_at"] = time.time()
+                    self._save(data)
+                    return True
+        return False
+
+    def delete_session(self, channel: str, identity: str, session_id: str) -> bool:
+        """Delete a session. Returns False if not found."""
+        with self._lock:
+            data = self._load()
+            key = self._user_key(channel, identity)
+            sessions = data.get(key, {}).get("sessions", [])
+            new_sessions = [s for s in sessions if s["session_id"] != session_id]
+            if len(new_sessions) == len(sessions):
+                return False
+            data[key]["sessions"] = new_sessions
+            self._save(data)
+            return True
 
 
 class SessionManager:
@@ -545,15 +792,29 @@ class SessionManager:
         with open(self.session_map_file, "w") as f:
             json.dump(session_map, f, indent=2)
 
-    # Backwards compatibility: older callers used load_session_data
-    def load_session_data(self) -> Dict:
-        """Compatibility wrapper for older code expecting load_session_data()."""
-        return self.load_session_map()
+    def load_session_data(self, n8n_session_id: str) -> Optional[Dict]:
+        """
+        Load existing session data without creating new ones.
+        Returns session data dict or None if not found.
+        """
+        session_map = self.load_session_map()
+        return session_map.get(n8n_session_id)
+
+    def _extract_bot_identifier(self, session_id: str) -> str:
+        """Extract bot identifier (last 4 chars of numeric part) from session ID"""
+        # Format: "telegram_<user_id>" or "webex_<connector_id>" or other
+        if "_" in session_id:
+            parts = session_id.split("_")
+            if len(parts) >= 2:
+                numeric_part = parts[-1]
+                # Extract last 4 characters or full if less than 4
+                return numeric_part[-4:] if len(numeric_part) >= 4 else numeric_part
+        return session_id[-4:] if len(session_id) >= 4 else session_id
 
     def get_or_create_session_data(self, n8n_session_id: str) -> Dict:
         """
         Get existing session data or create new default
-        Returns dict with keys: session_id, model, agent, runtime
+        Returns dict with keys: session_id, model, agent, runtime, bot_id
         """
         session_map = self.load_session_map()
 
@@ -570,11 +831,15 @@ class SessionManager:
         elif default_runtime == "codex":
             default_model = "gpt-5.1-codex-max"
 
+        # Extract bot identifier from session ID (last 4 chars of numeric part)
+        bot_id = self._extract_bot_identifier(n8n_session_id)
+
         default_data = {
             "session_id": str(uuid4()),
             "model": default_model,
             "agent": get_default_agent(),
             "runtime": default_runtime,
+            "bot_id": bot_id,
         }
 
         if n8n_session_id not in session_map:
@@ -630,6 +895,10 @@ class SessionManager:
                 if not session_id or not session_id.startswith("ses_"):
                     merged["session_id"] = str(uuid4())
 
+            # Ensure bot_id is set
+            if "bot_id" not in merged:
+                merged["bot_id"] = bot_id
+
             # Save back if changed
             if merged != data:
                 session_map[n8n_session_id] = merged
@@ -641,7 +910,7 @@ class SessionManager:
         session_map[n8n_session_id] = default_data
         self.save_session_map(session_map)
         print(
-            f"[Session] Created new session: {default_data['session_id']} (N8N: {n8n_session_id})",
+            f"[Session] Created new session: {default_data['session_id']} (N8N: {n8n_session_id}, Bot: {bot_id})",
             file=sys.stderr,
         )
         return {**default_data, "is_new": True}
@@ -1573,9 +1842,29 @@ Example skill structure:
         # Add render type instruction to the context
         render_instruction = ""
         if render_type == "markdown":
-            render_instruction = """
+            _api_port = os.environ.get("API_PORT", "8001")
+            render_instruction = f"""
 [Output Format: markdown]
-[Media: When the user asks for images or pictures, you MUST use the web_search tool to search for the image. Find a real, publicly accessible image URL ending in .jpg, .png, .gif, or .webp (e.g. from Wikipedia Commons, Unsplash, Pexels). Include it using markdown: ![caption text](https://real-url.jpg). The text in brackets will appear as the image caption. Do NOT create files, generate ASCII art, or make SVGs. Only use real URLs found via web_search. You can also include hyperlinks using [text](url) syntax.]"""
+[Image Retrieval — MANDATORY: When the user asks for any image, picture, photo, or logo, you MUST retrieve and display a real image. Never say you cannot retrieve images — use your tools.
+
+How to get images:
+1. Use WebFetch on a relevant page (Wikipedia, the official product site, Wikimedia Commons) to locate a direct image URL ending in .jpg, .png, .gif, or .webp.
+   Example: WebFetch("https://en.wikipedia.org/wiki/Snort_(software)") then read the page to extract a real image src URL.
+2. Return the image using one of these methods:
+
+   Option A — Direct external URL (simplest, use when URL is publicly accessible):
+   ![Description of image](https://actual-direct-image-url.jpg)
+
+   Option B — Download locally for reliability (use when image may be behind a CDN or require headers):
+   Step 1: Bash("mkdir -p /tmp/webui_ai_media/{n8n_session_id} && curl -s -L --max-time 15 -o /tmp/webui_ai_media/{n8n_session_id}/image.jpg 'https://direct-image-url.jpg'")
+   Step 2: Include in your response: ![Description](/ai-media/{n8n_session_id}/image.jpg)
+
+   Option C — Local file (screenshots, files already on disk e.g. from Playwright/browser tools):
+   Step 1: Bash("mkdir -p /tmp/webui_ai_media/{n8n_session_id} && cp /path/to/local/screenshot.png /tmp/webui_ai_media/{n8n_session_id}/screenshot.png")
+   Step 2: Include in your response: ![Description](/ai-media/{n8n_session_id}/screenshot.png)
+   IMPORTANT: Always verify the cp succeeded and the destination file size is > 0 before including the image URL.
+
+Always include at least one image in markdown format. Do NOT use ASCII art, SVG generation, or placeholder images.]"""
         elif render_type == "html":
             render_instruction = """
 [Output Format: html]
@@ -1612,28 +1901,102 @@ HOW TO FORMAT:
 2. Bare URL: https://url.jpg - Image sent without caption
 Do NOT use <img> tags (unsupported). Do NOT create files, generate ASCII art, or make SVGs. The system will automatically detect image URLs and send them as photos. You can include hyperlinks using <a href="url">text</a>.]
 
-[File Handling - Telegram]: When the user asks for a file, report, export, or any output as a file:
-1. Generate the file content in the format requested (PDF, CSV, JSON, TXT, ZIP, etc.)
-2. Save the file to: /opt/n8n-copilot-shim-dev/telegram_downloads/
-3. Use this naming format: {user_id}_{filename} (e.g., 8193231291_report.pdf)
-4. Then reference it using: [FILE:/opt/n8n-copilot-shim-dev/telegram_downloads/{user_id}_{filename}:Caption describing the file]
+[File Handling - ALL PLATFORMS]: Use the SAME syntax for Telegram, WebEx, and WebUI!
 
-Supported file types: PDF (reports, documents), CSV (data exports), JSON (structured data), TXT (text), ZIP (archives), YAML, XML, MD, and any other text/binary format.
-Size limit: 50MB maximum (Telegram API limit)
-Important: Keep user_id in path to avoid conflicts with other users' files.
+UNIVERSAL SYNTAX:
+  Files:     [FILE:/path/to/file.ext:Your caption here]
+  Images:    ![caption](https://example.com/image.png) or bare URL
+  Captions:  Descriptive text after the colon (max 1000 chars)
 
-Examples:
-1. User asks for "monthly sales report as PDF":
-   - Generate PDF with sales data
-   - Save to: /opt/n8n-copilot-shim-dev/telegram_downloads/8193231291_sales_report.pdf
-   - Reference: [FILE:/opt/n8n-copilot-shim-dev/telegram_downloads/8193231291_sales_report.pdf:Monthly Sales Report - Jan 2026]
+PLATFORM-SPECIFIC DIRECTORIES (save files here):
+  Telegram:  /opt/n8n-copilot-shim-dev/telegram_downloads/
+  WebEx:     /opt/n8n-copilot-shim-dev/webex_downloads/
+  WebUI:     /opt/n8n-copilot-shim-dev/webui_downloads/
 
-2. User asks for "export this data as CSV":
-   - Create CSV with the data
-   - Save to: /opt/n8n-copilot-shim-dev/telegram_downloads/8193231291_data_export.csv
-   - Reference: [FILE:/opt/n8n-copilot-shim-dev/telegram_downloads/8193231291_data_export.csv:Data Export - All Records]
+SIZE LIMITS:
+  Telegram:  50 MB (will reject larger files)
+  WebEx:     100 MB (will reject larger files)
+  WebUI:     500 MB (will reject larger files)
 
-The system will automatically detect [FILE:...] markers and send files to the user via Telegram's sendDocument API with captions."""
+SUPPORTED FILE TYPES: All binary and text formats
+  ✓ PDF, DOCX, XLSX (documents)
+  ✓ CSV, JSON, XML, YAML (data)
+  ✓ PNG, JPG, GIF, WEBP (images)
+  ✓ ZIP, TAR, 7Z (archives)
+  ✓ MP4, MP3, WAV (media)
+  ✓ Any other format
+
+FILE NAMING BEST PRACTICES:
+  ✓ Descriptive names: monthly_report_jan_2026.pdf
+  ✓ With timestamps: report_2026_02_21_133000.pdf
+  ✓ User-scoped: user_123456_export.csv
+  ❌ Generic names: file.pdf, data.csv, image.png
+  ❌ Cryptic names: tmp123, output, file1
+
+EXAMPLES:
+
+1. USER ASKS FOR A SCREENSHOT:
+   User: "Get me a screenshot of snort.org"
+   → Use Playwright/Selenium to capture
+   → Save to: /opt/n8n-copilot-shim-dev/{platform}_downloads/snort_screenshot.png
+   → Return response:
+      "Here's the screenshot of snort.org:
+       [FILE:/opt/n8n-copilot-shim-dev/webex_downloads/snort_screenshot.png:Snort Homepage - Full Page]"
+   → System automatically sends file to user's platform ✓
+
+2. USER ASKS FOR A PDF REPORT:
+   User: "Generate a monthly sales report as PDF"
+   → Use reportlab or similar to create PDF
+   → Save to: /opt/n8n-copilot-shim-dev/{platform}_downloads/sales_report_jan_2026.pdf
+   → Return response:
+      "I've generated your monthly sales report:
+       [FILE:/opt/n8n-copilot-shim-dev/telegram_downloads/sales_report_jan_2026.pdf:Monthly Sales Report - January 2026]"
+   → System automatically sends file to user's platform ✓
+
+3. USER ASKS FOR A DATA EXPORT:
+   User: "Export all user data as CSV"
+   → Generate CSV with data
+   → Save to: /opt/n8n-copilot-shim-dev/{platform}_downloads/user_export.csv
+   → Return response:
+      "Your data export is ready:
+       [FILE:/opt/n8n-copilot-shim-dev/webui_downloads/user_export.csv:User Data Export - All Records]"
+   → System automatically sends file to user's platform ✓
+
+4. USER ASKS FOR AN IMAGE:
+   User: "Show me a network diagram"
+   → Use web_search tool to find real public image
+   → Return response with markdown:
+      "Here's a network diagram:
+       ![Network Architecture](https://commons.wikimedia.org/wiki/File:network_diagram.png)"
+   → System automatically embeds image in user's platform ✓
+
+HOW THE SYSTEM WORKS:
+  1. Agent generates response with [FILE:...] markers
+  2. Response is sent to platform connector (telegram_connector, webex_connector, etc)
+  3. Connector's send_response() method:
+     - Extracts [FILE:...] markers
+     - Sends text content as message
+     - Calls send_file() to upload each file
+     - Includes caption with file
+  4. File appears in user's platform with caption ✓
+
+IMPORTANT RULES:
+  ✓ ALWAYS use absolute paths (start with /)
+  ✓ ALWAYS include meaningful captions
+  ✓ ALWAYS check file exists before referencing
+  ✓ ALWAYS validate file size is within limits
+  ✓ DON'T create files outside designated directories
+  ✓ DON'T mix different syntaxes
+  ✓ DON'T use relative paths like ./file.pdf or ~/file.pdf
+  ✓ DON'T reference /tmp files (may be deleted)
+
+TROUBLESHOOTING:
+  "File does not exist" → Check path is correct and absolute
+  "File outside allowed directory" → Save to platform-specific downloads dir
+  "File exceeds size limit" → Compress file or split into smaller pieces
+  "File not appearing in platform" → Check captions are included, path is valid
+  "Image not showing" → Use public URL (not localhost or file://)
+"""
         else:  # text (default)
             render_instruction = ""
 
@@ -2594,7 +2957,7 @@ You can mention an agent in your prompt and it will auto-delegate:
                     f"Current Model: `{session_data.get('model')}` ({current_runtime})"
                 )
             elif argument.startswith("set "):
-                model_name = argument[4:].strip()
+                model_name = argument[4:].strip().strip('"')
                 model_id = self.get_model_from_name(model_name, current_runtime)
                 if not model_id:
                     return f"Unknown model '{model_name}' for runtime {current_runtime}"
@@ -2892,6 +3255,720 @@ def _check_command_result(result: str, error_keywords: List[str]) -> None:
             sys.exit(1)
 
 
+# ---------------------------------------------------------------------------
+# FastAPI Application
+# ---------------------------------------------------------------------------
+
+_api_auth_manager: Optional["AuthManager"] = None
+
+
+def _send_pairing_code(channel: str, identity: str, code: str) -> None:
+    """Best-effort delivery of a pairing code via the appropriate connector."""
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    try:
+        if channel == "telegram":
+            from telegram_connector import TelegramConnector
+
+            config_path = os.path.join(script_dir, "telegram_config.json")
+            with open(config_path) as f:
+                cfg = json.load(f)
+            token = cfg.get("token") or os.getenv("TELEGRAM_BOT_TOKEN", "")
+            connector = TelegramConnector(token, config_file=config_path)
+            connector.send_message(
+                int(identity),
+                f"Your pairing code is: {code}\nIt expires in 5 minutes.",
+            )
+        elif channel == "webex":
+            from webex_connector import WebEXConnector
+
+            config_path = os.path.join(script_dir, "webex_config.json")
+            with open(config_path) as f:
+                cfg = json.load(f)
+            token = cfg.get("bot_token") or os.getenv("WEBEX_BOT_TOKEN", "")
+            connector = WebEXConnector(token, config_file=config_path)
+            connector.send_message(
+                identity,
+                f"Your pairing code is: {code}\nIt expires in 5 minutes.",
+            )
+    except Exception as exc:  # noqa: BLE001
+        print(f"[API] Warning: could not send pairing code via {channel}: {exc}")
+
+
+def _get_telegram_username(user_id: str):
+    """Look up @username for a numeric Telegram user_id in telegram_config.json.
+    Returns the username string (without @), or None if not found."""
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    config_path = os.path.join(script_dir, "telegram_config.json")
+    try:
+        with open(config_path) as f:
+            cfg = json.load(f)
+        pairing = cfg.get("user_pairings", {}).get(str(user_id), {})
+        username = pairing.get("username", "")
+        return username.lstrip("@") if username else None
+    except Exception:
+        return None
+
+
+def _ddg_image_search(query: str, max_results: int = 4) -> list:
+    """Fetch image results from DuckDuckGo without an API key.
+    Returns list of {url, thumbnail, title, source} dicts."""
+    import re as _re
+    import requests as _req
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+            "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        ),
+        "Referer": "https://duckduckgo.com/",
+    }
+    try:
+        # Step 1: get VQD token
+        r1 = _req.get(
+            "https://duckduckgo.com/",
+            params={"q": query},
+            headers=headers,
+            timeout=8,
+        )
+        m = _re.search(r"vqd=([\d-]+)", r1.text)
+        if not m:
+            return []
+        vqd = m.group(1)
+        # Step 2: fetch image JSON
+        r2 = _req.get(
+            "https://duckduckgo.com/i.js",
+            params={
+                "q": query, "o": "json", "l": "us-en",
+                "s": "0", "f": ",,,,,", "p": "1", "vqd": vqd,
+            },
+            headers=headers,
+            timeout=8,
+        )
+        out = []
+        for item in r2.json().get("results", [])[:max_results]:
+            if item.get("image"):
+                out.append({
+                    "url":       item["image"],
+                    "thumbnail": item.get("thumbnail", item["image"]),
+                    "title":     item.get("title", ""),
+                    "source":    item.get("source", ""),
+                })
+        return out
+    except Exception:
+        return []
+
+
+def _resolve_telegram_identity(username: str):
+    """Reverse-lookup @username in telegram_config.json user_pairings.
+    Returns numeric user_id string, or None if not found (user must message bot first)."""
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    config_path = os.path.join(script_dir, "telegram_config.json")
+    try:
+        with open(config_path) as f:
+            cfg = json.load(f)
+        for uid, pairing in cfg.get("user_pairings", {}).items():
+            if pairing.get("username", "").lower() == username.lower():
+                return uid
+        return None
+    except Exception:
+        return None
+
+
+def create_api_app():  # noqa: C901 – factory kept in one place intentionally
+    """Factory that builds and returns the FastAPI application."""
+    import asyncio
+    import concurrent.futures
+    from enum import Enum
+
+    from fastapi import FastAPI, Header, HTTPException, Request, UploadFile, File
+    from fastapi.responses import JSONResponse, FileResponse
+    from fastapi.staticfiles import StaticFiles
+    from fastapi.middleware.cors import CORSMiddleware
+    from pydantic import BaseModel, field_validator
+    import mimetypes
+
+    global _api_auth_manager
+
+    # ---- configuration from environment ----
+    APP_ENV = os.environ.get("APP_ENV", "PROD").upper()
+    IS_PRODUCTION = APP_ENV != "DEV"
+    SHARED_KEY = os.environ.get("API_SHARED_KEY", "")
+    PAIRING_CODE_LENGTH = int(os.environ.get("PAIRING_CODE_LENGTH", "6"))
+    PAIRING_CODE_TTL = int(os.environ.get("PAIRING_CODE_TTL", "300"))
+    SESSION_TOKEN_TTL = int(os.environ.get("SESSION_TOKEN_TTL", "3600"))
+    CONFIG_FILE = os.environ.get("AGENT_CONFIG_FILE")
+
+    # ---- shared instances ----
+    auth_mgr = AuthManager(
+        shared_key=SHARED_KEY,
+        pairing_code_length=PAIRING_CODE_LENGTH,
+        pairing_code_ttl=PAIRING_CODE_TTL,
+        session_token_ttl=SESSION_TOKEN_TTL,
+    )
+    _api_auth_manager = auth_mgr
+    rate_limiter = RateLimiter()
+    session_mgr = SessionManager(config_file=CONFIG_FILE)
+    history_mgr = HistoryManager()
+
+    # ---- Pydantic models ----
+    class ChannelEnum(str, Enum):
+        telegram = "telegram"
+        webex = "webex"
+        webui = "webui"
+
+    class PairingRequest(BaseModel):
+        identity: str
+        channel: ChannelEnum
+
+    class PairingVerification(BaseModel):
+        code: str
+        identity: str
+
+    class SessionCreate(BaseModel):
+        agent: Optional[str] = None
+        model: Optional[str] = None
+        runtime: Optional[str] = None
+
+    class ExecuteRequest(BaseModel):
+        query: str
+        timeout: Optional[int] = None
+
+        @field_validator("query")
+        @classmethod
+        def validate_query_length(cls, v):
+            if len(v) > 10000:
+                raise ValueError("Query must be 10,000 characters or less")
+            return v
+
+    # ---- authentication dependency ----
+    async def authenticate(
+        request: Request,
+        authorization: Optional[str] = Header(None),
+        x_user_identity: Optional[str] = Header(None),
+        x_auth_channel: Optional[str] = Header(None),
+    ) -> dict:
+        if not authorization or not authorization.startswith("Bearer "):
+            raise HTTPException(status_code=401, detail="Missing or invalid authorization header")
+
+        token = authorization[7:]
+
+        if token.startswith("shared_"):
+            if not auth_mgr.validate_shared_key(token):
+                raise HTTPException(status_code=401, detail="Invalid shared key")
+            return {
+                "identity": x_user_identity or "shared",
+                "channel": x_auth_channel or "api",
+                "auth_type": "shared_key",
+            }
+
+        if token.startswith("session_"):
+            token_data = auth_mgr.validate_session_token(token)
+            if not token_data:
+                raise HTTPException(status_code=401, detail="Invalid or expired session token")
+            return {
+                "identity": token_data["identity"],
+                "channel": token_data["channel"],
+                "auth_type": "session_token",
+            }
+
+        raise HTTPException(status_code=401, detail="Unrecognized token type")
+
+    # ---- lifespan for background cleanup ----
+    from contextlib import asynccontextmanager
+
+    @asynccontextmanager
+    async def _lifespan(app):
+        async def _periodic_cleanup():
+            while True:
+                await asyncio.sleep(300)
+                auth_mgr.cleanup_expired()
+                rate_limiter.cleanup()
+
+        task = asyncio.ensure_future(_periodic_cleanup())
+        yield
+        task.cancel()
+
+    # ---- FastAPI app ----
+    app = FastAPI(
+        title="Wee-Orchestrator API",
+        version="1.0.0",
+        docs_url="/api/v1/docs" if not IS_PRODUCTION else None,
+        redoc_url="/api/v1/redoc" if not IS_PRODUCTION else None,
+        lifespan=_lifespan,
+    )
+
+    # ---- CORS middleware ----
+    cors_origins = [o.strip() for o in os.environ.get("API_CORS_ORIGINS", "").split(",") if o.strip()]
+    if cors_origins:
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origins=cors_origins,
+            allow_credentials=True,
+            allow_methods=["GET", "POST", "PUT", "DELETE"],
+            allow_headers=["Authorization", "Content-Type", "X-User-Identity", "X-Auth-Channel"],
+        )
+
+    # ---- generic exception handler ----
+    @app.exception_handler(Exception)
+    async def _global_exception_handler(request: Request, exc: Exception):
+        if IS_PRODUCTION:
+            return JSONResponse(status_code=500, content={"detail": "Internal server error"})
+        return JSONResponse(status_code=500, content={"detail": str(exc)})
+
+    # ---- endpoints ----
+
+    @app.get("/api/v1/health")
+    async def health():
+        return {
+            "status": "ok",
+            "environment": APP_ENV,
+            "version": "1.0.0",
+        }
+
+    @app.post("/api/v1/auth/request-pairing")
+    async def request_pairing(body: PairingRequest, request: Request):
+        client_ip = request.client.host if request.client else "unknown"
+        if not rate_limiter.check(client_ip, "pairing", max_requests=5, window=900):
+            raise HTTPException(status_code=429, detail="Rate limit exceeded")
+
+        identity = body.identity.lstrip("@")
+        if body.channel.value == "telegram":
+            resolved = _resolve_telegram_identity(identity)
+            if resolved is None:
+                raise HTTPException(
+                    status_code=404,
+                    detail=(
+                        f"Telegram user @{identity} not found. "
+                        "Please send any message to the bot first, then try again."
+                    ),
+                )
+            identity = resolved
+
+        code = auth_mgr.generate_pairing_code(identity, body.channel.value)
+        _send_pairing_code(body.channel.value, identity, code)
+        return {
+            "message": f"Pairing code sent via {body.channel.value}",
+            "expires_in": PAIRING_CODE_TTL,
+            "identity_resolved": identity,
+        }
+
+    @app.post("/api/v1/auth/verify-pairing")
+    async def verify_pairing(body: PairingVerification):
+        token = auth_mgr.verify_pairing_code(body.code, body.identity)
+        if not token:
+            raise HTTPException(status_code=400, detail="Invalid or expired pairing code")
+        token_data = auth_mgr.validate_session_token(token)
+        channel = token_data["channel"] if token_data else "unknown"
+        username = None
+        if channel == "telegram":
+            username = _get_telegram_username(body.identity)
+        return {
+            "token": token,
+            "expires_in": SESSION_TOKEN_TTL,
+            "identity": body.identity,
+            "channel": channel,
+            "username": username,
+        }
+
+    @app.post("/api/v1/sessions/create")
+    async def create_session(
+        body: SessionCreate,
+        user: dict = Header(None),
+        request: Request = None,
+    ):
+        # Manual auth – FastAPI Depends() isn't used here so we call directly
+        user = await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        session_id = str(uuid4())[:8]
+        session_mgr.get_or_create_session_data(session_id)
+        history_mgr.create_session(user["channel"], user["identity"], session_id)
+
+        # WebUI sessions default to markdown so media instructions are active
+        session_mgr.update_session_field(session_id, "render_type", "markdown")
+
+        if body.agent:
+            session_mgr.update_session_field(session_id, "agent", body.agent)
+        if body.model:
+            session_mgr.update_session_field(session_id, "model", body.model)
+        if body.runtime:
+            session_mgr.update_session_field(session_id, "runtime", body.runtime)
+
+        session_data = session_mgr.get_or_create_session_data(session_id)
+        return {
+            "session_id": session_id,
+            "agent": session_data.get("agent", "orchestrator"),
+            "model": session_data.get("model"),
+            "runtime": session_data.get("runtime"),
+        }
+
+    @app.post("/api/v1/sessions/{session_id}/execute")
+    async def execute_session(session_id: str, body: ExecuteRequest, request: Request):
+        user = await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+
+        client_ip = request.client.host if request.client else "unknown"
+        if not rate_limiter.check(client_ip, "execute", max_requests=60, window=60):
+            raise HTTPException(status_code=429, detail="Rate limit exceeded")
+
+        existing = session_mgr.load_session_data(session_id)
+        if not existing:
+            raise HTTPException(status_code=404, detail="Session not found")
+
+        loop = asyncio.get_event_loop()
+        with concurrent.futures.ThreadPoolExecutor() as pool:
+            result = await loop.run_in_executor(
+                pool, session_mgr.execute, body.query, session_id
+            )
+
+        history_mgr.append_message(user["channel"], user["identity"], session_id, "user", body.query)
+        history_mgr.append_message(user["channel"], user["identity"], session_id, "assistant", result)
+
+        session_data = session_mgr.get_or_create_session_data(session_id)
+        return {
+            "session_id": session_id,
+            "response": result,
+            "runtime": session_data.get("runtime"),
+            "model": session_data.get("model"),
+        }
+
+    @app.get("/api/v1/sessions/{session_id}/status")
+    async def session_status(session_id: str, request: Request):
+        user = await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+
+        data = session_mgr.load_session_data(session_id)
+        if not data:
+            raise HTTPException(status_code=404, detail="Session not found")
+
+        return {
+            "session_id": session_id,
+            "agent": data.get("agent"),
+            "runtime": data.get("runtime"),
+            "model": data.get("model"),
+            "yolo_mode": data.get("yolo_mode", "restricted"),
+        }
+
+    # --- History endpoints ---
+
+    @app.get("/api/v1/history/sessions")
+    async def list_history_sessions(request: Request):
+        user = await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        return {"sessions": history_mgr.get_sessions(user["channel"], user["identity"])}
+
+    @app.get("/api/v1/history/sessions/{session_id}/messages")
+    async def get_history_messages(session_id: str, request: Request):
+        user = await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        messages = history_mgr.get_session_messages(user["channel"], user["identity"], session_id)
+        if messages is None:
+            raise HTTPException(status_code=404, detail="Session not found in history")
+        return {"session_id": session_id, "messages": messages}
+
+    @app.delete("/api/v1/history/sessions/{session_id}")
+    async def delete_history_session(session_id: str, request: Request):
+        user = await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        if not history_mgr.delete_session(user["channel"], user["identity"], session_id):
+            raise HTTPException(status_code=404, detail="Session not found")
+        return {"deleted": True, "session_id": session_id}
+
+    # --- File upload ---
+
+    @app.post("/api/v1/sessions/{session_id}/upload")
+    async def upload_file(session_id: str, request: Request, file: UploadFile = File(...)):
+        user = await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        if not session_mgr.load_session_data(session_id):
+            raise HTTPException(status_code=404, detail="Session not found")
+        contents = await file.read()
+        if len(contents) > 50 * 1024 * 1024:
+            raise HTTPException(status_code=413, detail="File exceeds 50MB limit")
+        safe_name = re.sub(r"[^\w.\-]", "_", Path(file.filename).name)[:200]
+        upload_dir = Path(f"/tmp/webui_uploads/{session_id}")
+        upload_dir.mkdir(parents=True, exist_ok=True)
+        dest = upload_dir / safe_name
+        dest.write_bytes(contents)
+        mime, _ = mimetypes.guess_type(safe_name)
+        return {
+            "file_path": str(dest),
+            "filename": safe_name,
+            "size": len(contents),
+            "mime_type": mime or "application/octet-stream",
+        }
+
+    # --- Serve uploaded files (authenticated) ---
+
+    @app.get("/api/v1/uploads/{session_id}/{filename}")
+    async def serve_upload(session_id: str, filename: str, request: Request):
+        await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        safe_name = re.sub(r"[^\w.\-]", "_", Path(filename).name)
+        path = Path(f"/tmp/webui_uploads/{session_id}/{safe_name}")
+        if not path.exists():
+            raise HTTPException(status_code=404, detail="File not found")
+        return FileResponse(str(path))
+
+    # --- Image search ---
+
+    @app.get("/api/v1/search/images")
+    async def search_images(q: str, request: Request, max_results: int = 4):
+        await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        if not q.strip():
+            raise HTTPException(status_code=400, detail="Query required")
+        max_r = min(max(1, max_results), 8)
+        loop = asyncio.get_event_loop()
+        with concurrent.futures.ThreadPoolExecutor() as pool:
+            results = await loop.run_in_executor(pool, _ddg_image_search, q.strip(), max_r)
+        return {"query": q, "results": results}
+
+    # --- Task Scheduler ---
+    # Lazy-load TaskScheduler so the API starts even if the scheduler dirs don't exist yet.
+    _task_scheduler = None
+
+    def _get_scheduler():
+        nonlocal _task_scheduler
+        if _task_scheduler is None:
+            try:
+                import sys as _sys
+                _sched_path = str(Path(__file__).parent)
+                if _sched_path not in _sys.path:
+                    _sys.path.insert(0, _sched_path)
+                from task_scheduler import TaskScheduler
+                _task_scheduler = TaskScheduler()
+            except Exception as _e:
+                raise HTTPException(status_code=503, detail=f"Scheduler unavailable: {_e}")
+        return _task_scheduler
+
+    # ---- Scheduler authorization ----
+    # Override with comma-separated env vars to add more users without code changes.
+    _sched_allowed_telegram = {
+        u.strip().lower().lstrip("@")
+        for u in os.environ.get("SCHEDULER_ALLOWED_TELEGRAM", "vtflip").split(",")
+        if u.strip()
+    }
+    _sched_allowed_webex = {
+        u.strip().lower()
+        for u in os.environ.get("SCHEDULER_ALLOWED_WEBEX", "flipkey@cisco.com").split(",")
+        if u.strip()
+    }
+
+    async def _require_scheduler_auth(request: Request) -> dict:
+        """Authenticate AND verify the user is allowed to manage scheduled tasks.
+
+        Raises HTTP 403 if authenticated but not in the allowlist.
+        Returns the user dict on success.
+        """
+        user = await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+
+        # Shared-key callers (internal/admin) are always allowed.
+        if user.get("auth_type") == "shared_key":
+            return user
+
+        channel = user.get("channel", "")
+        identity = user.get("identity", "")
+
+        if channel == "telegram":
+            # identity is a numeric chat_id; resolve to username for the allowlist check.
+            username = _get_telegram_username(identity) or ""
+            if username.lower() in _sched_allowed_telegram:
+                return user
+        elif channel == "webex":
+            if identity.lower() in _sched_allowed_webex:
+                return user
+
+        raise HTTPException(
+            status_code=403,
+            detail="You are not authorized to manage scheduled tasks.",
+        )
+
+    class ScheduleJobRequest(BaseModel):
+        name: str
+        schedule: str
+        agent: Optional[str] = None
+        runtime: Optional[str] = None
+        model: Optional[str] = None
+        mode: Optional[str] = None  # "yolo" or "restricted"
+        task: str = ""
+        notify: bool = False
+        recurring: bool = True
+
+    class UpdateJobRequest(BaseModel):
+        name: Optional[str] = None
+        schedule: Optional[str] = None
+        agent: Optional[str] = None
+        runtime: Optional[str] = None
+        model: Optional[str] = None
+        mode: Optional[str] = None  # "yolo" or "restricted"
+        task: Optional[str] = None
+        notify: Optional[bool] = None
+        recurring: Optional[bool] = None
+        enabled: Optional[bool] = None
+
+    @app.get("/api/v1/scheduler/status")
+    async def scheduler_status(request: Request):
+        await _require_scheduler_auth(request)
+        return _get_scheduler().doctor()
+
+    @app.get("/api/v1/scheduler/jobs")
+    async def list_scheduler_jobs(request: Request):
+        await _require_scheduler_auth(request)
+        return _get_scheduler().list_jobs()
+
+    @app.post("/api/v1/scheduler/jobs")
+    async def create_scheduler_job(body: ScheduleJobRequest, request: Request):
+        user = await _require_scheduler_auth(request)
+        # Resolve Telegram username for storage so the executor can display it
+        username = None
+        if user.get("channel") == "telegram":
+            username = _get_telegram_username(user["identity"])
+        created_by = {
+            "identity": user["identity"],
+            "channel": user["channel"],
+            "username": username,
+        }
+        result = _get_scheduler().schedule_task(
+            name=body.name,
+            schedule=body.schedule,
+            agent=body.agent,
+            runtime=body.runtime,
+            model=body.model,
+            mode=body.mode,
+            task=body.task,
+            notify=body.notify,
+            recurring=body.recurring,
+            created_by=created_by,
+        )
+        if not result.get("success"):
+            raise HTTPException(status_code=400, detail=result.get("message", "Failed"))
+        return result
+
+    @app.get("/api/v1/scheduler/jobs/{job_id}")
+    async def get_scheduler_job(job_id: str, request: Request):
+        await _require_scheduler_auth(request)
+        result = _get_scheduler().get_job(job_id)
+        if not result.get("success"):
+            raise HTTPException(status_code=404, detail=result.get("message", "Not found"))
+        return result
+
+    @app.put("/api/v1/scheduler/jobs/{job_id}")
+    async def update_scheduler_job(job_id: str, body: UpdateJobRequest, request: Request):
+        await _require_scheduler_auth(request)
+        updates = {k: v for k, v in body.model_dump().items() if v is not None}
+        if not updates:
+            raise HTTPException(status_code=400, detail="No fields to update")
+        result = _get_scheduler().update_job(job_id, updates)
+        if not result.get("success"):
+            raise HTTPException(status_code=404, detail=result.get("message", "Not found"))
+        return result
+
+    @app.delete("/api/v1/scheduler/jobs/{job_id}")
+    async def delete_scheduler_job(job_id: str, request: Request):
+        await _require_scheduler_auth(request)
+        result = _get_scheduler().delete_job(job_id)
+        if not result.get("success"):
+            raise HTTPException(status_code=404, detail=result.get("message", "Not found"))
+        return result
+
+    @app.post("/api/v1/scheduler/jobs/{job_id}/pause")
+    async def pause_scheduler_job(job_id: str, request: Request):
+        await _require_scheduler_auth(request)
+        result = _get_scheduler().pause_job(job_id)
+        if not result.get("success"):
+            raise HTTPException(status_code=404, detail=result.get("message", "Not found"))
+        return result
+
+    @app.post("/api/v1/scheduler/jobs/{job_id}/resume")
+    async def resume_scheduler_job(job_id: str, request: Request):
+        await _require_scheduler_auth(request)
+        result = _get_scheduler().resume_job(job_id)
+        if not result.get("success"):
+            raise HTTPException(status_code=404, detail=result.get("message", "Not found"))
+        return result
+
+    @app.get("/api/v1/scheduler/jobs/{job_id}/results")
+    async def get_scheduler_job_results(job_id: str, request: Request, limit: int = 20):
+        await _require_scheduler_auth(request)
+        limit = min(max(1, limit), 100)
+        return _get_scheduler().get_results(job_id, limit=limit)
+
+    @app.get("/api/v1/scheduler/jobs/{job_id}/logs")
+    async def get_scheduler_job_logs(job_id: str, request: Request):
+        await _require_scheduler_auth(request)
+        return _get_scheduler().get_logs(job_id)
+
+    # --- AI media — publicly served, no auth (images fetched by the agent) ---
+    _ai_media_dir = Path("/tmp/webui_ai_media")
+    _ai_media_dir.mkdir(parents=True, exist_ok=True)
+    app.mount("/ai-media", StaticFiles(directory=str(_ai_media_dir)), name="ai_media")
+
+    # --- Static WebUI — MUST BE LAST ---
+    _webui_dist = Path(__file__).parent / "webui" / "dist"
+    if _webui_dist.exists():
+        app.mount("/ui", StaticFiles(directory=str(_webui_dist), html=True), name="webui")
+
+    return app
+
+
+def start_api_server():
+    """Load dotenv, create the FastAPI app, and run uvicorn."""
+    try:
+        from dotenv import load_dotenv
+
+        env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
+        load_dotenv(env_path)
+    except ImportError:
+        pass
+
+    import uvicorn
+
+    app = create_api_app()
+    port = int(os.environ.get("API_PORT", "8080"))
+    host = os.environ.get("API_HOST", "0.0.0.0")
+    uvicorn.run(app, host=host, port=port)
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="AI Session Wrapper for N8N Integration",
@@ -3055,4 +4132,7 @@ Examples:
 
 
 if __name__ == "__main__":
-    main()
+    if "--api" in sys.argv:
+        start_api_server()
+    else:
+        main()
