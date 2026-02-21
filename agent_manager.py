@@ -2957,7 +2957,7 @@ You can mention an agent in your prompt and it will auto-delegate:
                     f"Current Model: `{session_data.get('model')}` ({current_runtime})"
                 )
             elif argument.startswith("set "):
-                model_name = argument[4:].strip()
+                model_name = argument[4:].strip().strip('"')
                 model_id = self.get_model_from_name(model_name, current_runtime)
                 if not model_id:
                     return f"Unknown model '{model_name}' for runtime {current_runtime}"
@@ -3828,6 +3828,8 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         schedule: str
         agent: Optional[str] = None
         runtime: Optional[str] = None
+        model: Optional[str] = None
+        mode: Optional[str] = None  # "yolo" or "restricted"
         task: str = ""
         notify: bool = False
         recurring: bool = True
@@ -3837,6 +3839,8 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         schedule: Optional[str] = None
         agent: Optional[str] = None
         runtime: Optional[str] = None
+        model: Optional[str] = None
+        mode: Optional[str] = None  # "yolo" or "restricted"
         task: Optional[str] = None
         notify: Optional[bool] = None
         recurring: Optional[bool] = None
@@ -3869,6 +3873,8 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             schedule=body.schedule,
             agent=body.agent,
             runtime=body.runtime,
+            model=body.model,
+            mode=body.mode,
             task=body.task,
             notify=body.notify,
             recurring=body.recurring,
