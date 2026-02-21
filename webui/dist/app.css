@@ -802,6 +802,56 @@ html, body {
   flex-shrink: 0;
 }
 
+/* ---------- Image Search Results ---------- */
+.image-results-bubble {
+  max-width: 460px;
+  padding: 14px 16px;
+}
+
+.image-results-label {
+  font-size: 11px;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  margin-bottom: 10px;
+}
+
+.image-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 6px;
+}
+
+.image-grid-item {
+  display: block;
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  border: 1px solid var(--glass-border);
+  text-decoration: none;
+  transition: border-color var(--transition), transform var(--transition);
+  background: rgba(255,255,255,0.03);
+}
+.image-grid-item:hover {
+  border-color: rgba(255,255,255,0.28);
+  transform: translateY(-1px);
+}
+
+.search-result-img {
+  width: 100%;
+  height: 110px;
+  object-fit: cover;
+  display: block;
+}
+
+.search-result-title {
+  font-size: 10px;
+  color: var(--text-muted);
+  padding: 4px 6px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 /* ---------- Responsive ---------- */
 @media (max-width: 640px) {
   .sidebar { position: absolute; height: 100%; }
