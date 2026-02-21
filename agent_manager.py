@@ -1842,9 +1842,24 @@ Example skill structure:
         # Add render type instruction to the context
         render_instruction = ""
         if render_type == "markdown":
-            render_instruction = """
+            _api_port = os.environ.get("API_PORT", "8001")
+            render_instruction = f"""
 [Output Format: markdown]
-[Media: When the user asks for images or pictures, you MUST use the web_search tool to search for the image. Find a real, publicly accessible image URL ending in .jpg, .png, .gif, or .webp (e.g. from Wikipedia Commons, Unsplash, Pexels). Include it using markdown: ![caption text](https://real-url.jpg). The text in brackets will appear as the image caption. Do NOT create files, generate ASCII art, or make SVGs. Only use real URLs found via web_search. You can also include hyperlinks using [text](url) syntax.]"""
+[Image Retrieval — MANDATORY: When the user asks for any image, picture, photo, or logo, you MUST retrieve and display a real image. Never say you cannot retrieve images — use your tools.
+
+How to get images:
+1. Use WebFetch on a relevant page (Wikipedia, the official product site, Wikimedia Commons) to locate a direct image URL ending in .jpg, .png, .gif, or .webp.
+   Example: WebFetch("https://en.wikipedia.org/wiki/Snort_(software)") then read the page to extract a real image src URL.
+2. Return the image using one of these methods:
+
+   Option A — Direct external URL (simplest, use when URL is publicly accessible):
+   ![Description of image](https://actual-direct-image-url.jpg)
+
+   Option B — Download locally for reliability (use when image may be behind a CDN or require headers):
+   Step 1: Bash("mkdir -p /tmp/webui_ai_media/{n8n_session_id} && curl -s -L --max-time 15 -o /tmp/webui_ai_media/{n8n_session_id}/image.jpg 'https://direct-image-url.jpg'")
+   Step 2: Include in your response: ![Description](/ai-media/{n8n_session_id}/image.jpg)
+
+Always include at least one image in markdown format. Do NOT use ASCII art, SVG generation, or placeholder images.]"""
         elif render_type == "html":
             render_instruction = """
 [Output Format: html]
@@ -3492,6 +3507,9 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         session_mgr.get_or_create_session_data(session_id)
         history_mgr.create_session(user["channel"], user["identity"], session_id)
 
+        # WebUI sessions default to markdown so media instructions are active
+        session_mgr.update_session_field(session_id, "render_type", "markdown")
+
         if body.agent:
             session_mgr.update_session_field(session_id, "agent", body.agent)
         if body.model:
@@ -3660,6 +3678,11 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         with concurrent.futures.ThreadPoolExecutor() as pool:
             results = await loop.run_in_executor(pool, _ddg_image_search, q.strip(), max_r)
         return {"query": q, "results": results}
+
+    # --- AI media — publicly served, no auth (images fetched by the agent) ---
+    _ai_media_dir = Path("/tmp/webui_ai_media")
+    _ai_media_dir.mkdir(parents=True, exist_ok=True)
+    app.mount("/ai-media", StaticFiles(directory=str(_ai_media_dir)), name="ai_media")
 
     # --- Static WebUI — MUST BE LAST ---
     _webui_dist = Path(__file__).parent / "webui" / "dist"
