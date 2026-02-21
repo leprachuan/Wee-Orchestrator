@@ -46,6 +46,8 @@ class TelegramConfig:
             "enable_auto_pair": False,  # Auto-pair new users
             "default_agent": os.environ.get("COPILOT_DEFAULT_AGENT", "orchestrator"),
             "default_model": os.environ.get("COPILOT_DEFAULT_MODEL", "gpt-5-mini"),
+            "pinned_users": {},       # Maps user_id (str) to {"agent": "name"} - locks user to that agent
+            "yolo_allowed_users": [], # User IDs permitted to enable /mode yolo; empty = all allowed
         }
 
     def save(self):
@@ -96,6 +98,25 @@ class TelegramConfig:
         if user_id in self.config["allowed_users"]:
             self.config["allowed_users"].remove(user_id)
             self.save()
+
+    def is_user_pinned(self, user_id: int) -> bool:
+        """Check if user is pinned to a specific agent"""
+        return str(user_id) in self.config.get("pinned_users", {})
+
+    def get_pinned_agent(self, user_id: int) -> Optional[str]:
+        """Get the pinned agent for a user, or None if not pinned"""
+        pinned = self.config.get("pinned_users", {}).get(str(user_id))
+        if pinned:
+            return pinned.get("agent")
+        return None
+
+    def is_yolo_allowed(self, user_id: int) -> bool:
+        """Check if user is permitted to enable /mode yolo.
+        If yolo_allowed_users is empty, all users are allowed (backward compatible)."""
+        yolo_users = self.config.get("yolo_allowed_users", [])
+        if not yolo_users:
+            return True
+        return user_id in yolo_users
 
 
 class TelegramConnector:
@@ -761,16 +782,26 @@ class TelegramConnector:
             # Get or create user session
             session_info = self.config.get_user_session(user_id)
             if not session_info:
-                # Create new session
+                # Create new session - use pinned agent if configured
+                default_agent = self.config.config["default_agent"]
+                pinned_agent = self.config.get_pinned_agent(user_id)
+                if pinned_agent:
+                    default_agent = pinned_agent
                 session_info = {
                     "user_id": user_id,
                     "username": user_name,
                     "paired_at": datetime.now().isoformat(),
-                    "agent": self.config.config["default_agent"],
+                    "agent": default_agent,
                     "model": self.config.config["default_model"],
                     "render_type": "telegram_html",  # Default render type with markdown image support
                 }
                 self.config.set_user_session(user_id, session_info)
+            elif self.config.is_user_pinned(user_id):
+                # Enforce pinned agent even for existing sessions
+                pinned_agent = self.config.get_pinned_agent(user_id)
+                if pinned_agent and session_info.get("agent") != pinned_agent:
+                    session_info["agent"] = pinned_agent
+                    self.config.set_user_session(user_id, session_info)
 
             # Handle slash commands via agent_manager
             session_id = f"telegram_{user_id}"
@@ -779,8 +810,9 @@ class TelegramConnector:
             self.send_typing(chat_id)
             
             if text.startswith("/"):
+                cmd_lower = text.lower().strip()
                 # Check for timeout command
-                if text.lower().startswith("/timeout"):
+                if cmd_lower.startswith("/timeout"):
                     parts = text.split()
                     if len(parts) == 1 or (len(parts) > 1 and parts[1].lower() == "current"):
                         # Get current timeout
@@ -805,6 +837,16 @@ class TelegramConnector:
                     else:
                         response = "Invalid timeout command. Use: /timeout current or /timeout set <seconds>"
                     self.send_message(chat_id, response)
+                # Block pinned users from changing their agent
+                elif cmd_lower.startswith("/agent set") and self.config.is_user_pinned(user_id):
+                    pinned_agent = self.config.get_pinned_agent(user_id)
+                    self.send_message(
+                        chat_id,
+                        f"❌ Your agent is pinned to **{pinned_agent}** by an administrator. You cannot change agents.",
+                    )
+                # Block unauthorized users from enabling yolo mode
+                elif cmd_lower.startswith("/mode yolo") and not self.config.is_yolo_allowed(user_id):
+                    self.send_message(chat_id, "❌ You are not authorized to enable YOLO mode.")
                 else:
                     # Regular slash commands - get user timeout
                     timeout = self.config.get_user_timeout(user_id)
@@ -812,7 +854,6 @@ class TelegramConnector:
                     msg_id = self.send_message(chat_id, response)
 
                     # Pin agent set messages so user always knows which agent they're talking to
-                    cmd_lower = text.lower().strip()
                     if cmd_lower.startswith("/agent set") and msg_id:
                         self.unpin_all_messages(chat_id)
                         self.pin_message(chat_id, msg_id)
