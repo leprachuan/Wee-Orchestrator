@@ -1859,6 +1859,11 @@ How to get images:
    Step 1: Bash("mkdir -p /tmp/webui_ai_media/{n8n_session_id} && curl -s -L --max-time 15 -o /tmp/webui_ai_media/{n8n_session_id}/image.jpg 'https://direct-image-url.jpg'")
    Step 2: Include in your response: ![Description](/ai-media/{n8n_session_id}/image.jpg)
 
+   Option C — Local file (screenshots, files already on disk e.g. from Playwright/browser tools):
+   Step 1: Bash("mkdir -p /tmp/webui_ai_media/{n8n_session_id} && cp /path/to/local/screenshot.png /tmp/webui_ai_media/{n8n_session_id}/screenshot.png")
+   Step 2: Include in your response: ![Description](/ai-media/{n8n_session_id}/screenshot.png)
+   IMPORTANT: Always verify the cp succeeded and the destination file size is > 0 before including the image URL.
+
 Always include at least one image in markdown format. Do NOT use ASCII art, SVG generation, or placeholder images.]"""
         elif render_type == "html":
             render_instruction = """
