@@ -17,6 +17,9 @@ StandardError=journal
 SyslogIdentifier=webex-connector
 
 # Environment variables (optional - can also use config file)
+Environment="PATH=/home/flipkey/.local/bin:/home/flipkey/.nvm/versions/node/v22.22.0/bin:/usr/local/bin:/usr/bin:/bin"
+Environment="DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus"
+Environment="XDG_RUNTIME_DIR=/run/user/1000"
 Environment="WEBEX_BOT_TOKEN=MjRmMDVjMGUtNjYyYS00ZDk0LWI0N2EtOTc0YjAyODRkODU3NDAzN2QzNWItYjdh_PF84_1eb65fdf-9643-417f-9974-ad72cae0e10f"
 Environment="RABBITMQ_HOST=192.168.0.85"
 Environment="RABBITMQ_PORT=5672"
