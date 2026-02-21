@@ -216,7 +216,103 @@ async function handleVerifyCode() {
   }
 }
 
-// ─── Command Definitions ──────────────────────────────────────────────────────
+// ─── Meta Pill Popovers ───────────────────────────────────────────────────────
+const PILL_OPTIONS = {
+  'meta-agent': {
+    label: 'Switch Agent',
+    options: [
+      { label: '🍀 fosterbot',      cmd: '/agent set fosterbot' },
+      { label: '🔧 devops',         cmd: '/agent set devops' },
+      { label: '👨‍👩‍👧 family',         cmd: '/agent set family' },
+      { label: '💻 opencode',       cmd: '/agent set opencode' },
+      { label: '📋 list agents',    cmd: '/agent list' },
+    ],
+  },
+  'meta-runtime': {
+    label: 'Switch Runtime',
+    options: [
+      { label: '🟣 claude',         cmd: '/runtime set claude' },
+      { label: '🐙 copilot',        cmd: '/runtime set copilot' },
+      { label: '💎 gemini',         cmd: '/runtime set gemini' },
+      { label: '🔓 opencode',       cmd: '/runtime set opencode' },
+    ],
+  },
+  'meta-model': {
+    label: 'Switch Model',
+    options: [
+      { label: 'claude-sonnet-4-5',         cmd: '/model set "claude-sonnet-4-5"' },
+      { label: 'claude-opus-4',             cmd: '/model set "claude-opus-4"' },
+      { label: 'claude-haiku-4-5',          cmd: '/model set "claude-haiku-4-5"' },
+      { label: 'gpt-4o',                    cmd: '/model set "gpt-4o"' },
+      { label: 'gpt-4o-mini',              cmd: '/model set "gpt-4o-mini"' },
+      { label: 'gemini-1.5-pro',            cmd: '/model set "gemini-1.5-pro"' },
+      { label: '📋 list models',            cmd: '/model list' },
+    ],
+  },
+  'meta-mode': {
+    label: 'Switch Mode',
+    options: [
+      { label: '⚡ yolo',           cmd: '/mode yolo' },
+      { label: '🔒 restricted',     cmd: '/mode restricted' },
+    ],
+  },
+};
+
+let _pillPopover = null;
+
+function hidePillPopover() {
+  if (_pillPopover) { _pillPopover.remove(); _pillPopover = null; }
+}
+
+function showPillPopover(pillEl, pillId) {
+  hidePillPopover();
+  const config = PILL_OPTIONS[pillId];
+  if (!config) return;
+
+  const popover = document.createElement('div');
+  popover.className = 'pill-popover glass-panel';
+
+  const header = document.createElement('div');
+  header.className = 'pill-popover-header';
+  header.textContent = config.label;
+  popover.appendChild(header);
+
+  config.options.forEach(opt => {
+    const item = document.createElement('button');
+    item.className = 'pill-popover-item';
+    item.textContent = opt.label;
+    item.addEventListener('mousedown', e => {
+      e.preventDefault();
+      hidePillPopover();
+      sendCommand(opt.cmd);
+    });
+    popover.appendChild(item);
+  });
+
+  document.body.appendChild(popover);
+  _pillPopover = popover;
+
+  // Position below the pill, flip up if needed
+  const rect = pillEl.getBoundingClientRect();
+  const popH = popover.offsetHeight || 200;
+  let top = rect.bottom + 6;
+  if (top + popH > window.innerHeight - 10) top = rect.top - popH - 6;
+  let left = rect.right - popover.offsetWidth;
+  if (left < 8) left = 8;
+  popover.style.top  = `${top}px`;
+  popover.style.left = `${left}px`;
+}
+
+async function sendCommand(cmdText) {
+  const ta = $('message-input');
+  ta.value = cmdText;
+  autoResizeTextarea(ta);
+  syncMirror();
+  updateSendButton();
+  await sendMessage();
+}
+
+
 const COMMANDS = [
   { cmd: '/agent',        usage: '/agent <set|list|current|invoke>',      desc: 'Manage agents — switch, list, or delegate' },
   { cmd: '/model',        usage: '/model <set|list|current>',              desc: 'Change the AI model' },
@@ -529,7 +625,7 @@ function clearMessages() {
   const es = document.createElement('div');
   es.id = 'empty-state';
   es.className = 'empty-state hidden';
-  es.innerHTML = '<div class="empty-icon">💬</div><p>Start a conversation or select a session from the sidebar.</p>';
+  es.innerHTML = '<div class="empty-icon">🍀</div><p>Start a conversation or select a session from the sidebar.</p>';
   container.appendChild(es);
 }
 
@@ -542,7 +638,7 @@ async function renderMessage(role, content, files = []) {
 
   const avatar = document.createElement('div');
   avatar.className = 'message-avatar';
-  avatar.textContent = role === 'user' ? '👤' : '🤖';
+  avatar.textContent = role === 'user' ? '👤' : '🍀';
 
   const bubble = document.createElement('div');
   bubble.className = 'message-bubble';
@@ -796,6 +892,15 @@ document.addEventListener('DOMContentLoaded', () => {
     const file = e.dataTransfer.files[0];
     if (file) handleFileSelect(file);
   });
+
+  // --- Meta pill popovers ---
+  ['meta-agent', 'meta-runtime', 'meta-model', 'meta-mode'].forEach(id => {
+    $(id).addEventListener('click', e => { e.stopPropagation(); showPillPopover($(id), id); });
+  });
+  document.addEventListener('mousedown', e => {
+    if (_pillPopover && !_pillPopover.contains(e.target)) hidePillPopover();
+  });
+  document.addEventListener('keydown', e => { if (e.key === 'Escape') hidePillPopover(); });
 
   // --- Bootstrap ---
   loadAuth();
