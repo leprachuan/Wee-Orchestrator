@@ -1901,35 +1901,101 @@ HOW TO FORMAT:
 2. Bare URL: https://url.jpg - Image sent without caption
 Do NOT use <img> tags (unsupported). Do NOT create files, generate ASCII art, or make SVGs. The system will automatically detect image URLs and send them as photos. You can include hyperlinks using <a href="url">text</a>.]
 
-[File Handling - Telegram]: When the user asks for a file, report, export, or any output as a file:
-1. Generate the file content in the format requested (PDF, CSV, JSON, TXT, ZIP, etc.)
-2. Save the file to: /opt/n8n-copilot-shim-dev/telegram_downloads/
-3. Use this naming format: {user_id}_{filename} (e.g., 8193231291_report.pdf)
-4. Then reference it using: [FILE:/opt/n8n-copilot-shim-dev/telegram_downloads/{user_id}_{filename}:Caption describing the file]
+[File Handling - ALL PLATFORMS]: Use the SAME syntax for Telegram, WebEx, and WebUI!
 
-Supported file types: PDF (reports, documents), CSV (data exports), JSON (structured data), TXT (text), ZIP (archives), YAML, XML, MD, and any other text/binary format.
-Size limit: 50MB maximum (Telegram API limit)
-Important: Keep user_id in path to avoid conflicts with other users' files.
+UNIVERSAL SYNTAX:
+  Files:     [FILE:/path/to/file.ext:Your caption here]
+  Images:    ![caption](https://example.com/image.png) or bare URL
+  Captions:  Descriptive text after the colon (max 1000 chars)
 
-Examples:
-1. User asks for "monthly sales report as PDF":
-   - Generate PDF with sales data
-   - Save to: /opt/n8n-copilot-shim-dev/telegram_downloads/8193231291_sales_report.pdf
-   - Reference: [FILE:/opt/n8n-copilot-shim-dev/telegram_downloads/8193231291_sales_report.pdf:Monthly Sales Report - Jan 2026]
+PLATFORM-SPECIFIC DIRECTORIES (save files here):
+  Telegram:  /opt/n8n-copilot-shim-dev/telegram_downloads/
+  WebEx:     /opt/n8n-copilot-shim-dev/webex_downloads/
+  WebUI:     /opt/n8n-copilot-shim-dev/webui_downloads/
 
-2. User asks for "export this data as CSV":
-   - Create CSV with the data
-   - Save to: /opt/n8n-copilot-shim-dev/telegram_downloads/8193231291_data_export.csv
-   - Reference: [FILE:/opt/n8n-copilot-shim-dev/telegram_downloads/8193231291_data_export.csv:Data Export - All Records]
+SIZE LIMITS:
+  Telegram:  50 MB (will reject larger files)
+  WebEx:     100 MB (will reject larger files)
+  WebUI:     500 MB (will reject larger files)
 
-The system will automatically detect [FILE:...] markers and send files to the user via Telegram's sendDocument API with captions.
+SUPPORTED FILE TYPES: All binary and text formats
+  ✓ PDF, DOCX, XLSX (documents)
+  ✓ CSV, JSON, XML, YAML (data)
+  ✓ PNG, JPG, GIF, WEBP (images)
+  ✓ ZIP, TAR, 7Z (archives)
+  ✓ MP4, MP3, WAV (media)
+  ✓ Any other format
 
-[File Handling - WebEx]: Same as Telegram - use the [FILE:...] syntax. WebEx connector automatically sends files via multipart upload.
-1. Generate file and save to any accessible path
-2. Reference using: [FILE:/path/to/file:Caption for the file]
-3. WebEx will send the file with optional caption text above it
-Size limit: 1GB maximum (WebEx API limit)
-The [FILE:...] markers work the same way across both Telegram and WebEx connectors.]
+FILE NAMING BEST PRACTICES:
+  ✓ Descriptive names: monthly_report_jan_2026.pdf
+  ✓ With timestamps: report_2026_02_21_133000.pdf
+  ✓ User-scoped: user_123456_export.csv
+  ❌ Generic names: file.pdf, data.csv, image.png
+  ❌ Cryptic names: tmp123, output, file1
+
+EXAMPLES:
+
+1. USER ASKS FOR A SCREENSHOT:
+   User: "Get me a screenshot of snort.org"
+   → Use Playwright/Selenium to capture
+   → Save to: /opt/n8n-copilot-shim-dev/{platform}_downloads/snort_screenshot.png
+   → Return response:
+      "Here's the screenshot of snort.org:
+       [FILE:/opt/n8n-copilot-shim-dev/webex_downloads/snort_screenshot.png:Snort Homepage - Full Page]"
+   → System automatically sends file to user's platform ✓
+
+2. USER ASKS FOR A PDF REPORT:
+   User: "Generate a monthly sales report as PDF"
+   → Use reportlab or similar to create PDF
+   → Save to: /opt/n8n-copilot-shim-dev/{platform}_downloads/sales_report_jan_2026.pdf
+   → Return response:
+      "I've generated your monthly sales report:
+       [FILE:/opt/n8n-copilot-shim-dev/telegram_downloads/sales_report_jan_2026.pdf:Monthly Sales Report - January 2026]"
+   → System automatically sends file to user's platform ✓
+
+3. USER ASKS FOR A DATA EXPORT:
+   User: "Export all user data as CSV"
+   → Generate CSV with data
+   → Save to: /opt/n8n-copilot-shim-dev/{platform}_downloads/user_export.csv
+   → Return response:
+      "Your data export is ready:
+       [FILE:/opt/n8n-copilot-shim-dev/webui_downloads/user_export.csv:User Data Export - All Records]"
+   → System automatically sends file to user's platform ✓
+
+4. USER ASKS FOR AN IMAGE:
+   User: "Show me a network diagram"
+   → Use web_search tool to find real public image
+   → Return response with markdown:
+      "Here's a network diagram:
+       ![Network Architecture](https://commons.wikimedia.org/wiki/File:network_diagram.png)"
+   → System automatically embeds image in user's platform ✓
+
+HOW THE SYSTEM WORKS:
+  1. Agent generates response with [FILE:...] markers
+  2. Response is sent to platform connector (telegram_connector, webex_connector, etc)
+  3. Connector's send_response() method:
+     - Extracts [FILE:...] markers
+     - Sends text content as message
+     - Calls send_file() to upload each file
+     - Includes caption with file
+  4. File appears in user's platform with caption ✓
+
+IMPORTANT RULES:
+  ✓ ALWAYS use absolute paths (start with /)
+  ✓ ALWAYS include meaningful captions
+  ✓ ALWAYS check file exists before referencing
+  ✓ ALWAYS validate file size is within limits
+  ✓ DON'T create files outside designated directories
+  ✓ DON'T mix different syntaxes
+  ✓ DON'T use relative paths like ./file.pdf or ~/file.pdf
+  ✓ DON'T reference /tmp files (may be deleted)
+
+TROUBLESHOOTING:
+  "File does not exist" → Check path is correct and absolute
+  "File outside allowed directory" → Save to platform-specific downloads dir
+  "File exceeds size limit" → Compress file or split into smaller pieces
+  "File not appearing in platform" → Check captions are included, path is valid
+  "Image not showing" → Use public URL (not localhost or file://)
 """
         else:  # text (default)
             render_instruction = ""
