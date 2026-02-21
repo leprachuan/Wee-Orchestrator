@@ -3215,6 +3215,54 @@ def _get_telegram_username(user_id: str):
         return None
 
 
+def _ddg_image_search(query: str, max_results: int = 4) -> list:
+    """Fetch image results from DuckDuckGo without an API key.
+    Returns list of {url, thumbnail, title, source} dicts."""
+    import re as _re
+    import requests as _req
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+            "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        ),
+        "Referer": "https://duckduckgo.com/",
+    }
+    try:
+        # Step 1: get VQD token
+        r1 = _req.get(
+            "https://duckduckgo.com/",
+            params={"q": query},
+            headers=headers,
+            timeout=8,
+        )
+        m = _re.search(r"vqd=([\d-]+)", r1.text)
+        if not m:
+            return []
+        vqd = m.group(1)
+        # Step 2: fetch image JSON
+        r2 = _req.get(
+            "https://duckduckgo.com/i.js",
+            params={
+                "q": query, "o": "json", "l": "us-en",
+                "s": "0", "f": ",,,,,", "p": "1", "vqd": vqd,
+            },
+            headers=headers,
+            timeout=8,
+        )
+        out = []
+        for item in r2.json().get("results", [])[:max_results]:
+            if item.get("image"):
+                out.append({
+                    "url":       item["image"],
+                    "thumbnail": item.get("thumbnail", item["image"]),
+                    "title":     item.get("title", ""),
+                    "source":    item.get("source", ""),
+                })
+        return out
+    except Exception:
+        return []
+
+
 def _resolve_telegram_identity(username: str):
     """Reverse-lookup @username in telegram_config.json user_pairings.
     Returns numeric user_id string, or None if not found (user must message bot first)."""
@@ -3594,6 +3642,24 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         if not path.exists():
             raise HTTPException(status_code=404, detail="File not found")
         return FileResponse(str(path))
+
+    # --- Image search ---
+
+    @app.get("/api/v1/search/images")
+    async def search_images(q: str, request: Request, max_results: int = 4):
+        await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        if not q.strip():
+            raise HTTPException(status_code=400, detail="Query required")
+        max_r = min(max(1, max_results), 8)
+        loop = asyncio.get_event_loop()
+        with concurrent.futures.ThreadPoolExecutor() as pool:
+            results = await loop.run_in_executor(pool, _ddg_image_search, q.strip(), max_r)
+        return {"query": q, "results": results}
 
     # --- Static WebUI — MUST BE LAST ---
     _webui_dist = Path(__file__).parent / "webui" / "dist"
