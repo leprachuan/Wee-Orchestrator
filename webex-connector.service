@@ -6,9 +6,9 @@ Wants=rabbitmq-server.service
 
 [Service]
 Type=simple
-User=n8n
-WorkingDirectory=/opt/n8n-copilot-shim-dev
-ExecStart=/usr/bin/python3 /opt/n8n-copilot-shim-dev/webex_connector.py
+User=flipkey
+WorkingDirectory=/opt/n8n-copilot-shim
+ExecStart=/usr/bin/python3 /opt/n8n-copilot-shim/webex_connector.py
 Restart=always
 RestartSec=10
 StandardOutput=journal
@@ -16,6 +16,7 @@ StandardError=journal
 SyslogIdentifier=webex-connector
 
 # Environment variables (optional - can also use config file)
+Environment="PATH=/home/flipkey/.local/bin:/home/flipkey/.nvm/versions/node/v22.22.0/bin:/usr/local/bin:/usr/bin:/bin"
 Environment="WEBEX_BOT_TOKEN=MjRmMDVjMGUtNjYyYS00ZDk0LWI0N2EtOTc0YjAyODRkODU3NDAzN2QzNWItYjdh_PF84_1eb65fdf-9643-417f-9974-ad72cae0e10f"
 Environment="RABBITMQ_HOST=192.168.0.85"
 Environment="RABBITMQ_PORT=5672"
