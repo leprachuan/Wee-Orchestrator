@@ -2594,7 +2594,7 @@ You can mention an agent in your prompt and it will auto-delegate:
                     f"Current Model: `{session_data.get('model')}` ({current_runtime})"
                 )
             elif argument.startswith("set "):
-                model_name = argument[4:].strip()
+                model_name = argument[4:].strip().strip('"')
                 model_id = self.get_model_from_name(model_name, current_runtime)
                 if not model_id:
                     return f"Unknown model '{model_name}' for runtime {current_runtime}"
