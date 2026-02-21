@@ -820,6 +820,11 @@ document.addEventListener('DOMContentLoaded', () => {
   $('btn-logout').addEventListener('click', () => { clearAuth(); showAuthView(); });
   $('btn-sidebar-toggle').addEventListener('click', () => toggleSidebar(false));
   $('btn-open-sidebar').addEventListener('click',  () => toggleSidebar(true));
+  $('btn-sched-open-sidebar').addEventListener('click', () => toggleSidebar(true));
+
+  // --- View nav ---
+  $('btn-nav-chat').addEventListener('click', showChatPanel);
+  $('btn-nav-scheduler').addEventListener('click', showSchedulerPanel);
 
   // --- Send ---
   $('btn-send').addEventListener('click', sendMessage);
@@ -902,6 +907,11 @@ document.addEventListener('DOMContentLoaded', () => {
   });
   document.addEventListener('keydown', e => { if (e.key === 'Escape') hidePillPopover(); });
 
+  // --- Scheduler UI events ---
+  $('btn-sched-refresh').addEventListener('click', () => loadSchedulerJobs(true));
+  $('btn-sched-new').addEventListener('click', openNewJobForm);
+  $('btn-sched-detail-close').addEventListener('click', closeSchedDetail);
+
   // --- Bootstrap ---
   loadAuth();
   if (STATE.token) {
@@ -911,3 +921,450 @@ document.addEventListener('DOMContentLoaded', () => {
     showAuthView();
   }
 });
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// ─── View Switching ──────────────────────────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════════════════════
+
+function showChatPanel() {
+  show($('chat-panel'));
+  hide($('scheduler-panel'));
+  show($('btn-new-chat'));
+  show($('sessions-list'));
+  $('btn-nav-chat').classList.add('active');
+  $('btn-nav-scheduler').classList.remove('active');
+}
+
+function showSchedulerPanel() {
+  hide($('chat-panel'));
+  show($('scheduler-panel'));
+  hide($('btn-new-chat'));
+  hide($('sessions-list'));
+  $('btn-nav-scheduler').classList.add('active');
+  $('btn-nav-chat').classList.remove('active');
+  loadSchedulerJobs();
+  loadSchedulerStatus();
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// ─── Scheduler API Layer ─────────────────────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════════════════════
+
+async function schedApi(method, path, body = null) {
+  return apiRequest(method, `/scheduler${path}`, body);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// ─── Scheduler State ─────────────────────────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════════════════════
+
+const SCHED = {
+  jobs: [],
+  selectedJobId: null,
+  isLoadingJobs: false,
+};
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// ─── Scheduler: Load & Render Job List ───────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════════════════════
+
+async function loadSchedulerJobs(showToast = false) {
+  if (SCHED.isLoadingJobs) return;
+  SCHED.isLoadingJobs = true;
+  const list = $('sched-jobs-list');
+  list.innerHTML = '<p class="sched-empty">Loading…</p>';
+  try {
+    const data = await schedApi('GET', '/jobs');
+    SCHED.jobs = data.result || [];
+    renderSchedulerJobs();
+    if (showToast) schedToast('Jobs refreshed', 'success');
+  } catch (err) {
+    list.innerHTML = `<p class="sched-empty sched-error">Failed to load jobs: ${escHtml(err.message)}</p>`;
+  } finally {
+    SCHED.isLoadingJobs = false;
+  }
+}
+
+async function loadSchedulerStatus() {
+  const badge = $('sched-daemon-badge');
+  try {
+    const data = await schedApi('GET', '/status');
+    const info = data.result || {};
+    if (info.executor_running) {
+      badge.textContent = '● running';
+      badge.className = 'sched-daemon-badge badge-ok';
+      badge.title = `Executor running · ${info.jobs_count} job(s), ${info.enabled_count} enabled`;
+    } else {
+      badge.textContent = '● stopped';
+      badge.className = 'sched-daemon-badge badge-warn';
+      badge.title = 'task-scheduler-executor.service is not running';
+    }
+  } catch (_) {
+    badge.textContent = '● unknown';
+    badge.className = 'sched-daemon-badge badge-muted';
+    badge.title = 'Could not check executor status';
+  }
+}
+
+function renderSchedulerJobs() {
+  const list = $('sched-jobs-list');
+  if (!SCHED.jobs.length) {
+    list.innerHTML = '<p class="sched-empty">No scheduled jobs. Click <strong>+ New Job</strong> to create one.</p>';
+    return;
+  }
+
+  list.innerHTML = '';
+  for (const job of SCHED.jobs) {
+    const card = document.createElement('div');
+    card.className = 'sched-job-card' + (job.id === SCHED.selectedJobId ? ' selected' : '');
+    card.dataset.jobId = job.id;
+
+    const statusClass = job.enabled ? 'status-enabled' : 'status-disabled';
+    const statusLabel = job.enabled ? 'enabled' : 'paused';
+    const nextRun = job.next_run ? fmtDate(job.next_run) : '—';
+    const lastRun = job.last_run ? fmtDate(job.last_run) : 'never';
+
+    card.innerHTML = `
+      <div class="sched-job-top">
+        <span class="sched-job-name">${escHtml(job.name)}</span>
+        <span class="sched-job-status ${statusClass}">${statusLabel}</span>
+      </div>
+      <div class="sched-job-meta">
+        <span title="Schedule">⏰ ${escHtml(job.schedule)}</span>
+        <span title="Agent / Runtime">🤖 ${escHtml(job.agent)} · ${escHtml(job.runtime)}</span>
+      </div>
+      <div class="sched-job-times">
+        <span title="Next run">Next: ${escHtml(nextRun)}</span>
+        <span title="Last run">Last: ${escHtml(lastRun)}</span>
+      </div>
+    `;
+
+    card.addEventListener('click', () => openJobDetail(job.id));
+    list.appendChild(card);
+  }
+}
+
+function fmtDate(iso) {
+  if (!iso) return '—';
+  try {
+    return new Date(iso).toLocaleString(undefined, {
+      month: 'short', day: 'numeric',
+      hour: '2-digit', minute: '2-digit',
+    });
+  } catch (_) { return iso; }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// ─── Scheduler: Detail Panel ─────────────────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════════════════════
+
+function closeSchedDetail() {
+  SCHED.selectedJobId = null;
+  hide($('sched-detail'));
+  document.querySelectorAll('.sched-job-card').forEach(c => c.classList.remove('selected'));
+}
+
+async function openJobDetail(jobId) {
+  SCHED.selectedJobId = jobId;
+  document.querySelectorAll('.sched-job-card').forEach(c =>
+    c.classList.toggle('selected', c.dataset.jobId === jobId)
+  );
+
+  const job = SCHED.jobs.find(j => j.id === jobId);
+  if (!job) return;
+
+  $('sched-detail-title').textContent = job.name;
+  const body = $('sched-detail-body');
+  body.innerHTML = '<p style="color:var(--text-muted);font-size:13px;">Loading…</p>';
+  show($('sched-detail'));
+
+  renderJobDetailView(job);
+}
+
+function renderJobDetailView(job) {
+  const body = $('sched-detail-body');
+  const isEnabled = job.enabled;
+
+  body.innerHTML = `
+    <div class="sched-detail-tabs">
+      <button class="sched-tab active" data-tab="info">Info</button>
+      <button class="sched-tab" data-tab="edit">Edit</button>
+      <button class="sched-tab" data-tab="results">Results</button>
+    </div>
+    <div id="sched-tab-info" class="sched-tab-pane">
+      <dl class="sched-dl">
+        <dt>ID</dt>       <dd><code>${escHtml(job.id)}</code></dd>
+        <dt>Schedule</dt> <dd>${escHtml(job.schedule)}</dd>
+        <dt>Agent</dt>    <dd>${escHtml(job.agent)}</dd>
+        <dt>Runtime</dt>  <dd>${escHtml(job.runtime)}</dd>
+        <dt>Recurring</dt><dd>${job.recurring ? 'Yes' : 'No (one-shot)'}</dd>
+        <dt>Notify</dt>   <dd>${job.notify ? 'Yes (Telegram)' : 'No'}</dd>
+        <dt>Next run</dt> <dd>${escHtml(job.next_run ? fmtDate(job.next_run) : '—')}</dd>
+        <dt>Last run</dt> <dd>${escHtml(job.last_run ? fmtDate(job.last_run) : 'never')}</dd>
+        <dt>Created</dt>  <dd>${escHtml(job.created_at ? fmtDate(job.created_at) : '—')}</dd>
+      </dl>
+      <div class="sched-task-box">
+        <label>Task prompt</label>
+        <pre class="sched-task-pre">${escHtml(job.task || '(empty)')}</pre>
+      </div>
+      <div class="sched-detail-actions">
+        ${isEnabled
+          ? `<button class="btn btn-ghost btn-sm" id="btn-job-pause">⏸ Pause</button>`
+          : `<button class="btn btn-primary btn-sm" id="btn-job-resume">▶ Resume</button>`
+        }
+        <button class="btn btn-danger btn-sm" id="btn-job-delete">🗑 Delete</button>
+      </div>
+    </div>
+    <div id="sched-tab-edit" class="sched-tab-pane hidden"></div>
+    <div id="sched-tab-results" class="sched-tab-pane hidden"></div>
+  `;
+
+  // Tab switching
+  body.querySelectorAll('.sched-tab').forEach(tab => {
+    tab.addEventListener('click', () => {
+      body.querySelectorAll('.sched-tab').forEach(t => t.classList.remove('active'));
+      tab.classList.add('active');
+      body.querySelectorAll('.sched-tab-pane').forEach(p => hide(p));
+      const pane = $(`sched-tab-${tab.dataset.tab}`);
+      show(pane);
+      if (tab.dataset.tab === 'edit' && !pane.children.length) renderJobEditForm(job, pane);
+      if (tab.dataset.tab === 'results') loadJobResults(job.id, pane);
+    });
+  });
+
+  // Action buttons
+  const pauseBtn   = body.querySelector('#btn-job-pause');
+  const resumeBtn  = body.querySelector('#btn-job-resume');
+  const deleteBtn  = body.querySelector('#btn-job-delete');
+
+  if (pauseBtn)  pauseBtn.addEventListener('click',  () => doJobPause(job.id));
+  if (resumeBtn) resumeBtn.addEventListener('click', () => doJobResume(job.id));
+  if (deleteBtn) deleteBtn.addEventListener('click', () => doJobDelete(job.id));
+}
+
+function renderJobEditForm(job, container) {
+  container.innerHTML = buildJobForm(job);
+  wireJobForm(container, async (payload) => {
+    try {
+      await schedApi('PUT', `/jobs/${job.id}`, payload);
+      schedToast('Job updated', 'success');
+      await loadSchedulerJobs();
+      const updated = SCHED.jobs.find(j => j.id === job.id);
+      if (updated) {
+        $('sched-detail-title').textContent = updated.name;
+        renderJobDetailView(updated);
+      }
+    } catch (err) {
+      schedToast('Update failed: ' + err.message, 'error');
+    }
+  });
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// ─── Scheduler: New Job Form ─────────────────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════════════════════
+
+function openNewJobForm() {
+  SCHED.selectedJobId = null;
+  document.querySelectorAll('.sched-job-card').forEach(c => c.classList.remove('selected'));
+  $('sched-detail-title').textContent = 'New Scheduled Job';
+  const body = $('sched-detail-body');
+  body.innerHTML = buildJobForm(null);
+  wireJobForm(body, async (payload) => {
+    try {
+      await schedApi('POST', '/jobs', payload);
+      schedToast('Job created', 'success');
+      closeSchedDetail();
+      await loadSchedulerJobs();
+    } catch (err) {
+      schedToast('Create failed: ' + err.message, 'error');
+    }
+  });
+  show($('sched-detail'));
+}
+
+function buildJobForm(job) {
+  const v = (field, fallback = '') => escHtml(job?.[field] ?? fallback);
+  const checked = (field, fallback = false) => (job?.[field] ?? fallback) ? 'checked' : '';
+  return `
+    <form class="sched-form" id="sched-job-form">
+      <div class="form-group">
+        <label>Name <span class="req">*</span></label>
+        <input class="glass-input" name="name" value="${v('name')}" placeholder="Daily summary" required />
+      </div>
+      <div class="form-group">
+        <label>Schedule <span class="req">*</span></label>
+        <input class="glass-input" name="schedule" value="${v('schedule')}" placeholder="every day at 9am" required />
+        <p class="form-hint">e.g. "in 5 minutes", "every day at 9am", "every Monday at 8am", "every 6 hours"</p>
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label>Agent</label>
+          <input class="glass-input" name="agent" value="${v('agent', 'fosterbot')}" placeholder="fosterbot" />
+        </div>
+        <div class="form-group">
+          <label>Runtime</label>
+          <select class="glass-input glass-select" name="runtime">
+            <option value="claude"   ${(job?.runtime ?? 'claude') === 'claude'   ? 'selected' : ''}>claude</option>
+            <option value="copilot"  ${job?.runtime === 'copilot'  ? 'selected' : ''}>copilot</option>
+            <option value="gemini"   ${job?.runtime === 'gemini'   ? 'selected' : ''}>gemini</option>
+            <option value="opencode" ${job?.runtime === 'opencode' ? 'selected' : ''}>opencode</option>
+          </select>
+        </div>
+      </div>
+      <div class="form-group">
+        <label>Task prompt <span class="req">*</span></label>
+        <textarea class="glass-input sched-task-input" name="task" rows="4" placeholder="Describe the task the agent should perform…" required>${v('task')}</textarea>
+      </div>
+      <div class="form-checks">
+        <label class="form-check">
+          <input type="checkbox" name="recurring" ${checked('recurring', true)} />
+          <span>Recurring</span>
+          <small>Uncheck for one-shot execution</small>
+        </label>
+        <label class="form-check">
+          <input type="checkbox" name="notify" ${checked('notify', false)} />
+          <span>Telegram notify</span>
+          <small>Send result via Telegram when complete</small>
+        </label>
+      </div>
+      <div class="sched-form-actions">
+        <button type="submit" class="btn btn-primary">💾 Save</button>
+        <button type="button" class="btn btn-ghost" id="btn-form-cancel">Cancel</button>
+      </div>
+      <p id="sched-form-error" class="auth-error hidden"></p>
+    </form>
+  `;
+}
+
+function wireJobForm(container, onSubmit) {
+  const form = container.querySelector('#sched-job-form');
+  const errEl = container.querySelector('#sched-form-error');
+  const cancelBtn = container.querySelector('#btn-form-cancel');
+
+  if (cancelBtn) cancelBtn.addEventListener('click', closeSchedDetail);
+
+  form.addEventListener('submit', async e => {
+    e.preventDefault();
+    errEl.classList.add('hidden');
+    const data = Object.fromEntries(new FormData(form));
+    if (!data.name?.trim())     { showFormErr(errEl, 'Name is required'); return; }
+    if (!data.schedule?.trim()) { showFormErr(errEl, 'Schedule is required'); return; }
+    if (!data.task?.trim())     { showFormErr(errEl, 'Task prompt is required'); return; }
+
+    const payload = {
+      name:      data.name.trim(),
+      schedule:  data.schedule.trim(),
+      agent:     data.agent?.trim() || 'fosterbot',
+      runtime:   data.runtime || 'claude',
+      task:      data.task.trim(),
+      recurring: !!data.recurring,
+      notify:    !!data.notify,
+    };
+
+    const submitBtn = form.querySelector('[type=submit]');
+    submitBtn.disabled = true;
+    submitBtn.textContent = 'Saving…';
+    try {
+      await onSubmit(payload);
+    } catch (_) {
+      // Error handled by caller
+    } finally {
+      submitBtn.disabled = false;
+      submitBtn.textContent = '💾 Save';
+    }
+  });
+}
+
+function showFormErr(el, msg) {
+  el.textContent = msg;
+  el.classList.remove('hidden');
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// ─── Scheduler: Job Actions ──────────────────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════════════════════
+
+async function doJobPause(jobId) {
+  try {
+    await schedApi('POST', `/jobs/${jobId}/pause`);
+    schedToast('Job paused', 'success');
+    await loadSchedulerJobs();
+    const updated = SCHED.jobs.find(j => j.id === jobId);
+    if (updated) renderJobDetailView(updated);
+  } catch (err) {
+    schedToast('Failed: ' + err.message, 'error');
+  }
+}
+
+async function doJobResume(jobId) {
+  try {
+    await schedApi('POST', `/jobs/${jobId}/resume`);
+    schedToast('Job resumed', 'success');
+    await loadSchedulerJobs();
+    const updated = SCHED.jobs.find(j => j.id === jobId);
+    if (updated) renderJobDetailView(updated);
+  } catch (err) {
+    schedToast('Failed: ' + err.message, 'error');
+  }
+}
+
+async function doJobDelete(jobId) {
+  if (!confirm('Delete this scheduled job? This cannot be undone.')) return;
+  try {
+    await schedApi('DELETE', `/jobs/${jobId}`);
+    schedToast('Job deleted', 'success');
+    closeSchedDetail();
+    await loadSchedulerJobs();
+  } catch (err) {
+    schedToast('Failed: ' + err.message, 'error');
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// ─── Scheduler: Results View ─────────────────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════════════════════
+
+async function loadJobResults(jobId, container) {
+  container.innerHTML = '<p style="color:var(--text-muted);font-size:13px;padding:8px 0;">Loading results…</p>';
+  try {
+    const data = await schedApi('GET', `/jobs/${jobId}/results?limit=20`);
+    const results = data.result || [];
+    if (!results.length) {
+      container.innerHTML = '<p class="sched-empty">No execution results yet.</p>';
+      return;
+    }
+    container.innerHTML = results.map(r => `
+      <div class="sched-result-card ${r.success ? 'result-ok' : 'result-fail'}">
+        <div class="sched-result-header">
+          <span class="result-icon">${r.success ? '✓' : '✗'}</span>
+          <span class="result-ts">${escHtml(fmtDate(r.timestamp))}</span>
+        </div>
+        ${r.output ? `<pre class="result-output">${escHtml(r.output.slice(0, 1000))}${r.output.length > 1000 ? '\n…(truncated)' : ''}</pre>` : ''}
+        ${r.error  ? `<pre class="result-error">${escHtml(r.error.slice(0, 500))}</pre>` : ''}
+      </div>
+    `).join('');
+  } catch (err) {
+    container.innerHTML = `<p class="sched-empty sched-error">Failed to load results: ${escHtml(err.message)}</p>`;
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// ─── Scheduler: Toast Notifications ─────────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════════════════════
+
+let _toastTimer = null;
+
+function schedToast(msg, type = 'info') {
+  let toast = $('sched-toast');
+  if (!toast) {
+    toast = document.createElement('div');
+    toast.id = 'sched-toast';
+    document.body.appendChild(toast);
+  }
+  toast.textContent = msg;
+  toast.className = `sched-toast sched-toast-${type}`;
+  toast.style.opacity = '1';
+  clearTimeout(_toastTimer);
+  _toastTimer = setTimeout(() => { toast.style.opacity = '0'; }, 2500);
+}
