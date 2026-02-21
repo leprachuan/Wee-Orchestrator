@@ -4,9 +4,9 @@ After=network.target
 
 [Service]
 Type=simple
-User=n8n
+User=flipkey
 WorkingDirectory=/opt/n8n-copilot-shim
-Environment=PATH=/usr/bin:/usr/local/bin
+Environment=PATH=/home/flipkey/.local/bin:/home/flipkey/.nvm/versions/node/v22.22.0/bin:/usr/local/bin:/usr/bin:/bin
 EnvironmentFile=/opt/n8n-copilot-shim/.env
 ExecStart=/usr/bin/python3 /opt/n8n-copilot-shim/agent_manager.py --api
 Restart=always
