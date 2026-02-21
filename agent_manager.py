@@ -1922,7 +1922,15 @@ Examples:
    - Save to: /opt/n8n-copilot-shim-dev/telegram_downloads/8193231291_data_export.csv
    - Reference: [FILE:/opt/n8n-copilot-shim-dev/telegram_downloads/8193231291_data_export.csv:Data Export - All Records]
 
-The system will automatically detect [FILE:...] markers and send files to the user via Telegram's sendDocument API with captions."""
+The system will automatically detect [FILE:...] markers and send files to the user via Telegram's sendDocument API with captions.
+
+[File Handling - WebEx]: Same as Telegram - use the [FILE:...] syntax. WebEx connector automatically sends files via multipart upload.
+1. Generate file and save to any accessible path
+2. Reference using: [FILE:/path/to/file:Caption for the file]
+3. WebEx will send the file with optional caption text above it
+Size limit: 1GB maximum (WebEx API limit)
+The [FILE:...] markers work the same way across both Telegram and WebEx connectors.]
+"""
         else:  # text (default)
             render_instruction = ""
 
