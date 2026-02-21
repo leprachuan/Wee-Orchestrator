@@ -8,6 +8,7 @@ Type=simple
 User=n8n
 WorkingDirectory=/opt/n8n-copilot-shim-dev
 EnvironmentFile=/opt/n8n-copilot-shim-dev/.env
+Environment="PATH=/home/flipkey/.nvm/versions/node/v22.22.0/bin:/usr/local/bin:/usr/bin:/bin"
 Environment="TELEGRAM_BOT_TOKEN=[REDACTED-TELEGRAM-TOKEN]"
 ExecStart=/usr/bin/python3 /opt/n8n-copilot-shim-dev/telegram_connector.py
 Restart=always
