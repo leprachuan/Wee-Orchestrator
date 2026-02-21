@@ -18,6 +18,14 @@ from typing import Optional, Dict, List
 from datetime import datetime
 import agent_manager
 
+# If production listener should be disabled to avoid duplicate responders, create the
+# sentinel file /opt/n8n-copilot-shim/PROD_DISABLED. When present, any process
+# started from the production path will exit immediately.
+_prod_disable_path = Path("/opt/n8n-copilot-shim/PROD_DISABLED")
+if os.path.abspath(__file__).startswith("/opt/n8n-copilot-shim/") and _prod_disable_path.exists():
+    print("Production Telegram connector disabled via PROD_DISABLED sentinel.", file=sys.stderr)
+    sys.exit(0)
+
 
 class TelegramConfig:
     """Manages Telegram connector configuration"""
@@ -161,6 +169,20 @@ class TelegramConnector:
         self.api_shared_key = os.getenv("API_SHARED_KEY", "")
 
         self.api_url = f"https://api.telegram.org/bot{self.token}"
+        # Determine bot id (useful when multiple bots run against same service)
+        self.bot_id = None
+        try:
+            resp = requests.get(f"{self.api_url}/getMe", timeout=10)
+            resp.raise_for_status()
+            data = resp.json()
+            if data.get("ok") and "result" in data and "id" in data["result"]:
+                self.bot_id = data["result"]["id"]
+                print(f"[DEBUG] Detected bot id: {self.bot_id}", file=sys.stderr)
+            else:
+                print(f"[WARN] getMe did not return bot id: {data}", file=sys.stderr)
+        except Exception as e:
+            print(f"[WARN] Failed to determine bot id: {e}", file=sys.stderr)
+
         self.offset = 0
         self.running = False
     
@@ -835,10 +857,14 @@ class TelegramConnector:
                     self.config.set_user_session(user_id, session_info)
 
             # Handle slash commands via agent_manager
-            session_id = f"telegram_{user_id}"
+            if self.bot_id:
+                session_id = f"telegram_{self.bot_id}_{user_id}"
+            else:
+                session_id = f"telegram_{user_id}"
 
             # Push pinned agent/runtime/model into SessionManager before every message
             self._enforce_pinned_session(user_id, session_id)
+
 
             # Show typing indicator
             self.send_typing(chat_id)
@@ -1039,8 +1065,11 @@ class TelegramConnector:
     ) -> str:
         """Query the agent_manager with user session tied to user ID"""
         try:
-            # Session ID tied to user ID
-            session_id = f"telegram_{user_id}"
+            # Session ID tied to user ID and bot id (if available)
+            if self.bot_id:
+                session_id = f"telegram_{self.bot_id}_{user_id}"
+            else:
+                session_id = f"telegram_{user_id}"
             
             # Use persistent session manager
             session_mgr = self.get_session_manager(session_id)
