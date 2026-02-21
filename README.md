@@ -1,16 +1,25 @@
-# n8n-copilot-shim
+# Wee-Orchestrator
 
-A unified AI agent manager that bridges N8N workflows with multiple AI CLI tools (GitHub Copilot, OpenCode, Claude Code, Google Gemini). Features session management, multi-agent support with dynamic configuration, and model switching.
+> **Renamed from n8n-copilot-shim** — folder names kept for backwards compatibility.
+
+A unified AI agent manager and browser-based chat platform that bridges Telegram, WebEx, and the Web UI with multiple AI CLI runtimes (GitHub Copilot, OpenCode, Claude Code, Google Gemini). Features session management, multi-agent support, a built-in task scheduler, file handling, and a glassmorphism web interface.
 
 ## Overview
 
-This shim provides a flexible framework to:
-- Call AI CLIs (Copilot, OpenCode, Claude Code, Gemini) from N8N workflows
+Wee-Orchestrator provides a flexible framework to:
+- Chat with AI agents from **Telegram**, **WebEx**, or the **browser-based Web UI**
+- Call AI CLIs (Copilot, OpenCode, Claude Code, Gemini, Codex) from N8N workflows
 - Maintain session affinity across multiple conversation turns
 - Switch between different agent repositories dynamically
 - Configure agents via JSON config files instead of hardcoding
 - Support multiple AI models and runtimes
+- Schedule recurring AI tasks with the built-in **Task Scheduler**
 - Execute bash commands directly with `!` prefix
+- Send and receive **files and images** over Telegram and WebEx
+- Enforce per-user **agent pinning**, **model pinning**, and **yolo/restricted mode** ACLs
+
+For a full architectural overview see **[ARCHITECTURE.md](./ARCHITECTURE.md)**.  
+For release history see **[RELEASE_NOTES.md](./RELEASE_NOTES.md)**.
 
 ## Requirements
 
@@ -586,8 +595,9 @@ python3 -m unittest discover -s tests -p "test_*.py" -v
 
 ### Test Coverage
 
-The test suite includes 62 tests covering:
+The test suite includes **141 tests** across two test files:
 
+**`tests/test_agent_manager.py`** (62 tests) — core functionality:
 - **Session Management** (5 tests) - Creating, resuming, and persisting sessions
 - **Agent Configuration** (4 tests) - Loading and managing agent configurations
 - **Slash Commands** (9 tests) - All interactive commands (`/help`, `/runtime`, `/model`, `/agent`, `/session`)
@@ -597,12 +607,20 @@ The test suite includes 62 tests covering:
 - **Agent Switching** (3 tests) - Changing agents and session context
 - **Session Existence** (2 tests) - Checking session state file existence
 
+**`tests/test_new_features.py`** (79 tests) — WebUI and scheduler features:
+- **Auth / pairing flow** — pairing code generation, session token validation
+- **History Manager** — per-user session history CRUD
+- **File upload / download** — upload endpoint, file serving, cleanup
+- **Scheduler endpoints** — create, list, get, update, delete, pause, resume, results, logs
+- **Image search** — DuckDuckGo image search integration
+- **Rate limiting** — per-IP sliding window
+
 ### Test Results
 
 All tests pass with no external CLI dependencies required:
 
 ```
-Ran 31 tests in 0.021s
+Ran 141 tests in 0.185s
 OK
 ```
 
@@ -621,42 +639,164 @@ When adding new features to `agent_manager.py`:
 
 For detailed testing documentation, see [tests/README.md](tests/README.md).
 
+## Web UI
+
+Wee-Orchestrator ships a browser-based chat interface served at `/ui` by the API server.
+
+### Features
+
+- 🍀 **Glassmorphism design** — frosted-glass panels, animated background blobs, responsive layout
+- 💬 **Chat panel** — markdown rendering, syntax highlighting, image display (no overflow), clickable meta pills
+- 👤 **@username display** — shows `@handle` instead of raw numeric IDs in message headers
+- 🔍 **Typeahead** — `/command` highlighting and autocomplete in the input box
+- 📸 **File uploads** — drag-and-drop or click to attach images and files to messages
+- 🖼️ **Auto image search** — AI can trigger DuckDuckGo image searches; results are served inline
+- 📅 **Scheduler panel** — switch between Chat and Scheduler from the sidebar navigation
+  - Job list with status badges (active / paused / disabled)
+  - Detail drawer with full job configuration
+  - Create / edit form with agent, runtime, model, and mode (yolo / restricted) selectors
+  - Daemon status badge showing scheduler health
+  - Toast notifications for CRUD operations
+- 🔐 **Pairing auth** — 6-digit one-time code sent via Telegram or WebEx; no passwords
+
+### Accessing the UI
+
+```
+http://<host>:<port>/ui
+```
+
+Default port is set by `API_PORT` in `.env` (default `8000`).
+
+## Task Scheduler
+
+The built-in task scheduler (`task_scheduler.py`) runs AI jobs on a schedule without human interaction.
+
+### Features
+
+- 📅 **Natural-language schedules** — `in 10 minutes`, `every 2 hours`, `every day at 9am`
+- 🔄 **Recurring or one-shot jobs**
+- 🤖 **Per-job AI config** — choose agent, runtime, model, and mode independently for each job
+- 🔔 **Creator-targeted notifications** — results sent back to the Telegram or WebEx user who created the job
+- 🔒 **Per-user ACL** — only allowed users (configured via `SCHEDULER_ALLOWED_TELEGRAM` / `SCHEDULER_ALLOWED_WEBEX` env vars) can create/manage jobs
+- ⏸️ **Pause / Resume** — temporarily disable jobs without deleting them
+- 📋 **Results history** — last N results stored per job, viewable via API or Web UI
+
+### REST API Endpoints
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/api/v1/scheduler/status` | Daemon health / doctor report |
+| `GET` | `/api/v1/scheduler/jobs` | List all jobs |
+| `POST` | `/api/v1/scheduler/jobs` | Create a new job |
+| `GET` | `/api/v1/scheduler/jobs/{id}` | Get job details |
+| `PUT` | `/api/v1/scheduler/jobs/{id}` | Update a job |
+| `DELETE` | `/api/v1/scheduler/jobs/{id}` | Delete a job |
+| `POST` | `/api/v1/scheduler/jobs/{id}/pause` | Pause a job |
+| `POST` | `/api/v1/scheduler/jobs/{id}/resume` | Resume a paused job |
+| `GET` | `/api/v1/scheduler/jobs/{id}/results` | Retrieve execution results |
+| `GET` | `/api/v1/scheduler/jobs/{id}/logs` | Retrieve execution logs |
+
+### Quick Start
+
+```bash
+# Create a daily summary job (via API)
+curl -X POST http://localhost:8000/api/v1/scheduler/jobs \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "Daily standup",
+    "schedule": "every day at 9am",
+    "agent": "devops",
+    "runtime": "copilot",
+    "model": "gpt-5-mini",
+    "mode": "restricted",
+    "task": "Summarise open pull requests and any failing CI jobs",
+    "notify": true,
+    "recurring": true
+  }'
+```
+
+Data is stored in `/opt/.task-scheduler/` (jobs.json, results/, logs/).
+
+## File Handling
+
+Both the Telegram and WebEx connectors support sending and receiving files and images.
+
+- **Receiving:** files are downloaded to `webex_downloads/` and injected into the agent context as a file path prompt
+- **Sending:** agents can produce local file paths that the connector uploads back to the user
+- **Images:** the Web UI serves AI-fetched images from `/ai-media/` so the browser can render them inline
+
+See **[WEBEX_FILE_HANDLING.md](./WEBEX_FILE_HANDLING.md)** and **[FILE_MEDIA_HANDLING_SKILL.md](./FILE_MEDIA_HANDLING_SKILL.md)** for details.
+
+## Per-User Access Control
+
+### Agent & Model Pinning
+
+Users can be locked to a specific agent, runtime, and model via `pinned_users` in the connector config:
+
+```json
+"pinned_users": {
+  "8193231291": {
+    "agent": "family",
+    "runtime": "copilot",
+    "model": "gpt-5-mini"
+  }
+}
+```
+
+Pinned users cannot run `/agent set` — they receive a clear admin message. The pinned config is re-applied before every query, so even a session reset cannot bypass it.
+
+### Yolo Mode Restriction
+
+By default all users may run `/mode yolo`. To restrict yolo access to a list of user IDs:
+
+```json
+"yolo_allowed_users": ["8193231291", "9876543210"]
+```
+
+An empty list preserves the permissive default (all allowed).
+
 ## File Structure
 
 ```
-n8n-copilot-shim-1/
-├── agent_manager.py           # Main agent manager script
+n8n-copilot-shim/
+├── agent_manager.py           # Core: SessionManager, FastAPI app factory, all /api/v1/ endpoints
+├── task_scheduler.py          # TaskScheduler class — schedule, pause, resume, results
+├── telegram_connector.py      # Telegram bot long-polling connector
+├── webex_connector.py         # WebEx webhook/RabbitMQ connector
 ├── agents.json                # Agent configuration (git-ignored)
 ├── agents.example.json        # Example configuration template
-├── run_tests.sh               # Test runner script
-├── .testrc                    # Test configuration
-├── EXAMPLE_WORKFLOW.json      # N8N workflow example
-├── README.md                  # This file
+├── webui/
+│   └── dist/                  # Built Web UI assets (index.html, app.js, app.css)
 ├── tests/
-│   ├── __init__.py            # Test package marker
-│   ├── test_agent_manager.py  # Comprehensive unit tests
-│   └── README.md              # Testing documentation
-└── .gitignore                 # Git configuration
+│   ├── test_agent_manager.py  # Core unit tests (62 tests)
+│   └── test_new_features.py   # WebUI + scheduler feature tests (79 tests)
+├── docs/plans/                # Planning docs
+├── run_tests.sh               # Test runner
+├── .testrc                    # Test configuration
+├── .env.example               # Environment variable template
+├── EXAMPLE_WORKFLOW.json      # N8N workflow example
+├── ARCHITECTURE.md            # System architecture and Mermaid diagrams
+├── RELEASE_NOTES.md           # Version history
+└── README.md                  # This file
 ```
 
-## Architecture
+## Architecture Summary
 
-### SessionManager Class
+See **[ARCHITECTURE.md](./ARCHITECTURE.md)** for full detail and Mermaid diagrams.
 
-The core class that manages:
-- Agent configuration loading
-- AI CLI execution (Copilot, OpenCode, Claude)
-- Session state persistence
-- Slash command parsing and execution
-- Model and runtime switching
+Key components:
 
-### Key Methods
-
-- `_load_agents_config()` - Load agents from JSON config file
-- `execute()` - Main entry point for processing prompts and commands
-- `run_copilot()`, `run_opencode()`, `run_claude()` - Execute respective CLIs
-- `strip_metadata()` - Clean CLI output
-- `set_agent()`, `update_session_field()` - Session state management
+| Component | Description |
+|-----------|-------------|
+| `SessionManager` | Core AI execution engine — session state, slash commands, CLI dispatch |
+| `HistoryManager` | Per-user, per-channel chat history persistence |
+| `AuthManager` | Pairing-code auth, session token issuance, shared-key validation |
+| `RateLimiter` | Per-IP, per-endpoint sliding-window rate limiting |
+| `TaskScheduler` | Cron-like AI job scheduler embedded in the orchestrator |
+| FastAPI app | REST API (`/api/v1/`) + static Web UI mount (`/ui`) |
+| `TelegramConnector` | Long-polling Telegram bot → `SessionManager` bridge |
+| `WebEXConnector` | WebEx webhook / RabbitMQ → `SessionManager` bridge |
 
 ## Troubleshooting
 
@@ -673,36 +813,18 @@ The core class that manages:
   - `~/.claude/debug/`
   - `~/.gemini/sessions/`
 
+### Scheduler not running
+- Check `SCHEDULER_JOBS_FILE` path exists and is writable (`/opt/.task-scheduler/jobs.json`)
+- Verify the API server is running: `sudo systemctl status agent-manager-api.service`
+- Hit `GET /api/v1/scheduler/status` to see the daemon health report
+
 ### CLI not found
 - Ensure copilot, opencode, claude, and gemini binaries are in PATH or at expected locations
 - Check `/usr/bin/copilot`, `/usr/bin/claude`, `~/.opencode/bin/opencode`, and `gemini` in PATH
 
-## Migration from Original Script
-
-This version replaces hardcoded agents with JSON configuration:
-
-**Before:**
-```python
-AGENTS = {
-    'devops': {'path': '/opt/MyHomeDevops', ...},
-    'family': {'path': '/opt/family_knowledge', ...}
-}
-```
-
-**After:**
-```json
-{
-  "agents": [
-    {"name": "devops", "path": "/opt/MyHomeDevops", ...},
-    {"name": "family", "path": "/opt/family_knowledge", ...}
-  ]
-}
-```
-
-To migrate:
-1. Copy `agent_manager.py` to your environment
-2. Create `agents.json` with your agent definitions
-3. No code changes needed - same interface as before
+### Web UI auth loop
+- Confirm the API server can reach your Telegram or WebEx bot to deliver the pairing code
+- Check `PAIRING_CODE_TTL` (default 300 s) — request a new code if it expired
 
 ## Agent Orchestration
 
@@ -710,6 +832,7 @@ This project supports multi-agent orchestration with dynamic agent discovery. Se
 
 - **[AGENTS.md](./AGENTS.md)** - Agent orchestration overview and usage guide
 - **[SKILL_SUBAGENTS.md](./SKILL_SUBAGENTS.md)** - Detailed subagent management and advanced patterns
+- **[ARCHITECTURE.md](./ARCHITECTURE.md)** - Full system architecture with Mermaid diagrams
 - **[agents.json](./agents.json)** - Agent configuration file (controls available agents)
 
 ### Quick Agent Start
