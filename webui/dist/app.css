@@ -395,17 +395,49 @@ html, body {
   border-top: none;
   display: flex;
   align-items: center;
-  padding: 0 20px;
-  gap: 12px;
+  padding: 0 16px;
+  gap: 10px;
   flex-shrink: 0;
   z-index: 5;
 }
 
 .sidebar-open-btn { margin-right: 4px; }
 
-.chat-header-info { display: flex; align-items: baseline; gap: 8px; }
-.chat-session-label { font-size: 12px; color: var(--text-muted); }
-.chat-session-id { font-size: 13px; color: var(--text-secondary); font-family: 'SF Mono', 'Fira Code', monospace; }
+.chat-header-info { display: flex; align-items: baseline; gap: 8px; flex-shrink: 0; }
+.chat-session-label { font-size: 11px; color: var(--text-muted); }
+.chat-session-id { font-size: 12px; color: var(--text-secondary); font-family: 'SF Mono', 'Fira Code', monospace; }
+
+/* Session meta pills */
+.session-meta {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin-left: auto;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.meta-pill {
+  padding: 3px 9px;
+  border-radius: 12px;
+  font-size: 11px;
+  font-weight: 500;
+  background: rgba(255,255,255,0.07);
+  border: 1px solid rgba(255,255,255,0.12);
+  color: var(--text-secondary);
+  white-space: nowrap;
+  transition: background var(--transition), color var(--transition);
+}
+.meta-pill.meta-agent   { color: #a78bfa; border-color: rgba(167,139,250,0.25); background: rgba(167,139,250,0.1); }
+.meta-pill.meta-runtime { color: #67e8f9; border-color: rgba(103,232,249,0.25); background: rgba(103,232,249,0.08); }
+.meta-pill.meta-model   { color: #86efac; border-color: rgba(134,239,172,0.25); background: rgba(134,239,172,0.08); }
+.meta-pill.meta-mode    { color: var(--text-muted); }
+.meta-pill.meta-mode.yolo {
+  color: #fbbf24;
+  border-color: rgba(251,191,36,0.35);
+  background: rgba(251,191,36,0.12);
+}
+.meta-pill.empty { opacity: 0.4; }
 
 /* ---------- Messages ---------- */
 .messages-container {
@@ -605,6 +637,69 @@ html, body {
 }
 .file-chip-remove:hover { color: var(--danger); }
 
+/* ---------- Input Area (contains dropdown + bar) ---------- */
+.input-area {
+  position: relative;
+  flex-shrink: 0;
+}
+
+/* ---------- Command Dropdown ---------- */
+.cmd-dropdown {
+  position: absolute;
+  bottom: calc(100% + 2px);
+  left: 0;
+  right: 0;
+  background: rgba(12,17,30,0.97);
+  backdrop-filter: blur(24px) saturate(180%);
+  -webkit-backdrop-filter: blur(24px) saturate(180%);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  box-shadow: 0 -8px 32px rgba(0,0,0,0.5), inset 0 1px 0 rgba(255,255,255,0.06);
+  z-index: 20;
+  max-height: 280px;
+  overflow-y: auto;
+}
+.cmd-dropdown::-webkit-scrollbar { width: 3px; }
+.cmd-dropdown::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.15); border-radius: 2px; }
+
+.cmd-row {
+  display: grid;
+  grid-template-columns: 120px 1fr;
+  grid-template-rows: auto auto;
+  align-items: center;
+  padding: 9px 14px;
+  cursor: pointer;
+  border-bottom: 1px solid rgba(255,255,255,0.05);
+  gap: 0 10px;
+  transition: background var(--transition);
+}
+.cmd-row:last-child { border-bottom: none; }
+.cmd-row:hover, .cmd-row.active { background: rgba(79,140,255,0.12); }
+
+.cmd-row-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--accent);
+  font-family: 'SF Mono', 'Fira Code', monospace;
+  grid-column: 1;
+  grid-row: 1;
+}
+.cmd-row-desc {
+  font-size: 12px;
+  color: var(--text-secondary);
+  grid-column: 2;
+  grid-row: 1;
+}
+.cmd-row-usage {
+  font-size: 11px;
+  color: var(--text-muted);
+  font-family: 'SF Mono', 'Fira Code', monospace;
+  grid-column: 1 / -1;
+  grid-row: 2;
+  margin-top: 2px;
+}
+
 /* ---------- Input Bar ---------- */
 .input-bar {
   display: flex;
@@ -633,26 +728,70 @@ html, body {
 .file-btn:hover { background: rgba(255,255,255,0.08); }
 .file-btn input { display: none; }
 
-.message-textarea {
+/* ---------- Input mirror + textarea ---------- */
+.input-wrap {
+  position: relative;
   flex: 1;
-  resize: none;
-  background: rgba(255,255,255,0.06);
-  border: 1px solid rgba(255,255,255,0.15);
-  border-radius: var(--radius-sm);
-  color: var(--text-primary);
+}
+
+/* Shared typography for mirror and textarea — MUST match exactly */
+.input-mirror,
+.message-textarea {
   font-family: var(--font);
   font-size: 14px;
   line-height: 1.5;
   padding: 10px 14px;
+  border-radius: var(--radius-sm);
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-wrap: break-word;
+}
+
+.input-mirror {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  color: var(--text-primary);
+  background: rgba(255,255,255,0.06);
+  border: 1px solid rgba(255,255,255,0.15);
+  overflow: hidden;
+  z-index: 0;
+  /* Reserve space for scrollbar so text alignment stays exact */
+  padding-right: 17px;
+}
+
+/* /command token highlight */
+.cmd-token {
+  background: rgba(79,140,255,0.22);
+  color: #7eb3ff;
+  border-radius: 3px;
+  padding: 0 2px;
+  font-weight: 600;
+}
+
+.message-textarea {
+  position: relative;
+  z-index: 1;
+  width: 100%;
+  resize: none;
+  /* Transparent text so mirror shows through; caret stays visible */
+  background: transparent;
+  color: transparent;
+  caret-color: var(--text-primary);
+  border: 1px solid rgba(255,255,255,0.15);
   outline: none;
   max-height: 180px;
   overflow-y: auto;
   transition: border-color var(--transition);
 }
 .message-textarea:focus { border-color: var(--accent); }
+/* When mirror is present we keep placeholder via the textarea but style it */
 .message-textarea::placeholder { color: var(--text-muted); }
 .message-textarea::-webkit-scrollbar { width: 3px; }
 .message-textarea::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.2); border-radius: 2px; }
+
+/* Show placeholder from mirror div when textarea is empty (mirror shows nothing, textarea placeholder shows) */
+.message-textarea:not(:placeholder-shown) { color: transparent; }
 
 .send-btn {
   width: 40px;
