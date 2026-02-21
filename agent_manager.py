@@ -3776,6 +3776,53 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 raise HTTPException(status_code=503, detail=f"Scheduler unavailable: {_e}")
         return _task_scheduler
 
+    # ---- Scheduler authorization ----
+    # Override with comma-separated env vars to add more users without code changes.
+    _sched_allowed_telegram = {
+        u.strip().lower().lstrip("@")
+        for u in os.environ.get("SCHEDULER_ALLOWED_TELEGRAM", "vtflip").split(",")
+        if u.strip()
+    }
+    _sched_allowed_webex = {
+        u.strip().lower()
+        for u in os.environ.get("SCHEDULER_ALLOWED_WEBEX", "flipkey@cisco.com").split(",")
+        if u.strip()
+    }
+
+    async def _require_scheduler_auth(request: Request) -> dict:
+        """Authenticate AND verify the user is allowed to manage scheduled tasks.
+
+        Raises HTTP 403 if authenticated but not in the allowlist.
+        Returns the user dict on success.
+        """
+        user = await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+
+        # Shared-key callers (internal/admin) are always allowed.
+        if user.get("auth_type") == "shared_key":
+            return user
+
+        channel = user.get("channel", "")
+        identity = user.get("identity", "")
+
+        if channel == "telegram":
+            # identity is a numeric chat_id; resolve to username for the allowlist check.
+            username = _get_telegram_username(identity) or ""
+            if username.lower() in _sched_allowed_telegram:
+                return user
+        elif channel == "webex":
+            if identity.lower() in _sched_allowed_webex:
+                return user
+
+        raise HTTPException(
+            status_code=403,
+            detail="You are not authorized to manage scheduled tasks.",
+        )
+
     class ScheduleJobRequest(BaseModel):
         name: str
         schedule: str
@@ -3797,32 +3844,26 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
 
     @app.get("/api/v1/scheduler/status")
     async def scheduler_status(request: Request):
-        await authenticate(
-            request,
-            authorization=request.headers.get("authorization"),
-            x_user_identity=request.headers.get("x-user-identity"),
-            x_auth_channel=request.headers.get("x-auth-channel"),
-        )
+        await _require_scheduler_auth(request)
         return _get_scheduler().doctor()
 
     @app.get("/api/v1/scheduler/jobs")
     async def list_scheduler_jobs(request: Request):
-        await authenticate(
-            request,
-            authorization=request.headers.get("authorization"),
-            x_user_identity=request.headers.get("x-user-identity"),
-            x_auth_channel=request.headers.get("x-auth-channel"),
-        )
+        await _require_scheduler_auth(request)
         return _get_scheduler().list_jobs()
 
     @app.post("/api/v1/scheduler/jobs")
     async def create_scheduler_job(body: ScheduleJobRequest, request: Request):
-        await authenticate(
-            request,
-            authorization=request.headers.get("authorization"),
-            x_user_identity=request.headers.get("x-user-identity"),
-            x_auth_channel=request.headers.get("x-auth-channel"),
-        )
+        user = await _require_scheduler_auth(request)
+        # Resolve Telegram username for storage so the executor can display it
+        username = None
+        if user.get("channel") == "telegram":
+            username = _get_telegram_username(user["identity"])
+        created_by = {
+            "identity": user["identity"],
+            "channel": user["channel"],
+            "username": username,
+        }
         result = _get_scheduler().schedule_task(
             name=body.name,
             schedule=body.schedule,
@@ -3831,6 +3872,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             task=body.task,
             notify=body.notify,
             recurring=body.recurring,
+            created_by=created_by,
         )
         if not result.get("success"):
             raise HTTPException(status_code=400, detail=result.get("message", "Failed"))
@@ -3838,12 +3880,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
 
     @app.get("/api/v1/scheduler/jobs/{job_id}")
     async def get_scheduler_job(job_id: str, request: Request):
-        await authenticate(
-            request,
-            authorization=request.headers.get("authorization"),
-            x_user_identity=request.headers.get("x-user-identity"),
-            x_auth_channel=request.headers.get("x-auth-channel"),
-        )
+        await _require_scheduler_auth(request)
         result = _get_scheduler().get_job(job_id)
         if not result.get("success"):
             raise HTTPException(status_code=404, detail=result.get("message", "Not found"))
@@ -3851,12 +3888,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
 
     @app.put("/api/v1/scheduler/jobs/{job_id}")
     async def update_scheduler_job(job_id: str, body: UpdateJobRequest, request: Request):
-        await authenticate(
-            request,
-            authorization=request.headers.get("authorization"),
-            x_user_identity=request.headers.get("x-user-identity"),
-            x_auth_channel=request.headers.get("x-auth-channel"),
-        )
+        await _require_scheduler_auth(request)
         updates = {k: v for k, v in body.model_dump().items() if v is not None}
         if not updates:
             raise HTTPException(status_code=400, detail="No fields to update")
@@ -3867,12 +3899,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
 
     @app.delete("/api/v1/scheduler/jobs/{job_id}")
     async def delete_scheduler_job(job_id: str, request: Request):
-        await authenticate(
-            request,
-            authorization=request.headers.get("authorization"),
-            x_user_identity=request.headers.get("x-user-identity"),
-            x_auth_channel=request.headers.get("x-auth-channel"),
-        )
+        await _require_scheduler_auth(request)
         result = _get_scheduler().delete_job(job_id)
         if not result.get("success"):
             raise HTTPException(status_code=404, detail=result.get("message", "Not found"))
@@ -3880,12 +3907,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
 
     @app.post("/api/v1/scheduler/jobs/{job_id}/pause")
     async def pause_scheduler_job(job_id: str, request: Request):
-        await authenticate(
-            request,
-            authorization=request.headers.get("authorization"),
-            x_user_identity=request.headers.get("x-user-identity"),
-            x_auth_channel=request.headers.get("x-auth-channel"),
-        )
+        await _require_scheduler_auth(request)
         result = _get_scheduler().pause_job(job_id)
         if not result.get("success"):
             raise HTTPException(status_code=404, detail=result.get("message", "Not found"))
@@ -3893,12 +3915,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
 
     @app.post("/api/v1/scheduler/jobs/{job_id}/resume")
     async def resume_scheduler_job(job_id: str, request: Request):
-        await authenticate(
-            request,
-            authorization=request.headers.get("authorization"),
-            x_user_identity=request.headers.get("x-user-identity"),
-            x_auth_channel=request.headers.get("x-auth-channel"),
-        )
+        await _require_scheduler_auth(request)
         result = _get_scheduler().resume_job(job_id)
         if not result.get("success"):
             raise HTTPException(status_code=404, detail=result.get("message", "Not found"))
@@ -3906,23 +3923,13 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
 
     @app.get("/api/v1/scheduler/jobs/{job_id}/results")
     async def get_scheduler_job_results(job_id: str, request: Request, limit: int = 20):
-        await authenticate(
-            request,
-            authorization=request.headers.get("authorization"),
-            x_user_identity=request.headers.get("x-user-identity"),
-            x_auth_channel=request.headers.get("x-auth-channel"),
-        )
+        await _require_scheduler_auth(request)
         limit = min(max(1, limit), 100)
         return _get_scheduler().get_results(job_id, limit=limit)
 
     @app.get("/api/v1/scheduler/jobs/{job_id}/logs")
     async def get_scheduler_job_logs(job_id: str, request: Request):
-        await authenticate(
-            request,
-            authorization=request.headers.get("authorization"),
-            x_user_identity=request.headers.get("x-user-identity"),
-            x_auth_channel=request.headers.get("x-auth-channel"),
-        )
+        await _require_scheduler_auth(request)
         return _get_scheduler().get_logs(job_id)
 
     # --- AI media — publicly served, no auth (images fetched by the agent) ---

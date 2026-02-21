@@ -122,8 +122,13 @@ class TaskScheduler:
         task: str = "",
         notify: bool = False,
         recurring: bool = True,
+        created_by: Optional[Dict] = None,
     ) -> Dict:
-        """Create a scheduled task."""
+        """Create a scheduled task.
+
+        created_by: optional dict with keys 'identity', 'channel', and optionally 'username'.
+        Stored in the job so the executor can send notifications back to the right person.
+        """
         if agent is None:
             agent = os.getenv("SCHEDULER_DEFAULT_AGENT", "fosterbot")
         if runtime is None:
@@ -156,6 +161,7 @@ class TaskScheduler:
             "last_run": None,
             "enabled": True,
             "retries": 0,
+            "created_by": created_by or {},
         }
 
         jobs["jobs"].append(job)
