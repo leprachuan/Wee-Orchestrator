@@ -5,7 +5,7 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-User=n8n
+User=flipkey
 WorkingDirectory=/opt/n8n-copilot-shim
 EnvironmentFile=/opt/n8n-copilot-shim/.env
 Environment="PATH=/home/flipkey/.local/bin:/home/flipkey/.nvm/versions/node/v22.22.0/bin:/usr/local/bin:/usr/bin:/bin"

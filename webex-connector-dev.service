@@ -6,7 +6,7 @@ Wants=rabbitmq-server.service
 
 [Service]
 Type=simple
-User=n8n
+User=flipkey
 WorkingDirectory=/opt/n8n-copilot-shim-dev
 EnvironmentFile=/opt/n8n-copilot-shim-dev/.env
 ExecStart=/usr/bin/python3 /opt/n8n-copilot-shim-dev/webex_connector.py
