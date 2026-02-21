@@ -54,6 +54,8 @@ class WebEXConfig:
             "enable_auto_pair": False,  # Auto-pair new users
             "default_agent": os.environ.get("COPILOT_DEFAULT_AGENT", "orchestrator"),
             "default_model": os.environ.get("COPILOT_DEFAULT_MODEL", "gpt-5-mini"),
+            "pinned_users": {},       # Maps person_id (str) to {"agent": "name"} - locks user to that agent
+            "yolo_allowed_users": [], # Person IDs permitted to enable /mode yolo; empty = all allowed
         }
 
     def save(self):
@@ -104,6 +106,25 @@ class WebEXConfig:
         if person_id in self.config["allowed_users"]:
             self.config["allowed_users"].remove(person_id)
             self.save()
+
+    def is_user_pinned(self, person_id: str) -> bool:
+        """Check if user is pinned to a specific agent"""
+        return person_id in self.config.get("pinned_users", {})
+
+    def get_pinned_agent(self, person_id: str) -> Optional[str]:
+        """Get the pinned agent for a user, or None if not pinned"""
+        pinned = self.config.get("pinned_users", {}).get(person_id)
+        if pinned:
+            return pinned.get("agent")
+        return None
+
+    def is_yolo_allowed(self, person_id: str) -> bool:
+        """Check if user is permitted to enable /mode yolo.
+        If yolo_allowed_users is empty, all users are allowed (backward compatible)."""
+        yolo_users = self.config.get("yolo_allowed_users", [])
+        if not yolo_users:
+            return True
+        return person_id in yolo_users
 
 
 class WebEXConnector:
@@ -653,21 +674,32 @@ class WebEXConnector:
             # Get or create user session
             session_info = self.config.get_user_session(person_id)
             if not session_info:
-                # Create new session
+                # Create new session - use pinned agent if configured
+                default_agent = self.config.config["default_agent"]
+                pinned_agent = self.config.get_pinned_agent(person_id)
+                if pinned_agent:
+                    default_agent = pinned_agent
                 session_info = {
                     "person_id": person_id,
                     "email": person_email,
                     "paired_at": datetime.now().isoformat(),
-                    "agent": self.config.config["default_agent"],
+                    "agent": default_agent,
                     "model": self.config.config["default_model"],
                 }
                 self.config.set_user_session(person_id, session_info)
+            elif self.config.is_user_pinned(person_id):
+                # Enforce pinned agent even for existing sessions
+                pinned_agent = self.config.get_pinned_agent(person_id)
+                if pinned_agent and session_info.get("agent") != pinned_agent:
+                    session_info["agent"] = pinned_agent
+                    self.config.set_user_session(person_id, session_info)
 
             session_id = f"webex_{person_id}"
 
             # Handle slash commands
             if text.startswith("/"):
-                if text.lower().startswith("/timeout"):
+                cmd_lower = text.lower().strip()
+                if cmd_lower.startswith("/timeout"):
                     parts = text.split()
                     if len(parts) == 1 or (len(parts) > 1 and parts[1].lower() == "current"):
                         current = self.config.get_user_timeout(person_id)
@@ -690,6 +722,16 @@ class WebEXConnector:
                     else:
                         response = "Invalid timeout command. Use: /timeout current or /timeout set <seconds>"
                     msg_id = self.send_message(room_id, response)
+                # Block pinned users from changing their agent
+                elif cmd_lower.startswith("/agent set") and self.config.is_user_pinned(person_id):
+                    pinned_agent = self.config.get_pinned_agent(person_id)
+                    self.send_message(
+                        room_id,
+                        f"❌ Your agent is pinned to **{pinned_agent}** by an administrator. You cannot change agents.",
+                    )
+                # Block unauthorized users from enabling yolo mode
+                elif cmd_lower.startswith("/mode yolo") and not self.config.is_yolo_allowed(person_id):
+                    self.send_message(room_id, "❌ You are not authorized to enable YOLO mode.")
                 else:
                     # Regular slash commands
                     timeout = self.config.get_user_timeout(person_id)
@@ -697,7 +739,6 @@ class WebEXConnector:
                     msg_id = self.send_message(room_id, response)
 
                     # Pin configuration commands (agent, runtime, model, session)
-                    cmd_lower = text.lower().strip()
                     if msg_id and any(cmd_lower.startswith(cmd) for cmd in ["/agent set", "/runtime set", "/model set", "/session reset"]):
                         self.pin_message(msg_id, room_id)
                         print(f"[DEBUG] Pinned configuration command message: {cmd_lower[:30]}", file=sys.stderr)
