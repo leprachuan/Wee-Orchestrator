@@ -118,6 +118,20 @@ class WebEXConfig:
             return pinned.get("agent")
         return None
 
+    def get_pinned_runtime(self, person_id: str) -> Optional[str]:
+        """Get the pinned runtime for a user, or None if not set"""
+        pinned = self.config.get("pinned_users", {}).get(person_id)
+        if pinned:
+            return pinned.get("runtime")
+        return None
+
+    def get_pinned_model(self, person_id: str) -> Optional[str]:
+        """Get the pinned model for a user, or None if not set"""
+        pinned = self.config.get("pinned_users", {}).get(person_id)
+        if pinned:
+            return pinned.get("model")
+        return None
+
     def is_yolo_allowed(self, person_id: str) -> bool:
         """Check if user is permitted to enable /mode yolo.
         If yolo_allowed_users is empty, all users are allowed (backward compatible)."""
@@ -171,6 +185,23 @@ class WebEXConnector:
         if session_id in self.session_managers:
             del self.session_managers[session_id]
             print(f"[DEBUG] Evicted cached SessionManager for: {session_id}", file=sys.stderr)
+
+    def _enforce_pinned_session(self, person_id: str, session_id: str):
+        """For pinned users, push pinned agent/runtime/model into the SessionManager.
+        Must be called before every query or command so the SessionManager's session
+        data always reflects the pinned values regardless of what the user has set."""
+        if not self.config.is_user_pinned(person_id):
+            return
+        session_mgr = self.get_session_manager(session_id)
+        pinned_agent = self.config.get_pinned_agent(person_id)
+        if pinned_agent:
+            session_mgr.update_session_field(session_id, "agent", pinned_agent)
+        pinned_runtime = self.config.get_pinned_runtime(person_id)
+        if pinned_runtime:
+            session_mgr.update_session_field(session_id, "runtime", pinned_runtime)
+        pinned_model = self.config.get_pinned_model(person_id)
+        if pinned_model:
+            session_mgr.update_session_field(session_id, "model", pinned_model)
 
     def _execute_via_api(self, query: str, session_id: str, user_identity: str, channel: str) -> str:
         """Execute query via API using shared key authentication."""
@@ -696,6 +727,9 @@ class WebEXConnector:
 
             session_id = f"webex_{person_id}"
 
+            # Push pinned agent/runtime/model into SessionManager before every message
+            self._enforce_pinned_session(person_id, session_id)
+
             # Handle slash commands
             if text.startswith("/"):
                 cmd_lower = text.lower().strip()
@@ -728,6 +762,20 @@ class WebEXConnector:
                     self.send_message(
                         room_id,
                         f"❌ Your agent is pinned to **{pinned_agent}** by an administrator. You cannot change agents.",
+                    )
+                # Block pinned users from changing their runtime (if a runtime is pinned)
+                elif cmd_lower.startswith("/runtime set") and self.config.get_pinned_runtime(person_id):
+                    pinned_runtime = self.config.get_pinned_runtime(person_id)
+                    self.send_message(
+                        room_id,
+                        f"❌ Your runtime is pinned to **{pinned_runtime}** by an administrator. You cannot change runtimes.",
+                    )
+                # Block pinned users from changing their model (if a model is pinned)
+                elif cmd_lower.startswith("/model set") and self.config.get_pinned_model(person_id):
+                    pinned_model = self.config.get_pinned_model(person_id)
+                    self.send_message(
+                        room_id,
+                        f"❌ Your model is pinned to **{pinned_model}** by an administrator. You cannot change models.",
                     )
                 # Block unauthorized users from enabling yolo mode
                 elif cmd_lower.startswith("/mode yolo") and not self.config.is_yolo_allowed(person_id):
