@@ -1,31 +1,31 @@
 [Unit]
-Description=WebEX Connector for N8N Copilot Shim
-Documentation=file:///opt/n8n-copilot-shim/webex_connector.py
+Description=WebEX Connector Dev for N8N Copilot Shim
+Documentation=file:///opt/n8n-copilot-shim-dev/webex_connector.py
 After=network.target rabbitmq-server.service
 Wants=rabbitmq-server.service
 
 [Service]
 Type=simple
 User=flipkey
-WorkingDirectory=/opt/n8n-copilot-shim
-EnvironmentFile=/opt/n8n-copilot-shim/.env
-ExecStart=/usr/bin/python3 /opt/n8n-copilot-shim/webex_connector.py
+WorkingDirectory=/opt/n8n-copilot-shim-dev
+EnvironmentFile=/opt/n8n-copilot-shim-dev/.env
+ExecStart=/usr/bin/python3 /opt/n8n-copilot-shim-dev/webex_connector.py
 Restart=always
 RestartSec=10
 StandardOutput=journal
 StandardError=journal
-SyslogIdentifier=webex-connector
+SyslogIdentifier=webex-connector-dev
 
 # Environment variables (optional - can also use config file)
 Environment="PATH=/home/flipkey/.local/bin:/home/flipkey/.nvm/versions/node/v22.22.0/bin:/usr/local/bin:/usr/bin:/bin"
 Environment="DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus"
 Environment="XDG_RUNTIME_DIR=/run/user/1000"
-Environment="WEBEX_BOT_TOKEN=MjRmMDVjMGUtNjYyYS00ZDk0LWI0N2EtOTc0YjAyODRkODU3NDAzN2QzNWItYjdh_PF84_1eb65fdf-9643-417f-9974-ad72cae0e10f"
+Environment="WEBEX_BOT_TOKEN=Yzc1OWU0NGItNDU1Yi00N2IzLTkwZjctMmU0NGYyYTExMTdmOGFiMmY3MzAtNzdl_PF84_1eb65fdf-9643-417f-9974-ad72cae0e10f"
 Environment="RABBITMQ_HOST=192.168.0.85"
 Environment="RABBITMQ_PORT=5672"
 Environment="RABBITMQ_USER=admin"
 Environment="RABBITMQ_PASSWORD=TestPassword123!"
-Environment="RABBITMQ_QUEUE=webex"
+Environment="RABBITMQ_QUEUE=webex-dev"
 
 # Security
 NoNewPrivileges=true

@@ -46,6 +46,8 @@ class TelegramConfig:
             "enable_auto_pair": False,  # Auto-pair new users
             "default_agent": os.environ.get("COPILOT_DEFAULT_AGENT", "orchestrator"),
             "default_model": os.environ.get("COPILOT_DEFAULT_MODEL", "gpt-5-mini"),
+            "pinned_users": {},       # Maps user_id (str) to {"agent": "name"} - locks user to that agent
+            "yolo_allowed_users": [], # User IDs permitted to enable /mode yolo; empty = all allowed
         }
 
     def save(self):
@@ -97,6 +99,39 @@ class TelegramConfig:
             self.config["allowed_users"].remove(user_id)
             self.save()
 
+    def is_user_pinned(self, user_id: int) -> bool:
+        """Check if user is pinned to a specific agent"""
+        return str(user_id) in self.config.get("pinned_users", {})
+
+    def get_pinned_agent(self, user_id: int) -> Optional[str]:
+        """Get the pinned agent for a user, or None if not pinned"""
+        pinned = self.config.get("pinned_users", {}).get(str(user_id))
+        if pinned:
+            return pinned.get("agent")
+        return None
+
+    def get_pinned_runtime(self, user_id: int) -> Optional[str]:
+        """Get the pinned runtime for a user, or None if not set"""
+        pinned = self.config.get("pinned_users", {}).get(str(user_id))
+        if pinned:
+            return pinned.get("runtime")
+        return None
+
+    def get_pinned_model(self, user_id: int) -> Optional[str]:
+        """Get the pinned model for a user, or None if not set"""
+        pinned = self.config.get("pinned_users", {}).get(str(user_id))
+        if pinned:
+            return pinned.get("model")
+        return None
+
+    def is_yolo_allowed(self, user_id: int) -> bool:
+        """Check if user is permitted to enable /mode yolo.
+        If yolo_allowed_users is empty, all users are allowed (backward compatible)."""
+        yolo_users = self.config.get("yolo_allowed_users", [])
+        if not yolo_users:
+            return True
+        return user_id in yolo_users
+
 
 class TelegramConnector:
     """Main Telegram connector class"""
@@ -120,6 +155,11 @@ class TelegramConnector:
             self.config.config["token"] = token
             self.config.save()
 
+        # API mode configuration
+        self.use_api = os.getenv("USE_API", "false").lower() == "true"
+        self.api_url_copilot = os.getenv("API_URL", "http://127.0.0.1:8001")
+        self.api_shared_key = os.getenv("API_SHARED_KEY", "")
+
         self.api_url = f"https://api.telegram.org/bot{self.token}"
         self.offset = 0
         self.running = False
@@ -128,7 +168,16 @@ class TelegramConnector:
         """Get or create SessionManager for session_id"""
         if session_id not in self.session_managers:
             from agent_manager import SessionManager
-            self.session_managers[session_id] = SessionManager()
+            mgr = SessionManager()
+            # Backwards compatibility: ensure older SessionManager implementations
+            # that expose load_session_map still satisfy callers expecting
+            # load_session_data
+            if not hasattr(mgr, "load_session_data"):
+                if hasattr(mgr, "load_session_map"):
+                    mgr.load_session_data = mgr.load_session_map
+                else:
+                    mgr.load_session_data = lambda sid: None
+            self.session_managers[session_id] = mgr
         return self.session_managers[session_id]
 
     def _evict_session_manager(self, session_id: str):
@@ -136,6 +185,61 @@ class TelegramConnector:
         if session_id in self.session_managers:
             del self.session_managers[session_id]
             print(f"[DEBUG] Evicted cached SessionManager for: {session_id}", file=sys.stderr)
+
+    def _enforce_pinned_session(self, user_id: int, session_id: str):
+        """For pinned users, push pinned agent/runtime/model into the SessionManager.
+        Must be called before every query or command so the SessionManager's session
+        data always reflects the pinned values regardless of what the user has set."""
+        if not self.config.is_user_pinned(user_id):
+            return
+        session_mgr = self.get_session_manager(session_id)
+        pinned_agent = self.config.get_pinned_agent(user_id)
+        if pinned_agent:
+            session_mgr.update_session_field(session_id, "agent", pinned_agent)
+        pinned_runtime = self.config.get_pinned_runtime(user_id)
+        if pinned_runtime:
+            session_mgr.update_session_field(session_id, "runtime", pinned_runtime)
+        pinned_model = self.config.get_pinned_model(user_id)
+        if pinned_model:
+            session_mgr.update_session_field(session_id, "model", pinned_model)
+
+    def _execute_via_api(self, query: str, session_id: str, user_identity: str, channel: str) -> str:
+        """Execute query via API using shared key authentication."""
+        try:
+            headers = {
+                "Authorization": f"Bearer shared_{self.api_shared_key}",
+                "Content-Type": "application/json",
+                "X-User-Identity": user_identity,
+                "X-Auth-Channel": channel,
+            }
+
+            # Ensure session exists
+            requests.post(
+                f"{self.api_url_copilot}/api/v1/sessions/create",
+                headers=headers,
+                json={},
+                timeout=10,
+            )
+
+            # Execute the query
+            resp = requests.post(
+                f"{self.api_url_copilot}/api/v1/sessions/{session_id}/execute",
+                headers=headers,
+                json={"query": query},
+                timeout=self.config.get_user_timeout(int(user_identity.replace("telegram_", ""))) if "telegram_" in str(user_identity) else 600,
+            )
+
+            if resp.status_code == 200:
+                return resp.json().get("response", "No response from API")
+            else:
+                print(f"[WARN] API request failed ({resp.status_code}): {resp.text}", file=sys.stderr)
+                # Fallback to direct mode
+                session_mgr = self.get_session_manager(session_id)
+                return session_mgr.execute(query, session_id)
+        except Exception as e:
+            print(f"[WARN] API request exception: {e}, falling back to direct mode", file=sys.stderr)
+            session_mgr = self.get_session_manager(session_id)
+            return session_mgr.execute(query, session_id)
 
     def get_updates(self, timeout: int = 30) -> List[Dict]:
         """Fetch new messages from Telegram"""
@@ -225,28 +329,37 @@ class TelegramConnector:
             
             last_msg_id = None
             for chunk in chunks:
+                # Log outbound attempt (short snippet)
+                print(f"[DEBUG OUTBOUND] send_message -> chat_id={chat_id} text_snippet={repr(chunk[:200])}", file=sys.stderr)
                 resp = requests.post(
                     f"{self.api_url}/sendMessage",
                     json={"chat_id": chat_id, "text": chunk, "parse_mode": "HTML"},
                     timeout=10,
                 )
+                print(f"[DEBUG OUTBOUND] send_message HTTP {resp.status_code} for chat_id={chat_id}", file=sys.stderr)
                 if resp.status_code != 200:
                     print(f"[WARN] HTML send failed ({resp.status_code}): {resp.text[:200]}", file=sys.stderr)
                     # Fallback to plain text
                     plain = re.sub(r'<[^>]+>', '', chunk)
                     plain = plain.replace('&amp;', '&').replace('&lt;', '<').replace('&gt;', '>')
+                    print(f"[DEBUG OUTBOUND] send_message falling back to plain text for chat_id={chat_id}", file=sys.stderr)
                     resp = requests.post(
                         f"{self.api_url}/sendMessage",
                         json={"chat_id": chat_id, "text": plain},
                         timeout=10,
                     )
+                    print(f"[DEBUG OUTBOUND] send_message fallback HTTP {resp.status_code} for chat_id={chat_id}", file=sys.stderr)
                     if resp.status_code != 200:
                         print(f"[ERROR] Plain text also failed ({resp.status_code}): {resp.text[:200]}", file=sys.stderr)
                 
                 if resp.status_code == 200:
-                    result = resp.json()
-                    if result.get("ok"):
-                        last_msg_id = result["result"]["message_id"]
+                    try:
+                        result = resp.json()
+                        if result.get("ok"):
+                            last_msg_id = result["result"]["message_id"]
+                            print(f"[DEBUG OUTBOUND] send_message succeeded message_id={last_msg_id} for chat_id={chat_id}", file=sys.stderr)
+                    except Exception as e:
+                        print(f"[WARN] send_message response JSON parse error: {e}", file=sys.stderr)
             return last_msg_id
         except Exception as e:
             print(f"Error sending message: {e}", file=sys.stderr)
@@ -259,20 +372,25 @@ class TelegramConnector:
             max_len = 4096
             chunks = [sanitized[i:i + max_len] for i in range(0, len(sanitized), max_len)] if sanitized else ["No response"]
             
+            # Log edit attempt
+            print(f"[DEBUG OUTBOUND] edit_message -> chat_id={chat_id} message_id={message_id} text_snippet={repr(chunks[0][:200])}", file=sys.stderr)
             resp = requests.post(
                 f"{self.api_url}/editMessageText",
                 json={"chat_id": chat_id, "message_id": message_id, "text": chunks[0], "parse_mode": "HTML"},
                 timeout=10,
             )
+            print(f"[DEBUG OUTBOUND] edit_message HTTP {resp.status_code} for chat_id={chat_id} message_id={message_id}", file=sys.stderr)
             if resp.status_code != 200:
                 # Fallback to plain text
                 plain = re.sub(r'<[^>]+>', '', chunks[0])
                 plain = plain.replace('&amp;', '&').replace('&lt;', '<').replace('&gt;', '>')
+                print(f"[DEBUG OUTBOUND] edit_message falling back to plain text for chat_id={chat_id} message_id={message_id}", file=sys.stderr)
                 resp = requests.post(
                     f"{self.api_url}/editMessageText",
                     json={"chat_id": chat_id, "message_id": message_id, "text": plain},
                     timeout=10,
                 )
+                print(f"[DEBUG OUTBOUND] edit_message fallback HTTP {resp.status_code} for chat_id={chat_id} message_id={message_id}", file=sys.stderr)
                 if resp.status_code != 200:
                     print(f"[WARN] Edit failed ({resp.status_code}): {resp.text[:200]}", file=sys.stderr)
             
@@ -284,11 +402,13 @@ class TelegramConnector:
     def send_typing(self, chat_id: int):
         """Send typing indicator to chat"""
         try:
-            requests.post(
+            print(f"[DEBUG OUTBOUND] send_typing -> chat_id={chat_id}", file=sys.stderr)
+            resp = requests.post(
                 f"{self.api_url}/sendChatAction",
                 json={"chat_id": chat_id, "action": "typing"},
                 timeout=5,
             )
+            print(f"[DEBUG OUTBOUND] send_typing HTTP {resp.status_code} for chat_id={chat_id}", file=sys.stderr)
         except Exception as e:
             print(f"Error sending typing indicator: {e}", file=sys.stderr)
 
@@ -538,6 +658,7 @@ class TelegramConnector:
 
     def send_response(self, chat_id: int, text: str, status_msg_id: Optional[int] = None):
         """Send response, detecting image URLs and file paths."""
+        print(f"[DEBUG OUTBOUND] send_response -> chat_id={chat_id} text_snippet={repr(text[:200])} status_msg_id={status_msg_id}", file=sys.stderr)
         # Extract images first, then files from remaining text
         image_data, text_after_images = self.extract_image_urls(text)
         file_data, remaining_text = self.extract_file_paths(text_after_images)
@@ -545,31 +666,37 @@ class TelegramConnector:
         # Handle text portion
         if remaining_text.strip():
             if status_msg_id:
+                print(f"[DEBUG OUTBOUND] send_response editing status message {status_msg_id} for chat_id={chat_id}", file=sys.stderr)
                 self.edit_message(chat_id, status_msg_id, remaining_text)
                 status_msg_id = None
             else:
+                print(f"[DEBUG OUTBOUND] send_response sending text to chat_id={chat_id}", file=sys.stderr)
                 self.send_message(chat_id, remaining_text)
         elif status_msg_id and (image_data or file_data):
             # No text, just media - delete status message
             try:
-                requests.post(
+                resp = requests.post(
                     f"{self.api_url}/deleteMessage",
                     json={"chat_id": chat_id, "message_id": status_msg_id},
                     timeout=5,
                 )
-            except Exception:
-                pass
+                print(f"[DEBUG OUTBOUND] deleteMessage HTTP {resp.status_code} for chat_id={chat_id} message_id={status_msg_id}", file=sys.stderr)
+            except Exception as e:
+                print(f"[WARN] deleteMessage failed: {e}", file=sys.stderr)
             status_msg_id = None
         elif status_msg_id:
             # No text, no media - edit status message with default text
+            print(f"[DEBUG OUTBOUND] send_response editing status message {status_msg_id} to checkmark for chat_id={chat_id}", file=sys.stderr)
             self.edit_message(chat_id, status_msg_id, "✓")
 
         # Send images
         for url, caption in image_data:
+            print(f"[DEBUG OUTBOUND] send_response sending photo URL={url} caption={repr(caption[:100])} to chat_id={chat_id}", file=sys.stderr)
             self.send_photo(chat_id, url, caption)
 
         # Send files
         for file_path, caption in file_data:
+            print(f"[DEBUG OUTBOUND] send_response sending document path={file_path} caption={repr(caption[:100])} to chat_id={chat_id}", file=sys.stderr)
             self.send_document(chat_id, file_path, caption)
 
     def download_file(self, file_id: str, user_id: int) -> Optional[str]:
@@ -686,26 +813,40 @@ class TelegramConnector:
             # Get or create user session
             session_info = self.config.get_user_session(user_id)
             if not session_info:
-                # Create new session
+                # Create new session - use pinned agent if configured
+                default_agent = self.config.config["default_agent"]
+                pinned_agent = self.config.get_pinned_agent(user_id)
+                if pinned_agent:
+                    default_agent = pinned_agent
                 session_info = {
                     "user_id": user_id,
                     "username": user_name,
                     "paired_at": datetime.now().isoformat(),
-                    "agent": self.config.config["default_agent"],
+                    "agent": default_agent,
                     "model": self.config.config["default_model"],
                     "render_type": "telegram_html",  # Default render type with markdown image support
                 }
                 self.config.set_user_session(user_id, session_info)
+            elif self.config.is_user_pinned(user_id):
+                # Enforce pinned agent even for existing sessions
+                pinned_agent = self.config.get_pinned_agent(user_id)
+                if pinned_agent and session_info.get("agent") != pinned_agent:
+                    session_info["agent"] = pinned_agent
+                    self.config.set_user_session(user_id, session_info)
 
             # Handle slash commands via agent_manager
             session_id = f"telegram_{user_id}"
-            
+
+            # Push pinned agent/runtime/model into SessionManager before every message
+            self._enforce_pinned_session(user_id, session_id)
+
             # Show typing indicator
             self.send_typing(chat_id)
-            
+
             if text.startswith("/"):
+                cmd_lower = text.lower().strip()
                 # Check for timeout command
-                if text.lower().startswith("/timeout"):
+                if cmd_lower.startswith("/timeout"):
                     parts = text.split()
                     if len(parts) == 1 or (len(parts) > 1 and parts[1].lower() == "current"):
                         # Get current timeout
@@ -730,6 +871,30 @@ class TelegramConnector:
                     else:
                         response = "Invalid timeout command. Use: /timeout current or /timeout set <seconds>"
                     self.send_message(chat_id, response)
+                # Block pinned users from changing their agent
+                elif cmd_lower.startswith("/agent set") and self.config.is_user_pinned(user_id):
+                    pinned_agent = self.config.get_pinned_agent(user_id)
+                    self.send_message(
+                        chat_id,
+                        f"❌ Your agent is pinned to **{pinned_agent}** by an administrator. You cannot change agents.",
+                    )
+                # Block pinned users from changing their runtime (if a runtime is pinned)
+                elif cmd_lower.startswith("/runtime set") and self.config.get_pinned_runtime(user_id):
+                    pinned_runtime = self.config.get_pinned_runtime(user_id)
+                    self.send_message(
+                        chat_id,
+                        f"❌ Your runtime is pinned to **{pinned_runtime}** by an administrator. You cannot change runtimes.",
+                    )
+                # Block pinned users from changing their model (if a model is pinned)
+                elif cmd_lower.startswith("/model set") and self.config.get_pinned_model(user_id):
+                    pinned_model = self.config.get_pinned_model(user_id)
+                    self.send_message(
+                        chat_id,
+                        f"❌ Your model is pinned to **{pinned_model}** by an administrator. You cannot change models.",
+                    )
+                # Block unauthorized users from enabling yolo mode
+                elif cmd_lower.startswith("/mode yolo") and not self.config.is_yolo_allowed(user_id):
+                    self.send_message(chat_id, "❌ You are not authorized to enable YOLO mode.")
                 else:
                     # Regular slash commands - get user timeout
                     timeout = self.config.get_user_timeout(user_id)
@@ -737,7 +902,6 @@ class TelegramConnector:
                     msg_id = self.send_message(chat_id, response)
 
                     # Pin agent set messages so user always knows which agent they're talking to
-                    cmd_lower = text.lower().strip()
                     if cmd_lower.startswith("/agent set") and msg_id:
                         self.unpin_all_messages(chat_id)
                         self.pin_message(chat_id, msg_id)
@@ -775,12 +939,15 @@ class TelegramConnector:
         """Execute slash command via agent_manager.execute() with timeout support"""
         # Container for result and thread control
         result_container = {"response": None, "done": False}
-        
+
         def run_command():
             """Run command in background thread"""
             try:
-                session_mgr = self.get_session_manager(session_id)
-                result_container["response"] = session_mgr.execute(command, session_id)
+                if self.use_api:
+                    result_container["response"] = self._execute_via_api(command, session_id, session_id, "telegram")
+                else:
+                    session_mgr = self.get_session_manager(session_id)
+                    result_container["response"] = session_mgr.execute(command, session_id)
                 result_container["done"] = True
             except Exception as e:
                 import traceback
@@ -882,8 +1049,11 @@ class TelegramConnector:
             print(f"[DEBUG] Using persistent session_mgr for: {session_id}", file=sys.stderr)
             
             # Use execute() which routes to the correct runtime automatically
-            result = session_mgr.execute(query, session_id)
-            
+            if self.use_api:
+                result = self._execute_via_api(query, session_id, session_id, "telegram")
+            else:
+                result = session_mgr.execute(query, session_id)
+
             return result if result else "No response from agent"
         except Exception as e:
             import traceback
