@@ -210,6 +210,134 @@ def get_command_timeout() -> int:
         return 300
 
 
+class HistoryManager:
+    """Persists per-user chat history in ~/.copilot/chat-history.json."""
+
+    MAX_SESSIONS_PER_USER = 100
+    MAX_MESSAGES_PER_SESSION = 500
+
+    def __init__(self):
+        home = os.path.expanduser("~")
+        copilot_dir = os.path.join(home, ".copilot")
+        os.makedirs(copilot_dir, exist_ok=True)
+        self._path = os.path.join(copilot_dir, "chat-history.json")
+        self._lock = threading.Lock()
+        if not os.path.exists(self._path):
+            self._save({})
+
+    def _user_key(self, channel: str, identity: str) -> str:
+        return f"{channel}_{identity}"
+
+    def _load(self) -> dict:
+        try:
+            with open(self._path) as f:
+                return json.load(f)
+        except Exception:
+            return {}
+
+    def _save(self, data: dict) -> None:
+        with open(self._path, "w") as f:
+            json.dump(data, f, indent=2)
+
+    def get_sessions(self, channel: str, identity: str) -> list:
+        """Return session list (no messages) sorted newest-first."""
+        with self._lock:
+            data = self._load()
+            key = self._user_key(channel, identity)
+            sessions = data.get(key, {}).get("sessions", [])
+            # Return without messages, sorted newest-first
+            result = []
+            for s in sorted(sessions, key=lambda x: x.get("updated_at", 0), reverse=True):
+                result.append({k: v for k, v in s.items() if k != "messages"})
+            return result
+
+    def get_session_messages(self, channel: str, identity: str, session_id: str):
+        """Return messages for a session, or None if not found."""
+        with self._lock:
+            data = self._load()
+            key = self._user_key(channel, identity)
+            for s in data.get(key, {}).get("sessions", []):
+                if s["session_id"] == session_id:
+                    return s.get("messages", [])
+        return None
+
+    def create_session(self, channel: str, identity: str, session_id: str) -> dict:
+        """Create a new session entry, pruning oldest if over cap."""
+        with self._lock:
+            data = self._load()
+            key = self._user_key(channel, identity)
+            user_data = data.setdefault(key, {"sessions": []})
+            sessions = user_data["sessions"]
+            # Prune if at cap
+            if len(sessions) >= self.MAX_SESSIONS_PER_USER:
+                sessions.sort(key=lambda x: x.get("updated_at", 0))
+                sessions = sessions[-(self.MAX_SESSIONS_PER_USER - 1):]
+                user_data["sessions"] = sessions
+            now = time.time()
+            session = {
+                "session_id": session_id,
+                "title": "",
+                "preview": "",
+                "created_at": now,
+                "updated_at": now,
+                "messages": [],
+            }
+            sessions.append(session)
+            self._save(data)
+            return session
+
+    def append_message(
+        self,
+        channel: str,
+        identity: str,
+        session_id: str,
+        role: str,
+        content: str,
+        files=None,
+    ) -> bool:
+        """Append a message to a session. Returns False if session not found."""
+        with self._lock:
+            data = self._load()
+            key = self._user_key(channel, identity)
+            for s in data.get(key, {}).get("sessions", []):
+                if s["session_id"] == session_id:
+                    msg: dict = {
+                        "role": role,
+                        "content": content,
+                        "timestamp": time.time(),
+                    }
+                    if files:
+                        msg["files"] = files
+                    messages = s.setdefault("messages", [])
+                    messages.append(msg)
+                    # Auto-set title from first user message
+                    if role == "user" and not s.get("title"):
+                        s["title"] = content[:60]
+                    # Auto-set preview from first assistant message
+                    if role == "assistant" and not s.get("preview"):
+                        s["preview"] = content[:120]
+                    # Prune if too many messages
+                    if len(messages) > self.MAX_MESSAGES_PER_SESSION:
+                        s["messages"] = messages[-self.MAX_MESSAGES_PER_SESSION:]
+                    s["updated_at"] = time.time()
+                    self._save(data)
+                    return True
+        return False
+
+    def delete_session(self, channel: str, identity: str, session_id: str) -> bool:
+        """Delete a session. Returns False if not found."""
+        with self._lock:
+            data = self._load()
+            key = self._user_key(channel, identity)
+            sessions = data.get(key, {}).get("sessions", [])
+            new_sessions = [s for s in sessions if s["session_id"] != session_id]
+            if len(new_sessions) == len(sessions):
+                return False
+            data[key]["sessions"] = new_sessions
+            self._save(data)
+            return True
+
+
 class SessionManager:
     """Manages AI CLI sessions (Copilot & OpenCode) for N8N integration"""
 
@@ -3050,7 +3178,8 @@ def _send_pairing_code(channel: str, identity: str, code: str) -> None:
             config_path = os.path.join(script_dir, "telegram_config.json")
             with open(config_path) as f:
                 cfg = json.load(f)
-            connector = TelegramConnector(cfg)
+            token = cfg.get("token") or os.getenv("TELEGRAM_BOT_TOKEN", "")
+            connector = TelegramConnector(token, config_file=config_path)
             connector.send_message(
                 int(identity),
                 f"Your pairing code is: {code}\nIt expires in 5 minutes.",
@@ -3061,7 +3190,8 @@ def _send_pairing_code(channel: str, identity: str, code: str) -> None:
             config_path = os.path.join(script_dir, "webex_config.json")
             with open(config_path) as f:
                 cfg = json.load(f)
-            connector = WebEXConnector(cfg)
+            token = cfg.get("bot_token") or os.getenv("WEBEX_BOT_TOKEN", "")
+            connector = WebEXConnector(token, config_file=config_path)
             connector.send_message(
                 identity,
                 f"Your pairing code is: {code}\nIt expires in 5 minutes.",
@@ -3070,15 +3200,34 @@ def _send_pairing_code(channel: str, identity: str, code: str) -> None:
         print(f"[API] Warning: could not send pairing code via {channel}: {exc}")
 
 
+def _resolve_telegram_identity(username: str):
+    """Reverse-lookup @username in telegram_config.json user_pairings.
+    Returns numeric user_id string, or None if not found (user must message bot first)."""
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    config_path = os.path.join(script_dir, "telegram_config.json")
+    try:
+        with open(config_path) as f:
+            cfg = json.load(f)
+        for uid, pairing in cfg.get("user_pairings", {}).items():
+            if pairing.get("username", "").lower() == username.lower():
+                return uid
+        return None
+    except Exception:
+        return None
+
+
 def create_api_app():  # noqa: C901 – factory kept in one place intentionally
     """Factory that builds and returns the FastAPI application."""
     import asyncio
     import concurrent.futures
     from enum import Enum
 
-    from fastapi import FastAPI, Header, HTTPException, Request
-    from fastapi.responses import JSONResponse
+    from fastapi import FastAPI, Header, HTTPException, Request, UploadFile, File
+    from fastapi.responses import JSONResponse, FileResponse
+    from fastapi.staticfiles import StaticFiles
+    from fastapi.middleware.cors import CORSMiddleware
     from pydantic import BaseModel, field_validator
+    import mimetypes
 
     global _api_auth_manager
 
@@ -3101,11 +3250,13 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
     _api_auth_manager = auth_mgr
     rate_limiter = RateLimiter()
     session_mgr = SessionManager(config_file=CONFIG_FILE)
+    history_mgr = HistoryManager()
 
     # ---- Pydantic models ----
     class ChannelEnum(str, Enum):
         telegram = "telegram"
         webex = "webex"
+        webui = "webui"
 
     class PairingRequest(BaseModel):
         identity: str
@@ -3188,6 +3339,17 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         lifespan=_lifespan,
     )
 
+    # ---- CORS middleware ----
+    cors_origins = [o.strip() for o in os.environ.get("API_CORS_ORIGINS", "").split(",") if o.strip()]
+    if cors_origins:
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origins=cors_origins,
+            allow_credentials=True,
+            allow_methods=["GET", "POST", "DELETE"],
+            allow_headers=["Authorization", "Content-Type", "X-User-Identity", "X-Auth-Channel"],
+        )
+
     # ---- generic exception handler ----
     @app.exception_handler(Exception)
     async def _global_exception_handler(request: Request, exc: Exception):
@@ -3211,11 +3373,25 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         if not rate_limiter.check(client_ip, "pairing", max_requests=5, window=900):
             raise HTTPException(status_code=429, detail="Rate limit exceeded")
 
-        code = auth_mgr.generate_pairing_code(body.identity, body.channel.value)
-        _send_pairing_code(body.channel.value, body.identity, code)
+        identity = body.identity.lstrip("@")
+        if body.channel.value == "telegram":
+            resolved = _resolve_telegram_identity(identity)
+            if resolved is None:
+                raise HTTPException(
+                    status_code=404,
+                    detail=(
+                        f"Telegram user @{identity} not found. "
+                        "Please send any message to the bot first, then try again."
+                    ),
+                )
+            identity = resolved
+
+        code = auth_mgr.generate_pairing_code(identity, body.channel.value)
+        _send_pairing_code(body.channel.value, identity, code)
         return {
             "message": f"Pairing code sent via {body.channel.value}",
             "expires_in": PAIRING_CODE_TTL,
+            "identity_resolved": identity,
         }
 
     @app.post("/api/v1/auth/verify-pairing")
@@ -3223,7 +3399,13 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         token = auth_mgr.verify_pairing_code(body.code, body.identity)
         if not token:
             raise HTTPException(status_code=400, detail="Invalid or expired pairing code")
-        return {"token": token, "expires_in": SESSION_TOKEN_TTL}
+        token_data = auth_mgr.validate_session_token(token)
+        return {
+            "token": token,
+            "expires_in": SESSION_TOKEN_TTL,
+            "identity": body.identity,
+            "channel": token_data["channel"] if token_data else "unknown",
+        }
 
     @app.post("/api/v1/sessions/create")
     async def create_session(
@@ -3240,6 +3422,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         )
         session_id = str(uuid4())[:8]
         session_mgr.get_or_create_session_data(session_id)
+        history_mgr.create_session(user["channel"], user["identity"], session_id)
 
         if body.agent:
             session_mgr.update_session_field(session_id, "agent", body.agent)
@@ -3279,6 +3462,9 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 pool, session_mgr.execute, body.query, session_id
             )
 
+        history_mgr.append_message(user["channel"], user["identity"], session_id, "user", body.query)
+        history_mgr.append_message(user["channel"], user["identity"], session_id, "assistant", result)
+
         session_data = session_mgr.get_or_create_session_data(session_id)
         return {
             "session_id": session_id,
@@ -3306,6 +3492,92 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             "runtime": data.get("runtime"),
             "model": data.get("model"),
         }
+
+    # --- History endpoints ---
+
+    @app.get("/api/v1/history/sessions")
+    async def list_history_sessions(request: Request):
+        user = await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        return {"sessions": history_mgr.get_sessions(user["channel"], user["identity"])}
+
+    @app.get("/api/v1/history/sessions/{session_id}/messages")
+    async def get_history_messages(session_id: str, request: Request):
+        user = await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        messages = history_mgr.get_session_messages(user["channel"], user["identity"], session_id)
+        if messages is None:
+            raise HTTPException(status_code=404, detail="Session not found in history")
+        return {"session_id": session_id, "messages": messages}
+
+    @app.delete("/api/v1/history/sessions/{session_id}")
+    async def delete_history_session(session_id: str, request: Request):
+        user = await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        if not history_mgr.delete_session(user["channel"], user["identity"], session_id):
+            raise HTTPException(status_code=404, detail="Session not found")
+        return {"deleted": True, "session_id": session_id}
+
+    # --- File upload ---
+
+    @app.post("/api/v1/sessions/{session_id}/upload")
+    async def upload_file(session_id: str, request: Request, file: UploadFile = File(...)):
+        user = await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        if not session_mgr.load_session_data(session_id):
+            raise HTTPException(status_code=404, detail="Session not found")
+        contents = await file.read()
+        if len(contents) > 50 * 1024 * 1024:
+            raise HTTPException(status_code=413, detail="File exceeds 50MB limit")
+        safe_name = re.sub(r"[^\w.\-]", "_", Path(file.filename).name)[:200]
+        upload_dir = Path(f"/tmp/webui_uploads/{session_id}")
+        upload_dir.mkdir(parents=True, exist_ok=True)
+        dest = upload_dir / safe_name
+        dest.write_bytes(contents)
+        mime, _ = mimetypes.guess_type(safe_name)
+        return {
+            "file_path": str(dest),
+            "filename": safe_name,
+            "size": len(contents),
+            "mime_type": mime or "application/octet-stream",
+        }
+
+    # --- Serve uploaded files (authenticated) ---
+
+    @app.get("/api/v1/uploads/{session_id}/{filename}")
+    async def serve_upload(session_id: str, filename: str, request: Request):
+        await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        safe_name = re.sub(r"[^\w.\-]", "_", Path(filename).name)
+        path = Path(f"/tmp/webui_uploads/{session_id}/{safe_name}")
+        if not path.exists():
+            raise HTTPException(status_code=404, detail="File not found")
+        return FileResponse(str(path))
+
+    # --- Static WebUI — MUST BE LAST ---
+    _webui_dist = Path(__file__).parent / "webui" / "dist"
+    if _webui_dist.exists():
+        app.mount("/ui", StaticFiles(directory=str(_webui_dist), html=True), name="webui")
 
     return app
 

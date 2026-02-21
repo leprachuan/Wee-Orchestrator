@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Wee — Orchestrator Chat</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/highlight.js@11.9.0/styles/github-dark.min.css" />
+  <link rel="stylesheet" href="app.css" />
+</head>
+<body>
+  <!-- Auth overlay -->
+  <div id="auth-overlay" class="auth-overlay hidden">
+    <div class="auth-card glass-card">
+      <div class="auth-logo">🤖</div>
+      <h1 class="auth-title">Wee Orchestrator</h1>
+      <p class="auth-subtitle">Sign in to start chatting</p>
+
+      <!-- Step 1 -->
+      <div id="auth-step1">
+        <div class="form-group">
+          <label id="identity-label" for="auth-identity">Telegram @username</label>
+          <input id="auth-identity" type="text" class="glass-input" placeholder="@yourname" autocomplete="off" />
+        </div>
+        <div class="form-group">
+          <label for="auth-channel">Channel</label>
+          <select id="auth-channel" class="glass-input glass-select">
+            <option value="telegram">Telegram</option>
+            <option value="webex">WebEx</option>
+          </select>
+        </div>
+        <button id="btn-send-code" class="btn btn-primary btn-full">Send Pairing Code</button>
+        <p id="auth-error" class="auth-error hidden"></p>
+      </div>
+
+      <!-- Step 2 -->
+      <div id="auth-step2" class="hidden">
+        <p class="auth-hint">Check your <span id="auth-channel-display">Telegram</span> for a 6-digit code.</p>
+        <div class="form-group">
+          <label for="auth-code">Pairing Code</label>
+          <input id="auth-code" type="text" class="glass-input code-input" placeholder="123456" maxlength="6" inputmode="numeric" autocomplete="one-time-code" />
+        </div>
+        <button id="btn-verify-code" class="btn btn-primary btn-full">Verify</button>
+        <button id="btn-back" class="btn btn-ghost btn-full">← Back</button>
+        <p id="auth-error2" class="auth-error hidden"></p>
+      </div>
+    </div>
+  </div>
+
+  <!-- Main app -->
+  <div id="app" class="app-layout hidden">
+    <!-- Background blobs -->
+    <div class="bg-blobs" aria-hidden="true">
+      <div class="blob blob-1"></div>
+      <div class="blob blob-2"></div>
+      <div class="blob blob-3"></div>
+    </div>
+
+    <!-- Sidebar -->
+    <aside id="sidebar" class="sidebar glass-panel">
+      <div class="sidebar-header">
+        <span class="sidebar-logo">🤖</span>
+        <span class="sidebar-title">Wee</span>
+        <button id="btn-sidebar-toggle" class="btn-icon sidebar-toggle-btn" title="Close sidebar">‹</button>
+      </div>
+      <button id="btn-new-chat" class="btn btn-primary new-chat-btn">+ New Chat</button>
+      <div id="sessions-list" class="sessions-list"></div>
+      <div class="sidebar-footer">
+        <span id="sidebar-identity" class="sidebar-user"></span>
+        <button id="btn-logout" class="btn btn-ghost btn-sm">Logout</button>
+      </div>
+    </aside>
+
+    <!-- Main panel -->
+    <main class="main-panel">
+      <!-- Header -->
+      <header class="chat-header glass-panel">
+        <button id="btn-open-sidebar" class="btn-icon sidebar-open-btn hidden" title="Open sidebar">☰</button>
+        <div class="chat-header-info">
+          <span class="chat-session-label">Session</span>
+          <span id="header-session-id" class="chat-session-id">—</span>
+        </div>
+      </header>
+
+      <!-- Messages -->
+      <div id="messages" class="messages-container">
+        <div id="empty-state" class="empty-state">
+          <div class="empty-icon">💬</div>
+          <p>Start a conversation or select a session from the sidebar.</p>
+        </div>
+      </div>
+
+      <!-- Typing indicator -->
+      <div id="typing-indicator" class="typing-indicator hidden">
+        <div class="typing-bubble glass-bubble">
+          <span class="dot"></span><span class="dot"></span><span class="dot"></span>
+        </div>
+      </div>
+
+      <!-- File preview strip -->
+      <div id="file-preview-strip" class="file-preview-strip hidden"></div>
+
+      <!-- Input bar -->
+      <div class="input-bar glass-panel">
+        <label for="file-input" class="btn-icon file-btn" title="Attach file">📎
+          <input id="file-input" type="file" class="hidden" accept="image/*,text/*,.pdf,.json,.csv" />
+        </label>
+        <textarea
+          id="message-input"
+          class="message-textarea"
+          placeholder="Message Wee…"
+          rows="1"
+          maxlength="10000"
+        ></textarea>
+        <button id="btn-send" class="btn btn-primary send-btn" disabled>▶</button>
+      </div>
+    </main>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/marked@9/marked.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/highlight.js@11.9.0/lib/core.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/highlight.js@11.9.0/lib/languages/javascript.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/highlight.js@11.9.0/lib/languages/python.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/highlight.js@11.9.0/lib/languages/bash.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/highlight.js@11.9.0/lib/languages/json.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/highlight.js@11.9.0/lib/languages/yaml.min.js"></script>
+  <script src="app.js" type="module"></script>
+</body>
+</html>
