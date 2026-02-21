@@ -1220,8 +1220,8 @@ function buildJobForm(job) {
         <div class="form-group">
           <label>Mode</label>
           <select class="glass-input glass-select" name="mode">
-            <option value="yolo"       ${(job?.mode ?? 'yolo') === 'yolo'       ? 'selected' : ''}>yolo (auto-approve)</option>
-            <option value="restricted" ${job?.mode === 'restricted' ? 'selected' : ''}>restricted (safe)</option>
+            <option value="restricted" ${(job?.mode ?? 'restricted') === 'restricted' ? 'selected' : ''}>restricted (safe)</option>
+            <option value="yolo"       ${job?.mode === 'yolo' ? 'selected' : ''}>yolo (auto-approve)</option>
           </select>
         </div>
       </div>
@@ -1271,7 +1271,7 @@ function wireJobForm(container, onSubmit) {
       agent:     data.agent?.trim() || 'fosterbot',
       runtime:   data.runtime || 'claude',
       model:     data.model?.trim() || null,
-      mode:      data.mode || 'yolo',
+      mode:      data.mode || 'restricted',
       task:      data.task.trim(),
       recurring: !!data.recurring,
       notify:    !!data.notify,
