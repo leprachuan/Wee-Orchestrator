@@ -1212,6 +1212,19 @@ function buildJobForm(job) {
           </select>
         </div>
       </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label>Model <small class="form-hint-inline">(optional — leave blank for runtime default)</small></label>
+          <input class="glass-input" name="model" value="${v('model')}" placeholder="e.g. sonnet, gpt-4o, gemini-1.5-pro" />
+        </div>
+        <div class="form-group">
+          <label>Mode</label>
+          <select class="glass-input glass-select" name="mode">
+            <option value="yolo"       ${(job?.mode ?? 'yolo') === 'yolo'       ? 'selected' : ''}>yolo (auto-approve)</option>
+            <option value="restricted" ${job?.mode === 'restricted' ? 'selected' : ''}>restricted (safe)</option>
+          </select>
+        </div>
+      </div>
       <div class="form-group">
         <label>Task prompt <span class="req">*</span></label>
         <textarea class="glass-input sched-task-input" name="task" rows="4" placeholder="Describe the task the agent should perform…" required>${v('task')}</textarea>
@@ -1257,6 +1270,8 @@ function wireJobForm(container, onSubmit) {
       schedule:  data.schedule.trim(),
       agent:     data.agent?.trim() || 'fosterbot',
       runtime:   data.runtime || 'claude',
+      model:     data.model?.trim() || null,
+      mode:      data.mode || 'yolo',
       task:      data.task.trim(),
       recurring: !!data.recurring,
       notify:    !!data.notify,
