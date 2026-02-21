@@ -8,14 +8,15 @@ const API_BASE = '/api/v1';
 
 // ─── State ────────────────────────────────────────────────────────────────────
 const STATE = {
-  token: null,
-  identity: null,
-  channel: null,
-  identityResolved: null,   // numeric ID after @username resolution
+  token:           null,
+  identity:        null,   // numeric/email identity
+  channel:         null,
+  username:        null,   // @handle (telegram) or null
+  identityResolved: null,  // resolved numeric ID during auth
   currentSessionId: null,
-  isTyping: false,
-  pendingFiles: [],         // [{filename, file_path, mime_type}]
-  sessions: [],
+  isTyping:        false,
+  pendingFiles:    [],
+  sessions:        [],
   activeSessionId: null,
 };
 
@@ -24,22 +25,22 @@ function saveAuth() {
   localStorage.setItem('wee_token',    STATE.token    || '');
   localStorage.setItem('wee_identity', STATE.identity || '');
   localStorage.setItem('wee_channel',  STATE.channel  || '');
+  localStorage.setItem('wee_username', STATE.username || '');
 }
 
 function loadAuth() {
   STATE.token    = localStorage.getItem('wee_token')    || null;
   STATE.identity = localStorage.getItem('wee_identity') || null;
   STATE.channel  = localStorage.getItem('wee_channel')  || null;
+  STATE.username = localStorage.getItem('wee_username') || null;
 }
 
 function clearAuth() {
-  STATE.token = STATE.identity = STATE.channel = STATE.identityResolved = null;
+  STATE.token = STATE.identity = STATE.channel = STATE.username = STATE.identityResolved = null;
   STATE.currentSessionId = STATE.activeSessionId = null;
   STATE.sessions = [];
   STATE.pendingFiles = [];
-  localStorage.removeItem('wee_token');
-  localStorage.removeItem('wee_identity');
-  localStorage.removeItem('wee_channel');
+  ['wee_token','wee_identity','wee_channel','wee_username'].forEach(k => localStorage.removeItem(k));
 }
 
 // ─── API Layer ────────────────────────────────────────────────────────────────
@@ -59,31 +60,24 @@ async function apiRequest(method, path, body = null) {
   }
 
   const data = await res.json().catch(() => ({}));
-
-  if (!res.ok) {
-    throw new Error(data.detail || `HTTP ${res.status}`);
-  }
+  if (!res.ok) throw new Error(data.detail || `HTTP ${res.status}`);
   return data;
 }
 
 async function apiUpload(sessionId, file) {
   const form = new FormData();
   form.append('file', file);
-
   const res = await fetch(`${API_BASE}/sessions/${sessionId}/upload`, {
     method: 'POST',
     headers: { 'Authorization': `Bearer ${STATE.token}` },
     body: form,
   });
-
   if (res.status === 401) { clearAuth(); showAuthView(); throw new Error('Session expired'); }
-
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data.detail || `Upload failed: HTTP ${res.status}`);
   return data;
 }
 
-// Fetch a blob for authenticated image display
 async function fetchBlob(url) {
   const res = await fetch(url, {
     headers: STATE.token ? { 'Authorization': `Bearer ${STATE.token}` } : {},
@@ -100,7 +94,6 @@ const hide = el => el.classList.add('hidden');
 function showAuthView() {
   hide($('app'));
   show($('auth-overlay'));
-  // reset to step 1
   show($('auth-step1'));
   hide($('auth-step2'));
   $('auth-identity').value = '';
@@ -112,19 +105,58 @@ function showAuthView() {
 function showAppView() {
   hide($('auth-overlay'));
   show($('app'));
-  $('sidebar-identity').textContent = `${STATE.channel} · ${STATE.identity}`;
+  updateSidebarIdentity();
 }
 
-function showError(id, msg) {
-  const el = $(id);
-  el.textContent = msg;
-  show(el);
+function updateSidebarIdentity() {
+  const label = STATE.username
+    ? `@${STATE.username}`
+    : (STATE.identity || '—');
+  $('sidebar-identity').textContent = `${STATE.channel || ''} · ${label}`;
 }
 
+function showError(id, msg) { const el = $(id); el.textContent = msg; show(el); }
 function hideError(id) { hide($(id)); }
 
+// ─── Session Meta Pills ───────────────────────────────────────────────────────
+function updateSessionMeta(data) {
+  const set = (id, text, extra = '') => {
+    const el = $(id);
+    if (!text || text === 'null' || text === 'undefined') {
+      el.textContent = '—';
+      el.classList.add('empty');
+      el.classList.remove(extra);
+    } else {
+      el.textContent = text;
+      el.classList.remove('empty');
+      if (extra) el.classList.toggle(extra, true);
+    }
+  };
+
+  set('meta-agent',   data?.agent);
+  set('meta-runtime', data?.runtime);
+
+  // Shorten model names for display
+  const model = data?.model ? data.model.replace(/^claude-/, '').replace(/^gpt-/, '') : null;
+  set('meta-model', model);
+
+  const isYolo = data?.yolo_mode === 'on' || data?.yolo_mode === 'yolo';
+  const modeEl = $('meta-mode');
+  modeEl.textContent = isYolo ? '⚡ yolo' : 'restricted';
+  modeEl.classList.toggle('yolo', isYolo);
+  modeEl.classList.remove('empty');
+}
+
+async function fetchAndUpdateMeta(sessionId) {
+  if (!sessionId) return;
+  try {
+    const data = await apiRequest('GET', `/sessions/${sessionId}/status`);
+    updateSessionMeta(data);
+  } catch (_) { /* non-fatal */ }
+}
+
 // ─── Auth Flow ────────────────────────────────────────────────────────────────
-let _authState = 'IDLE'; // IDLE | CODE_SENT | LOGGED_IN
+let _authState = 'IDLE';
 
 async function handleRequestCode() {
   const rawIdentity = $('auth-identity').value.trim();
@@ -171,6 +203,7 @@ async function handleVerifyCode() {
     STATE.token    = data.token;
     STATE.identity = data.identity || STATE.identityResolved;
     STATE.channel  = data.channel  || STATE.channel;
+    STATE.username = data.username || null;
     saveAuth();
     _authState = 'LOGGED_IN';
     showAppView();
@@ -183,7 +216,166 @@ async function handleVerifyCode() {
   }
 }
 
-// ─── Session Management ────────────────────────────────────────────────────────
+// ─── Command Definitions ──────────────────────────────────────────────────────
+const COMMANDS = [
+  { cmd: '/agent',        usage: '/agent <set|list|current|invoke>',      desc: 'Manage agents — switch, list, or delegate' },
+  { cmd: '/model',        usage: '/model <set|list|current>',              desc: 'Change the AI model' },
+  { cmd: '/runtime',      usage: '/runtime <set|list|current>',            desc: 'Switch execution runtime' },
+  { cmd: '/mode',         usage: '/mode <yolo|restricted|current|list>',   desc: 'Toggle yolo / restricted permission mode' },
+  { cmd: '/status',       usage: '/status',                                desc: 'Show current session status' },
+  { cmd: '/cancel',       usage: '/cancel',                                desc: 'Cancel a running query' },
+  { cmd: '/capabilities', usage: '/capabilities',                          desc: 'List all available capabilities' },
+  { cmd: '/session',      usage: '/session',                               desc: 'Show session info' },
+  { cmd: '/timeout',      usage: '/timeout <seconds>',                     desc: 'Set the command timeout' },
+  { cmd: '/render',       usage: '/render <text|markdown>',                desc: 'Set render output type' },
+];
+
+const SUBCOMMANDS = {
+  '/agent':   [
+    { sub: 'set <name>',               desc: 'Switch to a named agent (devops, family, opencode…)' },
+    { sub: 'list',                     desc: 'List all available agents' },
+    { sub: 'current',                  desc: 'Show the current agent' },
+    { sub: 'invoke <agent> <prompt>',  desc: 'Delegate a prompt to a sub-agent' },
+  ],
+  '/model':   [
+    { sub: 'set "<model>"',  desc: 'Switch to a specific model name' },
+    { sub: 'list',           desc: 'List models for the current runtime' },
+    { sub: 'current',        desc: 'Show the current model' },
+  ],
+  '/runtime': [
+    { sub: 'set claude',    desc: 'Switch to Claude Code' },
+    { sub: 'set copilot',   desc: 'Switch to GitHub Copilot CLI' },
+    { sub: 'set gemini',    desc: 'Switch to Gemini' },
+    { sub: 'set opencode',  desc: 'Switch to OpenCode' },
+    { sub: 'list',          desc: 'List available runtimes' },
+    { sub: 'current',       desc: 'Show the current runtime' },
+  ],
+  '/mode':    [
+    { sub: 'yolo',        desc: 'Enable auto-approval (no permission prompts)' },
+    { sub: 'restricted',  desc: 'Require approval for potentially destructive actions' },
+    { sub: 'current',     desc: 'Show the current mode' },
+    { sub: 'list',        desc: 'List available modes' },
+  ],
+};
+
+// ─── Command Dropdown ─────────────────────────────────────────────────────────
+let _dropActive = -1;
+
+function getDropdownItems(text) {
+  // Only trigger when text is JUST a slash-command (no other text before it)
+  const trimmed = text.trimStart();
+  if (!trimmed.startsWith('/')) return null;
+
+  const parts = trimmed.split(/\s+/);
+  const cmd   = parts[0].toLowerCase();  // e.g. "/age" or "/agent"
+  const hasSub = parts.length > 1;       // space has been typed after cmd
+
+  if (hasSub) {
+    // Show sub-commands for exact command matches
+    const subs = SUBCOMMANDS[cmd];
+    if (!subs) return null;
+    const subFilter = parts.slice(1).join(' ').toLowerCase();
+    const filtered = subs.filter(s => s.sub.toLowerCase().startsWith(subFilter));
+    if (!filtered.length) return null;
+    return filtered.map(s => ({ primary: `${cmd} ${s.sub}`, name: cmd, desc: s.desc, usage: `${cmd} ${s.sub}` }));
+  } else {
+    // Filter top-level commands by prefix
+    const filtered = COMMANDS.filter(c => c.cmd.startsWith(cmd));
+    if (!filtered.length) return null;
+    return filtered.map(c => ({ primary: c.cmd, name: c.cmd, desc: c.desc, usage: c.usage }));
+  }
+}
+
+function showCommandDropdown(items) {
+  const dd = $('cmd-dropdown');
+  dd.innerHTML = '';
+
+  items.forEach((item, idx) => {
+    const row = document.createElement('div');
+    row.className = 'cmd-row';
+    row.setAttribute('role', 'option');
+    row.dataset.idx = String(idx);
+    row.innerHTML =
+      `<span class="cmd-row-name">${escHtml(item.name)}</span>` +
+      `<span class="cmd-row-desc">${escHtml(item.desc)}</span>` +
+      `<span class="cmd-row-usage">${escHtml(item.usage)}</span>`;
+
+    row.addEventListener('mousedown', e => {
+      e.preventDefault();
+      applyCompletion(item.primary);
+    });
+    dd.appendChild(row);
+  });
+
+  _dropActive = -1;
+  show(dd);
+}
+
+function hideCommandDropdown() {
+  hide($('cmd-dropdown'));
+  _dropActive = -1;
+}
+
+function setDropActive(idx) {
+  const rows = $('cmd-dropdown').querySelectorAll('.cmd-row');
+  _dropActive = Math.max(-1, Math.min(idx, rows.length - 1));
+  rows.forEach((r, i) => r.classList.toggle('active', i === _dropActive));
+  if (_dropActive >= 0) rows[_dropActive].scrollIntoView({ block: 'nearest' });
+}
+
+function applyCompletion(fullCmd) {
+  const ta = $('message-input');
+  // Replace text from the start up to the end with the completion + space
+  const trimmed = ta.value.trimStart();
+  const leadingWS = ta.value.slice(0, ta.value.length - trimmed.length);
+  const parts = trimmed.split(/\s+/);
+  // Keep everything after the command words already typed (e.g. "/agent set " keeps nothing to replace)
+  const newText = leadingWS + fullCmd + ' ';
+  ta.value = newText;
+  ta.focus();
+  // Cursor to end
+  ta.selectionStart = ta.selectionEnd = newText.length;
+  syncMirror();
+  updateSendButton();
+  hideCommandDropdown();
+}
+
+// ─── Mirror Sync ──────────────────────────────────────────────────────────────
+function syncMirror() {
+  const ta     = $('message-input');
+  const mirror = $('input-mirror');
+
+  const text = ta.value;
+  const esc  = text
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+
+  // Highlight /command tokens — only when they appear at start or after whitespace
+  const highlighted = esc.replace(
+    /((?:^|[ \t\n]))(\/\w+)/g,
+    (_, prefix, token) => `${prefix}<span class="cmd-token">${token}</span>`
+  );
+
+  // Trailing zero-width space forces the div to match textarea height on last empty line
+  mirror.innerHTML = highlighted + '\u200b';
+  mirror.scrollTop = ta.scrollTop;
+
+  // Update dropdown
+  const trimmed = text.trimStart();
+  if (trimmed.startsWith('/')) {
+    const items = getDropdownItems(trimmed);
+    if (items) {
+      showCommandDropdown(items);
+    } else {
+      hideCommandDropdown();
+    }
+  } else {
+    hideCommandDropdown();
+  }
+}
+
+// ─── Session Management ───────────────────────────────────────────────────────
 async function loadSessions() {
   try {
     const data = await apiRequest('GET', '/history/sessions');
@@ -208,42 +400,35 @@ function renderSessionList() {
     item.className = 'session-item' + (s.session_id === STATE.activeSessionId ? ' active' : '');
     item.dataset.sessionId = s.session_id;
 
-    const title = s.title || s.session_id;
+    const title   = s.title   || s.session_id;
     const preview = s.preview || '';
 
-    item.innerHTML = `
-      <div class="session-title">${escHtml(title)}</div>
-      <div class="session-preview">${escHtml(preview)}</div>
-      <button class="session-delete-btn" data-id="${escHtml(s.session_id)}" title="Delete">✕</button>
-    `;
+    item.innerHTML =
+      `<div class="session-title">${escHtml(title)}</div>` +
+      `<div class="session-preview">${escHtml(preview)}</div>` +
+      `<button class="session-delete-btn" data-id="${escHtml(s.session_id)}" title="Delete">✕</button>`;
 
     item.addEventListener('click', e => {
       if (e.target.classList.contains('session-delete-btn')) return;
       selectSession(s.session_id);
     });
-
     item.querySelector('.session-delete-btn').addEventListener('click', e => {
       e.stopPropagation();
       deleteSession(s.session_id);
     });
-
     list.appendChild(item);
   }
 }
 
 async function selectSession(sessionId) {
-  STATE.activeSessionId = sessionId;
+  STATE.activeSessionId  = sessionId;
   STATE.currentSessionId = sessionId;
-
-  // Update header
   $('header-session-id').textContent = sessionId;
 
-  // Mark active in sidebar
-  document.querySelectorAll('.session-item').forEach(el => {
-    el.classList.toggle('active', el.dataset.sessionId === sessionId);
-  });
+  document.querySelectorAll('.session-item').forEach(el =>
+    el.classList.toggle('active', el.dataset.sessionId === sessionId)
+  );
 
-  // Load messages
   clearMessages();
   try {
     const data = await apiRequest('GET', `/history/sessions/${sessionId}/messages`);
@@ -254,6 +439,7 @@ async function selectSession(sessionId) {
     renderSystemMessage('Could not load messages: ' + err.message);
   }
   scrollToBottom();
+  await fetchAndUpdateMeta(sessionId);
 }
 
 async function startNewSession() {
@@ -264,8 +450,9 @@ async function startNewSession() {
     $('header-session-id').textContent = data.session_id;
     clearMessages();
     hide($('empty-state'));
-    // Add to session list immediately
+    updateSessionMeta(data);  // initial meta from create response
     await loadSessions();
+    await fetchAndUpdateMeta(data.session_id); // get full defaults
   } catch (err) {
     alert('Failed to create session: ' + err.message);
   }
@@ -283,6 +470,7 @@ async function deleteSession(sessionId) {
       $('header-session-id').textContent = '—';
       clearMessages();
       show($('empty-state'));
+      updateSessionMeta(null);
     }
   } catch (err) {
     alert('Could not delete: ' + err.message);
@@ -297,36 +485,33 @@ async function sendMessage() {
   let query = textarea.value.trim();
   if (!query && STATE.pendingFiles.length === 0) return;
 
-  // Ensure we have a session
   if (!STATE.currentSessionId) {
     await startNewSession();
   }
 
-  // Append file paths to query (same pattern as Telegram/WebEx connectors)
   const fileRefs = STATE.pendingFiles.map(f => f.file_path);
   if (fileRefs.length) {
-    query += '\n\nFiles attached:\n' + fileRefs.map(p => p).join('\n');
+    query += '\n\nFiles attached:\n' + fileRefs.join('\n');
   }
 
   const fileNames = STATE.pendingFiles.map(f => f.filename);
 
-  // Render user message
   await renderMessage('user', query, fileNames);
 
-  // Clear input
   textarea.value = '';
   autoResizeTextarea(textarea);
+  syncMirror();
   clearPendingFiles();
   $('btn-send').disabled = true;
+  hideCommandDropdown();
 
-  // Show typing indicator
   showTyping();
-
   try {
     const data = await apiRequest('POST', `/sessions/${STATE.currentSessionId}/execute`, { query });
     hideTyping();
     await renderMessage('assistant', data.response || '(no response)', []);
-    // Refresh session list to update titles/previews
+    // Refresh meta — a /agent set etc. may have changed things
+    await fetchAndUpdateMeta(STATE.currentSessionId);
     await loadSessions();
   } catch (err) {
     hideTyping();
@@ -341,7 +526,6 @@ async function sendMessage() {
 function clearMessages() {
   const container = $('messages');
   container.innerHTML = '';
-  // Keep empty-state div available but hidden
   const es = document.createElement('div');
   es.id = 'empty-state';
   es.className = 'empty-state hidden';
@@ -364,12 +548,16 @@ async function renderMessage(role, content, files = []) {
   bubble.className = 'message-bubble';
 
   if (role === 'user') {
-    bubble.textContent = content;
+    // Highlight /command tokens in user bubbles too
+    const esc = escHtml(content);
+    const highlighted = esc.replace(
+      /((?:^|[ \t\n]))(\/\w+)/g,
+      (_, prefix, token) => `${prefix}<span class="cmd-token">${token}</span>`
+    );
+    bubble.innerHTML = `<span style="white-space:pre-wrap">${highlighted}</span>`;
   } else {
-    // Render markdown
     try {
       bubble.innerHTML = marked.parse(content);
-      // Syntax-highlight code blocks
       bubble.querySelectorAll('pre code').forEach(block => {
         if (window.hljs) hljs.highlightElement(block);
       });
@@ -378,17 +566,16 @@ async function renderMessage(role, content, files = []) {
     }
   }
 
-  // Load file images via fetch (handles auth headers)
   for (const fname of files) {
     if (/\.(png|jpe?g|gif|webp|svg)$/i.test(fname)) {
-      const url = `${API_BASE}/uploads/${STATE.currentSessionId}/${encodeURIComponent(fname)}`;
-      const blobUrl = await fetchBlob(url).catch(() => null);
+      const url      = `${API_BASE}/uploads/${STATE.currentSessionId}/${encodeURIComponent(fname)}`;
+      const blobUrl  = await fetchBlob(url).catch(() => null);
       if (blobUrl) {
-        const img = document.createElement('img');
-        img.src = blobUrl;
-        img.className = 'message-image';
-        img.alt = fname;
-        img.title = fname;
+        const img      = document.createElement('img');
+        img.src        = blobUrl;
+        img.className  = 'message-image';
+        img.alt        = fname;
+        img.title      = fname;
         bubble.appendChild(img);
       }
     }
@@ -415,23 +602,12 @@ function scrollToBottom() {
 }
 
 // ─── Typing Indicator ─────────────────────────────────────────────────────────
-function showTyping() {
-  STATE.isTyping = true;
-  show($('typing-indicator'));
-  scrollToBottom();
-}
-
-function hideTyping() {
-  STATE.isTyping = false;
-  hide($('typing-indicator'));
-}
+function showTyping() { STATE.isTyping = true;  show($('typing-indicator')); scrollToBottom(); }
+function hideTyping() { STATE.isTyping = false; hide($('typing-indicator')); }
 
 // ─── File Uploads ─────────────────────────────────────────────────────────────
 async function handleFileSelect(file) {
-  if (!STATE.currentSessionId) {
-    await startNewSession();
-  }
-
+  if (!STATE.currentSessionId) await startNewSession();
   try {
     const data = await apiUpload(STATE.currentSessionId, file);
     STATE.pendingFiles.push({ filename: data.filename, file_path: data.file_path, mime_type: data.mime_type });
@@ -443,11 +619,7 @@ async function handleFileSelect(file) {
 
 function renderFilePreviews() {
   const strip = $('file-preview-strip');
-  if (STATE.pendingFiles.length === 0) {
-    hide(strip);
-    strip.innerHTML = '';
-    return;
-  }
+  if (!STATE.pendingFiles.length) { hide(strip); strip.innerHTML = ''; return; }
   show(strip);
   strip.innerHTML = '';
   STATE.pendingFiles.forEach((f, idx) => {
@@ -463,10 +635,7 @@ function renderFilePreviews() {
   updateSendButton();
 }
 
-function clearPendingFiles() {
-  STATE.pendingFiles = [];
-  renderFilePreviews();
-}
+function clearPendingFiles() { STATE.pendingFiles = []; renderFilePreviews(); }
 
 // ─── Input Helpers ────────────────────────────────────────────────────────────
 function autoResizeTextarea(el) {
@@ -475,16 +644,13 @@ function autoResizeTextarea(el) {
 }
 
 function updateSendButton() {
-  const val = $('message-input').value.trim();
-  $('btn-send').disabled = !val && STATE.pendingFiles.length === 0;
+  $('btn-send').disabled = !$('message-input').value.trim() && !STATE.pendingFiles.length;
 }
 
 function escHtml(s) {
   return String(s)
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;');
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
 // ─── Sidebar Toggle ───────────────────────────────────────────────────────────
@@ -524,10 +690,11 @@ function updateChannelUX() {
 // ─── Init ─────────────────────────────────────────────────────────────────────
 async function initApp() {
   $('header-session-id').textContent = '—';
+  updateSessionMeta(null);
   STATE.currentSessionId = null;
   STATE.activeSessionId  = null;
+  updateSidebarIdentity();
   await loadSessions();
-  // If there are existing sessions, show empty state (user can pick one)
   if (STATE.sessions.length === 0) {
     await startNewSession();
   } else {
@@ -537,7 +704,8 @@ async function initApp() {
 
 // ─── Boot ─────────────────────────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', () => {
-  // --- Auth UI ---
+
+  // --- Auth ---
   $('auth-channel').addEventListener('change', updateChannelUX);
   updateChannelUX();
 
@@ -545,43 +713,84 @@ document.addEventListener('DOMContentLoaded', () => {
   $('auth-identity').addEventListener('keydown', e => { if (e.key === 'Enter') handleRequestCode(); });
   $('btn-verify-code').addEventListener('click', handleVerifyCode);
   $('auth-code').addEventListener('keydown', e => { if (e.key === 'Enter') handleVerifyCode(); });
-
   $('btn-back').addEventListener('click', () => {
     hide($('auth-step2'));
     show($('auth-step1'));
     _authState = 'IDLE';
   });
 
-  // --- App UI ---
+  // --- Sidebar ---
   $('btn-new-chat').addEventListener('click', startNewSession);
   $('btn-logout').addEventListener('click', () => { clearAuth(); showAuthView(); });
-
   $('btn-sidebar-toggle').addEventListener('click', () => toggleSidebar(false));
   $('btn-open-sidebar').addEventListener('click',  () => toggleSidebar(true));
 
+  // --- Send ---
   $('btn-send').addEventListener('click', sendMessage);
 
-  const textarea = $('message-input');
-  textarea.addEventListener('input', () => {
-    autoResizeTextarea(textarea);
+  // --- Textarea ---
+  const ta = $('message-input');
+
+  ta.addEventListener('input', () => {
+    autoResizeTextarea(ta);
     updateSendButton();
+    syncMirror();
   });
-  textarea.addEventListener('keydown', e => {
+
+  ta.addEventListener('scroll', () => {
+    $('input-mirror').scrollTop = ta.scrollTop;
+  });
+
+  ta.addEventListener('keydown', e => {
+    const dd = $('cmd-dropdown');
+    const ddVisible = !dd.classList.contains('hidden');
+
+    if (ddVisible) {
+      const rows = dd.querySelectorAll('.cmd-row');
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        setDropActive(_dropActive + 1);
+        return;
+      }
+      if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        setDropActive(_dropActive - 1);
+        return;
+      }
+      if ((e.key === 'Tab' || e.key === 'Enter') && _dropActive >= 0) {
+        e.preventDefault();
+        const cmd = rows[_dropActive].querySelector('.cmd-row-name').textContent;
+        // Find the full completion for this row
+        const items = getDropdownItems(ta.value.trimStart());
+        if (items && items[_dropActive]) applyCompletion(items[_dropActive].primary);
+        return;
+      }
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        hideCommandDropdown();
+        return;
+      }
+    }
+
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       sendMessage();
     }
   });
 
-  // File input
+  ta.addEventListener('blur', () => {
+    // Small delay so mousedown on dropdown fires first
+    setTimeout(() => hideCommandDropdown(), 150);
+  });
+
+  // --- File input ---
   $('file-input').addEventListener('change', e => {
     const file = e.target.files[0];
     if (file) handleFileSelect(file);
-    e.target.value = ''; // reset so same file can be re-picked
+    e.target.value = '';
   });
 
-  // Drag-and-drop onto messages area
-  $('messages').addEventListener('dragover', e => { e.preventDefault(); });
+  $('messages').addEventListener('dragover', e => e.preventDefault());
   $('messages').addEventListener('drop', e => {
     e.preventDefault();
     const file = e.dataTransfer.files[0];

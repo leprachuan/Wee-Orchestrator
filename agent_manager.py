@@ -3200,6 +3200,21 @@ def _send_pairing_code(channel: str, identity: str, code: str) -> None:
         print(f"[API] Warning: could not send pairing code via {channel}: {exc}")
 
 
+def _get_telegram_username(user_id: str):
+    """Look up @username for a numeric Telegram user_id in telegram_config.json.
+    Returns the username string (without @), or None if not found."""
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    config_path = os.path.join(script_dir, "telegram_config.json")
+    try:
+        with open(config_path) as f:
+            cfg = json.load(f)
+        pairing = cfg.get("user_pairings", {}).get(str(user_id), {})
+        username = pairing.get("username", "")
+        return username.lstrip("@") if username else None
+    except Exception:
+        return None
+
+
 def _resolve_telegram_identity(username: str):
     """Reverse-lookup @username in telegram_config.json user_pairings.
     Returns numeric user_id string, or None if not found (user must message bot first)."""
@@ -3400,11 +3415,16 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         if not token:
             raise HTTPException(status_code=400, detail="Invalid or expired pairing code")
         token_data = auth_mgr.validate_session_token(token)
+        channel = token_data["channel"] if token_data else "unknown"
+        username = None
+        if channel == "telegram":
+            username = _get_telegram_username(body.identity)
         return {
             "token": token,
             "expires_in": SESSION_TOKEN_TTL,
             "identity": body.identity,
-            "channel": token_data["channel"] if token_data else "unknown",
+            "channel": channel,
+            "username": username,
         }
 
     @app.post("/api/v1/sessions/create")
@@ -3491,6 +3511,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             "agent": data.get("agent"),
             "runtime": data.get("runtime"),
             "model": data.get("model"),
+            "yolo_mode": data.get("yolo_mode", "restricted"),
         }
 
     # --- History endpoints ---
