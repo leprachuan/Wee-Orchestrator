@@ -3503,7 +3503,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             CORSMiddleware,
             allow_origins=cors_origins,
             allow_credentials=True,
-            allow_methods=["GET", "POST", "DELETE"],
+            allow_methods=["GET", "POST", "PUT", "DELETE"],
             allow_headers=["Authorization", "Content-Type", "X-User-Identity", "X-Auth-Channel"],
         )
 
@@ -3757,6 +3757,173 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         with concurrent.futures.ThreadPoolExecutor() as pool:
             results = await loop.run_in_executor(pool, _ddg_image_search, q.strip(), max_r)
         return {"query": q, "results": results}
+
+    # --- Task Scheduler ---
+    # Lazy-load TaskScheduler so the API starts even if the scheduler dirs don't exist yet.
+    _task_scheduler = None
+
+    def _get_scheduler():
+        nonlocal _task_scheduler
+        if _task_scheduler is None:
+            try:
+                import sys as _sys
+                _sched_path = str(Path(__file__).parent)
+                if _sched_path not in _sys.path:
+                    _sys.path.insert(0, _sched_path)
+                from task_scheduler import TaskScheduler
+                _task_scheduler = TaskScheduler()
+            except Exception as _e:
+                raise HTTPException(status_code=503, detail=f"Scheduler unavailable: {_e}")
+        return _task_scheduler
+
+    class ScheduleJobRequest(BaseModel):
+        name: str
+        schedule: str
+        agent: Optional[str] = None
+        runtime: Optional[str] = None
+        task: str = ""
+        notify: bool = False
+        recurring: bool = True
+
+    class UpdateJobRequest(BaseModel):
+        name: Optional[str] = None
+        schedule: Optional[str] = None
+        agent: Optional[str] = None
+        runtime: Optional[str] = None
+        task: Optional[str] = None
+        notify: Optional[bool] = None
+        recurring: Optional[bool] = None
+        enabled: Optional[bool] = None
+
+    @app.get("/api/v1/scheduler/status")
+    async def scheduler_status(request: Request):
+        await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        return _get_scheduler().doctor()
+
+    @app.get("/api/v1/scheduler/jobs")
+    async def list_scheduler_jobs(request: Request):
+        await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        return _get_scheduler().list_jobs()
+
+    @app.post("/api/v1/scheduler/jobs")
+    async def create_scheduler_job(body: ScheduleJobRequest, request: Request):
+        await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        result = _get_scheduler().schedule_task(
+            name=body.name,
+            schedule=body.schedule,
+            agent=body.agent,
+            runtime=body.runtime,
+            task=body.task,
+            notify=body.notify,
+            recurring=body.recurring,
+        )
+        if not result.get("success"):
+            raise HTTPException(status_code=400, detail=result.get("message", "Failed"))
+        return result
+
+    @app.get("/api/v1/scheduler/jobs/{job_id}")
+    async def get_scheduler_job(job_id: str, request: Request):
+        await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        result = _get_scheduler().get_job(job_id)
+        if not result.get("success"):
+            raise HTTPException(status_code=404, detail=result.get("message", "Not found"))
+        return result
+
+    @app.put("/api/v1/scheduler/jobs/{job_id}")
+    async def update_scheduler_job(job_id: str, body: UpdateJobRequest, request: Request):
+        await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        updates = {k: v for k, v in body.model_dump().items() if v is not None}
+        if not updates:
+            raise HTTPException(status_code=400, detail="No fields to update")
+        result = _get_scheduler().update_job(job_id, updates)
+        if not result.get("success"):
+            raise HTTPException(status_code=404, detail=result.get("message", "Not found"))
+        return result
+
+    @app.delete("/api/v1/scheduler/jobs/{job_id}")
+    async def delete_scheduler_job(job_id: str, request: Request):
+        await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        result = _get_scheduler().delete_job(job_id)
+        if not result.get("success"):
+            raise HTTPException(status_code=404, detail=result.get("message", "Not found"))
+        return result
+
+    @app.post("/api/v1/scheduler/jobs/{job_id}/pause")
+    async def pause_scheduler_job(job_id: str, request: Request):
+        await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        result = _get_scheduler().pause_job(job_id)
+        if not result.get("success"):
+            raise HTTPException(status_code=404, detail=result.get("message", "Not found"))
+        return result
+
+    @app.post("/api/v1/scheduler/jobs/{job_id}/resume")
+    async def resume_scheduler_job(job_id: str, request: Request):
+        await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        result = _get_scheduler().resume_job(job_id)
+        if not result.get("success"):
+            raise HTTPException(status_code=404, detail=result.get("message", "Not found"))
+        return result
+
+    @app.get("/api/v1/scheduler/jobs/{job_id}/results")
+    async def get_scheduler_job_results(job_id: str, request: Request, limit: int = 20):
+        await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        limit = min(max(1, limit), 100)
+        return _get_scheduler().get_results(job_id, limit=limit)
+
+    @app.get("/api/v1/scheduler/jobs/{job_id}/logs")
+    async def get_scheduler_job_logs(job_id: str, request: Request):
+        await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        return _get_scheduler().get_logs(job_id)
 
     # --- AI media — publicly served, no auth (images fetched by the agent) ---
     _ai_media_dir = Path("/tmp/webui_ai_media")
