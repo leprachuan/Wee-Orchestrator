@@ -216,55 +216,6 @@ async function handleVerifyCode() {
   }
 }
 
-// ─── Image Search ─────────────────────────────────────────────────────────────
-function detectImageRequest(text) {
-  return (
-    /\b(?:show|get|fetch|find|give|display)\s+(?:me\s+)?(?:a\s+|an\s+|the\s+)?(?:picture|image|photo|pic|logo|screenshot)\s+(?:of|for)\b/i.test(text) ||
-    /\bwhat\s+does\s+.+\s+look\s+like\b/i.test(text) ||
-    /\b(?:picture|image|photo|pic|logo)\s+of\b/i.test(text) ||
-    /\bcan\s+you\s+(?:get|show|find|fetch)\s+(?:me\s+)?(?:a|an|the)\s+(?:picture|image|photo)\b/i.test(text)
-  );
-}
-
-async function fetchAndRenderImages(query) {
-  try {
-    const data = await apiRequest('GET', `/search/images?q=${encodeURIComponent(query)}&max_results=4`);
-    if (data.results && data.results.length > 0) {
-      renderImageResults(data.results, query);
-    }
-  } catch (_) { /* non-fatal — image search failure shouldn't disrupt chat */ }
-}
-
-function renderImageResults(images, query) {
-  hide($('empty-state'));
-  const container = $('messages');
-  const row = document.createElement('div');
-  row.className = 'message-row assistant';
-
-  const avatar = document.createElement('div');
-  avatar.className = 'message-avatar';
-  avatar.textContent = '🖼️';
-
-  const bubble = document.createElement('div');
-  bubble.className = 'message-bubble image-results-bubble';
-
-  const gridItems = images.map(img =>
-    `<a class="image-grid-item" href="${escHtml(img.url)}" target="_blank" rel="noopener noreferrer" title="${escHtml(img.title)}">` +
-    `<img class="search-result-img" src="${escHtml(img.thumbnail)}" alt="${escHtml(img.title)}" loading="lazy" />` +
-    `<div class="search-result-title">${escHtml(img.title || img.source)}</div>` +
-    `</a>`
-  ).join('');
-
-  bubble.innerHTML =
-    `<div class="image-results-label">Images · ${escHtml(query)}</div>` +
-    `<div class="image-grid">${gridItems}</div>`;
-
-  row.appendChild(avatar);
-  row.appendChild(bubble);
-  container.appendChild(row);
-  scrollToBottom();
-}
-
 // ─── Command Definitions ──────────────────────────────────────────────────────
 const COMMANDS = [
   { cmd: '/agent',        usage: '/agent <set|list|current|invoke>',      desc: 'Manage agents — switch, list, or delegate' },
@@ -538,9 +489,6 @@ async function sendMessage() {
     await startNewSession();
   }
 
-  // Save original user text for image detection before appending file paths
-  const originalQuery = query;
-
   const fileRefs = STATE.pendingFiles.map(f => f.file_path);
   if (fileRefs.length) {
     query += '\n\nFiles attached:\n' + fileRefs.join('\n');
@@ -562,10 +510,6 @@ async function sendMessage() {
     const data = await apiRequest('POST', `/sessions/${STATE.currentSessionId}/execute`, { query });
     hideTyping();
     await renderMessage('assistant', data.response || '(no response)', []);
-    // Auto-fetch images if the user asked for one
-    if (detectImageRequest(originalQuery)) {
-      await fetchAndRenderImages(originalQuery);
-    }
     // Refresh meta — a /agent set etc. may have changed things
     await fetchAndUpdateMeta(STATE.currentSessionId);
     await loadSessions();
