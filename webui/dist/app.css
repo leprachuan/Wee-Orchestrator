@@ -584,6 +584,49 @@ html, body {
   border: 1px solid var(--glass-border);
 }
 
+/* ---------- Markdown Table Styling ---------- */
+.message-bubble table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 12px 0;
+  font-size: 13px;
+  background: rgba(255,255,255,0.02);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-xs);
+  overflow: hidden;
+}
+
+.message-bubble table thead {
+  background: rgba(255,255,255,0.08);
+  border-bottom: 2px solid var(--glass-border);
+}
+
+.message-bubble table th,
+.message-bubble table td {
+  padding: 8px 12px;
+  text-align: left;
+  border-right: 1px solid var(--glass-border);
+  word-break: break-word;
+}
+
+.message-bubble table th:last-child,
+.message-bubble table td:last-child {
+  border-right: none;
+}
+
+.message-bubble table tbody tr {
+  border-bottom: 1px solid rgba(255,255,255,0.06);
+  transition: background var(--transition);
+}
+
+.message-bubble table tbody tr:hover {
+  background: rgba(255,255,255,0.04);
+}
+
+.message-bubble table tbody tr:last-child {
+  border-bottom: none;
+}
+
 /* ---------- Streaming bubble cursor ---------- */
 .message-bubble.streaming {
   white-space: pre-wrap;
