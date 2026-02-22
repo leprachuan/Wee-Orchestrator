@@ -85,6 +85,29 @@
       </div>
     </aside>
 
+    <!-- REQUEST QUEUE PANEL -->
+    <aside id="request-queue-panel" class="request-queue-panel queue-hidden">
+      <!-- Queue Header -->
+      <div class="queue-header">
+        <div class="queue-header-title">
+          <span class="queue-icon">📋</span>
+          <span class="queue-label">Queued</span>
+          <span id="queue-count" class="queue-count">0</span>
+        </div>
+        <button id="btn-toggle-queue" class="queue-toggle-btn" title="Collapse queue">‹</button>
+      </div>
+      
+      <!-- Queue Items List -->
+      <div id="queue-items-list" class="queue-items-list">
+        <p class="queue-empty">No queued requests</p>
+      </div>
+      
+      <!-- Queue Footer -->
+      <div class="queue-footer">
+        <small>Requests will auto-submit when current message completes</small>
+      </div>
+    </aside>
+
     <!-- Chat panel -->
     <main id="chat-panel" class="main-panel">
       <!-- Header -->
@@ -186,7 +209,6 @@
   <script src="app.js" type="module"></script>
 </body>
 </html>
-
 <script>
   // Scheduler form enhancement: mode toggle + agent select dropdown
   function enhanceJobEditForm() {
@@ -238,7 +260,10 @@
     const nameGroup = form.querySelector('input[name="name"]')?.closest('.form-group');
     if (!nameGroup || form.querySelector('.task-mode-toggle')) return;
     
-    const currentMode = form.querySelector('input[name="mode"]')?.value || 'ai';
+    // Get the actual mode value from the hidden input
+    const modeInput = form.querySelector('input[name="mode"]');
+    const currentMode = modeInput ? modeInput.value : 'ai';
+    
     const toggleDiv = document.createElement('div');
     toggleDiv.className = 'task-mode-toggle';
     toggleDiv.innerHTML = `
@@ -250,6 +275,9 @@
     `;
     
     nameGroup.insertAdjacentElement('afterend', toggleDiv);
+    
+    // IMPORTANT: Set the form class based on actual mode value
+    form.classList.remove('task-mode-ai', 'task-mode-command');
     form.classList.add(`task-mode-${currentMode}`);
     
     const runtimeGroup = form.querySelector('select[name="runtime"]')?.closest('.form-group');
@@ -279,5 +307,4 @@
     setTimeout(enhanceJobEditForm, 500);
   });
 </script>
-</body>
-</html>
+</body></html>
