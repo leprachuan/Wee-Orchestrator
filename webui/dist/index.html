@@ -65,6 +65,7 @@
       <div class="sidebar-header">
         <span class="sidebar-logo">🍀</span>
         <span class="sidebar-title">Wee-Orchestrator</span>
+        <span id="dev-badge" class="dev-badge" style="display: none;">🔧 DEV</span>
         <button id="btn-sidebar-toggle" class="btn-icon sidebar-toggle-btn" title="Close sidebar">‹</button>
       </div>
 
@@ -183,3 +184,30 @@
   <script src="app.js" type="module"></script>
 </body>
 </html>
+
+<script>
+  // Show DEV badge if APP_ENV is 'dev'
+  async function showDevBadgeIfNeeded() {
+    try {
+      const response = await fetch('/api/v1/config');
+      if (response.ok) {
+        const config = await response.json();
+        if (config.app_env === 'DEV') {
+          const badge = document.getElementById('dev-badge');
+          if (badge) {
+            badge.style.display = 'inline-block';
+          }
+        }
+      }
+    } catch (e) {
+      // Silently fail, badge stays hidden
+    }
+  }
+  
+  // Show badge on page load
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', showDevBadgeIfNeeded);
+  } else {
+    showDevBadgeIfNeeded();
+  }
+</script>
