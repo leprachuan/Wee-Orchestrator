@@ -3453,6 +3453,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
     PAIRING_CODE_TTL = int(os.environ.get("PAIRING_CODE_TTL", "300"))
     SESSION_TOKEN_TTL = int(os.environ.get("SESSION_TOKEN_TTL", "3600"))
     CONFIG_FILE = os.environ.get("AGENT_CONFIG_FILE")
+    SCHEDULER_ENABLED = os.environ.get("SCHEDULER_ENABLED", "true").strip().lower() not in ("false", "0", "no")
 
     # ---- shared instances ----
     auth_mgr = AuthManager(
@@ -3579,6 +3580,13 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             "status": "ok",
             "environment": APP_ENV,
             "version": "1.0.0",
+        }
+
+    @app.get("/api/v1/config")
+    async def get_config():
+        """Public endpoint — returns feature flags for the WebUI."""
+        return {
+            "scheduler_enabled": SCHEDULER_ENABLED,
         }
 
     @app.post("/api/v1/auth/request-pairing")
@@ -3938,185 +3946,186 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         return {"query": q, "results": results}
 
     # --- Task Scheduler ---
-    # Lazy-load TaskScheduler so the API starts even if the scheduler dirs don't exist yet.
-    _task_scheduler = None
-
-    def _get_scheduler():
-        nonlocal _task_scheduler
-        if _task_scheduler is None:
-            try:
-                import sys as _sys
-                _sched_path = str(Path(__file__).parent)
-                if _sched_path not in _sys.path:
-                    _sys.path.insert(0, _sched_path)
-                from task_scheduler import TaskScheduler
-                _task_scheduler = TaskScheduler()
-            except Exception as _e:
-                raise HTTPException(status_code=503, detail=f"Scheduler unavailable: {_e}")
-        return _task_scheduler
-
-    # ---- Scheduler authorization ----
-    # Override with comma-separated env vars to add more users without code changes.
-    _sched_allowed_telegram = {
-        u.strip().lower().lstrip("@")
-        for u in os.environ.get("SCHEDULER_ALLOWED_TELEGRAM", "vtflip").split(",")
-        if u.strip()
-    }
-    _sched_allowed_webex = {
-        u.strip().lower()
-        for u in os.environ.get("SCHEDULER_ALLOWED_WEBEX", "flipkey@cisco.com").split(",")
-        if u.strip()
-    }
-
-    async def _require_scheduler_auth(request: Request) -> dict:
-        """Authenticate AND verify the user is allowed to manage scheduled tasks.
-
-        Raises HTTP 403 if authenticated but not in the allowlist.
-        Returns the user dict on success.
-        """
-        user = await authenticate(
-            request,
-            authorization=request.headers.get("authorization"),
-            x_user_identity=request.headers.get("x-user-identity"),
-            x_auth_channel=request.headers.get("x-auth-channel"),
-        )
-
-        # Shared-key callers (internal/admin) are always allowed.
-        if user.get("auth_type") == "shared_key":
-            return user
-
-        channel = user.get("channel", "")
-        identity = user.get("identity", "")
-
-        if channel == "telegram":
-            # identity is a numeric chat_id; resolve to username for the allowlist check.
-            username = _get_telegram_username(identity) or ""
-            if username.lower() in _sched_allowed_telegram:
-                return user
-        elif channel == "webex":
-            if identity.lower() in _sched_allowed_webex:
-                return user
-
-        raise HTTPException(
-            status_code=403,
-            detail="You are not authorized to manage scheduled tasks.",
-        )
-
-    class ScheduleJobRequest(BaseModel):
-        name: str
-        schedule: str
-        agent: Optional[str] = None
-        runtime: Optional[str] = None
-        model: Optional[str] = None
-        mode: Optional[str] = None  # "yolo" or "restricted"
-        task: str = ""
-        notify: bool = False
-        recurring: bool = True
-
-    class UpdateJobRequest(BaseModel):
-        name: Optional[str] = None
-        schedule: Optional[str] = None
-        agent: Optional[str] = None
-        runtime: Optional[str] = None
-        model: Optional[str] = None
-        mode: Optional[str] = None  # "yolo" or "restricted"
-        task: Optional[str] = None
-        notify: Optional[bool] = None
-        recurring: Optional[bool] = None
-        enabled: Optional[bool] = None
-
-    @app.get("/api/v1/scheduler/status")
-    async def scheduler_status(request: Request):
-        await _require_scheduler_auth(request)
-        return _get_scheduler().doctor()
-
-    @app.get("/api/v1/scheduler/jobs")
-    async def list_scheduler_jobs(request: Request):
-        await _require_scheduler_auth(request)
-        return _get_scheduler().list_jobs()
-
-    @app.post("/api/v1/scheduler/jobs")
-    async def create_scheduler_job(body: ScheduleJobRequest, request: Request):
-        user = await _require_scheduler_auth(request)
-        # Resolve Telegram username for storage so the executor can display it
-        username = None
-        if user.get("channel") == "telegram":
-            username = _get_telegram_username(user["identity"])
-        created_by = {
-            "identity": user["identity"],
-            "channel": user["channel"],
-            "username": username,
+    if SCHEDULER_ENABLED:
+            # Lazy-load TaskScheduler so the API starts even if the scheduler dirs don't exist yet.
+        _task_scheduler = None
+    
+        def _get_scheduler():
+            nonlocal _task_scheduler
+            if _task_scheduler is None:
+                try:
+                    import sys as _sys
+                    _sched_path = str(Path(__file__).parent)
+                    if _sched_path not in _sys.path:
+                        _sys.path.insert(0, _sched_path)
+                    from task_scheduler import TaskScheduler
+                    _task_scheduler = TaskScheduler()
+                except Exception as _e:
+                    raise HTTPException(status_code=503, detail=f"Scheduler unavailable: {_e}")
+            return _task_scheduler
+    
+        # ---- Scheduler authorization ----
+        # Override with comma-separated env vars to add more users without code changes.
+        _sched_allowed_telegram = {
+            u.strip().lower().lstrip("@")
+            for u in os.environ.get("SCHEDULER_ALLOWED_TELEGRAM", "vtflip").split(",")
+            if u.strip()
         }
-        result = _get_scheduler().schedule_task(
-            name=body.name,
-            schedule=body.schedule,
-            agent=body.agent,
-            runtime=body.runtime,
-            model=body.model,
-            mode=body.mode,
-            task=body.task,
-            notify=body.notify,
-            recurring=body.recurring,
-            created_by=created_by,
-        )
-        if not result.get("success"):
-            raise HTTPException(status_code=400, detail=result.get("message", "Failed"))
-        return result
-
-    @app.get("/api/v1/scheduler/jobs/{job_id}")
-    async def get_scheduler_job(job_id: str, request: Request):
-        await _require_scheduler_auth(request)
-        result = _get_scheduler().get_job(job_id)
-        if not result.get("success"):
-            raise HTTPException(status_code=404, detail=result.get("message", "Not found"))
-        return result
-
-    @app.put("/api/v1/scheduler/jobs/{job_id}")
-    async def update_scheduler_job(job_id: str, body: UpdateJobRequest, request: Request):
-        await _require_scheduler_auth(request)
-        updates = {k: v for k, v in body.model_dump().items() if v is not None}
-        if not updates:
-            raise HTTPException(status_code=400, detail="No fields to update")
-        result = _get_scheduler().update_job(job_id, updates)
-        if not result.get("success"):
-            raise HTTPException(status_code=404, detail=result.get("message", "Not found"))
-        return result
-
-    @app.delete("/api/v1/scheduler/jobs/{job_id}")
-    async def delete_scheduler_job(job_id: str, request: Request):
-        await _require_scheduler_auth(request)
-        result = _get_scheduler().delete_job(job_id)
-        if not result.get("success"):
-            raise HTTPException(status_code=404, detail=result.get("message", "Not found"))
-        return result
-
-    @app.post("/api/v1/scheduler/jobs/{job_id}/pause")
-    async def pause_scheduler_job(job_id: str, request: Request):
-        await _require_scheduler_auth(request)
-        result = _get_scheduler().pause_job(job_id)
-        if not result.get("success"):
-            raise HTTPException(status_code=404, detail=result.get("message", "Not found"))
-        return result
-
-    @app.post("/api/v1/scheduler/jobs/{job_id}/resume")
-    async def resume_scheduler_job(job_id: str, request: Request):
-        await _require_scheduler_auth(request)
-        result = _get_scheduler().resume_job(job_id)
-        if not result.get("success"):
-            raise HTTPException(status_code=404, detail=result.get("message", "Not found"))
-        return result
-
-    @app.get("/api/v1/scheduler/jobs/{job_id}/results")
-    async def get_scheduler_job_results(job_id: str, request: Request, limit: int = 20):
-        await _require_scheduler_auth(request)
-        limit = min(max(1, limit), 100)
-        return _get_scheduler().get_results(job_id, limit=limit)
-
-    @app.get("/api/v1/scheduler/jobs/{job_id}/logs")
-    async def get_scheduler_job_logs(job_id: str, request: Request):
-        await _require_scheduler_auth(request)
-        return _get_scheduler().get_logs(job_id)
-
+        _sched_allowed_webex = {
+            u.strip().lower()
+            for u in os.environ.get("SCHEDULER_ALLOWED_WEBEX", "flipkey@cisco.com").split(",")
+            if u.strip()
+        }
+    
+        async def _require_scheduler_auth(request: Request) -> dict:
+            """Authenticate AND verify the user is allowed to manage scheduled tasks.
+    
+            Raises HTTP 403 if authenticated but not in the allowlist.
+            Returns the user dict on success.
+            """
+            user = await authenticate(
+                request,
+                authorization=request.headers.get("authorization"),
+                x_user_identity=request.headers.get("x-user-identity"),
+                x_auth_channel=request.headers.get("x-auth-channel"),
+            )
+    
+            # Shared-key callers (internal/admin) are always allowed.
+            if user.get("auth_type") == "shared_key":
+                return user
+    
+            channel = user.get("channel", "")
+            identity = user.get("identity", "")
+    
+            if channel == "telegram":
+                # identity is a numeric chat_id; resolve to username for the allowlist check.
+                username = _get_telegram_username(identity) or ""
+                if username.lower() in _sched_allowed_telegram:
+                    return user
+            elif channel == "webex":
+                if identity.lower() in _sched_allowed_webex:
+                    return user
+    
+            raise HTTPException(
+                status_code=403,
+                detail="You are not authorized to manage scheduled tasks.",
+            )
+    
+        class ScheduleJobRequest(BaseModel):
+            name: str
+            schedule: str
+            agent: Optional[str] = None
+            runtime: Optional[str] = None
+            model: Optional[str] = None
+            mode: Optional[str] = None  # "yolo" or "restricted"
+            task: str = ""
+            notify: bool = False
+            recurring: bool = True
+    
+        class UpdateJobRequest(BaseModel):
+            name: Optional[str] = None
+            schedule: Optional[str] = None
+            agent: Optional[str] = None
+            runtime: Optional[str] = None
+            model: Optional[str] = None
+            mode: Optional[str] = None  # "yolo" or "restricted"
+            task: Optional[str] = None
+            notify: Optional[bool] = None
+            recurring: Optional[bool] = None
+            enabled: Optional[bool] = None
+    
+        @app.get("/api/v1/scheduler/status")
+        async def scheduler_status(request: Request):
+            await _require_scheduler_auth(request)
+            return _get_scheduler().doctor()
+    
+        @app.get("/api/v1/scheduler/jobs")
+        async def list_scheduler_jobs(request: Request):
+            await _require_scheduler_auth(request)
+            return _get_scheduler().list_jobs()
+    
+        @app.post("/api/v1/scheduler/jobs")
+        async def create_scheduler_job(body: ScheduleJobRequest, request: Request):
+            user = await _require_scheduler_auth(request)
+            # Resolve Telegram username for storage so the executor can display it
+            username = None
+            if user.get("channel") == "telegram":
+                username = _get_telegram_username(user["identity"])
+            created_by = {
+                "identity": user["identity"],
+                "channel": user["channel"],
+                "username": username,
+            }
+            result = _get_scheduler().schedule_task(
+                name=body.name,
+                schedule=body.schedule,
+                agent=body.agent,
+                runtime=body.runtime,
+                model=body.model,
+                mode=body.mode,
+                task=body.task,
+                notify=body.notify,
+                recurring=body.recurring,
+                created_by=created_by,
+            )
+            if not result.get("success"):
+                raise HTTPException(status_code=400, detail=result.get("message", "Failed"))
+            return result
+    
+        @app.get("/api/v1/scheduler/jobs/{job_id}")
+        async def get_scheduler_job(job_id: str, request: Request):
+            await _require_scheduler_auth(request)
+            result = _get_scheduler().get_job(job_id)
+            if not result.get("success"):
+                raise HTTPException(status_code=404, detail=result.get("message", "Not found"))
+            return result
+    
+        @app.put("/api/v1/scheduler/jobs/{job_id}")
+        async def update_scheduler_job(job_id: str, body: UpdateJobRequest, request: Request):
+            await _require_scheduler_auth(request)
+            updates = {k: v for k, v in body.model_dump().items() if v is not None}
+            if not updates:
+                raise HTTPException(status_code=400, detail="No fields to update")
+            result = _get_scheduler().update_job(job_id, updates)
+            if not result.get("success"):
+                raise HTTPException(status_code=404, detail=result.get("message", "Not found"))
+            return result
+    
+        @app.delete("/api/v1/scheduler/jobs/{job_id}")
+        async def delete_scheduler_job(job_id: str, request: Request):
+            await _require_scheduler_auth(request)
+            result = _get_scheduler().delete_job(job_id)
+            if not result.get("success"):
+                raise HTTPException(status_code=404, detail=result.get("message", "Not found"))
+            return result
+    
+        @app.post("/api/v1/scheduler/jobs/{job_id}/pause")
+        async def pause_scheduler_job(job_id: str, request: Request):
+            await _require_scheduler_auth(request)
+            result = _get_scheduler().pause_job(job_id)
+            if not result.get("success"):
+                raise HTTPException(status_code=404, detail=result.get("message", "Not found"))
+            return result
+    
+        @app.post("/api/v1/scheduler/jobs/{job_id}/resume")
+        async def resume_scheduler_job(job_id: str, request: Request):
+            await _require_scheduler_auth(request)
+            result = _get_scheduler().resume_job(job_id)
+            if not result.get("success"):
+                raise HTTPException(status_code=404, detail=result.get("message", "Not found"))
+            return result
+    
+        @app.get("/api/v1/scheduler/jobs/{job_id}/results")
+        async def get_scheduler_job_results(job_id: str, request: Request, limit: int = 20):
+            await _require_scheduler_auth(request)
+            limit = min(max(1, limit), 100)
+            return _get_scheduler().get_results(job_id, limit=limit)
+    
+        @app.get("/api/v1/scheduler/jobs/{job_id}/logs")
+        async def get_scheduler_job_logs(job_id: str, request: Request):
+            await _require_scheduler_auth(request)
+            return _get_scheduler().get_logs(job_id)
+    
     # --- AI media — publicly served, no auth (images fetched by the agent) ---
     _ai_media_dir = Path("/tmp/webui_ai_media")
     _ai_media_dir.mkdir(parents=True, exist_ok=True)
