@@ -22,6 +22,7 @@ const STATE = {
   schedulerEnabled: true,  // overridden by /api/v1/config on boot
   requestQueue:    [],     // queued requests while processing
   queuePaused:     false,  // true to prevent auto-submit of next queued message
+  currentProcessingQueueId: null,  // ID of queue item currently being processed
 };
 
 // ─── Persist ──────────────────────────────────────────────────────────────────
@@ -594,12 +595,39 @@ function queueRequest(text, files = []) {
     text: text,
     files: files,
     timestamp: Date.now(),
-    status: 'queued'
+    status: 'pending'
   };
   
   STATE.requestQueue.push(queueItem);
   renderQueuePanel();
   showQueuePanel();
+}
+
+function setQueueItemStatus(queueId, status) {
+  const item = STATE.requestQueue.find(q => q.id === queueId);
+  if (item) {
+    item.status = status;
+    renderQueuePanel();
+  }
+}
+
+function markCurrentQueueAsProcessing(queueId) {
+  STATE.currentProcessingQueueId = queueId;
+  setQueueItemStatus(queueId, 'processing');
+}
+
+function markCurrentQueueAsCompleted() {
+  if (STATE.currentProcessingQueueId) {
+    setQueueItemStatus(STATE.currentProcessingQueueId, 'completed');
+    STATE.currentProcessingQueueId = null;
+  }
+}
+
+function markCurrentQueueAsFailed() {
+  if (STATE.currentProcessingQueueId) {
+    setQueueItemStatus(STATE.currentProcessingQueueId, 'failed');
+    STATE.currentProcessingQueueId = null;
+  }
 }
 
 function processNextQueue() {
@@ -622,6 +650,9 @@ function processNextQueue() {
   // Restore pending files
   STATE.pendingFiles = nextRequest.files || [];
   renderFilePreviews();
+  
+  // Mark this item as processing
+  markCurrentQueueAsProcessing(nextRequest.id);
   
   // Send the request (sendMessage will handle isProcessing state)
   sendMessage();
@@ -708,9 +739,25 @@ function renderQueuePanel() {
     const fileLabel = fileCount > 0 ? ` 📎 ${fileCount}` : '';
     const time = new Date(item.timestamp).toLocaleTimeString();
     
+    // Determine status indicator class and symbol
+    let statusClass = 'queue-status-pending';
+    let statusSymbol = '◯';  // Empty circle for pending
+    
+    if (item.status === 'completed') {
+      statusClass = 'queue-status-completed';
+      statusSymbol = '●';  // Filled green circle
+    } else if (item.status === 'failed') {
+      statusClass = 'queue-status-failed';
+      statusSymbol = '●';  // Filled red circle
+    } else if (item.status === 'processing') {
+      statusClass = 'queue-status-processing';
+      statusSymbol = '◐';  // Half-filled circle for processing
+    }
+    
     return `
-      <div class="queue-item" data-queue-id="${item.id}">
+      <div class="queue-item ${statusClass}" data-queue-id="${item.id}">
         <div class="queue-item-header">
+          <span class="queue-status-dot ${statusClass}">${statusSymbol}</span>
           <span class="queue-item-number">#${idx + 1}</span>
           <span class="queue-item-time">${time}</span>
         </div>
@@ -803,6 +850,9 @@ async function sendMessage() {
     hideTyping();
     STATE.isProcessing = false;
     
+    // Mark current queue item as completed
+    markCurrentQueueAsCompleted();
+    
     // Auto-submit next queued request if any (unless queue is paused)
     if (STATE.requestQueue.length > 0 && !STATE.queuePaused) {
       processNextQueue();
@@ -814,6 +864,10 @@ async function sendMessage() {
   } catch (err) {
     hideTyping();
     STATE.isProcessing = false;
+    
+    // Mark current queue item as failed
+    markCurrentQueueAsFailed();
+    
     renderSystemMessage('Error: ' + err.message);
   } finally {
     $('btn-send').disabled = false;

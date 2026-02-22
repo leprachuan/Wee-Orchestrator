@@ -2316,6 +2316,46 @@ html, body {
   border-color: #f5576c;
 }
 
+/* Status Indicators */
+.queue-status-dot {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  margin-right: 8px;
+  font-size: 12px;
+  line-height: 14px;
+  text-align: center;
+  font-weight: bold;
+  vertical-align: middle;
+  transition: all 0.3s;
+}
+
+.queue-status-pending .queue-status-dot {
+  color: #999;  /* Gray for pending */
+}
+
+.queue-status-processing .queue-status-dot {
+  color: #ffc107;  /* Amber/yellow for processing */
+  animation: pulse 1.5s ease-in-out infinite;
+}
+
+.queue-status-completed .queue-status-dot {
+  color: #00c853;  /* Green for completed */
+}
+
+.queue-status-failed .queue-status-dot {
+  color: #f5576c;  /* Red for failed */
+}
+
+@keyframes pulse {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.5;
+  }
+}
+
 /* Queue Footer */
 .queue-footer {
   padding: 10px 16px;
