@@ -622,8 +622,7 @@ function processNextQueue() {
   STATE.pendingFiles = nextRequest.files || [];
   renderFilePreviews();
   
-  // Send the request
-  STATE.isProcessing = true;
+  // Send the request (sendMessage will handle isProcessing state)
   sendMessage();
 }
 

@@ -2073,19 +2073,17 @@ html, body {
 /* Desktop: Right sidebar */
 @media (min-width: 1024px) {
   .request-queue-panel {
-    position: fixed;
-    right: 0;
-    top: 0;
-    bottom: 0;
+    position: relative;
+    order: 10;
     width: 300px;
+    flex-shrink: 0;
     border-left: 1px solid rgba(255, 255, 255, 0.1);
     border-right: none;
-    transform: translateX(0);
+    transition: width 0.3s ease;
   }
   
   .request-queue-panel.queue-hidden {
-    transform: translateX(100%);
-    pointer-events: none;
+    display: none;
   }
   
   .request-queue-panel.queue-minimized {
