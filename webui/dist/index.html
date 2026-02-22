@@ -213,3 +213,33 @@
     showDevBadgeIfNeeded();
   }
 </script>
+
+<script>
+  // Enhance scheduler UI with task mode indicators
+  function enhanceSchedulerUI() {
+    // Watch for job items being added and set data-mode attribute
+    const observer = new MutationObserver(() => {
+      document.querySelectorAll('.sched-job-item').forEach(item => {
+        if (!item.hasAttribute('data-mode')) {
+          // Try to extract mode from item content or fetch from API
+          const titleText = item.textContent || '';
+          if (titleText.includes('Command')) {
+            item.setAttribute('data-mode', 'command');
+          } else if (titleText.includes('AI')) {
+            item.setAttribute('data-mode', 'ai');
+          }
+        }
+      });
+    });
+    
+    const scheduler = document.getElementById('scheduler-panel');
+    if (scheduler) {
+      observer.observe(scheduler, { childList: true, subtree: true });
+    }
+  }
+  
+  // Initialize when scheduler panel is shown
+  document.addEventListener('DOMContentLoaded', () => {
+    setTimeout(enhanceSchedulerUI, 500);
+  });
+</script>
