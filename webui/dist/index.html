@@ -243,3 +243,114 @@
     setTimeout(enhanceSchedulerUI, 500);
   });
 </script>
+
+<script>
+  // Enhance job edit form with task mode toggle
+  function enhanceJobEditForm() {
+    const observer = new MutationObserver(() => {
+      const form = document.querySelector('#sched-job-form');
+      if (form && !form.hasAttribute('data-mode-enhanced')) {
+        form.setAttribute('data-mode-enhanced', 'true');
+        injectModeToggle(form);
+      }
+    });
+    
+    const detail = document.getElementById('sched-detail');
+    if (detail) {
+      observer.observe(detail, { childList: true, subtree: true });
+    }
+  }
+  
+  function injectModeToggle(form) {
+    // Find where to inject the toggle (after name field)
+    const nameGroup = form.querySelector('input[name="name"]')?.closest('.form-group');
+    if (!nameGroup) return;
+    
+    // Get current mode value
+    const currentMode = form.querySelector('input[name="mode"]')?.value || 'ai';
+    
+    // Create toggle HTML
+    const toggleHTML = `
+      <div class="task-mode-toggle">
+        <span class="task-mode-label">Task Type:</span>
+        <div class="toggle-switch">
+          <button type="button" class="toggle-option ${currentMode === 'ai' ? 'active ai' : ''}" data-mode="ai">🤖 AI</button>
+          <button type="button" class="toggle-option ${currentMode === 'command' ? 'active command' : ''}" data-mode="command">⚙️ Command</button>
+        </div>
+      </div>
+    `;
+    
+    // Insert toggle after name group
+    nameGroup.insertAdjacentHTML('afterend', toggleHTML);
+    
+    // Mark form with mode class
+    form.classList.add(`task-mode-${currentMode}`);
+    
+    // Add hidden input to store mode
+    if (!form.querySelector('input[name="task-mode-value"]')) {
+      const hiddenMode = document.createElement('input');
+      hiddenMode.type = 'hidden';
+      hiddenMode.name = 'task-mode-value';
+      hiddenMode.value = currentMode;
+      form.appendChild(hiddenMode);
+    }
+    
+    // Mark runtime/model as AI-only
+    const runtimeGroup = form.querySelector('input[name="runtime"]')?.closest('.form-group');
+    const modelGroup = form.querySelector('input[name="model"]')?.closest('.form-group');
+    if (runtimeGroup) runtimeGroup.classList.add('ai-only');
+    if (modelGroup) modelGroup.classList.add('ai-only');
+    
+    // Mark working_dir as command-only (or create if missing)
+    let workingDirGroup = form.querySelector('input[name="working_dir"]')?.closest('.form-group');
+    if (!workingDirGroup) {
+      const taskGroup = form.querySelector('textarea[name="task"]')?.closest('.form-group');
+      if (taskGroup) {
+        const workingDirHTML = `
+          <div class="form-group command-only">
+            <label>Working Directory</label>
+            <input class="glass-input" name="working_dir" placeholder="/opt" />
+            <p class="form-hint">Directory where the command will execute</p>
+          </div>
+        `;
+        taskGroup.insertAdjacentHTML('beforebegin', workingDirHTML);
+      }
+    } else {
+      workingDirGroup.classList.add('command-only');
+    }
+    
+    // Handle toggle clicks
+    form.querySelectorAll('.toggle-option').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.preventDefault();
+        const mode = btn.dataset.mode;
+        
+        // Update form class
+        form.classList.remove('task-mode-ai', 'task-mode-command');
+        form.classList.add(`task-mode-${mode}`);
+        
+        // Update button states
+        form.querySelectorAll('.toggle-option').forEach(b => {
+          b.classList.remove('active', 'ai', 'command');
+          if (b.dataset.mode === mode) {
+            b.classList.add('active', mode);
+          }
+        });
+        
+        // Update hidden input
+        form.querySelector('input[name="task-mode-value"]').value = mode;
+        
+        // Update actual mode field (for submission)
+        const modeField = form.querySelector('input[name="mode"]');
+        if (modeField) {
+          modeField.value = mode;
+        }
+      });
+    });
+  }
+  
+  // Initialize when scheduler panel is shown
+  document.addEventListener('DOMContentLoaded', () => {
+    setTimeout(enhanceJobEditForm, 500);
+  });
+</script>

@@ -1951,3 +1951,98 @@ html, body {
   margin-right: 6px;
   letter-spacing: 0.5px;
 }
+
+/* Task Mode Toggle Switch */
+.task-mode-toggle {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 16px;
+  padding: 12px;
+  background: rgba(255, 255, 255, 0.05);
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.task-mode-label {
+  font-weight: 600;
+  font-size: 14px;
+  color: #e0e0e0;
+  flex-shrink: 0;
+}
+
+.toggle-switch {
+  display: flex;
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 20px;
+  padding: 3px;
+  gap: 3px;
+  flex-shrink: 0;
+}
+
+.toggle-option {
+  padding: 6px 12px;
+  border: none;
+  border-radius: 18px;
+  background: transparent;
+  color: #999;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.3s ease;
+  white-space: nowrap;
+}
+
+.toggle-option.active {
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: white;
+  box-shadow: 0 2px 8px rgba(102, 126, 234, 0.3);
+}
+
+.toggle-option.active.command {
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+}
+
+.toggle-option.active.ai {
+  background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
+}
+
+/* Conditional field visibility */
+.form-group.ai-only {
+  display: none;
+}
+
+.form-group.command-only {
+  display: none;
+}
+
+.task-mode-ai .form-group.ai-only {
+  display: block;
+}
+
+.task-mode-ai .form-group.command-only {
+  display: none;
+}
+
+.task-mode-command .form-group.ai-only {
+  display: none;
+}
+
+.task-mode-command .form-group.command-only {
+  display: block;
+}
+
+/* Label styling for conditional fields */
+.form-group.ai-only label::after {
+  content: " (AI mode)";
+  font-size: 11px;
+  color: #f5576c;
+  font-weight: 600;
+}
+
+.form-group.command-only label::after {
+  content: " (Command mode)";
+  font-size: 11px;
+  color: #667eea;
+  font-weight: 600;
+}
