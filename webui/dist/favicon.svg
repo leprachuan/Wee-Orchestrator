@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+  <!-- Orange background -->
+  <rect width="100" height="100" fill="#ff6b35" rx="20"/>
+  
+  <!-- Orange Shamrock/Clover (simplified) -->
+  <g transform="translate(50, 50)">
+    <!-- Stem -->
+    <rect x="-2" y="0" width="4" height="20" fill="#2d5016"/>
+    
+    <!-- Three leaves -->
+    <!-- Top leaf -->
+    <circle cx="0" cy="-15" r="10" fill="#ffa500"/>
+    <!-- Bottom left leaf -->
+    <circle cx="-13" cy="5" r="10" fill="#ff9500"/>
+    <!-- Bottom right leaf -->
+    <circle cx="13" cy="5" r="10" fill="#ffb500"/>
+  </g>
+</svg>
