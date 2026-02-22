@@ -458,6 +458,11 @@ The system loads agents from `agents.json` or a custom config file. Each agent r
 
 ### Environment Configuration
 
+> ⚠️ **`API_HOST` Security Warning**
+> Never set `API_HOST=0.0.0.0` — this exposes the server on every network interface
+> including your LAN and any public NIC.  Always bind to specific trusted interfaces
+> (e.g. `127.0.0.1,<tailscale-ip>`).  See [Network Binding & Secure Access](#network-binding--secure-access).
+
 The default agent, model, and runtime can be customized via environment variables. This is useful for:
 - Different users having different defaults
 - Docker container configuration
@@ -897,6 +902,81 @@ http://<host>:<port>/ui
 ```
 
 Default port is set by `API_PORT` in `.env` (default `8000`).
+
+> 🔒 See [Network Binding & Secure Access](#network-binding--secure-access) below for
+> guidance on restricting which interfaces the server listens on.
+
+### Network Binding & Secure Access
+
+> ⚠️ **WARNING: Do NOT bind to `0.0.0.0`**
+>
+> Binding to `0.0.0.0` exposes the API and Web UI on **every network interface** —
+> including your LAN and any public-facing NIC.  This server grants executing
+> arbitrary shell commands and full file-system access to connected AI agents.
+> **A malicious actor on your LAN or internet could take over your machine.**
+>
+> Always restrict `API_HOST` to trusted interfaces only.
+
+#### Recommended: Tailscale + Localhost
+
+Set `API_HOST` in `.env` to a comma-separated list of the interfaces you want to
+bind (the server spawns a listener for each):
+
+```dotenv
+# ✅ GOOD — localhost and Tailscale only
+API_HOST=127.0.0.1,100.x.x.x   # replace with your Tailscale IPv4 (tailscale ip -4)
+API_PORT=8001
+
+# ❌ BAD — exposes to entire LAN/internet
+# API_HOST=0.0.0.0
+```
+
+After changing `.env`, restart the API service:
+
+```bash
+sudo systemctl restart agent-manager-api-dev.service
+# Verify — should show ONLY 127.0.0.1 and Tailscale IP:
+ss -tlnp | grep 8001
+```
+
+#### Accessing the Dev Environment Remotely
+
+**Option 1 – Tailscale (Recommended)**
+
+1. Install Tailscale: https://tailscale.com/download
+2. Join the same Tailscale network (get invite key from admin)
+3. Access directly via Tailscale IP:
+   ```
+   http://100.x.x.x:8001/ui
+   ```
+
+**Option 2 – SSH SOCKS Proxy**
+
+```bash
+# Start SOCKS proxy (-f backgrounds it, -N means no command)
+ssh -fN -D 1080 user@your-host
+
+# Browser: configure SOCKS5 proxy  127.0.0.1:1080  (proxy DNS enabled)
+# Then open: http://127.0.0.1:8001/ui
+```
+
+Firefox: Settings → Network Settings → Manual proxy → SOCKS Host `127.0.0.1` Port `1080` SOCKS v5 → ✓ Proxy DNS
+
+Chrome/Edge:
+```bash
+google-chrome --proxy-server="socks5://127.0.0.1:1080"
+```
+
+**Option 3 – SSH Port Forwarding (single port)**
+
+```bash
+ssh -N -L 8001:127.0.0.1:8001 user@your-host
+# Then open: http://localhost:8001/ui
+```
+
+Full details: [`docs/dev-access.md`](docs/dev-access.md)
+
+---
 
 ### Streaming (SSE)
 
