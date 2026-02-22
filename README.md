@@ -21,6 +21,159 @@ Wee-Orchestrator provides a flexible framework to:
 For a full architectural overview see **[ARCHITECTURE.md](./ARCHITECTURE.md)**.  
 For release history see **[RELEASE_NOTES.md](./RELEASE_NOTES.md)**.
 
+## Bot Setup Guide
+
+Wee-Orchestrator enables you to create **custom bots** — specialized AI agents with their own configuration, knowledge base, and capabilities. Each bot is a self-contained repository that can be integrated with Wee-Orchestrator.
+
+### What is a Bot?
+
+A bot is a Git repository containing:
+
+1. **Core Configuration** — An `AGENTS.md` file defining agent behavior, preferences, and runtime configurations
+2. **Knowledge Base** — A `memory/` directory using the PARA methodology (Projects, Areas, Resources, Archive) for organizing operational knowledge
+3. **Focus Areas** — Organized folders for specific domains (e.g., `email_triage/`, `smart_home/`, `infrastructure/`)
+4. **Skills Integration** — References to specialized skills from [pot-o-skills](https://github.com/leprachuan/pot-o-skills) or custom skills
+5. **Documentation** — README, guides, and workflow documentation
+
+### Example Bot Structure
+
+```
+my-bot/
+├── README.md                  # Bot overview & usage
+├── AGENTS.md                  # Agent behavior & configuration
+├── .env                       # Credentials (git-ignored)
+├── .gitignore                 # Protect secrets
+│
+├── memory/                    # Knowledge base (PARA methodology)
+│   ├── projects/              # Active multi-step initiatives
+│   ├── areas/                 # Ongoing responsibility areas
+│   ├── resources/             # Reference material & best practices
+│   └── archive/               # Completed/deprecated items
+│
+├── skills/                    # Custom skill implementations
+│   ├── custom-skill-1/
+│   └── custom-skill-2/
+│
+└── domain-folders/            # Domain-specific organization
+    ├── email/                 # Email processing
+    ├── home-automation/       # Smart home tasks
+    └── infrastructure/        # Infrastructure management
+```
+
+### Key Components
+
+#### AGENTS.md
+Defines the bot's behavior, preferences, and runtime configuration:
+- Agent name, purpose, and timezone
+- Preferred models and runtimes (Claude, Copilot, Gemini)
+- Tool permissions and access control
+- Sub-agent delegation rules
+- Skill definitions and repository locations
+- Security and credential management
+
+**Example excerpt:**
+```yaml
+---
+name: my-bot
+runtime: copilot
+model: gpt-5-sonnet
+timezone: EST/EDT
+---
+
+## Behavior
+
+- Preferred AI runtime: Claude > Copilot > Gemini
+- Task routing: Delegate to specialized sub-agents for domain expertise
+- Notification channel: Telegram
+```
+
+#### Memory Structure (PARA)
+Organize knowledge for long-term retention and reuse:
+
+- **Projects/** — Active multi-step work (e.g., `home-automation-setup.md`)
+- **Areas/** — Ongoing responsibilities (e.g., `orchestration.md`, `security.md`)
+- **Resources/** — Reference material (e.g., `best-practices.md`, `api-docs.md`)
+- **Archive/** — Completed or deprecated knowledge
+
+#### Skills
+Integrate with [pot-o-skills](https://github.com/leprachuan/pot-o-skills) or define custom skills:
+
+```bash
+# Link public skills from pot-o-skills
+ln -s /opt/pot-o-skills/cisco-meraki ./skills/
+ln -s /opt/pot-o-skills/cisco-security-cloud-control ./skills/
+
+# Or implement custom skills in skills/ directory
+```
+
+#### Domain Folders
+Organize bot work by area of focus:
+- Keep related scripts, templates, and documentation together
+- Example: `email/` for email processing, `home/` for automation tasks
+- Each folder can have its own README with domain-specific guidance
+
+### Getting Started
+
+1. **Create your bot repository:**
+   ```bash
+   mkdir my-bot && cd my-bot
+   git init
+   git remote add origin https://github.com/username/my-bot.git
+   ```
+
+2. **Add AGENTS.md:**
+   Copy and customize the [AGENTS.md](./AGENTS.md) template from Wee-Orchestrator with your bot's preferences
+
+3. **Create memory directory:**
+   ```bash
+   mkdir -p memory/{projects,areas,resources,archive}
+   echo "# Knowledge Base" > memory/INDEX.md
+   ```
+
+4. **Add .env and .gitignore:**
+   ```bash
+   cp /opt/n8n-copilot-shim-dev/.env.example .env
+   echo ".env" >> .gitignore
+   echo "*.key" >> .gitignore
+   echo "secrets.json" >> .gitignore
+   ```
+
+5. **Link or implement skills:**
+   ```bash
+   mkdir skills
+   ln -s /opt/pot-o-skills skills/cisco-meraki
+   ```
+
+6. **Register with Wee-Orchestrator:**
+   Update Wee-Orchestrator's `agents.json` to include your bot:
+   ```json
+   {
+     "agents": [
+       {
+         "name": "my-bot",
+         "path": "/opt/my-bot",
+         "enabled": true
+       }
+     ]
+   }
+   ```
+
+### Best Practices
+
+- **Secrets First:** Store all credentials in `.env` (git-ignored), never commit secrets
+- **Document Decisions:** Use `memory/areas/` to record architectural decisions and conventions
+- **Skill Reuse:** Leverage [pot-o-skills](https://github.com/leprachuan/pot-o-skills) before building custom skills
+- **Domain Organization:** Group related work into focused folders for maintainability
+- **README Clarity:** Each folder should have clear purpose and examples
+
+### Resources
+
+- **Wee-Orchestrator:** https://github.com/leprachuan/Wee-Orchestrator
+- **pot-o-skills:** https://github.com/leprachuan/pot-o-skills (Cisco Meraki, SCC, and more)
+- **AGENTS.md Template:** See [./AGENTS.md](./AGENTS.md) for full configuration reference
+
+---
+
 ## Requirements
 
 This project requires one or more of the following AI CLI tools to be installed:
