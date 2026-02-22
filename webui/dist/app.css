@@ -2046,3 +2046,12 @@ html, body {
   color: #667eea;
   font-weight: 600;
 }
+
+/* Improve conditional field visibility */
+.sched-form.task-mode-command .ai-only {
+  display: none !important;
+}
+
+.sched-form.task-mode-ai .command-only {
+  display: none !important;
+}
