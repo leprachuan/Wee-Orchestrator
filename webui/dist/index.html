@@ -210,6 +210,10 @@
     if (!agentInput) return;
     
     const currentAgent = agentInput.value || 'fosterbot';
+    const select = document.createElement('select');
+    select.className = 'glass-input glass-select';
+    select.name = 'agent';
+    
     const agents = [
       { value: 'fosterbot', label: 'Fosterbot (Orchestrator)' },
       { value: 'smart_home', label: 'Smart Home' },
@@ -219,8 +223,15 @@
       { value: 'family', label: 'Family Knowledge' },
     ];
     
-    const selectHTML = `<select class="glass-input glass-select" name="agent">${agents.map(a => `<option value="${a.value}" ${currentAgent === a.value ? 'selected' : ''}>${a.label}</option>`).join('')}</select>`;
-    agentInput.replaceWith(selectHTML);
+    agents.forEach(agent => {
+      const option = document.createElement('option');
+      option.value = agent.value;
+      option.textContent = agent.label;
+      if (agent.value === currentAgent) option.selected = true;
+      select.appendChild(option);
+    });
+    
+    agentInput.replaceWith(select);
   }
   
   function injectModeToggle(form) {
@@ -228,30 +239,26 @@
     if (!nameGroup || form.querySelector('.task-mode-toggle')) return;
     
     const currentMode = form.querySelector('input[name="mode"]')?.value || 'ai';
-    
-    const toggleHTML = `
-      <div class="task-mode-toggle">
-        <span class="task-mode-label">Task Type:</span>
-        <div class="toggle-switch">
-          <button type="button" class="toggle-option ${currentMode === 'ai' ? 'active ai' : ''}" data-mode="ai">🤖 AI</button>
-          <button type="button" class="toggle-option ${currentMode === 'command' ? 'active command' : ''}" data-mode="command">⚙️ Command</button>
-        </div>
+    const toggleDiv = document.createElement('div');
+    toggleDiv.className = 'task-mode-toggle';
+    toggleDiv.innerHTML = `
+      <span class="task-mode-label">Task Type:</span>
+      <div class="toggle-switch">
+        <button type="button" class="toggle-option ${currentMode === 'ai' ? 'active ai' : ''}" data-mode="ai">🤖 AI</button>
+        <button type="button" class="toggle-option ${currentMode === 'command' ? 'active command' : ''}" data-mode="command">⚙️ Command</button>
       </div>
     `;
     
-    nameGroup.insertAdjacentHTML('afterend', toggleHTML);
+    nameGroup.insertAdjacentElement('afterend', toggleDiv);
     form.classList.add(`task-mode-${currentMode}`);
     
-    // Mark runtime as AI-only
     const runtimeGroup = form.querySelector('select[name="runtime"]')?.closest('.form-group');
     const modelGroup = form.querySelector('input[name="model"]')?.closest('.form-group');
     if (runtimeGroup) runtimeGroup.classList.add('ai-only');
     if (modelGroup) modelGroup.classList.add('ai-only');
     
-    // Remove working_dir field if present
     form.querySelector('input[name="working_dir"]')?.closest('.form-group')?.remove();
     
-    // Handle toggle
     form.querySelectorAll('.toggle-option').forEach(btn => {
       btn.addEventListener('click', (e) => {
         e.preventDefault();
