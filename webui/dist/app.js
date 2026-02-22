@@ -18,6 +18,7 @@ const STATE = {
   pendingFiles:    [],
   sessions:        [],
   activeSessionId: null,
+  schedulerEnabled: true,  // overridden by /api/v1/config on boot
 };
 
 // ─── Persist ──────────────────────────────────────────────────────────────────
@@ -106,6 +107,11 @@ function showAppView() {
   hide($('auth-overlay'));
   show($('app'));
   updateSidebarIdentity();
+  // Apply scheduler feature flag
+  if (!STATE.schedulerEnabled) {
+    hide($('btn-nav-scheduler'));
+    hide($('scheduler-panel'));
+  }
 }
 
 function updateSidebarIdentity() {
@@ -910,16 +916,6 @@ async function initApp() {
   STATE.currentSessionId = null;
   STATE.activeSessionId  = null;
   updateSidebarIdentity();
-
-  // Load feature flags and apply UI visibility
-  try {
-    const cfg = await fetch('/api/v1/config').then(r => r.json());
-    if (!cfg.scheduler_enabled) {
-      hide($('btn-nav-scheduler'));
-      hide($('scheduler-panel'));
-    }
-  } catch (_) { /* non-fatal — show everything by default */ }
-
   await loadSessions();
   if (STATE.sessions.length === 0) {
     await startNewSession();
@@ -1043,13 +1039,20 @@ document.addEventListener('DOMContentLoaded', () => {
   $('btn-sched-detail-close').addEventListener('click', closeSchedDetail);
 
   // --- Bootstrap ---
-  loadAuth();
-  if (STATE.token) {
-    showAppView();
-    initApp();
-  } else {
-    showAuthView();
-  }
+  // Fetch feature flags first (no auth needed) then decide what to show
+  fetch('/api/v1/config')
+    .then(r => r.json())
+    .then(cfg => { STATE.schedulerEnabled = cfg.scheduler_enabled !== false; })
+    .catch(() => { /* keep default true */ })
+    .finally(() => {
+      loadAuth();
+      if (STATE.token) {
+        showAppView();
+        initApp();
+      } else {
+        showAuthView();
+      }
+    });
 });
 
 // ═══════════════════════════════════════════════════════════════════════════════
