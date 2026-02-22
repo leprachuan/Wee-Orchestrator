@@ -2188,6 +2188,28 @@ html, body {
   color: #fff;
 }
 
+.queue-header-buttons {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.queue-pause-btn {
+  background: none;
+  border: none;
+  color: #aaa;
+  font-size: 16px;
+  cursor: pointer;
+  padding: 6px 8px;
+  transition: color 0.2s;
+  border-radius: 4px;
+}
+
+.queue-pause-btn:hover {
+  color: #667eea;
+  background: rgba(102, 126, 234, 0.1);
+}
+
 /* Queue Items List */
 .queue-items-list {
   flex: 1;

@@ -21,6 +21,7 @@ const STATE = {
   activeSessionId: null,
   schedulerEnabled: true,  // overridden by /api/v1/config on boot
   requestQueue:    [],     // queued requests while processing
+  queuePaused:     false,  // true to prevent auto-submit of next queued message
 };
 
 // ─── Persist ──────────────────────────────────────────────────────────────────
@@ -678,6 +679,19 @@ function renderQueuePanel() {
   const queueList = $('queue-items-list');
   if (!queueList) return;
   
+  // Update pause button and status message
+  const pauseBtn = $('btn-pause-queue');
+  const statusMsg = $('queue-status-msg');
+  if (pauseBtn) {
+    pauseBtn.textContent = STATE.queuePaused ? '▶' : '⏸';
+    pauseBtn.title = STATE.queuePaused ? 'Resume auto-submit' : 'Pause auto-submit';
+  }
+  if (statusMsg) {
+    statusMsg.textContent = STATE.queuePaused 
+      ? 'Queue paused — click ▶ to resume auto-submit'
+      : 'Requests will auto-submit when current message completes';
+  }
+  
   if (STATE.requestQueue.length === 0) {
     queueList.innerHTML = '<p class="queue-empty">No queued requests</p>';
     const counter = $('queue-count');
@@ -732,6 +746,10 @@ function toggleQueuePanel() {
   }
 }
 
+function toggleQueuePause() {
+  STATE.queuePaused = !STATE.queuePaused;
+  renderQueuePanel();
+}
 
 // ─── Messaging ────────────────────────────────────────────────────────────────
 async function sendMessage() {
@@ -785,8 +803,8 @@ async function sendMessage() {
     hideTyping();
     STATE.isProcessing = false;
     
-    // Auto-submit next queued request if any
-    if (STATE.requestQueue.length > 0) {
+    // Auto-submit next queued request if any (unless queue is paused)
+    if (STATE.requestQueue.length > 0 && !STATE.queuePaused) {
       processNextQueue();
     }
     
@@ -1130,6 +1148,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // --- Request Queue ---
   $('btn-toggle-queue').addEventListener('click', toggleQueuePanel);
+  $('btn-pause-queue').addEventListener('click', toggleQueuePause);
 
   // --- View nav ---
   $('btn-nav-chat').addEventListener('click', showChatPanel);
