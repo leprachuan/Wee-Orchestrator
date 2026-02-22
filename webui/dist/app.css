@@ -584,6 +584,25 @@ html, body {
   border: 1px solid var(--glass-border);
 }
 
+/* ---------- Streaming bubble cursor ---------- */
+.message-bubble.streaming {
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.message-bubble.streaming::after {
+  content: '▋';
+  display: inline-block;
+  animation: stream-cursor 0.8s step-end infinite;
+  color: var(--accent);
+  margin-left: 1px;
+}
+
+@keyframes stream-cursor {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0; }
+}
+
 /* ---------- Typing Indicator ---------- */
 .typing-indicator {
   padding: 0 20px 8px;

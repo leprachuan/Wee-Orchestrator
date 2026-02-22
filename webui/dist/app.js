@@ -603,9 +603,8 @@ async function sendMessage() {
 
   showTyping();
   try {
-    const data = await apiRequest('POST', `/sessions/${STATE.currentSessionId}/execute`, { query });
+    const result = await sendMessageStreaming(query, STATE.currentSessionId);
     hideTyping();
-    await renderMessage('assistant', data.response || '(no response)', []);
     // Refresh meta — a /agent set etc. may have changed things
     await fetchAndUpdateMeta(STATE.currentSessionId);
     await loadSessions();
@@ -616,6 +615,127 @@ async function sendMessage() {
     $('btn-send').disabled = false;
     scrollToBottom();
   }
+}
+
+/**
+ * Send a message using the SSE /stream endpoint and update the UI live.
+ * Returns the `done` event payload {response, runtime, model} on success.
+ * Throws on network/HTTP error so the caller can fall back gracefully.
+ */
+async function sendMessageStreaming(query, sessionId) {
+  const headers = { 'Content-Type': 'application/json' };
+  if (STATE.token) headers['Authorization'] = `Bearer ${STATE.token}`;
+
+  const res = await fetch(`${API_BASE}/sessions/${sessionId}/stream`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ query }),
+  });
+
+  if (!res.ok) throw new Error(`Stream request failed: HTTP ${res.status}`);
+
+  const reader  = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer    = '';
+
+  // Placeholder bubble that we fill in progressively
+  let streamRow    = null;
+  let streamBubble = null;
+  let rawText      = '';
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      buffer += decoder.decode(value, { stream: true });
+
+      // SSE frames are separated by '\n\n'; split and keep incomplete tail
+      const frames = buffer.split('\n\n');
+      buffer = frames.pop();  // last entry may be incomplete
+
+      for (const frame of frames) {
+        for (const line of frame.split('\n')) {
+          if (!line.startsWith('data: ')) continue;
+          const payload = line.slice(6).trim();
+          if (!payload) continue;
+
+          let evt;
+          try { evt = JSON.parse(payload); } catch { continue; }
+
+          if (evt.type === 'start') {
+            // Create the live streaming bubble
+            hideTyping();
+            ({ row: streamRow, bubble: streamBubble } = createStreamingBubble());
+
+          } else if (evt.type === 'chunk' && streamBubble) {
+            rawText += evt.text;
+            // Show raw text while streaming so it feels instant
+            streamBubble.classList.add('streaming');
+            streamBubble.textContent = rawText;
+            scrollToBottom();
+
+          } else if (evt.type === 'done') {
+            // Replace raw text with fully-rendered markdown
+            if (streamBubble) {
+              streamBubble.classList.remove('streaming');
+              applyMarkdownToBubble(streamBubble, evt.response || '(no response)');
+              scrollToBottom();
+            } else {
+              // Command/no-chunk path: render fresh bubble
+              await renderMessage('assistant', evt.response || '(no response)', []);
+            }
+            return evt;  // caller can read runtime/model
+
+          } else if (evt.type === 'error') {
+            if (streamBubble) streamBubble.remove();
+            if (streamRow)    streamRow.remove();
+            throw new Error(evt.message || 'Stream error');
+          }
+        }
+      }
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  return null;
+}
+
+/** Inject markdown+highlight into an existing bubble element. */
+function applyMarkdownToBubble(bubble, content) {
+  try {
+    bubble.innerHTML = marked.parse(content);
+    bubble.querySelectorAll('pre code').forEach(block => {
+      if (window.hljs) hljs.highlightElement(block);
+    });
+  } catch (_) {
+    bubble.textContent = content;
+  }
+}
+
+/**
+ * Create an empty assistant message row appended to the messages container.
+ * Returns { row, bubble } so the caller can update or remove them.
+ */
+function createStreamingBubble() {
+  hide($('empty-state'));
+  const container = $('messages');
+
+  const row = document.createElement('div');
+  row.className = 'message-row assistant';
+
+  const avatar = document.createElement('div');
+  avatar.className = 'message-avatar';
+  avatar.textContent = '🍀';
+
+  const bubble = document.createElement('div');
+  bubble.className = 'message-bubble streaming';
+
+  row.appendChild(avatar);
+  row.appendChild(bubble);
+  container.appendChild(row);
+  scrollToBottom();
+  return { row, bubble };
 }
 
 // ─── Render Messages ──────────────────────────────────────────────────────────
