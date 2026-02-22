@@ -21,6 +21,159 @@ Wee-Orchestrator provides a flexible framework to:
 For a full architectural overview see **[ARCHITECTURE.md](./ARCHITECTURE.md)**.  
 For release history see **[RELEASE_NOTES.md](./RELEASE_NOTES.md)**.
 
+## Bot Setup Guide
+
+Wee-Orchestrator enables you to create **custom bots** — specialized AI agents with their own configuration, knowledge base, and capabilities. Each bot is a self-contained repository that can be integrated with Wee-Orchestrator.
+
+### What is a Bot?
+
+A bot is a Git repository containing:
+
+1. **Core Configuration** — An `AGENTS.md` file defining agent behavior, preferences, and runtime configurations
+2. **Knowledge Base** — A `memory/` directory using the PARA methodology (Projects, Areas, Resources, Archive) for organizing operational knowledge
+3. **Focus Areas** — Organized folders for specific domains (e.g., `email_triage/`, `smart_home/`, `infrastructure/`)
+4. **Skills Integration** — References to specialized skills from [pot-o-skills](https://github.com/leprachuan/pot-o-skills) or custom skills
+5. **Documentation** — README, guides, and workflow documentation
+
+### Example Bot Structure
+
+```
+my-bot/
+├── README.md                  # Bot overview & usage
+├── AGENTS.md                  # Agent behavior & configuration
+├── .env                       # Credentials (git-ignored)
+├── .gitignore                 # Protect secrets
+│
+├── memory/                    # Knowledge base (PARA methodology)
+│   ├── projects/              # Active multi-step initiatives
+│   ├── areas/                 # Ongoing responsibility areas
+│   ├── resources/             # Reference material & best practices
+│   └── archive/               # Completed/deprecated items
+│
+├── skills/                    # Custom skill implementations
+│   ├── custom-skill-1/
+│   └── custom-skill-2/
+│
+└── domain-folders/            # Domain-specific organization
+    ├── email/                 # Email processing
+    ├── home-automation/       # Smart home tasks
+    └── infrastructure/        # Infrastructure management
+```
+
+### Key Components
+
+#### AGENTS.md
+Defines the bot's behavior, preferences, and runtime configuration:
+- Agent name, purpose, and timezone
+- Preferred models and runtimes (Claude, Copilot, Gemini)
+- Tool permissions and access control
+- Sub-agent delegation rules
+- Skill definitions and repository locations
+- Security and credential management
+
+**Example excerpt:**
+```yaml
+---
+name: my-bot
+runtime: copilot
+model: gpt-5-sonnet
+timezone: EST/EDT
+---
+
+## Behavior
+
+- Preferred AI runtime: Claude > Copilot > Gemini
+- Task routing: Delegate to specialized sub-agents for domain expertise
+- Notification channel: Telegram
+```
+
+#### Memory Structure (PARA)
+Organize knowledge for long-term retention and reuse:
+
+- **Projects/** — Active multi-step work (e.g., `home-automation-setup.md`)
+- **Areas/** — Ongoing responsibilities (e.g., `orchestration.md`, `security.md`)
+- **Resources/** — Reference material (e.g., `best-practices.md`, `api-docs.md`)
+- **Archive/** — Completed or deprecated knowledge
+
+#### Skills
+Integrate with [pot-o-skills](https://github.com/leprachuan/pot-o-skills) or define custom skills:
+
+```bash
+# Link public skills from pot-o-skills
+ln -s /opt/pot-o-skills/cisco-meraki ./skills/
+ln -s /opt/pot-o-skills/cisco-security-cloud-control ./skills/
+
+# Or implement custom skills in skills/ directory
+```
+
+#### Domain Folders
+Organize bot work by area of focus:
+- Keep related scripts, templates, and documentation together
+- Example: `email/` for email processing, `home/` for automation tasks
+- Each folder can have its own README with domain-specific guidance
+
+### Getting Started
+
+1. **Create your bot repository:**
+   ```bash
+   mkdir my-bot && cd my-bot
+   git init
+   git remote add origin https://github.com/username/my-bot.git
+   ```
+
+2. **Add AGENTS.md:**
+   Copy and customize the [AGENTS.md](./AGENTS.md) template from Wee-Orchestrator with your bot's preferences
+
+3. **Create memory directory:**
+   ```bash
+   mkdir -p memory/{projects,areas,resources,archive}
+   echo "# Knowledge Base" > memory/INDEX.md
+   ```
+
+4. **Add .env and .gitignore:**
+   ```bash
+   cp /opt/n8n-copilot-shim-dev/.env.example .env
+   echo ".env" >> .gitignore
+   echo "*.key" >> .gitignore
+   echo "secrets.json" >> .gitignore
+   ```
+
+5. **Link or implement skills:**
+   ```bash
+   mkdir skills
+   ln -s /opt/pot-o-skills skills/cisco-meraki
+   ```
+
+6. **Register with Wee-Orchestrator:**
+   Update Wee-Orchestrator's `agents.json` to include your bot:
+   ```json
+   {
+     "agents": [
+       {
+         "name": "my-bot",
+         "path": "/opt/my-bot",
+         "enabled": true
+       }
+     ]
+   }
+   ```
+
+### Best Practices
+
+- **Secrets First:** Store all credentials in `.env` (git-ignored), never commit secrets
+- **Document Decisions:** Use `memory/areas/` to record architectural decisions and conventions
+- **Skill Reuse:** Leverage [pot-o-skills](https://github.com/leprachuan/pot-o-skills) before building custom skills
+- **Domain Organization:** Group related work into focused folders for maintainability
+- **README Clarity:** Each folder should have clear purpose and examples
+
+### Resources
+
+- **Wee-Orchestrator:** https://github.com/leprachuan/Wee-Orchestrator
+- **pot-o-skills:** https://github.com/leprachuan/pot-o-skills (Cisco Meraki, SCC, and more)
+- **AGENTS.md Template:** See [./AGENTS.md](./AGENTS.md) for full configuration reference
+
+---
+
 ## Requirements
 
 This project requires one or more of the following AI CLI tools to be installed:
@@ -647,11 +800,12 @@ Wee-Orchestrator ships a browser-based chat interface served at `/ui` by the API
 
 - 🍀 **Glassmorphism design** — frosted-glass panels, animated background blobs, responsive layout
 - 💬 **Chat panel** — markdown rendering, syntax highlighting, image display (no overflow), clickable meta pills
+- ⚡ **Streaming responses** — AI output streams to the browser in real-time via SSE; a blinking cursor shows progress and the bubble is replaced with fully-rendered markdown when complete
 - 👤 **@username display** — shows `@handle` instead of raw numeric IDs in message headers
 - 🔍 **Typeahead** — `/command` highlighting and autocomplete in the input box
 - 📸 **File uploads** — drag-and-drop or click to attach images and files to messages
 - 🖼️ **Auto image search** — AI can trigger DuckDuckGo image searches; results are served inline
-- 📅 **Scheduler panel** — switch between Chat and Scheduler from the sidebar navigation
+- 📅 **Scheduler panel** — switch between Chat and Scheduler from the sidebar navigation (hidden when `SCHEDULER_ENABLED=false`)
   - Job list with status badges (active / paused / disabled)
   - Detail drawer with full job configuration
   - Create / edit form with agent, runtime, model, and mode (yolo / restricted) selectors
@@ -667,9 +821,24 @@ http://<host>:<port>/ui
 
 Default port is set by `API_PORT` in `.env` (default `8000`).
 
+### Streaming (SSE)
+
+Chat responses from the Web UI use `POST /api/v1/sessions/{id}/stream` instead of the blocking execute endpoint. The browser receives Server-Sent Events:
+
+| Event | Payload | Description |
+|-------|---------|-------------|
+| `start` | `{}` | Streaming bubble created in the UI |
+| `chunk` | `{"text": "…"}` | Raw stdout line from the AI CLI as it arrives |
+| `done` | `{"response":"…","runtime":"…","model":"…"}` | Final stripped response; bubble replaced with rendered markdown |
+| `error` | `{"message":"…"}` | On failure |
+
+Keepalive comments (`: keepalive`) are sent every second to prevent proxy/browser timeouts. Slash commands and bash commands (`!`) skip the chunk loop and emit `start` → `done` immediately. All other channels (Telegram, WebEx, N8N) use the original blocking endpoint — streaming is WebUI-only.
+
 ## Task Scheduler
 
 The built-in task scheduler (`task_scheduler.py`) runs AI jobs on a schedule without human interaction.
+
+> **Feature flag:** The scheduler can be fully disabled by setting `SCHEDULER_ENABLED=false` in `.env`. This removes all `/api/v1/scheduler/*` API endpoints and hides the Scheduler tab in the Web UI. See [Feature Flags](#feature-flags) below.
 
 ### Features
 
@@ -717,6 +886,28 @@ curl -X POST http://localhost:8000/api/v1/scheduler/jobs \
 ```
 
 Data is stored in `/opt/.task-scheduler/` (jobs.json, results/, logs/).
+
+## Feature Flags
+
+Wee-Orchestrator exposes a public `GET /api/v1/config` endpoint that the Web UI reads at boot to determine which features to display. Backend routes for disabled features are never registered.
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `SCHEDULER_ENABLED` | `true` | Enable/disable the Task Scheduler API and Web UI panel |
+
+### Disabling the Scheduler
+
+```bash
+# In .env
+SCHEDULER_ENABLED=false
+```
+
+Effects when `false`:
+- All `/api/v1/scheduler/*` endpoints return 404 (routes not registered)
+- The **📅 Scheduler** tab is hidden from the Web UI sidebar before auth — it never appears
+- `GET /api/v1/config` returns `{"scheduler_enabled": false}` for the browser to act on
+
+To re-enable, set `SCHEDULER_ENABLED=true` (or remove the variable) and restart the service.
 
 ## File Handling
 
@@ -789,12 +980,12 @@ Key components:
 
 | Component | Description |
 |-----------|-------------|
-| `SessionManager` | Core AI execution engine — session state, slash commands, CLI dispatch |
+| `SessionManager` | Core AI execution engine — session state, slash commands, CLI dispatch, streaming queues |
 | `HistoryManager` | Per-user, per-channel chat history persistence |
 | `AuthManager` | Pairing-code auth, session token issuance, shared-key validation |
 | `RateLimiter` | Per-IP, per-endpoint sliding-window rate limiting |
-| `TaskScheduler` | Cron-like AI job scheduler embedded in the orchestrator |
-| FastAPI app | REST API (`/api/v1/`) + static Web UI mount (`/ui`) |
+| `TaskScheduler` | Cron-like AI job scheduler embedded in the orchestrator (feature-flagged) |
+| FastAPI app | REST API (`/api/v1/`) + SSE streaming (`/stream`) + static Web UI mount (`/ui`) |
 | `TelegramConnector` | Long-polling Telegram bot → `SessionManager` bridge |
 | `WebEXConnector` | WebEx webhook / RabbitMQ → `SessionManager` bridge |
 
