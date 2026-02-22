@@ -647,11 +647,12 @@ Wee-Orchestrator ships a browser-based chat interface served at `/ui` by the API
 
 - 🍀 **Glassmorphism design** — frosted-glass panels, animated background blobs, responsive layout
 - 💬 **Chat panel** — markdown rendering, syntax highlighting, image display (no overflow), clickable meta pills
+- ⚡ **Streaming responses** — AI output streams to the browser in real-time via SSE; a blinking cursor shows progress and the bubble is replaced with fully-rendered markdown when complete
 - 👤 **@username display** — shows `@handle` instead of raw numeric IDs in message headers
 - 🔍 **Typeahead** — `/command` highlighting and autocomplete in the input box
 - 📸 **File uploads** — drag-and-drop or click to attach images and files to messages
 - 🖼️ **Auto image search** — AI can trigger DuckDuckGo image searches; results are served inline
-- 📅 **Scheduler panel** — switch between Chat and Scheduler from the sidebar navigation
+- 📅 **Scheduler panel** — switch between Chat and Scheduler from the sidebar navigation (hidden when `SCHEDULER_ENABLED=false`)
   - Job list with status badges (active / paused / disabled)
   - Detail drawer with full job configuration
   - Create / edit form with agent, runtime, model, and mode (yolo / restricted) selectors
@@ -667,9 +668,24 @@ http://<host>:<port>/ui
 
 Default port is set by `API_PORT` in `.env` (default `8000`).
 
+### Streaming (SSE)
+
+Chat responses from the Web UI use `POST /api/v1/sessions/{id}/stream` instead of the blocking execute endpoint. The browser receives Server-Sent Events:
+
+| Event | Payload | Description |
+|-------|---------|-------------|
+| `start` | `{}` | Streaming bubble created in the UI |
+| `chunk` | `{"text": "…"}` | Raw stdout line from the AI CLI as it arrives |
+| `done` | `{"response":"…","runtime":"…","model":"…"}` | Final stripped response; bubble replaced with rendered markdown |
+| `error` | `{"message":"…"}` | On failure |
+
+Keepalive comments (`: keepalive`) are sent every second to prevent proxy/browser timeouts. Slash commands and bash commands (`!`) skip the chunk loop and emit `start` → `done` immediately. All other channels (Telegram, WebEx, N8N) use the original blocking endpoint — streaming is WebUI-only.
+
 ## Task Scheduler
 
 The built-in task scheduler (`task_scheduler.py`) runs AI jobs on a schedule without human interaction.
+
+> **Feature flag:** The scheduler can be fully disabled by setting `SCHEDULER_ENABLED=false` in `.env`. This removes all `/api/v1/scheduler/*` API endpoints and hides the Scheduler tab in the Web UI. See [Feature Flags](#feature-flags) below.
 
 ### Features
 
@@ -717,6 +733,28 @@ curl -X POST http://localhost:8000/api/v1/scheduler/jobs \
 ```
 
 Data is stored in `/opt/.task-scheduler/` (jobs.json, results/, logs/).
+
+## Feature Flags
+
+Wee-Orchestrator exposes a public `GET /api/v1/config` endpoint that the Web UI reads at boot to determine which features to display. Backend routes for disabled features are never registered.
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `SCHEDULER_ENABLED` | `true` | Enable/disable the Task Scheduler API and Web UI panel |
+
+### Disabling the Scheduler
+
+```bash
+# In .env
+SCHEDULER_ENABLED=false
+```
+
+Effects when `false`:
+- All `/api/v1/scheduler/*` endpoints return 404 (routes not registered)
+- The **📅 Scheduler** tab is hidden from the Web UI sidebar before auth — it never appears
+- `GET /api/v1/config` returns `{"scheduler_enabled": false}` for the browser to act on
+
+To re-enable, set `SCHEDULER_ENABLED=true` (or remove the variable) and restart the service.
 
 ## File Handling
 
@@ -789,12 +827,12 @@ Key components:
 
 | Component | Description |
 |-----------|-------------|
-| `SessionManager` | Core AI execution engine — session state, slash commands, CLI dispatch |
+| `SessionManager` | Core AI execution engine — session state, slash commands, CLI dispatch, streaming queues |
 | `HistoryManager` | Per-user, per-channel chat history persistence |
 | `AuthManager` | Pairing-code auth, session token issuance, shared-key validation |
 | `RateLimiter` | Per-IP, per-endpoint sliding-window rate limiting |
-| `TaskScheduler` | Cron-like AI job scheduler embedded in the orchestrator |
-| FastAPI app | REST API (`/api/v1/`) + static Web UI mount (`/ui`) |
+| `TaskScheduler` | Cron-like AI job scheduler embedded in the orchestrator (feature-flagged) |
+| FastAPI app | REST API (`/api/v1/`) + SSE streaming (`/stream`) + static Web UI mount (`/ui`) |
 | `TelegramConnector` | Long-polling Telegram bot → `SessionManager` bridge |
 | `WebEXConnector` | WebEx webhook / RabbitMQ → `SessionManager` bridge |
 

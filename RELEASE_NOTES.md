@@ -1,5 +1,59 @@
 # Release Notes — Wee-Orchestrator
 
+## v2.1.0 — 2026-02-22
+
+### SSE Streaming for Web UI Chat
+
+AI responses in the Web UI now stream in real-time rather than waiting for the full response before displaying anything.
+
+**Backend (`agent_manager.py`):**
+- `SessionManager._stream_queues` — per-session `(asyncio.Queue, event_loop)` registry
+- `SessionManager._register_stream()` / `_unregister_stream()` — lifecycle helpers
+- `_execute_subprocess_with_tracking()` now has a **dual path**:
+  - *Streaming path* (queue registered): reads stdout line-by-line and pushes each line to the asyncio queue via `loop.call_soon_threadsafe()`; stderr drained in a daemon thread; `('done', '')` sentinel pushed on exit
+  - *Blocking path* (no queue): original `communicate()` behaviour — **zero change** for Telegram, WebEx, N8N, and CLI callers
+- New `POST /api/v1/sessions/{id}/stream` endpoint (`text/event-stream`):
+  - Emits `start` immediately so the browser can create the live bubble
+  - Streams `chunk` events as stdout arrives
+  - Emits `done` with the final metadata-stripped response and session metadata
+  - Sends `: keepalive` SSE comments every second to prevent proxy/browser timeouts
+  - Slash commands and `!bash` commands skip the queue and emit `start` → `done` directly
+  - `StreamingResponse` with `X-Accel-Buffering: no` header for nginx compatibility
+
+**Frontend (`webui/dist/app.js`):**
+- `sendMessage()` delegates to `sendMessageStreaming()` instead of `apiRequest()`
+- `sendMessageStreaming()`: fetch + `ReadableStream` SSE parser; frame splitting on `\n\n`
+- `createStreamingBubble()`: inserts placeholder assistant bubble immediately on `start`
+- On `chunk`: appends raw text to bubble (`.streaming` class shows blinking cursor)
+- On `done`: calls `applyMarkdownToBubble()` to replace raw text with rendered markdown + syntax highlighting; `.streaming` class removed
+- `applyMarkdownToBubble()`: shared helper using `marked.parse()` + `hljs.highlightElement()`
+
+**Styles (`webui/dist/app.css`):**
+- `.message-bubble.streaming` — `white-space: pre-wrap` during streaming
+- `.message-bubble.streaming::after` — blinking `▋` cursor via `stream-cursor` `@keyframes`
+
+---
+
+### `SCHEDULER_ENABLED` Feature Flag
+
+The Task Scheduler can now be toggled on/off via environment variable without code changes.
+
+**Backend (`agent_manager.py`):**
+- `SCHEDULER_ENABLED = os.environ.get("SCHEDULER_ENABLED", "true")` — accepts `false`, `0`, `no`
+- New public `GET /api/v1/config` endpoint — returns `{"scheduler_enabled": true|false}`; no auth required; used by the WebUI at boot
+- All `/api/v1/scheduler/*` routes wrapped in `if SCHEDULER_ENABLED:` — when disabled, the routes are never registered (clean 404, no dead code paths)
+
+**Frontend (`webui/dist/app.js`):**
+- Config fetched at **boot time** via `fetch('/api/v1/config')` inside `DOMContentLoaded`, *before* auth is checked — `STATE.schedulerEnabled` is set from the response
+- `showAppView()` applies visibility from `STATE.schedulerEnabled` — the Scheduler tab is hidden before the app is ever displayed; it never flashes visible then hides
+- Graceful fallback: if the config fetch fails, `schedulerEnabled` defaults to `true` (show everything)
+
+**`.env.example`:** documents `SCHEDULER_ENABLED=true` default.
+
+**Dev environment:** `SCHEDULER_ENABLED=false` set in `/opt/n8n-copilot-shim-dev/.env`.
+
+---
+
 ## v2.0.0 — 2026-02-21
 
 ### Highlights
