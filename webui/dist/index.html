@@ -94,7 +94,10 @@
           <span class="queue-label">Queued</span>
           <span id="queue-count" class="queue-count">0</span>
         </div>
-        <button id="btn-toggle-queue" class="queue-toggle-btn" title="Collapse queue">‹</button>
+        <div class="queue-header-buttons">
+          <button id="btn-pause-queue" class="queue-pause-btn" title="Pause auto-submit">⏸</button>
+          <button id="btn-toggle-queue" class="queue-toggle-btn" title="Collapse queue">‹</button>
+        </div>
       </div>
       
       <!-- Queue Items List -->
@@ -104,7 +107,7 @@
       
       <!-- Queue Footer -->
       <div class="queue-footer">
-        <small>Requests will auto-submit when current message completes</small>
+        <small id="queue-status-msg">Requests will auto-submit when current message completes</small>
       </div>
     </aside>
 
