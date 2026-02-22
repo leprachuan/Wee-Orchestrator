@@ -3516,17 +3516,26 @@ def _send_pairing_code(channel: str, identity: str, code: str) -> None:
                 f"Your pairing code is: {code}\nIt expires in 5 minutes.",
             )
         elif channel == "webex":
-            from webex_connector import WebEXConnector
-
             config_path = os.path.join(script_dir, "webex_config.json")
             with open(config_path) as f:
                 cfg = json.load(f)
-            token = cfg.get("bot_token") or os.getenv("WEBEX_BOT_TOKEN", "")
-            connector = WebEXConnector(token, config_file=config_path)
-            connector.send_message(
-                identity,
-                f"Your pairing code is: {code}\nIt expires in 5 minutes.",
+            token = cfg.get("bot_token") or cfg.get("token") or os.getenv("WEBEX_BOT_TOKEN", "")
+            msg = f"Your pairing code is: **{code}**\nIt expires in 5 minutes."
+            # If identity looks like an email, use toPersonEmail; otherwise treat as roomId
+            import re as _re
+            if _re.match(r"[^@]+@[^@]+\.[^@]+", identity):
+                payload = {"toPersonEmail": identity, "text": msg, "markdown": msg}
+            else:
+                payload = {"roomId": identity, "text": msg, "markdown": msg}
+            import requests as _req
+            resp = _req.post(
+                "https://webexapis.com/v1/messages",
+                headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+                json=payload,
+                timeout=10,
             )
+            if resp.status_code != 200:
+                print(f"[API] WebEX send failed ({resp.status_code}): {resp.text[:200]}", file=sys.stderr)
     except Exception as exc:  # noqa: BLE001
         print(f"[API] Warning: could not send pairing code via {channel}: {exc}")
 
