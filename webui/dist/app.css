@@ -1910,3 +1910,17 @@ html, body {
   background: linear-gradient(135deg, #ff7a4a 0%, #ff9a57 100%);
   box-shadow: 0 6px 16px rgba(255, 107, 53, 0.5);
 }
+
+/* DEV Environment: Orange Shamrocks */
+.sidebar-logo,
+.auth-logo,
+.empty-icon {
+  filter: hue-rotate(-30deg) saturate(1.5) brightness(1.1);
+  transition: filter 0.3s ease;
+}
+
+.sidebar-logo:hover,
+.auth-logo:hover,
+.empty-icon:hover {
+  filter: hue-rotate(-30deg) saturate(1.7) brightness(1.2);
+}
