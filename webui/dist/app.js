@@ -796,6 +796,11 @@ function toggleQueuePanel() {
 function toggleQueuePause() {
   STATE.queuePaused = !STATE.queuePaused;
   renderQueuePanel();
+  
+  // If resuming and not currently processing, start processing queued items
+  if (!STATE.queuePaused && !STATE.isProcessing && STATE.requestQueue.length > 0) {
+    processNextQueue();
+  }
 }
 
 // ─── Messaging ────────────────────────────────────────────────────────────────
