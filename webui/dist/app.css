@@ -2064,8 +2064,9 @@ html, body {
 .request-queue-panel {
   display: flex;
   flex-direction: column;
-  background: rgba(20, 25, 35, 0.95);
-  border-left: 1px solid rgba(255, 255, 255, 0.1);
+  background: var(--glass-bg);
+  backdrop-filter: var(--glass-blur);
+  border-left: 1px solid var(--glass-border);
   transition: all 0.3s ease;
   z-index: 40;
 }
@@ -2077,7 +2078,7 @@ html, body {
     order: 10;
     width: 300px;
     flex-shrink: 0;
-    border-left: 1px solid rgba(255, 255, 255, 0.1);
+    border-left: 1px solid var(--glass-border);
     border-right: none;
     transition: width 0.3s ease;
   }
@@ -2110,7 +2111,7 @@ html, body {
     left: 0;
     right: 0;
     max-height: 70vh;
-    border-top: 1px solid rgba(255, 255, 255, 0.1);
+    border-top: 1px solid var(--glass-border);
     border-right: none;
     transform: translateY(100%);
     border-radius: 12px 12px 0 0;
@@ -2136,7 +2137,7 @@ html, body {
   justify-content: space-between;
   align-items: center;
   padding: 12px 16px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+  border-bottom: 1px solid var(--glass-border);
   cursor: grab;
   user-select: none;
 }
@@ -2150,7 +2151,7 @@ html, body {
   align-items: center;
   gap: 8px;
   font-weight: 600;
-  color: #fff;
+  color: var(--text-primary);
   font-size: 14px;
 }
 
@@ -2177,7 +2178,7 @@ html, body {
 .queue-toggle-btn {
   background: none;
   border: none;
-  color: #aaa;
+  color: var(--text-secondary);
   font-size: 18px;
   cursor: pointer;
   padding: 4px 8px;
@@ -2185,7 +2186,7 @@ html, body {
 }
 
 .queue-toggle-btn:hover {
-  color: #fff;
+  color: var(--text-primary);
 }
 
 .queue-header-buttons {
@@ -2197,17 +2198,17 @@ html, body {
 .queue-pause-btn {
   background: none;
   border: none;
-  color: #aaa;
+  color: var(--text-secondary);
   font-size: 16px;
   cursor: pointer;
   padding: 6px 8px;
-  transition: color 0.2s;
+  transition: all 0.2s;
   border-radius: 4px;
 }
 
 .queue-pause-btn:hover {
-  color: #667eea;
-  background: rgba(102, 126, 234, 0.1);
+  color: var(--accent);
+  background: rgba(79, 140, 255, 0.1);
 }
 
 /* Queue Items List */
@@ -2222,7 +2223,7 @@ html, body {
 
 .queue-empty {
   text-align: center;
-  color: #666;
+  color: var(--text-muted);
   font-size: 13px;
   padding: 24px 16px;
   margin: 0;
@@ -2230,8 +2231,8 @@ html, body {
 
 /* Queue Item */
 .queue-item {
-  background: rgba(255, 255, 255, 0.05);
-  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--glass-border);
   border-radius: 8px;
   padding: 10px;
   transition: all 0.2s;
@@ -2240,7 +2241,7 @@ html, body {
 
 .queue-item:hover {
   background: rgba(255, 255, 255, 0.08);
-  border-color: rgba(255, 255, 255, 0.2);
+  border-color: var(--glass-border);
 }
 
 .queue-item-header {
@@ -2249,12 +2250,12 @@ html, body {
   align-items: center;
   margin-bottom: 6px;
   font-size: 12px;
-  color: #999;
+  color: var(--text-secondary);
 }
 
 .queue-item-number {
-  background: rgba(102, 126, 234, 0.2);
-  color: #667eea;
+  background: rgba(79, 140, 255, 0.15);
+  color: var(--accent);
   padding: 2px 6px;
   border-radius: 4px;
   font-weight: 600;
@@ -2263,11 +2264,11 @@ html, body {
 
 .queue-item-time {
   font-size: 11px;
-  color: #666;
+  color: var(--text-muted);
 }
 
 .queue-item-preview {
-  color: #ddd;
+  color: var(--text-secondary);
   font-size: 13px;
   margin-bottom: 8px;
   line-height: 1.3;
@@ -2287,8 +2288,8 @@ html, body {
 .queue-btn-edit,
 .queue-btn-delete {
   background: none;
-  border: 1px solid rgba(255, 255, 255, 0.2);
-  color: #aaa;
+  border: 1px solid var(--glass-border);
+  color: var(--text-secondary);
   padding: 4px 10px;
   border-radius: 4px;
   font-size: 12px;
@@ -2297,23 +2298,23 @@ html, body {
 }
 
 .queue-btn-edit {
-  border-color: rgba(102, 126, 234, 0.3);
-  color: #667eea;
+  border-color: rgba(79, 140, 255, 0.3);
+  color: var(--accent);
 }
 
 .queue-btn-edit:hover {
-  background: rgba(102, 126, 234, 0.2);
-  border-color: #667eea;
+  background: rgba(79, 140, 255, 0.1);
+  border-color: var(--accent);
 }
 
 .queue-btn-delete {
-  border-color: rgba(245, 87, 108, 0.3);
-  color: #f5576c;
+  border-color: rgba(255, 95, 109, 0.3);
+  color: var(--danger);
 }
 
 .queue-btn-delete:hover {
-  background: rgba(245, 87, 108, 0.2);
-  border-color: #f5576c;
+  background: rgba(255, 95, 109, 0.1);
+  border-color: var(--danger);
 }
 
 /* Status Indicators */
@@ -2359,8 +2360,8 @@ html, body {
 /* Queue Footer */
 .queue-footer {
   padding: 10px 16px;
-  border-top: 1px solid rgba(255, 255, 255, 0.05);
-  color: #666;
+  border-top: 1px solid var(--glass-border);
+  color: var(--text-secondary);
   font-size: 12px;
   text-align: center;
 }
