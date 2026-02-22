@@ -584,6 +584,68 @@ html, body {
   border: 1px solid var(--glass-border);
 }
 
+/* ---------- Markdown Table Styling ---------- */
+.message-bubble table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 12px 0;
+  font-size: 13px;
+  background: rgba(255,255,255,0.02);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-xs);
+  overflow: hidden;
+}
+
+.message-bubble table thead {
+  background: rgba(255,255,255,0.08);
+  border-bottom: 2px solid var(--glass-border);
+}
+
+.message-bubble table th,
+.message-bubble table td {
+  padding: 8px 12px;
+  text-align: left;
+  border-right: 1px solid var(--glass-border);
+  word-break: break-word;
+}
+
+.message-bubble table th:last-child,
+.message-bubble table td:last-child {
+  border-right: none;
+}
+
+.message-bubble table tbody tr {
+  border-bottom: 1px solid rgba(255,255,255,0.06);
+  transition: background var(--transition);
+}
+
+.message-bubble table tbody tr:hover {
+  background: rgba(255,255,255,0.04);
+}
+
+.message-bubble table tbody tr:last-child {
+  border-bottom: none;
+}
+
+/* ---------- Streaming bubble cursor ---------- */
+.message-bubble.streaming {
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.message-bubble.streaming::after {
+  content: '▋';
+  display: inline-block;
+  animation: stream-cursor 0.8s step-end infinite;
+  color: var(--accent);
+  margin-left: 1px;
+}
+
+@keyframes stream-cursor {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0; }
+}
+
 /* ---------- Typing Indicator ---------- */
 .typing-indicator {
   padding: 0 20px 8px;
@@ -1302,4 +1364,519 @@ html, body {
 /* Responsive: collapse detail on narrow viewports */
 @media (max-width: 700px) {
   .sched-detail { width: 100%; position: absolute; inset: 0; z-index: 20; }
+}
+
+/* ============================================
+   RESPONSIVE DESIGN — MOBILE OPTIMIZATION
+   ============================================ */
+
+/* Tablet & Small Devices (max-width: 1024px) */
+@media (max-width: 1024px) {
+  :root {
+    --sidebar-width: 240px;
+    --header-height: 48px;
+    --input-height: 64px;
+    --radius: 12px;
+    --radius-sm: 8px;
+  }
+
+  .sidebar-title { font-size: 16px; }
+  .new-chat-btn { font-size: 12px; padding: 8px 12px; }
+  .session-title { font-size: 12px; }
+  .session-preview { font-size: 10px; }
+
+  .messages-container { padding: 16px 12px; gap: 12px; }
+  .message-row { max-width: 700px; }
+
+  .chat-header { padding: 0 12px; }
+  .session-meta { gap: 3px; }
+  .meta-pill { padding: 2px 7px; font-size: 10px; }
+
+  .input-bar { padding: 10px 12px; }
+}
+
+/* Mobile Devices (max-width: 768px) */
+@media (max-width: 768px) {
+  :root {
+    --sidebar-width: 100%;
+    --header-height: 44px;
+    --input-height: 60px;
+    --radius: 12px;
+    --radius-sm: 8px;
+    font-size: 14px;
+  }
+
+  html, body { font-size: 14px; }
+
+  /* Hide large blobs on mobile */
+  .blob {
+    filter: blur(60px);
+    opacity: 0.25;
+  }
+  .blob-1 { width: 400px; height: 400px; }
+  .blob-2 { width: 300px; height: 300px; }
+  .blob-3 { width: 250px; height: 250px; }
+
+  /* Full-width sidebar on mobile */
+  .sidebar {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    width: 100%;
+    border-right: none;
+    border-bottom: 1px solid var(--glass-border);
+    z-index: 100;
+    transform: translateX(-100%);
+    transition: transform 0.25s ease;
+  }
+
+  .sidebar.open {
+    transform: translateX(0);
+  }
+
+  .sidebar.collapsed {
+    width: 100%;
+    transform: translateX(-100%);
+  }
+
+  .sidebar-header {
+    padding: 12px 14px;
+    gap: 8px;
+  }
+
+  .sidebar-logo { font-size: 20px; }
+  .sidebar-title { font-size: 16px; font-weight: 600; }
+  .sidebar-toggle-btn { font-size: 24px; }
+
+  .new-chat-btn {
+    margin: 8px 10px 6px;
+    font-size: 12px;
+    padding: 8px 12px;
+  }
+
+  .sessions-list {
+    padding: 3px 6px;
+    gap: 2px;
+  }
+
+  .session-item {
+    padding: 8px 10px;
+    font-size: 13px;
+  }
+
+  .session-title { font-size: 12px; margin-bottom: 2px; }
+  .session-preview { font-size: 10px; }
+
+  .sidebar-footer {
+    padding: 10px 12px;
+    font-size: 12px;
+  }
+
+  .sidebar-user { font-size: 11px; }
+
+  /* Main panel adjustments */
+  .main-panel {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 1;
+  }
+
+  /* Always show sidebar toggle on mobile */
+  .sidebar-open-btn { display: flex !important; }
+  .sidebar-toggle-btn { display: flex; }
+
+  /* Header adjustments */
+  .chat-header {
+    height: var(--header-height);
+    padding: 0 10px;
+    gap: 8px;
+  }
+
+  .chat-header-info { gap: 6px; }
+  .chat-session-label { font-size: 10px; }
+  .chat-session-id { font-size: 11px; }
+
+  /* Messages spacing */
+  .messages-container {
+    padding: 12px 10px;
+    gap: 10px;
+  }
+
+  .message-row {
+    max-width: calc(100% - 20px);
+    gap: 8px;
+  }
+
+  .message-avatar {
+    width: 28px;
+    height: 28px;
+    font-size: 14px;
+  }
+
+  .message-bubble {
+    max-width: calc(100vw - 80px);
+    padding: 10px 12px;
+    font-size: 13px;
+    line-height: 1.5;
+    word-wrap: break-word;
+    overflow-wrap: break-word;
+  }
+
+  .message-bubble code {
+    font-size: 12px;
+    padding: 2px 5px;
+  }
+
+  .message-bubble pre {
+    padding: 10px;
+    font-size: 11px;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .message-bubble table {
+    font-size: 12px;
+    width: 100%;
+    max-width: calc(100vw - 100px);
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    display: block;
+  }
+
+  .message-bubble table th,
+  .message-bubble table td {
+    padding: 6px 8px;
+    font-size: 11px;
+  }
+
+  /* Input area */
+  .input-area {
+    padding: 0;
+  }
+
+  .input-bar {
+    padding: 8px 10px;
+    gap: 6px;
+    height: auto;
+    min-height: var(--input-height);
+  }
+
+  .file-btn {
+    font-size: 16px;
+    width: 36px;
+    height: 36px;
+    padding: 0;
+    flex-shrink: 0;
+  }
+
+  .message-textarea {
+    font-size: 14px;
+    padding: 8px 10px;
+    min-height: 36px;
+    max-height: 120px;
+  }
+
+  .send-btn {
+    width: 36px;
+    height: 36px;
+    padding: 0;
+    flex-shrink: 0;
+    font-size: 16px;
+  }
+
+  .input-mirror {
+    padding: 8px 10px;
+    font-size: 14px;
+  }
+
+  /* File preview strip */
+  .file-preview-strip {
+    padding: 6px 10px 0;
+    gap: 6px;
+  }
+
+  .file-chip {
+    font-size: 11px;
+    padding: 3px 8px;
+    gap: 4px;
+  }
+
+  /* Command dropdown on mobile */
+  .cmd-dropdown {
+    max-height: 200px;
+    border-radius: 12px 12px 0 0;
+    bottom: var(--input-height);
+  }
+
+  .cmd-row {
+    grid-template-columns: 100px 1fr;
+    padding: 8px 12px;
+    gap: 0 8px;
+  }
+
+  .cmd-label { font-size: 12px; }
+  .cmd-desc { font-size: 11px; }
+  .cmd-hint { font-size: 10px; }
+
+  /* Auth card mobile */
+  .auth-card {
+    width: calc(100vw - 20px);
+    padding: 30px 20px;
+  }
+
+  .auth-logo { font-size: 40px; margin-bottom: 6px; }
+  .auth-title { font-size: 22px; }
+  .auth-subtitle { font-size: 13px; margin-bottom: 20px; }
+
+  .form-group { margin-bottom: 12px; }
+  .form-group label { font-size: 12px; margin-bottom: 5px; }
+
+  .glass-input {
+    font-size: 14px;
+    padding: 10px 12px;
+  }
+
+  .glass-select {
+    background-position: right 10px center;
+    padding-right: 32px;
+  }
+
+  .btn {
+    padding: 10px 16px;
+    font-size: 13px;
+    min-height: 44px;
+  }
+
+  .btn-full { width: 100%; }
+
+  .code-input {
+    font-size: 20px;
+    letter-spacing: 0.2em;
+  }
+
+  /* Empty state */
+  .empty-icon { font-size: 40px; }
+  .empty-state p { font-size: 13px; max-width: 260px; }
+
+  /* Scheduler panel mobile */
+  .sched-header {
+    flex-direction: column;
+    align-items: flex-start;
+    padding: 10px 12px;
+    gap: 8px;
+  }
+
+  .sched-header-left {
+    width: 100%;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .sched-title { font-size: 16px; }
+
+  .sched-header-actions {
+    width: 100%;
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+  }
+
+  .btn-sm {
+    padding: 8px 12px;
+    font-size: 12px;
+    min-height: 36px;
+  }
+
+  .sched-body {
+    flex-direction: column;
+  }
+
+  .sched-jobs-list {
+    width: 100%;
+    max-height: 50vh;
+    overflow-y: auto;
+  }
+
+  .sched-job-card {
+    margin: 8px;
+  }
+
+  .sched-detail {
+    width: 100%;
+    position: absolute;
+    inset: 0;
+    z-index: 20;
+    border-radius: 0;
+  }
+
+  /* Session meta pills wrapping */
+  .session-meta {
+    gap: 4px;
+    flex-wrap: wrap;
+  }
+
+  .meta-pill {
+    padding: 2px 6px;
+    font-size: 9px;
+  }
+
+  /* Scrollbar improvements for touch devices */
+  .messages-container::-webkit-scrollbar {
+    width: 6px;
+  }
+
+  .sessions-list::-webkit-scrollbar {
+    width: 4px;
+  }
+}
+
+/* Small Phones (max-width: 480px) */
+@media (max-width: 480px) {
+  :root {
+    font-size: 13px;
+    --header-height: 40px;
+    --input-height: 56px;
+  }
+
+  html, body { font-size: 13px; }
+
+  .sidebar-header { padding: 10px 12px; }
+  .sidebar-logo { font-size: 18px; }
+  .sidebar-title { font-size: 14px; }
+
+  .new-chat-btn { margin: 6px 8px; font-size: 11px; padding: 6px 10px; }
+
+  .sessions-list { padding: 2px 5px; }
+  .session-item { padding: 6px 8px; font-size: 12px; }
+  .session-title { font-size: 11px; }
+
+  .sidebar-footer { padding: 8px 10px; }
+
+  .chat-header {
+    padding: 0 8px;
+    height: var(--header-height);
+  }
+
+  .chat-session-label { font-size: 9px; }
+  .chat-session-id { font-size: 10px; }
+
+  .messages-container {
+    padding: 10px 8px;
+    gap: 8px;
+  }
+
+  .message-avatar {
+    width: 24px;
+    height: 24px;
+    font-size: 12px;
+  }
+
+  .message-bubble {
+    max-width: calc(100vw - 60px);
+    padding: 8px 10px;
+    font-size: 12px;
+    border-radius: 10px;
+  }
+
+  .message-bubble code { font-size: 11px; }
+  .message-bubble pre { font-size: 10px; padding: 8px; }
+  .message-bubble table { font-size: 11px; }
+  .message-bubble table th,
+  .message-bubble table td {
+    padding: 4px 6px;
+    font-size: 10px;
+  }
+
+  .input-bar {
+    padding: 6px 8px;
+    gap: 4px;
+  }
+
+  .file-btn {
+    width: 32px;
+    height: 32px;
+    font-size: 14px;
+  }
+
+  .message-textarea {
+    font-size: 13px;
+    padding: 6px 8px;
+    min-height: 32px;
+  }
+
+  .send-btn {
+    width: 32px;
+    height: 32px;
+    font-size: 14px;
+  }
+
+  .input-mirror {
+    padding: 6px 8px;
+    font-size: 13px;
+  }
+
+  .file-preview-strip { padding: 4px 8px 0; }
+  .file-chip { font-size: 10px; padding: 2px 6px; }
+
+  .auth-card {
+    width: calc(100vw - 16px);
+    padding: 24px 16px;
+  }
+
+  .auth-logo { font-size: 36px; margin-bottom: 4px; }
+  .auth-title { font-size: 20px; }
+  .auth-subtitle { font-size: 12px; margin-bottom: 16px; }
+
+  .form-group { margin-bottom: 10px; }
+  .glass-input { font-size: 13px; padding: 9px 10px; }
+  .btn { min-height: 40px; padding: 8px 14px; font-size: 12px; }
+
+  .code-input { font-size: 18px; letter-spacing: 0.15em; }
+
+  .empty-icon { font-size: 36px; }
+  .empty-state p { font-size: 12px; max-width: 240px; }
+
+  .sched-title { font-size: 14px; }
+  .btn-sm { padding: 6px 10px; font-size: 11px; min-height: 32px; }
+
+  .meta-pill { padding: 1px 5px; font-size: 8px; }
+
+  /* Ensure touch targets are at least 44x44px */
+  .btn { min-height: 44px; }
+  .glass-input { min-height: 44px; }
+  .file-btn, .send-btn { min-width: 44px; min-height: 44px; }
+  .sidebar-toggle-btn, .sidebar-open-btn { min-width: 44px; min-height: 44px; }
+}
+
+/* Landscape Mode Adjustments */
+@media (max-height: 600px) {
+  :root {
+    --header-height: 40px;
+    --input-height: 52px;
+  }
+
+  .messages-container { padding: 8px 10px; }
+  .message-bubble { padding: 8px 10px; }
+
+  .input-bar { padding: 6px 10px; }
+  .message-textarea { min-height: 28px; max-height: 80px; }
+}
+
+/* Ultra-wide displays (desktop optimization) */
+@media (min-width: 1400px) {
+  :root {
+    --sidebar-width: 320px;
+  }
+
+  .message-row { max-width: 900px; }
+  .messages-container { padding: 32px 28px; }
+  .input-bar { padding: 14px 20px; }
+
+  .auth-card { width: 480px; padding: 48px; }
 }

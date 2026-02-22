@@ -144,7 +144,9 @@ sequenceDiagram
 
 ---
 
-## Request Flow — Web UI
+## Request Flow — Web UI (Streaming)
+
+Chat messages from the Web UI use the SSE streaming endpoint. The browser displays a live bubble with a blinking cursor while the AI CLI is running.
 
 ```mermaid
 sequenceDiagram
@@ -154,6 +156,10 @@ sequenceDiagram
     participant SM as SessionManager
     participant HM as HistoryManager
     participant CLI as AI CLI Runtime
+
+    B->>FA: GET /api/v1/config  (no auth)
+    FA-->>B: {"scheduler_enabled": true|false}
+    Note over B: Hide scheduler tab if disabled
 
     B->>FA: POST /api/v1/auth/request-pairing\n{identity, channel}
     FA->>AM: generate_pairing_code()
@@ -166,18 +172,29 @@ sequenceDiagram
     B->>FA: POST /api/v1/sessions\nAuthorization: Bearer <token>
     FA-->>B: 200 {session_id}
 
-    B->>FA: POST /api/v1/sessions/{id}/execute\n{query}
-    FA->>SM: execute(query, session_id)
-    SM->>CLI: subprocess
-    CLI-->>SM: response
-    SM-->>FA: cleaned text
-    FA->>HM: append_message()
-    FA-->>B: 200 {response}
+    B->>FA: POST /api/v1/sessions/{id}/stream\n{query}  (text/event-stream)
+    FA->>SM: _register_stream(session_id, queue, loop)
+    FA-->>B: event: start  →  browser creates live bubble
 
-    B->>FA: GET /api/v1/sessions/{id}/history
-    FA->>HM: get_session_messages()
-    HM-->>FA: messages[]
-    FA-->>B: 200 {messages}
+    FA->>SM: execute(query, session_id)  [thread]
+    SM->>CLI: subprocess (Popen)
+
+    loop stdout lines
+        CLI-->>SM: line
+        SM->>SM: queue.put_nowait(("chunk", line))
+        FA-->>B: event: chunk {"text": line}
+        Note over B: Appends text to bubble
+    end
+
+    Note over FA,B: keepalive comment every 1s if no chunks
+
+    CLI-->>SM: exit
+    SM->>SM: queue.put_nowait(("done", ""))
+    SM-->>FA: full stripped response
+    FA->>SM: _unregister_stream(session_id)
+    FA->>HM: append_message() x2 (user + assistant)
+    FA-->>B: event: done {"response":"…","runtime":"…","model":"…"}
+    Note over B: Replace raw text with rendered markdown
 ```
 
 ---
@@ -245,6 +262,7 @@ The central execution engine. Responsible for:
 - Maintaining session state files (`n8n-session-map.json`)
 - Parsing and executing slash commands (`/agent`, `/runtime`, `/model`, `/session`, `/status`, `/cancel`, `/mode`)
 - Dispatching AI prompts to the selected runtime subprocess
+- **Streaming**: maintaining `_stream_queues` (per-session `asyncio.Queue` registry); pushing stdout chunks to the SSE endpoint in real-time via `loop.call_soon_threadsafe()`
 - Tracking running queries (PID, runtime, agent, output snippet)
 - Stripping CLI metadata (thinking tags, token counts, banners) from output
 - Building per-agent context prompts (skills, repo info, AGENTS.md)
@@ -255,6 +273,8 @@ The central execution engine. Responsible for:
 |--------|---------|
 | `execute()` | Entry point — parse slash command or dispatch to AI |
 | `run_copilot()` / `run_claude()` / `run_gemini()` / `run_opencode()` / `run_codex()` | Runtime-specific subprocess wrappers |
+| `_execute_subprocess_with_tracking()` | Dual-path: streaming (queue-based line-by-line) or blocking (`communicate()`) |
+| `_register_stream()` / `_unregister_stream()` | Register/remove per-session SSE queue |
 | `set_agent()` | Switch agent and update session state |
 | `update_session_field()` | Write a single field (model, runtime, mode…) to the session map |
 | `strip_metadata()` | Clean raw CLI stdout |
@@ -334,16 +354,18 @@ Factory function that builds the ASGI application. Endpoints grouped by prefix:
 
 | Prefix | Purpose |
 |--------|---------|
+| `/api/v1/health` | Health check |
+| `/api/v1/config` | **Public** feature-flag endpoint (no auth); returns `{scheduler_enabled}` |
 | `/api/v1/auth/` | Pairing code request and verification |
-| `/api/v1/sessions/` | Session create, execute, status, delete |
+| `/api/v1/sessions/` | Session create, execute (blocking), status, delete |
+| `/api/v1/sessions/{id}/stream` | **SSE streaming** execute — WebUI chat path |
 | `/api/v1/history/` | Per-user session history |
 | `/api/v1/sessions/{id}/upload` | File uploads |
 | `/api/v1/uploads/` | Serve uploaded files |
 | `/api/v1/search/images` | DuckDuckGo image proxy |
-| `/api/v1/scheduler/` | Task scheduler CRUD and results |
+| `/api/v1/scheduler/` | Task scheduler CRUD and results (only registered when `SCHEDULER_ENABLED=true`) |
 | `/ai-media/` | AI-fetched images (static, no auth) |
 | `/ui` | Web UI SPA (static, no auth) |
-| `/health` | Health check |
 
 ---
 
@@ -416,3 +438,41 @@ Key variables (see `.env.example` for the full list):
 | `SCHEDULER_RESULTS_DIR` | `/opt/.task-scheduler/results/` | Scheduler results directory |
 | `SCHEDULER_ALLOWED_TELEGRAM` | `vtflip` | Comma-separated Telegram usernames allowed to manage scheduler |
 | `SCHEDULER_ALLOWED_WEBEX` | `flipkey@cisco.com` | Comma-separated WebEx emails allowed to manage scheduler |
+| `SCHEDULER_ENABLED` | `true` | Set to `false` to disable all scheduler routes and hide the Scheduler tab in the Web UI |
+
+---
+
+## Feature Flags
+
+Feature flags are read from the environment at startup and exposed to the browser via the public `GET /api/v1/config` endpoint. Because the endpoint requires no authentication, the browser can read it before the login screen appears.
+
+| Flag | Env Var | Default | Effect |
+|------|---------|---------|--------|
+| Scheduler | `SCHEDULER_ENABLED` | `true` | When `false`: all `/api/v1/scheduler/*` routes are not registered (404); `GET /api/v1/config` returns `{"scheduler_enabled": false}`; browser hides the Scheduler tab before the app view is shown |
+
+### Config Boot Flow
+
+```mermaid
+sequenceDiagram
+    participant B as Browser
+    participant FA as FastAPI
+
+    Note over B: DOMContentLoaded fires
+    B->>FA: GET /api/v1/config  (no auth, no token)
+    FA-->>B: {"scheduler_enabled": false}
+    Note over B: STATE.schedulerEnabled = false
+    B->>B: loadAuth() → showAppView()
+    Note over B: showAppView() hides Scheduler tab\nbefore anything is visible to user
+```
+
+### Adding a New Feature Flag
+
+1. Add the env-var read in `agent_manager.py` near the top of `create_api_app()`:
+   ```python
+   MY_FLAG = os.environ.get("MY_FLAG", "true").lower() not in ("false", "0", "no")
+   ```
+2. Add it to the `GET /api/v1/config` response dict.
+3. In `app.js`, read `config.my_flag` inside the config fetch in `DOMContentLoaded` and store in `STATE`.
+4. Apply visibility in `showAppView()` (runs before UI is shown).
+5. Document in `.env.example` and this file.
+

@@ -480,6 +480,10 @@ class SessionManager:
         # Load command timeout from environment
         self.command_timeout = get_command_timeout()
 
+        # Per-session streaming queues: session_id -> (asyncio.Queue, event_loop)
+        # Populated by the /stream API endpoint; read by _execute_subprocess_with_tracking.
+        self._stream_queues: Dict[str, tuple] = {}
+
     def _load_agents_config(self, config_file: Optional[str] = None) -> Dict:
         """Load agents configuration from JSON file"""
         if config_file is None:
@@ -2115,6 +2119,20 @@ User Request:
 {prompt}"""
         return context
 
+    # ------------------------------------------------------------------ streaming
+
+    def _register_stream(
+        self, session_id: str, queue, loop  # asyncio.Queue, asyncio.AbstractEventLoop
+    ) -> None:
+        """Register an asyncio queue for the /stream endpoint to receive chunks."""
+        self._stream_queues[session_id] = (queue, loop)
+
+    def _unregister_stream(self, session_id: str) -> None:
+        """Remove the streaming queue for a session."""
+        self._stream_queues.pop(session_id, None)
+
+    # ------------------------------------------------------------------
+
     def _execute_subprocess_with_tracking(
         self,
         cmd: list,
@@ -2125,16 +2143,21 @@ User Request:
         prompt: str,
         n8n_session_id: str,
     ) -> str:
-        """Execute a subprocess with PID tracking
+        """Execute a subprocess with PID tracking.
 
-        This method:
-        1. Starts the process with Popen to get the PID
-        2. Tracks the running query
-        3. Waits for completion with timeout
-        4. Cleans up tracking when done
+        When a streaming queue is registered for *n8n_session_id* (via
+        _register_stream), stdout chunks are pushed to the queue in real-time
+        so the /stream SSE endpoint can forward them to the browser.  A
+        ``('done', '')`` sentinel is pushed when the process exits.
+
+        Without a queue the behaviour is identical to the original
+        communicate()-based approach (blocking, full-output return).
         """
+        import threading as _threading
+
+        stream_info = self._stream_queues.get(n8n_session_id)
+
         try:
-            # Start process and get PID
             process = subprocess.Popen(
                 cmd,
                 stdout=subprocess.PIPE,
@@ -2143,33 +2166,67 @@ User Request:
                 cwd=cwd,
             )
 
-            # Track the running query
             self.track_running_query(
                 n8n_session_id, process.pid, runtime, agent, prompt
             )
 
-            # Wait for completion with timeout
-            try:
-                stdout, stderr = process.communicate(timeout=timeout)
-                output = stdout + (stderr if stderr else "")
+            if stream_info:
+                # ── Streaming path ──────────────────────────────────────────
+                # Read stdout line-by-line and push each line to the async
+                # queue so the SSE generator can forward it immediately.
+                # stderr is drained in a background thread to avoid blocking.
+                queue, loop = stream_info
+                stderr_buf: list = []
 
-                # Update with final output snippet
+                def _drain_stderr() -> None:
+                    try:
+                        stderr_buf.append(process.stderr.read())
+                    except Exception:
+                        pass
+
+                stderr_thread = _threading.Thread(target=_drain_stderr, daemon=True)
+                stderr_thread.start()
+
+                stdout_chunks: list = []
+                try:
+                    for line in process.stdout:
+                        stdout_chunks.append(line)
+                        loop.call_soon_threadsafe(queue.put_nowait, ("chunk", line))
+                except Exception:
+                    pass
+                finally:
+                    process.stdout.close()
+                    stderr_thread.join(timeout=5)
+                    process.wait()
+
+                output = "".join(stdout_chunks) + ("".join(stderr_buf) if stderr_buf else "")
                 self.update_query_output(n8n_session_id, output)
-
+                # Signal the SSE generator that the subprocess is finished
+                loop.call_soon_threadsafe(queue.put_nowait, ("done", ""))
                 return output
-            except subprocess.TimeoutExpired:
-                # Process timed out, kill it and wait for termination
-                process.kill()
-                process.wait()  # Wait for process to actually terminate
-                timeout_min = timeout / 60
-                return f"Error: Command timed out (exceeded {timeout}s / {timeout_min:.1f}min)"
-            finally:
-                # Always clear tracking when done (success or failure)
-                self.clear_running_query(n8n_session_id)
+
+            else:
+                # ── Original blocking path ───────────────────────────────────
+                try:
+                    stdout, stderr = process.communicate(timeout=timeout)
+                    output = stdout + (stderr if stderr else "")
+                    self.update_query_output(n8n_session_id, output)
+                    return output
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    process.wait()
+                    timeout_min = timeout / 60
+                    return f"Error: Command timed out (exceeded {timeout}s / {timeout_min:.1f}min)"
+                finally:
+                    self.clear_running_query(n8n_session_id)
 
         except Exception as e:
             self.clear_running_query(n8n_session_id)
             return f"Error: Failed to execute command: {e}"
+        finally:
+            # clear_running_query is idempotent; ensure it runs for streaming path too
+            if stream_info:
+                self.clear_running_query(n8n_session_id)
 
     def run_copilot(
         self,
@@ -3380,7 +3437,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
     from enum import Enum
 
     from fastapi import FastAPI, Header, HTTPException, Request, UploadFile, File
-    from fastapi.responses import JSONResponse, FileResponse
+    from fastapi.responses import JSONResponse, FileResponse, StreamingResponse
     from fastapi.staticfiles import StaticFiles
     from fastapi.middleware.cors import CORSMiddleware
     from pydantic import BaseModel, field_validator
@@ -3396,6 +3453,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
     PAIRING_CODE_TTL = int(os.environ.get("PAIRING_CODE_TTL", "300"))
     SESSION_TOKEN_TTL = int(os.environ.get("SESSION_TOKEN_TTL", "3600"))
     CONFIG_FILE = os.environ.get("AGENT_CONFIG_FILE")
+    SCHEDULER_ENABLED = os.environ.get("SCHEDULER_ENABLED", "true").strip().lower() not in ("false", "0", "no")
 
     # ---- shared instances ----
     auth_mgr = AuthManager(
@@ -3524,6 +3582,13 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             "version": "1.0.0",
         }
 
+    @app.get("/api/v1/config")
+    async def get_config():
+        """Public endpoint — returns feature flags for the WebUI."""
+        return {
+            "scheduler_enabled": SCHEDULER_ENABLED,
+        }
+
     @app.post("/api/v1/auth/request-pairing")
     async def request_pairing(body: PairingRequest, request: Request):
         client_ip = request.client.host if request.client else "unknown"
@@ -3637,6 +3702,128 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             "runtime": session_data.get("runtime"),
             "model": session_data.get("model"),
         }
+
+    @app.post("/api/v1/sessions/{session_id}/stream")
+    async def stream_session(session_id: str, body: ExecuteRequest, request: Request):
+        """SSE streaming endpoint — WebUI only.
+
+        Returns a ``text/event-stream`` response.  Events:
+
+        ``{"type":"start"}``            — emitted immediately so the browser can
+                                          create the streaming bubble.
+        ``{"type":"chunk","text":"…"}`` — one or more lines of raw stdout as they
+                                          arrive from the AI CLI subprocess.
+        ``{"type":"done","response":"…","runtime":"…","model":"…"}``
+                                        — final, metadata-stripped response.
+                                          The browser replaces the streaming
+                                          bubble with this fully-rendered text.
+        ``{"type":"error","message":"…"}`` — on failure.
+
+        Slash-commands (``/…``) and bash commands (``!…``) produce no subprocess
+        output; the ``start`` event is followed immediately by ``done``.
+        """
+        import json as _json
+
+        user = await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+
+        client_ip = request.client.host if request.client else "unknown"
+        if not rate_limiter.check(client_ip, "execute", max_requests=60, window=60):
+            raise HTTPException(status_code=429, detail="Rate limit exceeded")
+
+        existing = session_mgr.load_session_data(session_id)
+        if not existing:
+            raise HTTPException(status_code=404, detail="Session not found")
+
+        loop = asyncio.get_event_loop()
+        queue: asyncio.Queue = asyncio.Queue()
+
+        # Slash / bash commands don't spawn a subprocess, so no chunks will
+        # ever arrive on the queue.  Detect them early so we can skip the
+        # queue-draining loop and just await the future directly.
+        is_command = body.query.lstrip().startswith(("/", "!"))
+
+        async def generate():
+            # Register the queue so _execute_subprocess_with_tracking can push chunks
+            if not is_command:
+                session_mgr._register_stream(session_id, queue, loop)
+
+            # Tell the browser to create its streaming bubble right away
+            yield f"data: {_json.dumps({'type': 'start'})}\n\n"
+
+            # Run execute() in a thread — it may take a long time
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+                future = loop.run_in_executor(pool, session_mgr.execute, body.query, session_id)
+
+                if is_command:
+                    # No subprocess → just wait for the result, no chunks to stream
+                    try:
+                        result = await future
+                    except Exception as exc:
+                        result = f"Error: {exc}"
+                else:
+                    # Drain chunks from the queue until the subprocess sends the
+                    # 'done' sentinel, then await the (already-complete) future
+                    # for the final stripped response.
+                    try:
+                        while True:
+                            try:
+                                kind, data = await asyncio.wait_for(queue.get(), timeout=1.0)
+                            except asyncio.TimeoutError:
+                                # Send a keepalive comment every second so the
+                                # connection is not torn down by proxies/browsers
+                                yield ": keepalive\n\n"
+                                # If execute() finished early (e.g. an error before
+                                # the subprocess started) break out gracefully
+                                if future.done():
+                                    break
+                                continue
+
+                            if kind == "chunk":
+                                yield f"data: {_json.dumps({'type': 'chunk', 'text': data})}\n\n"
+                            elif kind == "done":
+                                break  # subprocess finished; final result in future
+                    except Exception as exc:
+                        yield f"data: {_json.dumps({'type': 'error', 'message': str(exc)})}\n\n"
+                        session_mgr._unregister_stream(session_id)
+                        return
+
+                    try:
+                        result = await future
+                    except Exception as exc:
+                        result = f"Error: {exc}"
+
+                    session_mgr._unregister_stream(session_id)
+
+            history_mgr.append_message(
+                user["channel"], user["identity"], session_id, "user", body.query
+            )
+            history_mgr.append_message(
+                user["channel"], user["identity"], session_id, "assistant", result
+            )
+
+            session_data = session_mgr.get_or_create_session_data(session_id)
+            done_payload = _json.dumps({
+                "type": "done",
+                "response": result,
+                "runtime": session_data.get("runtime"),
+                "model": session_data.get("model"),
+            })
+            yield f"data: {done_payload}\n\n"
+
+        return StreamingResponse(
+            generate(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "X-Accel-Buffering": "no",
+                "Connection": "keep-alive",
+            },
+        )
 
     @app.get("/api/v1/sessions/{session_id}/status")
     async def session_status(session_id: str, request: Request):
@@ -3759,185 +3946,186 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         return {"query": q, "results": results}
 
     # --- Task Scheduler ---
-    # Lazy-load TaskScheduler so the API starts even if the scheduler dirs don't exist yet.
-    _task_scheduler = None
-
-    def _get_scheduler():
-        nonlocal _task_scheduler
-        if _task_scheduler is None:
-            try:
-                import sys as _sys
-                _sched_path = str(Path(__file__).parent)
-                if _sched_path not in _sys.path:
-                    _sys.path.insert(0, _sched_path)
-                from task_scheduler import TaskScheduler
-                _task_scheduler = TaskScheduler()
-            except Exception as _e:
-                raise HTTPException(status_code=503, detail=f"Scheduler unavailable: {_e}")
-        return _task_scheduler
-
-    # ---- Scheduler authorization ----
-    # Override with comma-separated env vars to add more users without code changes.
-    _sched_allowed_telegram = {
-        u.strip().lower().lstrip("@")
-        for u in os.environ.get("SCHEDULER_ALLOWED_TELEGRAM", "vtflip").split(",")
-        if u.strip()
-    }
-    _sched_allowed_webex = {
-        u.strip().lower()
-        for u in os.environ.get("SCHEDULER_ALLOWED_WEBEX", "flipkey@cisco.com").split(",")
-        if u.strip()
-    }
-
-    async def _require_scheduler_auth(request: Request) -> dict:
-        """Authenticate AND verify the user is allowed to manage scheduled tasks.
-
-        Raises HTTP 403 if authenticated but not in the allowlist.
-        Returns the user dict on success.
-        """
-        user = await authenticate(
-            request,
-            authorization=request.headers.get("authorization"),
-            x_user_identity=request.headers.get("x-user-identity"),
-            x_auth_channel=request.headers.get("x-auth-channel"),
-        )
-
-        # Shared-key callers (internal/admin) are always allowed.
-        if user.get("auth_type") == "shared_key":
-            return user
-
-        channel = user.get("channel", "")
-        identity = user.get("identity", "")
-
-        if channel == "telegram":
-            # identity is a numeric chat_id; resolve to username for the allowlist check.
-            username = _get_telegram_username(identity) or ""
-            if username.lower() in _sched_allowed_telegram:
-                return user
-        elif channel == "webex":
-            if identity.lower() in _sched_allowed_webex:
-                return user
-
-        raise HTTPException(
-            status_code=403,
-            detail="You are not authorized to manage scheduled tasks.",
-        )
-
-    class ScheduleJobRequest(BaseModel):
-        name: str
-        schedule: str
-        agent: Optional[str] = None
-        runtime: Optional[str] = None
-        model: Optional[str] = None
-        mode: Optional[str] = None  # "yolo" or "restricted"
-        task: str = ""
-        notify: bool = False
-        recurring: bool = True
-
-    class UpdateJobRequest(BaseModel):
-        name: Optional[str] = None
-        schedule: Optional[str] = None
-        agent: Optional[str] = None
-        runtime: Optional[str] = None
-        model: Optional[str] = None
-        mode: Optional[str] = None  # "yolo" or "restricted"
-        task: Optional[str] = None
-        notify: Optional[bool] = None
-        recurring: Optional[bool] = None
-        enabled: Optional[bool] = None
-
-    @app.get("/api/v1/scheduler/status")
-    async def scheduler_status(request: Request):
-        await _require_scheduler_auth(request)
-        return _get_scheduler().doctor()
-
-    @app.get("/api/v1/scheduler/jobs")
-    async def list_scheduler_jobs(request: Request):
-        await _require_scheduler_auth(request)
-        return _get_scheduler().list_jobs()
-
-    @app.post("/api/v1/scheduler/jobs")
-    async def create_scheduler_job(body: ScheduleJobRequest, request: Request):
-        user = await _require_scheduler_auth(request)
-        # Resolve Telegram username for storage so the executor can display it
-        username = None
-        if user.get("channel") == "telegram":
-            username = _get_telegram_username(user["identity"])
-        created_by = {
-            "identity": user["identity"],
-            "channel": user["channel"],
-            "username": username,
+    if SCHEDULER_ENABLED:
+            # Lazy-load TaskScheduler so the API starts even if the scheduler dirs don't exist yet.
+        _task_scheduler = None
+    
+        def _get_scheduler():
+            nonlocal _task_scheduler
+            if _task_scheduler is None:
+                try:
+                    import sys as _sys
+                    _sched_path = str(Path(__file__).parent)
+                    if _sched_path not in _sys.path:
+                        _sys.path.insert(0, _sched_path)
+                    from task_scheduler import TaskScheduler
+                    _task_scheduler = TaskScheduler()
+                except Exception as _e:
+                    raise HTTPException(status_code=503, detail=f"Scheduler unavailable: {_e}")
+            return _task_scheduler
+    
+        # ---- Scheduler authorization ----
+        # Override with comma-separated env vars to add more users without code changes.
+        _sched_allowed_telegram = {
+            u.strip().lower().lstrip("@")
+            for u in os.environ.get("SCHEDULER_ALLOWED_TELEGRAM", "vtflip").split(",")
+            if u.strip()
         }
-        result = _get_scheduler().schedule_task(
-            name=body.name,
-            schedule=body.schedule,
-            agent=body.agent,
-            runtime=body.runtime,
-            model=body.model,
-            mode=body.mode,
-            task=body.task,
-            notify=body.notify,
-            recurring=body.recurring,
-            created_by=created_by,
-        )
-        if not result.get("success"):
-            raise HTTPException(status_code=400, detail=result.get("message", "Failed"))
-        return result
-
-    @app.get("/api/v1/scheduler/jobs/{job_id}")
-    async def get_scheduler_job(job_id: str, request: Request):
-        await _require_scheduler_auth(request)
-        result = _get_scheduler().get_job(job_id)
-        if not result.get("success"):
-            raise HTTPException(status_code=404, detail=result.get("message", "Not found"))
-        return result
-
-    @app.put("/api/v1/scheduler/jobs/{job_id}")
-    async def update_scheduler_job(job_id: str, body: UpdateJobRequest, request: Request):
-        await _require_scheduler_auth(request)
-        updates = {k: v for k, v in body.model_dump().items() if v is not None}
-        if not updates:
-            raise HTTPException(status_code=400, detail="No fields to update")
-        result = _get_scheduler().update_job(job_id, updates)
-        if not result.get("success"):
-            raise HTTPException(status_code=404, detail=result.get("message", "Not found"))
-        return result
-
-    @app.delete("/api/v1/scheduler/jobs/{job_id}")
-    async def delete_scheduler_job(job_id: str, request: Request):
-        await _require_scheduler_auth(request)
-        result = _get_scheduler().delete_job(job_id)
-        if not result.get("success"):
-            raise HTTPException(status_code=404, detail=result.get("message", "Not found"))
-        return result
-
-    @app.post("/api/v1/scheduler/jobs/{job_id}/pause")
-    async def pause_scheduler_job(job_id: str, request: Request):
-        await _require_scheduler_auth(request)
-        result = _get_scheduler().pause_job(job_id)
-        if not result.get("success"):
-            raise HTTPException(status_code=404, detail=result.get("message", "Not found"))
-        return result
-
-    @app.post("/api/v1/scheduler/jobs/{job_id}/resume")
-    async def resume_scheduler_job(job_id: str, request: Request):
-        await _require_scheduler_auth(request)
-        result = _get_scheduler().resume_job(job_id)
-        if not result.get("success"):
-            raise HTTPException(status_code=404, detail=result.get("message", "Not found"))
-        return result
-
-    @app.get("/api/v1/scheduler/jobs/{job_id}/results")
-    async def get_scheduler_job_results(job_id: str, request: Request, limit: int = 20):
-        await _require_scheduler_auth(request)
-        limit = min(max(1, limit), 100)
-        return _get_scheduler().get_results(job_id, limit=limit)
-
-    @app.get("/api/v1/scheduler/jobs/{job_id}/logs")
-    async def get_scheduler_job_logs(job_id: str, request: Request):
-        await _require_scheduler_auth(request)
-        return _get_scheduler().get_logs(job_id)
-
+        _sched_allowed_webex = {
+            u.strip().lower()
+            for u in os.environ.get("SCHEDULER_ALLOWED_WEBEX", "flipkey@cisco.com").split(",")
+            if u.strip()
+        }
+    
+        async def _require_scheduler_auth(request: Request) -> dict:
+            """Authenticate AND verify the user is allowed to manage scheduled tasks.
+    
+            Raises HTTP 403 if authenticated but not in the allowlist.
+            Returns the user dict on success.
+            """
+            user = await authenticate(
+                request,
+                authorization=request.headers.get("authorization"),
+                x_user_identity=request.headers.get("x-user-identity"),
+                x_auth_channel=request.headers.get("x-auth-channel"),
+            )
+    
+            # Shared-key callers (internal/admin) are always allowed.
+            if user.get("auth_type") == "shared_key":
+                return user
+    
+            channel = user.get("channel", "")
+            identity = user.get("identity", "")
+    
+            if channel == "telegram":
+                # identity is a numeric chat_id; resolve to username for the allowlist check.
+                username = _get_telegram_username(identity) or ""
+                if username.lower() in _sched_allowed_telegram:
+                    return user
+            elif channel == "webex":
+                if identity.lower() in _sched_allowed_webex:
+                    return user
+    
+            raise HTTPException(
+                status_code=403,
+                detail="You are not authorized to manage scheduled tasks.",
+            )
+    
+        class ScheduleJobRequest(BaseModel):
+            name: str
+            schedule: str
+            agent: Optional[str] = None
+            runtime: Optional[str] = None
+            model: Optional[str] = None
+            mode: Optional[str] = None  # "yolo" or "restricted"
+            task: str = ""
+            notify: bool = False
+            recurring: bool = True
+    
+        class UpdateJobRequest(BaseModel):
+            name: Optional[str] = None
+            schedule: Optional[str] = None
+            agent: Optional[str] = None
+            runtime: Optional[str] = None
+            model: Optional[str] = None
+            mode: Optional[str] = None  # "yolo" or "restricted"
+            task: Optional[str] = None
+            notify: Optional[bool] = None
+            recurring: Optional[bool] = None
+            enabled: Optional[bool] = None
+    
+        @app.get("/api/v1/scheduler/status")
+        async def scheduler_status(request: Request):
+            await _require_scheduler_auth(request)
+            return _get_scheduler().doctor()
+    
+        @app.get("/api/v1/scheduler/jobs")
+        async def list_scheduler_jobs(request: Request):
+            await _require_scheduler_auth(request)
+            return _get_scheduler().list_jobs()
+    
+        @app.post("/api/v1/scheduler/jobs")
+        async def create_scheduler_job(body: ScheduleJobRequest, request: Request):
+            user = await _require_scheduler_auth(request)
+            # Resolve Telegram username for storage so the executor can display it
+            username = None
+            if user.get("channel") == "telegram":
+                username = _get_telegram_username(user["identity"])
+            created_by = {
+                "identity": user["identity"],
+                "channel": user["channel"],
+                "username": username,
+            }
+            result = _get_scheduler().schedule_task(
+                name=body.name,
+                schedule=body.schedule,
+                agent=body.agent,
+                runtime=body.runtime,
+                model=body.model,
+                mode=body.mode,
+                task=body.task,
+                notify=body.notify,
+                recurring=body.recurring,
+                created_by=created_by,
+            )
+            if not result.get("success"):
+                raise HTTPException(status_code=400, detail=result.get("message", "Failed"))
+            return result
+    
+        @app.get("/api/v1/scheduler/jobs/{job_id}")
+        async def get_scheduler_job(job_id: str, request: Request):
+            await _require_scheduler_auth(request)
+            result = _get_scheduler().get_job(job_id)
+            if not result.get("success"):
+                raise HTTPException(status_code=404, detail=result.get("message", "Not found"))
+            return result
+    
+        @app.put("/api/v1/scheduler/jobs/{job_id}")
+        async def update_scheduler_job(job_id: str, body: UpdateJobRequest, request: Request):
+            await _require_scheduler_auth(request)
+            updates = {k: v for k, v in body.model_dump().items() if v is not None}
+            if not updates:
+                raise HTTPException(status_code=400, detail="No fields to update")
+            result = _get_scheduler().update_job(job_id, updates)
+            if not result.get("success"):
+                raise HTTPException(status_code=404, detail=result.get("message", "Not found"))
+            return result
+    
+        @app.delete("/api/v1/scheduler/jobs/{job_id}")
+        async def delete_scheduler_job(job_id: str, request: Request):
+            await _require_scheduler_auth(request)
+            result = _get_scheduler().delete_job(job_id)
+            if not result.get("success"):
+                raise HTTPException(status_code=404, detail=result.get("message", "Not found"))
+            return result
+    
+        @app.post("/api/v1/scheduler/jobs/{job_id}/pause")
+        async def pause_scheduler_job(job_id: str, request: Request):
+            await _require_scheduler_auth(request)
+            result = _get_scheduler().pause_job(job_id)
+            if not result.get("success"):
+                raise HTTPException(status_code=404, detail=result.get("message", "Not found"))
+            return result
+    
+        @app.post("/api/v1/scheduler/jobs/{job_id}/resume")
+        async def resume_scheduler_job(job_id: str, request: Request):
+            await _require_scheduler_auth(request)
+            result = _get_scheduler().resume_job(job_id)
+            if not result.get("success"):
+                raise HTTPException(status_code=404, detail=result.get("message", "Not found"))
+            return result
+    
+        @app.get("/api/v1/scheduler/jobs/{job_id}/results")
+        async def get_scheduler_job_results(job_id: str, request: Request, limit: int = 20):
+            await _require_scheduler_auth(request)
+            limit = min(max(1, limit), 100)
+            return _get_scheduler().get_results(job_id, limit=limit)
+    
+        @app.get("/api/v1/scheduler/jobs/{job_id}/logs")
+        async def get_scheduler_job_logs(job_id: str, request: Request):
+            await _require_scheduler_auth(request)
+            return _get_scheduler().get_logs(job_id)
+    
     # --- AI media — publicly served, no auth (images fetched by the agent) ---
     _ai_media_dir = Path("/tmp/webui_ai_media")
     _ai_media_dir.mkdir(parents=True, exist_ok=True)
