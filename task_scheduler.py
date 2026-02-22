@@ -161,10 +161,12 @@ class TaskScheduler:
         """
         if agent is None:
             agent = os.getenv("SCHEDULER_DEFAULT_AGENT", "fosterbot")
-        if runtime is None:
-            runtime = os.getenv("SCHEDULER_DEFAULT_RUNTIME", "claude")
         if mode is None:
             mode = "ai"  # default to AI mode
+        
+        # Only set runtime for AI mode; command mode doesn't need it
+        if mode == "ai" and runtime is None:
+            runtime = os.getenv("SCHEDULER_DEFAULT_RUNTIME", "claude")
 
         jobs = self._load_jobs()
         job_id = name.lower().replace(" ", "-")
