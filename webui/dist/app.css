@@ -2065,25 +2065,26 @@ html, body {
   display: flex;
   flex-direction: column;
   background: rgba(20, 25, 35, 0.95);
-  border-right: 1px solid rgba(255, 255, 255, 0.1);
+  border-left: 1px solid rgba(255, 255, 255, 0.1);
   transition: all 0.3s ease;
   z-index: 40;
 }
 
-/* Desktop: Left sidebar */
+/* Desktop: Right sidebar */
 @media (min-width: 1024px) {
   .request-queue-panel {
     position: fixed;
-    left: 0;
+    right: 0;
     top: 0;
     bottom: 0;
     width: 300px;
-    border-right: 1px solid rgba(255, 255, 255, 0.1);
+    border-left: 1px solid rgba(255, 255, 255, 0.1);
+    border-right: none;
     transform: translateX(0);
   }
   
   .request-queue-panel.queue-hidden {
-    transform: translateX(-100%);
+    transform: translateX(100%);
     pointer-events: none;
   }
   

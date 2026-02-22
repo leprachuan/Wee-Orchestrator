@@ -620,7 +620,7 @@ function processNextQueue() {
   
   // Restore pending files
   STATE.pendingFiles = nextRequest.files || [];
-  updateFileCount();
+  renderFilePreviews();
   
   // Send the request
   STATE.isProcessing = true;
@@ -650,7 +650,7 @@ function editQueueItem(queueId) {
   
   // Restore files
   STATE.pendingFiles = item.files || [];
-  updateFileCount();
+  renderFilePreviews();
   
   renderQueuePanel();
   if (STATE.requestQueue.length === 0) {
