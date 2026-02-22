@@ -2033,6 +2033,15 @@ These commands allow you to control the agent's behavior and are processed by th
 - /help - Show available commands and agent capabilities
 - /discover-skills [query] - Discover available skills from configured repositories (optional search term)
 - /load-skill <name> [repo] - Load a skill into this agent's .github/skills directory (optional repository name)
+- /schedule list - List all scheduled jobs
+- /schedule status - Scheduler health and diagnostics
+- /schedule add <name> | <schedule> | <task> - Create a scheduled job (e.g., /schedule add Daily Report | every day at 9am | generate summary)
+- /schedule info <job_id> - Show details for a scheduled job
+- /schedule pause <job_id> - Pause a scheduled job
+- /schedule resume <job_id> - Resume a paused job
+- /schedule delete <job_id> - Delete a scheduled job
+- /schedule logs <job_id> - View logs for a job
+- /schedule results <job_id> - View execution results for a job
 
 [Skills Discovery & Management]
 You can help users discover and load additional skills for this agent from configured skill repositories.
@@ -2785,6 +2794,17 @@ User Request:
    • /status - Check status of running query for this session
    • /cancel - Cancel running query for this session
 
+**Scheduler:**
+   • /schedule list - List all scheduled jobs
+   • /schedule status - Scheduler health status
+   • /schedule add <name> | <schedule> | <task> - Create a new job
+   • /schedule info <job_id> - Show job details
+   • /schedule pause <job_id> - Pause a job
+   • /schedule resume <job_id> - Resume a paused job
+   • /schedule delete <job_id> - Delete a job
+   • /schedule logs <job_id> - View job logs
+   • /schedule results <job_id> - View execution results
+
 **Auto-Delegation:**
 You can mention an agent in your prompt and it will auto-delegate:
    • ask the family agent for Parkers Christmas ideas
@@ -3112,6 +3132,166 @@ You can mention an agent in your prompt and it will auto-delegate:
             else:
                 return (
                     "Usage: `/mode current` - Show current mode\n       `/mode list` - Show available modes\n       `/mode yolo` - Enable auto-approval mode\n       `/mode restricted` - Disable auto-approval mode"
+                )
+
+        elif command == "/schedule":
+            if not SCHEDULER_ENABLED:
+                return "⚠️ Scheduler is not enabled on this instance."
+
+            try:
+                scheduler = _get_scheduler()
+            except Exception as e:
+                return f"⚠️ Scheduler unavailable: {e}"
+
+            sub = (argument or "").strip()
+            sub_lower = sub.lower()
+
+            # /schedule or /schedule list
+            if not sub or sub_lower == "list":
+                result = scheduler.list_jobs()
+                jobs = result.get("result", [])
+                if not jobs:
+                    return "📅 **Scheduled Jobs**\n\nNo jobs scheduled."
+                lines = ["📅 **Scheduled Jobs**\n"]
+                for j in jobs:
+                    status = "▶️" if j.get("enabled") else "⏸"
+                    recurring = "🔁" if j.get("recurring") else "1️⃣"
+                    lines.append(
+                        f"{status} {recurring} `{j['id']}` — **{j['name']}**\n"
+                        f"   Schedule: `{j['schedule']}`\n"
+                        f"   Next run: `{j.get('next_run','?')}`\n"
+                        f"   Agent: `{j.get('agent','?')}` / Runtime: `{j.get('runtime','?')}`"
+                    )
+                return "\n\n".join(lines)
+
+            # /schedule status
+            elif sub_lower == "status":
+                result = scheduler.doctor()
+                info = result.get("result", result)
+                lines = ["🩺 **Scheduler Status**\n"]
+                for k, v in info.items():
+                    lines.append(f"• **{k}**: `{v}`")
+                return "\n".join(lines)
+
+            # /schedule pause <job_id>
+            elif sub_lower.startswith("pause "):
+                job_id = sub[6:].strip()
+                result = scheduler.pause_job(job_id)
+                if result.get("success"):
+                    return f"⏸ Job `{job_id}` paused."
+                return f"❌ {result.get('message', 'Failed to pause job.')}"
+
+            # /schedule resume <job_id>
+            elif sub_lower.startswith("resume "):
+                job_id = sub[7:].strip()
+                result = scheduler.resume_job(job_id)
+                if result.get("success"):
+                    return f"▶️ Job `{job_id}` resumed."
+                return f"❌ {result.get('message', 'Failed to resume job.')}"
+
+            # /schedule delete <job_id>
+            elif sub_lower.startswith("delete ") or sub_lower.startswith("remove "):
+                job_id = sub.split(" ", 1)[1].strip()
+                result = scheduler.delete_job(job_id)
+                if result.get("success"):
+                    return f"🗑️ Job `{job_id}` deleted."
+                return f"❌ {result.get('message', 'Failed to delete job.')}"
+
+            # /schedule info <job_id>
+            elif sub_lower.startswith("info "):
+                job_id = sub[5:].strip()
+                result = scheduler.get_job(job_id)
+                if not result.get("success"):
+                    return f"❌ {result.get('message', 'Job not found.')}"
+                j = result["result"]
+                return (
+                    f"📋 **Job: {j['name']}**\n\n"
+                    f"• **ID:** `{j['id']}`\n"
+                    f"• **Schedule:** `{j['schedule']}`\n"
+                    f"• **Next run:** `{j.get('next_run','?')}`\n"
+                    f"• **Last run:** `{j.get('last_run','never')}`\n"
+                    f"• **Agent:** `{j.get('agent','?')}` / Runtime: `{j.get('runtime','?')}`\n"
+                    f"• **Recurring:** {'Yes 🔁' if j.get('recurring') else 'No 1️⃣'}\n"
+                    f"• **Enabled:** {'Yes ▶️' if j.get('enabled') else 'No ⏸'}\n"
+                    f"• **Task:** {j.get('task','')}"
+                )
+
+            # /schedule logs <job_id>
+            elif sub_lower.startswith("logs "):
+                job_id = sub[5:].strip()
+                result = scheduler.get_logs(job_id)
+                if not result.get("success"):
+                    return f"❌ {result.get('message', 'No logs found.')}"
+                logs = result.get("result", [])
+                if not logs:
+                    return f"📜 No logs for job `{job_id}`."
+                recent = logs[-20:]  # last 20 entries
+                lines = [f"📜 **Logs for `{job_id}`** (last {len(recent)}):\n"]
+                lines.extend(f"`{entry}`" for entry in recent)
+                return "\n".join(lines)
+
+            # /schedule results <job_id>
+            elif sub_lower.startswith("results "):
+                job_id = sub[8:].strip()
+                result = scheduler.get_results(job_id)
+                if not result.get("success"):
+                    return f"❌ {result.get('message', 'No results found.')}"
+                results = result.get("result", [])
+                if not results:
+                    return f"📊 No results for job `{job_id}` yet."
+                lines = [f"📊 **Results for `{job_id}`** ({len(results)} runs):\n"]
+                for r in results[-5:]:  # last 5 runs
+                    status = "✅" if r.get("success") else "❌"
+                    lines.append(f"{status} `{r.get('timestamp','?')}` — {r.get('summary','')[:100]}")
+                return "\n".join(lines)
+
+            # /schedule add <name> | <schedule> | <task>
+            # e.g.: /schedule add Daily Report | every day at 9am | generate daily summary
+            elif sub_lower.startswith("add "):
+                raw = sub[4:].strip()
+                parts = [p.strip() for p in raw.split("|")]
+                if len(parts) < 3:
+                    return (
+                        "Usage: `/schedule add <name> | <schedule> | <task>`\n\n"
+                        "Example: `/schedule add Daily Report | every day at 9am | generate a daily summary`\n"
+                        "Example: `/schedule add One-time Ping | in 10 minutes | say hello`"
+                    )
+                name, schedule_str, task = parts[0], parts[1], parts[2]
+                recurring = not any(w in schedule_str.lower() for w in ["in ", "once"])
+                result = scheduler.schedule_task(
+                    name=name,
+                    schedule=schedule_str,
+                    task=task,
+                    recurring=recurring,
+                )
+                if result.get("success"):
+                    j = result["result"]
+                    return (
+                        f"✅ **Job scheduled!**\n\n"
+                        f"• **ID:** `{j['id']}`\n"
+                        f"• **Name:** {j['name']}\n"
+                        f"• **Schedule:** `{j['schedule']}`\n"
+                        f"• **Next run:** `{j.get('next_run','?')}`\n"
+                        f"• **Recurring:** {'Yes 🔁' if j.get('recurring') else 'No 1️⃣'}"
+                    )
+                return f"❌ {result.get('message', 'Failed to schedule job.')}"
+
+            else:
+                return (
+                    "📅 **Schedule Commands**\n\n"
+                    "• `/schedule list` — List all scheduled jobs\n"
+                    "• `/schedule status` — Scheduler health status\n"
+                    "• `/schedule add <name> | <schedule> | <task>` — Create a new job\n"
+                    "• `/schedule info <job_id>` — Show job details\n"
+                    "• `/schedule pause <job_id>` — Pause a job\n"
+                    "• `/schedule resume <job_id>` — Resume a paused job\n"
+                    "• `/schedule delete <job_id>` — Delete a job\n"
+                    "• `/schedule logs <job_id>` — View job logs\n"
+                    "• `/schedule results <job_id>` — View job execution results\n\n"
+                    "**Examples:**\n"
+                    "`/schedule add Daily Report | every day at 9am | generate daily summary`\n"
+                    "`/schedule pause daily-report`\n"
+                    "`/schedule delete daily-report`"
                 )
 
         # --- Execution ---
