@@ -3776,6 +3776,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         """Public endpoint — returns feature flags for the WebUI."""
         return {
             "scheduler_enabled": SCHEDULER_ENABLED,
+            "app_env": APP_ENV,
         }
 
     @app.post("/api/v1/auth/request-pairing")
@@ -4341,8 +4342,8 @@ def start_api_server():
     import uvicorn
 
     app = create_api_app()
-    port = int(os.environ.get("API_PORT", "8080"))
-    host = os.environ.get("API_HOST", "0.0.0.0")
+    port = int(os.environ.get("API_PORT", "8001"))  # DEV: default 8001 to avoid collision with prod
+    host = os.environ.get("API_HOST", "127.0.0.1")
 
     # Support comma-separated hosts (e.g. "127.0.0.1,100.x.x.x" for Tailscale + localhost).
     # When multiple hosts are specified, run each in a background thread and block on the last.
