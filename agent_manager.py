@@ -4334,7 +4334,27 @@ def start_api_server():
     app = create_api_app()
     port = int(os.environ.get("API_PORT", "8080"))
     host = os.environ.get("API_HOST", "0.0.0.0")
-    uvicorn.run(app, host=host, port=port)
+
+    # Support comma-separated hosts (e.g. "127.0.0.1,100.x.x.x" for Tailscale + localhost).
+    # When multiple hosts are specified, run each in a background thread and block on the last.
+    hosts = [h.strip() for h in host.split(",") if h.strip()]
+    if len(hosts) > 1:
+        import threading
+        threads = []
+        for h in hosts[:-1]:
+            print(f"[API] Listening on {h}:{port}", file=sys.stderr)
+            t = threading.Thread(
+                target=uvicorn.run,
+                kwargs={"app": app, "host": h, "port": port},
+                daemon=True,
+            )
+            t.start()
+            threads.append(t)
+        print(f"[API] Listening on {hosts[-1]}:{port}", file=sys.stderr)
+        uvicorn.run(app, host=hosts[-1], port=port)
+    else:
+        print(f"[API] Listening on {host}:{port}", file=sys.stderr)
+        uvicorn.run(app, host=host, port=port)
 
 
 def main():
