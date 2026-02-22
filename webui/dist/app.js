@@ -910,6 +910,16 @@ async function initApp() {
   STATE.currentSessionId = null;
   STATE.activeSessionId  = null;
   updateSidebarIdentity();
+
+  // Load feature flags and apply UI visibility
+  try {
+    const cfg = await fetch('/api/v1/config').then(r => r.json());
+    if (!cfg.scheduler_enabled) {
+      hide($('btn-nav-scheduler'));
+      hide($('scheduler-panel'));
+    }
+  } catch (_) { /* non-fatal — show everything by default */ }
+
   await loadSessions();
   if (STATE.sessions.length === 0) {
     await startNewSession();
