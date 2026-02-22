@@ -96,15 +96,92 @@ Organize knowledge for long-term retention and reuse:
 - **Archive/** — Completed or deprecated knowledge
 
 #### Skills
-Integrate with [pot-o-skills](https://github.com/leprachuan/pot-o-skills) or define custom skills:
+
+Skills extend your bot's capabilities by providing pre-built integrations with external APIs and services. **Skills should be sourced from reputable, official repositories** to minimize security risks.
+
+##### Recommended Skill Sources
+
+1. **pot-o-skills** — Community skills for cloud networking and security
+   - Repository: https://github.com/leprachuan/pot-o-skills
+   - Skills: Cisco Meraki, Cisco Security Cloud Control, and more
+   - Status: Public, open-source, actively maintained
+   - Usage: Clone and link into your bot's `skills/` directory
+
+2. **Anthropic Official Skills** — Official skills from Anthropic
+   - Repository: https://github.com/anthropics/skills
+   - Status: Official, production-ready
+   - Security: Vetted and maintained by Anthropic team
+   - Best for: Claude AI integration, code generation, analysis
+
+3. **Custom Skills** — Implement your own domain-specific skills
+   - Location: `./skills/` directory in your bot repository
+   - Documentation: Must include SKILL.md, README, and examples
+   - Security: You control the code and updates
+
+##### ⚠️ Skills Security Guidelines
+
+**Skills have full access to your system** — they can execute commands, read files, and call APIs. Follow these practices:
+
+- ✅ **Only use official skills** from original software/service authors
+  - Example: Use Cisco's official Meraki skill, not community forks
+  - Example: Use Anthropic's official skills, not third-party versions
+
+- ✅ **Validate before installation**
+  - Review the source code in the skill repository
+  - Check for hardcoded credentials or suspicious patterns
+  - Verify the repository is actively maintained
+  - Look for security issues reported in GitHub Issues
+
+- ✅ **Use trusted repositories**
+  - Official repos (Anthropic, GitHub, etc.)
+  - Long-standing community projects with active maintainers
+  - Projects with security policies and issue tracking
+  - Avoid random GitHub repos without documentation or maintenance
+
+- ⚠️ **Audit custom skills carefully**
+  - Never trust a skill without reviewing its code first
+  - Check for unintended API calls or data exfiltration
+  - Validate input sanitization
+  - Ensure credentials are handled safely
+
+- ✅ **Keep skills updated**
+  - Periodically review and update to latest versions
+  - Subscribe to security advisories from skill repositories
+  - Remove unused skills to reduce attack surface
+
+##### Using Skills in Your Bot
 
 ```bash
-# Link public skills from pot-o-skills
+# Link public skills from pot-o-skills (verified, open-source)
 ln -s /opt/pot-o-skills/cisco-meraki ./skills/
 ln -s /opt/pot-o-skills/cisco-security-cloud-control ./skills/
 
+# Link Anthropic official skills (verified, official)
+ln -s /opt/anthropic-skills/code-analysis ./skills/
+ln -s /opt/anthropic-skills/file-operations ./skills/
+
 # Or implement custom skills in skills/ directory
+mkdir skills/my-custom-skill
 ```
+
+##### Discovering Skills
+
+- **pot-o-skills:** https://github.com/leprachuan/pot-o-skills
+  ```bash
+  cd /opt && git clone https://github.com/leprachuan/pot-o-skills.git
+  ```
+
+- **Anthropic Skills:** https://github.com/anthropics/skills
+  ```bash
+  cd /opt && git clone https://github.com/anthropics/skills.git
+  ```
+
+- **Custom Community Skills:** Search GitHub for `topic:agent-skills` with verification:
+  - ✅ Active maintenance (recent commits)
+  - ✅ Clear documentation
+  - ✅ Security policy file
+  - ✅ Public issue tracking
+
 
 #### Domain Folders
 Organize bot work by area of focus:
