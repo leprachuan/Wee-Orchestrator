@@ -2331,20 +2331,20 @@ html, body {
   transition: all 0.3s;
 }
 
-.queue-status-pending .queue-status-dot {
+.queue-status-dot.queue-status-pending {
   color: #999;  /* Gray for pending */
 }
 
-.queue-status-processing .queue-status-dot {
+.queue-status-dot.queue-status-processing {
   color: #ffc107;  /* Amber/yellow for processing */
   animation: pulse 1.5s ease-in-out infinite;
 }
 
-.queue-status-completed .queue-status-dot {
+.queue-status-dot.queue-status-completed {
   color: #00c853;  /* Green for completed */
 }
 
-.queue-status-failed .queue-status-dot {
+.queue-status-dot.queue-status-failed {
   color: #f5576c;  /* Red for failed */
 }
 
