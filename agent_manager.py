@@ -4186,7 +4186,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                     _sched_path = str(Path(__file__).parent)
                     if _sched_path not in _sys.path:
                         _sys.path.insert(0, _sched_path)
-                    from task_scheduler import TaskScheduler
+                    from scheduler.management import TaskScheduler
                     _task_scheduler = TaskScheduler()
                 except Exception as _e:
                     raise HTTPException(status_code=503, detail=f"Scheduler unavailable: {_e}")
