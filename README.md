@@ -25,8 +25,6 @@ For release history see **[RELEASE_NOTES.md](./RELEASE_NOTES.md)**.
 
 Wee-Orchestrator enables you to create **custom bots** — specialized AI agents with their own configuration, knowledge base, and capabilities. Each bot is a self-contained repository that can be integrated with Wee-Orchestrator.
 
-> 🚀 **New here?** Use the **[Wee-Orchestrator Starter Kit](https://github.com/leprachuan/wee-orchestrator-starter-kit)** to scaffold a new bot in minutes — includes `AGENTS.md`, skill management with security scanning, memory structure, and setup scripts.
-
 ### What is a Bot?
 
 A bot is a Git repository containing:
@@ -192,8 +190,6 @@ Organize bot work by area of focus:
 - Each folder can have its own README with domain-specific guidance
 
 ### Getting Started
-
-> 💡 **Recommended:** Fork the **[Wee-Orchestrator Starter Kit](https://github.com/leprachuan/wee-orchestrator-starter-kit)** instead of starting from scratch — it includes everything below pre-configured with best practices, security scanning, and setup scripts.
 
 1. **Create your bot repository:**
    ```bash

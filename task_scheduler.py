@@ -99,28 +99,6 @@ class TaskScheduler:
         self.logs_dir.mkdir(parents=True, exist_ok=True)
         self.results_dir.mkdir(parents=True, exist_ok=True)
         self._init_jobs_file()
-    
-    @staticmethod
-    def get_agent_working_dir(agent: str) -> str:
-        """Get working directory for an agent.
-        
-        Agent mapping:
-        - fosterbot: /opt (orchestrator root)
-        - email_triage: /opt/email_triage
-        - smart_home: /opt/smart_home
-        - opencode: /opt/opencode
-        - devops: /opt/MyHomeDevops
-        - etc.
-        """
-        agent_dirs = {
-            "fosterbot": "/opt",
-            "email_triage": "/opt/email_triage",
-            "smart_home": "/opt/smart_home",
-            "opencode": "/opt/opencode",
-            "devops": "/opt/MyHomeDevops",
-            "home-lab": "/opt/MyHomeDevops",
-        }
-        return agent_dirs.get(agent, "/opt")
 
     def _init_jobs_file(self):
         """Initialize jobs.json if it doesn't exist."""
@@ -150,22 +128,12 @@ class TaskScheduler:
     ) -> Dict:
         """Create a scheduled task.
 
-        Args:
-            mode: 'ai' (default, uses LLM) or 'command' (direct shell execution)
-            agent: agent name or 'fosterbot' (default)
-            runtime: 'claude', 'copilot', 'gemini', etc. (for ai mode)
-            task: for 'ai' mode = natural language task, for 'command' mode = shell command
-            created_by: optional dict with keys 'identity', 'channel', and optionally 'username'.
-
-        For 'command' mode, working_dir is automatically set based on agent selection.
+        created_by: optional dict with keys 'identity', 'channel', and optionally 'username'.
+        Stored in the job so the executor can send notifications back to the right person.
         """
         if agent is None:
             agent = os.getenv("SCHEDULER_DEFAULT_AGENT", "fosterbot")
-        if mode is None:
-            mode = "ai"  # default to AI mode
-        
-        # Only set runtime for AI mode; command mode doesn't need it
-        if mode == "ai" and runtime is None:
+        if runtime is None:
             runtime = os.getenv("SCHEDULER_DEFAULT_RUNTIME", "claude")
 
         jobs = self._load_jobs()
@@ -180,9 +148,6 @@ class TaskScheduler:
             counter += 1
 
         next_run = parse_schedule_to_next_run(schedule)
-        
-        # Get working directory based on agent (for command mode)
-        working_dir = self.get_agent_working_dir(agent)
 
         job = {
             "id": job_id,
@@ -190,9 +155,8 @@ class TaskScheduler:
             "agent": agent,
             "runtime": runtime,
             "model": model,
-            "mode": mode,  # 'ai' or 'command'
+            "mode": mode,
             "task": task,
-            "working_dir": working_dir,  # Set automatically based on agent
             "schedule": schedule,
             "notify": notify,
             "recurring": recurring,
@@ -206,7 +170,7 @@ class TaskScheduler:
 
         jobs["jobs"].append(job)
         self._save_jobs(jobs)
-        self._log(job_id, f"Scheduled: {name} (mode={mode}, next run: {next_run}, recurring: {recurring})")
+        self._log(job_id, f"Scheduled: {name} (next run: {next_run}, recurring: {recurring})")
 
         return {"success": True, "result": job, "message": f"Task '{name}' scheduled for {next_run}"}
 
@@ -226,12 +190,10 @@ class TaskScheduler:
     def update_job(self, job_id: str, updates: Dict) -> Dict:
         """Update fields of an existing job.
 
-        Allowed fields: name, schedule, agent, runtime, model, mode, task, notify, recurring, enabled.
+        Allowed fields: name, schedule, agent, runtime, task, notify, recurring, enabled.
         If schedule changes, next_run is recalculated.
-        Mode can be 'ai' (LLM-based) or 'command' (direct shell execution).
-        For 'command' mode: set task to shell command, working_dir is based on agent selection.
         """
-        allowed = {"name", "schedule", "agent", "runtime", "model", "mode", "task", "notify", "recurring", "enabled", "working_dir"}
+        allowed = {"name", "schedule", "agent", "runtime", "task", "notify", "recurring", "enabled"}
         invalid = set(updates.keys()) - allowed
         if invalid:
             return {"success": False, "message": f"Unknown fields: {', '.join(invalid)}"}
