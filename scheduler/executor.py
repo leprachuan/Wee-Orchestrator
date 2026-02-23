@@ -52,10 +52,18 @@ class TaskSchedulerExecutor:
     """Execute scheduled jobs from jobs.json."""
 
     def __init__(self):
-        self.jobs_file = Path("/opt/.task-scheduler/jobs.json")
-        self.logs_dir = Path("/opt/.task-scheduler/logs/")
-        self.results_dir = Path("/opt/.task-scheduler/results/")
-        self.config_file = Path("/opt/agents.json")
+        # Detect repo location dynamically (this file is scheduler/executor.py)
+        self.repo_root = Path(__file__).parent.parent
+        
+        # Detect if dev or prod by checking /opt/.task-scheduler-dev vs /opt/.task-scheduler
+        is_dev = self.repo_root.name == "n8n-copilot-shim-dev"
+        scheduler_base = Path("/opt/.task-scheduler-dev" if is_dev else "/opt/.task-scheduler")
+        
+        self.jobs_file = scheduler_base / "jobs.json"
+        self.logs_dir = scheduler_base / "logs/"
+        self.results_dir = scheduler_base / "results/"
+        self.config_file = self.repo_root / "agents.json"
+        self.agent_manager = self.repo_root / "agent_manager.py"
 
         self.jobs_file.parent.mkdir(parents=True, exist_ok=True)
         self.logs_dir.mkdir(parents=True, exist_ok=True)
@@ -191,77 +199,26 @@ class TaskSchedulerExecutor:
 
     def _execute_task(self, job: Dict) -> Optional[str]:
         """
-        Execute a job via agent_manager.py.
+        Execute a job in either AI mode (via agent_manager.py) or command mode (direct shell).
+        
+        Modes:
+        - 'ai' (default): Execute via LLM agent through agent_manager.py
+        - 'command': Execute as direct shell/python command
+        
         Returns the execution result/output, or None if failed.
         """
         try:
             job_id = job["id"]
-            agent = job.get("agent", os.getenv("SCHEDULER_DEFAULT_AGENT", "orchestrator"))
-            runtime = job.get("runtime", os.getenv("SCHEDULER_DEFAULT_RUNTIME", "claude"))
             task = job.get("task", "")
-            notify = job.get("notify", False)  # Whether to send Telegram notification
-
-            # Create session ID
-            session_id = f"scheduled-{job_id}-{int(time.time())}"
-
-            # Pick a sensible default model per runtime (can be overridden via job["model"])
-            _default_models = {
-                "claude":   "sonnet",
-                "copilot":  "gpt-4.1",
-                "gemini":   "gemini-1.5-pro",
-                "opencode": "gpt-4o",
-            }
-            model = job.get("model") or _default_models.get(runtime, "sonnet")
-
-            # Build command for agent_manager.py
-            cmd = [
-                "python3",
-                "/opt/n8n-copilot-shim/agent_manager.py",
-                "--config", str(self.config_file),
-                "--agent", agent,
-                "--runtime", runtime,
-                "--model", model,
-                "--mode", job.get("mode", "restricted"),
-                task,
-                session_id
-            ]
-
-            logger.info(f"Executing job {job_id}: {task[:60]}...")
-            self._log_job(job_id, f"Starting execution via agent_manager.py")
-
-            # Execute with timeout
-            result = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                timeout=300  # 5 minute timeout
-            )
-
-            if result.returncode == 0:
-                output = result.stdout.strip()
-                self._log_job(job_id, f"Execution succeeded")
-                self._save_result(job_id, job["name"], success=True, output=output)
-                logger.info(f"Job {job_id} completed successfully")
-
-                # Send notification if enabled
-                if notify:
-                    notification_text = f"✅ Job Completed: {job['name']}\n\nTask: {task[:100]}\n\nResult:\n{output[:500]}"
-                    self._notify_creator(job, notification_text)
-
-                return output
+            notify = job.get("notify", False)
+            mode = job.get("mode", "ai")  # Default to AI mode
+            
+            # Route to appropriate executor
+            if mode == "command":
+                return self._execute_command_mode(job)
             else:
-                error_msg = result.stderr or result.stdout
-                self._log_job(job_id, f"Execution failed: {error_msg[:200]}")
-                self._save_result(job_id, job["name"], success=False, error=error_msg)
-                logger.error(f"Job {job_id} failed with code {result.returncode}")
-
-                # Send error notification if enabled
-                if notify:
-                    notification_text = f"❌ Job Failed: {job['name']}\n\nTask: {task[:100]}\n\nError:\n{error_msg[:500]}"
-                    self._notify_creator(job, notification_text)
-
-                return None
-
+                return self._execute_ai_mode(job)
+                
         except subprocess.TimeoutExpired:
             self._log_job(job_id, "Execution timed out (5 minutes)")
             self._save_result(job_id, job["name"], success=False, error="Execution timed out (5 minutes)")
@@ -270,22 +227,139 @@ class TaskSchedulerExecutor:
             if job.get("notify"):
                 self._notify_creator(
                     job,
-                    f"⏱️ Job Timeout: {job['name']}\n\nTask: {task[:100]}\n\nExecution exceeded 5 minute limit",
+                    f"❌ Job Failed: {job['name']}\n\nTask: {task[:100]}\n\nError: Execution timed out (5 minutes)"
                 )
             return None
 
         except Exception as e:
-            error_str = str(e)
-            self._log_job(job_id, f"Exception: {error_str}")
-            self._save_result(job_id, job["name"], success=False, error=error_str)
             logger.error(f"Failed to execute job {job_id}: {e}")
+            self._log_job(job_id, f"Execution error: {e}")
+            self._save_result(job_id, job["name"], success=False, error=str(e))
 
             if job.get("notify"):
-                self._notify_creator(
-                    job,
-                    f"⚠️ Job Exception: {job['name']}\n\nTask: {task[:100]}\n\nError:\n{error_str[:200]}",
-                )
+                self._notify_creator(job, f"❌ Job Failed: {job['name']}\n\nError: {str(e)[:200]}")
             return None
+
+    def _execute_ai_mode(self, job: Dict) -> Optional[str]:
+        """Execute job via LLM agent (agent_manager.py)."""
+        job_id = job["id"]
+        agent = job.get("agent", os.getenv("SCHEDULER_DEFAULT_AGENT", "orchestrator"))
+        runtime = job.get("runtime", os.getenv("SCHEDULER_DEFAULT_RUNTIME", "claude"))
+        task = job.get("task", "")
+        notify = job.get("notify", False)
+
+        # Create session ID
+        session_id = f"scheduled-{job_id}-{int(time.time())}"
+
+        # Pick a sensible default model per runtime (can be overridden via job["model"])
+        _default_models = {
+            "claude":   "sonnet",
+            "copilot":  "gpt-4.1",
+            "gemini":   "gemini-1.5-pro",
+            "opencode": "gpt-4o",
+        }
+        model = job.get("model") or _default_models.get(runtime, "sonnet")
+
+        # Build command for agent_manager.py (use relative path)
+        cmd = [
+            "python3",
+            str(self.agent_manager),
+            "--config", str(self.config_file),
+            "--agent", agent,
+            "--runtime", runtime,
+            "--model", model,
+            "--mode", job.get("mode", "restricted"),
+            task,
+            session_id
+        ]
+
+        logger.info(f"[AI Mode] Executing job {job_id}: {task[:60]}...")
+        self._log_job(job_id, f"Starting execution via agent_manager.py (AI mode)")
+
+        # Execute with timeout
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=300  # 5 minute timeout
+        )
+
+        if result.returncode == 0:
+            output = result.stdout.strip()
+            self._log_job(job_id, f"Execution succeeded")
+            self._save_result(job_id, job["name"], success=True, output=output)
+            logger.info(f"Job {job_id} completed successfully")
+
+            # Send notification if enabled
+            if notify:
+                notification_text = f"✅ Job Completed: {job['name']}\n\nTask: {task[:100]}\n\nResult:\n{output[:500]}"
+                self._notify_creator(job, notification_text)
+
+            return output
+        else:
+            error_msg = result.stderr or result.stdout
+            self._log_job(job_id, f"Execution failed: {error_msg[:200]}")
+            self._save_result(job_id, job["name"], success=False, error=error_msg)
+            logger.error(f"Job {job_id} failed with code {result.returncode}")
+
+            # Send error notification if enabled
+            if notify:
+                notification_text = f"❌ Job Failed: {job['name']}\n\nTask: {task[:100]}\n\nError:\n{error_msg[:500]}"
+                self._notify_creator(job, notification_text)
+
+            return None
+
+    def _execute_command_mode(self, job: Dict) -> Optional[str]:
+        """Execute job as direct shell/python command (no LLM)."""
+        job_id = job["id"]
+        task = job.get("task", "")
+        notify = job.get("notify", False)
+        working_dir = job.get("working_dir", "/opt")
+
+        logger.info(f"[Command Mode] Executing job {job_id}: {task[:60]}...")
+        self._log_job(job_id, f"Starting direct command execution (working_dir: {working_dir})")
+
+        try:
+            # Execute shell command directly
+            result = subprocess.run(
+                task,
+                capture_output=True,
+                text=True,
+                timeout=300,  # 5 minute timeout
+                shell=True,
+                cwd=working_dir
+            )
+
+            if result.returncode == 0:
+                output = result.stdout.strip()
+                self._log_job(job_id, f"Command executed successfully")
+                self._save_result(job_id, job["name"], success=True, output=output)
+                logger.info(f"Job {job_id} (command mode) completed successfully")
+
+                # Send notification if enabled
+                if notify:
+                    notification_text = f"✅ Command Completed: {job['name']}\n\nCommand: {task[:100]}\n\nOutput:\n{output[:500]}"
+                    self._notify_creator(job, notification_text)
+
+                return output
+            else:
+                error_msg = result.stderr or result.stdout or f"Command failed with exit code {result.returncode}"
+                self._log_job(job_id, f"Command failed: {error_msg[:200]}")
+                self._save_result(job_id, job["name"], success=False, error=error_msg)
+                logger.error(f"Job {job_id} (command mode) failed with code {result.returncode}")
+
+                # Send error notification if enabled
+                if notify:
+                    notification_text = f"❌ Command Failed: {job['name']}\n\nCommand: {task[:100]}\n\nError:\n{error_msg[:500]}"
+                    self._notify_creator(job, notification_text)
+
+                return None
+
+        except subprocess.TimeoutExpired:
+            raise  # Re-raise to be caught by parent handler
+
+        except Exception as e:
+            raise  # Re-raise to be caught by parent handler
 
     def _is_job_ready(self, job: Dict) -> bool:
         """Check if a job is ready to execute (enabled and time has passed)."""

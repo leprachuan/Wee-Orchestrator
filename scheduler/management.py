@@ -90,9 +90,20 @@ def parse_schedule_to_next_run(schedule: str) -> Optional[str]:
 
 class TaskScheduler:
     def __init__(self, config: Optional[Dict] = None):
-        self.jobs_file = Path(os.getenv("SCHEDULER_JOBS_FILE", "/opt/.task-scheduler/jobs.json"))
-        self.logs_dir = Path(os.getenv("SCHEDULER_LOGS_DIR", "/opt/.task-scheduler/logs/"))
-        self.results_dir = Path(os.getenv("SCHEDULER_RESULTS_DIR", "/opt/.task-scheduler/results/"))
+        # Auto-detect if running in dev or prod environment
+        # Check for dev marker files/directories
+        dev_marker = Path("/opt/n8n-copilot-shim-dev").exists()
+        is_dev = dev_marker and (
+            os.path.exists("/opt/.task-scheduler-dev") or 
+            Path(__file__).parent.parent.name == "n8n-copilot-shim-dev"
+        )
+        
+        # Use environment variables if set, otherwise auto-detect
+        base_dir = "/opt/.task-scheduler-dev" if is_dev else "/opt/.task-scheduler"
+        
+        self.jobs_file = Path(os.getenv("SCHEDULER_JOBS_FILE", f"{base_dir}/jobs.json"))
+        self.logs_dir = Path(os.getenv("SCHEDULER_LOGS_DIR", f"{base_dir}/logs/"))
+        self.results_dir = Path(os.getenv("SCHEDULER_RESULTS_DIR", f"{base_dir}/results/"))
         self.max_retries = int(os.getenv("SCHEDULER_RETRY_MAX", 3))
 
         self.jobs_file.parent.mkdir(parents=True, exist_ok=True)
@@ -124,17 +135,49 @@ class TaskScheduler:
         task: str = "",
         notify: bool = False,
         recurring: bool = True,
+        working_dir: str = None,
         created_by: Optional[Dict] = None,
     ) -> Dict:
         """Create a scheduled task.
 
-        created_by: optional dict with keys 'identity', 'channel', and optionally 'username'.
-        Stored in the job so the executor can send notifications back to the right person.
+        Args:
+            name: Task name
+            schedule: Schedule string (e.g. "every day at 9am", "in 5 minutes")
+            agent: Agent name (default: fosterbot)
+            runtime: Runtime (default: claude)
+            model: Model override
+            mode: Execution mode - 'ai' (LLM-based, default) or 'command' (direct shell)
+            task: Task description or shell command
+            notify: Send notification when done
+            recurring: Whether task repeats
+            working_dir: Working directory for command mode (default: /opt)
+            created_by: Optional dict with identity, channel, username for notifications
+
+        Examples:
+            # AI mode (via LLM agent)
+            scheduler.schedule_task(
+                name="Daily Report",
+                schedule="every day at 9am",
+                mode="ai",
+                task="Generate daily summary",
+                agent="devops"
+            )
+
+            # Command mode (direct execution)
+            scheduler.schedule_task(
+                name="Backup DB",
+                schedule="every day at 2am",
+                mode="command",
+                task="bash /opt/scripts/backup.sh",
+                working_dir="/opt"
+            )
         """
         if agent is None:
             agent = os.getenv("SCHEDULER_DEFAULT_AGENT", "fosterbot")
         if runtime is None:
             runtime = os.getenv("SCHEDULER_DEFAULT_RUNTIME", "claude")
+        if working_dir is None:
+            working_dir = "/opt"
 
         jobs = self._load_jobs()
         job_id = name.lower().replace(" ", "-")
@@ -155,9 +198,10 @@ class TaskScheduler:
             "agent": agent,
             "runtime": runtime,
             "model": model,
-            "mode": mode,
+            "mode": mode or "ai",
             "task": task,
             "schedule": schedule,
+            "working_dir": working_dir,
             "notify": notify,
             "recurring": recurring,
             "created_at": datetime.utcnow().isoformat() + "Z",
@@ -170,7 +214,7 @@ class TaskScheduler:
 
         jobs["jobs"].append(job)
         self._save_jobs(jobs)
-        self._log(job_id, f"Scheduled: {name} (next run: {next_run}, recurring: {recurring})")
+        self._log(job_id, f"Scheduled: {name} (next run: {next_run}, recurring: {recurring}, mode: {mode or 'ai'})")
 
         return {"success": True, "result": job, "message": f"Task '{name}' scheduled for {next_run}"}
 
@@ -190,10 +234,10 @@ class TaskScheduler:
     def update_job(self, job_id: str, updates: Dict) -> Dict:
         """Update fields of an existing job.
 
-        Allowed fields: name, schedule, agent, runtime, task, notify, recurring, enabled.
+        Allowed fields: name, schedule, agent, runtime, task, notify, recurring, enabled, mode, model, working_dir.
         If schedule changes, next_run is recalculated.
         """
-        allowed = {"name", "schedule", "agent", "runtime", "task", "notify", "recurring", "enabled"}
+        allowed = {"name", "schedule", "agent", "runtime", "task", "notify", "recurring", "enabled", "mode", "model", "working_dir"}
         invalid = set(updates.keys()) - allowed
         if invalid:
             return {"success": False, "message": f"Unknown fields: {', '.join(invalid)}"}
