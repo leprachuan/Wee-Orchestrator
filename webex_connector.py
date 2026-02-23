@@ -214,13 +214,15 @@ class WebEXConnector:
                 "X-Auth-Channel": channel,
             }
 
-            # Ensure session exists
-            requests.post(
+            # Create session with our session_id so it's properly tracked
+            create_resp = requests.post(
                 f"{self.api_url}/api/v1/sessions/create",
                 headers=headers,
-                json={},
+                json={"session_id": session_id},
                 timeout=10,
             )
+            if create_resp.status_code != 200:
+                print(f"[WARN] Session create failed ({create_resp.status_code}): {create_resp.text}", file=sys.stderr)
 
             # Execute the query
             resp = requests.post(

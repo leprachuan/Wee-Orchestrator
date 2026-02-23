@@ -20,6 +20,9 @@ from typing import Optional, Tuple, Dict, List
 import secrets as _secrets
 import threading
 
+# Dynamically determine the repo base directory (works regardless of where repo is cloned)
+SCRIPT_BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
 
 class RateLimiter:
     """In-memory per-IP rate limiter with sliding window."""
@@ -1946,11 +1949,11 @@ UNIVERSAL SYNTAX (same for all platforms):
 
 YOUR CURRENT CHANNEL: {channel_upper}
 Save files to YOUR CHANNEL'S DIRECTORY:
-  → /opt/n8n-copilot-shim-dev/{channel}_downloads/
+  → {script_base_dir}/{channel}_downloads/
   
-  ✓ Telegram users: /opt/n8n-copilot-shim-dev/telegram_downloads/
-  ✓ WebEx users: /opt/n8n-copilot-shim-dev/webex_downloads/
-  ✓ WebUI users: /opt/n8n-copilot-shim-dev/webui_downloads/
+  ✓ Telegram users: {script_base_dir}/telegram_downloads/
+  ✓ WebEx users: {script_base_dir}/webex_downloads/
+  ✓ WebUI users: {script_base_dir}/webui_downloads/
 
 SIZE LIMITS:
   Telegram:  50 MB
@@ -1961,20 +1964,20 @@ SUPPORTED FILE TYPES: PDF, DOCX, XLSX, CSV, JSON, PNG, JPG, GIF, WEBP, ZIP, TAR,
 
 EXAMPLES:
 
-1. USER ASKS FOR A SCREENSHOT → Save to: /opt/n8n-copilot-shim-dev/{channel}_downloads/screenshot.png
-   → Return: "Here's the screenshot: [FILE:/opt/n8n-copilot-shim-dev/{channel}_downloads/screenshot.png:Snort Homepage]"
+1. USER ASKS FOR A SCREENSHOT → Save to: {script_base_dir}/{channel}_downloads/screenshot.png
+   → Return: "Here's the screenshot: [FILE:{script_base_dir}/{channel}_downloads/screenshot.png:Snort Homepage]"
    → File sent to {channel_upper} ✓
 
-2. USER ASKS FOR A PDF REPORT → Save to: /opt/n8n-copilot-shim-dev/{channel}_downloads/report.pdf  
-   → Return: "Here's your report: [FILE:/opt/n8n-copilot-shim-dev/{channel}_downloads/report.pdf:Monthly Sales]"
+2. USER ASKS FOR A PDF REPORT → Save to: {script_base_dir}/{channel}_downloads/report.pdf  
+   → Return: "Here's your report: [FILE:{script_base_dir}/{channel}_downloads/report.pdf:Monthly Sales]"
    → File sent to {channel_upper} ✓
 
-3. USER ASKS FOR A DATA EXPORT → Save to: /opt/n8n-copilot-shim-dev/{channel}_downloads/data.csv
-   → Return: "Your export: [FILE:/opt/n8n-copilot-shim-dev/{channel}_downloads/data.csv:User Data]"
+3. USER ASKS FOR A DATA EXPORT → Save to: {script_base_dir}/{channel}_downloads/data.csv
+   → Return: "Your export: [FILE:{script_base_dir}/{channel}_downloads/data.csv:User Data]"
    → File sent to {channel_upper} ✓
 
 HOW IT WORKS:
-  1. Save file to /opt/n8n-copilot-shim-dev/{channel}_downloads/
+  1. Save file to {script_base_dir}/{channel}_downloads/
   2. Include [FILE:path:caption] in your response
   3. System sends file to {channel_upper} automatically ✓
 
@@ -1989,12 +1992,13 @@ IMPORTANT:
         else:  # text (default)
             render_instruction = ""
 
-        # Format render_instruction with channel variables
-        if "{channel" in render_instruction or "{channel_" in render_instruction:
+        # Format render_instruction with channel and script_base_dir variables
+        if "{channel" in render_instruction or "{script_base_dir" in render_instruction:
             channel_upper = channel.upper()
             render_instruction = render_instruction.format(
                 channel=channel,
-                channel_upper=channel_upper
+                channel_upper=channel_upper,
+                script_base_dir=SCRIPT_BASE_DIR
             )
 
         # Add timeout/deadline information with 15% buffer for overhead
@@ -3700,6 +3704,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         identity: str
 
     class SessionCreate(BaseModel):
+        session_id: Optional[str] = None  # Optional: if provided, use this session_id instead of generating
         agent: Optional[str] = None
         model: Optional[str] = None
         runtime: Optional[str] = None
@@ -3865,7 +3870,8 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             x_user_identity=request.headers.get("x-user-identity"),
             x_auth_channel=request.headers.get("x-auth-channel"),
         )
-        session_id = str(uuid4())[:8]
+        # Use provided session_id or generate a new one
+        session_id = body.session_id if body.session_id else str(uuid4())[:8]
         session_mgr.get_or_create_session_data(session_id)
         history_mgr.create_session(user["channel"], user["identity"], session_id)
 
