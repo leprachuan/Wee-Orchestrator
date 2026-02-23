@@ -77,3 +77,4 @@ TELEGRAM_DEV_SETUP.md
 .Trashes
 ehthumbs.db
 telegram_downloads/
+.env
