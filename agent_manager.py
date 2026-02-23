@@ -387,17 +387,17 @@ class SessionManager:
             (
                 "sonnet",
                 "Claude Sonnet (Latest)",
-                ["claude-sonnet", "claude-sonnet-4.5", "sonnet-4.5"],
+                ["claude-sonnet", "claude-sonnet-4-6", "claude-sonnet-4.6", "sonnet-4.6"],
             ),
             (
                 "haiku",
                 "Claude Haiku (Latest)",
-                ["claude-haiku", "claude-haiku-4.5", "haiku-4.5"],
+                ["claude-haiku", "claude-haiku-4-5", "claude-haiku-4.5", "haiku-4.5"],
             ),
             (
                 "opus",
                 "Claude Opus (Latest)",
-                ["claude-opus", "claude-opus-4.5", "opus-4.5"],
+                ["claude-opus", "claude-opus-4-6", "claude-opus-4.6", "opus-4.6"],
             ),
         ]
     }
@@ -444,12 +444,18 @@ class SessionManager:
         ]
     }
 
-    # CODEX models configuration
+    # CODEX models configuration (from copilot CLI --model choices)
     CODEX_MODELS = {
         "OpenAI Models": [
+            ("gpt-5.3-codex", "GPT-5.3 Codex", ["gpt-5.3", "codex-latest"]),
+            ("gpt-5.2-codex", "GPT-5.2 Codex", ["gpt-5.2-codex"]),
+            ("gpt-5.2", "GPT-5.2", ["gpt-5.2"]),
             ("gpt-5.1-codex-max", "GPT-5.1 Codex Max", ["gpt-5.1", "codex-max"]),
-            ("gpt-5-codex", "GPT-5 Codex", ["gpt-5", "codex"]),
-            ("gpt-4-turbo", "GPT-4 Turbo", ["gpt-4-turbo-preview", "gpt-4"]),
+            ("gpt-5.1-codex", "GPT-5.1 Codex", ["codex"]),
+            ("gpt-5.1", "GPT-5.1", []),
+            ("gpt-5.1-codex-mini", "GPT-5.1 Codex Mini", ["codex-mini"]),
+            ("gpt-5-mini", "GPT-5 Mini", ["gpt-5", "mini"]),
+            ("gpt-4.1", "GPT-4.1", ["gpt-4"]),
         ]
     }
 
@@ -1372,8 +1378,29 @@ class SessionManager:
                 result.append(clean_line)
 
         elif runtime == "claude":
+            import json as _json
+            text_parts = []
             for line in lines:
-                result.append(line)
+                line_stripped = line.strip()
+                if not line_stripped:
+                    continue
+                try:
+                    obj = _json.loads(line_stripped)
+                    # Prefer the final result event for the complete text
+                    if obj.get("type") == "result" and not obj.get("is_error", False):
+                        return obj.get("result", "")
+                    # Collect text deltas as fallback
+                    if obj.get("type") == "stream_event":
+                        event = obj.get("event", {})
+                        if event.get("type") == "content_block_delta":
+                            delta = event.get("delta", {})
+                            if delta.get("type") == "text_delta":
+                                text_parts.append(delta.get("text", ""))
+                except (ValueError, KeyError):
+                    # Not JSON — treat as plain text (legacy fallback)
+                    result.append(line)
+            if text_parts:
+                return "".join(text_parts)
 
         elif runtime == "gemini":
             for line in lines:
@@ -2229,11 +2256,28 @@ User Request:
                 stderr_thread = _threading.Thread(target=_drain_stderr, daemon=True)
                 stderr_thread.start()
 
+                import json as _json
+
                 stdout_chunks: list = []
                 try:
                     for line in process.stdout:
                         stdout_chunks.append(line)
-                        loop.call_soon_threadsafe(queue.put_nowait, ("chunk", line))
+                        if runtime == "claude":
+                            # Parse stream-json output and push only text deltas
+                            try:
+                                obj = _json.loads(line.strip())
+                                if obj.get("type") == "stream_event":
+                                    event = obj.get("event", {})
+                                    if event.get("type") == "content_block_delta":
+                                        delta = event.get("delta", {})
+                                        if delta.get("type") == "text_delta":
+                                            text = delta.get("text", "")
+                                            if text:
+                                                loop.call_soon_threadsafe(queue.put_nowait, ("chunk", text))
+                            except (ValueError, KeyError):
+                                pass
+                        else:
+                            loop.call_soon_threadsafe(queue.put_nowait, ("chunk", line))
                 except Exception:
                     pass
                 finally:
@@ -2449,6 +2493,10 @@ User Request:
             permission_mode,
             "--model",
             model,
+            "--output-format",
+            "stream-json",
+            "--include-partial-messages",
+            "--verbose",
         ]
 
         if resume and session_id:
