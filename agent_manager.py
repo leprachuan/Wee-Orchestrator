@@ -354,7 +354,7 @@ class SessionManager:
             (
                 "sonnet",
                 "Claude Sonnet (Latest)",
-                ["claude-sonnet", "claude-sonnet-4-6", "claude-sonnet-4.6", "sonnet-4.6"],
+                ["claude-sonnet", "claude-sonnet-4-6", "claude-sonnet-4.6", "claude-sonnet-4.5", "sonnet-4.6"],
             ),
             (
                 "haiku",
