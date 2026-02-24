@@ -1187,10 +1187,13 @@ document.addEventListener('DOMContentLoaded', () => {
   // --- Dev Detection ---
   const isDev = window.location.port === '8001';
   if (isDev) {
-    const sidebarTitle = document.querySelector('.sidebar-title');
-    if (sidebarTitle) {
-      sidebarTitle.textContent = 'Wee-Orchestrator (dev)';
-      sidebarTitle.style.color = '#60a5fa'; // Light blue for dev
+    const sidebarHeader = document.querySelector('.sidebar-header');
+    if (sidebarHeader) {
+      // Create orange pulsing DEV pill
+      const devBadge = document.createElement('span');
+      devBadge.className = 'dev-badge';
+      devBadge.innerHTML = '🔧 DEV';
+      sidebarHeader.appendChild(devBadge);
     }
   }
 
