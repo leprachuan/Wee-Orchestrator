@@ -7,8 +7,10 @@
   <meta name="apple-mobile-web-app-capable" content="true" />
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
   <meta name="apple-mobile-web-app-title" content="Wee Orchestrator" />
-  <meta name="theme-color" content="#0a0e1a" />
+  <meta name="theme-color" content="#ff6b35" />
   <title>Wee — Orchestrator 🍀</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' fill='%23ff6b35' rx='20'/><g transform='translate(50, 50)'><rect x='-2' y='0' width='4' height='20' fill='%232d5016'/><circle cx='0' cy='-15' r='10' fill='%23ffa500'/><circle cx='-13' cy='5' r='10' fill='%23ff9500'/><circle cx='13' cy='5' r='10' fill='%23ffb500'/></g></svg>" />
+  <link rel="apple-touch-icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' fill='%23ff6b35' rx='20'/><g transform='translate(50, 50)'><rect x='-2' y='0' width='4' height='20' fill='%232d5016'/><circle cx='0' cy='-15' r='10' fill='%23ffa500'/><circle cx='-13' cy='5' r='10' fill='%23ff9500'/><circle cx='13' cy='5' r='10' fill='%23ffb500'/></g></svg>" />
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/highlight.js@11.9.0/styles/github-dark.min.css" />
   <link rel="stylesheet" href="app.css" />
 </head>
@@ -65,6 +67,7 @@
       <div class="sidebar-header">
         <span class="sidebar-logo">🍀</span>
         <span class="sidebar-title">Wee-Orchestrator</span>
+        <span id="dev-badge" class="dev-badge" style="display: none;">🔧 DEV</span>
         <button id="btn-sidebar-toggle" class="btn-icon sidebar-toggle-btn" title="Close sidebar">‹</button>
       </div>
 
@@ -79,6 +82,32 @@
       <div class="sidebar-footer">
         <span id="sidebar-identity" class="sidebar-user"></span>
         <button id="btn-logout" class="btn btn-ghost btn-sm">Logout</button>
+      </div>
+    </aside>
+
+    <!-- REQUEST QUEUE PANEL -->
+    <aside id="request-queue-panel" class="request-queue-panel queue-hidden">
+      <!-- Queue Header -->
+      <div class="queue-header">
+        <div class="queue-header-title">
+          <span class="queue-icon">📋</span>
+          <span class="queue-label">Queued</span>
+          <span id="queue-count" class="queue-count">0</span>
+        </div>
+        <div class="queue-header-buttons">
+          <button id="btn-pause-queue" class="queue-pause-btn" title="Pause auto-submit">⏸</button>
+          <button id="btn-toggle-queue" class="queue-toggle-btn" title="Collapse queue">‹</button>
+        </div>
+      </div>
+      
+      <!-- Queue Items List -->
+      <div id="queue-items-list" class="queue-items-list">
+        <p class="queue-empty">No queued requests</p>
+      </div>
+      
+      <!-- Queue Footer -->
+      <div class="queue-footer">
+        <small id="queue-status-msg">Requests will auto-submit when current message completes</small>
       </div>
     </aside>
 
@@ -183,3 +212,102 @@
   <script src="app.js" type="module"></script>
 </body>
 </html>
+<script>
+  // Scheduler form enhancement: mode toggle + agent select dropdown
+  function enhanceJobEditForm() {
+    const observer = new MutationObserver(() => {
+      const form = document.querySelector('#sched-job-form');
+      if (form && !form.hasAttribute('data-enhanced')) {
+        form.setAttribute('data-enhanced', 'true');
+        convertAgentToSelect(form);
+        injectModeToggle(form);
+      }
+    });
+    
+    const detail = document.getElementById('sched-detail');
+    if (detail) {
+      observer.observe(detail, { childList: true, subtree: true });
+    }
+  }
+  
+  function convertAgentToSelect(form) {
+    const agentInput = form.querySelector('input[name="agent"]');
+    if (!agentInput) return;
+    
+    const currentAgent = agentInput.value || 'fosterbot';
+    const select = document.createElement('select');
+    select.className = 'glass-input glass-select';
+    select.name = 'agent';
+    
+    const agents = [
+      { value: 'fosterbot', label: 'Fosterbot (Orchestrator)' },
+      { value: 'smart_home', label: 'Smart Home' },
+      { value: 'email_triage', label: 'Email Triage' },
+      { value: 'opencode', label: 'OpenCode' },
+      { value: 'devops', label: 'DevOps' },
+      { value: 'family', label: 'Family Knowledge' },
+    ];
+    
+    agents.forEach(agent => {
+      const option = document.createElement('option');
+      option.value = agent.value;
+      option.textContent = agent.label;
+      if (agent.value === currentAgent) option.selected = true;
+      select.appendChild(option);
+    });
+    
+    agentInput.replaceWith(select);
+  }
+  
+  function injectModeToggle(form) {
+    const nameGroup = form.querySelector('input[name="name"]')?.closest('.form-group');
+    if (!nameGroup || form.querySelector('.task-mode-toggle')) return;
+    
+    // Get the actual mode value from the hidden input
+    const modeInput = form.querySelector('input[name="mode"]');
+    const currentMode = modeInput ? modeInput.value : 'ai';
+    
+    const toggleDiv = document.createElement('div');
+    toggleDiv.className = 'task-mode-toggle';
+    toggleDiv.innerHTML = `
+      <span class="task-mode-label">Task Type:</span>
+      <div class="toggle-switch">
+        <button type="button" class="toggle-option ${currentMode === 'ai' ? 'active ai' : ''}" data-mode="ai">🤖 AI</button>
+        <button type="button" class="toggle-option ${currentMode === 'command' ? 'active command' : ''}" data-mode="command">⚙️ Command</button>
+      </div>
+    `;
+    
+    nameGroup.insertAdjacentElement('afterend', toggleDiv);
+    
+    // IMPORTANT: Set the form class based on actual mode value
+    form.classList.remove('task-mode-ai', 'task-mode-command');
+    form.classList.add(`task-mode-${currentMode}`);
+    
+    const runtimeGroup = form.querySelector('select[name="runtime"]')?.closest('.form-group');
+    const modelGroup = form.querySelector('input[name="model"]')?.closest('.form-group');
+    if (runtimeGroup) runtimeGroup.classList.add('ai-only');
+    if (modelGroup) modelGroup.classList.add('ai-only');
+    
+    form.querySelector('input[name="working_dir"]')?.closest('.form-group')?.remove();
+    
+    form.querySelectorAll('.toggle-option').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.preventDefault();
+        const mode = btn.dataset.mode;
+        form.classList.remove('task-mode-ai', 'task-mode-command');
+        form.classList.add(`task-mode-${mode}`);
+        form.querySelectorAll('.toggle-option').forEach(b => {
+          b.classList.remove('active', 'ai', 'command');
+          if (b.dataset.mode === mode) b.classList.add('active', mode);
+        });
+        const modeField = form.querySelector('input[name="mode"]');
+        if (modeField) modeField.value = mode;
+      });
+    });
+  }
+  
+  document.addEventListener('DOMContentLoaded', () => {
+    setTimeout(enhanceJobEditForm, 500);
+  });
+</script>
+</body></html>

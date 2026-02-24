@@ -62,20 +62,48 @@ class AuthManager:
         pairing_code_length: int = 6,
         pairing_code_ttl: int = 300,
         session_token_ttl: int = 3600,
+        sessions_file: Optional[str] = None,
     ):
         self.shared_key = shared_key
         self.pairing_code_length = pairing_code_length
         self.pairing_code_ttl = pairing_code_ttl
         self.session_token_ttl = session_token_ttl
+        self.sessions_file = sessions_file or "/opt/.task-scheduler-dev/sessions.json"
         self.pairing_codes: Dict[str, dict] = {}
         self.session_tokens: Dict[str, dict] = {}
         self._lock = threading.Lock()
+        self._load_sessions()
 
     def validate_shared_key(self, token: str) -> bool:
         """Validate a Bearer token as a shared key. Expects 'shared_<key>'."""
         if not token.startswith("shared_"):
             return False
         return token[7:] == self.shared_key
+
+    def _load_sessions(self):
+        """Load persisted sessions from file on startup."""
+        if not os.path.exists(self.sessions_file):
+            return
+        try:
+            with open(self.sessions_file) as f:
+                data = json.load(f)
+                now = time.time()
+                with self._lock:
+                    for token, entry in data.items():
+                        if entry.get("expires_at", 0) > now:
+                            self.session_tokens[token] = entry
+        except Exception:
+            pass
+
+    def _save_sessions(self):
+        """Persist sessions to file."""
+        try:
+            os.makedirs(os.path.dirname(self.sessions_file), exist_ok=True)
+            with open(self.sessions_file, "w") as f:
+                json.dump(self.session_tokens, f)
+        except Exception:
+            pass
+
 
     def generate_pairing_code(self, identity: str, channel: str) -> str:
         """Generate a numeric pairing code and store it."""
@@ -114,6 +142,7 @@ class AuthManager:
                 "last_used": now,
                 "expires_at": now + self.session_token_ttl,
             }
+        self._save_sessions()
         return token
 
     def validate_session_token(self, token: str) -> Optional[dict]:
@@ -124,9 +153,11 @@ class AuthManager:
                 return None
             if time.time() > entry["expires_at"]:
                 del self.session_tokens[token]
+                self._save_sessions()
                 return None
             entry["last_used"] = time.time()
             entry["expires_at"] = time.time() + self.session_token_ttl
+            self._save_sessions()
             return {"identity": entry["identity"], "channel": entry["channel"]}
 
     def cleanup_expired(self):
@@ -139,6 +170,8 @@ class AuthManager:
             for token in list(self.session_tokens):
                 if now > self.session_tokens[token]["expires_at"]:
                     del self.session_tokens[token]
+        self._save_sessions()
+
 
 
 # Executable resolution
@@ -3571,17 +3604,26 @@ def _send_pairing_code(channel: str, identity: str, code: str) -> None:
                 f"Your pairing code is: {code}\nIt expires in 5 minutes.",
             )
         elif channel == "webex":
-            from webex_connector import WebEXConnector
-
             config_path = os.path.join(script_dir, "webex_config.json")
             with open(config_path) as f:
                 cfg = json.load(f)
-            token = cfg.get("bot_token") or os.getenv("WEBEX_BOT_TOKEN", "")
-            connector = WebEXConnector(token, config_file=config_path)
-            connector.send_message(
-                identity,
-                f"Your pairing code is: {code}\nIt expires in 5 minutes.",
+            token = cfg.get("bot_token") or cfg.get("token") or os.getenv("WEBEX_BOT_TOKEN", "")
+            msg = f"Your pairing code is: **{code}**\nIt expires in 5 minutes."
+            # If identity looks like an email, use toPersonEmail; otherwise treat as roomId
+            import re as _re
+            if _re.match(r"[^@]+@[^@]+\.[^@]+", identity):
+                payload = {"toPersonEmail": identity, "text": msg, "markdown": msg}
+            else:
+                payload = {"roomId": identity, "text": msg, "markdown": msg}
+            import requests as _req
+            resp = _req.post(
+                "https://webexapis.com/v1/messages",
+                headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+                json=payload,
+                timeout=10,
             )
+            if resp.status_code != 200:
+                print(f"[API] WebEX send failed ({resp.status_code}): {resp.text[:200]}", file=sys.stderr)
     except Exception as exc:  # noqa: BLE001
         print(f"[API] Warning: could not send pairing code via {channel}: {exc}")
 
@@ -3688,6 +3730,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
     PAIRING_CODE_TTL = int(os.environ.get("PAIRING_CODE_TTL", "300"))
     SESSION_TOKEN_TTL = int(os.environ.get("SESSION_TOKEN_TTL", "3600"))
     CONFIG_FILE = os.environ.get("AGENT_CONFIG_FILE")
+    SCHEDULER_JOBS_FILE = os.environ.get("SCHEDULER_JOBS_FILE", "/opt/.task-scheduler-dev/jobs.json")
     SCHEDULER_ENABLED = os.environ.get("SCHEDULER_ENABLED", "true").strip().lower() not in ("false", "0", "no")
 
     # ---- shared instances ----
@@ -3696,6 +3739,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         pairing_code_length=PAIRING_CODE_LENGTH,
         pairing_code_ttl=PAIRING_CODE_TTL,
         session_token_ttl=SESSION_TOKEN_TTL,
+        sessions_file=os.path.join(os.path.dirname(SCHEDULER_JOBS_FILE), "sessions.json"),
     )
     _api_auth_manager = auth_mgr
     rate_limiter = RateLimiter()
@@ -3823,6 +3867,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         """Public endpoint — returns feature flags for the WebUI."""
         return {
             "scheduler_enabled": SCHEDULER_ENABLED,
+            "app_env": APP_ENV,
         }
 
     @app.post("/api/v1/auth/request-pairing")
@@ -4262,7 +4307,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             agent: Optional[str] = None
             runtime: Optional[str] = None
             model: Optional[str] = None
-            mode: Optional[str] = None  # "yolo" or "restricted"
+            mode: Optional[str] = None  # "ai" (default, uses LLM) or "command" (shell)
             task: str = ""
             notify: bool = False
             recurring: bool = True
@@ -4273,7 +4318,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             agent: Optional[str] = None
             runtime: Optional[str] = None
             model: Optional[str] = None
-            mode: Optional[str] = None  # "yolo" or "restricted"
+            mode: Optional[str] = None  # "ai" (default, uses LLM) or "command" (shell)
             task: Optional[str] = None
             notify: Optional[bool] = None
             recurring: Optional[bool] = None
@@ -4397,8 +4442,8 @@ def start_api_server():
     import uvicorn
 
     app = create_api_app()
-    port = int(os.environ.get("API_PORT", "8080"))
-    host = os.environ.get("API_HOST", "0.0.0.0")
+    port = int(os.environ.get("API_PORT", "8001"))  # DEV: default 8001 to avoid collision with prod
+    host = os.environ.get("API_HOST", "127.0.0.1")
 
     # Support comma-separated hosts (e.g. "127.0.0.1,100.x.x.x" for Tailscale + localhost).
     # When multiple hosts are specified, run each in a background thread and block on the last.

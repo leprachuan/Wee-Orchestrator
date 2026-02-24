@@ -76,3 +76,5 @@ TELEGRAM_DEV_SETUP.md
 .Spotlight-V100
 .Trashes
 ehthumbs.db
+telegram_downloads/
+.env
