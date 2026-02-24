@@ -267,21 +267,23 @@ html, body {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 16px;
+  padding: 12px 12px;
   border-bottom: 1px solid var(--glass-border);
   flex-shrink: 0;
+  flex-wrap: wrap;
+  row-gap: 8px;
 }
 
-.sidebar-logo { font-size: 22px; }
+.sidebar-logo { font-size: 22px; flex-shrink: 0; }
 
 .sidebar-title {
-  font-size: 18px;
+  font-size: 16px;
   font-weight: 700;
-  flex: 1;
+  flex-shrink: 0;
   white-space: nowrap;
 }
 
-.sidebar-toggle-btn { margin-left: auto; }
+.sidebar-toggle-btn { margin-left: auto; flex-shrink: 0; }
 
 .new-chat-btn {
   margin: 12px 12px 8px;
