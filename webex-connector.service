@@ -20,11 +20,11 @@ SyslogIdentifier=webex-connector
 Environment="PATH=/home/flipkey/.local/bin:/home/flipkey/.nvm/versions/node/v22.22.0/bin:/usr/local/bin:/usr/bin:/bin"
 Environment="DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus"
 Environment="XDG_RUNTIME_DIR=/run/user/1000"
-Environment="WEBEX_BOT_TOKEN=MjRmMDVjMGUtNjYyYS00ZDk0LWI0N2EtOTc0YjAyODRkODU3NDAzN2QzNWItYjdh_PF84_1eb65fdf-9643-417f-9974-ad72cae0e10f"
+Environment="WEBEX_BOT_TOKEN=YOUR_WEBEX_BOT_TOKEN_HERE
 Environment="RABBITMQ_HOST=192.168.0.85"
 Environment="RABBITMQ_PORT=5672"
 Environment="RABBITMQ_USER=admin"
-Environment="RABBITMQ_PASSWORD=[REDACTED-RABBITMQ-PASSWORD]"
+Environment="RABBITMQ_PASSWORD=YOUR_RABBITMQ_PASSWORD_HERE
 Environment="RABBITMQ_QUEUE=webex"
 
 # Security
