@@ -1184,6 +1184,16 @@ async function initApp() {
 // ─── Boot ─────────────────────────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', () => {
 
+  // --- Dev Detection ---
+  const isDev = window.location.port === '8001';
+  if (isDev) {
+    const sidebarTitle = document.querySelector('.sidebar-title');
+    if (sidebarTitle) {
+      sidebarTitle.textContent = 'Wee-Orchestrator (dev)';
+      sidebarTitle.style.color = '#60a5fa'; // Light blue for dev
+    }
+  }
+
   // --- Auth ---
   $('auth-channel').addEventListener('change', updateChannelUX);
   updateChannelUX();
