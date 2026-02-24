@@ -683,10 +683,12 @@ async function sendMessageStreaming(query, sessionId) {
               .replace(/</g, '&lt;')
               .replace(/>/g, '&gt;')
               .replace(/\n\n+/g, '\n\n')  // normalize paragraph breaks
-              .replace(/:\s+/g, ':\n')    // break after colons (thought breaks)
-              .replace(/\.\s+/g, '.\n')   // break after periods
-              .replace(/\?\s+/g, '?\n')   // break after questions
-              .replace(/\!\s+/g, '!\n')   // break after exclamations
+              .replace(/:\s*(?=[A-Z])/g, ':\n')  // colon followed by capital letter
+              .replace(/:\s+/g, ':\n')    // colon followed by space
+              .replace(/\.\s*(?=[A-Z])/g, '.\n')  // period followed by capital letter
+              .replace(/\.\s+/g, '.\n')   // period followed by space
+              .replace(/\?\s+/g, '?\n')   // questions
+              .replace(/\!\s+/g, '!\n')   // exclamations
               .replace(/\n\n+/g, '</p><p>')  // paragraph breaks
               .replace(/\n/g, '<br>');    // line breaks
             streamBubble.innerHTML = formatted ? `<p>${formatted}</p>` : '';
