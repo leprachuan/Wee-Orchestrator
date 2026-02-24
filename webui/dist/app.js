@@ -932,22 +932,23 @@ async function sendMessageStreaming(query, sessionId) {
             ({ row: streamRow, bubble: streamBubble } = createStreamingBubble());
 
           } else if (evt.type === 'chunk' && streamBubble) {
-            rawText += evt.text;
+            // New: semantic markers from backend
+            if (evt.ends_paragraph) {
+              rawText += evt.text + '\n\n';
+            } else if (evt.ends_sentence) {
+              rawText += evt.text + '\n';
+            } else {
+              rawText += evt.text;
+            }
+
             // Show formatted text while streaming so it feels instant
             streamBubble.classList.add('streaming');
-            // Format streaming text with intelligent line breaks
+            // Format streaming text with semantic awareness
             let formatted = rawText
               .replace(/</g, '&lt;')
               .replace(/>/g, '&gt;')
-              .replace(/\n\n+/g, '\n\n')  // normalize paragraph breaks
-              .replace(/:\s*(?=[A-Z])/g, ':\n')  // colon followed by capital letter
-              .replace(/:\s+/g, ':\n')    // colon followed by space
-              .replace(/\.\s*(?=[A-Z])/g, '.\n')  // period followed by capital letter
-              .replace(/\.\s+/g, '.\n')   // period followed by space
-              .replace(/\?\s+/g, '?\n')   // questions
-              .replace(/\!\s+/g, '!\n')   // exclamations
               .replace(/\n\n+/g, '</p><p>')  // paragraph breaks
-              .replace(/\n/g, '<br>');    // line breaks
+              .replace(/\n/g, '<br>');      // line breaks
             streamBubble.innerHTML = formatted ? `<p>${formatted}</p>` : '';
             scrollToBottom();
 

@@ -2243,7 +2243,15 @@ User Request:
                                         if delta.get("type") == "text_delta":
                                             text = delta.get("text", "")
                                             if text:
-                                                loop.call_soon_threadsafe(queue.put_nowait, ("chunk", text))
+                                                # Detect semantic markers
+                                                ends_sentence = any(text.rstrip().endswith(p) for p in '.!?')
+                                                ends_paragraph = '\n\n' in text or text.strip() == ''
+                                                chunk_data = {
+                                                    'text': text,
+                                                    'ends_sentence': ends_sentence,
+                                                    'ends_paragraph': ends_paragraph
+                                                }
+                                                loop.call_soon_threadsafe(queue.put_nowait, ("chunk", chunk_data))
                             except (ValueError, KeyError):
                                 pass
                         else:
@@ -4056,7 +4064,12 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                                 continue
 
                             if kind == "chunk":
-                                yield f"data: {_json.dumps({'type': 'chunk', 'text': data})}\n\n"
+                                # data is now a dict with text, ends_sentence, ends_paragraph
+                                if isinstance(data, dict):
+                                    yield f"data: {_json.dumps({'type': 'chunk', **data})}\n\n"
+                                else:
+                                    # Fallback for non-Claude runtimes
+                                    yield f"data: {_json.dumps({'type': 'chunk', 'text': data})}\n\n"
                             elif kind == "done":
                                 break  # subprocess finished; final result in future
                     except Exception as exc:
