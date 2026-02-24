@@ -78,3 +78,20 @@ TELEGRAM_DEV_SETUP.md
 ehthumbs.db
 telegram_downloads/
 .env
+
+# Secrets and credentials
+*.env
+*.env.local
+*.env.*.local
+webex_config.json
+telegram_config.json
+.env.prod
+.env.dev
+
+# Documentation with credentials
+*SETUP*.md
+*DEPLOYMENT*.md
+*QUICK*.md
+
+# Secrets scanning
+.gitleaks.toml
