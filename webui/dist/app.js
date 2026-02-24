@@ -935,12 +935,17 @@ async function sendMessageStreaming(query, sessionId) {
             rawText += evt.text;
             // Show formatted text while streaming so it feels instant
             streamBubble.classList.add('streaming');
-            // Preserve line breaks and escape HTML, but keep text readable
-            const formatted = rawText
+            // Format streaming text with intelligent line breaks
+            let formatted = rawText
               .replace(/</g, '&lt;')
               .replace(/>/g, '&gt;')
+              .replace(/\n\n+/g, '\n\n')  // normalize paragraph breaks
+              .replace(/:\s+/g, ':\n')    // break after colons (thought breaks)
+              .replace(/\.\s+/g, '.\n')   // break after periods
+              .replace(/\?\s+/g, '?\n')   // break after questions
+              .replace(/\!\s+/g, '!\n')   // break after exclamations
               .replace(/\n\n+/g, '</p><p>')  // paragraph breaks
-              .replace(/\n/g, '<br>');       // line breaks
+              .replace(/\n/g, '<br>');    // line breaks
             streamBubble.innerHTML = formatted ? `<p>${formatted}</p>` : '';
             scrollToBottom();
 
