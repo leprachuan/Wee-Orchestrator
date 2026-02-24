@@ -856,6 +856,7 @@ class SessionManager:
             "agent": get_default_agent(),
             "runtime": default_runtime,
             "bot_id": bot_id,
+            "render_type": "markdown",
         }
 
         if n8n_session_id not in session_map:
