@@ -162,6 +162,82 @@ curl http://127.0.0.1:8001/health
 
 ## Configuration
 
+### Credential Management ⚠️ SECURITY CRITICAL
+
+**⛔ NEVER commit credentials to the repository!**
+
+Service files contain placeholders for credentials:
+
+```bash
+# ❌ DON'T DO THIS - Hardcoded secrets
+Environment="TELEGRAM_BOT_TOKEN=[REDACTED-TELEGRAM-TOKEN]"
+
+# ✅ DO THIS - Placeholder in repo
+Environment="TELEGRAM_BOT_TOKEN=YOUR_TELEGRAM_BOT_TOKEN_HERE"
+```
+
+**Methods to set credentials securely:**
+
+#### Option 1: Environment Variables (Recommended)
+
+```bash
+# Set before starting service
+export TELEGRAM_BOT_TOKEN="your_actual_token_here"
+export WEBEX_BOT_TOKEN="your_actual_token_here"
+
+# Or use systemctl set-environment
+sudo systemctl set-environment TELEGRAM_BOT_TOKEN="your_actual_token_here"
+
+# Start service
+sudo systemctl start telegram-bot-listener.service
+```
+
+#### Option 2: Systemd Drop-In Override
+
+```bash
+# Create override directory
+sudo mkdir -p /etc/systemd/system/telegram-bot-listener.service.d/
+
+# Create override file with secrets
+sudo tee /etc/systemd/system/telegram-bot-listener.service.d/override.conf << EOF
+[Service]
+Environment="TELEGRAM_BOT_TOKEN=your_actual_token_here"
+EOF
+
+# Protect the override file
+sudo chmod 600 /etc/systemd/system/telegram-bot-listener.service.d/override.conf
+
+# Reload and restart
+sudo systemctl daemon-reload
+sudo systemctl restart telegram-bot-listener.service
+```
+
+#### Option 3: .env File (with caution)
+
+```bash
+# Create .env file in working directory
+cat > /opt/n8n-copilot-shim/.env << EOF
+TELEGRAM_BOT_TOKEN=your_actual_token_here
+WEBEX_BOT_TOKEN=your_actual_token_here
+RABBITMQ_PASSWORD=your_password_here
+EOF
+
+# Protect it
+chmod 600 /opt/n8n-copilot-shim/.env
+
+# Modify service to load it
+# Add to [Service] section:
+# EnvironmentFile=/opt/n8n-copilot-shim/.env
+```
+
+**Best Practice:** Use Option 2 (systemd drop-in overrides) for production.
+
+### Getting Credentials
+
+- **Telegram:** Message @BotFather, get token from `/newbot` command
+- **WebEx:** Create bot at https://developer.webex.com/my-apps
+- **RabbitMQ:** Set username/password when deploying RabbitMQ
+
 ### Environment Variables
 
 Services can be configured via environment variables in the service files:
