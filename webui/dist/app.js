@@ -15,14 +15,10 @@ const STATE = {
   identityResolved: null,  // resolved numeric ID during auth
   currentSessionId: null,
   isTyping:        false,
-  isProcessing:    false,  // true when waiting for AI response
   pendingFiles:    [],
   sessions:        [],
   activeSessionId: null,
   schedulerEnabled: true,  // overridden by /api/v1/config on boot
-  requestQueue:    [],     // queued requests while processing
-  queuePaused:     false,  // true to prevent auto-submit of next queued message
-  currentProcessingQueueId: null,  // ID of queue item currently being processed
 };
 
 // ─── Persist ──────────────────────────────────────────────────────────────────
@@ -583,245 +579,8 @@ async function deleteSession(sessionId) {
   }
 }
 
-// ─── REQUEST QUEUE MANAGEMENT ──────────────────────────────────────────────
-
-function generateQueueId() {
-  return Math.random().toString(36).substring(2) + Date.now().toString(36);
-}
-
-function queueRequest(text, files = []) {
-  const queueItem = {
-    id: generateQueueId(),
-    text: text,
-    files: files,
-    timestamp: Date.now(),
-    status: 'pending'
-  };
-  
-  STATE.requestQueue.push(queueItem);
-  renderQueuePanel();
-  showQueuePanel();
-}
-
-function setQueueItemStatus(queueId, status) {
-  const item = STATE.requestQueue.find(q => q.id === queueId);
-  if (item) {
-    item.status = status;
-    renderQueuePanel();
-  }
-}
-
-function markCurrentQueueAsProcessing(queueId) {
-  STATE.currentProcessingQueueId = queueId;
-  setQueueItemStatus(queueId, 'processing');
-}
-
-function markCurrentQueueAsCompleted() {
-  if (STATE.currentProcessingQueueId) {
-    setQueueItemStatus(STATE.currentProcessingQueueId, 'completed');
-    STATE.currentProcessingQueueId = null;
-  }
-}
-
-function markCurrentQueueAsFailed() {
-  if (STATE.currentProcessingQueueId) {
-    setQueueItemStatus(STATE.currentProcessingQueueId, 'failed');
-    STATE.currentProcessingQueueId = null;
-  }
-}
-
-function processNextQueue() {
-  if (STATE.requestQueue.length === 0) {
-    hideQueuePanel();
-    STATE.isProcessing = false;
-    return;
-  }
-  
-  // Get first item and remove from queue
-  const nextRequest = STATE.requestQueue.shift();
-  renderQueuePanel();
-  
-  // Prepare textarea with queued request
-  const textarea = $('message-input');
-  textarea.value = nextRequest.text;
-  autoResizeTextarea(textarea);
-  syncMirror();
-  
-  // Restore pending files
-  STATE.pendingFiles = nextRequest.files || [];
-  renderFilePreviews();
-  
-  // Mark this item as processing
-  markCurrentQueueAsProcessing(nextRequest.id);
-  
-  // Send the request (sendMessage will handle isProcessing state)
-  sendMessage();
-}
-
-function deleteQueueItem(queueId) {
-  STATE.requestQueue = STATE.requestQueue.filter(item => item.id !== queueId);
-  renderQueuePanel();
-  if (STATE.requestQueue.length === 0) {
-    hideQueuePanel();
-  }
-}
-
-function editQueueItem(queueId) {
-  const item = STATE.requestQueue.find(q => q.id === queueId);
-  if (!item) return;
-  
-  // Remove from queue
-  STATE.requestQueue = STATE.requestQueue.filter(q => q.id !== queueId);
-  
-  // Put back in textarea for editing
-  const textarea = $('message-input');
-  textarea.value = item.text;
-  autoResizeTextarea(textarea);
-  syncMirror();
-  
-  // Restore files
-  STATE.pendingFiles = item.files || [];
-  renderFilePreviews();
-  
-  renderQueuePanel();
-  if (STATE.requestQueue.length === 0) {
-    hideQueuePanel();
-  }
-  
-  // Focus textarea
-  textarea.focus();
-}
-
-function showQueuePanel() {
-  const panel = $('request-queue-panel');
-  if (panel) {
-    panel.classList.remove('queue-hidden');
-  }
-}
-
-function hideQueuePanel() {
-  const panel = $('request-queue-panel');
-  if (panel) {
-    panel.classList.add('queue-hidden');
-  }
-}
-
-function renderQueuePanel() {
-  const queueList = $('queue-items-list');
-  if (!queueList) return;
-  
-  // Update pause button and status message
-  const pauseBtn = $('btn-pause-queue');
-  const statusMsg = $('queue-status-msg');
-  if (pauseBtn) {
-    pauseBtn.textContent = STATE.queuePaused ? '▶' : '⏸';
-    pauseBtn.title = STATE.queuePaused ? 'Resume auto-submit' : 'Pause auto-submit';
-  }
-  if (statusMsg) {
-    statusMsg.textContent = STATE.queuePaused 
-      ? 'Queue paused — click ▶ to resume auto-submit'
-      : 'Requests will auto-submit when current message completes';
-  }
-  
-  if (STATE.requestQueue.length === 0) {
-    queueList.innerHTML = '<p class="queue-empty">No queued requests</p>';
-    const counter = $('queue-count');
-    if (counter) counter.textContent = '0';
-    return;
-  }
-  
-  const counter = $('queue-count');
-  if (counter) counter.textContent = STATE.requestQueue.length;
-  
-  queueList.innerHTML = STATE.requestQueue.map((item, idx) => {
-    const preview = item.text.substring(0, 60).replace(/</g, '&lt;').replace(/>/g, '&gt;');
-    const fileCount = item.files ? item.files.length : 0;
-    const fileLabel = fileCount > 0 ? ` 📎 ${fileCount}` : '';
-    const time = new Date(item.timestamp).toLocaleTimeString();
-    
-    // Determine status indicator class and symbol
-    let statusClass = 'queue-status-pending';
-    let statusSymbol = '◯';  // Empty circle for pending
-    
-    if (item.status === 'completed') {
-      statusClass = 'queue-status-completed';
-      statusSymbol = '●';  // Filled green circle
-    } else if (item.status === 'failed') {
-      statusClass = 'queue-status-failed';
-      statusSymbol = '●';  // Filled red circle
-    } else if (item.status === 'processing') {
-      statusClass = 'queue-status-processing';
-      statusSymbol = '◐';  // Half-filled circle for processing
-    }
-    
-    return `
-      <div class="queue-item ${statusClass}" data-queue-id="${item.id}">
-        <div class="queue-item-header">
-          <span class="queue-status-dot ${statusClass}">${statusSymbol}</span>
-          <span class="queue-item-number">#${idx + 1}</span>
-          <span class="queue-item-time">${time}</span>
-        </div>
-        <div class="queue-item-preview">"${preview}${preview.length >= 60 ? '...' : ''}"${fileLabel}</div>
-        <div class="queue-item-actions">
-          <button class="queue-btn-edit" title="Edit request">✎ Edit</button>
-          <button class="queue-btn-delete" title="Delete request">✕ Delete</button>
-        </div>
-      </div>
-    `;
-  }).join('');
-  
-  // Add event listeners
-  queueList.querySelectorAll('.queue-btn-edit').forEach(btn => {
-    btn.addEventListener('click', (e) => {
-      const queueId = btn.closest('.queue-item').dataset.queueId;
-      editQueueItem(queueId);
-    });
-  });
-  
-  queueList.querySelectorAll('.queue-btn-delete').forEach(btn => {
-    btn.addEventListener('click', (e) => {
-      const queueId = btn.closest('.queue-item').dataset.queueId;
-      deleteQueueItem(queueId);
-    });
-  });
-}
-
-function toggleQueuePanel() {
-  const panel = $('request-queue-panel');
-  if (panel) {
-    panel.classList.toggle('queue-minimized');
-  }
-}
-
-function toggleQueuePause() {
-  STATE.queuePaused = !STATE.queuePaused;
-  renderQueuePanel();
-  
-  // If resuming and not currently processing, start processing queued items
-  if (!STATE.queuePaused && !STATE.isProcessing && STATE.requestQueue.length > 0) {
-    processNextQueue();
-  }
-}
-
 // ─── Messaging ────────────────────────────────────────────────────────────────
 async function sendMessage() {
-  // If already processing, queue this request instead
-  if (STATE.isProcessing) {
-    const textarea = $('message-input');
-    let query = textarea.value.trim();
-    if (!query && STATE.pendingFiles.length === 0) return;
-    
-    queueRequest(query, [...STATE.pendingFiles]);
-    
-    // Clear input after queuing
-    textarea.value = '';
-    autoResizeTextarea(textarea);
-    syncMirror();
-    clearPendingFiles();
-    $('btn-send').disabled = true;
-    return;
-  }
-
   if (STATE.isTyping) return;
 
   const textarea = $('message-input');
@@ -848,31 +607,15 @@ async function sendMessage() {
   $('btn-send').disabled = true;
   hideCommandDropdown();
 
-  STATE.isProcessing = true;
   showTyping();
   try {
     const result = await sendMessageStreaming(query, STATE.currentSessionId);
     hideTyping();
-    STATE.isProcessing = false;
-    
-    // Mark current queue item as completed
-    markCurrentQueueAsCompleted();
-    
-    // Auto-submit next queued request if any (unless queue is paused)
-    if (STATE.requestQueue.length > 0 && !STATE.queuePaused) {
-      processNextQueue();
-    }
-    
     // Refresh meta — a /agent set etc. may have changed things
     await fetchAndUpdateMeta(STATE.currentSessionId);
     await loadSessions();
   } catch (err) {
     hideTyping();
-    STATE.isProcessing = false;
-    
-    // Mark current queue item as failed
-    markCurrentQueueAsFailed();
-    
     renderSystemMessage('Error: ' + err.message);
   } finally {
     $('btn-send').disabled = false;
@@ -932,22 +675,23 @@ async function sendMessageStreaming(query, sessionId) {
             ({ row: streamRow, bubble: streamBubble } = createStreamingBubble());
 
           } else if (evt.type === 'chunk' && streamBubble) {
-            rawText += evt.text;
+            // New: semantic markers from backend
+            if (evt.ends_paragraph) {
+              rawText += evt.text + '\n\n';
+            } else if (evt.ends_sentence) {
+              rawText += evt.text + '\n';
+            } else {
+              rawText += evt.text;
+            }
+
             // Show formatted text while streaming so it feels instant
             streamBubble.classList.add('streaming');
-            // Format streaming text with intelligent line breaks
+            // Format streaming text with semantic awareness
             let formatted = rawText
               .replace(/</g, '&lt;')
               .replace(/>/g, '&gt;')
-              .replace(/\n\n+/g, '\n\n')  // normalize paragraph breaks
-              .replace(/:\s*(?=[A-Z])/g, ':\n')  // colon followed by capital letter
-              .replace(/:\s+/g, ':\n')    // colon followed by space
-              .replace(/\.\s*(?=[A-Z])/g, '.\n')  // period followed by capital letter
-              .replace(/\.\s+/g, '.\n')   // period followed by space
-              .replace(/\?\s+/g, '?\n')   // questions
-              .replace(/\!\s+/g, '!\n')   // exclamations
               .replace(/\n\n+/g, '</p><p>')  // paragraph breaks
-              .replace(/\n/g, '<br>');    // line breaks
+              .replace(/\n/g, '<br>');      // line breaks
             streamBubble.innerHTML = formatted ? `<p>${formatted}</p>` : '';
             scrollToBottom();
 
@@ -1231,10 +975,6 @@ document.addEventListener('DOMContentLoaded', () => {
   $('btn-open-sidebar').addEventListener('click',  () => toggleSidebar(true));
   $('btn-sched-open-sidebar').addEventListener('click', () => toggleSidebar(true));
 
-  // --- Request Queue ---
-  $('btn-toggle-queue').addEventListener('click', toggleQueuePanel);
-  $('btn-pause-queue').addEventListener('click', toggleQueuePause);
-
   // --- View nav ---
   $('btn-nav-chat').addEventListener('click', showChatPanel);
   $('btn-nav-scheduler').addEventListener('click', showSchedulerPanel);
@@ -1443,13 +1183,6 @@ function renderSchedulerJobs() {
     const statusLabel = job.enabled ? 'enabled' : 'paused';
     const nextRun = job.next_run ? fmtDate(job.next_run) : '—';
     const lastRun = job.last_run ? fmtDate(job.last_run) : 'never';
-    
-    // Task type indicator
-    const typeIcon = job.mode === 'command' ? '⚙️' : '🤖';
-    const typeLabel = job.mode === 'command' ? 'Command' : 'AI';
-    const runtimeInfo = job.mode === 'command' 
-      ? '(no runtime)' 
-      : `${escHtml(job.runtime || 'claude')}`;
 
     card.innerHTML = `
       <div class="sched-job-top">
@@ -1457,9 +1190,8 @@ function renderSchedulerJobs() {
         <span class="sched-job-status ${statusClass}">${statusLabel}</span>
       </div>
       <div class="sched-job-meta">
-        <span title="Task Type">${typeIcon} ${typeLabel}</span>
         <span title="Schedule">⏰ ${escHtml(job.schedule)}</span>
-        <span title="Agent / Runtime">👤 ${escHtml(job.agent)} · ${runtimeInfo}</span>
+        <span title="Agent / Runtime">🤖 ${escHtml(job.agent)} · ${escHtml(job.runtime)}</span>
       </div>
       <div class="sched-job-times">
         <span title="Next run">Next: ${escHtml(nextRun)}</span>
@@ -1614,10 +1346,8 @@ function openNewJobForm() {
 function buildJobForm(job) {
   const v = (field, fallback = '') => escHtml(job?.[field] ?? fallback);
   const checked = (field, fallback = false) => (job?.[field] ?? fallback) ? 'checked' : '';
-  const mode = job?.mode || 'ai';
-  const modeClass = `task-mode-${mode}`;
   return `
-    <form class="sched-form ${modeClass}" id="sched-job-form">
+    <form class="sched-form" id="sched-job-form">
       <div class="form-group">
         <label>Name <span class="req">*</span></label>
         <input class="glass-input" name="name" value="${v('name')}" placeholder="Daily summary" required />
@@ -1627,12 +1357,12 @@ function buildJobForm(job) {
         <input class="glass-input" name="schedule" value="${v('schedule')}" placeholder="every day at 9am" required />
         <p class="form-hint">e.g. "in 5 minutes", "every day at 9am", "every Monday at 8am", "every 6 hours"</p>
       </div>
-      <div class="form-group">
-        <label>Agent</label>
-        <input class="glass-input" name="agent" value="${v('agent', 'fosterbot')}" placeholder="fosterbot" />
-      </div>
       <div class="form-row">
-        <div class="form-group ai-only">
+        <div class="form-group">
+          <label>Agent</label>
+          <input class="glass-input" name="agent" value="${v('agent', 'fosterbot')}" placeholder="fosterbot" />
+        </div>
+        <div class="form-group">
           <label>Runtime</label>
           <select class="glass-input glass-select" name="runtime">
             <option value="claude"   ${(job?.runtime ?? 'claude') === 'claude'   ? 'selected' : ''}>claude</option>
@@ -1641,12 +1371,20 @@ function buildJobForm(job) {
             <option value="opencode" ${job?.runtime === 'opencode' ? 'selected' : ''}>opencode</option>
           </select>
         </div>
-        <div class="form-group ai-only">
+      </div>
+      <div class="form-row">
+        <div class="form-group">
           <label>Model <small class="form-hint-inline">(optional — leave blank for runtime default)</small></label>
           <input class="glass-input" name="model" value="${v('model')}" placeholder="e.g. sonnet, gpt-4o, gemini-1.5-pro" />
         </div>
+        <div class="form-group">
+          <label>Mode</label>
+          <select class="glass-input glass-select" name="mode">
+            <option value="restricted" ${(job?.mode ?? 'restricted') === 'restricted' ? 'selected' : ''}>restricted (safe)</option>
+            <option value="yolo"       ${job?.mode === 'yolo' ? 'selected' : ''}>yolo (auto-approve)</option>
+          </select>
+        </div>
       </div>
-      <input type="hidden" name="mode" value="${v('mode', 'ai')}" />
       <div class="form-group">
         <label>Task prompt <span class="req">*</span></label>
         <textarea class="glass-input sched-task-input" name="task" rows="4" placeholder="Describe the task the agent should perform…" required>${v('task')}</textarea>

@@ -249,15 +249,18 @@ def get_command_timeout() -> int:
 class HistoryManager:
     """Persists per-user chat history in ~/.copilot/chat-history.json."""
 
-    MAX_SESSIONS_PER_USER = 100
-    MAX_MESSAGES_PER_SESSION = 500
-
     def __init__(self):
         home = os.path.expanduser("~")
         copilot_dir = os.path.join(home, ".copilot")
         os.makedirs(copilot_dir, exist_ok=True)
         self._path = os.path.join(copilot_dir, "chat-history.json")
         self._lock = threading.Lock()
+        # Read MAX_SESSIONS from environment or use default
+        try:
+            self.MAX_SESSIONS_PER_USER = int(os.environ.get("MAX_SESSIONS", "100"))
+        except (ValueError, TypeError):
+            self.MAX_SESSIONS_PER_USER = 100
+        self.MAX_MESSAGES_PER_SESSION = 500
         if not os.path.exists(self._path):
             self._save({})
 
@@ -886,6 +889,7 @@ class SessionManager:
             "agent": get_default_agent(),
             "runtime": default_runtime,
             "bot_id": bot_id,
+            "render_type": "markdown",
         }
 
         if n8n_session_id not in session_map:
@@ -2025,13 +2029,14 @@ IMPORTANT:
         else:  # text (default)
             render_instruction = ""
 
-        # Format render_instruction with channel and script_base_dir variables
-        if "{channel" in render_instruction or "{script_base_dir" in render_instruction:
+        # Format render_instruction with channel, script_base_dir, and session_id variables
+        if "{channel" in render_instruction or "{script_base_dir" in render_instruction or "{n8n_session_id" in render_instruction:
             channel_upper = channel.upper()
             render_instruction = render_instruction.format(
                 channel=channel,
                 channel_upper=channel_upper,
-                script_base_dir=SCRIPT_BASE_DIR
+                script_base_dir=SCRIPT_BASE_DIR,
+                n8n_session_id=n8n_session_id
             )
 
         # Add timeout/deadline information with 15% buffer for overhead
@@ -2243,7 +2248,15 @@ User Request:
                                         if delta.get("type") == "text_delta":
                                             text = delta.get("text", "")
                                             if text:
-                                                loop.call_soon_threadsafe(queue.put_nowait, ("chunk", text))
+                                                # Detect semantic markers
+                                                ends_sentence = any(text.rstrip().endswith(p) for p in '.!?')
+                                                ends_paragraph = '\n\n' in text or text.strip() == ''
+                                                chunk_data = {
+                                                    'text': text,
+                                                    'ends_sentence': ends_sentence,
+                                                    'ends_paragraph': ends_paragraph
+                                                }
+                                                loop.call_soon_threadsafe(queue.put_nowait, ("chunk", chunk_data))
                             except (ValueError, KeyError):
                                 pass
                         else:
@@ -4056,7 +4069,12 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                                 continue
 
                             if kind == "chunk":
-                                yield f"data: {_json.dumps({'type': 'chunk', 'text': data})}\n\n"
+                                # data is now a dict with text, ends_sentence, ends_paragraph
+                                if isinstance(data, dict):
+                                    yield f"data: {_json.dumps({'type': 'chunk', **data})}\n\n"
+                                else:
+                                    # Fallback for non-Claude runtimes
+                                    yield f"data: {_json.dumps({'type': 'chunk', 'text': data})}\n\n"
                             elif kind == "done":
                                 break  # subprocess finished; final result in future
                     except Exception as exc:

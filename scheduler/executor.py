@@ -153,8 +153,7 @@ class TaskSchedulerExecutor:
                 self._log_job(job_id, "Telegram notification skipped: connector unavailable")
                 return False
 
-            script_dir = Path("/opt/n8n-copilot-shim")
-            config_path = script_dir / "telegram_config.json"
+            config_path = self.repo_root / "telegram_config.json"
             with open(config_path) as f:
                 cfg = json.load(f)
             token = cfg.get("token") or os.getenv("TELEGRAM_BOT_TOKEN", "")
@@ -179,8 +178,7 @@ class TaskSchedulerExecutor:
                 self._log_job(job_id, "WebEx notification skipped: connector unavailable")
                 return False
 
-            script_dir = Path("/opt/n8n-copilot-shim")
-            config_path = script_dir / "webex_config.json"
+            config_path = self.repo_root / "webex_config.json"
             with open(config_path) as f:
                 cfg = json.load(f)
             token = cfg.get("bot_token") or os.getenv("WEBEX_BOT_TOKEN", "")
