@@ -14,6 +14,7 @@ import threading
 import time
 import pika
 import mimetypes
+import ssl
 from pathlib import Path
 from urllib.parse import unquote
 from typing import Optional, Dict, List
@@ -213,13 +214,15 @@ class WebEXConnector:
                 "X-Auth-Channel": channel,
             }
 
-            # Ensure session exists
-            requests.post(
+            # Create session with our session_id so it's properly tracked
+            create_resp = requests.post(
                 f"{self.api_url}/api/v1/sessions/create",
                 headers=headers,
-                json={},
+                json={"session_id": session_id},
                 timeout=10,
             )
+            if create_resp.status_code != 200:
+                print(f"[WARN] Session create failed ({create_resp.status_code}): {create_resp.text}", file=sys.stderr)
 
             # Execute the query
             resp = requests.post(
@@ -241,17 +244,37 @@ class WebEXConnector:
             return session_mgr.execute(query, session_id)
 
     def connect_rabbitmq(self) -> bool:
-        """Connect to RabbitMQ"""
+        """Connect to RabbitMQ with optional SSL and DNS override support"""
         try:
             credentials = pika.PlainCredentials(
                 self.config.config["rabbitmq_user"],
                 self.config.config["rabbitmq_password"]
             )
+            
+            # Get connection parameters
+            host = self.config.config["rabbitmq_host"]
+            port = self.config.config["rabbitmq_port"]
+            
+            # Fix 3: Use rabbitmq_host_ip if provided for direct IP connection (bypass DNS)
+            host_ip = self.config.config.get("rabbitmq_host_ip") or host
+            
+            # Fix 2: SSL/TLS support - auto-detect on port 5671 or use rabbitmq_ssl config
+            ssl_options = None
+            use_ssl = self.config.config.get("rabbitmq_ssl", port == 5671)
+            if use_ssl:
+                ctx = ssl.create_default_context()
+                # Fix 2: Allow optional SSL verification disable via rabbitmq_ssl_verify
+                if not self.config.config.get("rabbitmq_ssl_verify", True):
+                    ctx.check_hostname = False
+                    ctx.verify_mode = ssl.CERT_NONE
+                ssl_options = pika.SSLOptions(ctx, host)  # SNI uses original hostname
+            
             parameters = pika.ConnectionParameters(
-                host=self.config.config["rabbitmq_host"],
-                port=self.config.config["rabbitmq_port"],
+                host=host_ip,  # Use IP for TCP connection (DNS bypass)
+                port=port,
                 virtual_host=self.config.config["rabbitmq_vhost"],
                 credentials=credentials,
+                ssl_options=ssl_options,
                 connection_attempts=3,
                 retry_delay=2
             )
@@ -264,7 +287,8 @@ class WebEXConnector:
                 durable=True
             )
 
-            print(f"✅ Connected to RabbitMQ on {self.config.config['rabbitmq_host']}", file=sys.stderr)
+            ssl_info = " (SSL/TLS enabled)" if use_ssl else ""
+            print(f"✅ Connected to RabbitMQ on {host_ip}:{port}{ssl_info}", file=sys.stderr)
             return True
         except Exception as e:
             print(f"❌ Error connecting to RabbitMQ: {e}", file=sys.stderr)
@@ -279,7 +303,12 @@ class WebEXConnector:
             print(f"Error disconnecting from RabbitMQ: {e}", file=sys.stderr)
 
     def send_message(self, room_id: str, text: str) -> Optional[str]:
-        """Send message to WebEX room via API. Returns message ID of last chunk sent."""
+        """Send message to WebEX room/person via API. Returns message ID of last chunk sent.
+        
+        Fix 4: Supports both roomId and toPersonEmail based on destination format.
+        If room_id contains '@', treats it as email address (toPersonEmail).
+        Otherwise treats it as room ID (roomId).
+        """
         try:
             headers = {
                 "Authorization": f"Bearer {self.token}",
@@ -292,11 +321,21 @@ class WebEXConnector:
 
             last_msg_id = None
             for chunk in chunks:
-                data = {
-                    "roomId": room_id,
-                    "text": chunk,
-                    "markdown": chunk
-                }
+                # Fix 4: Determine if destination is email or room ID
+                if "@" in room_id:
+                    # Email address - use toPersonEmail
+                    data = {
+                        "toPersonEmail": room_id,
+                        "text": chunk,
+                        "markdown": chunk
+                    }
+                else:
+                    # Room ID - use roomId
+                    data = {
+                        "roomId": room_id,
+                        "text": chunk,
+                        "markdown": chunk
+                    }
 
                 response = requests.post(
                     "https://webexapis.com/v1/messages",
@@ -1073,6 +1112,13 @@ class WebEXConnector:
                 try:
                     message_data = json.loads(body.decode())
                     print(f"[DEBUG] Received WebEX message: {message_data}", file=sys.stderr)
+                    
+                    # Fix 1: Support configurable payload unwrapping for gateway wrappers
+                    payload_key = self.config.config.get("rabbitmq_payload_key")
+                    if payload_key and payload_key in message_data and isinstance(message_data[payload_key], dict):
+                        message_data = message_data[payload_key]
+                        print(f"[DEBUG] Unwrapped payload from key '{payload_key}'", file=sys.stderr)
+                    
                     self.handle_message(message_data)
                     ch.basic_ack(delivery_tag=method.delivery_tag)
                 except Exception as e:

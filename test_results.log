@@ -1,0 +1,441 @@
+test_set_agent_generates_new_session_id (test_agent_manager.TestAgentSwitching.test_set_agent_generates_new_session_id)
+Test that switching agents generates new backend session ID ... [Info] No skill_repositories.json found, using default Anthropic repository
+[Agent] Switched to 'agent1' agent. New backend session: ded5f69c-bfa2-4300-aa8c-166ae59cb429
+ok
+test_set_agent_nonexistent (test_agent_manager.TestAgentSwitching.test_set_agent_nonexistent)
+Test switching to non-existent agent ... [Info] No skill_repositories.json found, using default Anthropic repository
+ok
+test_set_agent_success (test_agent_manager.TestAgentSwitching.test_set_agent_success)
+Test successfully switching agents ... [Info] No skill_repositories.json found, using default Anthropic repository
+[Agent] Switched to 'agent1' agent. New backend session: d4b92fc9-f518-4b93-9f10-a332f15d4823
+ok
+test_agent_argument (test_agent_manager.TestCLIArguments.test_agent_argument)
+Test --agent sets the agent ... ok
+test_backwards_compatibility_positional (test_agent_manager.TestCLIArguments.test_backwards_compatibility_positional)
+Test backwards compatibility with positional arguments ... ok
+test_combined_arguments (test_agent_manager.TestCLIArguments.test_combined_arguments)
+Test combining multiple CLI arguments ... ok
+test_help_argument (test_agent_manager.TestCLIArguments.test_help_argument)
+Test --help displays usage information ... ok
+test_invalid_agent_error (test_agent_manager.TestCLIArguments.test_invalid_agent_error)
+Test error handling for invalid agent ... ok
+test_invalid_model_error (test_agent_manager.TestCLIArguments.test_invalid_model_error)
+Test error handling for invalid model ... ok
+test_invalid_runtime_error (test_agent_manager.TestCLIArguments.test_invalid_runtime_error)
+Test error handling for invalid runtime ... ok
+test_list_agents_argument (test_agent_manager.TestCLIArguments.test_list_agents_argument)
+Test --list-agents displays available agents ... ok
+test_list_models_argument (test_agent_manager.TestCLIArguments.test_list_models_argument)
+Test --list-models displays available models ... ok
+test_list_runtimes_argument (test_agent_manager.TestCLIArguments.test_list_runtimes_argument)
+Test --list-runtimes displays available runtimes ... ok
+test_missing_prompt_error (test_agent_manager.TestCLIArguments.test_missing_prompt_error)
+Test error when prompt is missing and no list command ... ok
+test_model_argument (test_agent_manager.TestCLIArguments.test_model_argument)
+Test --model sets the model ... ok
+test_prompt_with_session_id (test_agent_manager.TestCLIArguments.test_prompt_with_session_id)
+Test executing prompt with explicit session ID ... ok
+test_runtime_argument (test_agent_manager.TestCLIArguments.test_runtime_argument)
+Test --runtime sets the runtime ... ok
+test_runtime_with_list_models (test_agent_manager.TestCLIArguments.test_runtime_with_list_models)
+Test that --runtime affects --list-models ... ok
+test_runtime_with_list_models_claude (test_agent_manager.TestCLIArguments.test_runtime_with_list_models_claude)
+Test that --runtime claude shows Claude models ... ok
+test_capabilities_command (test_agent_manager.TestCapabilityDiscovery.test_capabilities_command)
+Test /capabilities command displays all agents ... [Info] No skill_repositories.json found, using default Anthropic repository
+ok
+test_capabilities_dynamic_discovery (test_agent_manager.TestCapabilityDiscovery.test_capabilities_dynamic_discovery)
+Test that capabilities are dynamically discovered from agents.json ... [Info] No skill_repositories.json found, using default Anthropic repository
+ok
+test_capabilities_empty_agents (test_agent_manager.TestCapabilityDiscovery.test_capabilities_empty_agents)
+Test capabilities when no agents are configured ... [Info] No skill_repositories.json found, using default Anthropic repository
+[Info] No skill_repositories.json found, using default Anthropic repository
+ok
+test_capabilities_include_descriptions (test_agent_manager.TestCapabilityDiscovery.test_capabilities_include_descriptions)
+Test that capabilities include agent descriptions ... [Info] No skill_repositories.json found, using default Anthropic repository
+ok
+test_help_includes_capabilities_command (test_agent_manager.TestCapabilityDiscovery.test_help_includes_capabilities_command)
+Test that /help includes the /capabilities command ... [Info] No skill_repositories.json found, using default Anthropic repository
+ok
+test_gemini_models_defined (test_agent_manager.TestGeminiSupport.test_gemini_models_defined)
+Test that Gemini models are properly defined ... [Info] No skill_repositories.json found, using default Anthropic repository
+ok
+test_gemini_session_directory_created (test_agent_manager.TestGeminiSupport.test_gemini_session_directory_created)
+Test that Gemini session directory is created ... [Info] No skill_repositories.json found, using default Anthropic repository
+ok
+test_gemini_session_exists (test_agent_manager.TestGeminiSupport.test_gemini_session_exists)
+Test session_exists for Gemini runtime ... [Info] No skill_repositories.json found, using default Anthropic repository
+ok
+test_get_gemini_model_by_alias (test_agent_manager.TestGeminiSupport.test_get_gemini_model_by_alias)
+Test resolving Gemini models by alias ... [Info] No skill_repositories.json found, using default Anthropic repository
+ok
+test_get_gemini_model_by_name (test_agent_manager.TestGeminiSupport.test_get_gemini_model_by_name)
+Test resolving Gemini models by name ... [Info] No skill_repositories.json found, using default Anthropic repository
+ok
+test_model_list_gemini (test_agent_manager.TestGeminiSupport.test_model_list_gemini)
+Test /model list command for Gemini runtime ... [Info] No skill_repositories.json found, using default Anthropic repository
+ok
+test_model_set_gemini (test_agent_manager.TestGeminiSupport.test_model_set_gemini)
+Test /model set command for Gemini runtime ... [Info] No skill_repositories.json found, using default Anthropic repository
+ok
+test_runtime_list_includes_gemini (test_agent_manager.TestGeminiSupport.test_runtime_list_includes_gemini)
+Test that /runtime list includes gemini ... [Info] No skill_repositories.json found, using default Anthropic repository
+ok
+test_runtime_set_gemini (test_agent_manager.TestGeminiSupport.test_runtime_set_gemini)
+Test switching to Gemini runtime ... [Info] No skill_repositories.json found, using default Anthropic repository
+ok
+test_strip_claude_metadata (test_agent_manager.TestMetadataStripping.test_strip_claude_metadata)
+Test Claude metadata handling (should pass through) ... [Info] No skill_repositories.json found, using default Anthropic repository
+ok
+test_strip_copilot_metadata (test_agent_manager.TestMetadataStripping.test_strip_copilot_metadata)
+Test stripping Copilot metadata ... [Info] No skill_repositories.json found, using default Anthropic repository
+ok
+test_strip_opencode_metadata (test_agent_manager.TestMetadataStripping.test_strip_opencode_metadata)
+Test stripping OpenCode metadata ... [Info] No skill_repositories.json found, using default Anthropic repository
+ok
+test_strip_thinking_tags (test_agent_manager.TestMetadataStripping.test_strip_thinking_tags)
+Test removing <think> tags ... [Info] No skill_repositories.json found, using default Anthropic repository
+ok
+test_get_claude_model_by_alias (test_agent_manager.TestModelResolution.test_get_claude_model_by_alias)
+Test resolving Claude models by alias ... [Info] No skill_repositories.json found, using default Anthropic repository
+ok
+test_get_claude_model_by_full_name (test_agent_manager.TestModelResolution.test_get_claude_model_by_full_name)
+Test resolving Claude models by full name ... [Info] No skill_repositories.json found, using default Anthropic repository
+FAIL
+test_get_copilot_model_exact_match (test_agent_manager.TestModelResolution.test_get_copilot_model_exact_match)
+Test exact model name matching for Copilot ... [Info] No skill_repositories.json found, using default Anthropic repository
+ok
+test_get_copilot_model_substring_match (test_agent_manager.TestModelResolution.test_get_copilot_model_substring_match)
+Test substring matching for Copilot models ... [Info] No skill_repositories.json found, using default Anthropic repository
+ok
+test_get_invalid_model (test_agent_manager.TestModelResolution.test_get_invalid_model)
+Test resolving non-existent model ... [Info] No skill_repositories.json found, using default Anthropic repository
+ok
+test_cancel_command_no_running_query (test_agent_manager.TestQueryTracking.test_cancel_command_no_running_query)
+Test /cancel when no query is running ... [Info] No skill_repositories.json found, using default Anthropic repository
+ok
+test_cancel_command_with_running_query (test_agent_manager.TestQueryTracking.test_cancel_command_with_running_query)
+Test /cancel with a running query ... [Info] No skill_repositories.json found, using default Anthropic repository
+[Track] Started tracking query for session test_session, PID: 12345
+[Track] Cleared tracking for session test_session
+ok
+test_clear_running_query (test_agent_manager.TestQueryTracking.test_clear_running_query)
+Test clearing a running query ... [Info] No skill_repositories.json found, using default Anthropic repository
+[Track] Started tracking query for session test_session, PID: 12345
+[Track] Cleared tracking for session test_session
+ok
+test_help_includes_status_and_cancel (test_agent_manager.TestQueryTracking.test_help_includes_status_and_cancel)
+Test that /help includes /status and /cancel commands ... [Info] No skill_repositories.json found, using default Anthropic repository
+ok
+test_status_command_no_running_query (test_agent_manager.TestQueryTracking.test_status_command_no_running_query)
+Test /status when no query is running ... [Info] No skill_repositories.json found, using default Anthropic repository
+ok
+test_status_command_with_running_query (test_agent_manager.TestQueryTracking.test_status_command_with_running_query)
+Test /status with a running query ... [Info] No skill_repositories.json found, using default Anthropic repository
+[Track] Started tracking query for session test_session, PID: 12345
+ok
+test_track_running_query (test_agent_manager.TestQueryTracking.test_track_running_query)
+Test tracking a running query ... [Info] No skill_repositories.json found, using default Anthropic repository
+[Track] Started tracking query for session test_session, PID: 12345
+ok
+test_update_query_output (test_agent_manager.TestQueryTracking.test_update_query_output)
+Test updating query output ... [Info] No skill_repositories.json found, using default Anthropic repository
+[Track] Started tracking query for session test_session, PID: 12345
+ok
+test_claude_simple_prompt (test_agent_manager.TestRealRuntimeExecution.test_claude_simple_prompt) ... [Info] No skill_repositories.json found, using default Anthropic repository
+skipped 'Runtime tests disabled. Set TEST_WITH_RUNTIMES=1 to enable.'
+test_codex_simple_prompt (test_agent_manager.TestRealRuntimeExecution.test_codex_simple_prompt) ... [Info] No skill_repositories.json found, using default Anthropic repository
+skipped 'Runtime tests disabled. Set TEST_WITH_RUNTIMES=1 to enable.'
+test_copilot_simple_prompt (test_agent_manager.TestRealRuntimeExecution.test_copilot_simple_prompt) ... [Info] No skill_repositories.json found, using default Anthropic repository
+skipped 'Runtime tests disabled. Set TEST_WITH_RUNTIMES=1 to enable.'
+test_gemini_simple_prompt (test_agent_manager.TestRealRuntimeExecution.test_gemini_simple_prompt) ... [Info] No skill_repositories.json found, using default Anthropic repository
+skipped 'Runtime tests disabled. Set TEST_WITH_RUNTIMES=1 to enable.'
+test_opencode_simple_prompt (test_agent_manager.TestRealRuntimeExecution.test_opencode_simple_prompt) ... [Info] No skill_repositories.json found, using default Anthropic repository
+skipped 'Runtime tests disabled. Set TEST_WITH_RUNTIMES=1 to enable.'
+test_metadata_stripping_with_real_output (test_agent_manager.TestRuntimeIntegration.test_metadata_stripping_with_real_output) ... [Info] No skill_repositories.json found, using default Anthropic repository
+skipped 'Runtime tests disabled. Set TEST_WITH_RUNTIMES=1 to enable.'
+test_multi_runtime_session_isolation (test_agent_manager.TestRuntimeIntegration.test_multi_runtime_session_isolation) ... [Info] No skill_repositories.json found, using default Anthropic repository
+skipped 'Runtime tests disabled. Set TEST_WITH_RUNTIMES=1 to enable.'
+test_runtime_switching_with_copilot (test_agent_manager.TestRuntimeIntegration.test_runtime_switching_with_copilot) ... [Info] No skill_repositories.json found, using default Anthropic repository
+skipped 'Runtime tests disabled. Set TEST_WITH_RUNTIMES=1 to enable.'
+test_session_resumption_with_real_cli (test_agent_manager.TestRuntimeIntegration.test_session_resumption_with_real_cli) ... [Info] No skill_repositories.json found, using default Anthropic repository
+skipped 'Runtime tests disabled. Set TEST_WITH_RUNTIMES=1 to enable.'
+test_copilot_session_exists (test_agent_manager.TestSessionExistence.test_copilot_session_exists)
+Test checking if Copilot session exists ... [Info] No skill_repositories.json found, using default Anthropic repository
+ok
+test_invalid_runtime_session_check (test_agent_manager.TestSessionExistence.test_invalid_runtime_session_check)
+Test checking session for invalid runtime ... [Info] No skill_repositories.json found, using default Anthropic repository
+ok
+test_load_agents_config (test_agent_manager.TestSessionManager.test_load_agents_config)
+Test loading agents from config file ... [Info] No skill_repositories.json found, using default Anthropic repository
+ok
+test_load_agents_config_invalid_json (test_agent_manager.TestSessionManager.test_load_agents_config_invalid_json)
+Test handling of invalid JSON in config file ... [Error] Failed to parse agents config: Expecting property name enclosed in double quotes: line 1 column 2 (char 1)
+[Info] No skill_repositories.json found, using default Anthropic repository
+ok
+test_load_agents_config_missing_file (test_agent_manager.TestSessionManager.test_load_agents_config_missing_file)
+Test handling of missing config file ... [Warning] Agents config file not found at /tmp/tmpabsx4ju8/nonexistent.json. Using empty agents.
+[Info] No skill_repositories.json found, using default Anthropic repository
+ok
+test_session_manager_initialization (test_agent_manager.TestSessionManager.test_session_manager_initialization)
+Test SessionManager initializes with proper directories ... [Info] No skill_repositories.json found, using default Anthropic repository
+ok
+test_create_new_session (test_agent_manager.TestSessionPersistence.test_create_new_session)
+Test creating a new session with default values ... [Info] No skill_repositories.json found, using default Anthropic repository
+ok
+test_resume_existing_session (test_agent_manager.TestSessionPersistence.test_resume_existing_session)
+Test resuming an existing session ... [Info] No skill_repositories.json found, using default Anthropic repository
+ok
+test_session_persistence_across_instances (test_agent_manager.TestSessionPersistence.test_session_persistence_across_instances)
+Test that sessions persist across SessionManager instances ... [Info] No skill_repositories.json found, using default Anthropic repository
+[Info] No skill_repositories.json found, using default Anthropic repository
+ok
+test_update_session_field (test_agent_manager.TestSessionPersistence.test_update_session_field)
+Test updating individual session fields ... [Info] No skill_repositories.json found, using default Anthropic repository
+ok
+test_agent_list_command (test_agent_manager.TestSlashCommands.test_agent_list_command)
+Test /agent list command ... [Info] No skill_repositories.json found, using default Anthropic repository
+ok
+test_agent_set_command (test_agent_manager.TestSlashCommands.test_agent_set_command)
+Test /agent set command ... [Info] No skill_repositories.json found, using default Anthropic repository
+[Agent] Switched to 'test_devops' agent. New backend session: ec7fb451-3219-4458-a10f-2693641d182e
+ok
+test_agent_set_invalid (test_agent_manager.TestSlashCommands.test_agent_set_invalid)
+Test /agent set with invalid agent ... [Info] No skill_repositories.json found, using default Anthropic repository
+ok
+test_bash_command_echo (test_agent_manager.TestSlashCommands.test_bash_command_echo)
+Test bash command execution with !echo ... [Info] No skill_repositories.json found, using default Anthropic repository
+[Shell] Executing in /opt/n8n-copilot-shim-dev: echo 'Hello World'
+ok
+test_bash_command_empty (test_agent_manager.TestSlashCommands.test_bash_command_empty)
+Test bash command with empty command ... [Info] No skill_repositories.json found, using default Anthropic repository
+ok
+test_bash_command_exit_code (test_agent_manager.TestSlashCommands.test_bash_command_exit_code)
+Test bash command that returns non-zero exit code ... [Info] No skill_repositories.json found, using default Anthropic repository
+[Shell] Executing in /opt/n8n-copilot-shim-dev: false
+ok
+test_bash_command_ls (test_agent_manager.TestSlashCommands.test_bash_command_ls)
+Test bash command execution with !ls ... [Info] No skill_repositories.json found, using default Anthropic repository
+[Shell] Executing in /opt/n8n-copilot-shim-dev: ls
+ok
+test_bash_command_nonexistent (test_agent_manager.TestSlashCommands.test_bash_command_nonexistent)
+Test bash command with nonexistent command ... [Info] No skill_repositories.json found, using default Anthropic repository
+[Shell] Executing in /opt/n8n-copilot-shim-dev: nonexistentcommand12345
+ok
+test_bash_command_pwd (test_agent_manager.TestSlashCommands.test_bash_command_pwd)
+Test bash command execution with !pwd ... [Info] No skill_repositories.json found, using default Anthropic repository
+[Shell] Executing in /opt/n8n-copilot-shim-dev: pwd
+ok
+test_help_command (test_agent_manager.TestSlashCommands.test_help_command)
+Test /help command ... [Info] No skill_repositories.json found, using default Anthropic repository
+ok
+test_parse_slash_command (test_agent_manager.TestSlashCommands.test_parse_slash_command)
+Test parsing slash commands ... [Info] No skill_repositories.json found, using default Anthropic repository
+ok
+test_runtime_current_command (test_agent_manager.TestSlashCommands.test_runtime_current_command)
+Test /runtime current command ... [Info] No skill_repositories.json found, using default Anthropic repository
+ok
+test_runtime_list_command (test_agent_manager.TestSlashCommands.test_runtime_list_command)
+Test /runtime list command ... [Info] No skill_repositories.json found, using default Anthropic repository
+ok
+test_runtime_set_command (test_agent_manager.TestSlashCommands.test_runtime_set_command)
+Test /runtime set command ... [Info] No skill_repositories.json found, using default Anthropic repository
+ok
+test_session_reset_command (test_agent_manager.TestSlashCommands.test_session_reset_command)
+Test /session reset command ... [Info] No skill_repositories.json found, using default Anthropic repository
+ok
+test_cleanup_expired (test_api_auth.TestAuthManager.test_cleanup_expired) ... ok
+test_generate_pairing_code (test_api_auth.TestAuthManager.test_generate_pairing_code) ... ok
+test_generate_pairing_code_stored (test_api_auth.TestAuthManager.test_generate_pairing_code_stored) ... ok
+test_validate_session_token_expired (test_api_auth.TestAuthManager.test_validate_session_token_expired) ... ok
+test_validate_session_token_invalid (test_api_auth.TestAuthManager.test_validate_session_token_invalid) ... ok
+test_validate_session_token_success (test_api_auth.TestAuthManager.test_validate_session_token_success) ... ok
+test_validate_session_token_updates_last_used (test_api_auth.TestAuthManager.test_validate_session_token_updates_last_used) ... ok
+test_validate_shared_key_missing_prefix (test_api_auth.TestAuthManager.test_validate_shared_key_missing_prefix) ... ok
+test_validate_shared_key_success (test_api_auth.TestAuthManager.test_validate_shared_key_success) ... ok
+test_validate_shared_key_wrong_key (test_api_auth.TestAuthManager.test_validate_shared_key_wrong_key) ... ok
+test_verify_pairing_code_consumed (test_api_auth.TestAuthManager.test_verify_pairing_code_consumed) ... ok
+test_verify_pairing_code_expired (test_api_auth.TestAuthManager.test_verify_pairing_code_expired) ... ok
+test_verify_pairing_code_success (test_api_auth.TestAuthManager.test_verify_pairing_code_success) ... ok
+test_verify_pairing_code_wrong_code (test_api_auth.TestAuthManager.test_verify_pairing_code_wrong_code) ... ok
+test_verify_pairing_code_wrong_identity (test_api_auth.TestAuthManager.test_verify_pairing_code_wrong_identity) ... ok
+test_allow_under_limit (test_api_auth.TestRateLimiter.test_allow_under_limit) ... ok
+test_block_over_limit (test_api_auth.TestRateLimiter.test_block_over_limit) ... ok
+test_different_endpoints_independent (test_api_auth.TestRateLimiter.test_different_endpoints_independent) ... ok
+test_different_ips_independent (test_api_auth.TestRateLimiter.test_different_ips_independent) ... ok
+test_expired_entries_dont_count (test_api_auth.TestRateLimiter.test_expired_entries_dont_count) ... ok
+setUpClass (test_api_endpoints.TestAPIEndpoints) ... ERROR
+test_respects_max_results (test_new_features.TestDDGImageSearch.test_respects_max_results) ... ok
+test_result_structure (test_new_features.TestDDGImageSearch.test_result_structure) ... ok
+test_returns_empty_list_on_exception (test_new_features.TestDDGImageSearch.test_returns_empty_list_on_exception) ... ok
+test_returns_empty_list_when_no_vqd_token (test_new_features.TestDDGImageSearch.test_returns_empty_list_when_no_vqd_token) ... ok
+test_returns_results_list (test_new_features.TestDDGImageSearch.test_returns_results_list) ... ok
+test_skips_results_without_image_key (test_new_features.TestDDGImageSearch.test_skips_results_without_image_key) ... ok
+test_thumbnail_falls_back_to_image_url (test_new_features.TestDDGImageSearch.test_thumbnail_falls_back_to_image_url) ... ok
+test_append_message_missing_session_returns_false (test_new_features.TestHistoryManager.test_append_message_missing_session_returns_false) ... ok
+test_append_message_prunes_at_max (test_new_features.TestHistoryManager.test_append_message_prunes_at_max) ... ok
+test_append_message_returns_true (test_new_features.TestHistoryManager.test_append_message_returns_true) ... ok
+test_append_message_sets_preview_from_first_assistant_message (test_new_features.TestHistoryManager.test_append_message_sets_preview_from_first_assistant_message) ... ok
+test_append_message_sets_title_from_first_user_message (test_new_features.TestHistoryManager.test_append_message_sets_title_from_first_user_message) ... ok
+test_append_message_stored (test_new_features.TestHistoryManager.test_append_message_stored) ... ok
+test_append_message_title_truncated_at_60 (test_new_features.TestHistoryManager.test_append_message_title_truncated_at_60) ... ok
+test_append_message_with_files (test_new_features.TestHistoryManager.test_append_message_with_files) ... ok
+test_create_multiple_sessions (test_new_features.TestHistoryManager.test_create_multiple_sessions) ... ok
+test_create_session_persisted (test_new_features.TestHistoryManager.test_create_session_persisted) ... ok
+test_create_session_prunes_at_cap (test_new_features.TestHistoryManager.test_create_session_prunes_at_cap) ... ok
+test_create_session_returns_dict (test_new_features.TestHistoryManager.test_create_session_returns_dict) ... ok
+test_delete_session_nonexistent_returns_false (test_new_features.TestHistoryManager.test_delete_session_nonexistent_returns_false) ... ok
+test_delete_session_only_removes_target (test_new_features.TestHistoryManager.test_delete_session_only_removes_target) ... ok
+test_delete_session_removes_it (test_new_features.TestHistoryManager.test_delete_session_removes_it) ... ok
+test_delete_session_returns_true (test_new_features.TestHistoryManager.test_delete_session_returns_true) ... ok
+test_get_session_messages_empty_on_new_session (test_new_features.TestHistoryManager.test_get_session_messages_empty_on_new_session) ... ok
+test_get_session_messages_unknown_session_returns_none (test_new_features.TestHistoryManager.test_get_session_messages_unknown_session_returns_none) ... ok
+test_get_sessions_excludes_messages (test_new_features.TestHistoryManager.test_get_sessions_excludes_messages) ... ok
+test_get_sessions_sorted_newest_first (test_new_features.TestHistoryManager.test_get_sessions_sorted_newest_first) ... ok
+test_sessions_isolated_by_channel (test_new_features.TestHistoryManager.test_sessions_isolated_by_channel) ... ok
+test_sessions_isolated_by_user (test_new_features.TestHistoryManager.test_sessions_isolated_by_user) ... ok
+test_ai_media_path_referenced (test_new_features.TestMediaInstructions.test_ai_media_path_referenced) ... ok
+test_option_a_direct_url_present (test_new_features.TestMediaInstructions.test_option_a_direct_url_present) ... ok
+test_option_b_curl_download_present (test_new_features.TestMediaInstructions.test_option_b_curl_download_present) ... ok
+test_option_c_instructs_verify_file_size (test_new_features.TestMediaInstructions.test_option_c_instructs_verify_file_size) ... ok
+test_option_c_local_file_present (test_new_features.TestMediaInstructions.test_option_c_local_file_present) ... ok
+test_option_c_uses_cp_command (test_new_features.TestMediaInstructions.test_option_c_uses_cp_command) ... ok
+test_all_three_pinned_fields_together (test_new_features.TestTelegramConfigPinnedUsers.test_all_three_pinned_fields_together) ... ok
+test_get_pinned_agent_returns_agent (test_new_features.TestTelegramConfigPinnedUsers.test_get_pinned_agent_returns_agent) ... ok
+test_get_pinned_agent_returns_none_when_no_agent_key (test_new_features.TestTelegramConfigPinnedUsers.test_get_pinned_agent_returns_none_when_no_agent_key) ... ok
+test_get_pinned_agent_returns_none_when_not_pinned (test_new_features.TestTelegramConfigPinnedUsers.test_get_pinned_agent_returns_none_when_not_pinned) ... ok
+test_get_pinned_model_returns_model (test_new_features.TestTelegramConfigPinnedUsers.test_get_pinned_model_returns_model) ... ok
+test_get_pinned_model_returns_none_when_absent (test_new_features.TestTelegramConfigPinnedUsers.test_get_pinned_model_returns_none_when_absent) ... ok
+test_get_pinned_model_returns_none_when_not_pinned (test_new_features.TestTelegramConfigPinnedUsers.test_get_pinned_model_returns_none_when_not_pinned) ... ok
+test_get_pinned_runtime_returns_none_when_absent (test_new_features.TestTelegramConfigPinnedUsers.test_get_pinned_runtime_returns_none_when_absent) ... ok
+test_get_pinned_runtime_returns_none_when_not_pinned (test_new_features.TestTelegramConfigPinnedUsers.test_get_pinned_runtime_returns_none_when_not_pinned) ... ok
+test_get_pinned_runtime_returns_runtime (test_new_features.TestTelegramConfigPinnedUsers.test_get_pinned_runtime_returns_runtime) ... ok
+test_user_is_pinned (test_new_features.TestTelegramConfigPinnedUsers.test_user_is_pinned) ... ok
+test_user_not_pinned_by_default (test_new_features.TestTelegramConfigPinnedUsers.test_user_not_pinned_by_default) ... ok
+test_user_pinned_uses_string_key (test_new_features.TestTelegramConfigPinnedUsers.test_user_pinned_uses_string_key) ... ok
+test_yolo_allowed_for_listed_user (test_new_features.TestTelegramConfigPinnedUsers.test_yolo_allowed_for_listed_user) ... ok
+test_yolo_allowed_multiple_users (test_new_features.TestTelegramConfigPinnedUsers.test_yolo_allowed_multiple_users) ... ok
+test_yolo_allowed_when_list_empty (test_new_features.TestTelegramConfigPinnedUsers.test_yolo_allowed_when_list_empty)
+Empty yolo_allowed_users means all users can use yolo (backward compat). ... ok
+test_yolo_blocked_for_unlisted_user (test_new_features.TestTelegramConfigPinnedUsers.test_yolo_blocked_for_unlisted_user) ... ok
+test_all_three_fields_together (test_new_features.TestWebEXConfigPinnedUsers.test_all_three_fields_together) ... ok
+test_get_pinned_agent (test_new_features.TestWebEXConfigPinnedUsers.test_get_pinned_agent) ... ok
+test_get_pinned_agent_none_when_not_pinned (test_new_features.TestWebEXConfigPinnedUsers.test_get_pinned_agent_none_when_not_pinned) ... ok
+test_get_pinned_model (test_new_features.TestWebEXConfigPinnedUsers.test_get_pinned_model) ... ok
+test_get_pinned_model_none_when_absent (test_new_features.TestWebEXConfigPinnedUsers.test_get_pinned_model_none_when_absent) ... ok
+test_get_pinned_runtime (test_new_features.TestWebEXConfigPinnedUsers.test_get_pinned_runtime) ... ok
+test_get_pinned_runtime_none_when_absent (test_new_features.TestWebEXConfigPinnedUsers.test_get_pinned_runtime_none_when_absent) ... ok
+test_user_is_pinned (test_new_features.TestWebEXConfigPinnedUsers.test_user_is_pinned) ... ok
+test_user_not_pinned_by_default (test_new_features.TestWebEXConfigPinnedUsers.test_user_not_pinned_by_default) ... ok
+test_yolo_allowed_for_listed_person (test_new_features.TestWebEXConfigPinnedUsers.test_yolo_allowed_for_listed_person) ... ok
+test_yolo_allowed_when_list_empty (test_new_features.TestWebEXConfigPinnedUsers.test_yolo_allowed_when_list_empty) ... ok
+test_yolo_blocked_for_unlisted_person (test_new_features.TestWebEXConfigPinnedUsers.test_yolo_blocked_for_unlisted_person) ... ok
+test_agent_commands_present (test_new_features.TestWebuiPillCommands.test_agent_commands_present) ... ok
+test_assistant_avatar_is_shamrock (test_new_features.TestWebuiPillCommands.test_assistant_avatar_is_shamrock) ... ok
+test_haiku_model_name_correct (test_new_features.TestWebuiPillCommands.test_haiku_model_name_correct) ... ok
+test_leprechaun_icon_in_sidebar (test_new_features.TestWebuiPillCommands.test_leprechaun_icon_in_sidebar) ... ok
+test_mode_commands_present (test_new_features.TestWebuiPillCommands.test_mode_commands_present) ... ok
+test_model_commands_correct_format (test_new_features.TestWebuiPillCommands.test_model_commands_correct_format) ... ok
+test_model_commands_have_no_quotes (test_new_features.TestWebuiPillCommands.test_model_commands_have_no_quotes) ... ok
+test_model_names_use_dots_not_hyphens (test_new_features.TestWebuiPillCommands.test_model_names_use_dots_not_hyphens) ... ok
+test_no_robot_avatar_for_assistant (test_new_features.TestWebuiPillCommands.test_no_robot_avatar_for_assistant) ... ok
+test_pill_click_handlers_wired (test_new_features.TestWebuiPillCommands.test_pill_click_handlers_wired) ... ok
+test_pill_popover_function_exists (test_new_features.TestWebuiPillCommands.test_pill_popover_function_exists) ... ok
+test_runtime_commands_present (test_new_features.TestWebuiPillCommands.test_runtime_commands_present) ... ok
+test_send_command_function_exists (test_new_features.TestWebuiPillCommands.test_send_command_function_exists) ... ok
+test_sidebar_title_updated (test_new_features.TestWebuiPillCommands.test_sidebar_title_updated) ... ok
+test_sonnet_model_name_correct (test_new_features.TestWebuiPillCommands.test_sonnet_model_name_correct) ... ok
+test_help_includes_schedule (test_schedule_commands.TestScheduleSlashCommands.test_help_includes_schedule) ... [Info] No skill_repositories.json found, using default Anthropic repository
+ok
+test_schedule_add (test_schedule_commands.TestScheduleSlashCommands.test_schedule_add) ... [Info] No skill_repositories.json found, using default Anthropic repository
+ok
+test_schedule_add_failure (test_schedule_commands.TestScheduleSlashCommands.test_schedule_add_failure) ... [Info] No skill_repositories.json found, using default Anthropic repository
+ok
+test_schedule_add_missing_parts_returns_usage (test_schedule_commands.TestScheduleSlashCommands.test_schedule_add_missing_parts_returns_usage) ... [Info] No skill_repositories.json found, using default Anthropic repository
+ok
+test_schedule_add_recurring_detection (test_schedule_commands.TestScheduleSlashCommands.test_schedule_add_recurring_detection)
+Jobs with 'in X' schedule should be non-recurring. ... [Info] No skill_repositories.json found, using default Anthropic repository
+ok
+test_schedule_add_recurring_flag_set (test_schedule_commands.TestScheduleSlashCommands.test_schedule_add_recurring_flag_set)
+Jobs with 'every' schedule should be recurring. ... [Info] No skill_repositories.json found, using default Anthropic repository
+ok
+test_schedule_delete (test_schedule_commands.TestScheduleSlashCommands.test_schedule_delete) ... [Info] No skill_repositories.json found, using default Anthropic repository
+ok
+test_schedule_delete_failure (test_schedule_commands.TestScheduleSlashCommands.test_schedule_delete_failure) ... [Info] No skill_repositories.json found, using default Anthropic repository
+ok
+test_schedule_disabled (test_schedule_commands.TestScheduleSlashCommands.test_schedule_disabled) ... [Info] No skill_repositories.json found, using default Anthropic repository
+ok
+test_schedule_info (test_schedule_commands.TestScheduleSlashCommands.test_schedule_info) ... [Info] No skill_repositories.json found, using default Anthropic repository
+ok
+test_schedule_info_not_found (test_schedule_commands.TestScheduleSlashCommands.test_schedule_info_not_found) ... [Info] No skill_repositories.json found, using default Anthropic repository
+ok
+test_schedule_list (test_schedule_commands.TestScheduleSlashCommands.test_schedule_list) ... [Info] No skill_repositories.json found, using default Anthropic repository
+ok
+test_schedule_list_empty (test_schedule_commands.TestScheduleSlashCommands.test_schedule_list_empty) ... [Info] No skill_repositories.json found, using default Anthropic repository
+ok
+test_schedule_logs (test_schedule_commands.TestScheduleSlashCommands.test_schedule_logs) ... [Info] No skill_repositories.json found, using default Anthropic repository
+ok
+test_schedule_logs_empty (test_schedule_commands.TestScheduleSlashCommands.test_schedule_logs_empty) ... [Info] No skill_repositories.json found, using default Anthropic repository
+ok
+test_schedule_logs_failure (test_schedule_commands.TestScheduleSlashCommands.test_schedule_logs_failure) ... [Info] No skill_repositories.json found, using default Anthropic repository
+ok
+test_schedule_no_subcommand_defaults_to_list (test_schedule_commands.TestScheduleSlashCommands.test_schedule_no_subcommand_defaults_to_list) ... [Info] No skill_repositories.json found, using default Anthropic repository
+ok
+test_schedule_pause (test_schedule_commands.TestScheduleSlashCommands.test_schedule_pause) ... [Info] No skill_repositories.json found, using default Anthropic repository
+ok
+test_schedule_pause_failure (test_schedule_commands.TestScheduleSlashCommands.test_schedule_pause_failure) ... [Info] No skill_repositories.json found, using default Anthropic repository
+ok
+test_schedule_remove_alias (test_schedule_commands.TestScheduleSlashCommands.test_schedule_remove_alias)
+'remove' should be an alias for 'delete'. ... [Info] No skill_repositories.json found, using default Anthropic repository
+ok
+test_schedule_results (test_schedule_commands.TestScheduleSlashCommands.test_schedule_results) ... [Info] No skill_repositories.json found, using default Anthropic repository
+ok
+test_schedule_results_empty (test_schedule_commands.TestScheduleSlashCommands.test_schedule_results_empty) ... [Info] No skill_repositories.json found, using default Anthropic repository
+ok
+test_schedule_results_failure (test_schedule_commands.TestScheduleSlashCommands.test_schedule_results_failure) ... [Info] No skill_repositories.json found, using default Anthropic repository
+ok
+test_schedule_resume (test_schedule_commands.TestScheduleSlashCommands.test_schedule_resume) ... [Info] No skill_repositories.json found, using default Anthropic repository
+ok
+test_schedule_resume_failure (test_schedule_commands.TestScheduleSlashCommands.test_schedule_resume_failure) ... [Info] No skill_repositories.json found, using default Anthropic repository
+ok
+test_schedule_status (test_schedule_commands.TestScheduleSlashCommands.test_schedule_status) ... [Info] No skill_repositories.json found, using default Anthropic repository
+ok
+test_schedule_unknown_subcommand_shows_help (test_schedule_commands.TestScheduleSlashCommands.test_schedule_unknown_subcommand_shows_help) ... [Info] No skill_repositories.json found, using default Anthropic repository
+ok
+
+======================================================================
+ERROR: setUpClass (test_api_endpoints.TestAPIEndpoints)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/flipkey/.local/lib/python3.12/site-packages/starlette/testclient.py", line 38, in <module>
+    import httpx
+ModuleNotFoundError: No module named 'httpx'
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/opt/n8n-copilot-shim-dev/tests/test_api_endpoints.py", line 17, in setUpClass
+    from fastapi.testclient import TestClient
+  File "/home/flipkey/.local/lib/python3.12/site-packages/fastapi/testclient.py", line 1, in <module>
+    from starlette.testclient import TestClient as TestClient  # noqa
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/flipkey/.local/lib/python3.12/site-packages/starlette/testclient.py", line 40, in <module>
+    raise RuntimeError(
+RuntimeError: The starlette.testclient module requires the httpx package to be installed.
+You can install this with:
+    $ pip install httpx
+
+
+======================================================================
+FAIL: test_get_claude_model_by_full_name (test_agent_manager.TestModelResolution.test_get_claude_model_by_full_name)
+Test resolving Claude models by full name
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/opt/n8n-copilot-shim-dev/tests/test_agent_manager.py", line 440, in test_get_claude_model_by_full_name
+    self.assertEqual(result, "sonnet")
+AssertionError: None != 'sonnet'
+
+----------------------------------------------------------------------
+Ran 210 tests in 7.336s
+
+FAILED (failures=1, errors=1, skipped=9)

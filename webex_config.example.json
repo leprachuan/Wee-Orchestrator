@@ -10,5 +10,10 @@
   "user_pairings": {},
   "enable_auto_pair": false,
   "default_agent": "orchestrator",
-  "default_model": "gpt-5-mini"
+  "default_model": "gpt-5-mini",
+  
+  "rabbitmq_payload_key": null,
+  "rabbitmq_ssl": false,
+  "rabbitmq_ssl_verify": true,
+  "rabbitmq_host_ip": null
 }

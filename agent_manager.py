@@ -20,6 +20,9 @@ from typing import Optional, Tuple, Dict, List
 import secrets as _secrets
 import threading
 
+# Dynamically determine the repo base directory (works regardless of where repo is cloned)
+SCRIPT_BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
 
 class RateLimiter:
     """In-memory per-IP rate limiter with sliding window."""
@@ -387,7 +390,7 @@ class SessionManager:
             (
                 "sonnet",
                 "Claude Sonnet (Latest)",
-                ["claude-sonnet", "claude-sonnet-4-6", "claude-sonnet-4.6", "sonnet-4.6"],
+                ["claude-sonnet", "claude-sonnet-4-6", "claude-sonnet-4.6", "claude-sonnet-4.5", "sonnet-4.6"],
             ),
             (
                 "haiku",
@@ -1879,8 +1882,13 @@ Example skill structure:
         timeout: Optional[int] = None,
         runtime: str = "copilot",
         model: str = "gpt-5-mini",
+        channel: str = "webui",
     ) -> str:
-        """Build a context-aware prompt that includes agent information, runtime, model, and execution deadline"""
+        """Build a context-aware prompt that includes agent information, runtime, model, and execution deadline.
+        
+        Args:
+            channel: The communication channel (telegram, webex, webui) - determines which platform to send files to
+        """
         if agent not in self.AGENTS:
             agent = "devops"
 
@@ -1965,104 +1973,66 @@ HOW TO FORMAT:
 2. Bare URL: https://url.jpg - Image sent without caption
 Do NOT use <img> tags (unsupported). Do NOT create files, generate ASCII art, or make SVGs. The system will automatically detect image URLs and send them as photos. You can include hyperlinks using <a href="url">text</a>.]
 
-[File Handling - ALL PLATFORMS]: Use the SAME syntax for Telegram, WebEx, and WebUI!
+[File Handling - CHANNEL-SPECIFIC]:
 
-UNIVERSAL SYNTAX:
+UNIVERSAL SYNTAX (same for all platforms):
   Files:     [FILE:/path/to/file.ext:Your caption here]
   Images:    ![caption](https://example.com/image.png) or bare URL
   Captions:  Descriptive text after the colon (max 1000 chars)
 
-PLATFORM-SPECIFIC DIRECTORIES (save files here):
-  Telegram:  /opt/n8n-copilot-shim-dev/telegram_downloads/
-  WebEx:     /opt/n8n-copilot-shim-dev/webex_downloads/
-  WebUI:     /opt/n8n-copilot-shim-dev/webui_downloads/
+YOUR CURRENT CHANNEL: {channel_upper}
+Save files to YOUR CHANNEL'S DIRECTORY:
+  → {script_base_dir}/{channel}_downloads/
+  
+  ✓ Telegram users: {script_base_dir}/telegram_downloads/
+  ✓ WebEx users: {script_base_dir}/webex_downloads/
+  ✓ WebUI users: {script_base_dir}/webui_downloads/
 
 SIZE LIMITS:
-  Telegram:  50 MB (will reject larger files)
-  WebEx:     100 MB (will reject larger files)
-  WebUI:     500 MB (will reject larger files)
+  Telegram:  50 MB
+  WebEx:     100 MB
+  WebUI:     500 MB
 
-SUPPORTED FILE TYPES: All binary and text formats
-  ✓ PDF, DOCX, XLSX (documents)
-  ✓ CSV, JSON, XML, YAML (data)
-  ✓ PNG, JPG, GIF, WEBP (images)
-  ✓ ZIP, TAR, 7Z (archives)
-  ✓ MP4, MP3, WAV (media)
-  ✓ Any other format
-
-FILE NAMING BEST PRACTICES:
-  ✓ Descriptive names: monthly_report_jan_2026.pdf
-  ✓ With timestamps: report_2026_02_21_133000.pdf
-  ✓ User-scoped: user_123456_export.csv
-  ❌ Generic names: file.pdf, data.csv, image.png
-  ❌ Cryptic names: tmp123, output, file1
+SUPPORTED FILE TYPES: PDF, DOCX, XLSX, CSV, JSON, PNG, JPG, GIF, WEBP, ZIP, TAR, MP4, MP3, etc.
 
 EXAMPLES:
 
-1. USER ASKS FOR A SCREENSHOT:
-   User: "Get me a screenshot of snort.org"
-   → Use Playwright/Selenium to capture
-   → Save to: /opt/n8n-copilot-shim-dev/{platform}_downloads/snort_screenshot.png
-   → Return response:
-      "Here's the screenshot of snort.org:
-       [FILE:/opt/n8n-copilot-shim-dev/webex_downloads/snort_screenshot.png:Snort Homepage - Full Page]"
-   → System automatically sends file to user's platform ✓
+1. USER ASKS FOR A SCREENSHOT → Save to: {script_base_dir}/{channel}_downloads/screenshot.png
+   → Return: "Here's the screenshot: [FILE:{script_base_dir}/{channel}_downloads/screenshot.png:Snort Homepage]"
+   → File sent to {channel_upper} ✓
 
-2. USER ASKS FOR A PDF REPORT:
-   User: "Generate a monthly sales report as PDF"
-   → Use reportlab or similar to create PDF
-   → Save to: /opt/n8n-copilot-shim-dev/{platform}_downloads/sales_report_jan_2026.pdf
-   → Return response:
-      "I've generated your monthly sales report:
-       [FILE:/opt/n8n-copilot-shim-dev/telegram_downloads/sales_report_jan_2026.pdf:Monthly Sales Report - January 2026]"
-   → System automatically sends file to user's platform ✓
+2. USER ASKS FOR A PDF REPORT → Save to: {script_base_dir}/{channel}_downloads/report.pdf  
+   → Return: "Here's your report: [FILE:{script_base_dir}/{channel}_downloads/report.pdf:Monthly Sales]"
+   → File sent to {channel_upper} ✓
 
-3. USER ASKS FOR A DATA EXPORT:
-   User: "Export all user data as CSV"
-   → Generate CSV with data
-   → Save to: /opt/n8n-copilot-shim-dev/{platform}_downloads/user_export.csv
-   → Return response:
-      "Your data export is ready:
-       [FILE:/opt/n8n-copilot-shim-dev/webui_downloads/user_export.csv:User Data Export - All Records]"
-   → System automatically sends file to user's platform ✓
+3. USER ASKS FOR A DATA EXPORT → Save to: {script_base_dir}/{channel}_downloads/data.csv
+   → Return: "Your export: [FILE:{script_base_dir}/{channel}_downloads/data.csv:User Data]"
+   → File sent to {channel_upper} ✓
 
-4. USER ASKS FOR AN IMAGE:
-   User: "Show me a network diagram"
-   → Use web_search tool to find real public image
-   → Return response with markdown:
-      "Here's a network diagram:
-       ![Network Architecture](https://commons.wikimedia.org/wiki/File:network_diagram.png)"
-   → System automatically embeds image in user's platform ✓
+HOW IT WORKS:
+  1. Save file to {script_base_dir}/{channel}_downloads/
+  2. Include [FILE:path:caption] in your response
+  3. System sends file to {channel_upper} automatically ✓
 
-HOW THE SYSTEM WORKS:
-  1. Agent generates response with [FILE:...] markers
-  2. Response is sent to platform connector (telegram_connector, webex_connector, etc)
-  3. Connector's send_response() method:
-     - Extracts [FILE:...] markers
-     - Sends text content as message
-     - Calls send_file() to upload each file
-     - Includes caption with file
-  4. File appears in user's platform with caption ✓
-
-IMPORTANT RULES:
+IMPORTANT:
+  ✓ ALWAYS save to your channel directory ({channel}_downloads)
   ✓ ALWAYS use absolute paths (start with /)
-  ✓ ALWAYS include meaningful captions
-  ✓ ALWAYS check file exists before referencing
-  ✓ ALWAYS validate file size is within limits
-  ✓ DON'T create files outside designated directories
-  ✓ DON'T mix different syntaxes
-  ✓ DON'T use relative paths like ./file.pdf or ~/file.pdf
-  ✓ DON'T reference /tmp files (may be deleted)
-
-TROUBLESHOOTING:
-  "File does not exist" → Check path is correct and absolute
-  "File outside allowed directory" → Save to platform-specific downloads dir
-  "File exceeds size limit" → Compress file or split into smaller pieces
-  "File not appearing in platform" → Check captions are included, path is valid
-  "Image not showing" → Use public URL (not localhost or file://)
+  ✓ ALWAYS include captions in [FILE:...] markers
+  ✓ DON'T save to other channels' directories (e.g., don't put files in webex_downloads if you're on Telegram)
+  ✓ DON'T use relative paths or /tmp files
+  ✓ Check file size is within {channel}'s limit
 """
         else:  # text (default)
             render_instruction = ""
+
+        # Format render_instruction with channel and script_base_dir variables
+        if "{channel" in render_instruction or "{script_base_dir" in render_instruction:
+            channel_upper = channel.upper()
+            render_instruction = render_instruction.format(
+                channel=channel,
+                channel_upper=channel_upper,
+                script_base_dir=SCRIPT_BASE_DIR
+            )
 
         # Add timeout/deadline information with 15% buffer for overhead
         timeout_instruction = ""
@@ -2337,22 +2307,27 @@ User Request:
         # Parse /mode command from prompt, fall back to session setting
         prompt, mode = self._parse_mode_command(prompt)
         
+        # Get session data once - reuse for mode and channel
+        session_data = self.get_or_create_session_data(n8n_session_id)
+        
         # If mode not specified in prompt, check session setting
         if mode == "restricted":
-            session_data = self.get_or_create_session_data(n8n_session_id)
             session_mode = session_data.get("yolo_mode", "restricted")
             if session_mode == "on":
                 mode = "yolo"
 
         agent_dir = self.AGENTS.get(agent, self.AGENTS["orchestrator"])["path"]
         effective_timeout = timeout if timeout is not None else self.command_timeout
+        
+        # Get channel for file handling instructions
+        channel = session_data.get("channel", "webui")
 
         # Only inject full context on new sessions; resumed sessions already have it
         if resume and session_id:
             context_prompt = prompt
         else:
             context_prompt = self.build_agent_context_prompt(
-                agent, prompt, n8n_session_id, render_type, effective_timeout, "copilot", model
+                agent, prompt, n8n_session_id, render_type, effective_timeout, "copilot", model, channel
             )
         
         # Add yolo mode instructions for unrestricted network/privileged access
@@ -2407,22 +2382,27 @@ User Request:
         # Parse /mode command from prompt
         prompt, mode = self._parse_mode_command(prompt)
 
+        # Get session data once - reuse for mode and channel
+        session_data = self.get_or_create_session_data(n8n_session_id)
+
         # If mode not specified in prompt, check session setting
         if mode == "restricted":
-            session_data = self.get_or_create_session_data(n8n_session_id)
             session_mode = session_data.get("yolo_mode", "restricted")
             if session_mode == "on":
                 mode = "yolo"
 
         agent_dir = self.AGENTS.get(agent, self.AGENTS["orchestrator"])["path"]
         effective_timeout = timeout if timeout is not None else self.command_timeout
+        
+        # Get channel for file handling instructions
+        channel = session_data.get("channel", "webui")
 
         # Only inject full context on new sessions; resumed sessions already have it
         if resume and session_id:
             context_prompt = prompt
         else:
             context_prompt = self.build_agent_context_prompt(
-                agent, prompt, n8n_session_id, render_type, effective_timeout, "opencode", model
+                agent, prompt, n8n_session_id, render_type, effective_timeout, "opencode", model, channel
             )
 
         cmd = [str(self.opencode_bin), "run", "--model", model]
@@ -2473,13 +2453,17 @@ User Request:
 
         agent_dir = self.AGENTS.get(agent, self.AGENTS["orchestrator"])["path"]
         effective_timeout = timeout if timeout is not None else self.command_timeout
+        
+        # Get channel for file handling instructions
+        session_data = self.get_or_create_session_data(n8n_session_id)
+        channel = session_data.get("channel", "webui")
 
         # Only inject full context on new sessions; resumed sessions already have it
         if resume and session_id:
             context_prompt = prompt
         else:
             context_prompt = self.build_agent_context_prompt(
-                agent, prompt, n8n_session_id, render_type, effective_timeout, "claude", model
+                agent, prompt, n8n_session_id, render_type, effective_timeout, "claude", model, channel
             )
 
         # Set permission mode: use bypassPermissions for yolo mode, otherwise default
@@ -2539,22 +2523,27 @@ User Request:
         # Parse /mode command from prompt
         prompt, mode = self._parse_mode_command(prompt)
 
+        # Get session data once - reuse for mode and channel
+        session_data = self.get_or_create_session_data(n8n_session_id)
+
         # If mode not specified in prompt, check session setting
         if mode == "restricted":
-            session_data = self.get_or_create_session_data(n8n_session_id)
             session_mode = session_data.get("yolo_mode", "restricted")
             if session_mode == "on":
                 mode = "yolo"
 
         agent_dir = self.AGENTS.get(agent, self.AGENTS["orchestrator"])["path"]
         effective_timeout = timeout if timeout is not None else self.command_timeout
+        
+        # Get channel for file handling instructions
+        channel = session_data.get("channel", "webui")
 
         # Only inject full context on new sessions; resumed sessions already have it
         if resume and session_id:
             context_prompt = prompt
         else:
             context_prompt = self.build_agent_context_prompt(
-                agent, prompt, n8n_session_id, render_type, effective_timeout, "gemini", model
+                agent, prompt, n8n_session_id, render_type, effective_timeout, "gemini", model, channel
             )
 
         cmd = ["gemini"]
@@ -2604,22 +2593,27 @@ User Request:
         # Parse /mode command from prompt
         prompt, mode = self._parse_mode_command(prompt)
 
+        # Get session data once - reuse for mode and channel
+        session_data = self.get_or_create_session_data(n8n_session_id)
+
         # If mode not specified in prompt, check session setting
         if mode == "restricted":
-            session_data = self.get_or_create_session_data(n8n_session_id)
             session_mode = session_data.get("yolo_mode", "restricted")
             if session_mode == "on":
                 mode = "yolo"
 
         agent_dir = self.AGENTS.get(agent, self.AGENTS["orchestrator"])["path"]
         effective_timeout = timeout if timeout is not None else self.command_timeout
+        
+        # Get channel for file handling instructions
+        channel = session_data.get("channel", "webui")
 
         # Only inject full context on new sessions; resumed sessions already have it
         if resume and session_id:
             context_prompt = prompt
         else:
             context_prompt = self.build_agent_context_prompt(
-                agent, prompt, n8n_session_id, render_type, effective_timeout, "codex", model
+                agent, prompt, n8n_session_id, render_type, effective_timeout, "codex", model, channel
             )
 
         if resume and session_id:
@@ -3754,6 +3748,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         identity: str
 
     class SessionCreate(BaseModel):
+        session_id: Optional[str] = None  # Optional: if provided, use this session_id instead of generating
         agent: Optional[str] = None
         model: Optional[str] = None
         runtime: Optional[str] = None
@@ -3920,9 +3915,13 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             x_user_identity=request.headers.get("x-user-identity"),
             x_auth_channel=request.headers.get("x-auth-channel"),
         )
-        session_id = str(uuid4())[:8]
+        # Use provided session_id or generate a new one
+        session_id = body.session_id if body.session_id else str(uuid4())[:8]
         session_mgr.get_or_create_session_data(session_id)
         history_mgr.create_session(user["channel"], user["identity"], session_id)
+
+        # Store channel in session so file instructions are channel-aware
+        session_mgr.update_session_field(session_id, "channel", user["channel"])
 
         # WebUI sessions default to markdown so media instructions are active
         session_mgr.update_session_field(session_id, "render_type", "markdown")
@@ -4231,7 +4230,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                     _sched_path = str(Path(__file__).parent)
                     if _sched_path not in _sys.path:
                         _sys.path.insert(0, _sched_path)
-                    from task_scheduler import TaskScheduler
+                    from scheduler.management import TaskScheduler
                     _task_scheduler = TaskScheduler()
                 except Exception as _e:
                     raise HTTPException(status_code=503, detail=f"Scheduler unavailable: {_e}")
