@@ -676,9 +676,15 @@ async function sendMessageStreaming(query, sessionId) {
 
           } else if (evt.type === 'chunk' && streamBubble) {
             rawText += evt.text;
-            // Show raw text while streaming so it feels instant
+            // Show formatted text while streaming so it feels instant
             streamBubble.classList.add('streaming');
-            streamBubble.textContent = rawText;
+            // Preserve line breaks and escape HTML, but keep text readable
+            const formatted = rawText
+              .replace(/</g, '&lt;')
+              .replace(/>/g, '&gt;')
+              .replace(/\n\n+/g, '</p><p>')  // paragraph breaks
+              .replace(/\n/g, '<br>');       // line breaks
+            streamBubble.innerHTML = formatted ? `<p>${formatted}</p>` : '';
             scrollToBottom();
 
           } else if (evt.type === 'done') {
