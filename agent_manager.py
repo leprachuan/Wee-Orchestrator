@@ -216,15 +216,18 @@ def get_command_timeout() -> int:
 class HistoryManager:
     """Persists per-user chat history in ~/.copilot/chat-history.json."""
 
-    MAX_SESSIONS_PER_USER = 100
-    MAX_MESSAGES_PER_SESSION = 500
-
     def __init__(self):
         home = os.path.expanduser("~")
         copilot_dir = os.path.join(home, ".copilot")
         os.makedirs(copilot_dir, exist_ok=True)
         self._path = os.path.join(copilot_dir, "chat-history.json")
         self._lock = threading.Lock()
+        # Read MAX_SESSIONS from environment or use default
+        try:
+            self.MAX_SESSIONS_PER_USER = int(os.environ.get("MAX_SESSIONS", "100"))
+        except (ValueError, TypeError):
+            self.MAX_SESSIONS_PER_USER = 100
+        self.MAX_MESSAGES_PER_SESSION = 500
         if not os.path.exists(self._path):
             self._save({})
 
