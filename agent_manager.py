@@ -1995,13 +1995,14 @@ IMPORTANT:
         else:  # text (default)
             render_instruction = ""
 
-        # Format render_instruction with channel and script_base_dir variables
-        if "{channel" in render_instruction or "{script_base_dir" in render_instruction:
+        # Format render_instruction with channel, script_base_dir, and session_id variables
+        if "{channel" in render_instruction or "{script_base_dir" in render_instruction or "{n8n_session_id" in render_instruction:
             channel_upper = channel.upper()
             render_instruction = render_instruction.format(
                 channel=channel,
                 channel_upper=channel_upper,
-                script_base_dir=SCRIPT_BASE_DIR
+                script_base_dir=SCRIPT_BASE_DIR,
+                n8n_session_id=n8n_session_id
             )
 
         # Add timeout/deadline information with 15% buffer for overhead
