@@ -14,11 +14,15 @@ const STATE = {
   username:        null,   // @handle (telegram) or null
   identityResolved: null,  // resolved numeric ID during auth
   currentSessionId: null,
+  isProcessing:    false,  // true when waiting for AI response
   isTyping:        false,
   pendingFiles:    [],
   sessions:        [],
   activeSessionId: null,
   schedulerEnabled: true,  // overridden by /api/v1/config on boot
+  requestQueue:    [],     // queued requests while processing
+  queuePaused:     false,  // true to prevent auto-submit of next queued message
+  currentProcessingQueueId: null,  // ID of queue item currently being processed
 };
 
 // ─── Persist ──────────────────────────────────────────────────────────────────
@@ -579,8 +583,224 @@ async function deleteSession(sessionId) {
   }
 }
 
+// ─── REQUEST QUEUE MANAGEMENT ──────────────────────────────────────────────
+
+function generateQueueId() {
+  return Math.random().toString(36).substring(2) + Date.now().toString(36);
+}
+
+function queueRequest(text, files = []) {
+  const queueItem = {
+    id: generateQueueId(),
+    text: text,
+    files: files,
+    timestamp: Date.now(),
+    status: 'pending'
+  };
+  STATE.requestQueue.push(queueItem);
+  renderQueuePanel();
+  showQueuePanel();
+}
+
+function setQueueItemStatus(queueId, status) {
+  const item = STATE.requestQueue.find(q => q.id === queueId);
+  if (item) {
+    item.status = status;
+    renderQueuePanel();
+  }
+}
+
+function markCurrentQueueAsProcessing(queueId) {
+  STATE.currentProcessingQueueId = queueId;
+  setQueueItemStatus(queueId, 'processing');
+}
+
+function markCurrentQueueAsCompleted() {
+  if (STATE.currentProcessingQueueId) {
+    setQueueItemStatus(STATE.currentProcessingQueueId, 'completed');
+    STATE.currentProcessingQueueId = null;
+  }
+}
+
+function markCurrentQueueAsFailed() {
+  if (STATE.currentProcessingQueueId) {
+    setQueueItemStatus(STATE.currentProcessingQueueId, 'failed');
+    STATE.currentProcessingQueueId = null;
+  }
+}
+
+function processNextQueue() {
+  if (STATE.requestQueue.length === 0) {
+    hideQueuePanel();
+    STATE.isProcessing = false;
+    return;
+  }
+
+  // Get first item and remove from queue
+  const nextRequest = STATE.requestQueue.shift();
+  renderQueuePanel();
+
+  // Prepare textarea with queued request
+  const textarea = $('message-input');
+  textarea.value = nextRequest.text;
+  autoResizeTextarea(textarea);
+  syncMirror();
+
+  // Restore pending files
+  STATE.pendingFiles = nextRequest.files || [];
+  renderFilePreviews();
+
+  // Mark this item as processing
+  markCurrentQueueAsProcessing(nextRequest.id);
+
+  // Send the request
+  sendMessage();
+}
+
+function deleteQueueItem(queueId) {
+  STATE.requestQueue = STATE.requestQueue.filter(item => item.id !== queueId);
+  renderQueuePanel();
+  if (STATE.requestQueue.length === 0) {
+    hideQueuePanel();
+  }
+}
+
+function editQueueItem(queueId) {
+  const item = STATE.requestQueue.find(q => q.id === queueId);
+  if (!item) return;
+
+  // Remove from queue
+  STATE.requestQueue = STATE.requestQueue.filter(q => q.id !== queueId);
+
+  // Put back in textarea for editing
+  const textarea = $('message-input');
+  textarea.value = item.text;
+  autoResizeTextarea(textarea);
+  syncMirror();
+  renderQueuePanel();
+
+  if (STATE.requestQueue.length === 0) {
+    hideQueuePanel();
+  }
+}
+
+function showQueuePanel() {
+  const panel = $('request-queue-panel');
+  if (panel) {
+    panel.classList.remove('queue-hidden');
+  }
+}
+
+function hideQueuePanel() {
+  const panel = $('request-queue-panel');
+  if (panel) {
+    panel.classList.add('queue-hidden');
+  }
+}
+
+function renderQueuePanel() {
+  const queueList = $('queue-items-list');
+  if (!queueList) return;
+
+  const pauseBtn = $('btn-pause-queue');
+  const statusMsg = $('queue-status-msg');
+  if (pauseBtn) {
+    pauseBtn.textContent = STATE.queuePaused ? '▶' : '⏸';
+    pauseBtn.title = STATE.queuePaused ? 'Resume auto-submit' : 'Pause auto-submit';
+  }
+  if (statusMsg) {
+    statusMsg.textContent = STATE.queuePaused
+      ? 'Queue paused — click ▶ to resume auto-submit'
+      : 'Requests will auto-submit when current message completes';
+  }
+
+  if (STATE.requestQueue.length === 0) {
+    queueList.innerHTML = '<p class="queue-empty">No queued requests</p>';
+    const counter = $('queue-count');
+    if (counter) counter.textContent = '0';
+    return;
+  }
+
+  const counter = $('queue-count');
+  if (counter) counter.textContent = STATE.requestQueue.length;
+
+  queueList.innerHTML = STATE.requestQueue.map((item, idx) => {
+    const preview = item.text.substring(0, 60).replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    const fileCount = item.files ? item.files.length : 0;
+    const fileLabel = fileCount > 0 ? ` 📎 ${fileCount}` : '';
+    const time = new Date(item.timestamp).toLocaleTimeString();
+
+    let statusClass = 'queue-status-pending';
+    let statusSymbol = '◯';
+    if (item.status === 'completed') { statusClass = 'queue-status-completed'; statusSymbol = '●'; }
+    else if (item.status === 'failed') { statusClass = 'queue-status-failed'; statusSymbol = '●'; }
+    else if (item.status === 'processing') { statusClass = 'queue-status-processing'; statusSymbol = '◐'; }
+
+    return `
+      <div class="queue-item ${statusClass}" data-queue-id="${item.id}">
+        <div class="queue-item-header">
+          <span class="queue-status-dot ${statusClass}">${statusSymbol}</span>
+          <span class="queue-item-number">#${idx + 1}</span>
+          <span class="queue-item-time">${time}</span>
+        </div>
+        <div class="queue-item-preview">"${preview}${preview.length >= 60 ? '...' : ''}"${fileLabel}</div>
+        <div class="queue-item-actions">
+          <button class="queue-btn-edit" title="Edit request">✎ Edit</button>
+          <button class="queue-btn-delete" title="Delete request">✕ Delete</button>
+        </div>
+      </div>
+    `;
+  }).join('');
+
+  queueList.querySelectorAll('.queue-btn-edit').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const queueId = btn.closest('.queue-item').dataset.queueId;
+      editQueueItem(queueId);
+    });
+  });
+
+  queueList.querySelectorAll('.queue-btn-delete').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const queueId = btn.closest('.queue-item').dataset.queueId;
+      deleteQueueItem(queueId);
+    });
+  });
+}
+
+function toggleQueuePanel() {
+  const panel = $('request-queue-panel');
+  if (panel) {
+    panel.classList.toggle('queue-minimized');
+  }
+}
+
+function toggleQueuePause() {
+  STATE.queuePaused = !STATE.queuePaused;
+  renderQueuePanel();
+  if (!STATE.queuePaused && !STATE.isProcessing && STATE.requestQueue.length > 0) {
+    processNextQueue();
+  }
+}
+
 // ─── Messaging ────────────────────────────────────────────────────────────────
 async function sendMessage() {
+  // If already processing, queue this request instead
+  if (STATE.isProcessing) {
+    const textarea = $('message-input');
+    let query = textarea.value.trim();
+    if (!query && STATE.pendingFiles.length === 0) return;
+
+    queueRequest(query, [...STATE.pendingFiles]);
+
+    // Clear input after queuing
+    textarea.value = '';
+    autoResizeTextarea(textarea);
+    syncMirror();
+    clearPendingFiles();
+    $('btn-send').disabled = true;
+    return;
+  }
+
   if (STATE.isTyping) return;
 
   const textarea = $('message-input');
@@ -607,15 +827,31 @@ async function sendMessage() {
   $('btn-send').disabled = true;
   hideCommandDropdown();
 
+  STATE.isProcessing = true;
   showTyping();
   try {
     const result = await sendMessageStreaming(query, STATE.currentSessionId);
     hideTyping();
+    STATE.isProcessing = false;
+
+    // Mark current queue item as completed
+    markCurrentQueueAsCompleted();
+
+    // Auto-submit next queued request if any (unless queue is paused)
+    if (STATE.requestQueue.length > 0 && !STATE.queuePaused) {
+      processNextQueue();
+    }
+
     // Refresh meta — a /agent set etc. may have changed things
     await fetchAndUpdateMeta(STATE.currentSessionId);
     await loadSessions();
   } catch (err) {
     hideTyping();
+    STATE.isProcessing = false;
+
+    // Mark current queue item as failed
+    markCurrentQueueAsFailed();
+
     renderSystemMessage('Error: ' + err.message);
   } finally {
     $('btn-send').disabled = false;
@@ -981,6 +1217,10 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // --- Send ---
   $('btn-send').addEventListener('click', sendMessage);
+
+  // --- Request Queue ---
+  $('btn-toggle-queue').addEventListener('click', toggleQueuePanel);
+  $('btn-pause-queue').addEventListener('click', toggleQueuePause);
 
   // --- Textarea ---
   const ta = $('message-input');
