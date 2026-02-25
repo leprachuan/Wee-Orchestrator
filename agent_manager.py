@@ -1387,27 +1387,49 @@ class SessionManager:
         elif runtime == "claude":
             import json as _json
             text_parts = []
+            assistant_text = ""
+            error_result = None
             for line in lines:
                 line_stripped = line.strip()
                 if not line_stripped:
                     continue
                 try:
                     obj = _json.loads(line_stripped)
+                    obj_type = obj.get("type")
                     # Prefer the final result event for the complete text
-                    if obj.get("type") == "result" and not obj.get("is_error", False):
-                        return obj.get("result", "")
+                    if obj_type == "result":
+                        result_text = obj.get("result", "")
+                        if obj.get("is_error", False):
+                            error_result = result_text
+                        else:
+                            return result_text
                     # Collect text deltas as fallback
-                    if obj.get("type") == "stream_event":
-                        event = obj.get("event", {})
+                    elif obj_type == "stream_event":
+                        event = obj.get("event") or {}
                         if event.get("type") == "content_block_delta":
-                            delta = event.get("delta", {})
+                            delta = event.get("delta") or {}
                             if delta.get("type") == "text_delta":
                                 text_parts.append(delta.get("text", ""))
-                except (ValueError, KeyError):
+                    # Extract text from assistant partial messages as last-resort fallback
+                    elif obj_type == "assistant":
+                        msg = obj.get("message") or {}
+                        content = msg.get("content") or []
+                        texts = [
+                            c.get("text", "")
+                            for c in content
+                            if isinstance(c, dict) and c.get("type") == "text"
+                        ]
+                        if texts:
+                            assistant_text = "\n\n".join(texts)
+                except (ValueError, KeyError, AttributeError):
                     # Not JSON — treat as plain text (legacy fallback)
                     result.append(line)
             if text_parts:
                 return "".join(text_parts)
+            if assistant_text:
+                return assistant_text
+            if error_result:
+                return error_result
 
         elif runtime == "gemini":
             for line in lines:
@@ -2208,6 +2230,7 @@ User Request:
                 stderr=subprocess.PIPE,
                 text=True,
                 cwd=cwd,
+                bufsize=1,  # line-buffered for faster streaming chunk delivery
             )
 
             self.track_running_query(
@@ -2234,30 +2257,39 @@ User Request:
                 import json as _json
 
                 stdout_chunks: list = []
+                _claude_text_block_count = 0  # track text blocks for separators
                 try:
                     for line in process.stdout:
                         stdout_chunks.append(line)
                         if runtime == "claude":
-                            # Parse stream-json output and push only text deltas
+                            # Parse stream-json output and push text deltas
                             try:
                                 obj = _json.loads(line.strip())
-                                if obj.get("type") == "stream_event":
-                                    event = obj.get("event", {})
-                                    if event.get("type") == "content_block_delta":
-                                        delta = event.get("delta", {})
+                                evt_type = obj.get("type")
+                                if evt_type == "stream_event":
+                                    event = obj.get("event") or {}
+                                    inner_type = event.get("type", "")
+                                    if inner_type == "content_block_start":
+                                        cb = event.get("content_block") or {}
+                                        if cb.get("type") == "text":
+                                            # Push newline separator between text blocks
+                                            # (e.g. text before tool call vs text after)
+                                            if _claude_text_block_count > 0:
+                                                loop.call_soon_threadsafe(
+                                                    queue.put_nowait,
+                                                    ("chunk", {"text": "\n\n"}),
+                                                )
+                                            _claude_text_block_count += 1
+                                    elif inner_type == "content_block_delta":
+                                        delta = event.get("delta") or {}
                                         if delta.get("type") == "text_delta":
                                             text = delta.get("text", "")
                                             if text:
-                                                # Detect semantic markers
-                                                ends_sentence = any(text.rstrip().endswith(p) for p in '.!?')
-                                                ends_paragraph = '\n\n' in text or text.strip() == ''
-                                                chunk_data = {
-                                                    'text': text,
-                                                    'ends_sentence': ends_sentence,
-                                                    'ends_paragraph': ends_paragraph
-                                                }
-                                                loop.call_soon_threadsafe(queue.put_nowait, ("chunk", chunk_data))
-                            except (ValueError, KeyError):
+                                                loop.call_soon_threadsafe(
+                                                    queue.put_nowait,
+                                                    ("chunk", {"text": text}),
+                                                )
+                            except (ValueError, KeyError, AttributeError):
                                 pass
                         else:
                             loop.call_soon_threadsafe(queue.put_nowait, ("chunk", line))
@@ -3869,6 +3901,51 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             "scheduler_enabled": SCHEDULER_ENABLED,
             "app_env": APP_ENV,
         }
+
+    @app.get("/api/v1/models")
+    async def get_models(runtime: str = "copilot"):
+        """Return available models for the specified runtime."""
+        runtime = runtime.lower().strip()
+
+        if runtime == "claude":
+            models = []
+            for group, entries in session_mgr.CLAUDE_MODELS.items():
+                for model_id, display_name, aliases in entries:
+                    models.append({"id": model_id, "label": display_name})
+            return {"runtime": runtime, "models": models}
+
+        elif runtime == "gemini":
+            models = []
+            for group, entries in session_mgr.GEMINI_MODELS.items():
+                for model_id, display_name, aliases in entries:
+                    models.append({"id": model_id, "label": display_name})
+            return {"runtime": runtime, "models": models}
+
+        elif runtime == "codex":
+            models = []
+            for group, entries in session_mgr.CODEX_MODELS.items():
+                for model_id, display_name, aliases in entries:
+                    models.append({"id": model_id, "label": display_name})
+            return {"runtime": runtime, "models": models}
+
+        elif runtime == "copilot":
+            try:
+                raw = session_mgr.fetch_copilot_models()
+                models = [{"id": m, "label": m} for group in raw.values() for m in group]
+                return {"runtime": runtime, "models": models}
+            except Exception as e:
+                return {"runtime": runtime, "models": [], "error": str(e)}
+
+        elif runtime == "opencode":
+            try:
+                raw = session_mgr.fetch_opencode_models()
+                models = [{"id": m, "label": m} for group in raw.values() for m in group]
+                return {"runtime": runtime, "models": models}
+            except Exception as e:
+                return {"runtime": runtime, "models": [], "error": str(e)}
+
+        else:
+            return {"runtime": runtime, "models": [], "error": f"Unknown runtime: {runtime}"}
 
     @app.post("/api/v1/auth/request-pairing")
     async def request_pairing(body: PairingRequest, request: Request):

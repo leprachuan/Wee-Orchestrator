@@ -245,19 +245,26 @@ const PILL_OPTIONS = {
       { label: '🐙 copilot',        cmd: '/runtime set copilot' },
       { label: '💎 gemini',         cmd: '/runtime set gemini' },
       { label: '🔓 opencode',       cmd: '/runtime set opencode' },
+      { label: '🧮 codex',          cmd: '/runtime set codex' },
     ],
   },
   'meta-model': {
     label: 'Switch Model',
-    options: [
-      { label: 'claude-sonnet-4.5',         cmd: '/model set claude-sonnet-4.5' },
-      { label: 'claude-opus-4',             cmd: '/model set claude-opus-4' },
-      { label: 'claude-haiku-4.5',          cmd: '/model set claude-haiku-4.5' },
-      { label: 'gpt-4o',                    cmd: '/model set gpt-4o' },
-      { label: 'gpt-4o-mini',              cmd: '/model set gpt-4o-mini' },
-      { label: 'gemini-1.5-pro',            cmd: '/model set gemini-1.5-pro' },
-      { label: '📋 list models',            cmd: '/model list' },
-    ],
+    options: null,   // null = dynamically loaded
+    dynamicLoad: async () => {
+      const runtime = $('meta-runtime')?.textContent?.trim() || 'copilot';
+      try {
+        const data = await apiRequest('GET', `/models?runtime=${encodeURIComponent(runtime)}`);
+        const opts = (data.models || []).map(m => ({
+          label: m.label,
+          cmd: `/model set ${m.id}`,
+        }));
+        opts.push({ label: '📋 list models', cmd: '/model list' });
+        return opts;
+      } catch (e) {
+        return [{ label: '📋 list models', cmd: '/model list' }];
+      }
+    },
   },
   'meta-mode': {
     label: 'Switch Mode',
@@ -274,35 +281,28 @@ function hidePillPopover() {
   if (_pillPopover) { _pillPopover.remove(); _pillPopover = null; }
 }
 
-function showPillPopover(pillEl, pillId) {
-  hidePillPopover();
-  const config = PILL_OPTIONS[pillId];
-  if (!config) return;
-
+function buildPopoverDOM(pillEl, label, options) {
   const popover = document.createElement('div');
   popover.className = 'pill-popover glass-panel';
-
   const header = document.createElement('div');
   header.className = 'pill-popover-header';
-  header.textContent = config.label;
+  header.textContent = label;
   popover.appendChild(header);
-
-  config.options.forEach(opt => {
+  options.forEach(opt => {
     const item = document.createElement('button');
     item.className = 'pill-popover-item';
     item.textContent = opt.label;
+    if (!opt.cmd) { item.disabled = true; item.style.opacity = '0.5'; }
     item.addEventListener('mousedown', e => {
       e.preventDefault();
+      if (!opt.cmd) return;
       hidePillPopover();
       sendCommand(opt.cmd);
     });
     popover.appendChild(item);
   });
-
   document.body.appendChild(popover);
   _pillPopover = popover;
-
-  // Position below the pill, flip up if needed
   const rect = pillEl.getBoundingClientRect();
   const popH = popover.offsetHeight || 200;
   let top = rect.bottom + 6;
@@ -311,6 +311,24 @@ function showPillPopover(pillEl, pillId) {
   if (left < 8) left = 8;
   popover.style.top  = `${top}px`;
   popover.style.left = `${left}px`;
+}
+
+async function showPillPopover(pillEl, pillId) {
+  hidePillPopover();
+  const config = PILL_OPTIONS[pillId];
+  if (!config) return;
+
+  if (config.options) {
+    buildPopoverDOM(pillEl, config.label, config.options);
+  } else if (config.dynamicLoad) {
+    buildPopoverDOM(pillEl, config.label, [{ label: '⏳ Loading…', cmd: null }]);
+    const capturedRef = _pillPopover;
+    const opts = await config.dynamicLoad();
+    if (_pillPopover === capturedRef) {  // still open and same popover
+      hidePillPopover();
+      buildPopoverDOM(pillEl, config.label, opts);
+    }
+  }
 }
 
 async function sendCommand(cmdText) {
@@ -911,18 +929,11 @@ async function sendMessageStreaming(query, sessionId) {
             ({ row: streamRow, bubble: streamBubble } = createStreamingBubble());
 
           } else if (evt.type === 'chunk' && streamBubble) {
-            // New: semantic markers from backend
-            if (evt.ends_paragraph) {
-              rawText += evt.text + '\n\n';
-            } else if (evt.ends_sentence) {
-              rawText += evt.text + '\n';
-            } else {
-              rawText += evt.text;
-            }
+            // Concatenate text directly — newlines are already embedded in the deltas
+            rawText += evt.text;
 
             // Show formatted text while streaming so it feels instant
             streamBubble.classList.add('streaming');
-            // Format streaming text with semantic awareness
             let formatted = rawText
               .replace(/</g, '&lt;')
               .replace(/>/g, '&gt;')
@@ -932,14 +943,18 @@ async function sendMessageStreaming(query, sessionId) {
             scrollToBottom();
 
           } else if (evt.type === 'done') {
-            // Replace raw text with fully-rendered markdown
+            // Use accumulated streaming text when available (captures all
+            // turns in multi-tool responses); fall back to done payload.
+            const finalContent = rawText.trim()
+              ? rawText
+              : (evt.response || '(no response)');
             if (streamBubble) {
               streamBubble.classList.remove('streaming');
-              applyMarkdownToBubble(streamBubble, evt.response || '(no response)');
+              applyMarkdownToBubble(streamBubble, finalContent);
               scrollToBottom();
             } else {
               // Command/no-chunk path: render fresh bubble
-              await renderMessage('assistant', evt.response || '(no response)', []);
+              await renderMessage('assistant', finalContent, []);
             }
             return evt;  // caller can read runtime/model
 
@@ -960,7 +975,7 @@ async function sendMessageStreaming(query, sessionId) {
 /** Inject markdown+highlight into an existing bubble element. */
 function applyMarkdownToBubble(bubble, content) {
   try {
-    bubble.innerHTML = marked.parse(content);
+    bubble.innerHTML = marked.parse(content, { breaks: true });
     bubble.querySelectorAll('pre code').forEach(block => {
       if (window.hljs) hljs.highlightElement(block);
     });
@@ -1029,7 +1044,7 @@ async function renderMessage(role, content, files = []) {
     bubble.innerHTML = `<span style="white-space:pre-wrap">${highlighted}</span>`;
   } else {
     try {
-      bubble.innerHTML = marked.parse(content);
+      bubble.innerHTML = marked.parse(content, { breaks: true });
       bubble.querySelectorAll('pre code').forEach(block => {
         if (window.hljs) hljs.highlightElement(block);
       });
