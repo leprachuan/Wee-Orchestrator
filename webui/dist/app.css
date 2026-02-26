@@ -1934,6 +1934,12 @@ html, body {
   transform: translateX(100%);
 }
 
+.request-queue-panel.queue-minimized {
+  width: 42px;
+}
+
+.request-queue-panel.queue-minimized .queue-header-title,
+.request-queue-panel.queue-minimized .queue-pause-btn,
 .request-queue-panel.queue-minimized .queue-items-list,
 .request-queue-panel.queue-minimized .queue-footer {
   display: none;
@@ -1976,6 +1982,18 @@ html, body {
 }
 
 .queue-pause-btn,
+.request-queue-panel.queue-minimized .queue-header {
+  justify-content: center;
+  padding: 12px 4px;
+  border-bottom: none;
+}
+
+.request-queue-panel.queue-minimized .queue-header-buttons {
+  width: 100%;
+  display: flex;
+  justify-content: center;
+}
+
 .queue-toggle-btn {
   background: none;
   border: none;

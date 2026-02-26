@@ -789,6 +789,11 @@ function toggleQueuePanel() {
   const panel = $('request-queue-panel');
   if (panel) {
     panel.classList.toggle('queue-minimized');
+    const btn = $('btn-toggle-queue');
+    if (btn) {
+      btn.textContent = panel.classList.contains('queue-minimized') ? '›' : '‹';
+      btn.title = panel.classList.contains('queue-minimized') ? 'Expand queue' : 'Collapse queue';
+    }
   }
 }
 
