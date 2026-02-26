@@ -152,15 +152,18 @@ class TelegramConnector:
             token: Telegram bot token
             config_file: Path to configuration file
         """
-        self.token = token
         self.config = TelegramConfig(config_file)
         
+        # Prefer config file token over env var (env var may be stale in systemd)
+        config_token = self.config.config.get("token", "")
+        self.token = config_token if config_token else token
+
         # Keep persistent SessionManager per session_id for context persistence
         self.session_managers = {}  # {session_id: SessionManager}
 
         # Set token in config if provided
-        if token and not self.config.config.get("token"):
-            self.config.config["token"] = token
+        if self.token and not self.config.config.get("token"):
+            self.config.config["token"] = self.token
             self.config.save()
 
         # API mode configuration
@@ -761,8 +764,9 @@ class TelegramConnector:
 
         # Send images
         for url, caption in image_data:
-            print(f"[DEBUG OUTBOUND] send_response sending photo URL={url} caption={repr(caption[:100])} to chat_id={chat_id}", file=sys.stderr)
-            self.send_photo(chat_id, url, caption)
+            print(f"[DEBUG OUTBOUND] send_response sending photo URL={url} caption={repr(caption[:100])} to chat_id={chat_id}", file=sys.stderr, flush=True)
+            result = self.send_photo(chat_id, url, caption)
+            print(f"[DEBUG OUTBOUND] send_photo returned: {result}", file=sys.stderr, flush=True)
 
         # Send files
         for file_path, caption in file_data:

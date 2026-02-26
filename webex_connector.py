@@ -474,6 +474,7 @@ class WebEXConnector:
     def _send_image_url(self, room_id: str, url: str, caption: str = "") -> Optional[str]:
         """Send an image to WebEX room via external URL. Returns message ID."""
         try:
+            print(f"[DEBUG] Sending image URL to WebEX: {url[:100]}", file=sys.stderr, flush=True)
             headers = {"Authorization": f"Bearer {self.token}"}
             data = {"roomId": room_id, "files": [url]}
             if caption:
@@ -484,22 +485,23 @@ class WebEXConnector:
                 json=data,
                 timeout=30,
             )
+            print(f"[DEBUG] WebEX image URL response: {response.status_code}", file=sys.stderr, flush=True)
             if response.status_code == 200:
                 result = response.json()
                 return result.get("id")
             else:
-                print(f"[WARN] WebEX image URL send failed ({response.status_code}): {response.text[:200]}", file=sys.stderr)
+                print(f"[WARN] WebEX image URL send failed ({response.status_code}): {response.text[:200]}", file=sys.stderr, flush=True)
                 # Fallback: send as markdown link
                 self.send_message(room_id, f"[📷 Image]({url})" + (f" - {caption}" if caption else ""))
         except Exception as e:
-            print(f"Error sending image URL to WebEX: {e}", file=sys.stderr)
+            print(f"[ERROR] Exception sending image URL to WebEX: {e}", file=sys.stderr, flush=True)
             self.send_message(room_id, f"[📷 Image]({url})" + (f" - {caption}" if caption else ""))
         return None
 
     def _send_image_file(self, room_id: str, file_path: str, caption: str = "") -> Optional[str]:
         """Send a local image file to WebEX room via multipart upload. Returns message ID."""
         try:
-            print(f"[DEBUG] Uploading local image to WebEX: {file_path}", file=sys.stderr)
+            print(f"[DEBUG] Uploading local image to WebEX: {file_path} (size={os.path.getsize(file_path)})", file=sys.stderr, flush=True)
             mime_type, _ = mimetypes.guess_type(file_path)
             if not mime_type:
                 mime_type = "image/png"
@@ -516,14 +518,17 @@ class WebEXConnector:
                     files=files,
                     timeout=60,
                 )
+                print(f"[DEBUG] WebEX image upload response: {response.status_code}", file=sys.stderr, flush=True)
                 if response.status_code == 200:
                     result = response.json()
-                    return result.get("id")
+                    msg_id = result.get("id")
+                    print(f"[DEBUG] WebEX image sent successfully, msg_id={msg_id}", file=sys.stderr, flush=True)
+                    return msg_id
                 else:
-                    print(f"[WARN] WebEX image file send failed ({response.status_code}): {response.text[:200]}", file=sys.stderr)
+                    print(f"[WARN] WebEX image file send failed ({response.status_code}): {response.text[:500]}", file=sys.stderr, flush=True)
                     self.send_message(room_id, f"⚠️ Failed to send image: {Path(file_path).name}")
         except Exception as e:
-            print(f"Error sending image file to WebEX: {e}", file=sys.stderr)
+            print(f"[ERROR] Exception sending image file to WebEX: {e}", file=sys.stderr, flush=True)
             self.send_message(room_id, f"⚠️ Error sending image: {str(e)}")
         return None
 
@@ -894,15 +899,19 @@ class WebEXConnector:
 
         # Send images
         for url, caption in image_data:
-            print(f"[DEBUG OUTBOUND] send_response sending image URL={url} caption={repr(caption[:100])} to room_id={room_id}", file=sys.stderr)
+            print(f"[DEBUG OUTBOUND] send_response sending image URL={url} caption={repr(caption[:100])} to room_id={room_id}", file=sys.stderr, flush=True)
             if url.startswith(('http://', 'https://')):
                 # External URL: send as file URL attachment
+                print(f"[DEBUG OUTBOUND] -> dispatching _send_image_url", file=sys.stderr, flush=True)
                 self._send_image_url(room_id, url, caption)
             elif os.path.isfile(url):
                 # Local file: upload as attachment
-                self._send_image_file(room_id, url, caption)
+                print(f"[DEBUG OUTBOUND] -> dispatching _send_image_file (file exists, size={os.path.getsize(url)})", file=sys.stderr, flush=True)
+                result = self._send_image_file(room_id, url, caption)
+                print(f"[DEBUG OUTBOUND] -> _send_image_file returned: {result}", file=sys.stderr, flush=True)
             else:
                 # Unresolved path: send as text link
+                print(f"[DEBUG OUTBOUND] -> image path not found, sending text fallback", file=sys.stderr, flush=True)
                 self.send_message(room_id, f"[Image]({url})" + (f" - {caption}" if caption else ""))
 
         # Send files
