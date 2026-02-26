@@ -4353,6 +4353,18 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             "app_env": APP_ENV,
         }
 
+    @app.get("/api/v1/agents")
+    async def get_agents():
+        """Return available agents from agents.json."""
+        agents = []
+        for name, info in session_mgr.AGENTS.items():
+            agents.append({
+                "name": name,
+                "description": info.get("description", ""),
+                "path": info.get("path", ""),
+            })
+        return {"agents": agents}
+
     @app.get("/api/v1/models")
     async def get_models(runtime: str = "copilot"):
         """Return available models for the specified runtime."""

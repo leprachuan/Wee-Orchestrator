@@ -278,13 +278,20 @@ async function handleVerifyCode() {
 const PILL_OPTIONS = {
   'meta-agent': {
     label: 'Switch Agent',
-    options: [
-      { label: '🍀 fosterbot',      cmd: '/agent set fosterbot' },
-      { label: '🔧 devops',         cmd: '/agent set devops' },
-      { label: '👨‍👩‍👧 family',         cmd: '/agent set family' },
-      { label: '💻 opencode',       cmd: '/agent set opencode' },
-      { label: '📋 list agents',    cmd: '/agent list' },
-    ],
+    options: null,
+    dynamicLoad: async () => {
+      try {
+        const data = await apiRequest('GET', '/agents');
+        const opts = (data.agents || []).map(a => ({
+          label: a.name,
+          cmd: `/agent set ${a.name}`,
+        }));
+        opts.push({ label: '📋 list agents', cmd: '/agent list' });
+        return opts;
+      } catch (e) {
+        return [{ label: '📋 list agents', cmd: '/agent list' }];
+      }
+    },
   },
   'meta-runtime': {
     label: 'Switch Runtime',
