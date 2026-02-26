@@ -471,12 +471,15 @@ class TelegramConnector:
 
         Checks:
         - File exists
-        - File is within allowed directory (telegram_downloads)
+        - File is within allowed directories (telegram_downloads, /tmp/webui_ai_media)
         - No path traversal attacks
         - File size within limits (50MB)
         """
         try:
-            allowed_dir = Path("/opt/n8n-copilot-shim-dev/telegram_downloads").resolve()
+            allowed_dirs = [
+                Path("/opt/n8n-copilot-shim-dev/telegram_downloads").resolve(),
+                Path("/tmp/webui_ai_media").resolve(),
+            ]
             file_path_obj = Path(file_path).resolve()
 
             # Check file exists
@@ -484,16 +487,18 @@ class TelegramConnector:
                 print(f"[WARN] File does not exist: {file_path}", file=sys.stderr)
                 return False
 
-            # Check file is in allowed directory (compatible with Python 3.8+)
-            try:
-                # Python 3.9+
-                is_safe = file_path_obj.is_relative_to(allowed_dir)
-            except AttributeError:
-                # Python 3.8 fallback: check if resolved path starts with allowed dir
-                is_safe = str(file_path_obj).startswith(str(allowed_dir))
+            # Check file is in any allowed directory
+            is_safe = False
+            for allowed_dir in allowed_dirs:
+                try:
+                    is_safe = file_path_obj.is_relative_to(allowed_dir)
+                except AttributeError:
+                    is_safe = str(file_path_obj).startswith(str(allowed_dir))
+                if is_safe:
+                    break
 
             if not is_safe:
-                print(f"[WARN] File outside allowed directory: {file_path}", file=sys.stderr)
+                print(f"[WARN] File outside allowed directories: {file_path}", file=sys.stderr)
                 return False
 
             # Check file size (50MB limit)

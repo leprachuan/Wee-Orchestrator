@@ -1143,7 +1143,7 @@ class SessionManager:
     def get_or_create_session_data(self, n8n_session_id: str) -> Dict:
         """
         Get existing session data or create new default
-        Returns dict with keys: session_id, model, agent, runtime, bot_id
+        Returns dict with keys: session_id, model, agent, runtime, bot_id, channel
         """
         session_map = self.load_session_map()
 
@@ -1163,6 +1163,13 @@ class SessionManager:
         # Extract bot identifier from session ID (last 4 chars of numeric part)
         bot_id = self._extract_bot_identifier(n8n_session_id)
 
+        # Auto-detect channel from session ID prefix
+        channel = "webui"
+        if n8n_session_id.startswith("webex_"):
+            channel = "webex"
+        elif n8n_session_id.startswith("telegram_"):
+            channel = "telegram"
+
         default_data = {
             "session_id": str(uuid4()),
             "model": default_model,
@@ -1170,6 +1177,7 @@ class SessionManager:
             "runtime": default_runtime,
             "bot_id": bot_id,
             "render_type": "markdown",
+            "channel": channel,
         }
 
         if n8n_session_id not in session_map:
@@ -2242,7 +2250,34 @@ How to get images:
    Step 2: Include in your response: ![Description](/ai-media/{n8n_session_id}/screenshot.png)
    IMPORTANT: Always verify the cp succeeded and the destination file size is > 0 before including the image URL.
 
-Always include at least one image in markdown format. Do NOT use ASCII art, SVG generation, or placeholder images.]"""
+Always include at least one image in markdown format. Do NOT use ASCII art, SVG generation, or placeholder images.]
+[File Handling - CHANNEL-SPECIFIC]:
+
+UNIVERSAL SYNTAX (same for all platforms):
+  Files:     [FILE:/path/to/file.ext:Your caption here]
+  Images:    ![caption](https://example.com/image.png) or ![caption](/ai-media/session/file.png)
+  Captions:  Descriptive text after the colon (max 1000 chars)
+
+YOUR CURRENT CHANNEL: {{channel_upper}}
+Save files to YOUR CHANNEL'S DIRECTORY:
+  → {{script_base_dir}}/{{channel}}_downloads/
+
+SIZE LIMITS:
+  Telegram:  50 MB
+  WebEx:     100 MB
+  WebUI:     500 MB
+
+HOW IT WORKS:
+  1. Save file to {{script_base_dir}}/{{channel}}_downloads/
+  2. Include [FILE:path:caption] in your response
+  3. For images, use markdown: ![caption](url) or ![caption](/ai-media/session/file.png)
+  4. System detects images/files and sends them natively to {{channel_upper}} ✓
+
+IMPORTANT:
+  ✓ ALWAYS save files to your channel directory ({{channel}}_downloads)
+  ✓ ALWAYS use absolute paths (start with /)
+  ✓ For images, prefer Option A (direct URL) or Option B/C (local with /ai-media/ path)
+  ✓ The system will automatically upload local images and send URL images to {{channel_upper}}"""
         elif render_type == "html":
             render_instruction = """
 [Output Format: html]
