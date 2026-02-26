@@ -688,16 +688,24 @@ class SessionManager:
         self._stream_queues: Dict[str, tuple] = {}
 
     def _load_agents_config(self, config_file: Optional[str] = None) -> Dict:
-        """Load agents configuration from JSON file"""
-        if config_file is None:
-            # Look for agents.json in current directory or script directory
-            config_path = (
-                Path(config_file) if config_file else Path.cwd() / "agents.json"
-            )
-            if not config_path.exists():
-                config_path = Path(__file__).parent / "agents.json"
-        else:
+        """Load agents configuration from JSON file
+
+        Priority:
+          1. Explicit config_file parameter
+          2. AGENT_CONFIG_FILE environment variable
+          3. ./agents.json in current working directory
+          4. agents.json next to this script
+        """
+        if config_file:
             config_path = Path(config_file)
+        else:
+            env_path = os.environ.get("AGENT_CONFIG_FILE")
+            if env_path:
+                config_path = Path(env_path)
+            else:
+                config_path = Path.cwd() / "agents.json"
+                if not config_path.exists():
+                    config_path = Path(__file__).parent / "agents.json"
 
         if not config_path.exists():
             print(
