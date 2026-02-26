@@ -1071,7 +1071,6 @@ async function renderMessage(role, content, files = []) {
   row.appendChild(avatar);
   row.appendChild(bubble);
   container.appendChild(row);
-  scrollToBottom();
 }
 
 function renderSystemMessage(text) {
