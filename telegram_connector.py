@@ -18,6 +18,9 @@ from typing import Optional, Dict, List
 from datetime import datetime
 import agent_manager
 
+# Download directories configurable via environment (.env / systemd EnvironmentFile)
+TELEGRAM_DOWNLOADS_DIR = Path(os.environ.get("TELEGRAM_DOWNLOADS_DIR", "/opt/n8n-copilot-shim-dev/telegram_downloads"))
+
 # If production listener should be disabled to avoid duplicate responders, create the
 # sentinel file /opt/n8n-copilot-shim/PROD_DISABLED. When present, any process
 # started from the production path will exit immediately.
@@ -476,7 +479,7 @@ class TelegramConnector:
         - File size within limits (50MB)
         """
         try:
-            allowed_dir = Path("/opt/n8n-copilot-shim-dev/telegram_downloads").resolve()
+            allowed_dir = TELEGRAM_DOWNLOADS_DIR.resolve()
             file_path_obj = Path(file_path).resolve()
 
             # Check file exists
@@ -737,7 +740,7 @@ class TelegramConnector:
             file_path = file_info["result"]["file_path"]
             
             # Create downloads directory in repo
-            downloads_dir = Path("/opt/n8n-copilot-shim-dev/telegram_downloads")
+            downloads_dir = TELEGRAM_DOWNLOADS_DIR
             downloads_dir.mkdir(exist_ok=True)
             
             # Download file
@@ -763,7 +766,7 @@ class TelegramConnector:
     def cleanup_files(self, user_id: int):
         """Clean up downloaded files for user"""
         try:
-            downloads_dir = Path("/opt/n8n-copilot-shim-dev/telegram_downloads")
+            downloads_dir = TELEGRAM_DOWNLOADS_DIR
             if downloads_dir.exists():
                 for file in downloads_dir.glob(f"{user_id}_*"):
                     file.unlink()

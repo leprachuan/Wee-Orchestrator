@@ -21,6 +21,9 @@ from typing import Optional, Dict, List
 from datetime import datetime, timedelta
 import agent_manager
 
+# Download directories configurable via environment (.env / systemd EnvironmentFile)
+WEBEX_DOWNLOADS_DIR = Path(os.environ.get("WEBEX_DOWNLOADS_DIR", "/opt/n8n-copilot-shim-dev/webex_downloads"))
+
 
 class WebEXConfig:
     """Manages WebEX connector configuration"""
@@ -562,7 +565,7 @@ class WebEXConnector:
         - File size within limits (100MB - WebEX limit)
         """
         try:
-            allowed_dir = Path("/opt/n8n-copilot-shim-dev/webex_downloads").resolve()
+            allowed_dir = WEBEX_DOWNLOADS_DIR.resolve()
             file_path_obj = Path(file_path).resolve()
 
             # Check file exists
@@ -605,7 +608,7 @@ class WebEXConnector:
 
             if response.status_code == 200:
                 # Create downloads directory
-                downloads_dir = Path("/opt/n8n-copilot-shim-dev/webex_downloads")
+                downloads_dir = WEBEX_DOWNLOADS_DIR
                 downloads_dir.mkdir(exist_ok=True)
 
                 # Extract filename from Content-Disposition header
@@ -650,7 +653,7 @@ class WebEXConnector:
                 )
                 if response.status_code == 200:
                     # Repeat save logic above
-                    downloads_dir = Path("/opt/n8n-copilot-shim-dev/webex_downloads")
+                    downloads_dir = WEBEX_DOWNLOADS_DIR
                     downloads_dir.mkdir(exist_ok=True)
 
                     filename = "file"
@@ -707,7 +710,7 @@ class WebEXConnector:
                                 pass  # Silently ignore errors (file may have been deleted)
 
                     # Clean up downloaded files in webex_downloads/
-                    downloads_dir = Path("/opt/n8n-copilot-shim-dev/webex_downloads")
+                    downloads_dir = WEBEX_DOWNLOADS_DIR
                     if downloads_dir.exists():
                         for file in downloads_dir.glob("*_*"):
                             try:
