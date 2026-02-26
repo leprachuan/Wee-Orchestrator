@@ -471,12 +471,76 @@ class WebEXConnector:
             self.send_message(room_id, f"⚠️ Error sending file: {str(e)}")
         return None
 
+    def _send_image_url(self, room_id: str, url: str, caption: str = "") -> Optional[str]:
+        """Send an image to WebEX room via external URL. Returns message ID."""
+        try:
+            headers = {"Authorization": f"Bearer {self.token}"}
+            data = {"roomId": room_id, "files": [url]}
+            if caption:
+                data["text"] = caption
+            response = requests.post(
+                "https://webexapis.com/v1/messages",
+                headers=headers,
+                json=data,
+                timeout=30,
+            )
+            if response.status_code == 200:
+                result = response.json()
+                return result.get("id")
+            else:
+                print(f"[WARN] WebEX image URL send failed ({response.status_code}): {response.text[:200]}", file=sys.stderr)
+                # Fallback: send as markdown link
+                self.send_message(room_id, f"[📷 Image]({url})" + (f" - {caption}" if caption else ""))
+        except Exception as e:
+            print(f"Error sending image URL to WebEX: {e}", file=sys.stderr)
+            self.send_message(room_id, f"[📷 Image]({url})" + (f" - {caption}" if caption else ""))
+        return None
+
+    def _send_image_file(self, room_id: str, file_path: str, caption: str = "") -> Optional[str]:
+        """Send a local image file to WebEX room via multipart upload. Returns message ID."""
+        try:
+            print(f"[DEBUG] Uploading local image to WebEX: {file_path}", file=sys.stderr)
+            mime_type, _ = mimetypes.guess_type(file_path)
+            if not mime_type:
+                mime_type = "image/png"
+            headers = {"Authorization": f"Bearer {self.token}"}
+            with open(file_path, 'rb') as f:
+                files = {'files': (Path(file_path).name, f, mime_type)}
+                data = {'roomId': room_id}
+                if caption:
+                    data['text'] = caption
+                response = requests.post(
+                    "https://webexapis.com/v1/messages",
+                    headers=headers,
+                    data=data,
+                    files=files,
+                    timeout=60,
+                )
+                if response.status_code == 200:
+                    result = response.json()
+                    return result.get("id")
+                else:
+                    print(f"[WARN] WebEX image file send failed ({response.status_code}): {response.text[:200]}", file=sys.stderr)
+                    self.send_message(room_id, f"⚠️ Failed to send image: {Path(file_path).name}")
+        except Exception as e:
+            print(f"Error sending image file to WebEX: {e}", file=sys.stderr)
+            self.send_message(room_id, f"⚠️ Error sending image: {str(e)}")
+        return None
+
+    def _resolve_image_path(self, url: str) -> str:
+        """Resolve /ai-media/ paths to local filesystem paths."""
+        if url.startswith("/ai-media/"):
+            return url.replace("/ai-media/", "/tmp/webui_ai_media/", 1)
+        return url
+
     def extract_image_urls(self, text: str) -> tuple:
-        """Extract image URLs from text and return (image_data, remaining_text).
+        """Extract image URLs from text/HTML/Markdown and return (image_data, remaining_text).
         
         Supports:
         - ![caption](url) - Markdown syntax with caption
+        - <img src="url"/> - HTML img tags
         - Bare URL - https://example.com/image.jpg
+        - Local paths - /ai-media/session/image.png (mapped to /tmp/webui_ai_media/)
         
         Returns:
             Tuple of (image_data, remaining_text) where:
@@ -490,20 +554,25 @@ class WebEXConnector:
         md_pattern = r'!\[([^\]]*)\]\(([^)]+)\)'
         for match in re.finditer(md_pattern, remaining):
             caption = match.group(1).strip()
-            url = match.group(2).strip()
-            
-            # Validate URL
-            if url.startswith(('http://', 'https://')):
+            url = self._resolve_image_path(match.group(2).strip())
+            if url not in [img[0] for img in image_data]:
                 image_data.append((url, caption))
-                remaining = remaining.replace(match.group(0), "").strip()
+            remaining = remaining.replace(match.group(0), "").strip()
+
+        # Match <img> tags
+        img_tag_pattern = r'<img\s+[^>]*src=["\']([^"\']+)["\'][^>]*/?\s*>'
+        for match in re.finditer(img_tag_pattern, remaining, re.IGNORECASE):
+            url = self._resolve_image_path(match.group(1).strip())
+            if url not in [img[0] for img in image_data]:
+                image_data.append((url, ""))
+            remaining = remaining.replace(match.group(0), "").strip()
 
         # Match bare URLs (http/https ending in image extensions)
-        url_pattern = r'(https?://[^\s\[\]]+\.(?:jpg|jpeg|png|gif|webp))'
+        url_pattern = r'(https?://[^\s\[\]<>"]+\.(?:jpg|jpeg|png|gif|webp)(?:\?[^\s<>"]*)?)'
         for match in re.finditer(url_pattern, remaining, re.IGNORECASE):
             url = match.group(1)
-            # Avoid duplicate URLs
-            if not any(img_url == url for img_url, _ in image_data):
-                image_data.append((url, ""))  # Empty caption
+            if url not in [img[0] for img in image_data]:
+                image_data.append((url, ""))
                 remaining = remaining.replace(url, "").strip()
 
         return image_data, remaining
@@ -820,7 +889,15 @@ class WebEXConnector:
         # Send images
         for url, caption in image_data:
             print(f"[DEBUG OUTBOUND] send_response sending image URL={url} caption={repr(caption[:100])} to room_id={room_id}", file=sys.stderr)
-            self.send_file(room_id, url, caption) if url.startswith('/') else self.send_message(room_id, f"[Image]({url})" + (f" - {caption}" if caption else ""))
+            if url.startswith(('http://', 'https://')):
+                # External URL: send as file URL attachment
+                self._send_image_url(room_id, url, caption)
+            elif os.path.isfile(url):
+                # Local file: upload as attachment
+                self._send_image_file(room_id, url, caption)
+            else:
+                # Unresolved path: send as text link
+                self.send_message(room_id, f"[Image]({url})" + (f" - {caption}" if caption else ""))
 
         # Send files
         for file_path, caption in file_data:

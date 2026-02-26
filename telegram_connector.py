@@ -506,33 +506,69 @@ class TelegramConnector:
             print(f"[WARN] Error validating file path: {e}", file=sys.stderr)
             return False
 
-    def send_photo(self, chat_id: int, photo_url: str, caption: str = "") -> Optional[int]:
-        """Send a photo to Telegram chat via URL. Returns message_id."""
+    def send_photo(self, chat_id: int, photo_source: str, caption: str = "") -> Optional[int]:
+        """Send a photo to Telegram chat via URL or local file upload. Returns message_id."""
         try:
-            print(f"[DEBUG] Attempting sendPhoto with URL: {photo_url}", file=sys.stderr)
-            data = {"chat_id": chat_id, "photo": photo_url}
-            if caption:
-                # Sanitize caption to support safe HTML formatting
-                sanitized_caption = self.sanitize_telegram_html(caption.strip())
-                data["caption"] = sanitized_caption[:1024]  # Telegram limit
-                data["parse_mode"] = "HTML"
-            resp = requests.post(
-                f"{self.api_url}/sendPhoto",
-                json=data,
-                timeout=30,
-            )
-            if resp.status_code != 200:
+            is_local = not photo_source.startswith(('http://', 'https://')) and os.path.isfile(photo_source)
+            print(f"[DEBUG] Attempting sendPhoto {'(local file)' if is_local else '(URL)'}: {photo_source}", file=sys.stderr)
+
+            if is_local:
+                # Local file: multipart upload
+                mime_type, _ = mimetypes.guess_type(photo_source)
+                if not mime_type:
+                    mime_type = "image/png"
+                data = {"chat_id": chat_id}
                 if caption:
-                    data.pop("parse_mode", None)
-                    resp = requests.post(f"{self.api_url}/sendPhoto", json=data, timeout=30)
+                    sanitized_caption = self.sanitize_telegram_html(caption.strip())
+                    data["caption"] = sanitized_caption[:1024]
+                    data["parse_mode"] = "HTML"
+                with open(photo_source, 'rb') as f:
+                    files = {'photo': (Path(photo_source).name, f, mime_type)}
+                    resp = requests.post(
+                        f"{self.api_url}/sendPhoto",
+                        data=data,
+                        files=files,
+                        timeout=30,
+                    )
+                    if resp.status_code != 200 and caption:
+                        data.pop("parse_mode", None)
+                        f.seek(0)
+                        resp = requests.post(
+                            f"{self.api_url}/sendPhoto",
+                            data=data,
+                            files={'photo': (Path(photo_source).name, f, mime_type)},
+                            timeout=30,
+                        )
+                    if resp.status_code != 200:
+                        print(f"[WARN] sendPhoto (local) failed ({resp.status_code}): {resp.text[:200]}", file=sys.stderr)
+                        self.send_message(chat_id, f"⚠️ Failed to send image: {Path(photo_source).name}")
+                        return None
+                result = resp.json()
+                if result.get("ok"):
+                    return result["result"]["message_id"]
+            else:
+                # URL-based send
+                data = {"chat_id": chat_id, "photo": photo_source}
+                if caption:
+                    sanitized_caption = self.sanitize_telegram_html(caption.strip())
+                    data["caption"] = sanitized_caption[:1024]
+                    data["parse_mode"] = "HTML"
+                resp = requests.post(
+                    f"{self.api_url}/sendPhoto",
+                    json=data,
+                    timeout=30,
+                )
                 if resp.status_code != 200:
-                    print(f"[WARN] sendPhoto failed ({resp.status_code}): {resp.text[:200]}", file=sys.stderr)
-                    # Fallback: send URL as clickable link
-                    self.send_message(chat_id, f'<a href="{photo_url}">📷 Image link</a>')
-                    return None
-            result = resp.json()
-            if result.get("ok"):
-                return result["result"]["message_id"]
+                    if caption:
+                        data.pop("parse_mode", None)
+                        resp = requests.post(f"{self.api_url}/sendPhoto", json=data, timeout=30)
+                    if resp.status_code != 200:
+                        print(f"[WARN] sendPhoto failed ({resp.status_code}): {resp.text[:200]}", file=sys.stderr)
+                        self.send_message(chat_id, f'<a href="{photo_source}">📷 Image link</a>')
+                        return None
+                result = resp.json()
+                if result.get("ok"):
+                    return result["result"]["message_id"]
         except Exception as e:
             print(f"Error sending photo: {e}", file=sys.stderr)
             self.send_message(chat_id, f'<a href="{photo_url}">📷 Image link</a>')
@@ -597,6 +633,12 @@ class TelegramConnector:
             self.send_message(chat_id, f"⚠️ Error sending file: {str(e)}")
         return None
 
+    def _resolve_image_path(self, url: str) -> str:
+        """Resolve /ai-media/ paths to local filesystem paths."""
+        if url.startswith("/ai-media/"):
+            return url.replace("/ai-media/", "/tmp/webui_ai_media/", 1)
+        return url
+
     def extract_image_urls(self, text: str) -> tuple:
         """Extract image URLs from text/HTML/Markdown.
 
@@ -604,6 +646,7 @@ class TelegramConnector:
         - Markdown: ![alt text](URL) - extracts URL and alt text as caption
         - HTML: <img src="URL"/> - extracts URL, no caption
         - Bare URLs: https://example.com/image.png - extracts URL, no caption
+        - Local paths: /ai-media/session/image.png (mapped to /tmp/webui_ai_media/)
 
         Returns:
             Tuple of (image_data, remaining_text) where:
@@ -625,14 +668,14 @@ class TelegramConnector:
         # Extract from markdown images FIRST (preserves alt text before bare URL pattern strips it)
         for match in re.finditer(md_img_pattern, remaining, re.IGNORECASE):
             alt_text = match.group(1).strip()
-            url = match.group(2).strip()
+            url = self._resolve_image_path(match.group(2).strip())
             if url not in [img[0] for img in image_data]:
                 image_data.append((url, alt_text))
             remaining = remaining.replace(match.group(0), "").strip()
 
         # Extract from <img> tags
         for match in re.finditer(img_tag_pattern, remaining, re.IGNORECASE):
-            url = match.group(1)
+            url = self._resolve_image_path(match.group(1).strip())
             if url not in [img[0] for img in image_data]:
                 image_data.append((url, ""))  # Empty caption
             remaining = remaining.replace(match.group(0), "").strip()
