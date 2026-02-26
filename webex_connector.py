@@ -153,14 +153,17 @@ class WebEXConnector:
             token: WebEX bot token
             config_file: Path to configuration file
         """
-        self.token = token
         self.config = WebEXConfig(config_file)
+
+        # Prefer config file token over env var (env var may be stale)
+        config_token = self.config.config.get("token", "")
+        self.token = config_token if config_token else token
 
         # Keep persistent SessionManager per session_id for context persistence
         self.session_managers = {}  # {session_id: SessionManager}
 
-        # Set token in config if provided
-        if token and not self.config.config.get("token"):
+        # Save token to config if only provided via env/arg
+        if token and not config_token:
             self.config.config["token"] = token
             self.config.save()
 
