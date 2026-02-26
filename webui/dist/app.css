@@ -1981,7 +1981,17 @@ html, body {
   gap: 4px;
 }
 
-.queue-pause-btn,
+.queue-pause-btn {
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: var(--text-muted);
+  font-size: 15px;
+  padding: 2px 6px;
+  border-radius: var(--radius-sm);
+  transition: background var(--transition), color var(--transition);
+}
+
 .request-queue-panel.queue-minimized .queue-header {
   justify-content: center;
   padding: 12px 4px;
