@@ -173,6 +173,164 @@ class AuthManager:
         self._save_sessions()
 
 
+class BackgroundTaskManager:
+    """Manages background task lifecycle: creation, tracking, output capture, cleanup."""
+
+    MAX_TASKS_PER_USER = int(os.environ.get("BG_MAX_TASKS_PER_USER", "5"))
+    MAX_OUTPUT_LINES = 500
+    CLEANUP_AGE_HOURS = int(os.environ.get("BG_CLEANUP_HOURS", "24"))
+
+    def __init__(self):
+        home = os.path.expanduser("~")
+        copilot_dir = os.path.join(home, ".copilot")
+        os.makedirs(copilot_dir, exist_ok=True)
+        self._path = os.path.join(copilot_dir, "background-tasks.json")
+        self._lock = threading.Lock()
+
+    def _load(self) -> list:
+        try:
+            with open(self._path, "r") as f:
+                return json.load(f)
+        except (FileNotFoundError, json.JSONDecodeError):
+            return []
+
+    def _save(self, tasks: list):
+        with open(self._path, "w") as f:
+            json.dump(tasks, f, indent=2, default=str)
+
+    def _user_key(self, channel: str, identity: str) -> str:
+        return f"{channel}_{identity}"
+
+    def create_task(self, task_id: str, session_id: str, user_identity: str,
+                    channel: str, agent: str, runtime: str, model: str,
+                    prompt: str, pid: int = 0) -> dict:
+        task = {
+            "task_id": task_id,
+            "session_id": session_id,
+            "user_key": self._user_key(channel, identity=user_identity),
+            "channel": channel,
+            "user_identity": user_identity,
+            "agent": agent,
+            "runtime": runtime,
+            "model": model,
+            "prompt": prompt,
+            "status": "running",
+            "pid": pid,
+            "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "completed_at": None,
+            "output_lines": [],
+            "final_response": None,
+            "error": None,
+        }
+        with self._lock:
+            tasks = self._load()
+            tasks.append(task)
+            self._save(tasks)
+        return task
+
+    def get_task(self, task_id: str) -> Optional[dict]:
+        with self._lock:
+            for t in self._load():
+                if t["task_id"] == task_id:
+                    return t
+        return None
+
+    def list_tasks(self, channel: str, identity: str) -> list:
+        key = self._user_key(channel, identity)
+        with self._lock:
+            return [t for t in self._load() if t["user_key"] == key]
+
+    def count_running(self, channel: str, identity: str) -> int:
+        return sum(1 for t in self.list_tasks(channel, identity) if t["status"] == "running")
+
+    def update_task(self, task_id: str, **fields):
+        with self._lock:
+            tasks = self._load()
+            for t in tasks:
+                if t["task_id"] == task_id:
+                    t.update(fields)
+                    break
+            self._save(tasks)
+
+    def append_output(self, task_id: str, line: str):
+        with self._lock:
+            tasks = self._load()
+            for t in tasks:
+                if t["task_id"] == task_id:
+                    t["output_lines"].append(line)
+                    # Keep only last MAX_OUTPUT_LINES
+                    if len(t["output_lines"]) > self.MAX_OUTPUT_LINES:
+                        t["output_lines"] = t["output_lines"][-self.MAX_OUTPUT_LINES:]
+                    break
+            self._save(tasks)
+
+    def complete_task(self, task_id: str, final_response: str):
+        self.update_task(
+            task_id,
+            status="completed",
+            final_response=final_response,
+            completed_at=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        )
+
+    def fail_task(self, task_id: str, error: str):
+        self.update_task(
+            task_id,
+            status="failed",
+            error=error,
+            completed_at=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        )
+
+    def kill_task(self, task_id: str) -> bool:
+        task = self.get_task(task_id)
+        if not task or task["status"] != "running":
+            return False
+        pid = task.get("pid", 0)
+        if pid:
+            try:
+                os.kill(pid, signal.SIGTERM)
+            except ProcessLookupError:
+                pass
+        self.update_task(
+            task_id,
+            status="killed",
+            completed_at=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        )
+        return True
+
+    def delete_task(self, task_id: str) -> bool:
+        with self._lock:
+            tasks = self._load()
+            before = len(tasks)
+            tasks = [t for t in tasks if t["task_id"] != task_id]
+            if len(tasks) < before:
+                self._save(tasks)
+                return True
+        return False
+
+    def cleanup_old(self):
+        cutoff = time.time() - (self.CLEANUP_AGE_HOURS * 3600)
+        with self._lock:
+            tasks = self._load()
+            kept = []
+            for t in tasks:
+                if t["status"] == "running":
+                    kept.append(t)
+                    continue
+                completed = t.get("completed_at")
+                if completed:
+                    try:
+                        ct = time.mktime(time.strptime(completed, "%Y-%m-%dT%H:%M:%SZ"))
+                        if ct > cutoff:
+                            kept.append(t)
+                            continue
+                    except (ValueError, OverflowError):
+                        kept.append(t)
+                        continue
+                else:
+                    kept.append(t)
+            if len(kept) < len(tasks):
+                self._save(kept)
+
 
 # Executable resolution
 def find_executable(name: str) -> Optional[str]:
@@ -2099,6 +2257,11 @@ These commands allow you to control the agent's behavior and are processed by th
 - /schedule delete <job_id> - Delete a scheduled job
 - /schedule logs <job_id> - View logs for a job
 - /schedule results <job_id> - View execution results for a job
+- /background <prompt> - Run a task in the background (doesn't block chat)
+- /background agent=<name> model=<model> <prompt> - Background task with overrides
+- /background list - List your background tasks
+- /background status <task_id> - Check background task status
+- /background kill <task_id> - Kill a running background task
 
 [Skills Discovery & Management]
 You can help users discover and load additional skills for this agent from configured skill repositories.
@@ -2834,6 +2997,26 @@ User Request:
             print(f"Error getting recent session ID: {e}", file=sys.stderr)
             return None
 
+    # Background task support
+    _bg_task_mgr = None  # Set by create_api_app
+    _bg_identity = None   # Set per-call for slash command context
+
+    def _execute_background_task(self, task_id, session_id, prompt, agent, runtime, model, channel):
+        """Run a background task in the current thread (called from thread pool)."""
+        self.get_or_create_session_data(session_id)
+        self.update_session_field(session_id, "agent", agent)
+        self.update_session_field(session_id, "model", model)
+        self.update_session_field(session_id, "runtime", runtime)
+        self.update_session_field(session_id, "channel", channel)
+        self.update_session_field(session_id, "render_type", "text")
+        try:
+            result = self.execute(prompt, session_id)
+            if self._bg_task_mgr:
+                self._bg_task_mgr.complete_task(task_id, result)
+        except Exception as exc:
+            if self._bg_task_mgr:
+                self._bg_task_mgr.fail_task(task_id, str(exc))
+
     def execute(self, prompt: str, n8n_session_id: str) -> str:
         """Main execution logic"""
         # Get session data first
@@ -2924,6 +3107,13 @@ User Request:
    • /schedule delete <job_id> - Delete a job
    • /schedule logs <job_id> - View job logs
    • /schedule results <job_id> - View execution results
+
+**Background Tasks:**
+   • /background <prompt> - Run a task in the background
+   • /background agent=<name> <prompt> - Override agent
+   • /background list - List your background tasks
+   • /background status <task_id> - Check task status
+   • /background kill <task_id> - Kill a running task
 
 **Auto-Delegation:**
 You can mention an agent in your prompt and it will auto-delegate:
@@ -3414,6 +3604,117 @@ You can mention an agent in your prompt and it will auto-delegate:
                     "`/schedule delete daily-report`"
                 )
 
+        elif command == "/background":
+            sub = (argument or "").strip()
+            if not sub or sub.lower() == "help":
+                return (
+                    "⚡ **Background Task Commands**\n\n"
+                    "• `/background <prompt>` — Run a task in the background\n"
+                    "• `/background agent=devops <prompt>` — Override agent\n"
+                    "• `/background runtime=claude model=sonnet <prompt>` — Override runtime/model\n"
+                    "• `/background list` — List your background tasks\n"
+                    "• `/background status <task_id>` — Check task status\n"
+                    "• `/background kill <task_id>` — Kill a running task\n\n"
+                    "Background tasks run in separate sessions and don't block your chat.\n"
+                    "Monitor them in the ⚡ Tasks tab in the sidebar."
+                )
+
+            sub_lower = sub.lower()
+
+            if sub_lower == "list":
+                channel = session_data.get("channel", "webui")
+                identity = self._bg_identity or "unknown"
+                tasks = self._bg_task_mgr.list_tasks(channel, identity)
+                if not tasks:
+                    return "⚡ **Background Tasks**\n\nNo background tasks."
+                icons = {"running": "🟢", "completed": "✅", "failed": "❌", "killed": "🛑"}
+                lines = ["⚡ **Background Tasks**\n"]
+                for t in tasks:
+                    icon = icons.get(t["status"], "❓")
+                    lines.append(
+                        f"{icon} `{t['task_id']}` — **{t['status']}**\n"
+                        f"   Agent: `{t['agent']}` | Prompt: {t['prompt'][:80]}..."
+                    )
+                return "\n\n".join(lines)
+
+            if sub_lower.startswith("status "):
+                tid = sub[7:].strip()
+                task = self._bg_task_mgr.get_task(tid)
+                if not task:
+                    return f"❌ Task `{tid}` not found."
+                icons = {"running": "🟢", "completed": "✅", "failed": "❌", "killed": "🛑"}
+                icon = icons.get(task["status"], "❓")
+                elapsed = ""
+                if task["status"] == "running":
+                    try:
+                        ct = time.mktime(time.strptime(task["created_at"], "%Y-%m-%dT%H:%M:%SZ"))
+                        secs = int(time.time() - ct)
+                        elapsed = f"\n**Elapsed:** {secs // 60}m {secs % 60}s"
+                    except Exception:
+                        pass
+                return (
+                    f"{icon} **Task: `{task['task_id']}`**\n\n"
+                    f"**Status:** {task['status']}\n"
+                    f"**Agent:** `{task['agent']}` | Runtime: `{task['runtime']}` | Model: `{task['model']}`\n"
+                    f"**Prompt:** {task['prompt'][:200]}"
+                    f"{elapsed}"
+                )
+
+            if sub_lower.startswith("kill "):
+                tid = sub[5:].strip()
+                if self._bg_task_mgr.kill_task(tid):
+                    return f"🛑 Task `{tid}` killed."
+                return f"❌ Could not kill task `{tid}` (not found or not running)."
+
+            # Otherwise it's a prompt to run in the background
+            # Parse optional overrides: agent=X runtime=Y model=Z
+            bg_agent = session_data.get("agent", "orchestrator")
+            bg_runtime = session_data.get("runtime", "copilot")
+            bg_model = session_data.get("model", "gpt-5-mini")
+            bg_prompt_parts = []
+            for word in sub.split():
+                if word.startswith("agent="):
+                    bg_agent = word[6:]
+                elif word.startswith("runtime="):
+                    bg_runtime = word[8:]
+                elif word.startswith("model="):
+                    bg_model = word[6:]
+                else:
+                    bg_prompt_parts.append(word)
+            bg_prompt = " ".join(bg_prompt_parts)
+
+            if not bg_prompt:
+                return "❌ No prompt provided. Usage: `/background <prompt>`"
+
+            channel = session_data.get("channel", "webui")
+            identity = self._bg_identity or "unknown"
+            running = self._bg_task_mgr.count_running(channel, identity)
+            if running >= BackgroundTaskManager.MAX_TASKS_PER_USER:
+                return f"❌ Maximum {BackgroundTaskManager.MAX_TASKS_PER_USER} concurrent background tasks allowed."
+
+            task_id = f"bg_{str(uuid4())[:8]}"
+            bg_session_id = f"bg_{str(uuid4())[:8]}"
+            self._bg_task_mgr.create_task(
+                task_id=task_id, session_id=bg_session_id,
+                user_identity=identity, channel=channel,
+                agent=bg_agent, runtime=bg_runtime, model=bg_model,
+                prompt=bg_prompt,
+            )
+            # Launch in background thread
+            import concurrent.futures as _cf
+            _cf.ThreadPoolExecutor(max_workers=1).submit(
+                self._execute_background_task,
+                task_id, bg_session_id, bg_prompt, bg_agent, bg_runtime, bg_model, channel,
+            )
+
+            return (
+                f"⚡ **Background task started!**\n\n"
+                f"• **Task ID:** `{task_id}`\n"
+                f"• **Agent:** `{bg_agent}` | Runtime: `{bg_runtime}` | Model: `{bg_model}`\n"
+                f"• **Prompt:** {bg_prompt[:150]}\n\n"
+                f"Check the ⚡ Tasks tab or use `/background status {task_id}` to monitor."
+            )
+
         # --- Execution ---
 
         # Prepare for execution
@@ -3777,6 +4078,8 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
     rate_limiter = RateLimiter()
     session_mgr = SessionManager(config_file=CONFIG_FILE)
     history_mgr = HistoryManager()
+    bg_task_mgr = BackgroundTaskManager()
+    session_mgr._bg_task_mgr = bg_task_mgr
 
     # ---- Pydantic models ----
     class ChannelEnum(str, Enum):
@@ -3852,6 +4155,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 await asyncio.sleep(300)
                 auth_mgr.cleanup_expired()
                 rate_limiter.cleanup()
+                bg_task_mgr.cleanup_old()
 
         task = asyncio.ensure_future(_periodic_cleanup())
         yield
@@ -3899,6 +4203,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         """Public endpoint — returns feature flags for the WebUI."""
         return {
             "scheduler_enabled": SCHEDULER_ENABLED,
+            "background_tasks_enabled": True,
             "app_env": APP_ENV,
         }
 
@@ -4048,6 +4353,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         if not existing:
             raise HTTPException(status_code=404, detail="Session not found")
 
+        session_mgr._bg_identity = user["identity"]
         loop = asyncio.get_event_loop()
         with concurrent.futures.ThreadPoolExecutor() as pool:
             result = await loop.run_in_executor(
@@ -4101,6 +4407,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         if not existing:
             raise HTTPException(status_code=404, detail="Session not found")
 
+        session_mgr._bg_identity = user["identity"]
         loop = asyncio.get_event_loop()
         queue: asyncio.Queue = asyncio.Queue()
 
@@ -4311,6 +4618,213 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         with concurrent.futures.ThreadPoolExecutor() as pool:
             results = await loop.run_in_executor(pool, _ddg_image_search, q.strip(), max_r)
         return {"query": q, "results": results}
+
+    # --- Background Tasks ---
+
+    class BackgroundTaskRequest(BaseModel):
+        prompt: str
+        agent: Optional[str] = None
+        runtime: Optional[str] = None
+        model: Optional[str] = None
+
+        @field_validator("prompt")
+        @classmethod
+        def validate_prompt(cls, v):
+            if len(v) > 10000:
+                raise ValueError("Prompt must be 10,000 characters or less")
+            return v
+
+    def _run_background_task(task_id: str, session_id: str, prompt: str,
+                             agent: str, runtime: str, model: str,
+                             channel: str, user_identity: str):
+        """Blocking function that runs a background task in a subprocess.
+        Called from a thread pool executor."""
+        import threading as _thr
+
+        # Build full context prompt
+        session_mgr.get_or_create_session_data(session_id)
+        session_mgr.update_session_field(session_id, "agent", agent)
+        session_mgr.update_session_field(session_id, "model", model)
+        session_mgr.update_session_field(session_id, "runtime", runtime)
+        session_mgr.update_session_field(session_id, "channel", channel)
+        session_mgr.update_session_field(session_id, "render_type", "text")
+
+        try:
+            # Use the existing execute method which handles all runtimes
+            result = session_mgr.execute(prompt, session_id)
+            bg_task_mgr.complete_task(task_id, result)
+        except Exception as exc:
+            bg_task_mgr.fail_task(task_id, str(exc))
+
+    @app.post("/api/v1/background-tasks")
+    async def create_background_task(body: BackgroundTaskRequest, request: Request):
+        user = await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+
+        channel = user["channel"]
+        identity = user["identity"]
+
+        # Check concurrent limit
+        running = bg_task_mgr.count_running(channel, identity)
+        if running >= BackgroundTaskManager.MAX_TASKS_PER_USER:
+            raise HTTPException(
+                status_code=429,
+                detail=f"Maximum {BackgroundTaskManager.MAX_TASKS_PER_USER} concurrent background tasks allowed.",
+            )
+
+        # Resolve agent/runtime/model — default to user's current session config
+        current_sessions = history_mgr.list_sessions(channel, identity)
+        defaults = {}
+        if current_sessions:
+            latest_sid = current_sessions[0].get("session_id", "")
+            if latest_sid:
+                sd = session_mgr.load_session_data(latest_sid)
+                if sd:
+                    defaults = sd
+
+        agent = body.agent or defaults.get("agent", get_default_agent())
+        runtime = body.runtime or defaults.get("runtime", get_default_runtime())
+        model = body.model or defaults.get("model", get_default_model())
+
+        task_id = f"bg_{str(uuid4())[:8]}"
+        session_id = f"bg_{str(uuid4())[:8]}"
+
+        # Create task record
+        task = bg_task_mgr.create_task(
+            task_id=task_id,
+            session_id=session_id,
+            user_identity=identity,
+            channel=channel,
+            agent=agent,
+            runtime=runtime,
+            model=model,
+            prompt=body.prompt,
+        )
+
+        # Run in background thread
+        loop = asyncio.get_event_loop()
+        loop.run_in_executor(
+            concurrent.futures.ThreadPoolExecutor(max_workers=1),
+            _run_background_task,
+            task_id, session_id, body.prompt, agent, runtime, model, channel, identity,
+        )
+
+        return {
+            "task_id": task_id,
+            "session_id": session_id,
+            "agent": agent,
+            "runtime": runtime,
+            "model": model,
+            "status": "running",
+        }
+
+    @app.get("/api/v1/background-tasks")
+    async def list_background_tasks(request: Request):
+        user = await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        tasks = bg_task_mgr.list_tasks(user["channel"], user["identity"])
+        # Check if running tasks are still alive
+        for t in tasks:
+            if t["status"] == "running" and t.get("pid"):
+                try:
+                    os.kill(t["pid"], 0)
+                except ProcessLookupError:
+                    bg_task_mgr.fail_task(t["task_id"], "Process terminated unexpectedly")
+                    t["status"] = "failed"
+        # Return summary (no full output_lines for list)
+        result = []
+        for t in tasks:
+            result.append({
+                "task_id": t["task_id"],
+                "agent": t["agent"],
+                "runtime": t["runtime"],
+                "model": t["model"],
+                "prompt": t["prompt"][:200],
+                "status": t["status"],
+                "created_at": t["created_at"],
+                "completed_at": t.get("completed_at"),
+                "error": t.get("error"),
+            })
+        return {"tasks": result}
+
+    @app.get("/api/v1/background-tasks/{task_id}")
+    async def get_background_task(task_id: str, request: Request):
+        user = await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        task = bg_task_mgr.get_task(task_id)
+        if not task:
+            raise HTTPException(status_code=404, detail="Task not found")
+        if task["user_key"] != bg_task_mgr._user_key(user["channel"], user["identity"]):
+            raise HTTPException(status_code=403, detail="Not your task")
+        # Return detail with last 50 output lines
+        return {
+            "task_id": task["task_id"],
+            "session_id": task["session_id"],
+            "agent": task["agent"],
+            "runtime": task["runtime"],
+            "model": task["model"],
+            "prompt": task["prompt"],
+            "status": task["status"],
+            "pid": task.get("pid"),
+            "created_at": task["created_at"],
+            "completed_at": task.get("completed_at"),
+            "recent_output": task.get("output_lines", [])[-50:],
+            "error": task.get("error"),
+        }
+
+    @app.get("/api/v1/background-tasks/{task_id}/transcript")
+    async def get_background_task_transcript(task_id: str, request: Request):
+        user = await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        task = bg_task_mgr.get_task(task_id)
+        if not task:
+            raise HTTPException(status_code=404, detail="Task not found")
+        if task["user_key"] != bg_task_mgr._user_key(user["channel"], user["identity"]):
+            raise HTTPException(status_code=403, detail="Not your task")
+        return {
+            "task_id": task["task_id"],
+            "status": task["status"],
+            "final_response": task.get("final_response"),
+            "output_lines": task.get("output_lines", []),
+            "error": task.get("error"),
+        }
+
+    @app.delete("/api/v1/background-tasks/{task_id}")
+    async def delete_background_task(task_id: str, request: Request):
+        user = await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        task = bg_task_mgr.get_task(task_id)
+        if not task:
+            raise HTTPException(status_code=404, detail="Task not found")
+        if task["user_key"] != bg_task_mgr._user_key(user["channel"], user["identity"]):
+            raise HTTPException(status_code=403, detail="Not your task")
+
+        if task["status"] == "running":
+            bg_task_mgr.kill_task(task_id)
+            return {"task_id": task_id, "action": "killed"}
+        else:
+            bg_task_mgr.delete_task(task_id)
+            return {"task_id": task_id, "action": "deleted"}
 
     # --- Task Scheduler ---
     if SCHEDULER_ENABLED:

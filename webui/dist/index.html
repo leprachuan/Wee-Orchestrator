@@ -74,6 +74,7 @@
       <!-- View switcher -->
       <div class="sidebar-nav">
         <button id="btn-nav-chat" class="sidebar-nav-btn active" title="Chat">💬 Chat</button>
+        <button id="btn-nav-background" class="sidebar-nav-btn" title="Background Tasks">⚡ Tasks <span id="bg-task-badge" class="nav-badge hidden">0</span></button>
         <button id="btn-nav-scheduler" class="sidebar-nav-btn" title="Scheduled Tasks">📅 Scheduler</button>
       </div>
 
@@ -169,6 +170,35 @@
         <small id="queue-status-msg">Requests will auto-submit when current message completes</small>
       </div>
     </aside>
+
+    <!-- Background Tasks panel -->
+    <section id="background-panel" class="background-panel hidden">
+      <header class="bg-header glass-panel">
+        <div class="bg-header-left">
+          <button id="btn-bg-open-sidebar" class="btn-icon sidebar-open-btn hidden" title="Open sidebar">☰</button>
+          <h2 class="bg-title">Background Tasks</h2>
+        </div>
+        <div class="bg-header-actions">
+          <button id="btn-bg-refresh" class="btn btn-ghost btn-sm">↺ Refresh</button>
+        </div>
+      </header>
+
+      <div class="bg-body">
+        <!-- Tasks list -->
+        <div id="bg-tasks-list" class="bg-tasks-list">
+          <p class="bg-empty">No background tasks</p>
+        </div>
+
+        <!-- Detail panel -->
+        <aside id="bg-detail" class="bg-detail glass-panel hidden">
+          <div class="bg-detail-header">
+            <h3 id="bg-detail-title">Task Details</h3>
+            <button id="btn-bg-detail-close" class="btn-icon" title="Close">✕</button>
+          </div>
+          <div id="bg-detail-body" class="bg-detail-body"></div>
+        </aside>
+      </div>
+    </section>
 
     <!-- Scheduler panel -->
     <section id="scheduler-panel" class="scheduler-panel hidden">

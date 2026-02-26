@@ -20,6 +20,7 @@ const STATE = {
   sessions:        [],
   activeSessionId: null,
   schedulerEnabled: true,  // overridden by /api/v1/config on boot
+  bgTasksEnabled:  true,  // overridden by /api/v1/config on boot
   requestQueue:    [],     // queued requests while processing
   queuePaused:     false,  // true to prevent auto-submit of next queued message
   currentProcessingQueueId: null,  // ID of queue item currently being processed
@@ -115,6 +116,14 @@ function showAppView() {
   if (!STATE.schedulerEnabled) {
     hide($('btn-nav-scheduler'));
     hide($('scheduler-panel'));
+  }
+  // Apply background tasks feature flag
+  if (!STATE.bgTasksEnabled) {
+    hide($('btn-nav-background'));
+    hide($('background-panel'));
+  } else {
+    // Start background task polling
+    startBgTaskPolling();
   }
 }
 
@@ -1229,9 +1238,11 @@ document.addEventListener('DOMContentLoaded', () => {
   $('btn-sidebar-toggle').addEventListener('click', () => toggleSidebar(false));
   $('btn-open-sidebar').addEventListener('click',  () => toggleSidebar(true));
   $('btn-sched-open-sidebar').addEventListener('click', () => toggleSidebar(true));
+  if ($('btn-bg-open-sidebar')) $('btn-bg-open-sidebar').addEventListener('click', () => toggleSidebar(true));
 
   // --- View nav ---
   $('btn-nav-chat').addEventListener('click', showChatPanel);
+  $('btn-nav-background').addEventListener('click', showBackgroundPanel);
   $('btn-nav-scheduler').addEventListener('click', showSchedulerPanel);
 
   // --- Send ---
@@ -1324,12 +1335,19 @@ document.addEventListener('DOMContentLoaded', () => {
   $('btn-sched-new').addEventListener('click', openNewJobForm);
   $('btn-sched-detail-close').addEventListener('click', closeSchedDetail);
 
+  // --- Background Tasks UI events ---
+  $('btn-bg-refresh').addEventListener('click', () => loadBackgroundTasks(true));
+  $('btn-bg-detail-close').addEventListener('click', closeBgDetail);
+
   // --- Bootstrap ---
   // Fetch feature flags first (no auth needed) then decide what to show
   fetch('/api/v1/config')
     .then(r => r.json())
-    .then(cfg => { STATE.schedulerEnabled = cfg.scheduler_enabled !== false; })
-    .catch(() => { /* keep default true */ })
+    .then(cfg => {
+      STATE.schedulerEnabled = cfg.scheduler_enabled !== false;
+      STATE.bgTasksEnabled = cfg.background_tasks_enabled !== false;
+    })
+    .catch(() => { /* keep defaults */ })
     .finally(() => {
       loadAuth();
       if (STATE.token) {
@@ -1348,21 +1366,37 @@ document.addEventListener('DOMContentLoaded', () => {
 function showChatPanel() {
   show($('chat-panel'));
   hide($('scheduler-panel'));
+  hide($('background-panel'));
   show($('btn-new-chat'));
   show($('sessions-list'));
   $('btn-nav-chat').classList.add('active');
   $('btn-nav-scheduler').classList.remove('active');
+  $('btn-nav-background').classList.remove('active');
 }
 
 function showSchedulerPanel() {
   hide($('chat-panel'));
   show($('scheduler-panel'));
+  hide($('background-panel'));
   hide($('btn-new-chat'));
   hide($('sessions-list'));
   $('btn-nav-scheduler').classList.add('active');
   $('btn-nav-chat').classList.remove('active');
+  $('btn-nav-background').classList.remove('active');
   loadSchedulerJobs();
   loadSchedulerStatus();
+}
+
+function showBackgroundPanel() {
+  hide($('chat-panel'));
+  hide($('scheduler-panel'));
+  show($('background-panel'));
+  hide($('btn-new-chat'));
+  hide($('sessions-list'));
+  $('btn-nav-background').classList.add('active');
+  $('btn-nav-chat').classList.remove('active');
+  $('btn-nav-scheduler').classList.remove('active');
+  loadBackgroundTasks();
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -1801,4 +1835,274 @@ function schedToast(msg, type = 'info') {
   toast.style.opacity = '1';
   clearTimeout(_toastTimer);
   _toastTimer = setTimeout(() => { toast.style.opacity = '0'; }, 2500);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// ─── Background Tasks ───────────────────────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════════════════════
+
+async function bgApi(method, path, body = null) {
+  return apiRequest(method, `/background-tasks${path}`, body);
+}
+
+const BG = {
+  tasks: [],
+  selectedTaskId: null,
+  isLoading: false,
+  pollInterval: null,
+};
+
+function startBgTaskPolling() {
+  if (BG.pollInterval) return;
+  updateBgBadge();
+  BG.pollInterval = setInterval(async () => {
+    try {
+      const data = await bgApi('GET', '');
+      BG.tasks = data.tasks || [];
+      updateBgBadge();
+      // If background panel is visible, refresh the list
+      if (!$('background-panel').classList.contains('hidden')) {
+        renderBgTasks();
+        // If we have a selected running task, refresh its detail
+        if (BG.selectedTaskId) {
+          const t = BG.tasks.find(x => x.task_id === BG.selectedTaskId);
+          if (t && t.status === 'running') {
+            loadBgTaskDetail(BG.selectedTaskId);
+          }
+        }
+      }
+    } catch { /* ignore polling errors */ }
+  }, 5000);
+}
+
+function updateBgBadge() {
+  const badge = $('bg-task-badge');
+  if (!badge) return;
+  const running = BG.tasks.filter(t => t.status === 'running').length;
+  if (running > 0) {
+    badge.textContent = running;
+    show(badge);
+  } else {
+    hide(badge);
+  }
+}
+
+async function loadBackgroundTasks(showToast = false) {
+  if (BG.isLoading) return;
+  BG.isLoading = true;
+  const list = $('bg-tasks-list');
+  list.innerHTML = '<p class="bg-empty">Loading…</p>';
+  try {
+    const data = await bgApi('GET', '');
+    BG.tasks = data.tasks || [];
+    renderBgTasks();
+    updateBgBadge();
+    if (showToast) bgToast('Tasks refreshed', 'success');
+  } catch (err) {
+    list.innerHTML = `<p class="bg-empty" style="color:#ff8888">Failed: ${escHtml(err.message)}</p>`;
+  } finally {
+    BG.isLoading = false;
+  }
+}
+
+function renderBgTasks() {
+  const list = $('bg-tasks-list');
+  if (!BG.tasks.length) {
+    list.innerHTML = '<p class="bg-empty">No background tasks yet.<br>Use <code>/background &lt;prompt&gt;</code> in chat to start one.</p>';
+    return;
+  }
+
+  // Sort: running first, then by created_at descending
+  const sorted = [...BG.tasks].sort((a, b) => {
+    if (a.status === 'running' && b.status !== 'running') return -1;
+    if (b.status === 'running' && a.status !== 'running') return 1;
+    return (b.created_at || '').localeCompare(a.created_at || '');
+  });
+
+  list.innerHTML = sorted.map(t => {
+    const icons = { running: '🟢', completed: '✅', failed: '❌', killed: '🛑' };
+    const icon = icons[t.status] || '❓';
+    const statusClass = `bg-status-${t.status}`;
+    const active = t.task_id === BG.selectedTaskId ? 'active' : '';
+    const elapsed = t.status === 'running' ? formatElapsed(t.created_at) : '';
+    return `
+      <div class="bg-task-card ${active}" data-task-id="${t.task_id}" onclick="selectBgTask('${t.task_id}')">
+        <div class="bg-card-top">
+          <span class="bg-card-status ${statusClass}">${icon} ${t.status}</span>
+          <span class="bg-card-agent">${escHtml(t.agent || '?')} / ${escHtml(t.runtime || '?')}</span>
+        </div>
+        <div class="bg-card-prompt">${escHtml(t.prompt || '')}</div>
+        <div class="bg-card-time">${fmtDate(t.created_at)}${elapsed ? ` · ${elapsed}` : ''}</div>
+      </div>
+    `;
+  }).join('');
+}
+
+function formatElapsed(isoDate) {
+  if (!isoDate) return '';
+  try {
+    const start = new Date(isoDate + 'Z');
+    const secs = Math.floor((Date.now() - start.getTime()) / 1000);
+    if (secs < 60) return `${secs}s`;
+    const mins = Math.floor(secs / 60);
+    const remSecs = secs % 60;
+    return `${mins}m ${remSecs}s`;
+  } catch { return ''; }
+}
+
+// Make selectBgTask global so onclick works
+window.selectBgTask = function(taskId) {
+  BG.selectedTaskId = taskId;
+  renderBgTasks();
+  loadBgTaskDetail(taskId);
+};
+
+async function loadBgTaskDetail(taskId) {
+  const detail = $('bg-detail');
+  const body = $('bg-detail-body');
+  show(detail);
+  $('bg-detail-title').textContent = `Task: ${taskId}`;
+
+  try {
+    const t = await bgApi('GET', `/${taskId}`);
+    const icons = { running: '🟢', completed: '✅', failed: '❌', killed: '🛑' };
+    const icon = icons[t.status] || '❓';
+    const statusClass = `bg-status-${t.status}`;
+    const elapsed = t.status === 'running' ? formatElapsed(t.created_at) : '';
+
+    let actionsHtml = '';
+    if (t.status === 'running') {
+      actionsHtml = `<div class="bg-detail-actions">
+        <button class="btn btn-danger btn-sm" onclick="killBgTask('${t.task_id}')">🛑 Kill Task</button>
+      </div>`;
+    } else {
+      actionsHtml = `<div class="bg-detail-actions">
+        <button class="btn btn-ghost btn-sm" onclick="viewBgTranscript('${t.task_id}')">📋 Full Transcript</button>
+        <button class="btn btn-ghost btn-sm" onclick="deleteBgTask('${t.task_id}')">🗑️ Remove</button>
+      </div>`;
+    }
+
+    let outputHtml = '';
+    if (t.status === 'completed' && t.final_response) {
+      // For completed tasks, show nothing here — transcript button handles it
+    } else if (t.recent_output && t.recent_output.length > 0) {
+      outputHtml = `<div class="bg-detail-output">${escHtml(t.recent_output.join('\n'))}</div>`;
+    } else if (t.error) {
+      outputHtml = `<div class="bg-detail-output" style="color:#ff8888">${escHtml(t.error)}</div>`;
+    }
+
+    body.innerHTML = `
+      <div class="bg-detail-meta">
+        <div class="bg-detail-meta-row">
+          <span class="bg-detail-meta-label">Status</span>
+          <span class="bg-card-status ${statusClass}">${icon} ${t.status}</span>
+          ${elapsed ? `<span style="font-size:11px;color:var(--text-muted);margin-left:8px">${elapsed}</span>` : ''}
+        </div>
+        <div class="bg-detail-meta-row">
+          <span class="bg-detail-meta-label">Agent</span>
+          <span class="bg-detail-meta-value">${escHtml(t.agent || '?')}</span>
+        </div>
+        <div class="bg-detail-meta-row">
+          <span class="bg-detail-meta-label">Runtime</span>
+          <span class="bg-detail-meta-value">${escHtml(t.runtime || '?')} / ${escHtml(t.model || '?')}</span>
+        </div>
+        <div class="bg-detail-meta-row">
+          <span class="bg-detail-meta-label">Started</span>
+          <span class="bg-detail-meta-value">${fmtDate(t.created_at)}</span>
+        </div>
+        ${t.completed_at ? `<div class="bg-detail-meta-row">
+          <span class="bg-detail-meta-label">Finished</span>
+          <span class="bg-detail-meta-value">${fmtDate(t.completed_at)}</span>
+        </div>` : ''}
+      </div>
+      <div class="bg-detail-prompt">${escHtml(t.prompt || '')}</div>
+      ${outputHtml}
+      ${actionsHtml}
+    `;
+  } catch (err) {
+    body.innerHTML = `<p style="color:#ff8888">Failed to load: ${escHtml(err.message)}</p>`;
+  }
+}
+window.loadBgTaskDetail = loadBgTaskDetail;
+
+function closeBgDetail() {
+  hide($('bg-detail'));
+  BG.selectedTaskId = null;
+  renderBgTasks();
+}
+
+window.killBgTask = async function(taskId) {
+  try {
+    await bgApi('DELETE', `/${taskId}`);
+    bgToast('Task killed', 'success');
+    await loadBackgroundTasks();
+    closeBgDetail();
+  } catch (err) {
+    bgToast(`Kill failed: ${err.message}`, 'error');
+  }
+};
+
+window.deleteBgTask = async function(taskId) {
+  try {
+    await bgApi('DELETE', `/${taskId}`);
+    bgToast('Task removed', 'success');
+    await loadBackgroundTasks();
+    closeBgDetail();
+  } catch (err) {
+    bgToast(`Remove failed: ${err.message}`, 'error');
+  }
+};
+
+window.viewBgTranscript = async function(taskId) {
+  const body = $('bg-detail-body');
+  try {
+    const data = await bgApi('GET', `/${taskId}/transcript`);
+    let content = '';
+    if (data.final_response) {
+      content = data.final_response;
+    } else if (data.output_lines && data.output_lines.length) {
+      content = data.output_lines.join('\n');
+    } else if (data.error) {
+      content = `Error: ${data.error}`;
+    } else {
+      content = '(no output)';
+    }
+
+    // Try to render as markdown if marked is available
+    let renderedHtml;
+    if (typeof marked !== 'undefined' && data.final_response) {
+      try {
+        renderedHtml = marked.parse(content);
+      } catch {
+        renderedHtml = `<pre>${escHtml(content)}</pre>`;
+      }
+    } else {
+      renderedHtml = `<pre>${escHtml(content)}</pre>`;
+    }
+
+    body.innerHTML = `
+      <div style="margin-bottom:12px">
+        <button class="btn btn-ghost btn-sm" onclick="loadBgTaskDetail('${taskId}')">← Back to Detail</button>
+      </div>
+      <div class="bg-detail-output" style="max-height:none">${renderedHtml}</div>
+    `;
+  } catch (err) {
+    body.innerHTML = `<p style="color:#ff8888">Failed: ${escHtml(err.message)}</p>`;
+  }
+};
+
+// Toast helper
+let _bgToastTimer = null;
+function bgToast(msg, type = 'info') {
+  let toast = $('bg-toast');
+  if (!toast) {
+    toast = document.createElement('div');
+    toast.id = 'bg-toast';
+    document.body.appendChild(toast);
+  }
+  toast.textContent = msg;
+  toast.className = `sched-toast sched-toast-${type}`;
+  toast.style.opacity = '1';
+  clearTimeout(_bgToastTimer);
+  _bgToastTimer = setTimeout(() => { toast.style.opacity = '0'; }, 2500);
 }
