@@ -536,15 +536,15 @@ class HistoryManager:
 
 
 class RuntimeUsageTracker:
-    """Tracks per-user, per-runtime request counts for usage display."""
+    """Queries real runtime usage from provider APIs and falls back to local tracking."""
 
-    # Known monthly quotas (configurable via env vars)
-    DEFAULT_QUOTAS = {
-        "copilot": 300,   # GitHub Copilot free-tier premium requests
-        "claude": None,   # No published limit
-        "gemini": None,
-        "opencode": None,
-        "codex": None,
+    # Known monthly quotas per plan (configurable via env vars)
+    COPILOT_PLAN_QUOTAS = {
+        "free": 50,
+        "pro": 300,
+        "pro+": 1500,
+        "business": 300,
+        "enterprise": 1000,
     }
 
     def __init__(self):
@@ -554,6 +554,9 @@ class RuntimeUsageTracker:
         self._path = os.path.join(copilot_dir, "runtime-usage.json")
         self._lock = threading.Lock()
         self._data = self._load()
+        # Cache for expensive API calls (gh billing) — keyed by (runtime, month)
+        self._cache: Dict[str, dict] = {}
+        self._cache_ttl = 120  # seconds
 
     def _load(self) -> dict:
         try:
@@ -573,13 +576,11 @@ class RuntimeUsageTracker:
 
     @staticmethod
     def _month_key() -> str:
-        """Return current month as 'YYYY-MM'."""
         from datetime import datetime, timezone
         return datetime.now(timezone.utc).strftime("%Y-%m")
 
     @staticmethod
     def _next_reset() -> str:
-        """Return ISO timestamp for 1st of next month 00:00 UTC."""
         from datetime import datetime, timezone
         now = datetime.now(timezone.utc)
         if now.month == 12:
@@ -589,33 +590,166 @@ class RuntimeUsageTracker:
         return reset.isoformat()
 
     def record(self, identity: str, runtime: str):
-        """Record one request for a user+runtime this month."""
+        """Record one request locally (fallback counter for non-API runtimes)."""
         month = self._month_key()
         with self._lock:
             bucket = self._data.setdefault(identity, {}).setdefault(month, {})
             bucket[runtime] = bucket.get(runtime, 0) + 1
             self._save()
 
+    # ── GitHub Copilot: real billing API ──────────────────────────────────
+
+    def _fetch_copilot_usage(self) -> dict:
+        """Query GitHub billing API for Copilot premium request usage this month."""
+        cache_key = f"copilot:{self._month_key()}"
+        now = time.time()
+        cached = self._cache.get(cache_key)
+        if cached and now - cached["ts"] < self._cache_ttl:
+            return cached["data"]
+
+        try:
+            # Discover GitHub username from gh CLI
+            gh_bin = shutil.which("gh")
+            if not gh_bin:
+                return {}
+            user_raw = subprocess.run(
+                [gh_bin, "api", "/user", "--jq", ".login"],
+                capture_output=True, text=True, timeout=10,
+            )
+            gh_user = user_raw.stdout.strip()
+            if not gh_user:
+                return {}
+
+            # Fetch billing usage
+            billing_raw = subprocess.run(
+                [gh_bin, "api", f"/users/{gh_user}/settings/billing/usage"],
+                capture_output=True, text=True, timeout=15,
+            )
+            if billing_raw.returncode != 0:
+                return {}
+
+            billing = json.loads(billing_raw.stdout)
+            month = self._month_key()
+            items = billing.get("usageItems", [])
+
+            premium = 0.0
+            coding_agent = 0.0
+            for item in items:
+                if item.get("product") != "copilot":
+                    continue
+                if not item.get("date", "").startswith(month):
+                    continue
+                sku = item.get("sku", "")
+                qty = item.get("quantity", 0)
+                if "Coding Agent" in sku:
+                    coding_agent += qty
+                elif "Premium Request" in sku:
+                    premium += qty
+
+            data = {
+                "premium_requests": round(premium, 1),
+                "coding_agent_requests": round(coding_agent, 1),
+                "total": round(premium + coding_agent, 1),
+            }
+            self._cache[cache_key] = {"ts": now, "data": data}
+            return data
+        except Exception as exc:
+            print(f"[RuntimeUsage] Copilot billing fetch failed: {exc}", file=sys.stderr)
+            return {}
+
+    def _get_copilot_quota(self) -> int:
+        """Determine Copilot plan quota from env or default (Pro=300)."""
+        env_val = os.environ.get("RUNTIME_QUOTA_COPILOT")
+        if env_val and env_val.isdigit():
+            return int(env_val)
+        plan = os.environ.get("COPILOT_PLAN", "pro").lower()
+        return self.COPILOT_PLAN_QUOTAS.get(plan, 300)
+
+    # ── Claude: subscription-aware local tracking ─────────────────────────
+
+    def _get_claude_info(self) -> dict:
+        """Read Claude subscription type from credentials file."""
+        try:
+            creds_path = os.path.join(os.path.expanduser("~"), ".claude", ".credentials.json")
+            if os.path.exists(creds_path):
+                with open(creds_path) as f:
+                    creds = json.load(f)
+                oauth = creds.get("claudeAiOauth", {})
+                return {
+                    "subscription": oauth.get("subscriptionType", "unknown"),
+                    "rate_limit_tier": oauth.get("rateLimitTier", "unknown"),
+                }
+        except Exception:
+            pass
+        return {"subscription": "unknown", "rate_limit_tier": "unknown"}
+
+    # ── Main entry point ──────────────────────────────────────────────────
+
     def get_usage(self, identity: str, runtime: str) -> dict:
-        """Return usage info for the current month."""
+        """Return usage info — queries real APIs when available."""
         month = self._month_key()
+        reset_date = self._next_reset()
+
+        # Local fallback count
         with self._lock:
-            used = self._data.get(identity, {}).get(month, {}).get(runtime, 0)
+            local_used = self._data.get(identity, {}).get(month, {}).get(runtime, 0)
 
-        # Check env override for quota, e.g. RUNTIME_QUOTA_COPILOT=300
-        env_key = f"RUNTIME_QUOTA_{runtime.upper()}"
-        quota_env = os.environ.get(env_key)
-        quota = int(quota_env) if quota_env and quota_env.isdigit() else self.DEFAULT_QUOTAS.get(runtime)
+        if runtime == "copilot":
+            billing = self._fetch_copilot_usage()
+            if billing:
+                used = billing.get("total", 0)
+                quota = self._get_copilot_quota()
+                return {
+                    "runtime": runtime,
+                    "requests_used": used,
+                    "quota_limit": quota,
+                    "requests_remaining": max(0, quota - used),
+                    "reset_date": reset_date,
+                    "period": month,
+                    "source": "github_billing",
+                    "breakdown": {
+                        "premium_requests": billing.get("premium_requests", 0),
+                        "coding_agent_requests": billing.get("coding_agent_requests", 0),
+                    },
+                }
+            # Fallback to local if billing API fails
+            return {
+                "runtime": runtime,
+                "requests_used": local_used,
+                "quota_limit": self._get_copilot_quota(),
+                "requests_remaining": max(0, self._get_copilot_quota() - local_used),
+                "reset_date": reset_date,
+                "period": month,
+                "source": "local",
+            }
 
-        result = {
-            "runtime": runtime,
-            "requests_used": used,
-            "quota_limit": quota,
-            "requests_remaining": (quota - used) if quota is not None else None,
-            "reset_date": self._next_reset(),
-            "period": month,
-        }
-        return result
+        elif runtime == "claude":
+            claude_info = self._get_claude_info()
+            return {
+                "runtime": runtime,
+                "requests_used": local_used,
+                "quota_limit": None,
+                "requests_remaining": None,
+                "reset_date": reset_date,
+                "period": month,
+                "source": "local",
+                "subscription": claude_info.get("subscription"),
+            }
+
+        else:
+            # gemini, opencode, codex — local tracking only
+            env_key = f"RUNTIME_QUOTA_{runtime.upper()}"
+            quota_env = os.environ.get(env_key)
+            quota = int(quota_env) if quota_env and quota_env.isdigit() else None
+            return {
+                "runtime": runtime,
+                "requests_used": local_used,
+                "quota_limit": quota,
+                "requests_remaining": (max(0, quota - local_used)) if quota else None,
+                "reset_date": reset_date,
+                "period": month,
+                "source": "local",
+            }
 
 
 class SessionManager:

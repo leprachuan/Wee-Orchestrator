@@ -182,7 +182,7 @@ async function fetchRuntimeUsage() {
   const runtime = $('meta-runtime')?.textContent?.trim();
   if (!runtime || runtime === '—') {
     const el = $('meta-usage');
-    if (el) { el.textContent = '—'; el.classList.add('empty'); }
+    if (el) { el.textContent = '—'; el.classList.add('empty'); el.removeAttribute('title'); }
     return;
   }
   try {
@@ -191,18 +191,34 @@ async function fetchRuntimeUsage() {
     if (!el) return;
     el.classList.remove('empty', 'usage-low', 'usage-critical');
 
-    const used = data.requests_used || 0;
+    const used = data.requests_used ?? 0;
     const limit = data.quota_limit;
+    const source = data.source || 'local';
+    const reset = data.reset_date?.slice(0, 10) || '1st';
+
     if (limit != null) {
       const remaining = Math.max(0, limit - used);
-      const pct = remaining / limit;
-      el.textContent = `${used}/${limit} reqs`;
-      el.title = `${used} of ${limit} requests used this month · resets ${data.reset_date?.slice(0,10) || '1st'}`;
-      if (pct <= 0.1) el.classList.add('usage-critical');
+      const pct = limit > 0 ? remaining / limit : 0;
+      // Show fractional used as rounded display
+      const usedDisplay = Number.isInteger(used) ? used : used.toFixed(1);
+      el.textContent = `${usedDisplay}/${limit} reqs`;
+      let tip = `${usedDisplay} of ${limit} premium requests used · resets ${reset}`;
+      if (data.breakdown) {
+        const bd = data.breakdown;
+        tip += `\nChat: ${bd.premium_requests ?? 0} · Agent: ${bd.coding_agent_requests ?? 0}`;
+      }
+      if (source !== 'local') tip += `\nSource: ${source}`;
+      if (used > limit) tip += `\n⚠️ Over quota — overage billed at $0.04/request`;
+      el.title = tip;
+      if (used > limit) el.classList.add('usage-critical');
+      else if (pct <= 0.1) el.classList.add('usage-critical');
       else if (pct <= 0.25) el.classList.add('usage-low');
     } else {
-      el.textContent = `${used} reqs`;
-      el.title = `${used} requests this month (${runtime}) · resets ${data.reset_date?.slice(0,10) || '1st'}`;
+      // No quota (e.g. Claude, Gemini) — show local count + subscription
+      const sub = data.subscription;
+      const label = sub && sub !== 'unknown' ? `${sub} · ${used} reqs` : `${used} reqs`;
+      el.textContent = label;
+      el.title = `${used} requests tracked this month (${runtime})${sub ? ' · ' + sub + ' plan' : ''} · resets ${reset}`;
     }
   } catch (_) { /* non-fatal */ }
 }
