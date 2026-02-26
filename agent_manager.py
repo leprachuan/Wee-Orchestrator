@@ -2250,34 +2250,7 @@ How to get images:
    Step 2: Include in your response: ![Description](/ai-media/{n8n_session_id}/screenshot.png)
    IMPORTANT: Always verify the cp succeeded and the destination file size is > 0 before including the image URL.
 
-Always include at least one image in markdown format. Do NOT use ASCII art, SVG generation, or placeholder images.]
-[File Handling - CHANNEL-SPECIFIC]:
-
-UNIVERSAL SYNTAX (same for all platforms):
-  Files:     [FILE:/path/to/file.ext:Your caption here]
-  Images:    ![caption](https://example.com/image.png) or ![caption](/ai-media/session/file.png)
-  Captions:  Descriptive text after the colon (max 1000 chars)
-
-YOUR CURRENT CHANNEL: {{channel_upper}}
-Save files to YOUR CHANNEL'S DIRECTORY:
-  → {{script_base_dir}}/{{channel}}_downloads/
-
-SIZE LIMITS:
-  Telegram:  50 MB
-  WebEx:     100 MB
-  WebUI:     500 MB
-
-HOW IT WORKS:
-  1. Save file to {{script_base_dir}}/{{channel}}_downloads/
-  2. Include [FILE:path:caption] in your response
-  3. For images, use markdown: ![caption](url) or ![caption](/ai-media/session/file.png)
-  4. System detects images/files and sends them natively to {{channel_upper}} ✓
-
-IMPORTANT:
-  ✓ ALWAYS save files to your channel directory ({{channel}}_downloads)
-  ✓ ALWAYS use absolute paths (start with /)
-  ✓ For images, prefer Option A (direct URL) or Option B/C (local with /ai-media/ path)
-  ✓ The system will automatically upload local images and send URL images to {{channel_upper}}"""
+Always include at least one image in markdown format. Do NOT use ASCII art, SVG generation, or placeholder images.]"""
         elif render_type == "html":
             render_instruction = """
 [Output Format: html]
@@ -2313,58 +2286,26 @@ HOW TO FORMAT:
 1. Markdown syntax: ![caption text](https://url.jpg) - Caption will appear below the image
 2. Bare URL: https://url.jpg - Image sent without caption
 Do NOT use <img> tags (unsupported). Do NOT create files, generate ASCII art, or make SVGs. The system will automatically detect image URLs and send them as photos. You can include hyperlinks using <a href="url">text</a>.]
-
-[File Handling - CHANNEL-SPECIFIC]:
-
-UNIVERSAL SYNTAX (same for all platforms):
-  Files:     [FILE:/path/to/file.ext:Your caption here]
-  Images:    ![caption](https://example.com/image.png) or bare URL
-  Captions:  Descriptive text after the colon (max 1000 chars)
-
-YOUR CURRENT CHANNEL: {channel_upper}
-Save files to YOUR CHANNEL'S DIRECTORY:
-  → {script_base_dir}/{channel}_downloads/
-  
-  ✓ Telegram users: {script_base_dir}/telegram_downloads/
-  ✓ WebEx users: {script_base_dir}/webex_downloads/
-  ✓ WebUI users: {script_base_dir}/webui_downloads/
-
-SIZE LIMITS:
-  Telegram:  50 MB
-  WebEx:     100 MB
-  WebUI:     500 MB
-
-SUPPORTED FILE TYPES: PDF, DOCX, XLSX, CSV, JSON, PNG, JPG, GIF, WEBP, ZIP, TAR, MP4, MP3, etc.
-
-EXAMPLES:
-
-1. USER ASKS FOR A SCREENSHOT → Save to: {script_base_dir}/{channel}_downloads/screenshot.png
-   → Return: "Here's the screenshot: [FILE:{script_base_dir}/{channel}_downloads/screenshot.png:Snort Homepage]"
-   → File sent to {channel_upper} ✓
-
-2. USER ASKS FOR A PDF REPORT → Save to: {script_base_dir}/{channel}_downloads/report.pdf  
-   → Return: "Here's your report: [FILE:{script_base_dir}/{channel}_downloads/report.pdf:Monthly Sales]"
-   → File sent to {channel_upper} ✓
-
-3. USER ASKS FOR A DATA EXPORT → Save to: {script_base_dir}/{channel}_downloads/data.csv
-   → Return: "Your export: [FILE:{script_base_dir}/{channel}_downloads/data.csv:User Data]"
-   → File sent to {channel_upper} ✓
-
-HOW IT WORKS:
-  1. Save file to {script_base_dir}/{channel}_downloads/
-  2. Include [FILE:path:caption] in your response
-  3. System sends file to {channel_upper} automatically ✓
-
-IMPORTANT:
-  ✓ ALWAYS save to your channel directory ({channel}_downloads)
-  ✓ ALWAYS use absolute paths (start with /)
-  ✓ ALWAYS include captions in [FILE:...] markers
-  ✓ DON'T save to other channels' directories (e.g., don't put files in webex_downloads if you're on Telegram)
-  ✓ DON'T use relative paths or /tmp files
-  ✓ Check file size is within {channel}'s limit
 """
         else:  # text (default)
             render_instruction = ""
+
+        # Add channel-specific file handling instructions (only for render types that support media)
+        if render_type in ("markdown", "telegram_html"):
+            size_limits = {"telegram": "50 MB", "webex": "100 MB", "webui": "500 MB"}
+            channel_limit = size_limits.get(channel, "100 MB")
+            file_handling = f"""
+[File Handling — YOUR CHANNEL: {channel.upper()}]
+  Files:     [FILE:/path/to/file.ext:Your caption here]
+  Images:    ![caption](url) or ![caption](/ai-media/session/file.png)
+  Save to:   {SCRIPT_BASE_DIR}/{channel}_downloads/
+  Size limit: {channel_limit}
+
+  1. Save file → {SCRIPT_BASE_DIR}/{channel}_downloads/
+  2. Include [FILE:path:caption] or ![caption](url) in your response
+  3. System sends it to {channel.upper()} automatically ✓
+  ✓ Use absolute paths  ✓ Only save to {channel}_downloads"""
+            render_instruction += file_handling
 
         # Format render_instruction with channel, script_base_dir, and session_id variables
         if "{channel" in render_instruction or "{script_base_dir" in render_instruction or "{n8n_session_id" in render_instruction:
