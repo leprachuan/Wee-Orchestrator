@@ -2341,8 +2341,31 @@ To add custom skill repositories or manage repository settings:
    - Users can discover and load skills from all enabled repositories
    - Existing skills continue to work without changes"""
 
+        # Background tasks instruction — tell the agent how to create tasks
+        # that appear in the WebUI Tasks panel via the orchestrator API.
+        _api_port_bg = os.environ.get("API_PORT", "8001")
+        _shared_key = os.environ.get("API_SHARED_KEY", "")
+        _user_identity = self._bg_identity or "unknown"
+        bg_task_instruction = ""
+        if _shared_key:
+            bg_task_instruction = f"""
+[Background Tasks — IMPORTANT]
+When the user asks you to run something "in the background", you MUST create a background task via the orchestrator API. Do NOT use your own internal background/async task mechanism (e.g. task tool with mode:"background") — those are invisible to the user.
+
+To create a background task, run this curl command:
+```
+curl -s -X POST http://127.0.0.1:{_api_port_bg}/api/v1/background-tasks \\
+  -H "Content-Type: application/json" \\
+  -H "Authorization: Bearer shared_{_shared_key}" \\
+  -H "X-User-Identity: {_user_identity}" \\
+  -H "X-Auth-Channel: {channel}" \\
+  -d '{{"prompt": "<the task prompt here>"}}'
+```
+The API returns a task_id. Tell the user the task was started and they can monitor it in the ⚡ Tasks tab (WebUI) or use `/background status <task_id>`.
+Do NOT run the actual work yourself when backgrounding — the API spawns a separate agent to handle it."""
+
         context = f"""[Session ID: {n8n_session_id}]
-{runtime_instruction}{agent_desc}{files_context}{render_instruction}{timeout_instruction}
+{runtime_instruction}{agent_desc}{files_context}{render_instruction}{bg_task_instruction}{timeout_instruction}
 
 User Request:
 {prompt}"""
