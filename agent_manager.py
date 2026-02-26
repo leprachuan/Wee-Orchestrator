@@ -4213,6 +4213,21 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
 
     # ---- endpoints ----
 
+    @app.get("/api/v1/agents")
+    async def get_agents():
+        """Return list of configured agents for WebUI."""
+        try:
+            agents = []
+            for name, info in session_mgr.AGENTS.items():
+                agents.append({
+                    "name": name,
+                    "description": info.get("description", ""),
+                    "path": info.get("path", ""),
+                })
+            return {"agents": agents}
+        except Exception as e:
+            return {"agents": [], "error": str(e)}
+
     @app.get("/api/v1/health")
     async def health():
         return {

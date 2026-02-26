@@ -269,7 +269,8 @@
     select.className = 'glass-input glass-select';
     select.name = 'agent';
     
-    const agents = [
+    // Fetch agents from API, fallback to built-in list
+    const fallbackAgents = [
       { value: 'fosterbot', label: 'Fosterbot (Orchestrator)' },
       { value: 'smart_home', label: 'Smart Home' },
       { value: 'email_triage', label: 'Email Triage' },
@@ -277,14 +278,28 @@
       { value: 'devops', label: 'DevOps' },
       { value: 'family', label: 'Family Knowledge' },
     ];
-    
-    agents.forEach(agent => {
-      const option = document.createElement('option');
-      option.value = agent.value;
-      option.textContent = agent.label;
-      if (agent.value === currentAgent) option.selected = true;
-      select.appendChild(option);
-    });
+
+    function populateAgentOptions(agentList) {
+      agentList.forEach(agent => {
+        const option = document.createElement('option');
+        option.value = agent.value;
+        option.textContent = agent.label;
+        if (agent.value === currentAgent) option.selected = true;
+        select.appendChild(option);
+      });
+    }
+
+    fetch('/api/v1/agents')
+      .then(res => res.json())
+      .then(data => {
+        if (data && Array.isArray(data.agents) && data.agents.length) {
+          const agentList = data.agents.map(a => ({ value: a.name, label: a.name + (a.description ? ' — ' + a.description : '') }));
+          populateAgentOptions(agentList);
+        } else {
+          populateAgentOptions(fallbackAgents);
+        }
+      })
+      .catch(() => populateAgentOptions(fallbackAgents));
     
     agentInput.replaceWith(select);
   }
