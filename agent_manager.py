@@ -4677,7 +4677,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             )
 
         # Resolve agent/runtime/model — default to user's current session config
-        current_sessions = history_mgr.list_sessions(channel, identity)
+        current_sessions = history_mgr.get_sessions(channel, identity)
         defaults = {}
         if current_sessions:
             latest_sid = current_sessions[0].get("session_id", "")
