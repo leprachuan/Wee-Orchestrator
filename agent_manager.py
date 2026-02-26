@@ -2364,8 +2364,18 @@ curl -s -X POST http://127.0.0.1:{_api_port_bg}/api/v1/background-tasks \\
 The API returns a task_id. Tell the user the task was started and they can monitor it in the ⚡ Tasks tab (WebUI) or use `/background status <task_id>`.
 Do NOT run the actual work yourself when backgrounding — the API spawns a separate agent to handle it."""
 
+        # Channel-specific injected context files
+        injection_dir = Path(os.environ.get("INJECTION_DIR", Path(SCRIPT_BASE_DIR) / "injections"))
+        injection_text = ""
+        try:
+            injection_file = injection_dir / f"{channel}.md"
+            if injection_file.exists():
+                injection_content = injection_file.read_text()
+                injection_text = f"\n\n[Injected context file: {injection_file}]\n{injection_content}\n"
+        except Exception:
+            injection_text = ""
         context = f"""[Session ID: {n8n_session_id}]
-{runtime_instruction}{agent_desc}{files_context}{render_instruction}{bg_task_instruction}{timeout_instruction}
+{runtime_instruction}{injection_text}{agent_desc}{files_context}{render_instruction}{bg_task_instruction}{timeout_instruction}
 
 User Request:
 {prompt}"""
