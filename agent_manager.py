@@ -535,6 +535,89 @@ class HistoryManager:
             return True
 
 
+class RuntimeUsageTracker:
+    """Tracks per-user, per-runtime request counts for usage display."""
+
+    # Known monthly quotas (configurable via env vars)
+    DEFAULT_QUOTAS = {
+        "copilot": 300,   # GitHub Copilot free-tier premium requests
+        "claude": None,   # No published limit
+        "gemini": None,
+        "opencode": None,
+        "codex": None,
+    }
+
+    def __init__(self):
+        home = os.path.expanduser("~")
+        copilot_dir = os.path.join(home, ".copilot")
+        os.makedirs(copilot_dir, exist_ok=True)
+        self._path = os.path.join(copilot_dir, "runtime-usage.json")
+        self._lock = threading.Lock()
+        self._data = self._load()
+
+    def _load(self) -> dict:
+        try:
+            if os.path.exists(self._path):
+                with open(self._path, "r") as f:
+                    return json.load(f)
+        except Exception:
+            pass
+        return {}
+
+    def _save(self):
+        try:
+            with open(self._path, "w") as f:
+                json.dump(self._data, f, indent=2)
+        except Exception:
+            pass
+
+    @staticmethod
+    def _month_key() -> str:
+        """Return current month as 'YYYY-MM'."""
+        from datetime import datetime, timezone
+        return datetime.now(timezone.utc).strftime("%Y-%m")
+
+    @staticmethod
+    def _next_reset() -> str:
+        """Return ISO timestamp for 1st of next month 00:00 UTC."""
+        from datetime import datetime, timezone
+        now = datetime.now(timezone.utc)
+        if now.month == 12:
+            reset = datetime(now.year + 1, 1, 1, tzinfo=timezone.utc)
+        else:
+            reset = datetime(now.year, now.month + 1, 1, tzinfo=timezone.utc)
+        return reset.isoformat()
+
+    def record(self, identity: str, runtime: str):
+        """Record one request for a user+runtime this month."""
+        month = self._month_key()
+        with self._lock:
+            bucket = self._data.setdefault(identity, {}).setdefault(month, {})
+            bucket[runtime] = bucket.get(runtime, 0) + 1
+            self._save()
+
+    def get_usage(self, identity: str, runtime: str) -> dict:
+        """Return usage info for the current month."""
+        month = self._month_key()
+        with self._lock:
+            used = self._data.get(identity, {}).get(month, {}).get(runtime, 0)
+
+        # Check env override for quota, e.g. RUNTIME_QUOTA_COPILOT=300
+        env_key = f"RUNTIME_QUOTA_{runtime.upper()}"
+        quota_env = os.environ.get(env_key)
+        quota = int(quota_env) if quota_env and quota_env.isdigit() else self.DEFAULT_QUOTAS.get(runtime)
+
+        result = {
+            "runtime": runtime,
+            "requests_used": used,
+            "quota_limit": quota,
+            "requests_remaining": (quota - used) if quota is not None else None,
+            "reset_date": self._next_reset(),
+            "period": month,
+        }
+        return result
+
+
 class SessionManager:
     """Manages AI CLI sessions (Copilot & OpenCode) for N8N integration"""
 
@@ -4103,6 +4186,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
     history_mgr = HistoryManager()
     bg_task_mgr = BackgroundTaskManager()
     session_mgr._bg_task_mgr = bg_task_mgr
+    usage_tracker = RuntimeUsageTracker()
 
     # ---- Pydantic models ----
     class ChannelEnum(str, Enum):
@@ -4387,10 +4471,14 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         history_mgr.append_message(user["channel"], user["identity"], session_id, "assistant", result)
 
         session_data = session_mgr.get_or_create_session_data(session_id)
+        runtime = session_data.get("runtime", "copilot")
+        # Track usage unless it was a slash command (no AI invocation)
+        if not body.query.lstrip().startswith(("/", "!")):
+            usage_tracker.record(user["identity"], runtime)
         return {
             "session_id": session_id,
             "response": result,
-            "runtime": session_data.get("runtime"),
+            "runtime": runtime,
             "model": session_data.get("model"),
         }
 
@@ -4504,10 +4592,14 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             )
 
             session_data = session_mgr.get_or_create_session_data(session_id)
+            runtime = session_data.get("runtime", "copilot")
+            # Track usage for non-command requests
+            if not is_command:
+                usage_tracker.record(user["identity"], runtime)
             done_payload = _json.dumps({
                 "type": "done",
                 "response": result,
-                "runtime": session_data.get("runtime"),
+                "runtime": runtime,
                 "model": session_data.get("model"),
             })
             yield f"data: {done_payload}\n\n"
@@ -4542,6 +4634,19 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             "model": data.get("model"),
             "yolo_mode": data.get("yolo_mode", "restricted"),
         }
+
+    # --- Runtime usage endpoint ---
+
+    @app.get("/api/v1/runtime-usage")
+    async def get_runtime_usage(request: Request, runtime: str = "copilot"):
+        """Return usage stats for the authenticated user and given runtime."""
+        user = await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        return usage_tracker.get_usage(user["identity"], runtime)
 
     # --- History endpoints ---
 

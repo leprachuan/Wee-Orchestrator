@@ -164,6 +164,9 @@ function updateSessionMeta(data) {
   modeEl.textContent = isYolo ? '⚡ yolo' : 'restricted';
   modeEl.classList.toggle('yolo', isYolo);
   modeEl.classList.remove('empty');
+
+  // Refresh usage indicator whenever meta updates (runtime may have changed)
+  if (typeof fetchRuntimeUsage === 'function') fetchRuntimeUsage();
 }
 
 async function fetchAndUpdateMeta(sessionId) {
@@ -171,6 +174,36 @@ async function fetchAndUpdateMeta(sessionId) {
   try {
     const data = await apiRequest('GET', `/sessions/${sessionId}/status`);
     updateSessionMeta(data);
+  } catch (_) { /* non-fatal */ }
+}
+
+// ─── Runtime Usage Indicator ──────────────────────────────────────────────────
+async function fetchRuntimeUsage() {
+  const runtime = $('meta-runtime')?.textContent?.trim();
+  if (!runtime || runtime === '—') {
+    const el = $('meta-usage');
+    if (el) { el.textContent = '—'; el.classList.add('empty'); }
+    return;
+  }
+  try {
+    const data = await apiRequest('GET', `/runtime-usage?runtime=${encodeURIComponent(runtime)}`);
+    const el = $('meta-usage');
+    if (!el) return;
+    el.classList.remove('empty', 'usage-low', 'usage-critical');
+
+    const used = data.requests_used || 0;
+    const limit = data.quota_limit;
+    if (limit != null) {
+      const remaining = Math.max(0, limit - used);
+      const pct = remaining / limit;
+      el.textContent = `${used}/${limit} reqs`;
+      el.title = `${used} of ${limit} requests used this month · resets ${data.reset_date?.slice(0,10) || '1st'}`;
+      if (pct <= 0.1) el.classList.add('usage-critical');
+      else if (pct <= 0.25) el.classList.add('usage-low');
+    } else {
+      el.textContent = `${used} reqs`;
+      el.title = `${used} requests this month (${runtime}) · resets ${data.reset_date?.slice(0,10) || '1st'}`;
+    }
   } catch (_) { /* non-fatal */ }
 }
 
@@ -573,6 +606,7 @@ async function selectSession(sessionId) {
   }
   scrollToBottom();
   await fetchAndUpdateMeta(sessionId);
+  fetchRuntimeUsage();  // update usage indicator
 }
 
 async function startNewSession() {
@@ -586,6 +620,7 @@ async function startNewSession() {
     updateSessionMeta(data);  // initial meta from create response
     await loadSessions();
     await fetchAndUpdateMeta(data.session_id); // get full defaults
+    fetchRuntimeUsage();  // update usage indicator
   } catch (err) {
     alert('Failed to create session: ' + err.message);
   }
@@ -876,6 +911,7 @@ async function sendMessage() {
 
     // Refresh meta — a /agent set etc. may have changed things
     await fetchAndUpdateMeta(STATE.currentSessionId);
+    fetchRuntimeUsage();  // update usage after each round trip
     await loadSessions();
   } catch (err) {
     hideTyping();
