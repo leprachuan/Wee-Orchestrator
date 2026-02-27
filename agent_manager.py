@@ -1630,6 +1630,8 @@ class SessionManager:
         if runtime == "copilot":
             in_metadata = False
             for line in lines:
+                # Strip ANSI escape codes (may leak despite --no-color)
+                line = re.sub(r"\x1b\[[0-9;]*m", "", line)
                 if re.match(r"^Total usage est:|^Total duration", line):
                     in_metadata = True
                     continue

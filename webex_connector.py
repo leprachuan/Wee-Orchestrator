@@ -533,7 +533,9 @@ class WebEXConnector:
         return None
 
     def _resolve_image_path(self, url: str) -> str:
-        """Resolve /ai-media/ paths to local filesystem paths."""
+        """Resolve /ai-media/ paths to local filesystem paths and strip ANSI codes."""
+        # Strip any ANSI escape codes that might leak from CLI output
+        url = re.sub(r'\x1b\[[0-9;]*m', '', url)
         if url.startswith("/ai-media/"):
             return url.replace("/ai-media/", "/tmp/webui_ai_media/", 1)
         return url
@@ -899,20 +901,32 @@ class WebEXConnector:
 
         # Send images
         for url, caption in image_data:
+            # Strip any residual ANSI codes from URL
+            url = re.sub(r'\x1b\[[0-9;]*m', '', url)
             print(f"[DEBUG OUTBOUND] send_response sending image URL={url} caption={repr(caption[:100])} to room_id={room_id}", file=sys.stderr, flush=True)
+            print(f"[DEBUG OUTBOUND] -> url repr: {repr(url)}", file=sys.stderr, flush=True)
             if url.startswith(('http://', 'https://')):
                 # External URL: send as file URL attachment
                 print(f"[DEBUG OUTBOUND] -> dispatching _send_image_url", file=sys.stderr, flush=True)
                 self._send_image_url(room_id, url, caption)
-            elif os.path.isfile(url):
-                # Local file: upload as attachment
-                print(f"[DEBUG OUTBOUND] -> dispatching _send_image_file (file exists, size={os.path.getsize(url)})", file=sys.stderr, flush=True)
-                result = self._send_image_file(room_id, url, caption)
-                print(f"[DEBUG OUTBOUND] -> _send_image_file returned: {result}", file=sys.stderr, flush=True)
             else:
-                # Unresolved path: send as text link
-                print(f"[DEBUG OUTBOUND] -> image path not found, sending text fallback", file=sys.stderr, flush=True)
-                self.send_message(room_id, f"[Image]({url})" + (f" - {caption}" if caption else ""))
+                # Local file path - check with retry for potential race condition
+                file_found = os.path.isfile(url)
+                if not file_found:
+                    # Retry after short delay in case file is still being written
+                    print(f"[DEBUG OUTBOUND] -> file not found on first check, retrying in 2s...", file=sys.stderr, flush=True)
+                    print(f"[DEBUG OUTBOUND] -> dir exists: {os.path.isdir(os.path.dirname(url))}, dir contents: {os.listdir(os.path.dirname(url)) if os.path.isdir(os.path.dirname(url)) else 'N/A'}", file=sys.stderr, flush=True)
+                    time.sleep(2)
+                    file_found = os.path.isfile(url)
+                    print(f"[DEBUG OUTBOUND] -> after retry: isfile={file_found}", file=sys.stderr, flush=True)
+                if file_found:
+                    print(f"[DEBUG OUTBOUND] -> dispatching _send_image_file (size={os.path.getsize(url)})", file=sys.stderr, flush=True)
+                    result = self._send_image_file(room_id, url, caption)
+                    print(f"[DEBUG OUTBOUND] -> _send_image_file returned: {result}", file=sys.stderr, flush=True)
+                else:
+                    # Unresolved path: send as text link
+                    print(f"[DEBUG OUTBOUND] -> image path not found after retry, sending text fallback", file=sys.stderr, flush=True)
+                    self.send_message(room_id, f"[Image]({url})" + (f" - {caption}" if caption else ""))
 
         # Send files
         for file_path, caption in file_data:

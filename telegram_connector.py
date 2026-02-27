@@ -642,7 +642,8 @@ class TelegramConnector:
         return None
 
     def _resolve_image_path(self, url: str) -> str:
-        """Resolve /ai-media/ paths to local filesystem paths."""
+        """Resolve /ai-media/ paths to local filesystem paths and strip ANSI codes."""
+        url = re.sub(r'\x1b\[[0-9;]*m', '', url)
         if url.startswith("/ai-media/"):
             return url.replace("/ai-media/", "/tmp/webui_ai_media/", 1)
         return url
