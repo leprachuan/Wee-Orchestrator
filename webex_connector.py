@@ -499,34 +499,69 @@ class WebEXConnector:
         return None
 
     def _send_image_file(self, room_id: str, file_path: str, caption: str = "") -> Optional[str]:
-        """Send a local image file to WebEX room via multipart upload. Returns message ID."""
+        """Send a local image file to WebEX room via multipart upload. Returns message ID.
+        
+        Converts PNG images to JPEG for reliable inline preview in WebEx client.
+        """
         try:
             print(f"[DEBUG] Uploading local image to WebEX: {file_path} (size={os.path.getsize(file_path)})", file=sys.stderr, flush=True)
-            mime_type, _ = mimetypes.guess_type(file_path)
-            if not mime_type:
-                mime_type = "image/png"
             headers = {"Authorization": f"Bearer {self.token}"}
-            with open(file_path, 'rb') as f:
-                files = {'files': (Path(file_path).name, f, mime_type)}
-                data = {'roomId': room_id}
-                if caption:
-                    data['text'] = caption
-                response = requests.post(
-                    "https://webexapis.com/v1/messages",
-                    headers=headers,
-                    data=data,
-                    files=files,
-                    timeout=60,
-                )
-                print(f"[DEBUG] WebEX image upload response: {response.status_code}", file=sys.stderr, flush=True)
-                if response.status_code == 200:
-                    result = response.json()
-                    msg_id = result.get("id")
-                    print(f"[DEBUG] WebEX image sent successfully, msg_id={msg_id}", file=sys.stderr, flush=True)
-                    return msg_id
-                else:
-                    print(f"[WARN] WebEX image file send failed ({response.status_code}): {response.text[:500]}", file=sys.stderr, flush=True)
-                    self.send_message(room_id, f"⚠️ Failed to send image: {Path(file_path).name}")
+            data = {'roomId': room_id}
+            if caption:
+                data['text'] = caption
+
+            # Convert PNG to JPEG for reliable WebEx inline preview
+            file_ext = Path(file_path).suffix.lower()
+            if file_ext == '.png':
+                try:
+                    from PIL import Image
+                    import io
+                    img = Image.open(file_path)
+                    if img.mode == 'RGBA':
+                        # Flatten alpha onto white background
+                        bg = Image.new('RGB', img.size, (255, 255, 255))
+                        bg.paste(img, mask=img.split()[3])
+                        img = bg
+                    elif img.mode != 'RGB':
+                        img = img.convert('RGB')
+                    buf = io.BytesIO()
+                    img.save(buf, format='JPEG', quality=85)
+                    buf.seek(0)
+                    jpeg_name = Path(file_path).stem + '.jpg'
+                    print(f"[DEBUG] Converted PNG->JPEG: {os.path.getsize(file_path)} -> {buf.getbuffer().nbytes} bytes", file=sys.stderr, flush=True)
+                    files = {'files': (jpeg_name, buf, 'image/jpeg')}
+                    response = requests.post(
+                        "https://webexapis.com/v1/messages",
+                        headers=headers, data=data, files=files, timeout=60,
+                    )
+                except ImportError:
+                    print(f"[DEBUG] PIL not available, sending PNG as-is", file=sys.stderr, flush=True)
+                    with open(file_path, 'rb') as f:
+                        files = {'files': (Path(file_path).name, f, 'image/png')}
+                        response = requests.post(
+                            "https://webexapis.com/v1/messages",
+                            headers=headers, data=data, files=files, timeout=60,
+                        )
+            else:
+                mime_type, _ = mimetypes.guess_type(file_path)
+                if not mime_type:
+                    mime_type = "image/jpeg"
+                with open(file_path, 'rb') as f:
+                    files = {'files': (Path(file_path).name, f, mime_type)}
+                    response = requests.post(
+                        "https://webexapis.com/v1/messages",
+                        headers=headers, data=data, files=files, timeout=60,
+                    )
+
+            print(f"[DEBUG] WebEX image upload response: {response.status_code}", file=sys.stderr, flush=True)
+            if response.status_code == 200:
+                result = response.json()
+                msg_id = result.get("id")
+                print(f"[DEBUG] WebEX image sent successfully, msg_id={msg_id}", file=sys.stderr, flush=True)
+                return msg_id
+            else:
+                print(f"[WARN] WebEX image file send failed ({response.status_code}): {response.text[:500]}", file=sys.stderr, flush=True)
+                self.send_message(room_id, f"⚠️ Failed to send image: {Path(file_path).name}")
         except Exception as e:
             print(f"[ERROR] Exception sending image file to WebEX: {e}", file=sys.stderr, flush=True)
             self.send_message(room_id, f"⚠️ Error sending image: {str(e)}")
