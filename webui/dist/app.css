@@ -937,6 +937,57 @@ html, body {
   flex-shrink: 0;
 }
 
+/* ---------- Mic Button ---------- */
+.mic-btn {
+  width: 40px;
+  height: 40px;
+  font-size: 18px;
+  border: none;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  color: var(--text-secondary);
+  transition: background var(--transition), color var(--transition), box-shadow 0.3s ease;
+  flex-shrink: 0;
+  position: relative;
+  padding: 0;
+}
+.mic-btn svg { pointer-events: none; }
+.mic-btn:hover { background: rgba(255,255,255,0.08); color: var(--text-primary); }
+.mic-btn.recording {
+  color: #ff4444;
+  background: rgba(255,68,68,0.15);
+  animation: mic-pulse 1.2s ease-in-out infinite;
+}
+.mic-btn.transcribing {
+  color: var(--accent);
+  background: rgba(79,140,255,0.15);
+  pointer-events: none;
+  animation: mic-spin 1s linear infinite;
+}
+@keyframes mic-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(255,68,68,0.4); }
+  50%      { box-shadow: 0 0 0 8px rgba(255,68,68,0); }
+}
+@keyframes mic-spin {
+  0%   { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
+.mic-timer {
+  position: absolute;
+  top: -18px;
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 10px;
+  color: #ff4444;
+  font-weight: 600;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
 /* ---------- Image Search Results ---------- */
 .image-results-bubble {
   max-width: 460px;

@@ -2271,6 +2271,146 @@ function bgToast(msg, type = 'info') {
   _bgToastTimer = setTimeout(() => { toast.style.opacity = '0'; }, 2500);
 }
 
+// ─── Microphone Recording ────────────────────────────────────────────────────
+
+const MIC = {
+  mediaRecorder: null,
+  audioChunks: [],
+  isRecording: false,
+  startTime: 0,
+  timerInterval: null,
+  stream: null,
+};
+
+function _initMic() {
+  const btn = $('btn-mic');
+  if (!btn) return;
+
+  // Click toggles recording on/off
+  btn.addEventListener('click', () => {
+    if (MIC.isRecording) {
+      stopRecording();
+    } else {
+      startRecording();
+    }
+  });
+}
+
+async function startRecording() {
+  const btn = $('btn-mic');
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    renderSystemMessage('⚠️ Microphone not supported in this browser.');
+    return;
+  }
+  if (!STATE.currentSessionId) {
+    renderSystemMessage('⚠️ Start or select a session first.');
+    return;
+  }
+  try {
+    MIC.stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  } catch (err) {
+    renderSystemMessage('⚠️ Microphone access denied: ' + err.message);
+    return;
+  }
+
+  MIC.audioChunks = [];
+  // Prefer webm/opus, fall back to whatever is available
+  const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
+    ? 'audio/webm;codecs=opus'
+    : MediaRecorder.isTypeSupported('audio/webm') ? 'audio/webm' : '';
+  MIC.mediaRecorder = new MediaRecorder(MIC.stream, mimeType ? { mimeType } : {});
+
+  MIC.mediaRecorder.ondataavailable = (e) => {
+    if (e.data.size > 0) MIC.audioChunks.push(e.data);
+  };
+  MIC.mediaRecorder.onstop = () => {
+    const blob = new Blob(MIC.audioChunks, { type: MIC.mediaRecorder.mimeType || 'audio/webm' });
+    MIC.stream.getTracks().forEach(t => t.stop());
+    MIC.stream = null;
+    transcribeAndInsert(blob);
+  };
+
+  MIC.mediaRecorder.start(250); // collect data every 250ms
+  MIC.isRecording = true;
+  MIC.startTime = Date.now();
+  btn.classList.add('recording');
+  btn.title = 'Click to stop recording';
+
+  // Timer display
+  const timer = document.createElement('span');
+  timer.className = 'mic-timer';
+  timer.id = 'mic-timer';
+  btn.appendChild(timer);
+  MIC.timerInterval = setInterval(() => {
+    const elapsed = Math.floor((Date.now() - MIC.startTime) / 1000);
+    const m = String(Math.floor(elapsed / 60)).padStart(2, '0');
+    const s = String(elapsed % 60).padStart(2, '0');
+    timer.textContent = `${m}:${s}`;
+  }, 500);
+
+  // Auto-stop after 5 minutes
+  setTimeout(() => { if (MIC.isRecording) stopRecording(); }, 5 * 60 * 1000);
+}
+
+function stopRecording() {
+  if (!MIC.isRecording || !MIC.mediaRecorder) return;
+  MIC.isRecording = false;
+  MIC.mediaRecorder.stop();
+  clearInterval(MIC.timerInterval);
+
+  const btn = $('btn-mic');
+  btn.classList.remove('recording');
+  btn.classList.add('transcribing');
+  btn.title = 'Transcribing…';
+
+  const timer = $('mic-timer');
+  if (timer) timer.remove();
+}
+
+async function transcribeAndInsert(blob) {
+  const btn = $('btn-mic');
+  try {
+    const ext = blob.type.includes('webm') ? 'webm' : blob.type.includes('ogg') ? 'ogg' : 'wav';
+    const file = new File([blob], `recording.${ext}`, { type: blob.type });
+    const form = new FormData();
+    form.append('file', file);
+
+    const res = await fetch(`${API_BASE}/sessions/${STATE.currentSessionId}/transcribe`, {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${STATE.token}` },
+      body: form,
+    });
+
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.detail || `HTTP ${res.status}`);
+    }
+
+    const data = await res.json();
+    if (data.text) {
+      // Insert transcribed text into the message input
+      const textarea = $('message-input');
+      const existing = textarea.value;
+      textarea.value = existing ? (existing + ' ' + data.text) : data.text;
+      autoResizeTextarea(textarea);
+      syncMirror();
+      $('btn-send').disabled = false;
+      textarea.focus();
+      renderSystemMessage(`🎤 Transcribed via ${data.backend} (${formatFileSize(data.size)})`);
+    } else {
+      renderSystemMessage('⚠️ No speech detected in recording.');
+    }
+  } catch (err) {
+    renderSystemMessage('❌ Transcription failed: ' + err.message);
+  } finally {
+    btn.classList.remove('transcribing');
+    btn.title = 'Hold to record voice';
+  }
+}
+
+_initMic();
+document.addEventListener('DOMContentLoaded', _initMic);
+
 // ─── File Viewer ──────────────────────────────────────────────────────────────
 
 const _FV_IMAGE_EXTS = /\.(png|jpe?g|gif|webp|svg|ico|bmp)$/i;
