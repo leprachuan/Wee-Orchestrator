@@ -535,6 +535,128 @@ class HistoryManager:
             return True
 
 
+class RuntimeUsageTracker:
+    """Queries GitHub Copilot premium request usage from the billing API."""
+
+    COPILOT_PLAN_QUOTAS = {
+        "free": 50, "pro": 300, "pro+": 1500,
+        "business": 300, "enterprise": 1000,
+    }
+
+    def __init__(self):
+        self._cache: Dict[str, dict] = {}
+        self._cache_ttl = 120  # seconds
+
+    @staticmethod
+    def _month_key() -> str:
+        from datetime import datetime, timezone
+        return datetime.now(timezone.utc).strftime("%Y-%m")
+
+    @staticmethod
+    def _next_reset() -> str:
+        from datetime import datetime, timezone
+        now = datetime.now(timezone.utc)
+        if now.month == 12:
+            reset = datetime(now.year + 1, 1, 1, tzinfo=timezone.utc)
+        else:
+            reset = datetime(now.year, now.month + 1, 1, tzinfo=timezone.utc)
+        return reset.isoformat()
+
+    def _fetch_copilot_usage(self) -> dict:
+        """Query GitHub billing API for Copilot premium request usage this month."""
+        cache_key = f"copilot:{self._month_key()}"
+        now = time.time()
+        cached = self._cache.get(cache_key)
+        if cached and now - cached["ts"] < self._cache_ttl:
+            return cached["data"]
+
+        try:
+            gh_bin = shutil.which("gh")
+            if not gh_bin:
+                return {}
+            user_raw = subprocess.run(
+                [gh_bin, "api", "/user", "--jq", ".login"],
+                capture_output=True, text=True, timeout=10,
+            )
+            gh_user = user_raw.stdout.strip()
+            if not gh_user:
+                return {}
+
+            billing_raw = subprocess.run(
+                [gh_bin, "api", f"/users/{gh_user}/settings/billing/usage"],
+                capture_output=True, text=True, timeout=15,
+            )
+            if billing_raw.returncode != 0:
+                return {}
+
+            billing = json.loads(billing_raw.stdout)
+            month = self._month_key()
+
+            premium = 0.0
+            coding_agent = 0.0
+            for item in billing.get("usageItems", []):
+                if item.get("product") != "copilot":
+                    continue
+                if not item.get("date", "").startswith(month):
+                    continue
+                sku = item.get("sku", "")
+                qty = item.get("quantity", 0)
+                if "Coding Agent" in sku:
+                    coding_agent += qty
+                elif "Premium Request" in sku:
+                    premium += qty
+
+            data = {
+                "premium_requests": round(premium, 1),
+                "coding_agent_requests": round(coding_agent, 1),
+                "total": round(premium + coding_agent, 1),
+            }
+            self._cache[cache_key] = {"ts": now, "data": data}
+            return data
+        except Exception as exc:
+            print(f"[RuntimeUsage] Copilot billing fetch failed: {exc}", file=sys.stderr)
+            return {}
+
+    def _get_copilot_quota(self) -> int:
+        env_val = os.environ.get("RUNTIME_QUOTA_COPILOT")
+        if env_val and env_val.isdigit():
+            return int(env_val)
+        plan = os.environ.get("COPILOT_PLAN", "pro").lower()
+        return self.COPILOT_PLAN_QUOTAS.get(plan, 300)
+
+    def get_usage(self) -> dict:
+        """Return Copilot premium request usage from GitHub billing."""
+        month = self._month_key()
+        reset_date = self._next_reset()
+        quota = self._get_copilot_quota()
+
+        billing = self._fetch_copilot_usage()
+        if billing:
+            used = billing["total"]
+            return {
+                "runtime": "copilot",
+                "requests_used": used,
+                "quota_limit": quota,
+                "requests_remaining": max(0, quota - used),
+                "reset_date": reset_date,
+                "period": month,
+                "source": "github_billing",
+                "breakdown": {
+                    "premium_requests": billing["premium_requests"],
+                    "coding_agent_requests": billing["coding_agent_requests"],
+                },
+            }
+        return {
+            "runtime": "copilot",
+            "requests_used": 0,
+            "quota_limit": quota,
+            "requests_remaining": quota,
+            "reset_date": reset_date,
+            "period": month,
+            "source": "unavailable",
+        }
+
+
 class SessionManager:
     """Manages AI CLI sessions (Copilot & OpenCode) for N8N integration"""
 
@@ -1029,7 +1151,7 @@ class SessionManager:
     def get_or_create_session_data(self, n8n_session_id: str) -> Dict:
         """
         Get existing session data or create new default
-        Returns dict with keys: session_id, model, agent, runtime, bot_id
+        Returns dict with keys: session_id, model, agent, runtime, bot_id, channel
         """
         session_map = self.load_session_map()
 
@@ -1049,6 +1171,13 @@ class SessionManager:
         # Extract bot identifier from session ID (last 4 chars of numeric part)
         bot_id = self._extract_bot_identifier(n8n_session_id)
 
+        # Auto-detect channel from session ID prefix
+        channel = "webui"
+        if n8n_session_id.startswith("webex_"):
+            channel = "webex"
+        elif n8n_session_id.startswith("telegram_"):
+            channel = "telegram"
+
         default_data = {
             "session_id": str(uuid4()),
             "model": default_model,
@@ -1056,6 +1185,7 @@ class SessionManager:
             "runtime": default_runtime,
             "bot_id": bot_id,
             "render_type": "markdown",
+            "channel": channel,
         }
 
         if n8n_session_id not in session_map:
@@ -1508,6 +1638,8 @@ class SessionManager:
         if runtime == "copilot":
             in_metadata = False
             for line in lines:
+                # Strip ANSI escape codes (may leak despite --no-color)
+                line = re.sub(r"\x1b\[[0-9;]*m", "", line)
                 if re.match(r"^Total usage est:|^Total duration", line):
                     in_metadata = True
                     continue
@@ -2164,58 +2296,26 @@ HOW TO FORMAT:
 1. Markdown syntax: ![caption text](https://url.jpg) - Caption will appear below the image
 2. Bare URL: https://url.jpg - Image sent without caption
 Do NOT use <img> tags (unsupported). Do NOT create files, generate ASCII art, or make SVGs. The system will automatically detect image URLs and send them as photos. You can include hyperlinks using <a href="url">text</a>.]
-
-[File Handling - CHANNEL-SPECIFIC]:
-
-UNIVERSAL SYNTAX (same for all platforms):
-  Files:     [FILE:/path/to/file.ext:Your caption here]
-  Images:    ![caption](https://example.com/image.png) or bare URL
-  Captions:  Descriptive text after the colon (max 1000 chars)
-
-YOUR CURRENT CHANNEL: {channel_upper}
-Save files to YOUR CHANNEL'S DIRECTORY:
-  → {script_base_dir}/{channel}_downloads/
-  
-  ✓ Telegram users: {script_base_dir}/telegram_downloads/
-  ✓ WebEx users: {script_base_dir}/webex_downloads/
-  ✓ WebUI users: {script_base_dir}/webui_downloads/
-
-SIZE LIMITS:
-  Telegram:  50 MB
-  WebEx:     100 MB
-  WebUI:     500 MB
-
-SUPPORTED FILE TYPES: PDF, DOCX, XLSX, CSV, JSON, PNG, JPG, GIF, WEBP, ZIP, TAR, MP4, MP3, etc.
-
-EXAMPLES:
-
-1. USER ASKS FOR A SCREENSHOT → Save to: {script_base_dir}/{channel}_downloads/screenshot.png
-   → Return: "Here's the screenshot: [FILE:{script_base_dir}/{channel}_downloads/screenshot.png:Snort Homepage]"
-   → File sent to {channel_upper} ✓
-
-2. USER ASKS FOR A PDF REPORT → Save to: {script_base_dir}/{channel}_downloads/report.pdf  
-   → Return: "Here's your report: [FILE:{script_base_dir}/{channel}_downloads/report.pdf:Monthly Sales]"
-   → File sent to {channel_upper} ✓
-
-3. USER ASKS FOR A DATA EXPORT → Save to: {script_base_dir}/{channel}_downloads/data.csv
-   → Return: "Your export: [FILE:{script_base_dir}/{channel}_downloads/data.csv:User Data]"
-   → File sent to {channel_upper} ✓
-
-HOW IT WORKS:
-  1. Save file to {script_base_dir}/{channel}_downloads/
-  2. Include [FILE:path:caption] in your response
-  3. System sends file to {channel_upper} automatically ✓
-
-IMPORTANT:
-  ✓ ALWAYS save to your channel directory ({channel}_downloads)
-  ✓ ALWAYS use absolute paths (start with /)
-  ✓ ALWAYS include captions in [FILE:...] markers
-  ✓ DON'T save to other channels' directories (e.g., don't put files in webex_downloads if you're on Telegram)
-  ✓ DON'T use relative paths or /tmp files
-  ✓ Check file size is within {channel}'s limit
 """
         else:  # text (default)
             render_instruction = ""
+
+        # Add channel-specific file handling instructions (only for render types that support media)
+        if render_type in ("markdown", "telegram_html"):
+            size_limits = {"telegram": "50 MB", "webex": "100 MB", "webui": "500 MB"}
+            channel_limit = size_limits.get(channel, "100 MB")
+            file_handling = f"""
+[File Handling — YOUR CHANNEL: {channel.upper()}]
+  Files:     [FILE:/path/to/file.ext:Your caption here]
+  Images:    ![caption](url) or ![caption](/ai-media/session/file.png)
+  Save to:   {SCRIPT_BASE_DIR}/{channel}_downloads/
+  Size limit: {channel_limit}
+
+  1. Save file → {SCRIPT_BASE_DIR}/{channel}_downloads/
+  2. Include [FILE:path:caption] or ![caption](url) in your response
+  3. System sends it to {channel.upper()} automatically ✓
+  ✓ Use absolute paths  ✓ Only save to {channel}_downloads"""
+            render_instruction += file_handling
 
         # Format render_instruction with channel, script_base_dir, and session_id variables
         if "{channel" in render_instruction or "{script_base_dir" in render_instruction or "{n8n_session_id" in render_instruction:
@@ -4121,6 +4221,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
     history_mgr = HistoryManager()
     bg_task_mgr = BackgroundTaskManager()
     session_mgr._bg_task_mgr = bg_task_mgr
+    usage_tracker = RuntimeUsageTracker()
 
     # ---- Pydantic models ----
     class ChannelEnum(str, Enum):
@@ -4432,10 +4533,11 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         history_mgr.append_message(user["channel"], user["identity"], session_id, "assistant", result)
 
         session_data = session_mgr.get_or_create_session_data(session_id)
+        runtime = session_data.get("runtime", "copilot")
         return {
             "session_id": session_id,
             "response": result,
-            "runtime": session_data.get("runtime"),
+            "runtime": runtime,
             "model": session_data.get("model"),
         }
 
@@ -4549,10 +4651,11 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             )
 
             session_data = session_mgr.get_or_create_session_data(session_id)
+            runtime = session_data.get("runtime", "copilot")
             done_payload = _json.dumps({
                 "type": "done",
                 "response": result,
-                "runtime": session_data.get("runtime"),
+                "runtime": runtime,
                 "model": session_data.get("model"),
             })
             yield f"data: {done_payload}\n\n"
@@ -4587,6 +4690,19 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             "model": data.get("model"),
             "yolo_mode": data.get("yolo_mode", "restricted"),
         }
+
+    # --- Runtime usage endpoint ---
+
+    @app.get("/api/v1/runtime-usage")
+    async def get_runtime_usage(request: Request):
+        """Return Copilot premium request usage from GitHub billing."""
+        await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        return usage_tracker.get_usage()
 
     # --- History endpoints ---
 

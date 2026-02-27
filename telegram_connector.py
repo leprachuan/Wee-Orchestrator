@@ -18,9 +18,6 @@ from typing import Optional, Dict, List
 from datetime import datetime
 import agent_manager
 
-# Download directories configurable via environment (.env / systemd EnvironmentFile)
-TELEGRAM_DOWNLOADS_DIR = Path(os.environ.get("TELEGRAM_DOWNLOADS_DIR", "/opt/n8n-copilot-shim-dev/telegram_downloads"))
-
 # If production listener should be disabled to avoid duplicate responders, create the
 # sentinel file /opt/n8n-copilot-shim/PROD_DISABLED. When present, any process
 # started from the production path will exit immediately.
@@ -155,15 +152,18 @@ class TelegramConnector:
             token: Telegram bot token
             config_file: Path to configuration file
         """
-        self.token = token
         self.config = TelegramConfig(config_file)
         
+        # Prefer config file token over env var (env var may be stale in systemd)
+        config_token = self.config.config.get("token", "")
+        self.token = config_token if config_token else token
+
         # Keep persistent SessionManager per session_id for context persistence
         self.session_managers = {}  # {session_id: SessionManager}
 
         # Set token in config if provided
-        if token and not self.config.config.get("token"):
-            self.config.config["token"] = token
+        if self.token and not self.config.config.get("token"):
+            self.config.config["token"] = self.token
             self.config.save()
 
         # API mode configuration
@@ -474,12 +474,15 @@ class TelegramConnector:
 
         Checks:
         - File exists
-        - File is within allowed directory (telegram_downloads)
+        - File is within allowed directories (telegram_downloads, /tmp/webui_ai_media)
         - No path traversal attacks
         - File size within limits (50MB)
         """
         try:
-            allowed_dir = TELEGRAM_DOWNLOADS_DIR.resolve()
+            allowed_dirs = [
+                Path("/opt/n8n-copilot-shim-dev/telegram_downloads").resolve(),
+                Path("/tmp/webui_ai_media").resolve(),
+            ]
             file_path_obj = Path(file_path).resolve()
 
             # Check file exists
@@ -487,16 +490,18 @@ class TelegramConnector:
                 print(f"[WARN] File does not exist: {file_path}", file=sys.stderr)
                 return False
 
-            # Check file is in allowed directory (compatible with Python 3.8+)
-            try:
-                # Python 3.9+
-                is_safe = file_path_obj.is_relative_to(allowed_dir)
-            except AttributeError:
-                # Python 3.8 fallback: check if resolved path starts with allowed dir
-                is_safe = str(file_path_obj).startswith(str(allowed_dir))
+            # Check file is in any allowed directory
+            is_safe = False
+            for allowed_dir in allowed_dirs:
+                try:
+                    is_safe = file_path_obj.is_relative_to(allowed_dir)
+                except AttributeError:
+                    is_safe = str(file_path_obj).startswith(str(allowed_dir))
+                if is_safe:
+                    break
 
             if not is_safe:
-                print(f"[WARN] File outside allowed directory: {file_path}", file=sys.stderr)
+                print(f"[WARN] File outside allowed directories: {file_path}", file=sys.stderr)
                 return False
 
             # Check file size (50MB limit)
@@ -509,33 +514,69 @@ class TelegramConnector:
             print(f"[WARN] Error validating file path: {e}", file=sys.stderr)
             return False
 
-    def send_photo(self, chat_id: int, photo_url: str, caption: str = "") -> Optional[int]:
-        """Send a photo to Telegram chat via URL. Returns message_id."""
+    def send_photo(self, chat_id: int, photo_source: str, caption: str = "") -> Optional[int]:
+        """Send a photo to Telegram chat via URL or local file upload. Returns message_id."""
         try:
-            print(f"[DEBUG] Attempting sendPhoto with URL: {photo_url}", file=sys.stderr)
-            data = {"chat_id": chat_id, "photo": photo_url}
-            if caption:
-                # Sanitize caption to support safe HTML formatting
-                sanitized_caption = self.sanitize_telegram_html(caption.strip())
-                data["caption"] = sanitized_caption[:1024]  # Telegram limit
-                data["parse_mode"] = "HTML"
-            resp = requests.post(
-                f"{self.api_url}/sendPhoto",
-                json=data,
-                timeout=30,
-            )
-            if resp.status_code != 200:
+            is_local = not photo_source.startswith(('http://', 'https://')) and os.path.isfile(photo_source)
+            print(f"[DEBUG] Attempting sendPhoto {'(local file)' if is_local else '(URL)'}: {photo_source}", file=sys.stderr)
+
+            if is_local:
+                # Local file: multipart upload
+                mime_type, _ = mimetypes.guess_type(photo_source)
+                if not mime_type:
+                    mime_type = "image/png"
+                data = {"chat_id": chat_id}
                 if caption:
-                    data.pop("parse_mode", None)
-                    resp = requests.post(f"{self.api_url}/sendPhoto", json=data, timeout=30)
+                    sanitized_caption = self.sanitize_telegram_html(caption.strip())
+                    data["caption"] = sanitized_caption[:1024]
+                    data["parse_mode"] = "HTML"
+                with open(photo_source, 'rb') as f:
+                    files = {'photo': (Path(photo_source).name, f, mime_type)}
+                    resp = requests.post(
+                        f"{self.api_url}/sendPhoto",
+                        data=data,
+                        files=files,
+                        timeout=30,
+                    )
+                    if resp.status_code != 200 and caption:
+                        data.pop("parse_mode", None)
+                        f.seek(0)
+                        resp = requests.post(
+                            f"{self.api_url}/sendPhoto",
+                            data=data,
+                            files={'photo': (Path(photo_source).name, f, mime_type)},
+                            timeout=30,
+                        )
+                    if resp.status_code != 200:
+                        print(f"[WARN] sendPhoto (local) failed ({resp.status_code}): {resp.text[:200]}", file=sys.stderr)
+                        self.send_message(chat_id, f"⚠️ Failed to send image: {Path(photo_source).name}")
+                        return None
+                result = resp.json()
+                if result.get("ok"):
+                    return result["result"]["message_id"]
+            else:
+                # URL-based send
+                data = {"chat_id": chat_id, "photo": photo_source}
+                if caption:
+                    sanitized_caption = self.sanitize_telegram_html(caption.strip())
+                    data["caption"] = sanitized_caption[:1024]
+                    data["parse_mode"] = "HTML"
+                resp = requests.post(
+                    f"{self.api_url}/sendPhoto",
+                    json=data,
+                    timeout=30,
+                )
                 if resp.status_code != 200:
-                    print(f"[WARN] sendPhoto failed ({resp.status_code}): {resp.text[:200]}", file=sys.stderr)
-                    # Fallback: send URL as clickable link
-                    self.send_message(chat_id, f'<a href="{photo_url}">📷 Image link</a>')
-                    return None
-            result = resp.json()
-            if result.get("ok"):
-                return result["result"]["message_id"]
+                    if caption:
+                        data.pop("parse_mode", None)
+                        resp = requests.post(f"{self.api_url}/sendPhoto", json=data, timeout=30)
+                    if resp.status_code != 200:
+                        print(f"[WARN] sendPhoto failed ({resp.status_code}): {resp.text[:200]}", file=sys.stderr)
+                        self.send_message(chat_id, f'<a href="{photo_source}">📷 Image link</a>')
+                        return None
+                result = resp.json()
+                if result.get("ok"):
+                    return result["result"]["message_id"]
         except Exception as e:
             print(f"Error sending photo: {e}", file=sys.stderr)
             self.send_message(chat_id, f'<a href="{photo_url}">📷 Image link</a>')
@@ -600,6 +641,43 @@ class TelegramConnector:
             self.send_message(chat_id, f"⚠️ Error sending file: {str(e)}")
         return None
 
+    def _resolve_image_path(self, url: str) -> str:
+        """Resolve /ai-media/ paths to local filesystem paths and strip ANSI codes.
+        
+        Handles LLM-mangled session IDs by fuzzy-matching directory names.
+        """
+        url = re.sub(r'\x1b\[[0-9;]*m', '', url)
+        if url.startswith("/ai-media/"):
+            resolved = url.replace("/ai-media/", "/tmp/webui_ai_media/", 1)
+            if os.path.exists(resolved):
+                return resolved
+            # Fuzzy directory match for mangled session IDs
+            base_dir = "/tmp/webui_ai_media"
+            parts = resolved[len(base_dir) + 1:].split("/", 1)
+            if len(parts) == 2:
+                session_dir_name, filename = parts
+                try:
+                    candidates = []
+                    for d in os.listdir(base_dir):
+                        if not os.path.isdir(os.path.join(base_dir, d)):
+                            continue
+                        prefix_len = min(20, len(session_dir_name), len(d))
+                        if d[:prefix_len] == session_dir_name[:prefix_len]:
+                            candidate_path = os.path.join(base_dir, d, filename)
+                            if os.path.isfile(candidate_path):
+                                candidates.append(candidate_path)
+                    if len(candidates) == 1:
+                        print(f"[DEBUG] Fuzzy-matched image path: {resolved} -> {candidates[0]}", file=sys.stderr, flush=True)
+                        return candidates[0]
+                    elif len(candidates) > 1:
+                        best = max(candidates, key=os.path.getmtime)
+                        print(f"[DEBUG] Fuzzy-matched image path (newest of {len(candidates)}): {resolved} -> {best}", file=sys.stderr, flush=True)
+                        return best
+                except OSError:
+                    pass
+            return resolved
+        return url
+
     def extract_image_urls(self, text: str) -> tuple:
         """Extract image URLs from text/HTML/Markdown.
 
@@ -607,6 +685,7 @@ class TelegramConnector:
         - Markdown: ![alt text](URL) - extracts URL and alt text as caption
         - HTML: <img src="URL"/> - extracts URL, no caption
         - Bare URLs: https://example.com/image.png - extracts URL, no caption
+        - Local paths: /ai-media/session/image.png (mapped to /tmp/webui_ai_media/)
 
         Returns:
             Tuple of (image_data, remaining_text) where:
@@ -628,14 +707,14 @@ class TelegramConnector:
         # Extract from markdown images FIRST (preserves alt text before bare URL pattern strips it)
         for match in re.finditer(md_img_pattern, remaining, re.IGNORECASE):
             alt_text = match.group(1).strip()
-            url = match.group(2).strip()
+            url = self._resolve_image_path(match.group(2).strip())
             if url not in [img[0] for img in image_data]:
                 image_data.append((url, alt_text))
             remaining = remaining.replace(match.group(0), "").strip()
 
         # Extract from <img> tags
         for match in re.finditer(img_tag_pattern, remaining, re.IGNORECASE):
-            url = match.group(1)
+            url = self._resolve_image_path(match.group(1).strip())
             if url not in [img[0] for img in image_data]:
                 image_data.append((url, ""))  # Empty caption
             remaining = remaining.replace(match.group(0), "").strip()
@@ -716,8 +795,9 @@ class TelegramConnector:
 
         # Send images
         for url, caption in image_data:
-            print(f"[DEBUG OUTBOUND] send_response sending photo URL={url} caption={repr(caption[:100])} to chat_id={chat_id}", file=sys.stderr)
-            self.send_photo(chat_id, url, caption)
+            print(f"[DEBUG OUTBOUND] send_response sending photo URL={url} caption={repr(caption[:100])} to chat_id={chat_id}", file=sys.stderr, flush=True)
+            result = self.send_photo(chat_id, url, caption)
+            print(f"[DEBUG OUTBOUND] send_photo returned: {result}", file=sys.stderr, flush=True)
 
         # Send files
         for file_path, caption in file_data:
@@ -740,7 +820,7 @@ class TelegramConnector:
             file_path = file_info["result"]["file_path"]
             
             # Create downloads directory in repo
-            downloads_dir = TELEGRAM_DOWNLOADS_DIR
+            downloads_dir = Path("/opt/n8n-copilot-shim-dev/telegram_downloads")
             downloads_dir.mkdir(exist_ok=True)
             
             # Download file
@@ -766,7 +846,7 @@ class TelegramConnector:
     def cleanup_files(self, user_id: int):
         """Clean up downloaded files for user"""
         try:
-            downloads_dir = TELEGRAM_DOWNLOADS_DIR
+            downloads_dir = Path("/opt/n8n-copilot-shim-dev/telegram_downloads")
             if downloads_dir.exists():
                 for file in downloads_dir.glob(f"{user_id}_*"):
                     file.unlink()

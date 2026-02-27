@@ -164,6 +164,9 @@ function updateSessionMeta(data) {
   modeEl.textContent = isYolo ? '⚡ yolo' : 'restricted';
   modeEl.classList.toggle('yolo', isYolo);
   modeEl.classList.remove('empty');
+
+  // Refresh usage indicator whenever meta updates (runtime may have changed)
+  if (typeof fetchRuntimeUsage === 'function') fetchRuntimeUsage();
 }
 
 async function fetchAndUpdateMeta(sessionId) {
@@ -171,6 +174,42 @@ async function fetchAndUpdateMeta(sessionId) {
   try {
     const data = await apiRequest('GET', `/sessions/${sessionId}/status`);
     updateSessionMeta(data);
+  } catch (_) { /* non-fatal */ }
+}
+
+// ─── Runtime Usage Indicator ──────────────────────────────────────────────────
+async function fetchRuntimeUsage() {
+  const runtime = $('meta-runtime')?.textContent?.trim();
+  const el = $('meta-usage');
+  if (!el) return;
+
+  // Only show usage for copilot runtime
+  if (runtime !== 'copilot') {
+    el.textContent = ''; el.classList.add('empty'); el.removeAttribute('title');
+    return;
+  }
+  try {
+    const data = await apiRequest('GET', `/runtime-usage`);
+    el.classList.remove('empty', 'usage-low', 'usage-critical');
+
+    const used = data.requests_used ?? 0;
+    const limit = data.quota_limit;
+    const reset = data.reset_date?.slice(0, 10) || '1st';
+    const usedDisplay = Number.isInteger(used) ? used : used.toFixed(1);
+
+    el.textContent = `${usedDisplay}/${limit} reqs`;
+    let tip = `${usedDisplay} of ${limit} premium requests used · resets ${reset}`;
+    if (data.breakdown) {
+      const bd = data.breakdown;
+      tip += `\nChat: ${bd.premium_requests ?? 0} · Agent: ${bd.coding_agent_requests ?? 0}`;
+    }
+    if (used > limit) tip += `\n⚠️ Over quota — overage billed at $0.04/request`;
+    el.title = tip;
+
+    const remaining = Math.max(0, limit - used);
+    const pct = limit > 0 ? remaining / limit : 0;
+    if (used > limit || pct <= 0.1) el.classList.add('usage-critical');
+    else if (pct <= 0.25) el.classList.add('usage-low');
   } catch (_) { /* non-fatal */ }
 }
 
@@ -580,6 +619,7 @@ async function selectSession(sessionId) {
   }
   scrollToBottom();
   await fetchAndUpdateMeta(sessionId);
+  fetchRuntimeUsage();  // update usage indicator
 }
 
 async function startNewSession() {
@@ -593,6 +633,7 @@ async function startNewSession() {
     updateSessionMeta(data);  // initial meta from create response
     await loadSessions();
     await fetchAndUpdateMeta(data.session_id); // get full defaults
+    fetchRuntimeUsage();  // update usage indicator
   } catch (err) {
     alert('Failed to create session: ' + err.message);
   }
@@ -883,6 +924,7 @@ async function sendMessage() {
 
     // Refresh meta — a /agent set etc. may have changed things
     await fetchAndUpdateMeta(STATE.currentSessionId);
+    fetchRuntimeUsage();  // update usage after each round trip
     await loadSessions();
   } catch (err) {
     hideTyping();

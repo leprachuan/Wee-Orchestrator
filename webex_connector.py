@@ -21,9 +21,6 @@ from typing import Optional, Dict, List
 from datetime import datetime, timedelta
 import agent_manager
 
-# Download directories configurable via environment (.env / systemd EnvironmentFile)
-WEBEX_DOWNLOADS_DIR = Path(os.environ.get("WEBEX_DOWNLOADS_DIR", "/opt/n8n-copilot-shim-dev/webex_downloads"))
-
 
 class WebEXConfig:
     """Manages WebEX connector configuration"""
@@ -156,14 +153,17 @@ class WebEXConnector:
             token: WebEX bot token
             config_file: Path to configuration file
         """
-        self.token = token
         self.config = WebEXConfig(config_file)
+
+        # Prefer config file token over env var (env var may be stale)
+        config_token = self.config.config.get("token", "")
+        self.token = config_token if config_token else token
 
         # Keep persistent SessionManager per session_id for context persistence
         self.session_managers = {}  # {session_id: SessionManager}
 
-        # Set token in config if provided
-        if token and not self.config.config.get("token"):
+        # Save token to config if only provided via env/arg
+        if token and not config_token:
             self.config.config["token"] = token
             self.config.save()
 
@@ -471,12 +471,153 @@ class WebEXConnector:
             self.send_message(room_id, f"⚠️ Error sending file: {str(e)}")
         return None
 
+    def _send_image_url(self, room_id: str, url: str, caption: str = "") -> Optional[str]:
+        """Send an image to WebEX room via external URL. Returns message ID."""
+        try:
+            print(f"[DEBUG] Sending image URL to WebEX: {url[:100]}", file=sys.stderr, flush=True)
+            headers = {"Authorization": f"Bearer {self.token}"}
+            data = {"roomId": room_id, "files": [url]}
+            if caption:
+                data["text"] = caption
+            response = requests.post(
+                "https://webexapis.com/v1/messages",
+                headers=headers,
+                json=data,
+                timeout=30,
+            )
+            print(f"[DEBUG] WebEX image URL response: {response.status_code}", file=sys.stderr, flush=True)
+            if response.status_code == 200:
+                result = response.json()
+                return result.get("id")
+            else:
+                print(f"[WARN] WebEX image URL send failed ({response.status_code}): {response.text[:200]}", file=sys.stderr, flush=True)
+                # Fallback: send as markdown link
+                self.send_message(room_id, f"[📷 Image]({url})" + (f" - {caption}" if caption else ""))
+        except Exception as e:
+            print(f"[ERROR] Exception sending image URL to WebEX: {e}", file=sys.stderr, flush=True)
+            self.send_message(room_id, f"[📷 Image]({url})" + (f" - {caption}" if caption else ""))
+        return None
+
+    def _send_image_file(self, room_id: str, file_path: str, caption: str = "") -> Optional[str]:
+        """Send a local image file to WebEX room via multipart upload. Returns message ID.
+        
+        Converts PNG images to JPEG for reliable inline preview in WebEx client.
+        """
+        try:
+            print(f"[DEBUG] Uploading local image to WebEX: {file_path} (size={os.path.getsize(file_path)})", file=sys.stderr, flush=True)
+            headers = {"Authorization": f"Bearer {self.token}"}
+            data = {'roomId': room_id}
+            if caption:
+                data['text'] = caption
+
+            # Convert PNG to JPEG for reliable WebEx inline preview
+            file_ext = Path(file_path).suffix.lower()
+            if file_ext == '.png':
+                try:
+                    from PIL import Image
+                    import io
+                    img = Image.open(file_path)
+                    if img.mode == 'RGBA':
+                        # Flatten alpha onto white background
+                        bg = Image.new('RGB', img.size, (255, 255, 255))
+                        bg.paste(img, mask=img.split()[3])
+                        img = bg
+                    elif img.mode != 'RGB':
+                        img = img.convert('RGB')
+                    buf = io.BytesIO()
+                    img.save(buf, format='JPEG', quality=85)
+                    buf.seek(0)
+                    jpeg_name = Path(file_path).stem + '.jpg'
+                    print(f"[DEBUG] Converted PNG->JPEG: {os.path.getsize(file_path)} -> {buf.getbuffer().nbytes} bytes", file=sys.stderr, flush=True)
+                    files = {'files': (jpeg_name, buf, 'image/jpeg')}
+                    response = requests.post(
+                        "https://webexapis.com/v1/messages",
+                        headers=headers, data=data, files=files, timeout=60,
+                    )
+                except ImportError:
+                    print(f"[DEBUG] PIL not available, sending PNG as-is", file=sys.stderr, flush=True)
+                    with open(file_path, 'rb') as f:
+                        files = {'files': (Path(file_path).name, f, 'image/png')}
+                        response = requests.post(
+                            "https://webexapis.com/v1/messages",
+                            headers=headers, data=data, files=files, timeout=60,
+                        )
+            else:
+                mime_type, _ = mimetypes.guess_type(file_path)
+                if not mime_type:
+                    mime_type = "image/jpeg"
+                with open(file_path, 'rb') as f:
+                    files = {'files': (Path(file_path).name, f, mime_type)}
+                    response = requests.post(
+                        "https://webexapis.com/v1/messages",
+                        headers=headers, data=data, files=files, timeout=60,
+                    )
+
+            print(f"[DEBUG] WebEX image upload response: {response.status_code}", file=sys.stderr, flush=True)
+            if response.status_code == 200:
+                result = response.json()
+                msg_id = result.get("id")
+                print(f"[DEBUG] WebEX image sent successfully, msg_id={msg_id}", file=sys.stderr, flush=True)
+                return msg_id
+            else:
+                print(f"[WARN] WebEX image file send failed ({response.status_code}): {response.text[:500]}", file=sys.stderr, flush=True)
+                self.send_message(room_id, f"⚠️ Failed to send image: {Path(file_path).name}")
+        except Exception as e:
+            print(f"[ERROR] Exception sending image file to WebEX: {e}", file=sys.stderr, flush=True)
+            self.send_message(room_id, f"⚠️ Error sending image: {str(e)}")
+        return None
+
+    def _resolve_image_path(self, url: str) -> str:
+        """Resolve /ai-media/ paths to local filesystem paths and strip ANSI codes.
+        
+        Handles LLM-mangled session IDs by fuzzy-matching directory names
+        when the exact path doesn't exist.
+        """
+        # Strip any ANSI escape codes that might leak from CLI output
+        url = re.sub(r'\x1b\[[0-9;]*m', '', url)
+        if url.startswith("/ai-media/"):
+            resolved = url.replace("/ai-media/", "/tmp/webui_ai_media/", 1)
+            # If exact path exists, use it
+            if os.path.exists(resolved):
+                return resolved
+            # LLM may mangle the session ID in the path — try fuzzy directory match
+            base_dir = "/tmp/webui_ai_media"
+            parts = resolved[len(base_dir) + 1:].split("/", 1)  # [session_dir, filename]
+            if len(parts) == 2:
+                session_dir_name, filename = parts
+                try:
+                    # Find directories that share a long common prefix with the mangled name
+                    candidates = []
+                    for d in os.listdir(base_dir):
+                        if not os.path.isdir(os.path.join(base_dir, d)):
+                            continue
+                        # Check if first 20 chars match (enough to identify the session)
+                        prefix_len = min(20, len(session_dir_name), len(d))
+                        if d[:prefix_len] == session_dir_name[:prefix_len]:
+                            candidate_path = os.path.join(base_dir, d, filename)
+                            if os.path.isfile(candidate_path):
+                                candidates.append(candidate_path)
+                    if len(candidates) == 1:
+                        print(f"[DEBUG] Fuzzy-matched image path: {resolved} -> {candidates[0]}", file=sys.stderr, flush=True)
+                        return candidates[0]
+                    elif len(candidates) > 1:
+                        # Multiple matches — pick most recent
+                        best = max(candidates, key=os.path.getmtime)
+                        print(f"[DEBUG] Fuzzy-matched image path (newest of {len(candidates)}): {resolved} -> {best}", file=sys.stderr, flush=True)
+                        return best
+                except OSError:
+                    pass
+            return resolved
+        return url
+
     def extract_image_urls(self, text: str) -> tuple:
-        """Extract image URLs from text and return (image_data, remaining_text).
+        """Extract image URLs from text/HTML/Markdown and return (image_data, remaining_text).
         
         Supports:
         - ![caption](url) - Markdown syntax with caption
+        - <img src="url"/> - HTML img tags
         - Bare URL - https://example.com/image.jpg
+        - Local paths - /ai-media/session/image.png (mapped to /tmp/webui_ai_media/)
         
         Returns:
             Tuple of (image_data, remaining_text) where:
@@ -490,20 +631,25 @@ class WebEXConnector:
         md_pattern = r'!\[([^\]]*)\]\(([^)]+)\)'
         for match in re.finditer(md_pattern, remaining):
             caption = match.group(1).strip()
-            url = match.group(2).strip()
-            
-            # Validate URL
-            if url.startswith(('http://', 'https://')):
+            url = self._resolve_image_path(match.group(2).strip())
+            if url not in [img[0] for img in image_data]:
                 image_data.append((url, caption))
-                remaining = remaining.replace(match.group(0), "").strip()
+            remaining = remaining.replace(match.group(0), "").strip()
+
+        # Match <img> tags
+        img_tag_pattern = r'<img\s+[^>]*src=["\']([^"\']+)["\'][^>]*/?\s*>'
+        for match in re.finditer(img_tag_pattern, remaining, re.IGNORECASE):
+            url = self._resolve_image_path(match.group(1).strip())
+            if url not in [img[0] for img in image_data]:
+                image_data.append((url, ""))
+            remaining = remaining.replace(match.group(0), "").strip()
 
         # Match bare URLs (http/https ending in image extensions)
-        url_pattern = r'(https?://[^\s\[\]]+\.(?:jpg|jpeg|png|gif|webp))'
+        url_pattern = r'(https?://[^\s\[\]<>"]+\.(?:jpg|jpeg|png|gif|webp)(?:\?[^\s<>"]*)?)'
         for match in re.finditer(url_pattern, remaining, re.IGNORECASE):
             url = match.group(1)
-            # Avoid duplicate URLs
-            if not any(img_url == url for img_url, _ in image_data):
-                image_data.append((url, ""))  # Empty caption
+            if url not in [img[0] for img in image_data]:
+                image_data.append((url, ""))
                 remaining = remaining.replace(url, "").strip()
 
         return image_data, remaining
@@ -560,12 +706,15 @@ class WebEXConnector:
 
         Checks:
         - File exists
-        - File is within allowed directory (webex_downloads)
+        - File is within allowed directories (webex_downloads, /tmp/webui_ai_media)
         - No path traversal attacks
         - File size within limits (100MB - WebEX limit)
         """
         try:
-            allowed_dir = WEBEX_DOWNLOADS_DIR.resolve()
+            allowed_dirs = [
+                Path("/opt/n8n-copilot-shim-dev/webex_downloads").resolve(),
+                Path("/tmp/webui_ai_media").resolve(),
+            ]
             file_path_obj = Path(file_path).resolve()
 
             # Check file exists
@@ -573,15 +722,18 @@ class WebEXConnector:
                 print(f"[WARN] File does not exist: {file_path}", file=sys.stderr)
                 return False
 
-            # Check file is in allowed directory
-            try:
-                is_safe = file_path_obj.is_relative_to(allowed_dir)
-            except AttributeError:
-                # Python 3.8 fallback
-                is_safe = str(file_path_obj).startswith(str(allowed_dir))
+            # Check file is in any allowed directory
+            is_safe = False
+            for allowed_dir in allowed_dirs:
+                try:
+                    is_safe = file_path_obj.is_relative_to(allowed_dir)
+                except AttributeError:
+                    is_safe = str(file_path_obj).startswith(str(allowed_dir))
+                if is_safe:
+                    break
 
             if not is_safe:
-                print(f"[WARN] File outside allowed directory: {file_path}", file=sys.stderr)
+                print(f"[WARN] File outside allowed directories: {file_path}", file=sys.stderr)
                 return False
 
             # Check file size (100MB limit - WebEX max)
@@ -608,7 +760,7 @@ class WebEXConnector:
 
             if response.status_code == 200:
                 # Create downloads directory
-                downloads_dir = WEBEX_DOWNLOADS_DIR
+                downloads_dir = Path("/opt/n8n-copilot-shim-dev/webex_downloads")
                 downloads_dir.mkdir(exist_ok=True)
 
                 # Extract filename from Content-Disposition header
@@ -653,7 +805,7 @@ class WebEXConnector:
                 )
                 if response.status_code == 200:
                     # Repeat save logic above
-                    downloads_dir = WEBEX_DOWNLOADS_DIR
+                    downloads_dir = Path("/opt/n8n-copilot-shim-dev/webex_downloads")
                     downloads_dir.mkdir(exist_ok=True)
 
                     filename = "file"
@@ -710,7 +862,7 @@ class WebEXConnector:
                                 pass  # Silently ignore errors (file may have been deleted)
 
                     # Clean up downloaded files in webex_downloads/
-                    downloads_dir = WEBEX_DOWNLOADS_DIR
+                    downloads_dir = Path("/opt/n8n-copilot-shim-dev/webex_downloads")
                     if downloads_dir.exists():
                         for file in downloads_dir.glob("*_*"):
                             try:
@@ -819,8 +971,32 @@ class WebEXConnector:
 
         # Send images
         for url, caption in image_data:
-            print(f"[DEBUG OUTBOUND] send_response sending image URL={url} caption={repr(caption[:100])} to room_id={room_id}", file=sys.stderr)
-            self.send_file(room_id, url, caption) if url.startswith('/') else self.send_message(room_id, f"[Image]({url})" + (f" - {caption}" if caption else ""))
+            # Strip any residual ANSI codes from URL
+            url = re.sub(r'\x1b\[[0-9;]*m', '', url)
+            print(f"[DEBUG OUTBOUND] send_response sending image URL={url} caption={repr(caption[:100])} to room_id={room_id}", file=sys.stderr, flush=True)
+            print(f"[DEBUG OUTBOUND] -> url repr: {repr(url)}", file=sys.stderr, flush=True)
+            if url.startswith(('http://', 'https://')):
+                # External URL: send as file URL attachment
+                print(f"[DEBUG OUTBOUND] -> dispatching _send_image_url", file=sys.stderr, flush=True)
+                self._send_image_url(room_id, url, caption)
+            else:
+                # Local file path - check with retry for potential race condition
+                file_found = os.path.isfile(url)
+                if not file_found:
+                    # Retry after short delay in case file is still being written
+                    print(f"[DEBUG OUTBOUND] -> file not found on first check, retrying in 2s...", file=sys.stderr, flush=True)
+                    print(f"[DEBUG OUTBOUND] -> dir exists: {os.path.isdir(os.path.dirname(url))}, dir contents: {os.listdir(os.path.dirname(url)) if os.path.isdir(os.path.dirname(url)) else 'N/A'}", file=sys.stderr, flush=True)
+                    time.sleep(2)
+                    file_found = os.path.isfile(url)
+                    print(f"[DEBUG OUTBOUND] -> after retry: isfile={file_found}", file=sys.stderr, flush=True)
+                if file_found:
+                    print(f"[DEBUG OUTBOUND] -> dispatching _send_image_file (size={os.path.getsize(url)})", file=sys.stderr, flush=True)
+                    result = self._send_image_file(room_id, url, caption)
+                    print(f"[DEBUG OUTBOUND] -> _send_image_file returned: {result}", file=sys.stderr, flush=True)
+                else:
+                    # Unresolved path: send as text link
+                    print(f"[DEBUG OUTBOUND] -> image path not found after retry, sending text fallback", file=sys.stderr, flush=True)
+                    self.send_message(room_id, f"[Image]({url})" + (f" - {caption}" if caption else ""))
 
         # Send files
         for file_path, caption in file_data:
