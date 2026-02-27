@@ -2317,6 +2317,10 @@ function _initMic() {
         renderSystemMessage('⚠️ Start or select a session first.');
         return;
       }
+      if (!MIC._warnedOnce) {
+        MIC._warnedOnce = true;
+        renderSystemMessage('🔒 Live mic recording requires HTTPS. Select an audio file to transcribe instead.');
+      }
       $('audio-file-input').click();
     }
   });
