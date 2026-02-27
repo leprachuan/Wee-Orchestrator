@@ -18,19 +18,24 @@ from datetime import datetime
 from pathlib import Path
 from typing import Dict, Optional
 
+# Repo root is parent of scheduler/ directory (e.g. /opt/n8n-copilot-shim-dev)
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+_SCHEDULER_BASE = _REPO_ROOT / ".task-scheduler"
+_SCHEDULER_BASE.mkdir(parents=True, exist_ok=True)
+
 # Setup logging
 logging.basicConfig(
     level=logging.INFO,
     format='[%(asctime)s] %(levelname)s: %(message)s',
     handlers=[
-        logging.FileHandler('/opt/.task-scheduler/executor.log'),
+        logging.FileHandler(str(_SCHEDULER_BASE / 'executor.log')),
         logging.StreamHandler()
     ]
 )
 logger = logging.getLogger(__name__)
 
 # Telegram connector for direct per-user delivery
-sys.path.insert(0, '/opt/n8n-copilot-shim')
+sys.path.insert(0, str(_REPO_ROOT))
 try:
     from telegram_connector import TelegramConnector as _TelegramConnector
 except ImportError:
@@ -47,15 +52,9 @@ class TaskSchedulerExecutor:
     """Execute scheduled jobs from jobs.json."""
 
     def __init__(self):
-        # Detect repo location dynamically (this file is skills/task-scheduler/scheduler_executor.py)
-        # The actual orchestrator repos are in /opt/n8n-copilot-shim or /opt/n8n-copilot-shim-dev
-        self.repo_root = Path("/opt/n8n-copilot-shim")
-        if not self.repo_root.exists():
-            self.repo_root = Path("/opt/n8n-copilot-shim-dev")
-        
-        # Detect which instance (dev or prod) for scheduler directories
-        is_dev = self.repo_root.name == "n8n-copilot-shim-dev"
-        scheduler_base = Path("/opt/.task-scheduler-dev" if is_dev else "/opt/.task-scheduler")
+        # Scheduler data lives inside the repo at .task-scheduler/
+        self.repo_root = _REPO_ROOT
+        scheduler_base = _SCHEDULER_BASE
         
         self.jobs_file = scheduler_base / "jobs.json"
         self.logs_dir = scheduler_base / "logs/"
