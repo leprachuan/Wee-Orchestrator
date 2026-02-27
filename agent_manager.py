@@ -5426,6 +5426,16 @@ def start_api_server():
     port = int(os.environ.get("API_PORT", "8001"))  # DEV: default 8001 to avoid collision with prod
     host = os.environ.get("API_HOST", "127.0.0.1")
 
+    # SSL support — set SSL_CERTFILE and SSL_KEYFILE env vars to enable HTTPS
+    ssl_certfile = os.environ.get("SSL_CERTFILE")
+    ssl_keyfile = os.environ.get("SSL_KEYFILE")
+    ssl_kwargs = {}
+    if ssl_certfile and ssl_keyfile and os.path.isfile(ssl_certfile) and os.path.isfile(ssl_keyfile):
+        ssl_kwargs = {"ssl_certfile": ssl_certfile, "ssl_keyfile": ssl_keyfile}
+        proto = "https"
+    else:
+        proto = "http"
+
     # Support comma-separated hosts (e.g. "127.0.0.1,100.x.x.x" for Tailscale + localhost).
     # When multiple hosts are specified, run each in a background thread and block on the last.
     hosts = [h.strip() for h in host.split(",") if h.strip()]
@@ -5433,19 +5443,19 @@ def start_api_server():
         import threading
         threads = []
         for h in hosts[:-1]:
-            print(f"[API] Listening on {h}:{port}", file=sys.stderr)
+            print(f"[API] Listening on {proto}://{h}:{port}", file=sys.stderr)
             t = threading.Thread(
                 target=uvicorn.run,
-                kwargs={"app": app, "host": h, "port": port},
+                kwargs={"app": app, "host": h, "port": port, **ssl_kwargs},
                 daemon=True,
             )
             t.start()
             threads.append(t)
-        print(f"[API] Listening on {hosts[-1]}:{port}", file=sys.stderr)
-        uvicorn.run(app, host=hosts[-1], port=port)
+        print(f"[API] Listening on {proto}://{hosts[-1]}:{port}", file=sys.stderr)
+        uvicorn.run(app, host=hosts[-1], port=port, **ssl_kwargs)
     else:
-        print(f"[API] Listening on {host}:{port}", file=sys.stderr)
-        uvicorn.run(app, host=host, port=port)
+        print(f"[API] Listening on {proto}://{host}:{port}", file=sys.stderr)
+        uvicorn.run(app, host=host, port=port, **ssl_kwargs)
 
 
 def main():
