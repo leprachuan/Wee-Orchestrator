@@ -1654,6 +1654,31 @@ html, body {
 
 .req { color: var(--danger); margin-left: 2px; }
 
+.mode-toggle {
+  display: inline-flex;
+  gap: 4px;
+  margin-left: 8px;
+}
+.mode-toggle-btn {
+  padding: 5px 14px;
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-xs);
+  background: rgba(255,255,255,0.04);
+  color: var(--text-secondary);
+  font-size: 12px;
+  cursor: pointer;
+  transition: all var(--transition);
+}
+.mode-toggle-btn:hover {
+  background: rgba(255,255,255,0.08);
+}
+.mode-toggle-btn.active {
+  background: rgba(62,207,142,0.15);
+  border-color: var(--accent);
+  color: var(--accent);
+  font-weight: 600;
+}
+
 .sched-form-actions {
   display: flex;
   gap: 8px;

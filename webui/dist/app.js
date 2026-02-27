@@ -1648,7 +1648,7 @@ function renderSchedulerJobs() {
       </div>
       <div class="sched-job-meta">
         <span title="Schedule">⏰ ${escHtml(job.schedule)}</span>
-        <span title="Agent / Runtime">🤖 ${escHtml(job.agent)} · ${escHtml(job.runtime)}</span>
+        <span title="Agent / Runtime">${job.mode === 'command' ? '⚙️ command' : `🤖 ${escHtml(job.agent)} · ${escHtml(job.runtime)}`}</span>
       </div>
       <div class="sched-job-times">
         <span title="Next run">Next: ${escHtml(nextRun)}</span>
@@ -1711,9 +1711,14 @@ function renderJobDetailView(job) {
     <div id="sched-tab-info" class="sched-tab-pane">
       <dl class="sched-dl">
         <dt>ID</dt>       <dd><code>${escHtml(job.id)}</code></dd>
+        <dt>Type</dt>     <dd>${job.mode === 'command' ? '⚙️ Command' : '🤖 AI'}</dd>
         <dt>Schedule</dt> <dd>${escHtml(job.schedule)}</dd>
+        ${job.mode !== 'command' ? `
         <dt>Agent</dt>    <dd>${escHtml(job.agent)}</dd>
         <dt>Runtime</dt>  <dd>${escHtml(job.runtime)}</dd>
+        ` : `
+        <dt>Working Dir</dt> <dd>${escHtml(job.working_dir || '/opt')}</dd>
+        `}
         <dt>Recurring</dt><dd>${job.recurring ? 'Yes' : 'No (one-shot)'}</dd>
         <dt>Notify</dt>   <dd>${job.notify ? 'Yes (Telegram)' : 'No'}</dd>
         <dt>Next run</dt> <dd>${escHtml(job.next_run ? fmtDate(job.next_run) : '—')}</dd>
@@ -1721,7 +1726,7 @@ function renderJobDetailView(job) {
         <dt>Created</dt>  <dd>${escHtml(job.created_at ? fmtDate(job.created_at) : '—')}</dd>
       </dl>
       <div class="sched-task-box">
-        <label>Task prompt</label>
+        <label>${job.mode === 'command' ? 'Command' : 'Task prompt'}</label>
         <pre class="sched-task-pre">${escHtml(job.task || '(empty)')}</pre>
       </div>
       <div class="sched-detail-actions">
@@ -1803,6 +1808,7 @@ function openNewJobForm() {
 function buildJobForm(job) {
   const v = (field, fallback = '') => escHtml(job?.[field] ?? fallback);
   const checked = (field, fallback = false) => (job?.[field] ?? fallback) ? 'checked' : '';
+  const isCmd = job?.mode === 'command';
   return `
     <form class="sched-form" id="sched-job-form">
       <div class="form-group">
@@ -1810,41 +1816,64 @@ function buildJobForm(job) {
         <input class="glass-input" name="name" value="${v('name')}" placeholder="Daily summary" required />
       </div>
       <div class="form-group">
+        <span>Task Type:</span>
+        <div class="mode-toggle" id="sched-mode-toggle">
+          <button type="button" class="mode-toggle-btn${isCmd ? '' : ' active'}" data-mode="ai">🤖 AI</button>
+          <button type="button" class="mode-toggle-btn${isCmd ? ' active' : ''}" data-mode="command">⚙️ Command</button>
+        </div>
+        <input type="hidden" name="exec_mode" value="${isCmd ? 'command' : 'ai'}" />
+      </div>
+      <div class="form-group">
         <label>Schedule <span class="req">*</span></label>
         <input class="glass-input" name="schedule" value="${v('schedule')}" placeholder="every day at 9am" required />
         <p class="form-hint">e.g. "in 5 minutes", "every day at 9am", "every Monday at 8am", "every 6 hours"</p>
       </div>
-      <div class="form-row">
-        <div class="form-group">
-          <label>Agent</label>
-          <input class="glass-input" name="agent" value="${v('agent', 'fosterbot')}" placeholder="fosterbot" />
+      <div id="sched-ai-fields" class="${isCmd ? 'hidden' : ''}">
+        <div class="form-row">
+          <div class="form-group">
+            <label>Agent</label>
+            <select class="glass-input glass-select" name="agent">
+              <option value="fosterbot" ${(job?.agent ?? 'fosterbot') === 'fosterbot' ? 'selected' : ''}>Fosterbot (Orchestrator)</option>
+              <option value="smart_home" ${job?.agent === 'smart_home' ? 'selected' : ''}>Smart Home</option>
+              <option value="email_triage" ${job?.agent === 'email_triage' ? 'selected' : ''}>Email Triage</option>
+              <option value="opencode" ${job?.agent === 'opencode' ? 'selected' : ''}>OpenCode</option>
+              <option value="devops" ${job?.agent === 'devops' ? 'selected' : ''}>DevOps</option>
+              <option value="family" ${job?.agent === 'family' ? 'selected' : ''}>Family Knowledge</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label>Runtime</label>
+            <select class="glass-input glass-select" name="runtime">
+              <option value="claude"   ${(job?.runtime ?? 'claude') === 'claude'   ? 'selected' : ''}>claude</option>
+              <option value="copilot"  ${job?.runtime === 'copilot'  ? 'selected' : ''}>copilot</option>
+              <option value="gemini"   ${job?.runtime === 'gemini'   ? 'selected' : ''}>gemini</option>
+              <option value="opencode" ${job?.runtime === 'opencode' ? 'selected' : ''}>opencode</option>
+            </select>
+          </div>
         </div>
-        <div class="form-group">
-          <label>Runtime</label>
-          <select class="glass-input glass-select" name="runtime">
-            <option value="claude"   ${(job?.runtime ?? 'claude') === 'claude'   ? 'selected' : ''}>claude</option>
-            <option value="copilot"  ${job?.runtime === 'copilot'  ? 'selected' : ''}>copilot</option>
-            <option value="gemini"   ${job?.runtime === 'gemini'   ? 'selected' : ''}>gemini</option>
-            <option value="opencode" ${job?.runtime === 'opencode' ? 'selected' : ''}>opencode</option>
-          </select>
+        <div class="form-row">
+          <div class="form-group">
+            <label>Model <small class="form-hint-inline">(optional — leave blank for runtime default)</small></label>
+            <input class="glass-input" name="model" value="${v('model')}" placeholder="e.g. sonnet, gpt-4o, gemini-1.5-pro" />
+          </div>
+          <div class="form-group">
+            <label>Mode</label>
+            <select class="glass-input glass-select" name="mode">
+              <option value="restricted" ${(job?.mode === 'yolo') ? '' : 'selected'}>restricted (safe)</option>
+              <option value="yolo"       ${job?.mode === 'yolo' ? 'selected' : ''}>yolo (auto-approve)</option>
+            </select>
+          </div>
         </div>
       </div>
-      <div class="form-row">
+      <div id="sched-cmd-fields" class="${isCmd ? '' : 'hidden'}">
         <div class="form-group">
-          <label>Model <small class="form-hint-inline">(optional — leave blank for runtime default)</small></label>
-          <input class="glass-input" name="model" value="${v('model')}" placeholder="e.g. sonnet, gpt-4o, gemini-1.5-pro" />
-        </div>
-        <div class="form-group">
-          <label>Mode</label>
-          <select class="glass-input glass-select" name="mode">
-            <option value="restricted" ${(job?.mode ?? 'restricted') === 'restricted' ? 'selected' : ''}>restricted (safe)</option>
-            <option value="yolo"       ${job?.mode === 'yolo' ? 'selected' : ''}>yolo (auto-approve)</option>
-          </select>
+          <label>Working Directory</label>
+          <input class="glass-input" name="working_dir" value="${v('working_dir', '/opt')}" placeholder="/opt" />
         </div>
       </div>
       <div class="form-group">
-        <label>Task prompt <span class="req">*</span></label>
-        <textarea class="glass-input sched-task-input" name="task" rows="4" placeholder="Describe the task the agent should perform…" required>${v('task')}</textarea>
+        <label id="sched-task-label">${isCmd ? 'Command' : 'Task prompt'} <span class="req">*</span></label>
+        <textarea class="glass-input sched-task-input" name="task" rows="4" placeholder="${isCmd ? 'Shell command to execute…' : 'Describe the task the agent should perform…'}" required>${v('task')}</textarea>
       </div>
       <div class="form-checks">
         <label class="form-check">
@@ -1871,6 +1900,26 @@ function wireJobForm(container, onSubmit) {
   const form = container.querySelector('#sched-job-form');
   const errEl = container.querySelector('#sched-form-error');
   const cancelBtn = container.querySelector('#btn-form-cancel');
+  const aiFields = container.querySelector('#sched-ai-fields');
+  const cmdFields = container.querySelector('#sched-cmd-fields');
+  const execModeInput = form.querySelector('input[name="exec_mode"]');
+  const taskLabel = container.querySelector('#sched-task-label');
+  const taskInput = form.querySelector('textarea[name="task"]');
+
+  // Wire Task Type toggle buttons
+  const toggleBtns = container.querySelectorAll('.mode-toggle-btn');
+  toggleBtns.forEach(btn => {
+    btn.addEventListener('click', () => {
+      toggleBtns.forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      const isCmd = btn.dataset.mode === 'command';
+      execModeInput.value = btn.dataset.mode;
+      aiFields.classList.toggle('hidden', isCmd);
+      cmdFields.classList.toggle('hidden', !isCmd);
+      taskLabel.textContent = isCmd ? 'Command' : 'Task prompt';
+      taskInput.placeholder = isCmd ? 'Shell command to execute…' : 'Describe the task the agent should perform…';
+    });
+  });
 
   if (cancelBtn) cancelBtn.addEventListener('click', closeSchedDetail);
 
@@ -1882,17 +1931,22 @@ function wireJobForm(container, onSubmit) {
     if (!data.schedule?.trim()) { showFormErr(errEl, 'Schedule is required'); return; }
     if (!data.task?.trim())     { showFormErr(errEl, 'Task prompt is required'); return; }
 
+    const isCommand = data.exec_mode === 'command';
     const payload = {
       name:      data.name.trim(),
       schedule:  data.schedule.trim(),
-      agent:     data.agent?.trim() || 'fosterbot',
-      runtime:   data.runtime || 'claude',
-      model:     data.model?.trim() || null,
-      mode:      data.mode || 'restricted',
       task:      data.task.trim(),
       recurring: !!data.recurring,
       notify:    !!data.notify,
+      mode:      isCommand ? 'command' : (data.mode || 'restricted'),
     };
+    if (!isCommand) {
+      payload.agent   = data.agent || 'fosterbot';
+      payload.runtime = data.runtime || 'claude';
+      payload.model   = data.model?.trim() || null;
+    } else {
+      payload.working_dir = data.working_dir?.trim() || '/opt';
+    }
 
     const submitBtn = form.querySelector('[type=submit]');
     submitBtn.disabled = true;
