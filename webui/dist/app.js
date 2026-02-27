@@ -149,7 +149,7 @@ function updateSessionMeta(data) {
     if (!text || text === 'null' || text === 'undefined') {
       el.textContent = '—';
       el.classList.add('empty');
-      el.classList.remove(extra);
+      if (extra) el.classList.remove(extra);
     } else {
       el.textContent = text;
       el.classList.remove('empty');
@@ -588,13 +588,25 @@ function renderSessionList() {
     const preview = s.preview || '';
 
     item.innerHTML =
-      `<div class="session-title">${escHtml(title)}</div>` +
+      `<div class="session-title" title="Double-click to rename">${escHtml(title)}</div>` +
       `<div class="session-preview">${escHtml(preview)}</div>` +
+      `<button class="session-rename-btn" data-id="${escHtml(s.session_id)}" title="Rename">✏️</button>` +
       `<button class="session-delete-btn" data-id="${escHtml(s.session_id)}" title="Delete">✕</button>`;
 
     item.addEventListener('click', e => {
-      if (e.target.classList.contains('session-delete-btn')) return;
+      if (e.target.classList.contains('session-delete-btn') ||
+          e.target.classList.contains('session-rename-btn') ||
+          e.target.classList.contains('session-rename-input')) return;
       selectSession(s.session_id);
+    });
+    // Double-click on title to rename
+    item.querySelector('.session-title').addEventListener('dblclick', e => {
+      e.stopPropagation();
+      startInlineRename(item, s.session_id, s.title || s.session_id);
+    });
+    item.querySelector('.session-rename-btn').addEventListener('click', e => {
+      e.stopPropagation();
+      startInlineRename(item, s.session_id, s.title || s.session_id);
     });
     item.querySelector('.session-delete-btn').addEventListener('click', e => {
       e.stopPropagation();
@@ -602,6 +614,47 @@ function renderSessionList() {
     });
     list.appendChild(item);
   }
+}
+
+/** Start inline rename editing for a session item */
+function startInlineRename(item, sessionId, currentTitle) {
+  const titleEl = item.querySelector('.session-title');
+  if (titleEl.querySelector('.session-rename-input')) return; // already editing
+
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.className = 'session-rename-input';
+  input.value = currentTitle;
+  input.maxLength = 120;
+
+  titleEl.textContent = '';
+  titleEl.appendChild(input);
+  input.focus();
+  input.select();
+
+  const commitRename = async () => {
+    const newTitle = input.value.trim();
+    if (!newTitle || newTitle === currentTitle) {
+      titleEl.textContent = currentTitle;
+      return;
+    }
+    try {
+      await apiRequest('PATCH', `/history/sessions/${sessionId}`, { title: newTitle });
+      // Update local state
+      const sess = STATE.sessions.find(s => s.session_id === sessionId);
+      if (sess) sess.title = newTitle;
+      titleEl.textContent = newTitle;
+    } catch (err) {
+      titleEl.textContent = currentTitle;
+      console.error('Rename failed:', err);
+    }
+  };
+
+  input.addEventListener('keydown', e => {
+    if (e.key === 'Enter') { e.preventDefault(); input.blur(); }
+    if (e.key === 'Escape') { input.value = currentTitle; input.blur(); }
+  });
+  input.addEventListener('blur', commitRename, { once: true });
 }
 
 async function selectSession(sessionId) {

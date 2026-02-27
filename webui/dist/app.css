@@ -360,6 +360,46 @@ html, body {
 .session-item:hover .session-delete-btn { opacity: 1; }
 .session-delete-btn:hover { background: rgba(255,95,109,0.3); }
 
+/* Rename button */
+.session-rename-btn {
+  position: absolute;
+  top: 8px;
+  right: 32px;
+  width: 22px;
+  height: 22px;
+  font-size: 11px;
+  border-radius: 4px;
+  opacity: 0;
+  background: rgba(79,140,255,0.15);
+  border: none;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: opacity var(--transition), background var(--transition);
+  padding: 0;
+  line-height: 1;
+}
+.session-item:hover .session-rename-btn { opacity: 1; }
+.session-rename-btn:hover { background: rgba(79,140,255,0.3); }
+
+/* Inline rename input */
+.session-rename-input {
+  width: 100%;
+  background: rgba(0,0,0,0.3);
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-xs);
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 500;
+  padding: 2px 6px;
+  outline: none;
+  font-family: var(--font);
+}
+.session-rename-input:focus {
+  box-shadow: 0 0 0 2px rgba(79,140,255,0.3);
+}
+
 .sidebar-footer {
   display: flex;
   align-items: center;

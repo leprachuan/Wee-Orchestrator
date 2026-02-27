@@ -521,6 +521,19 @@ class HistoryManager:
                     return True
         return False
 
+    def rename_session(self, channel: str, identity: str, session_id: str, title: str) -> bool:
+        """Rename a session. Returns False if not found."""
+        with self._lock:
+            data = self._load()
+            key = self._user_key(channel, identity)
+            for s in data.get(key, {}).get("sessions", []):
+                if s["session_id"] == session_id:
+                    s["title"] = title[:120]
+                    s["updated_at"] = time.time()
+                    self._save(data)
+                    return True
+        return False
+
     def delete_session(self, channel: str, identity: str, session_id: str) -> bool:
         """Delete a session. Returns False if not found."""
         with self._lock:
@@ -4738,6 +4751,22 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         if not history_mgr.delete_session(user["channel"], user["identity"], session_id):
             raise HTTPException(status_code=404, detail="Session not found")
         return {"deleted": True, "session_id": session_id}
+
+    @app.patch("/api/v1/history/sessions/{session_id}")
+    async def rename_history_session(session_id: str, request: Request):
+        user = await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        body = await request.json()
+        title = body.get("title", "").strip()
+        if not title:
+            raise HTTPException(status_code=400, detail="Title is required")
+        if not history_mgr.rename_session(user["channel"], user["identity"], session_id, title):
+            raise HTTPException(status_code=404, detail="Session not found")
+        return {"renamed": True, "session_id": session_id, "title": title[:120]}
 
     # --- File upload ---
 
