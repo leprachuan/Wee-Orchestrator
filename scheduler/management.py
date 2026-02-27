@@ -90,16 +90,10 @@ def parse_schedule_to_next_run(schedule: str) -> Optional[str]:
 
 class TaskScheduler:
     def __init__(self, config: Optional[Dict] = None):
-        # Auto-detect if running in dev or prod environment
-        # Check for dev marker files/directories
-        dev_marker = Path("/opt/n8n-copilot-shim-dev").exists()
-        is_dev = dev_marker and (
-            os.path.exists("/opt/.task-scheduler-dev") or 
-            Path(__file__).parent.parent.name == "n8n-copilot-shim-dev"
-        )
-        
-        # Use environment variables if set, otherwise auto-detect
-        base_dir = "/opt/.task-scheduler-dev" if is_dev else "/opt/.task-scheduler"
+        # Scheduler data lives inside the repo at .task-scheduler/
+        # Derive repo root from this file's location: scheduler/management.py → repo root
+        repo_root = Path(__file__).resolve().parent.parent
+        base_dir = str(repo_root / ".task-scheduler")
         
         self.jobs_file = Path(os.getenv("SCHEDULER_JOBS_FILE", f"{base_dir}/jobs.json"))
         self.logs_dir = Path(os.getenv("SCHEDULER_LOGS_DIR", f"{base_dir}/logs/"))

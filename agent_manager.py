@@ -68,7 +68,7 @@ class AuthManager:
         self.pairing_code_length = pairing_code_length
         self.pairing_code_ttl = pairing_code_ttl
         self.session_token_ttl = session_token_ttl
-        self.sessions_file = sessions_file or "/opt/.task-scheduler-dev/sessions.json"
+        self.sessions_file = sessions_file or os.path.join(os.path.dirname(os.path.abspath(__file__)), ".task-scheduler", "sessions.json")
         self.pairing_codes: Dict[str, dict] = {}
         self.session_tokens: Dict[str, dict] = {}
         self._lock = threading.Lock()
@@ -4199,7 +4199,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
     PAIRING_CODE_TTL = int(os.environ.get("PAIRING_CODE_TTL", "300"))
     SESSION_TOKEN_TTL = int(os.environ.get("SESSION_TOKEN_TTL", "3600"))
     CONFIG_FILE = os.environ.get("AGENT_CONFIG_FILE")
-    SCHEDULER_JOBS_FILE = os.environ.get("SCHEDULER_JOBS_FILE", "/opt/.task-scheduler-dev/jobs.json")
+    SCHEDULER_JOBS_FILE = os.environ.get("SCHEDULER_JOBS_FILE", os.path.join(os.path.dirname(os.path.abspath(__file__)), ".task-scheduler", "jobs.json"))
     SCHEDULER_ENABLED = os.environ.get("SCHEDULER_ENABLED", "true").strip().lower() not in ("false", "0", "no")
 
     # ---- shared instances ----
