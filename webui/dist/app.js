@@ -24,6 +24,7 @@ const STATE = {
   requestQueue:    [],     // queued requests while processing
   queuePaused:     false,  // true to prevent auto-submit of next queued message
   currentProcessingQueueId: null,  // ID of queue item currently being processed
+  currentAbortController: null,    // AbortController for the active streaming fetch
 };
 
 // ─── Persist ──────────────────────────────────────────────────────────────────
@@ -864,11 +865,47 @@ function toggleQueuePause() {
 
 // ─── Messaging ────────────────────────────────────────────────────────────────
 async function sendMessage() {
-  // If already processing, queue this request instead
+  // If already processing, check for /cancel first — it bypasses the queue
   if (STATE.isProcessing) {
     const textarea = $('message-input');
     let query = textarea.value.trim();
     if (!query && STATE.pendingFiles.length === 0) return;
+
+    if (query === '/cancel') {
+      textarea.value = '';
+      autoResizeTextarea(textarea);
+      syncMirror();
+
+      // Show /cancel as a user message
+      await renderMessage('user', '/cancel', []);
+
+      // Abort the in-flight streaming fetch
+      if (STATE.currentAbortController) {
+        STATE.currentAbortController.abort();
+        STATE.currentAbortController = null;
+      }
+
+      // Call the dedicated cancel endpoint
+      try {
+        const headers = { 'Content-Type': 'application/json' };
+        if (STATE.token) headers['Authorization'] = `Bearer ${STATE.token}`;
+        const res = await fetch(`${API_BASE}/sessions/${STATE.currentSessionId}/cancel`, {
+          method: 'POST',
+          headers,
+        });
+        const data = await res.json();
+        renderSystemMessage(data.cancelled ? `✓ ${data.message}` : `ℹ️ ${data.message}`);
+      } catch (err) {
+        renderSystemMessage('❌ Failed to cancel: ' + err.message);
+      }
+
+      // Clean up processing state
+      hideTyping();
+      STATE.isProcessing = false;
+      $('btn-send').disabled = false;
+      scrollToBottom();
+      return;
+    }
 
     queueRequest(query, [...STATE.pendingFiles]);
 
@@ -930,10 +967,20 @@ async function sendMessage() {
     hideTyping();
     STATE.isProcessing = false;
 
-    // Mark current queue item as failed
-    markCurrentQueueAsFailed();
+    // If aborted by /cancel, don't show an error — the cancel handler already reported
+    if (err.name === 'AbortError') {
+      // Clean up the streaming bubble if one was created
+      const streamingBubble = document.querySelector('.streaming');
+      if (streamingBubble) {
+        streamingBubble.classList.remove('streaming');
+        streamingBubble.textContent = '(cancelled)';
+      }
+    } else {
+      // Mark current queue item as failed
+      markCurrentQueueAsFailed();
 
-    renderSystemMessage('Error: ' + err.message);
+      renderSystemMessage('Error: ' + err.message);
+    }
   } finally {
     $('btn-send').disabled = false;
     scrollToBottom();
@@ -949,10 +996,15 @@ async function sendMessageStreaming(query, sessionId) {
   const headers = { 'Content-Type': 'application/json' };
   if (STATE.token) headers['Authorization'] = `Bearer ${STATE.token}`;
 
+  // Create AbortController so /cancel can abort this fetch
+  const abortController = new AbortController();
+  STATE.currentAbortController = abortController;
+
   const res = await fetch(`${API_BASE}/sessions/${sessionId}/stream`, {
     method: 'POST',
     headers,
     body: JSON.stringify({ query }),
+    signal: abortController.signal,
   });
 
   if (!res.ok) throw new Error(`Stream request failed: HTTP ${res.status}`);
@@ -1031,6 +1083,7 @@ async function sendMessageStreaming(query, sessionId) {
     }
   } finally {
     reader.releaseLock();
+    STATE.currentAbortController = null;
   }
   return null;
 }

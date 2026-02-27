@@ -4658,6 +4658,37 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             "yolo_mode": data.get("yolo_mode", "restricted"),
         }
 
+    @app.post("/api/v1/sessions/{session_id}/cancel")
+    async def cancel_session(session_id: str, request: Request):
+        """Cancel a running query for a session.
+
+        This is a dedicated endpoint that bypasses the execute pipeline so it
+        can be called even while a streaming response is in-flight.
+        """
+        user = await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+
+        query_info = session_mgr.get_running_query(session_id)
+        if not query_info:
+            return {"cancelled": False, "message": "No running query for this session"}
+
+        pid = query_info["pid"]
+
+        if not session_mgr.is_process_running(pid):
+            session_mgr.clear_running_query(session_id)
+            return {"cancelled": False, "message": "Query has already completed"}
+
+        runtime = query_info.get("runtime", "unknown")
+        if session_mgr.kill_process(pid):
+            session_mgr.clear_running_query(session_id)
+            return {"cancelled": True, "message": f"Cancelled running query (PID: {pid}, Runtime: {runtime})"}
+        else:
+            return {"cancelled": False, "message": f"Failed to cancel query (PID: {pid})"}
+
     # --- Runtime usage endpoint ---
 
     @app.get("/api/v1/runtime-usage")
