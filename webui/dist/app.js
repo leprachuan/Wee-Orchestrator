@@ -2280,28 +2280,96 @@ const MIC = {
   startTime: 0,
   timerInterval: null,
   stream: null,
+  canRecord: !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia),
 };
 
 function _initMic() {
   const btn = $('btn-mic');
   if (!btn) return;
+  if (btn._micBound) return;
+  btn._micBound = true;
 
-  // Click toggles recording on/off
+  // Create hidden audio file input for fallback upload
+  let audioInput = $('audio-file-input');
+  if (!audioInput) {
+    audioInput = document.createElement('input');
+    audioInput.type = 'file';
+    audioInput.id = 'audio-file-input';
+    audioInput.accept = 'audio/*,.ogg,.webm,.mp3,.wav,.m4a,.flac,.aac';
+    audioInput.className = 'hidden';
+    audioInput.style.display = 'none';
+    btn.parentElement.appendChild(audioInput);
+    audioInput.addEventListener('change', handleAudioFileUpload);
+  }
+
+  if (!MIC.canRecord) {
+    // Non-secure context: mic button becomes audio upload button
+    btn.title = 'Upload audio file for transcription (live recording requires HTTPS)';
+  }
+
   btn.addEventListener('click', () => {
-    if (MIC.isRecording) {
-      stopRecording();
+    if (MIC.canRecord) {
+      if (MIC.isRecording) stopRecording();
+      else startRecording();
     } else {
-      startRecording();
+      // Fallback: open file picker for audio
+      if (!STATE.currentSessionId) {
+        renderSystemMessage('⚠️ Start or select a session first.');
+        return;
+      }
+      $('audio-file-input').click();
     }
   });
 }
 
-async function startRecording() {
-  const btn = $('btn-mic');
-  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-    renderSystemMessage('⚠️ Microphone not supported in this browser.');
+async function handleAudioFileUpload(e) {
+  const file = e.target.files?.[0];
+  e.target.value = ''; // reset for next pick
+  if (!file) return;
+  if (file.size > 25 * 1024 * 1024) {
+    renderSystemMessage('⚠️ Audio file exceeds 25 MB limit.');
     return;
   }
+  const btn = $('btn-mic');
+  btn.classList.add('transcribing');
+  btn.title = 'Transcribing…';
+  renderSystemMessage(`🎤 Uploading ${file.name} (${formatFileSize(file.size)})…`);
+
+  try {
+    const form = new FormData();
+    form.append('file', file);
+    const res = await fetch(`${API_BASE}/sessions/${STATE.currentSessionId}/transcribe`, {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${STATE.token}` },
+      body: form,
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.detail || `HTTP ${res.status}`);
+    }
+    const data = await res.json();
+    if (data.text) {
+      const textarea = $('message-input');
+      const existing = textarea.value;
+      textarea.value = existing ? (existing + ' ' + data.text) : data.text;
+      autoResizeTextarea(textarea);
+      syncMirror();
+      $('btn-send').disabled = false;
+      textarea.focus();
+      renderSystemMessage(`🎤 Transcribed via ${data.backend} (${formatFileSize(data.size)})`);
+    } else {
+      renderSystemMessage('⚠️ No speech detected in audio file.');
+    }
+  } catch (err) {
+    renderSystemMessage('❌ Transcription failed: ' + err.message);
+  } finally {
+    btn.classList.remove('transcribing');
+    btn.title = MIC.canRecord ? 'Click to record voice' : 'Upload audio file for transcription';
+  }
+}
+
+async function startRecording() {
+  const btn = $('btn-mic');
   if (!STATE.currentSessionId) {
     renderSystemMessage('⚠️ Start or select a session first.');
     return;
@@ -2404,7 +2472,7 @@ async function transcribeAndInsert(blob) {
     renderSystemMessage('❌ Transcription failed: ' + err.message);
   } finally {
     btn.classList.remove('transcribing');
-    btn.title = 'Hold to record voice';
+    btn.title = MIC.canRecord ? 'Click to record voice' : 'Upload audio file for transcription';
   }
 }
 
