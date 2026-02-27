@@ -4783,6 +4783,127 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             raise HTTPException(status_code=404, detail="File not found")
         return FileResponse(str(path))
 
+    # --- File Viewer ---
+
+    # Allowed base directories for the file viewer (security)
+    _FILE_VIEWER_ALLOWED_BASES = [
+        "/opt/", "/tmp/", "/home/",
+    ]
+    _FILE_VIEWER_MAX_SIZE = 5 * 1024 * 1024  # 5MB text limit
+    _FILE_VIEWER_BINARY_EXTS = {
+        ".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".ico", ".bmp",
+        ".pdf",
+    }
+    _FILE_VIEWER_TEXT_EXTS = {
+        ".md", ".txt", ".py", ".js", ".ts", ".tsx", ".jsx", ".json", ".yaml", ".yml",
+        ".toml", ".cfg", ".ini", ".conf", ".sh", ".bash", ".zsh", ".fish",
+        ".html", ".htm", ".css", ".scss", ".less", ".xml",
+        ".sql", ".graphql", ".gql",
+        ".rs", ".go", ".java", ".kt", ".c", ".cpp", ".h", ".hpp",
+        ".rb", ".php", ".pl", ".lua", ".r", ".swift", ".scala",
+        ".env", ".env.example", ".gitignore", ".dockerignore",
+        ".csv", ".log", ".diff", ".patch",
+        "", # extensionless files (Makefile, Dockerfile, etc.)
+    }
+
+    @app.get("/api/v1/files/view")
+    async def view_file(path: str, request: Request):
+        """Read a file from the server for the file viewer panel."""
+        await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        # Resolve and validate path
+        try:
+            resolved = Path(path).resolve()
+        except Exception:
+            raise HTTPException(status_code=400, detail="Invalid path")
+
+        resolved_str = str(resolved)
+        if not any(resolved_str.startswith(b) for b in _FILE_VIEWER_ALLOWED_BASES):
+            raise HTTPException(status_code=403, detail="Path not in allowed directories")
+        if not resolved.exists():
+            raise HTTPException(status_code=404, detail="File not found")
+        if not resolved.is_file():
+            raise HTTPException(status_code=400, detail="Path is a directory")
+
+        ext = resolved.suffix.lower()
+        file_size = resolved.stat().st_size
+        mime, _ = mimetypes.guess_type(str(resolved))
+
+        # Binary files (images, PDFs) → serve as FileResponse
+        if ext in _FILE_VIEWER_BINARY_EXTS:
+            return FileResponse(
+                str(resolved),
+                media_type=mime or "application/octet-stream",
+                headers={"X-File-Name": resolved.name, "X-File-Size": str(file_size)},
+            )
+
+        # Text files → return JSON with content
+        if file_size > _FILE_VIEWER_MAX_SIZE:
+            raise HTTPException(status_code=413, detail=f"File too large ({file_size} bytes, max {_FILE_VIEWER_MAX_SIZE})")
+
+        try:
+            content = resolved.read_text(encoding="utf-8", errors="replace")
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Cannot read file: {e}")
+
+        # Determine language hint for syntax highlighting
+        lang_map = {
+            ".py": "python", ".js": "javascript", ".ts": "typescript",
+            ".tsx": "typescript", ".jsx": "javascript", ".json": "json",
+            ".yaml": "yaml", ".yml": "yaml", ".sh": "bash", ".bash": "bash",
+            ".html": "html", ".htm": "html", ".css": "css", ".sql": "sql",
+            ".md": "markdown", ".xml": "xml", ".go": "go", ".rs": "rust",
+            ".java": "java", ".rb": "ruby", ".php": "php", ".c": "c",
+            ".cpp": "cpp", ".h": "c", ".hpp": "cpp",
+        }
+        lang = lang_map.get(ext, "plaintext")
+        # Detect extensionless files
+        if ext == "":
+            name_lower = resolved.name.lower()
+            if "makefile" in name_lower:
+                lang = "makefile"
+            elif "dockerfile" in name_lower:
+                lang = "dockerfile"
+
+        return {
+            "path": str(resolved),
+            "name": resolved.name,
+            "size": file_size,
+            "mime": mime or "text/plain",
+            "language": lang,
+            "content": content,
+            "type": "text",
+        }
+
+    @app.get("/api/v1/files/view/raw")
+    async def view_file_raw(path: str, request: Request):
+        """Serve a file as raw binary (for images, PDFs)."""
+        await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        try:
+            resolved = Path(path).resolve()
+        except Exception:
+            raise HTTPException(status_code=400, detail="Invalid path")
+
+        resolved_str = str(resolved)
+        if not any(resolved_str.startswith(b) for b in _FILE_VIEWER_ALLOWED_BASES):
+            raise HTTPException(status_code=403, detail="Path not in allowed directories")
+        if not resolved.exists():
+            raise HTTPException(status_code=404, detail="File not found")
+        if not resolved.is_file():
+            raise HTTPException(status_code=400, detail="Path is a directory")
+
+        mime, _ = mimetypes.guess_type(str(resolved))
+        return FileResponse(str(resolved), media_type=mime or "application/octet-stream")
+
     # --- Image search ---
 
     @app.get("/api/v1/search/images")

@@ -25,6 +25,10 @@ const STATE = {
   queuePaused:     false,  // true to prevent auto-submit of next queued message
   currentProcessingQueueId: null,  // ID of queue item currently being processed
   currentAbortController: null,    // AbortController for the active streaming fetch
+  fileViewerOpen:  false,          // whether file viewer panel is open
+  fileViewerRaw:   false,          // true = raw view, false = preview
+  fileViewerPath:  null,           // currently viewed file path
+  fileViewerData:  null,           // cached file data
 };
 
 // ─── Persist ──────────────────────────────────────────────────────────────────
@@ -1098,6 +1102,8 @@ function applyMarkdownToBubble(bubble, content) {
   } catch (_) {
     bubble.textContent = content;
   }
+  // Make file paths clickable after markdown render
+  if (typeof linkifyFilePaths === 'function') linkifyFilePaths(bubble);
 }
 
 /**
@@ -1187,6 +1193,9 @@ async function renderMessage(role, content, files = []) {
   row.appendChild(avatar);
   row.appendChild(bubble);
   container.appendChild(row);
+
+  // Make file paths clickable in all messages
+  if (typeof linkifyFilePaths === 'function') linkifyFilePaths(bubble);
 }
 
 function renderSystemMessage(text) {
@@ -2208,3 +2217,269 @@ function bgToast(msg, type = 'info') {
   clearTimeout(_bgToastTimer);
   _bgToastTimer = setTimeout(() => { toast.style.opacity = '0'; }, 2500);
 }
+
+// ─── File Viewer ──────────────────────────────────────────────────────────────
+
+const _FV_IMAGE_EXTS = /\.(png|jpe?g|gif|webp|svg|ico|bmp)$/i;
+const _FV_MD_EXTS    = /\.(md|markdown)$/i;
+const _FV_HTML_EXTS  = /\.(html?|xml)$/i;
+const _FV_PREVIEW_EXTS = /\.(md|markdown|html?)$/i;
+
+// Regex to match absolute file paths in text
+const _FV_PATH_RE = /(?:^|[\s"'`(,;])(\/(opt|tmp|home)\/[^\s"'`)<>,;|]+\.[a-zA-Z0-9]{1,10})(?=[\s"'`),;|]|$)/g;
+
+function openFileViewer(filePath) {
+  STATE.fileViewerPath = filePath;
+  STATE.fileViewerData = null;
+  STATE.fileViewerRaw = false;
+  STATE.fileViewerOpen = true;
+
+  const panel = $('file-viewer-panel');
+  panel.classList.remove('fv-hidden');
+
+  // Update UI
+  $('fv-filename').textContent = filePath.split('/').pop();
+  $('fv-filename').title = filePath;
+  $('fv-meta').innerHTML = '';
+  $('fv-content').innerHTML = '<div class="fv-loading"><div class="fv-spinner"></div>Loading…</div>';
+
+  // Update raw button state
+  const rawBtn = $('btn-fv-raw');
+  rawBtn.classList.remove('active');
+  rawBtn.textContent = 'Raw';
+  // Only show toggle for md/html
+  rawBtn.style.display = _FV_PREVIEW_EXTS.test(filePath) ? '' : 'none';
+
+  fetchFileContent(filePath);
+}
+
+function closeFileViewer() {
+  STATE.fileViewerOpen = false;
+  STATE.fileViewerPath = null;
+  STATE.fileViewerData = null;
+  $('file-viewer-panel').classList.add('fv-hidden');
+}
+
+function toggleFileViewerMode() {
+  STATE.fileViewerRaw = !STATE.fileViewerRaw;
+  const rawBtn = $('btn-fv-raw');
+  if (STATE.fileViewerRaw) {
+    rawBtn.classList.add('active');
+    rawBtn.textContent = 'Preview';
+  } else {
+    rawBtn.classList.remove('active');
+    rawBtn.textContent = 'Raw';
+  }
+  if (STATE.fileViewerData) renderFileContent(STATE.fileViewerData);
+}
+
+async function fetchFileContent(filePath) {
+  try {
+    const isImage = _FV_IMAGE_EXTS.test(filePath);
+    if (isImage) {
+      // Fetch as blob for images
+      const url = `${API_BASE}/files/view/raw?path=${encodeURIComponent(filePath)}`;
+      const res = await fetch(url, {
+        headers: STATE.token ? { 'Authorization': `Bearer ${STATE.token}` } : {},
+      });
+      if (res.status === 401) { clearAuth(); showAuthView(); return; }
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ detail: `HTTP ${res.status}` }));
+        throw new Error(err.detail);
+      }
+      const blob = await res.blob();
+      const blobUrl = URL.createObjectURL(blob);
+      const data = {
+        type: 'image', name: filePath.split('/').pop(),
+        path: filePath, size: blob.size, mime: blob.type, blobUrl,
+      };
+      STATE.fileViewerData = data;
+      renderFileContent(data);
+    } else {
+      // Fetch as JSON (text content)
+      const url = `${API_BASE}/files/view?path=${encodeURIComponent(filePath)}`;
+      const res = await fetch(url, {
+        headers: STATE.token ? { 'Authorization': `Bearer ${STATE.token}` } : {},
+      });
+      if (res.status === 401) { clearAuth(); showAuthView(); return; }
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ detail: `HTTP ${res.status}` }));
+        throw new Error(err.detail);
+      }
+      const data = await res.json();
+      STATE.fileViewerData = data;
+      renderFileContent(data);
+    }
+  } catch (err) {
+    $('fv-content').innerHTML = `<div class="fv-error">❌ ${escHtml(err.message)}</div>`;
+  }
+}
+
+function formatFileSize(bytes) {
+  if (bytes < 1024) return bytes + ' B';
+  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+  return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+}
+
+function renderFileContent(data) {
+  // Meta bar
+  const metaEl = $('fv-meta');
+  const pathHtml = `<span class="fv-meta-path" title="Click to copy" onclick="navigator.clipboard.writeText('${escHtml(data.path)}')">${escHtml(data.path)}</span>`;
+  const sizeHtml = `<span class="fv-meta-pill">${formatFileSize(data.size)}</span>`;
+  const langHtml = data.language ? `<span class="fv-meta-pill">${escHtml(data.language)}</span>` : '';
+  metaEl.innerHTML = pathHtml + sizeHtml + langHtml;
+
+  const contentEl = $('fv-content');
+
+  if (data.type === 'image') {
+    contentEl.innerHTML = `<div class="fv-image-wrap"><img src="${data.blobUrl}" alt="${escHtml(data.name)}" /></div>`;
+    return;
+  }
+
+  // Text content
+  const isMarkdown = _FV_MD_EXTS.test(data.name);
+  const isHtml = _FV_HTML_EXTS.test(data.name);
+  const showPreview = (isMarkdown || isHtml) && !STATE.fileViewerRaw;
+
+  if (showPreview) {
+    const wrap = document.createElement('div');
+    wrap.className = 'fv-preview';
+    if (isMarkdown) {
+      try {
+        wrap.innerHTML = marked.parse(data.content, { breaks: true });
+        wrap.querySelectorAll('pre code').forEach(block => {
+          if (window.hljs) hljs.highlightElement(block);
+        });
+      } catch (_) {
+        wrap.textContent = data.content;
+      }
+    } else {
+      // HTML → render in sandboxed iframe-like div
+      wrap.innerHTML = data.content;
+    }
+    // Make file paths in preview clickable too
+    linkifyFilePaths(wrap);
+    contentEl.innerHTML = '';
+    contentEl.appendChild(wrap);
+  } else {
+    // Raw view with line numbers
+    const lines = data.content.split('\n');
+    const wrap = document.createElement('div');
+    wrap.className = 'fv-raw';
+    for (const line of lines) {
+      const span = document.createElement('span');
+      span.className = 'fv-raw-line';
+      span.textContent = line || ' ';
+      wrap.appendChild(span);
+    }
+    contentEl.innerHTML = '';
+    contentEl.appendChild(wrap);
+  }
+}
+
+/**
+ * Scan a DOM element for file paths and make them clickable.
+ * Works on both message bubbles and file viewer previews.
+ * Handles paths inside <code> tags (from markdown backticks).
+ */
+function linkifyFilePaths(container) {
+  // First pass: handle <code> elements whose entire content is a file path
+  const codeEls = Array.from(container.querySelectorAll('code'));
+  for (const codeEl of codeEls) {
+    // Skip code blocks inside <pre> (multi-line code)
+    if (codeEl.closest('pre')) continue;
+    // Skip if already linkified
+    if (codeEl.closest('.file-link')) continue;
+    const text = codeEl.textContent.trim();
+    if (/^\/(opt|tmp|home)\/[^\s"'`)<>,;|*?]+\.[a-zA-Z0-9]{1,10}$/.test(text)) {
+      const link = document.createElement('span');
+      link.className = 'file-link';
+      link.textContent = text;
+      link.title = 'Click to view file';
+      link.dataset.filepath = text;
+      link.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        openFileViewer(e.target.closest('.file-link').dataset.filepath);
+      });
+      codeEl.replaceWith(link);
+    }
+  }
+
+  // Second pass: handle bare paths in text nodes (not in code/pre/a/script)
+  const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT, null, false);
+  const textNodes = [];
+  let node;
+  while ((node = walker.nextNode())) textNodes.push(node);
+
+  for (const textNode of textNodes) {
+    const parent = textNode.parentElement;
+    if (!parent) continue;
+    const tag = parent.tagName;
+    if (tag === 'A' || tag === 'PRE' || tag === 'SCRIPT' || tag === 'STYLE') continue;
+    if (parent.classList.contains('file-link')) continue;
+    // Skip code blocks
+    if (parent.closest('pre')) continue;
+
+    const text = textNode.textContent;
+    const re = /(\/(opt|tmp|home)\/[^\s"'`)<>,;|*?]+\.[a-zA-Z0-9]{1,10})/g;
+    let match;
+    const parts = [];
+    let lastIndex = 0;
+    while ((match = re.exec(text)) !== null) {
+      if (match.index > lastIndex) {
+        parts.push(document.createTextNode(text.slice(lastIndex, match.index)));
+      }
+      const link = document.createElement('span');
+      link.className = 'file-link';
+      link.textContent = match[1];
+      link.title = 'Click to view file';
+      link.dataset.filepath = match[1];
+      link.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        openFileViewer(e.target.closest('.file-link').dataset.filepath);
+      });
+      parts.push(link);
+      lastIndex = re.lastIndex;
+    }
+    if (parts.length > 0) {
+      if (lastIndex < text.length) {
+        parts.push(document.createTextNode(text.slice(lastIndex)));
+      }
+      const frag = document.createDocumentFragment();
+      parts.forEach(p => frag.appendChild(p));
+      textNode.replaceWith(frag);
+    }
+  }
+}
+
+// Wire up file viewer buttons
+// Modules are deferred, so DOM is already ready. Wire up immediately and also on DOMContentLoaded as fallback.
+function _initFileViewer() {
+  const closeBtn = $('btn-fv-close');
+  if (closeBtn && !closeBtn._fvBound) {
+    closeBtn._fvBound = true;
+    closeBtn.addEventListener('click', closeFileViewer);
+  }
+  const rawBtn = $('btn-fv-raw');
+  if (rawBtn && !rawBtn._fvBound) {
+    rawBtn._fvBound = true;
+    rawBtn.addEventListener('click', toggleFileViewerMode);
+  }
+  // Close on Escape key
+  if (!window._fvEscBound) {
+    window._fvEscBound = true;
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape' && STATE.fileViewerOpen) {
+        closeFileViewer();
+      }
+    });
+  }
+}
+_initFileViewer();
+document.addEventListener('DOMContentLoaded', _initFileViewer);
+
+// Expose file viewer globally for click handlers
+window.openFileViewer = openFileViewer;
+window.linkifyFilePaths = linkifyFilePaths;

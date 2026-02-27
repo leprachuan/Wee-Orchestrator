@@ -12,7 +12,7 @@
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' fill='%23ff6b35' rx='20'/><g transform='translate(50, 50)'><rect x='-2' y='0' width='4' height='20' fill='%232d5016'/><circle cx='0' cy='-15' r='10' fill='%23ffa500'/><circle cx='-13' cy='5' r='10' fill='%23ff9500'/><circle cx='13' cy='5' r='10' fill='%23ffb500'/></g></svg>" />
   <link rel="apple-touch-icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' fill='%23ff6b35' rx='20'/><g transform='translate(50, 50)'><rect x='-2' y='0' width='4' height='20' fill='%232d5016'/><circle cx='0' cy='-15' r='10' fill='%23ffa500'/><circle cx='-13' cy='5' r='10' fill='%23ff9500'/><circle cx='13' cy='5' r='10' fill='%23ffb500'/></g></svg>" />
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/highlight.js@11.9.0/styles/github-dark.min.css" />
-  <link rel="stylesheet" href="app.css?v=20260227" />
+  <link rel="stylesheet" href="app.css?v=20260227b" />
 </head>
 <body>
   <!-- Auth overlay -->
@@ -146,6 +146,22 @@
       </div>
     </main>
 
+    <!-- FILE VIEWER PANEL (right side, overlays queue) -->
+    <aside id="file-viewer-panel" class="file-viewer-panel fv-hidden">
+      <div class="fv-header">
+        <div class="fv-header-title">
+          <span class="fv-icon">📄</span>
+          <span id="fv-filename" class="fv-filename" title="">File Viewer</span>
+        </div>
+        <div class="fv-header-buttons">
+          <button id="btn-fv-raw" class="fv-mode-btn" title="Toggle raw / preview">Raw</button>
+          <button id="btn-fv-close" class="fv-close-btn" title="Close viewer">✕</button>
+        </div>
+      </div>
+      <div id="fv-meta" class="fv-meta"></div>
+      <div id="fv-content" class="fv-content"></div>
+    </aside>
+
     <!-- REQUEST QUEUE PANEL (right side) -->
     <aside id="request-queue-panel" class="request-queue-panel queue-hidden">
       <!-- Queue Header -->
@@ -240,7 +256,7 @@
   <script src="https://cdn.jsdelivr.net/npm/highlight.js@11.9.0/lib/languages/bash.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/highlight.js@11.9.0/lib/languages/json.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/highlight.js@11.9.0/lib/languages/yaml.min.js"></script>
-  <script src="app.js?v=20260227" type="module"></script>
+  <script src="app.js?v=20260227b" type="module"></script>
 </body>
 </html>
 <script>
