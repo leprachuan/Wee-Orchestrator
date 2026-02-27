@@ -642,10 +642,40 @@ class TelegramConnector:
         return None
 
     def _resolve_image_path(self, url: str) -> str:
-        """Resolve /ai-media/ paths to local filesystem paths and strip ANSI codes."""
+        """Resolve /ai-media/ paths to local filesystem paths and strip ANSI codes.
+        
+        Handles LLM-mangled session IDs by fuzzy-matching directory names.
+        """
         url = re.sub(r'\x1b\[[0-9;]*m', '', url)
         if url.startswith("/ai-media/"):
-            return url.replace("/ai-media/", "/tmp/webui_ai_media/", 1)
+            resolved = url.replace("/ai-media/", "/tmp/webui_ai_media/", 1)
+            if os.path.exists(resolved):
+                return resolved
+            # Fuzzy directory match for mangled session IDs
+            base_dir = "/tmp/webui_ai_media"
+            parts = resolved[len(base_dir) + 1:].split("/", 1)
+            if len(parts) == 2:
+                session_dir_name, filename = parts
+                try:
+                    candidates = []
+                    for d in os.listdir(base_dir):
+                        if not os.path.isdir(os.path.join(base_dir, d)):
+                            continue
+                        prefix_len = min(20, len(session_dir_name), len(d))
+                        if d[:prefix_len] == session_dir_name[:prefix_len]:
+                            candidate_path = os.path.join(base_dir, d, filename)
+                            if os.path.isfile(candidate_path):
+                                candidates.append(candidate_path)
+                    if len(candidates) == 1:
+                        print(f"[DEBUG] Fuzzy-matched image path: {resolved} -> {candidates[0]}", file=sys.stderr, flush=True)
+                        return candidates[0]
+                    elif len(candidates) > 1:
+                        best = max(candidates, key=os.path.getmtime)
+                        print(f"[DEBUG] Fuzzy-matched image path (newest of {len(candidates)}): {resolved} -> {best}", file=sys.stderr, flush=True)
+                        return best
+                except OSError:
+                    pass
+            return resolved
         return url
 
     def extract_image_urls(self, text: str) -> tuple:
