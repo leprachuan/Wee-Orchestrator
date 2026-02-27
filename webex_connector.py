@@ -20,6 +20,7 @@ from urllib.parse import unquote
 from typing import Optional, Dict, List
 from datetime import datetime, timedelta
 import agent_manager
+import audio_transcriber
 
 
 class WebEXConfig:
@@ -1023,32 +1024,47 @@ class WebEXConnector:
 
                 if file_result:
                     file_path, file_name = file_result
-                    # Sanitize filename - remove spaces and special chars for shell safety
-                    # Keep extension, use underscores for safety
-                    safe_filename = f"webex_{person_id}_{int(time.time())}.png"
-
-                    # Copy file to /tmp for universal accessibility
-                    # (avoids sandboxing issues with /opt)
-                    tmp_file_path = Path("/tmp") / safe_filename
-                    try:
-                        # Copy the file to /tmp
-                        with open(file_path, "rb") as src:
-                            with open(tmp_file_path, "wb") as dst:
-                                dst.write(src.read())
-
-                        # Make world readable
-                        os.chmod(tmp_file_path, 0o644)
-                        print(f"[DEBUG] File copied to temp: {tmp_file_path}", file=sys.stderr)
-                        file_path = tmp_file_path
-                    except Exception as e:
-                        print(f"[WARN] Could not copy to /tmp: {e}, using original path", file=sys.stderr)
-
-                    # Add file path to query
-                    if not text:
-                        text = f"Please analyze this file: {file_path}"
+                    
+                    # Check if this is an audio file → transcribe it
+                    if audio_transcriber.is_audio_file(file_name):
+                        print(f"[DEBUG] Audio file detected: {file_name}, transcribing...", file=sys.stderr)
+                        transcribed, backend = audio_transcriber.transcribe(file_path)
+                        if transcribed:
+                            if text:
+                                text = f"{text}\n\n[Voice transcription ({backend})]: {transcribed}"
+                            else:
+                                text = transcribed
+                            print(f"[DEBUG] Transcribed audio via {backend}: {text[:100]}...", file=sys.stderr)
+                        else:
+                            self.send_message(room_id, "⚠️ Could not transcribe audio file. Please send as text instead.")
+                            return
                     else:
-                        text = f"{text}\n\nFile to analyze: {file_path}"
-                    print(f"[DEBUG] File query: {text[:200]}", file=sys.stderr)
+                        # Non-audio file - handle normally
+                        # Sanitize filename - remove spaces and special chars for shell safety
+                        safe_filename = f"webex_{person_id}_{int(time.time())}.png"
+
+                        # Copy file to /tmp for universal accessibility
+                        # (avoids sandboxing issues with /opt)
+                        tmp_file_path = Path("/tmp") / safe_filename
+                        try:
+                            # Copy the file to /tmp
+                            with open(file_path, "rb") as src:
+                                with open(tmp_file_path, "wb") as dst:
+                                    dst.write(src.read())
+
+                            # Make world readable
+                            os.chmod(tmp_file_path, 0o644)
+                            print(f"[DEBUG] File copied to temp: {tmp_file_path}", file=sys.stderr)
+                            file_path = tmp_file_path
+                        except Exception as e:
+                            print(f"[WARN] Could not copy to /tmp: {e}, using original path", file=sys.stderr)
+
+                        # Add file path to query
+                        if not text:
+                            text = f"Please analyze this file: {file_path}"
+                        else:
+                            text = f"{text}\n\nFile to analyze: {file_path}"
+                        print(f"[DEBUG] File query: {text[:200]}", file=sys.stderr)
                 else:
                     self.send_message(room_id, "❌ Failed to download file")
                     return

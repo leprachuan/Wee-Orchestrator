@@ -1,10 +1,89 @@
-# Wee-Orchestrator
+# 🍀 Wee-Orchestrator
 
-> **Renamed from n8n-copilot-shim** — folder names kept for backwards compatibility.
+**One platform. Every AI. Any channel.**
 
-A unified AI agent manager and browser-based chat platform that bridges Telegram, WebEx, and the Web UI with multiple AI CLI runtimes (GitHub Copilot, OpenCode, Claude Code, Google Gemini). Features session management, multi-agent support, a built-in task scheduler, file handling, and a glassmorphism web interface.
+[![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://python.org)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
-## Overview
+Wee-Orchestrator is a unified AI agent platform that lets you chat with **any AI CLI runtime** — GitHub Copilot, Claude Code, OpenCode, Google Gemini, or OpenAI Codex — from **Telegram**, **WebEx**, or a beautiful **browser-based Web UI**. Switch models, agents, and runtimes on the fly with slash commands. Schedule recurring AI tasks. Send files and images. All from one place.
+
+<p align="center">
+  <img src="docs/images/architecture.png" alt="Wee-Orchestrator Architecture" width="700"/>
+</p>
+
+---
+
+## ✨ Why Wee-Orchestrator?
+
+| Problem | Wee-Orchestrator Solution |
+|---------|---------------------------|
+| Juggling multiple AI tools and CLIs | **One unified interface** across 5 runtimes and 17+ models |
+| AI is stuck in the terminal | **Chat from anywhere** — Telegram, WebEx, or the Web UI |
+| No memory between sessions | **Persistent sessions** with full conversation history |
+| Can't automate AI tasks | **Built-in task scheduler** with cron-like scheduling |
+| One-size-fits-all agents | **Multi-agent architecture** — switch agents per task |
+| Complex setup | **Zero-config bot creation** with the [Starter Kit](https://github.com/leprachuan/wee-orchestrator-starter-kit) |
+
+---
+
+## 📸 Screenshots
+
+<table>
+  <tr>
+    <td align="center"><strong>Chat Interface</strong></td>
+    <td align="center"><strong>Task Scheduler</strong></td>
+  </tr>
+  <tr>
+    <td><img src="docs/images/chat-interface.png" alt="Chat Interface" width="400"/></td>
+    <td><img src="docs/images/scheduler.png" alt="Task Scheduler" width="400"/></td>
+  </tr>
+  <tr>
+    <td align="center"><strong>Secure Pairing Login</strong></td>
+    <td align="center"><strong>Architecture Overview</strong></td>
+  </tr>
+  <tr>
+    <td><img src="docs/images/login-screen.png" alt="Login Screen" width="400"/></td>
+    <td><img src="docs/images/architecture.png" alt="Architecture" width="400"/></td>
+  </tr>
+</table>
+
+---
+
+## 🚀 Key Features
+
+- **🔀 5 AI Runtimes** — GitHub Copilot CLI, Claude Code, OpenCode, Google Gemini, OpenAI Codex
+- **💬 3 Channels** — Telegram bot, WebEx bot (via RabbitMQ), glassmorphism Web UI with SSE streaming
+- **🤖 Multi-Agent** — Define specialized agents in `agents.json`, switch with `/agent`
+- **🔄 Live Model Switching** — Change models mid-conversation with `/model`
+- **📅 Task Scheduler** — Schedule recurring AI jobs with natural language (`every day at 9am`)
+- **📁 File & Image Support** — Upload, download, and inline images across all channels
+- **🎤 Audio Transcription** — Voice messages auto-transcribed via Whisper (OpenAI or local)
+- **🔐 Secure Auth** — Pairing-code login, per-user ACLs, agent/model pinning, yolo/restricted modes
+- **📜 Session History** — Full conversation persistence with search and resume
+- **⚡ Background Tasks** — Delegate long-running work to background agents
+- **🔌 Extensible Skills** — Plugin architecture for adding capabilities (Cisco Meraki, Home Assistant, etc.)
+
+---
+
+## 🏗️ Architecture
+
+```
+  Telegram ──► TelegramConnector ──┐
+                                   │
+  WebEx ─────► WebEXConnector ─────┼──► SessionManager ──► AI CLI Runtimes
+                                   │       │                (Copilot, Claude,
+  Browser ───► FastAPI /api/v1 ────┘       │                 OpenCode, Gemini,
+                                           │                 Codex)
+                                    TaskScheduler
+```
+
+Each inbound message flows through a **channel connector**, into the shared **SessionManager** (which handles slash commands, session state, and agent routing), and out to the selected **AI CLI runtime** as a subprocess. Responses stream back in real time.
+
+For the full component diagram, sequence diagrams, and deployment topology, see **[ARCHITECTURE.md](./ARCHITECTURE.md)**.
+
+---
+
+## 📋 Overview
 
 Wee-Orchestrator provides a flexible framework to:
 - Chat with AI agents from **Telegram**, **WebEx**, or the **browser-based Web UI**
@@ -18,8 +97,53 @@ Wee-Orchestrator provides a flexible framework to:
 - Send and receive **files and images** over Telegram and WebEx
 - Enforce per-user **agent pinning**, **model pinning**, and **yolo/restricted mode** ACLs
 
-For a full architectural overview see **[ARCHITECTURE.md](./ARCHITECTURE.md)**.  
 For release history see **[RELEASE_NOTES.md](./RELEASE_NOTES.md)**.
+
+## ⚡ Quick Start
+
+```bash
+# 1. Clone the repo
+git clone https://github.com/leprachuan/Wee-Orchestrator.git
+cd Wee-Orchestrator
+
+# 2. Install dependencies
+pip install -r requirements.txt
+
+# 3. Configure your environment
+cp .env.example .env    # Edit with your API keys and bot tokens
+
+# 4. Define your agents
+vi agents.json           # Add your agent definitions
+
+# 5. Start the API server
+python3 agent_manager.py --api
+
+# 6. (Optional) Start channel connectors
+python3 telegram_connector.py   # Telegram bot
+python3 webex_connector.py      # WebEx bot
+```
+
+Then open `http://localhost:8000/ui` in your browser and pair via Telegram or WebEx.
+
+> 🚀 **Want to create your own bot?** Use the **[Wee-Orchestrator Starter Kit](https://github.com/leprachuan/wee-orchestrator-starter-kit)** to scaffold one in minutes.
+
+---
+
+## 💬 Slash Commands
+
+| Command | Description |
+|---------|-------------|
+| `/agent <name>` | Switch to a different agent |
+| `/model <model>` | Change AI model mid-conversation |
+| `/runtime <runtime>` | Switch AI runtime (copilot, claude, gemini, opencode, codex) |
+| `/timeout <seconds>` | Adjust execution timeout |
+| `/status` | Check running task status |
+| `/cancel` | Cancel the current running task |
+| `/schedule list` | List all scheduled jobs |
+| `/schedule add <name> \| <schedule> \| <task>` | Create a scheduled job |
+| `/help` | Show all available commands |
+
+---
 
 ## Bot Setup Guide
 

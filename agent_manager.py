@@ -4834,6 +4834,64 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             results = await loop.run_in_executor(pool, _ddg_image_search, q.strip(), max_r)
         return {"query": q, "results": results}
 
+    # --- Audio Transcription ---
+
+    @app.post("/api/v1/sessions/{session_id}/transcribe")
+    async def transcribe_audio(session_id: str, request: Request, file: UploadFile = File(...)):
+        """Upload an audio file and get text transcription back."""
+        user = await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        if not session_mgr.load_session_data(session_id):
+            raise HTTPException(status_code=404, detail="Session not found")
+        contents = await file.read()
+        if len(contents) > 25 * 1024 * 1024:
+            raise HTTPException(status_code=413, detail="Audio file exceeds 25MB limit")
+        if len(contents) == 0:
+            raise HTTPException(status_code=400, detail="Empty audio file")
+
+        # Save to temp file
+        safe_name = re.sub(r"[^\w.\-]", "_", Path(file.filename).name)[:200]
+        upload_dir = Path(f"/tmp/webui_uploads/{session_id}")
+        upload_dir.mkdir(parents=True, exist_ok=True)
+        dest = upload_dir / safe_name
+        dest.write_bytes(contents)
+
+        try:
+            import audio_transcriber
+            loop = asyncio.get_event_loop()
+            with concurrent.futures.ThreadPoolExecutor() as pool:
+                text, backend = await loop.run_in_executor(
+                    pool, audio_transcriber.transcribe, str(dest)
+                )
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Transcription failed: {str(e)}")
+
+        if not text:
+            raise HTTPException(status_code=422, detail="Could not transcribe audio")
+
+        return {
+            "text": text,
+            "backend": backend,
+            "filename": safe_name,
+            "size": len(contents),
+        }
+
+    @app.get("/api/v1/transcription/status")
+    async def transcription_status(request: Request):
+        """Check transcription backend availability."""
+        await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        import audio_transcriber
+        return audio_transcriber.get_status()
+
     # --- Background Tasks ---
 
     class BackgroundTaskRequest(BaseModel):

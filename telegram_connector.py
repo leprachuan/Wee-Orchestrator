@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Optional, Dict, List
 from datetime import datetime
 import agent_manager
+import audio_transcriber
 
 # If production listener should be disabled to avoid duplicate responders, create the
 # sentinel file /opt/n8n-copilot-shim/PROD_DISABLED. When present, any process
@@ -898,6 +899,43 @@ class TelegramConnector:
                         text = f"{text}\n\nImage to analyze: {file_path}"
                 else:
                     self.send_message(chat_id, "Failed to download image")
+                    return
+            elif "voice" in message or "audio" in message or "video_note" in message:
+                # Voice messages, audio files, and video notes → transcribe
+                user_id = message["from"]["id"]
+                chat_id = message["chat"]["id"]
+                
+                if "voice" in message:
+                    file_id = message["voice"]["file_id"]
+                    duration = message["voice"].get("duration", 0)
+                    media_type = "voice message"
+                elif "audio" in message:
+                    file_id = message["audio"]["file_id"]
+                    duration = message["audio"].get("duration", 0)
+                    media_type = "audio"
+                else:  # video_note
+                    file_id = message["video_note"]["file_id"]
+                    duration = message["video_note"].get("duration", 0)
+                    media_type = "video note"
+                
+                print(f"[DEBUG] {media_type} detected ({duration}s), downloading...", file=sys.stderr)
+                audio_path = self.download_file(file_id, user_id)
+                
+                if audio_path:
+                    # Transcribe the audio
+                    transcribed, backend = audio_transcriber.transcribe(audio_path)
+                    if transcribed:
+                        # Use caption if provided, otherwise use transcription as the query
+                        if text:
+                            text = f"{text}\n\n[Voice transcription ({backend})]: {transcribed}"
+                        else:
+                            text = transcribed
+                        print(f"[DEBUG] Transcribed {media_type} via {backend}: {text[:100]}...", file=sys.stderr)
+                    else:
+                        self.send_message(chat_id, f"⚠️ Could not transcribe {media_type}. Please send as text instead.")
+                        return
+                else:
+                    self.send_message(chat_id, f"Failed to download {media_type}")
                     return
             elif not text:
                 # No text, no file - ignore
