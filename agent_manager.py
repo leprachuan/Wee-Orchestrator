@@ -521,6 +521,19 @@ class HistoryManager:
                     return True
         return False
 
+    def rename_session(self, channel: str, identity: str, session_id: str, title: str) -> bool:
+        """Rename a session. Returns False if not found."""
+        with self._lock:
+            data = self._load()
+            key = self._user_key(channel, identity)
+            for s in data.get(key, {}).get("sessions", []):
+                if s["session_id"] == session_id:
+                    s["title"] = title[:120]
+                    s["updated_at"] = time.time()
+                    self._save(data)
+                    return True
+        return False
+
     def delete_session(self, channel: str, identity: str, session_id: str) -> bool:
         """Delete a session. Returns False if not found."""
         with self._lock:
@@ -4772,6 +4785,22 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             raise HTTPException(status_code=404, detail="Session not found")
         return {"deleted": True, "session_id": session_id}
 
+    @app.patch("/api/v1/history/sessions/{session_id}")
+    async def rename_history_session(session_id: str, request: Request):
+        user = await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        body = await request.json()
+        title = body.get("title", "").strip()
+        if not title:
+            raise HTTPException(status_code=400, detail="Title is required")
+        if not history_mgr.rename_session(user["channel"], user["identity"], session_id, title):
+            raise HTTPException(status_code=404, detail="Session not found")
+        return {"renamed": True, "session_id": session_id, "title": title[:120]}
+
     # --- File upload ---
 
     @app.post("/api/v1/sessions/{session_id}/upload")
@@ -4815,6 +4844,127 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         if not path.exists():
             raise HTTPException(status_code=404, detail="File not found")
         return FileResponse(str(path))
+
+    # --- File Viewer ---
+
+    # Allowed base directories for the file viewer (security)
+    _FILE_VIEWER_ALLOWED_BASES = [
+        "/opt/", "/tmp/", "/home/",
+    ]
+    _FILE_VIEWER_MAX_SIZE = 5 * 1024 * 1024  # 5MB text limit
+    _FILE_VIEWER_BINARY_EXTS = {
+        ".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".ico", ".bmp",
+        ".pdf",
+    }
+    _FILE_VIEWER_TEXT_EXTS = {
+        ".md", ".txt", ".py", ".js", ".ts", ".tsx", ".jsx", ".json", ".yaml", ".yml",
+        ".toml", ".cfg", ".ini", ".conf", ".sh", ".bash", ".zsh", ".fish",
+        ".html", ".htm", ".css", ".scss", ".less", ".xml",
+        ".sql", ".graphql", ".gql",
+        ".rs", ".go", ".java", ".kt", ".c", ".cpp", ".h", ".hpp",
+        ".rb", ".php", ".pl", ".lua", ".r", ".swift", ".scala",
+        ".env", ".env.example", ".gitignore", ".dockerignore",
+        ".csv", ".log", ".diff", ".patch",
+        "", # extensionless files (Makefile, Dockerfile, etc.)
+    }
+
+    @app.get("/api/v1/files/view")
+    async def view_file(path: str, request: Request):
+        """Read a file from the server for the file viewer panel."""
+        await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        # Resolve and validate path
+        try:
+            resolved = Path(path).resolve()
+        except Exception:
+            raise HTTPException(status_code=400, detail="Invalid path")
+
+        resolved_str = str(resolved)
+        if not any(resolved_str.startswith(b) for b in _FILE_VIEWER_ALLOWED_BASES):
+            raise HTTPException(status_code=403, detail="Path not in allowed directories")
+        if not resolved.exists():
+            raise HTTPException(status_code=404, detail="File not found")
+        if not resolved.is_file():
+            raise HTTPException(status_code=400, detail="Path is a directory")
+
+        ext = resolved.suffix.lower()
+        file_size = resolved.stat().st_size
+        mime, _ = mimetypes.guess_type(str(resolved))
+
+        # Binary files (images, PDFs) → serve as FileResponse
+        if ext in _FILE_VIEWER_BINARY_EXTS:
+            return FileResponse(
+                str(resolved),
+                media_type=mime or "application/octet-stream",
+                headers={"X-File-Name": resolved.name, "X-File-Size": str(file_size)},
+            )
+
+        # Text files → return JSON with content
+        if file_size > _FILE_VIEWER_MAX_SIZE:
+            raise HTTPException(status_code=413, detail=f"File too large ({file_size} bytes, max {_FILE_VIEWER_MAX_SIZE})")
+
+        try:
+            content = resolved.read_text(encoding="utf-8", errors="replace")
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Cannot read file: {e}")
+
+        # Determine language hint for syntax highlighting
+        lang_map = {
+            ".py": "python", ".js": "javascript", ".ts": "typescript",
+            ".tsx": "typescript", ".jsx": "javascript", ".json": "json",
+            ".yaml": "yaml", ".yml": "yaml", ".sh": "bash", ".bash": "bash",
+            ".html": "html", ".htm": "html", ".css": "css", ".sql": "sql",
+            ".md": "markdown", ".xml": "xml", ".go": "go", ".rs": "rust",
+            ".java": "java", ".rb": "ruby", ".php": "php", ".c": "c",
+            ".cpp": "cpp", ".h": "c", ".hpp": "cpp",
+        }
+        lang = lang_map.get(ext, "plaintext")
+        # Detect extensionless files
+        if ext == "":
+            name_lower = resolved.name.lower()
+            if "makefile" in name_lower:
+                lang = "makefile"
+            elif "dockerfile" in name_lower:
+                lang = "dockerfile"
+
+        return {
+            "path": str(resolved),
+            "name": resolved.name,
+            "size": file_size,
+            "mime": mime or "text/plain",
+            "language": lang,
+            "content": content,
+            "type": "text",
+        }
+
+    @app.get("/api/v1/files/view/raw")
+    async def view_file_raw(path: str, request: Request):
+        """Serve a file as raw binary (for images, PDFs)."""
+        await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        try:
+            resolved = Path(path).resolve()
+        except Exception:
+            raise HTTPException(status_code=400, detail="Invalid path")
+
+        resolved_str = str(resolved)
+        if not any(resolved_str.startswith(b) for b in _FILE_VIEWER_ALLOWED_BASES):
+            raise HTTPException(status_code=403, detail="Path not in allowed directories")
+        if not resolved.exists():
+            raise HTTPException(status_code=404, detail="File not found")
+        if not resolved.is_file():
+            raise HTTPException(status_code=400, detail="Path is a directory")
+
+        mime, _ = mimetypes.guess_type(str(resolved))
+        return FileResponse(str(resolved), media_type=mime or "application/octet-stream")
 
     # --- Image search ---
 
@@ -5309,6 +5459,16 @@ def start_api_server():
     port = int(os.environ.get("API_PORT", "8001"))  # DEV: default 8001 to avoid collision with prod
     host = os.environ.get("API_HOST", "127.0.0.1")
 
+    # SSL support — set SSL_CERTFILE and SSL_KEYFILE env vars to enable HTTPS
+    ssl_certfile = os.environ.get("SSL_CERTFILE")
+    ssl_keyfile = os.environ.get("SSL_KEYFILE")
+    ssl_kwargs = {}
+    if ssl_certfile and ssl_keyfile and os.path.isfile(ssl_certfile) and os.path.isfile(ssl_keyfile):
+        ssl_kwargs = {"ssl_certfile": ssl_certfile, "ssl_keyfile": ssl_keyfile}
+        proto = "https"
+    else:
+        proto = "http"
+
     # Support comma-separated hosts (e.g. "127.0.0.1,100.x.x.x" for Tailscale + localhost).
     # When multiple hosts are specified, run each in a background thread and block on the last.
     hosts = [h.strip() for h in host.split(",") if h.strip()]
@@ -5316,19 +5476,19 @@ def start_api_server():
         import threading
         threads = []
         for h in hosts[:-1]:
-            print(f"[API] Listening on {h}:{port}", file=sys.stderr)
+            print(f"[API] Listening on {proto}://{h}:{port}", file=sys.stderr)
             t = threading.Thread(
                 target=uvicorn.run,
-                kwargs={"app": app, "host": h, "port": port},
+                kwargs={"app": app, "host": h, "port": port, **ssl_kwargs},
                 daemon=True,
             )
             t.start()
             threads.append(t)
-        print(f"[API] Listening on {hosts[-1]}:{port}", file=sys.stderr)
-        uvicorn.run(app, host=hosts[-1], port=port)
+        print(f"[API] Listening on {proto}://{hosts[-1]}:{port}", file=sys.stderr)
+        uvicorn.run(app, host=hosts[-1], port=port, **ssl_kwargs)
     else:
-        print(f"[API] Listening on {host}:{port}", file=sys.stderr)
-        uvicorn.run(app, host=host, port=port)
+        print(f"[API] Listening on {proto}://{host}:{port}", file=sys.stderr)
+        uvicorn.run(app, host=host, port=port, **ssl_kwargs)
 
 
 def main():

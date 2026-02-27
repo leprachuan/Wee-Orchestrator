@@ -95,3 +95,6 @@ telegram_config.json
 
 # Secrets scanning
 .gitleaks.toml
+
+# SSL certs
+certs/
