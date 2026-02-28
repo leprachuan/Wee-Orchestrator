@@ -13,11 +13,14 @@ import requests
 import threading
 import time
 import mimetypes
+import logging
 from pathlib import Path
 from typing import Optional, Dict, List
 from datetime import datetime
 import agent_manager
 import audio_transcriber
+
+logger = logging.getLogger(__name__)
 
 # If production listener should be disabled to avoid duplicate responders, create the
 # sentinel file /opt/n8n-copilot-shim/PROD_DISABLED. When present, any process
@@ -674,8 +677,8 @@ class TelegramConnector:
                         best = max(candidates, key=os.path.getmtime)
                         print(f"[DEBUG] Fuzzy-matched image path (newest of {len(candidates)}): {resolved} -> {best}", file=sys.stderr, flush=True)
                         return best
-                except OSError:
-                    pass
+                except OSError as e:
+                    logger.debug(f"Failed to check file modification time: {e}")
             return resolved
         return url
 
