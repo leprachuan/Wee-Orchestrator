@@ -259,6 +259,7 @@ class TaskSchedulerExecutor:
         runtime = job.get("runtime", os.getenv("SCHEDULER_DEFAULT_RUNTIME", "claude"))
         task = job.get("task", "")
         notify = job.get("notify", False)
+        timeout = int(job.get("timeout", os.getenv("SCHEDULER_DEFAULT_TIMEOUT", "300")))
 
         # Create session ID
         session_id = f"scheduled-{job_id}-{int(time.time())}"
@@ -295,7 +296,7 @@ class TaskSchedulerExecutor:
                 cmd,
                 capture_output=True,
                 text=True,
-                timeout=300
+                timeout=timeout
             )
 
             if result.returncode == 0:
@@ -322,14 +323,15 @@ class TaskSchedulerExecutor:
                 return None
 
         except subprocess.TimeoutExpired:
-            self._log_job(job_id, "Execution timed out (5 minutes)")
-            self._save_result(job_id, job["name"], success=False, error="Execution timed out (5 minutes)")
+            timeout_mins = timeout / 60
+            self._log_job(job_id, f"Execution timed out ({timeout_mins:.1f} minutes)")
+            self._save_result(job_id, job["name"], success=False, error=f"Execution timed out ({timeout_mins:.1f} minutes)")
             logger.error(f"Job {job_id} execution timed out")
 
-            if job.get("notify"):
+            if notify:
                 self._notify_creator(
                     job,
-                    f"⏱️ Job Timeout: {job['name']}\n\nTask: {task[:100]}\n\nExecution exceeded 5 minute limit",
+                    f"⏱️ Job Timeout: {job['name']}\n\nTask: {task[:100]}\n\nExecution exceeded {timeout_mins:.1f} minute limit",
                 )
             return None
 
@@ -354,6 +356,7 @@ class TaskSchedulerExecutor:
         task = job.get("task", "")
         notify = job.get("notify", False)
         working_dir = job.get("working_dir", "/opt")
+        timeout = int(job.get("timeout", os.getenv("SCHEDULER_DEFAULT_TIMEOUT", "300")))
 
         logger.info(f"[Command Mode] Executing job {job_id}: {task[:60]}...")
         self._log_job(job_id, f"Starting direct command execution (working_dir: {working_dir})")
@@ -364,7 +367,7 @@ class TaskSchedulerExecutor:
                 task,
                 capture_output=True,
                 text=True,
-                timeout=300,
+                timeout=timeout,
                 shell=True,
                 cwd=working_dir
             )
@@ -393,14 +396,15 @@ class TaskSchedulerExecutor:
                 return None
 
         except subprocess.TimeoutExpired:
-            self._log_job(job_id, "Execution timed out (5 minutes)")
-            self._save_result(job_id, job["name"], success=False, error="Execution timed out (5 minutes)")
+            timeout_mins = timeout / 60
+            self._log_job(job_id, f"Execution timed out ({timeout_mins:.1f} minutes)")
+            self._save_result(job_id, job["name"], success=False, error=f"Execution timed out ({timeout_mins:.1f} minutes)")
             logger.error(f"Job {job_id} execution timed out")
 
             if job.get("notify"):
                 self._notify_creator(
                     job,
-                    f"⏱️ Job Timeout: {job['name']}\n\nCommand: {task[:100]}\n\nExecution exceeded 5 minute limit",
+                    f"⏱️ Job Timeout: {job['name']}\n\nCommand: {task[:100]}\n\nExecution exceeded {timeout_mins:.1f} minute limit",
                 )
             return None
 

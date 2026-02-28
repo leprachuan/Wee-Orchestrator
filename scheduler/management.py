@@ -131,6 +131,7 @@ class TaskScheduler:
         recurring: bool = True,
         working_dir: str = None,
         created_by: Optional[Dict] = None,
+        timeout: int = None,
     ) -> Dict:
         """Create a scheduled task.
 
@@ -146,6 +147,7 @@ class TaskScheduler:
             recurring: Whether task repeats
             working_dir: Working directory for command mode (default: /opt)
             created_by: Optional dict with identity, channel, username for notifications
+            timeout: Execution timeout in seconds (default: 300)
 
         Examples:
             # AI mode (via LLM agent)
@@ -204,6 +206,7 @@ class TaskScheduler:
             "enabled": True,
             "retries": 0,
             "created_by": created_by or {},
+            "timeout": timeout,
         }
 
         jobs["jobs"].append(job)
@@ -231,7 +234,7 @@ class TaskScheduler:
         Allowed fields: name, schedule, agent, runtime, task, notify, recurring, enabled, mode, model, working_dir.
         If schedule changes, next_run is recalculated.
         """
-        allowed = {"name", "schedule", "agent", "runtime", "task", "notify", "recurring", "enabled", "mode", "model", "working_dir"}
+        allowed = {"name", "schedule", "agent", "runtime", "task", "notify", "recurring", "enabled", "mode", "model", "working_dir", "timeout"}
         invalid = set(updates.keys()) - allowed
         if invalid:
             return {"success": False, "message": f"Unknown fields: {', '.join(invalid)}"}
