@@ -4608,10 +4608,15 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             # Tell the browser to create its streaming bubble right away
             yield f"data: {_json.dumps({'type': 'start'})}\n\n"
 
-            # Run execute() in a thread — it may take a long time
-            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-                future = loop.run_in_executor(pool, session_mgr.execute, body.query, session_id)
+            # IMPORTANT: Do NOT use `with ThreadPoolExecutor(...) as pool:` here.
+            # Its __exit__ calls shutdown(wait=True) which blocks the asyncio
+            # event loop when the client disconnects (e.g. /cancel aborts the
+            # SSE stream).  That freeze prevents ALL requests (including the
+            # cancel endpoint) from being processed until execute() finishes.
+            pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+            future = loop.run_in_executor(pool, session_mgr.execute, body.query, session_id)
 
+            try:
                 if is_command:
                     # No subprocess → just wait for the result, no chunks to stream
                     try:
@@ -4647,7 +4652,6 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                                 break  # subprocess finished; final result in future
                     except Exception as exc:
                         yield f"data: {_json.dumps({'type': 'error', 'message': str(exc)})}\n\n"
-                        session_mgr._unregister_stream(session_id)
                         return
 
                     try:
@@ -4655,24 +4659,26 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                     except Exception as exc:
                         result = f"Error: {exc}"
 
+                history_mgr.append_message(
+                    user["channel"], user["identity"], session_id, "user", body.query
+                )
+                history_mgr.append_message(
+                    user["channel"], user["identity"], session_id, "assistant", result
+                )
+
+                session_data = session_mgr.get_or_create_session_data(session_id)
+                runtime = session_data.get("runtime", "copilot")
+                done_payload = _json.dumps({
+                    "type": "done",
+                    "response": result,
+                    "runtime": runtime,
+                    "model": session_data.get("model"),
+                })
+                yield f"data: {done_payload}\n\n"
+            finally:
+                if not is_command:
                     session_mgr._unregister_stream(session_id)
-
-            history_mgr.append_message(
-                user["channel"], user["identity"], session_id, "user", body.query
-            )
-            history_mgr.append_message(
-                user["channel"], user["identity"], session_id, "assistant", result
-            )
-
-            session_data = session_mgr.get_or_create_session_data(session_id)
-            runtime = session_data.get("runtime", "copilot")
-            done_payload = _json.dumps({
-                "type": "done",
-                "response": result,
-                "runtime": runtime,
-                "model": session_data.get("model"),
-            })
-            yield f"data: {done_payload}\n\n"
+                pool.shutdown(wait=False)
 
         return StreamingResponse(
             generate(),
