@@ -1255,7 +1255,7 @@ function clearMessages() {
   const es = document.createElement('div');
   es.id = 'empty-state';
   es.className = 'empty-state hidden';
-  es.innerHTML = '<div class="empty-icon"><img src="/static/icon-192.png" alt="Wee Orchestrator" style="width:48px;height:48px;border-radius:10px;opacity:0.7;"></div><p>Start a conversation or select a session from the sidebar.</p>';
+  es.innerHTML = '<div class="empty-icon"><img src="/static/icon-192.png" alt="Wee Orchestrator" style="width:160px;height:160px;border-radius:24px;opacity:0.7;"></div><p>Start a conversation or select a session from the sidebar.</p>';
   container.appendChild(es);
 }
 
