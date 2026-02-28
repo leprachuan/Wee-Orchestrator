@@ -4219,6 +4219,8 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
     bg_task_mgr = BackgroundTaskManager()
     session_mgr._bg_task_mgr = bg_task_mgr
     usage_tracker = RuntimeUsageTracker()
+    
+    _start_time = time.time()
 
     # ---- Pydantic models ----
     class ChannelEnum(str, Enum):
@@ -4333,8 +4335,11 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
     async def health():
         return {
             "status": "ok",
-            "environment": APP_ENV,
+            "uptime_seconds": time.time() - _start_time,
             "version": "1.0.0",
+            "agents_loaded": len(session_mgr.AGENTS),
+            "scheduler_enabled": SCHEDULER_ENABLED,
+            "active_sessions": len(session_mgr.session_map),
         }
 
     @app.get("/api/v1/config")
