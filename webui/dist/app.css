@@ -2502,6 +2502,110 @@ html, body {
   line-height: 1.4;
 }
 
+/* ========== TODO SECTION (inside queue panel) ========== */
+.todo-section {
+  border-top: 1px solid var(--glass-border);
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+.todo-section-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--glass-border);
+  flex-shrink: 0;
+}
+.todo-section-icon { font-size: 14px; }
+.todo-section-label { color: var(--text-primary); font-size: 12px; font-weight: 600; }
+.todo-count {
+  background: rgba(76, 175, 80, 0.2);
+  color: #4caf50;
+  font-size: 10px;
+  font-weight: 700;
+  padding: 1px 6px;
+  border-radius: 8px;
+  min-width: 18px;
+  text-align: center;
+}
+.todo-refresh-btn {
+  margin-left: auto;
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 14px;
+  padding: 2px 4px;
+  border-radius: 4px;
+  transition: color 0.15s, transform 0.3s;
+}
+.todo-refresh-btn:hover { color: var(--text-primary); transform: rotate(180deg); }
+.todo-items-list {
+  overflow-y: auto;
+  flex: 1;
+  padding: 4px 8px;
+}
+.todo-items-list::-webkit-scrollbar { width: 4px; }
+.todo-items-list::-webkit-scrollbar-track { background: transparent; }
+.todo-items-list::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.15); border-radius: 2px; }
+.todo-empty {
+  color: var(--text-muted);
+  font-size: 11px;
+  text-align: center;
+  padding: 16px 8px;
+  font-style: italic;
+}
+.todo-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 8px;
+  border-radius: 6px;
+  margin-bottom: 4px;
+  background: rgba(255,255,255,0.03);
+  border: 1px solid transparent;
+  transition: border-color 0.15s, background 0.15s;
+}
+.todo-item:hover {
+  border-color: var(--glass-border);
+  background: rgba(255,255,255,0.06);
+}
+.todo-item-desc {
+  font-size: 12px;
+  color: var(--text-primary);
+  line-height: 1.4;
+  word-break: break-word;
+}
+.todo-item-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.todo-due {
+  font-size: 10px;
+  color: #ffa726;
+  background: rgba(255, 167, 38, 0.12);
+  padding: 1px 6px;
+  border-radius: 4px;
+}
+.todo-due.overdue {
+  color: #ef5350;
+  background: rgba(239, 83, 80, 0.15);
+}
+.todo-label {
+  font-size: 9px;
+  color: var(--accent);
+  background: rgba(var(--accent-rgb, 255,107,53), 0.12);
+  padding: 1px 5px;
+  border-radius: 4px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+.request-queue-panel.queue-minimized .todo-section { display: none; }
+
 /* ========== FILE VIEWER PANEL ========== */
 .file-viewer-panel {
   position: absolute;

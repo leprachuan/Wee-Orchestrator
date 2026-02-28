@@ -920,6 +920,64 @@ function toggleQueuePause() {
   }
 }
 
+// ─── TODO Panel ───────────────────────────────────────────────────────────────
+let _todoRefreshTimer = null;
+
+async function fetchAndRenderTodos() {
+  const list = $('todo-items-list');
+  const counter = $('todo-count');
+  if (!list) return;
+
+  try {
+    const data = await apiRequest('GET', '/todos?limit=10');
+    const todos = data.todos || [];
+    if (counter) counter.textContent = todos.length;
+
+    if (todos.length === 0) {
+      list.innerHTML = '<p class="todo-empty">No upcoming TODOs</p>';
+      return;
+    }
+
+    const now = new Date();
+    list.innerHTML = todos.map(t => {
+      let dueBadge = '';
+      if (t.due) {
+        // Parse due date
+        let dueDate;
+        const parts = t.due.split(' ');
+        const dateParts = parts[0].split('/');
+        if (parts.length > 1) {
+          dueDate = new Date(`${dateParts[2]}-${dateParts[0].padStart(2,'0')}-${dateParts[1].padStart(2,'0')}T${parts[1]}`);
+        } else {
+          dueDate = new Date(`${dateParts[2]}-${dateParts[0].padStart(2,'0')}-${dateParts[1].padStart(2,'0')}T00:00:00`);
+        }
+        const isOverdue = dueDate < now;
+        const overdueClass = isOverdue ? ' overdue' : '';
+        dueBadge = `<span class="todo-due${overdueClass}">${isOverdue ? '⚠️' : '📅'} ${t.due}</span>`;
+      }
+
+      const labels = (t.labels || []).map(l => `<span class="todo-label">${l}</span>`).join('');
+
+      return `<div class="todo-item">
+        <div class="todo-item-desc">${escHtml(t.description)}</div>
+        <div class="todo-item-meta">${dueBadge}${labels}</div>
+      </div>`;
+    }).join('');
+  } catch (e) {
+    list.innerHTML = '<p class="todo-empty">Could not load TODOs</p>';
+  }
+}
+
+function startTodoRefresh() {
+  fetchAndRenderTodos();
+  if (_todoRefreshTimer) clearInterval(_todoRefreshTimer);
+  _todoRefreshTimer = setInterval(fetchAndRenderTodos, 60000); // refresh every 60s
+}
+
+function stopTodoRefresh() {
+  if (_todoRefreshTimer) { clearInterval(_todoRefreshTimer); _todoRefreshTimer = null; }
+}
+
 // ─── Messaging ────────────────────────────────────────────────────────────────
 async function sendMessage() {
   // If already processing, check for /cancel first — it bypasses the queue
@@ -1415,6 +1473,11 @@ document.addEventListener('DOMContentLoaded', () => {
   // --- Request Queue ---
   $('btn-toggle-queue').addEventListener('click', toggleQueuePanel);
   $('btn-pause-queue').addEventListener('click', toggleQueuePause);
+
+  // --- TODO panel ---
+  const btnRefreshTodos = $('btn-refresh-todos');
+  if (btnRefreshTodos) btnRefreshTodos.addEventListener('click', fetchAndRenderTodos);
+  startTodoRefresh();
 
   // --- Textarea ---
   const ta = $('message-input');

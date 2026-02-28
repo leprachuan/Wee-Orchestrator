@@ -5454,6 +5454,55 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             await _require_scheduler_auth(request)
             return _get_scheduler().get_logs(job_id)
     
+    # --- TODO list API ---------------------------------------------------
+    _TODO_FILE = Path("/opt/fosterbot-home/TODOs.md")
+
+    def _parse_todos_from_md(limit: int = 10) -> list:
+        """Parse active TODOs from the markdown file, return up to `limit`."""
+        if not _TODO_FILE.exists():
+            return []
+        todos = []
+        import re
+        with open(_TODO_FILE) as f:
+            for line in f:
+                line = line.rstrip("\n")
+                stripped = line.strip()
+                if stripped.startswith("- "):
+                    stripped = stripped[2:]
+                if not (stripped.startswith("[ ]") or stripped.startswith("[X]") or stripped.startswith("[x]")):
+                    continue
+                completed = stripped.startswith("[X]") or stripped.startswith("[x]")
+                if completed:
+                    continue  # only active todos
+                content = re.sub(r"^\[.\]\s+", "", stripped)
+                due = None
+                due_match = re.search(r"\(due ([^)]+)\)", content)
+                if due_match:
+                    due = due_match.group(1)
+                labels = []
+                label_match = re.search(r"\{([^}]+)\}", content)
+                if label_match:
+                    labels = [l.strip() for l in label_match.group(1).split(",")]
+                # Remove due and label markers from description
+                content = re.sub(r"\s*\(due [^)]+\)", "", content)
+                content = re.sub(r"\s*\{[^}]+\}", "", content).strip()
+                todos.append({"description": content, "due": due, "labels": labels})
+                if len(todos) >= limit:
+                    break
+        return todos
+
+    @app.get("/api/v1/todos")
+    async def get_todos(request: Request, limit: int = 10):
+        await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        limit = min(max(1, limit), 50)
+        todos = _parse_todos_from_md(limit)
+        return {"todos": todos, "count": len(todos)}
+
     # --- AI media — publicly served, no auth (images fetched by the agent) ---
     _ai_media_dir = Path("/tmp/webui_ai_media")
     _ai_media_dir.mkdir(parents=True, exist_ok=True)

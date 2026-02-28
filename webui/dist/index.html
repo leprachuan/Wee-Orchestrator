@@ -190,6 +190,19 @@
         <p class="queue-empty">No queued requests</p>
       </div>
 
+      <!-- TODO Section (inside queue panel) -->
+      <div id="todo-section" class="todo-section">
+        <div class="todo-section-header">
+          <span class="todo-section-icon">✅</span>
+          <span class="todo-section-label">Upcoming TODOs</span>
+          <span id="todo-count" class="todo-count">0</span>
+          <button id="btn-refresh-todos" class="todo-refresh-btn" title="Refresh TODOs">↻</button>
+        </div>
+        <div id="todo-items-list" class="todo-items-list">
+          <p class="todo-empty">No upcoming TODOs</p>
+        </div>
+      </div>
+
       <!-- Queue Footer -->
       <div class="queue-footer">
         <small id="queue-status-msg">Requests will auto-submit when current message completes</small>
