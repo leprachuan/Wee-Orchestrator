@@ -5320,6 +5320,9 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         @app.post("/api/v1/scheduler/jobs")
         async def create_scheduler_job(body: ScheduleJobRequest, request: Request):
             user = await _require_scheduler_auth(request)
+            client_ip = request.client.host if request.client else "unknown"
+            if not rate_limiter.check(client_ip, "scheduler_write", max_requests=20, window=60):
+                raise HTTPException(status_code=429, detail="Rate limit exceeded")
             # Resolve Telegram username for storage so the executor can display it
             username = None
             if user.get("channel") == "telegram":
@@ -5356,6 +5359,9 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         @app.put("/api/v1/scheduler/jobs/{job_id}")
         async def update_scheduler_job(job_id: str, body: UpdateJobRequest, request: Request):
             await _require_scheduler_auth(request)
+            client_ip = request.client.host if request.client else "unknown"
+            if not rate_limiter.check(client_ip, "scheduler_write", max_requests=20, window=60):
+                raise HTTPException(status_code=429, detail="Rate limit exceeded")
             updates = {k: v for k, v in body.model_dump().items() if v is not None}
             if not updates:
                 raise HTTPException(status_code=400, detail="No fields to update")
@@ -5367,6 +5373,9 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         @app.delete("/api/v1/scheduler/jobs/{job_id}")
         async def delete_scheduler_job(job_id: str, request: Request):
             await _require_scheduler_auth(request)
+            client_ip = request.client.host if request.client else "unknown"
+            if not rate_limiter.check(client_ip, "scheduler_write", max_requests=20, window=60):
+                raise HTTPException(status_code=429, detail="Rate limit exceeded")
             result = _get_scheduler().delete_job(job_id)
             if not result.get("success"):
                 raise HTTPException(status_code=404, detail=result.get("message", "Not found"))
@@ -5375,6 +5384,9 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         @app.post("/api/v1/scheduler/jobs/{job_id}/pause")
         async def pause_scheduler_job(job_id: str, request: Request):
             await _require_scheduler_auth(request)
+            client_ip = request.client.host if request.client else "unknown"
+            if not rate_limiter.check(client_ip, "scheduler_write", max_requests=20, window=60):
+                raise HTTPException(status_code=429, detail="Rate limit exceeded")
             result = _get_scheduler().pause_job(job_id)
             if not result.get("success"):
                 raise HTTPException(status_code=404, detail=result.get("message", "Not found"))
@@ -5383,6 +5395,9 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         @app.post("/api/v1/scheduler/jobs/{job_id}/resume")
         async def resume_scheduler_job(job_id: str, request: Request):
             await _require_scheduler_auth(request)
+            client_ip = request.client.host if request.client else "unknown"
+            if not rate_limiter.check(client_ip, "scheduler_write", max_requests=20, window=60):
+                raise HTTPException(status_code=429, detail="Rate limit exceeded")
             result = _get_scheduler().resume_job(job_id)
             if not result.get("success"):
                 raise HTTPException(status_code=404, detail=result.get("message", "Not found"))
