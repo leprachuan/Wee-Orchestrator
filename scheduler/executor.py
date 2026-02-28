@@ -60,10 +60,13 @@ class TaskSchedulerExecutor:
         self.logs_dir = scheduler_base / "logs/"
         self.results_dir = scheduler_base / "results/"
         self.config_file = self.repo_root / "agents.json"
+        self.data_dir = scheduler_base
 
         self.jobs_file.parent.mkdir(parents=True, exist_ok=True)
         self.logs_dir.mkdir(parents=True, exist_ok=True)
         self.results_dir.mkdir(parents=True, exist_ok=True)
+        
+        self._check_stale_checkpoints()
 
     def _load_jobs(self) -> Dict:
         """Load jobs from JSON."""
@@ -81,6 +84,43 @@ class TaskSchedulerExecutor:
             self.jobs_file.write_text(json.dumps(data, indent=2))
         except Exception as e:
             logger.error(f"Failed to save jobs: {e}")
+
+    def _check_stale_checkpoints(self):
+        """Check for stale checkpoint files on startup (from crashed executions)."""
+        if not self.data_dir.exists():
+            return
+        for checkpoint_file in self.data_dir.glob('.checkpoint_*.json'):
+            try:
+                checkpoint = json.loads(checkpoint_file.read_text())
+                job_id = checkpoint.get('job_id', 'unknown')
+                started_at = checkpoint.get('started_at', 'unknown')
+                pid = checkpoint.get('pid', 0)
+                logger.warning(f"Found stale checkpoint for job {job_id} (started: {started_at}, pid: {pid})")
+                checkpoint_file.unlink()
+            except Exception as e:
+                logger.error(f"Failed to process stale checkpoint {checkpoint_file}: {e}")
+
+    def _write_checkpoint(self, job_id: str):
+        """Write checkpoint file before starting execution."""
+        checkpoint_file = self.data_dir / f'.checkpoint_{job_id}.json'
+        checkpoint = {
+            'job_id': job_id,
+            'started_at': datetime.utcnow().isoformat() + 'Z',
+            'pid': os.getpid()
+        }
+        try:
+            checkpoint_file.write_text(json.dumps(checkpoint))
+        except Exception as e:
+            logger.error(f"Failed to write checkpoint for job {job_id}: {e}")
+
+    def _clear_checkpoint(self, job_id: str):
+        """Clear checkpoint file after execution completes or fails."""
+        checkpoint_file = self.data_dir / f'.checkpoint_{job_id}.json'
+        try:
+            if checkpoint_file.exists():
+                checkpoint_file.unlink()
+        except Exception as e:
+            logger.error(f"Failed to clear checkpoint for job {job_id}: {e}")
 
     def _log_job(self, job_id: str, message: str):
         """Log job execution to job-specific log file."""
@@ -249,6 +289,7 @@ class TaskSchedulerExecutor:
         logger.info(f"[AI Mode] Executing job {job_id}: {task[:60]}...")
         self._log_job(job_id, f"Starting execution via agent_manager.py (AI mode)")
 
+        self._write_checkpoint(job_id)
         try:
             result = subprocess.run(
                 cmd,
@@ -304,6 +345,8 @@ class TaskSchedulerExecutor:
                     f"⚠️ Job Exception: {job['name']}\n\nTask: {task[:100]}\n\nError:\n{error_str[:200]}",
                 )
             return None
+        finally:
+            self._clear_checkpoint(job_id)
 
     def _execute_command_mode(self, job: Dict) -> Optional[str]:
         """Execute job as direct shell/python command (no LLM)."""
@@ -315,6 +358,7 @@ class TaskSchedulerExecutor:
         logger.info(f"[Command Mode] Executing job {job_id}: {task[:60]}...")
         self._log_job(job_id, f"Starting direct command execution (working_dir: {working_dir})")
 
+        self._write_checkpoint(job_id)
         try:
             result = subprocess.run(
                 task,
@@ -372,6 +416,8 @@ class TaskSchedulerExecutor:
                     f"⚠️ Job Exception: {job['name']}\n\nCommand: {task[:100]}\n\nError:\n{error_str[:200]}",
                 )
             return None
+        finally:
+            self._clear_checkpoint(job_id)
 
     def _is_job_ready(self, job: Dict) -> bool:
         """Check if a job is ready to execute (enabled and time has passed)."""
