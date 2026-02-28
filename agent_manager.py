@@ -5456,7 +5456,11 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
     
     # --- TODO list API ---------------------------------------------------
     def _resolve_todo_file(agent_name: str | None) -> Path:
-        """Resolve the TODOs.md file for a given agent."""
+        """Resolve the TODOs.md file for a given agent.
+
+        Falls back to the default shared TODOs.md when no agent-specific
+        file exists so that switching agents never hides items.
+        """
         import json as _json
         default = Path("/opt/fosterbot-home/TODOs.md")
         if not agent_name:
@@ -5467,12 +5471,11 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             for a in agents_data.get("agents", []):
                 if a.get("name", "").lower() == agent_name.lower():
                     agent_path = Path(a.get("path", "/opt"))
-                    # Check for TODOs.md in agent path and common subdirectories
                     for candidate in [agent_path / "TODOs.md",
                                       agent_path / "fosterbot-home" / "TODOs.md"]:
                         if candidate.exists():
                             return candidate
-                    return agent_path / "TODOs.md"  # return even if doesn't exist yet
+                    return default  # fall back to shared file
         except Exception:
             pass
         return default
