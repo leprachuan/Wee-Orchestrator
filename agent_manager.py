@@ -4279,8 +4279,12 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         if token.startswith("shared_"):
             if not auth_mgr.validate_shared_key(token):
                 raise HTTPException(status_code=401, detail="Invalid shared key")
+            # Only trust X-User-Identity from loopback (where our connectors run)
+            client_ip = request.client.host if request.client else ""
+            is_local = client_ip in ("127.0.0.1", "::1", "localhost")
+            identity = x_user_identity if (is_local and x_user_identity) else "shared_key_user"
             return {
-                "identity": x_user_identity or "shared",
+                "identity": identity,
                 "channel": x_auth_channel or "api",
                 "auth_type": "shared_key",
             }
