@@ -849,7 +849,7 @@ function renderQueuePanel() {
   }
 
   if (STATE.requestQueue.length === 0) {
-    queueList.innerHTML = '<p class="queue-empty">No queued requests</p>';
+    queueList.innerHTML = '<p class="queue-empty"><img src="/static/icon-192.png" alt="" style="width:48px;height:48px;border-radius:10px;opacity:0.5;display:block;margin:0 auto 8px;">No queued requests</p>';
     const counter = $('queue-count');
     if (counter) counter.textContent = '0';
     return;
@@ -941,7 +941,7 @@ async function fetchAndRenderTodos() {
     if (counter) counter.textContent = todos.length;
 
     if (todos.length === 0) {
-      list.innerHTML = '<p class="todo-empty">No upcoming TODOs</p>';
+      list.innerHTML = '<p class="todo-empty"><img src="/static/icon-192.png" alt="" style="width:48px;height:48px;border-radius:10px;opacity:0.5;display:block;margin:0 auto 8px;">No upcoming TODOs</p>';
       return;
     }
 
@@ -971,7 +971,7 @@ async function fetchAndRenderTodos() {
       </div>`;
     }).join('');
   } catch (e) {
-    list.innerHTML = '<p class="todo-empty">Could not load TODOs</p>';
+    list.innerHTML = '<p class="todo-empty"><img src="/static/icon-192.png" alt="" style="width:48px;height:48px;border-radius:10px;opacity:0.5;display:block;margin:0 auto 8px;">Could not load TODOs</p>';
   }
 }
 
@@ -1237,8 +1237,7 @@ function createStreamingBubble() {
 
   const avatar = document.createElement('div');
   avatar.className = 'message-avatar';
-  avatar.textContent = '🍀';
-
+  avatar.innerHTML = '<img src="/static/icon-192.png" alt="Wee" style="width:32px;height:32px;border-radius:8px;">';
   const bubble = document.createElement('div');
   bubble.className = 'message-bubble streaming';
 
@@ -1256,7 +1255,7 @@ function clearMessages() {
   const es = document.createElement('div');
   es.id = 'empty-state';
   es.className = 'empty-state hidden';
-  es.innerHTML = '<div class="empty-icon">🍀</div><p>Start a conversation or select a session from the sidebar.</p>';
+  es.innerHTML = '<div class="empty-icon"><img src="/static/icon-192.png" alt="Wee Orchestrator" style="width:160px;height:160px;border-radius:24px;opacity:0.7;"></div><p>Start a conversation or select a session from the sidebar.</p>';
   container.appendChild(es);
 }
 
@@ -1269,7 +1268,7 @@ async function renderMessage(role, content, files = []) {
 
   const avatar = document.createElement('div');
   avatar.className = 'message-avatar';
-  avatar.textContent = role === 'user' ? '👤' : '🍀';
+  avatar.innerHTML = role === 'user' ? '👤' : '<img src="/static/icon-192.png" alt="Wee" style="width:32px;height:32px;border-radius:8px;">';
 
   const bubble = document.createElement('div');
   bubble.className = 'message-bubble';

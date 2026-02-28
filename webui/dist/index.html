@@ -7,10 +7,11 @@
   <meta name="apple-mobile-web-app-capable" content="true" />
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
   <meta name="apple-mobile-web-app-title" content="Wee Orchestrator" />
-  <meta name="theme-color" content="#ff6b35" />
-  <title>Wee — Orchestrator 🍀</title>
-  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' fill='%23ff6b35' rx='20'/><g transform='translate(50, 50)'><rect x='-2' y='0' width='4' height='20' fill='%232d5016'/><circle cx='0' cy='-15' r='10' fill='%23ffa500'/><circle cx='-13' cy='5' r='10' fill='%23ff9500'/><circle cx='13' cy='5' r='10' fill='%23ffb500'/></g></svg>" />
-  <link rel="apple-touch-icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' fill='%23ff6b35' rx='20'/><g transform='translate(50, 50)'><rect x='-2' y='0' width='4' height='20' fill='%232d5016'/><circle cx='0' cy='-15' r='10' fill='%23ffa500'/><circle cx='-13' cy='5' r='10' fill='%23ff9500'/><circle cx='13' cy='5' r='10' fill='%23ffb500'/></g></svg>" />
+  <meta name="theme-color" content="#1a1a2e" />
+  <title>Wee — Orchestrator</title>
+  <link rel="icon" type="image/x-icon" href="/static/favicon.ico" />
+  <link rel="icon" type="image/png" sizes="192x192" href="/static/icon-192.png" />
+  <link rel="apple-touch-icon" href="/static/apple-touch-icon.png" />
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/highlight.js@11.9.0/styles/github-dark.min.css" />
   <link rel="stylesheet" href="app.css?v=20260227i" />
 </head>
@@ -18,7 +19,7 @@
   <!-- Auth overlay -->
   <div id="auth-overlay" class="auth-overlay hidden">
     <div class="auth-card glass-card">
-      <div class="auth-logo">🍀</div>
+      <div class="auth-logo"><img src="/static/icon-192.png" alt="Wee Orchestrator" style="width:64px;height:64px;border-radius:12px;"></div>
       <h1 class="auth-title">Wee Orchestrator</h1>
       <p class="auth-subtitle">Sign in to start chatting</p>
 
@@ -65,7 +66,7 @@
     <!-- Sidebar -->
     <aside id="sidebar" class="sidebar glass-panel">
       <div class="sidebar-header">
-        <span class="sidebar-logo">🍀</span>
+        <span class="sidebar-logo"><img src="/static/icon-192.png" alt="Wee" style="width:36px;height:36px;border-radius:8px;"></span>
         <span class="sidebar-title">Wee-Orchestrator</span>
         <span id="dev-badge" class="dev-badge" style="display: none;">🔧 DEV</span>
         <button id="btn-sidebar-toggle" class="btn-icon sidebar-toggle-btn" title="Close sidebar">‹</button>
@@ -108,7 +109,7 @@
       <!-- Messages -->
       <div id="messages" class="messages-container">
         <div id="empty-state" class="empty-state">
-          <div class="empty-icon">🍀</div>
+          <div class="empty-icon"><img src="/static/icon-192.png" alt="Wee Orchestrator" style="width:160px;height:160px;border-radius:24px;opacity:0.7;"></div>
           <p>Start a conversation or select a session from the sidebar.</p>
         </div>
       </div>
@@ -187,7 +188,7 @@
 
       <!-- Queue Items List -->
       <div id="queue-items-list" class="queue-items-list">
-        <p class="queue-empty">No queued requests</p>
+        <p class="queue-empty"><img src="/static/icon-192.png" alt="" style="width:48px;height:48px;border-radius:10px;opacity:0.5;display:block;margin:0 auto 8px;"><span>No queued requests</span></p>
       </div>
 
       <!-- TODO Section (inside queue panel) -->
@@ -199,7 +200,7 @@
           <button id="btn-refresh-todos" class="todo-refresh-btn" title="Refresh TODOs">↻</button>
         </div>
         <div id="todo-items-list" class="todo-items-list">
-          <p class="todo-empty">No upcoming TODOs</p>
+          <p class="todo-empty"><img src="/static/icon-192.png" alt="" style="width:48px;height:48px;border-radius:10px;opacity:0.5;display:block;margin:0 auto 8px;"><span>No upcoming TODOs</span></p>
         </div>
       </div>
 
@@ -224,7 +225,7 @@
       <div class="bg-body">
         <!-- Tasks list -->
         <div id="bg-tasks-list" class="bg-tasks-list">
-          <p class="bg-empty">No background tasks</p>
+          <p class="bg-empty"><img src="/static/icon-192.png" alt="" style="width:48px;height:48px;border-radius:10px;opacity:0.5;display:block;margin:0 auto 8px;"><span>No background tasks</span></p>
         </div>
 
         <!-- Detail panel -->
