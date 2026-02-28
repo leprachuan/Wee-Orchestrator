@@ -2740,8 +2740,16 @@ function renderFileContent(data) {
         wrap.textContent = data.content;
       }
     } else {
-      // HTML → render in sandboxed iframe-like div
-      wrap.innerHTML = data.content;
+      // HTML → render in sandboxed iframe to prevent XSS
+      const iframe = document.createElement('iframe');
+      iframe.sandbox = 'allow-same-origin';
+      iframe.style.cssText = 'width:100%;border:none;min-height:400px;background:#fff';
+      wrap.appendChild(iframe);
+      setTimeout(() => {
+        const doc = iframe.contentDocument || iframe.contentWindow.document;
+        doc.open(); doc.write(data.content); doc.close();
+        iframe.style.height = doc.documentElement.scrollHeight + 'px';
+      }, 0);
     }
     // Make file paths in preview clickable too
     linkifyFilePaths(wrap);
