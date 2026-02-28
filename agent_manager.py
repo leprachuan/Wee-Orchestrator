@@ -4354,7 +4354,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             "version": "1.0.0",
             "agents_loaded": len(session_mgr.AGENTS),
             "scheduler_enabled": SCHEDULER_ENABLED,
-            "active_sessions": len(session_mgr.session_map),
+            "active_sessions": len(session_mgr.load_session_map()),
         }
 
     @app.get("/api/v1/config")
