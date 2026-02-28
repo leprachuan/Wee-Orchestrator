@@ -1767,6 +1767,11 @@ function renderJobDetailView(job) {
 function renderJobEditForm(job, container) {
   container.innerHTML = buildJobForm(job);
   populateAgentDropdown(container);
+  populateRuntimeDropdown(container).then(() => {
+    const rt = container.querySelector('select[name="runtime"]');
+    populateModelDropdown(container, rt?.value || 'claude');
+    if (rt) rt.addEventListener('change', () => populateModelDropdown(container, rt.value));
+  });
   wireJobForm(container, async (payload) => {
     try {
       await schedApi('PUT', `/jobs/${job.id}`, payload);
@@ -1794,6 +1799,11 @@ function openNewJobForm() {
   const body = $('sched-detail-body');
   body.innerHTML = buildJobForm(null);
   populateAgentDropdown(body);
+  populateRuntimeDropdown(body).then(() => {
+    const rt = body.querySelector('select[name="runtime"]');
+    populateModelDropdown(body, rt?.value || 'claude');
+    if (rt) rt.addEventListener('change', () => populateModelDropdown(body, rt.value));
+  });
   wireJobForm(body, async (payload) => {
     try {
       await schedApi('POST', '/jobs', payload);
@@ -1840,18 +1850,17 @@ function buildJobForm(job) {
           </div>
           <div class="form-group">
             <label>Runtime</label>
-            <select class="glass-input glass-select" name="runtime">
-              <option value="claude"   ${(job?.runtime ?? 'claude') === 'claude'   ? 'selected' : ''}>claude</option>
-              <option value="copilot"  ${job?.runtime === 'copilot'  ? 'selected' : ''}>copilot</option>
-              <option value="gemini"   ${job?.runtime === 'gemini'   ? 'selected' : ''}>gemini</option>
-              <option value="opencode" ${job?.runtime === 'opencode' ? 'selected' : ''}>opencode</option>
+            <select class="glass-input glass-select" name="runtime" data-current="${escHtml(job?.runtime ?? 'claude')}">
+              <option value="">Loading runtimes…</option>
             </select>
           </div>
         </div>
         <div class="form-row">
           <div class="form-group">
             <label>Model <small class="form-hint-inline">(optional — leave blank for runtime default)</small></label>
-            <input class="glass-input" name="model" value="${v('model')}" placeholder="e.g. sonnet, gpt-4o, gemini-1.5-pro" />
+            <select class="glass-input glass-select" name="model" data-current="${escHtml(job?.model ?? '')}">
+              <option value="">Loading models…</option>
+            </select>
           </div>
           <div class="form-group">
             <label>Mode</label>
@@ -1912,6 +1921,45 @@ async function populateAgentDropdown(container) {
     select.innerHTML = current
       ? `<option value="${escHtml(current)}" selected>${escHtml(current)}</option>`
       : '<option value="orchestrator">orchestrator</option>';
+  }
+}
+
+async function populateRuntimeDropdown(container) {
+  const select = container.querySelector('select[name="runtime"]');
+  if (!select) return;
+  const current = select.dataset.current || 'claude';
+  try {
+    const data = await apiRequest('GET', '/runtimes');
+    const runtimes = data.runtimes || [];
+    select.innerHTML = runtimes.map(r => {
+      const sel = r.id === current ? ' selected' : '';
+      return `<option value="${escHtml(r.id)}"${sel}>${escHtml(r.label)}</option>`;
+    }).join('');
+    if (!runtimes.length) {
+      select.innerHTML = '<option value="claude">claude</option>';
+    }
+  } catch (e) {
+    select.innerHTML = `<option value="${escHtml(current)}" selected>${escHtml(current)}</option>`;
+  }
+}
+
+async function populateModelDropdown(container, runtime) {
+  const select = container.querySelector('select[name="model"]');
+  if (!select) return;
+  const current = select.dataset.current || '';
+  try {
+    const data = await apiRequest('GET', `/models?runtime=${encodeURIComponent(runtime)}`);
+    const models = data.models || [];
+    let opts = '<option value="">(runtime default)</option>';
+    opts += models.map(m => {
+      const sel = m.id === current ? ' selected' : '';
+      return `<option value="${escHtml(m.id)}"${sel}>${escHtml(m.label)}</option>`;
+    }).join('');
+    select.innerHTML = opts;
+  } catch (e) {
+    let opts = '<option value="">(runtime default)</option>';
+    if (current) opts += `<option value="${escHtml(current)}" selected>${escHtml(current)}</option>`;
+    select.innerHTML = opts;
   }
 }
 

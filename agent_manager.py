@@ -4374,6 +4374,18 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             })
         return {"agents": agents}
 
+    @app.get("/api/v1/runtimes")
+    async def get_runtimes():
+        """Return list of available runtimes."""
+        runtimes = [
+            {"id": "copilot", "label": "copilot"},
+            {"id": "opencode", "label": "opencode"},
+            {"id": "claude", "label": "claude"},
+            {"id": "gemini", "label": "gemini"},
+            {"id": "codex", "label": "codex"},
+        ]
+        return {"runtimes": runtimes}
+
     @app.get("/api/v1/models")
     async def get_models(runtime: str = "copilot"):
         """Return available models for the specified runtime."""
