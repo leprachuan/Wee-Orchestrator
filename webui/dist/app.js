@@ -849,7 +849,7 @@ function renderQueuePanel() {
   }
 
   if (STATE.requestQueue.length === 0) {
-    queueList.innerHTML = '<p class="queue-empty">No queued requests</p>';
+    queueList.innerHTML = '<p class="queue-empty"><img src="/static/icon-192.png" alt="" style="width:48px;height:48px;border-radius:10px;opacity:0.5;display:block;margin:0 auto 8px;">No queued requests</p>';
     const counter = $('queue-count');
     if (counter) counter.textContent = '0';
     return;
@@ -941,7 +941,7 @@ async function fetchAndRenderTodos() {
     if (counter) counter.textContent = todos.length;
 
     if (todos.length === 0) {
-      list.innerHTML = '<p class="todo-empty">No upcoming TODOs</p>';
+      list.innerHTML = '<p class="todo-empty"><img src="/static/icon-192.png" alt="" style="width:48px;height:48px;border-radius:10px;opacity:0.5;display:block;margin:0 auto 8px;">No upcoming TODOs</p>';
       return;
     }
 
@@ -971,7 +971,7 @@ async function fetchAndRenderTodos() {
       </div>`;
     }).join('');
   } catch (e) {
-    list.innerHTML = '<p class="todo-empty">Could not load TODOs</p>';
+    list.innerHTML = '<p class="todo-empty"><img src="/static/icon-192.png" alt="" style="width:48px;height:48px;border-radius:10px;opacity:0.5;display:block;margin:0 auto 8px;">Could not load TODOs</p>';
   }
 }
 
