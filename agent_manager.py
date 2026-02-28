@@ -5455,15 +5455,35 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             return _get_scheduler().get_logs(job_id)
     
     # --- TODO list API ---------------------------------------------------
-    _TODO_FILE = Path("/opt/fosterbot-home/TODOs.md")
+    def _resolve_todo_file(agent_name: str | None) -> Path:
+        """Resolve the TODOs.md file for a given agent."""
+        import json as _json
+        default = Path("/opt/fosterbot-home/TODOs.md")
+        if not agent_name:
+            return default
+        try:
+            agents_file = Path(__file__).parent / "agents.json"
+            agents_data = _json.loads(agents_file.read_text())
+            for a in agents_data.get("agents", []):
+                if a.get("name", "").lower() == agent_name.lower():
+                    agent_path = Path(a.get("path", "/opt"))
+                    # Check for TODOs.md in agent path and common subdirectories
+                    for candidate in [agent_path / "TODOs.md",
+                                      agent_path / "fosterbot-home" / "TODOs.md"]:
+                        if candidate.exists():
+                            return candidate
+                    return agent_path / "TODOs.md"  # return even if doesn't exist yet
+        except Exception:
+            pass
+        return default
 
-    def _parse_todos_from_md(limit: int = 10) -> list:
+    def _parse_todos_from_md(todo_file: Path, limit: int = 10) -> list:
         """Parse active TODOs from the markdown file, return up to `limit`."""
-        if not _TODO_FILE.exists():
+        if not todo_file.exists():
             return []
         todos = []
         import re
-        with open(_TODO_FILE) as f:
+        with open(todo_file) as f:
             for line in f:
                 line = line.rstrip("\n")
                 stripped = line.strip()
@@ -5492,7 +5512,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         return todos
 
     @app.get("/api/v1/todos")
-    async def get_todos(request: Request, limit: int = 10):
+    async def get_todos(request: Request, agent: str = None, limit: int = 10):
         await authenticate(
             request,
             authorization=request.headers.get("authorization"),
@@ -5500,8 +5520,9 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             x_auth_channel=request.headers.get("x-auth-channel"),
         )
         limit = min(max(1, limit), 50)
-        todos = _parse_todos_from_md(limit)
-        return {"todos": todos, "count": len(todos)}
+        todo_file = _resolve_todo_file(agent)
+        todos = _parse_todos_from_md(todo_file, limit)
+        return {"todos": todos, "count": len(todos), "agent": agent or "default", "file": str(todo_file)}
 
     # --- AI media — publicly served, no auth (images fetched by the agent) ---
     _ai_media_dir = Path("/tmp/webui_ai_media")

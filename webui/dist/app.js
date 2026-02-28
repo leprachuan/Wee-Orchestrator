@@ -172,6 +172,15 @@ function updateSessionMeta(data) {
 
   // Refresh usage indicator whenever meta updates (runtime may have changed)
   if (typeof fetchRuntimeUsage === 'function') fetchRuntimeUsage();
+
+  // Refresh TODOs when agent changes
+  if (typeof fetchAndRenderTodos === 'function') {
+    const newAgent = data?.agent || null;
+    if (newAgent !== _todoCurrentAgent) {
+      _todoCurrentAgent = newAgent;
+      fetchAndRenderTodos();
+    }
+  }
 }
 
 async function fetchAndUpdateMeta(sessionId) {
@@ -922,14 +931,20 @@ function toggleQueuePause() {
 
 // ─── TODO Panel ───────────────────────────────────────────────────────────────
 let _todoRefreshTimer = null;
+let _todoCurrentAgent = null;
 
 async function fetchAndRenderTodos() {
   const list = $('todo-items-list');
   const counter = $('todo-count');
   if (!list) return;
 
+  // Read current agent from the meta pill
+  const agentEl = $('meta-agent');
+  const agent = agentEl ? agentEl.textContent.trim() : '';
+  const agentParam = agent && agent !== '—' ? `&agent=${encodeURIComponent(agent)}` : '';
+
   try {
-    const data = await apiRequest('GET', '/todos?limit=10');
+    const data = await apiRequest('GET', `/todos?limit=10${agentParam}`);
     const todos = data.todos || [];
     if (counter) counter.textContent = todos.length;
 
