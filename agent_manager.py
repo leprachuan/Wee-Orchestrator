@@ -5458,8 +5458,10 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
     def _resolve_todo_file(agent_name: str | None) -> Path:
         """Resolve the TODOs.md file for a given agent.
 
-        Falls back to the default shared TODOs.md when no agent-specific
-        file exists so that switching agents never hides items.
+        Returns the agent-specific TODOs.md path.  When the agent has no
+        TODOs.md the caller receives a non-existent path so that
+        _parse_todos_from_md correctly returns an empty list, ensuring the
+        UI reflects that the agent has no TODOs.
         """
         import json as _json
         default = Path("/opt/fosterbot-home/TODOs.md")
@@ -5475,10 +5477,14 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                                       agent_path / "fosterbot-home" / "TODOs.md"]:
                         if candidate.exists():
                             return candidate
-                    return default  # fall back to shared file
+                    # No TODOs.md for this agent — return non-existent
+                    # path so the panel shows empty instead of falling
+                    # back to another agent's TODOs.
+                    return agent_path / "TODOs.md"
         except Exception:
             pass
-        return default
+        # Unknown agent — return non-existent path
+        return Path(f"/opt/{agent_name}/TODOs.md")
 
     def _parse_todos_from_md(todo_file: Path, limit: int = 10) -> list:
         """Parse active TODOs from the markdown file, return up to `limit`."""
