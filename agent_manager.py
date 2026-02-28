@@ -2459,6 +2459,8 @@ To add custom skill repositories or manage repository settings:
         _api_port_bg = os.environ.get("API_PORT", "8001")
         _shared_key = os.environ.get("API_SHARED_KEY", "")
         _user_identity = self._bg_identity or "unknown"
+        _api_scheme = "https" if os.environ.get("SSL_CERTFILE") else "http"
+        _curl_insecure = " -k" if _api_scheme == "https" else ""
         bg_task_instruction = ""
         if _shared_key:
             bg_task_instruction = f"""
@@ -2467,15 +2469,16 @@ When the user asks you to run something "in the background", you MUST create a b
 
 To create a background task, run this curl command:
 ```
-curl -s -X POST http://127.0.0.1:{_api_port_bg}/api/v1/background-tasks \\
+curl -s{_curl_insecure} -X POST {_api_scheme}://127.0.0.1:{_api_port_bg}/api/v1/background-tasks \\
   -H "Content-Type: application/json" \\
   -H "Authorization: Bearer shared_{_shared_key}" \\
   -H "X-User-Identity: {_user_identity}" \\
   -H "X-Auth-Channel: {channel}" \\
-  -d '{{"prompt": "<the task prompt here>"}}'
+  -d '{{"prompt": "<the task prompt here>", "agent": "{agent}"}}'
 ```
 The API returns a task_id. Tell the user the task was started and they can monitor it in the ⚡ Tasks tab (WebUI) or use `/background status <task_id>`.
-Do NOT run the actual work yourself when backgrounding — the API spawns a separate agent to handle it."""
+Do NOT run the actual work yourself when backgrounding — the API spawns a separate agent to handle it.
+The default agent for background tasks is `{agent}` (inherited from your current session). Only override `"agent"` in the JSON body if the user explicitly requests a different agent."""
 
         context = f"""[Session ID: {n8n_session_id}]
 {runtime_instruction}{agent_desc}{files_context}{render_instruction}{bg_task_instruction}{timeout_instruction}
