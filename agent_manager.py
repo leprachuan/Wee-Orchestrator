@@ -4207,7 +4207,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
     IS_PRODUCTION = APP_ENV != "DEV"
     SHARED_KEY = os.environ.get("API_SHARED_KEY", "")
     if not SHARED_KEY:
-        logger.warning("API shared key is empty — authentication is effectively disabled. Set API_SHARED_KEY env var.")
+        print("[SECURITY][WARN] API shared key is empty — authentication is effectively disabled. Set API_SHARED_KEY env var.", file=sys.stderr)
     PAIRING_CODE_LENGTH = int(os.environ.get("PAIRING_CODE_LENGTH", "6"))
     PAIRING_CODE_TTL = int(os.environ.get("PAIRING_CODE_TTL", "300"))
     SESSION_TOKEN_TTL = int(os.environ.get("SESSION_TOKEN_TTL", "3600"))
@@ -5282,7 +5282,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             if u.strip()
         }
         if not _sched_allowed_telegram and not _sched_allowed_webex:
-            logger.warning("No scheduler allowlist configured — set SCHEDULER_ALLOWED_TELEGRAM and/or SCHEDULER_ALLOWED_WEBEX env vars")
+            print("[SECURITY][WARN] No scheduler allowlist configured — set SCHEDULER_ALLOWED_TELEGRAM and/or SCHEDULER_ALLOWED_WEBEX env vars", file=sys.stderr)
     
         async def _require_scheduler_auth(request: Request) -> dict:
             """Authenticate AND verify the user is allowed to manage scheduled tasks.
