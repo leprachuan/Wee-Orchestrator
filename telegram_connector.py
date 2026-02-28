@@ -192,6 +192,9 @@ class TelegramConnector:
 
         self.offset = 0
         self.running = False
+
+        if not self.config.config.get("allowed_users"):
+            print("⚠️  WARNING: allowed_users is empty — ALL Telegram users can interact with this bot!", file=sys.stderr)
     
     def get_session_manager(self, session_id: str):
         """Get or create SessionManager for session_id"""

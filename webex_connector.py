@@ -181,6 +181,9 @@ class WebEXConnector:
         self.rabbitmq_channel = None
         self.cleanup_thread = None
 
+        if not self.config.config.get("allowed_users"):
+            print("⚠️  WARNING: allowed_users is empty — ALL WebEx users can interact with this bot!", file=sys.stderr)
+
     def get_session_manager(self, session_id: str):
         """Get or create SessionManager for session_id"""
         if session_id not in self.session_managers:
