@@ -199,6 +199,10 @@ class BackgroundTaskManager:
             json.dump(tasks, f, indent=2, default=str)
 
     def _user_key(self, channel: str, identity: str) -> str:
+        # Strip channel prefix from identity to avoid double-prefixing
+        prefix = f"{channel}_"
+        if identity.startswith(prefix):
+            return identity
         return f"{channel}_{identity}"
 
     def create_task(self, task_id: str, session_id: str, user_identity: str,
@@ -423,6 +427,10 @@ class HistoryManager:
             self._save({})
 
     def _user_key(self, channel: str, identity: str) -> str:
+        # Strip channel prefix from identity to avoid double-prefixing
+        prefix = f"{channel}_"
+        if identity.startswith(prefix):
+            return identity
         return f"{channel}_{identity}"
 
     def _load(self) -> dict:
@@ -2467,6 +2475,8 @@ To add custom skill repositories or manage repository settings:
         _api_port_bg = os.environ.get("API_PORT", "8001")
         _shared_key = os.environ.get("API_SHARED_KEY", "")
         _user_identity = self._bg_identity or "unknown"
+        _api_scheme = "https" if os.environ.get("SSL_CERTFILE") else "http"
+        _curl_insecure = " -k" if _api_scheme == "https" else ""
         bg_task_instruction = ""
         if _shared_key:
             bg_task_instruction = f"""
@@ -2475,15 +2485,16 @@ When the user asks you to run something "in the background", you MUST create a b
 
 To create a background task, run this curl command:
 ```
-curl -s -X POST http://127.0.0.1:{_api_port_bg}/api/v1/background-tasks \\
+curl -s{_curl_insecure} -X POST {_api_scheme}://127.0.0.1:{_api_port_bg}/api/v1/background-tasks \\
   -H "Content-Type: application/json" \\
   -H "Authorization: Bearer shared_{_shared_key}" \\
   -H "X-User-Identity: {_user_identity}" \\
   -H "X-Auth-Channel: {channel}" \\
-  -d '{{"prompt": "<the task prompt here>"}}'
+  -d '{{"prompt": "<the task prompt here>", "agent": "{agent}"}}'
 ```
 The API returns a task_id. Tell the user the task was started and they can monitor it in the ⚡ Tasks tab (WebUI) or use `/background status <task_id>`.
-Do NOT run the actual work yourself when backgrounding — the API spawns a separate agent to handle it."""
+Do NOT run the actual work yourself when backgrounding — the API spawns a separate agent to handle it.
+The default agent for background tasks is `{agent}` (inherited from your current session). Only override `"agent"` in the JSON body if the user explicitly requests a different agent."""
 
         # Channel-specific injected context files
         injection_dir = Path(os.environ.get("INJECTION_DIR", Path(SCRIPT_BASE_DIR) / "injections"))
@@ -4213,6 +4224,8 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
     APP_ENV = os.environ.get("APP_ENV", "PROD").upper()
     IS_PRODUCTION = APP_ENV != "DEV"
     SHARED_KEY = os.environ.get("API_SHARED_KEY", "")
+    if not SHARED_KEY:
+        logger.warning("API shared key is empty — authentication is effectively disabled. Set API_SHARED_KEY env var.")
     PAIRING_CODE_LENGTH = int(os.environ.get("PAIRING_CODE_LENGTH", "6"))
     PAIRING_CODE_TTL = int(os.environ.get("PAIRING_CODE_TTL", "300"))
     SESSION_TOKEN_TTL = int(os.environ.get("SESSION_TOKEN_TTL", "3600"))
@@ -4235,6 +4248,8 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
     bg_task_mgr = BackgroundTaskManager()
     session_mgr._bg_task_mgr = bg_task_mgr
     usage_tracker = RuntimeUsageTracker()
+    
+    _start_time = time.time()
 
     # ---- Pydantic models ----
     class ChannelEnum(str, Enum):
@@ -4282,8 +4297,12 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         if token.startswith("shared_"):
             if not auth_mgr.validate_shared_key(token):
                 raise HTTPException(status_code=401, detail="Invalid shared key")
+            # Only trust X-User-Identity from loopback (where our connectors run)
+            client_ip = request.client.host if request.client else ""
+            is_local = client_ip in ("127.0.0.1", "::1", "localhost")
+            identity = x_user_identity if (is_local and x_user_identity) else "shared_key_user"
             return {
-                "identity": x_user_identity or "shared",
+                "identity": identity,
                 "channel": x_auth_channel or "api",
                 "auth_type": "shared_key",
             }
@@ -4364,8 +4383,11 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
     async def health():
         return {
             "status": "ok",
-            "environment": APP_ENV,
+            "uptime_seconds": time.time() - _start_time,
             "version": "1.0.0",
+            "agents_loaded": len(session_mgr.AGENTS),
+            "scheduler_enabled": SCHEDULER_ENABLED,
+            "active_sessions": len(session_mgr.session_map),
         }
 
     @app.get("/api/v1/config")
@@ -4388,6 +4410,18 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 "path": info.get("path", ""),
             })
         return {"agents": agents}
+
+    @app.get("/api/v1/runtimes")
+    async def get_runtimes():
+        """Return list of available runtimes."""
+        runtimes = [
+            {"id": "copilot", "label": "copilot"},
+            {"id": "opencode", "label": "opencode"},
+            {"id": "claude", "label": "claude"},
+            {"id": "gemini", "label": "gemini"},
+            {"id": "codex", "label": "codex"},
+        ]
+        return {"runtimes": runtimes}
 
     @app.get("/api/v1/models")
     async def get_models(runtime: str = "copilot"):
@@ -5272,14 +5306,16 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         # Override with comma-separated env vars to add more users without code changes.
         _sched_allowed_telegram = {
             u.strip().lower().lstrip("@")
-            for u in os.environ.get("SCHEDULER_ALLOWED_TELEGRAM", "vtflip").split(",")
+            for u in os.environ.get("SCHEDULER_ALLOWED_TELEGRAM", "").split(",")
             if u.strip()
         }
         _sched_allowed_webex = {
             u.strip().lower()
-            for u in os.environ.get("SCHEDULER_ALLOWED_WEBEX", "flipkey@cisco.com").split(",")
+            for u in os.environ.get("SCHEDULER_ALLOWED_WEBEX", "").split(",")
             if u.strip()
         }
+        if not _sched_allowed_telegram and not _sched_allowed_webex:
+            logger.warning("No scheduler allowlist configured — set SCHEDULER_ALLOWED_TELEGRAM and/or SCHEDULER_ALLOWED_WEBEX env vars")
     
         async def _require_scheduler_auth(request: Request) -> dict:
             """Authenticate AND verify the user is allowed to manage scheduled tasks.
@@ -5351,6 +5387,9 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         @app.post("/api/v1/scheduler/jobs")
         async def create_scheduler_job(body: ScheduleJobRequest, request: Request):
             user = await _require_scheduler_auth(request)
+            client_ip = request.client.host if request.client else "unknown"
+            if not rate_limiter.check(client_ip, "scheduler_write", max_requests=20, window=60):
+                raise HTTPException(status_code=429, detail="Rate limit exceeded")
             # Resolve Telegram username for storage so the executor can display it
             username = None
             if user.get("channel") == "telegram":
@@ -5387,6 +5426,9 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         @app.put("/api/v1/scheduler/jobs/{job_id}")
         async def update_scheduler_job(job_id: str, body: UpdateJobRequest, request: Request):
             await _require_scheduler_auth(request)
+            client_ip = request.client.host if request.client else "unknown"
+            if not rate_limiter.check(client_ip, "scheduler_write", max_requests=20, window=60):
+                raise HTTPException(status_code=429, detail="Rate limit exceeded")
             updates = {k: v for k, v in body.model_dump().items() if v is not None}
             if not updates:
                 raise HTTPException(status_code=400, detail="No fields to update")
@@ -5398,6 +5440,9 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         @app.delete("/api/v1/scheduler/jobs/{job_id}")
         async def delete_scheduler_job(job_id: str, request: Request):
             await _require_scheduler_auth(request)
+            client_ip = request.client.host if request.client else "unknown"
+            if not rate_limiter.check(client_ip, "scheduler_write", max_requests=20, window=60):
+                raise HTTPException(status_code=429, detail="Rate limit exceeded")
             result = _get_scheduler().delete_job(job_id)
             if not result.get("success"):
                 raise HTTPException(status_code=404, detail=result.get("message", "Not found"))
@@ -5406,6 +5451,9 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         @app.post("/api/v1/scheduler/jobs/{job_id}/pause")
         async def pause_scheduler_job(job_id: str, request: Request):
             await _require_scheduler_auth(request)
+            client_ip = request.client.host if request.client else "unknown"
+            if not rate_limiter.check(client_ip, "scheduler_write", max_requests=20, window=60):
+                raise HTTPException(status_code=429, detail="Rate limit exceeded")
             result = _get_scheduler().pause_job(job_id)
             if not result.get("success"):
                 raise HTTPException(status_code=404, detail=result.get("message", "Not found"))
@@ -5414,6 +5462,9 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         @app.post("/api/v1/scheduler/jobs/{job_id}/resume")
         async def resume_scheduler_job(job_id: str, request: Request):
             await _require_scheduler_auth(request)
+            client_ip = request.client.host if request.client else "unknown"
+            if not rate_limiter.check(client_ip, "scheduler_write", max_requests=20, window=60):
+                raise HTTPException(status_code=429, detail="Rate limit exceeded")
             result = _get_scheduler().resume_job(job_id)
             if not result.get("success"):
                 raise HTTPException(status_code=404, detail=result.get("message", "Not found"))

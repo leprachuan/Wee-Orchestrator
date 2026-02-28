@@ -1766,6 +1766,12 @@ function renderJobDetailView(job) {
 
 function renderJobEditForm(job, container) {
   container.innerHTML = buildJobForm(job);
+  populateAgentDropdown(container);
+  populateRuntimeDropdown(container).then(() => {
+    const rt = container.querySelector('select[name="runtime"]');
+    populateModelDropdown(container, rt?.value || 'claude');
+    if (rt) rt.addEventListener('change', () => populateModelDropdown(container, rt.value));
+  });
   wireJobForm(container, async (payload) => {
     try {
       await schedApi('PUT', `/jobs/${job.id}`, payload);
@@ -1792,6 +1798,12 @@ function openNewJobForm() {
   $('sched-detail-title').textContent = 'New Scheduled Job';
   const body = $('sched-detail-body');
   body.innerHTML = buildJobForm(null);
+  populateAgentDropdown(body);
+  populateRuntimeDropdown(body).then(() => {
+    const rt = body.querySelector('select[name="runtime"]');
+    populateModelDropdown(body, rt?.value || 'claude');
+    if (rt) rt.addEventListener('change', () => populateModelDropdown(body, rt.value));
+  });
   wireJobForm(body, async (payload) => {
     try {
       await schedApi('POST', '/jobs', payload);
@@ -1832,29 +1844,23 @@ function buildJobForm(job) {
         <div class="form-row">
           <div class="form-group">
             <label>Agent</label>
-            <select class="glass-input glass-select" name="agent">
-              <option value="fosterbot" ${(job?.agent ?? 'fosterbot') === 'fosterbot' ? 'selected' : ''}>Fosterbot (Orchestrator)</option>
-              <option value="smart_home" ${job?.agent === 'smart_home' ? 'selected' : ''}>Smart Home</option>
-              <option value="email_triage" ${job?.agent === 'email_triage' ? 'selected' : ''}>Email Triage</option>
-              <option value="opencode" ${job?.agent === 'opencode' ? 'selected' : ''}>OpenCode</option>
-              <option value="devops" ${job?.agent === 'devops' ? 'selected' : ''}>DevOps</option>
-              <option value="family" ${job?.agent === 'family' ? 'selected' : ''}>Family Knowledge</option>
+            <select class="glass-input glass-select" name="agent" data-current="${escHtml(job?.agent ?? '')}">
+              <option value="">Loading agents…</option>
             </select>
           </div>
           <div class="form-group">
             <label>Runtime</label>
-            <select class="glass-input glass-select" name="runtime">
-              <option value="claude"   ${(job?.runtime ?? 'claude') === 'claude'   ? 'selected' : ''}>claude</option>
-              <option value="copilot"  ${job?.runtime === 'copilot'  ? 'selected' : ''}>copilot</option>
-              <option value="gemini"   ${job?.runtime === 'gemini'   ? 'selected' : ''}>gemini</option>
-              <option value="opencode" ${job?.runtime === 'opencode' ? 'selected' : ''}>opencode</option>
+            <select class="glass-input glass-select" name="runtime" data-current="${escHtml(job?.runtime ?? 'claude')}">
+              <option value="">Loading runtimes…</option>
             </select>
           </div>
         </div>
         <div class="form-row">
           <div class="form-group">
             <label>Model <small class="form-hint-inline">(optional — leave blank for runtime default)</small></label>
-            <input class="glass-input" name="model" value="${v('model')}" placeholder="e.g. sonnet, gpt-4o, gemini-1.5-pro" />
+            <select class="glass-input glass-select" name="model" data-current="${escHtml(job?.model ?? '')}">
+              <option value="">Loading models…</option>
+            </select>
           </div>
           <div class="form-group">
             <label>Mode</label>
@@ -1894,6 +1900,67 @@ function buildJobForm(job) {
       <p id="sched-form-error" class="auth-error hidden"></p>
     </form>
   `;
+}
+
+async function populateAgentDropdown(container) {
+  const select = container.querySelector('select[name="agent"]');
+  if (!select) return;
+  const current = select.dataset.current;
+  try {
+    const data = await apiRequest('GET', '/agents');
+    const agents = data.agents || [];
+    select.innerHTML = agents.map(a => {
+      const sel = a.name === current || (!current && a.name === 'orchestrator') ? ' selected' : '';
+      const label = a.description ? `${a.name} — ${a.description}` : a.name;
+      return `<option value="${escHtml(a.name)}"${sel}>${escHtml(label)}</option>`;
+    }).join('');
+    if (!agents.length) {
+      select.innerHTML = '<option value="orchestrator">orchestrator</option>';
+    }
+  } catch (e) {
+    select.innerHTML = current
+      ? `<option value="${escHtml(current)}" selected>${escHtml(current)}</option>`
+      : '<option value="orchestrator">orchestrator</option>';
+  }
+}
+
+async function populateRuntimeDropdown(container) {
+  const select = container.querySelector('select[name="runtime"]');
+  if (!select) return;
+  const current = select.dataset.current || 'claude';
+  try {
+    const data = await apiRequest('GET', '/runtimes');
+    const runtimes = data.runtimes || [];
+    select.innerHTML = runtimes.map(r => {
+      const sel = r.id === current ? ' selected' : '';
+      return `<option value="${escHtml(r.id)}"${sel}>${escHtml(r.label)}</option>`;
+    }).join('');
+    if (!runtimes.length) {
+      select.innerHTML = '<option value="claude">claude</option>';
+    }
+  } catch (e) {
+    select.innerHTML = `<option value="${escHtml(current)}" selected>${escHtml(current)}</option>`;
+  }
+}
+
+async function populateModelDropdown(container, runtime) {
+  const select = container.querySelector('select[name="model"]');
+  if (!select) return;
+  const current = select.dataset.current || '';
+  try {
+    const data = await apiRequest('GET', `/models?runtime=${encodeURIComponent(runtime)}`);
+    const models = data.models || [];
+    let opts = '<option value="">(runtime default)</option>';
+    opts += models.map(m => {
+      const sel = m.id === current ? ' selected' : '';
+      return `<option value="${escHtml(m.id)}"${sel}>${escHtml(m.label)}</option>`;
+    }).join('');
+    select.innerHTML = opts;
+  } catch (e) {
+    let opts = '<option value="">(runtime default)</option>';
+    if (current) opts += `<option value="${escHtml(current)}" selected>${escHtml(current)}</option>`;
+    select.innerHTML = opts;
+  }
 }
 
 function wireJobForm(container, onSubmit) {
@@ -1941,7 +2008,7 @@ function wireJobForm(container, onSubmit) {
       mode:      isCommand ? 'command' : (data.mode || 'restricted'),
     };
     if (!isCommand) {
-      payload.agent   = data.agent || 'fosterbot';
+      payload.agent   = data.agent || 'orchestrator';
       payload.runtime = data.runtime || 'claude';
       payload.model   = data.model?.trim() || null;
     } else {
@@ -2673,8 +2740,16 @@ function renderFileContent(data) {
         wrap.textContent = data.content;
       }
     } else {
-      // HTML → render in sandboxed iframe-like div
-      wrap.innerHTML = data.content;
+      // HTML → render in sandboxed iframe to prevent XSS
+      const iframe = document.createElement('iframe');
+      iframe.sandbox = 'allow-same-origin';
+      iframe.style.cssText = 'width:100%;border:none;min-height:400px;background:#fff';
+      wrap.appendChild(iframe);
+      setTimeout(() => {
+        const doc = iframe.contentDocument || iframe.contentWindow.document;
+        doc.open(); doc.write(data.content); doc.close();
+        iframe.style.height = doc.documentElement.scrollHeight + 'px';
+      }, 0);
     }
     // Make file paths in preview clickable too
     linkifyFilePaths(wrap);

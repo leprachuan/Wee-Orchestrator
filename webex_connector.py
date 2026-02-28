@@ -15,12 +15,15 @@ import time
 import pika
 import mimetypes
 import ssl
+import logging
 from pathlib import Path
 from urllib.parse import unquote
 from typing import Optional, Dict, List
 from datetime import datetime, timedelta
 import agent_manager
 import audio_transcriber
+
+logger = logging.getLogger(__name__)
 
 
 class WebEXConfig:
@@ -177,6 +180,9 @@ class WebEXConnector:
         self.rabbitmq_connection = None
         self.rabbitmq_channel = None
         self.cleanup_thread = None
+
+        if not self.config.config.get("allowed_users"):
+            print("⚠️  WARNING: allowed_users is empty — ALL WebEx users can interact with this bot!", file=sys.stderr)
 
     def get_session_manager(self, session_id: str):
         """Get or create SessionManager for session_id"""
@@ -606,8 +612,8 @@ class WebEXConnector:
                         best = max(candidates, key=os.path.getmtime)
                         print(f"[DEBUG] Fuzzy-matched image path (newest of {len(candidates)}): {resolved} -> {best}", file=sys.stderr, flush=True)
                         return best
-                except OSError:
-                    pass
+                except OSError as e:
+                    logger.debug(f"Failed to check file modification time: {e}")
             return resolved
         return url
 
@@ -860,7 +866,7 @@ class WebEXConnector:
                                     tmp_file.unlink()
                                     print(f"[DEBUG] Cleaned up old temp file: {tmp_file}", file=sys.stderr)
                             except Exception as e:
-                                pass  # Silently ignore errors (file may have been deleted)
+                                logger.debug(f"Failed to clean up temp file: {e}")
 
                     # Clean up downloaded files in webex_downloads/
                     downloads_dir = Path("/opt/n8n-copilot-shim-dev/webex_downloads")
@@ -872,7 +878,7 @@ class WebEXConnector:
                                     file.unlink()
                                     print(f"[DEBUG] Cleaned up old download: {file}", file=sys.stderr)
                             except Exception as e:
-                                pass  # Silently ignore errors
+                                logger.debug(f"Failed to clean up download file: {e}")
 
                     # Sleep before next cleanup cycle
                     time.sleep(interval_seconds)

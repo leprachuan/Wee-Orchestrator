@@ -131,13 +131,14 @@ class TaskScheduler:
         recurring: bool = True,
         working_dir: str = None,
         created_by: Optional[Dict] = None,
+        timeout: int = None,
     ) -> Dict:
         """Create a scheduled task.
 
         Args:
             name: Task name
             schedule: Schedule string (e.g. "every day at 9am", "in 5 minutes")
-            agent: Agent name (default: fosterbot)
+            agent: Agent name (default: orchestrator, or SCHEDULER_DEFAULT_AGENT env var)
             runtime: Runtime (default: claude)
             model: Model override
             mode: Execution mode - 'ai' (LLM-based, default) or 'command' (direct shell)
@@ -146,6 +147,7 @@ class TaskScheduler:
             recurring: Whether task repeats
             working_dir: Working directory for command mode (default: /opt)
             created_by: Optional dict with identity, channel, username for notifications
+            timeout: Execution timeout in seconds (default: 300)
 
         Examples:
             # AI mode (via LLM agent)
@@ -167,7 +169,7 @@ class TaskScheduler:
             )
         """
         if agent is None:
-            agent = os.getenv("SCHEDULER_DEFAULT_AGENT", "fosterbot")
+            agent = os.getenv("SCHEDULER_DEFAULT_AGENT", "orchestrator")
         if runtime is None:
             runtime = os.getenv("SCHEDULER_DEFAULT_RUNTIME", "claude")
         if working_dir is None:
@@ -204,6 +206,7 @@ class TaskScheduler:
             "enabled": True,
             "retries": 0,
             "created_by": created_by or {},
+            "timeout": timeout,
         }
 
         jobs["jobs"].append(job)
@@ -231,7 +234,7 @@ class TaskScheduler:
         Allowed fields: name, schedule, agent, runtime, task, notify, recurring, enabled, mode, model, working_dir.
         If schedule changes, next_run is recalculated.
         """
-        allowed = {"name", "schedule", "agent", "runtime", "task", "notify", "recurring", "enabled", "mode", "model", "working_dir"}
+        allowed = {"name", "schedule", "agent", "runtime", "task", "notify", "recurring", "enabled", "mode", "model", "working_dir", "timeout"}
         invalid = set(updates.keys()) - allowed
         if invalid:
             return {"success": False, "message": f"Unknown fields: {', '.join(invalid)}"}
