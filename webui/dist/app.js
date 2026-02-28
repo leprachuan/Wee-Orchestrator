@@ -773,7 +773,6 @@ function markCurrentQueueAsFailed() {
 
 function processNextQueue() {
   if (STATE.requestQueue.length === 0) {
-    hideQueuePanel();
     STATE.isProcessing = false;
     return;
   }
@@ -802,9 +801,6 @@ function processNextQueue() {
 function deleteQueueItem(queueId) {
   STATE.requestQueue = STATE.requestQueue.filter(item => item.id !== queueId);
   renderQueuePanel();
-  if (STATE.requestQueue.length === 0) {
-    hideQueuePanel();
-  }
 }
 
 function editQueueItem(queueId) {
@@ -820,10 +816,6 @@ function editQueueItem(queueId) {
   autoResizeTextarea(textarea);
   syncMirror();
   renderQueuePanel();
-
-  if (STATE.requestQueue.length === 0) {
-    hideQueuePanel();
-  }
 }
 
 function showQueuePanel() {
