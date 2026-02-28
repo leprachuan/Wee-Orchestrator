@@ -298,8 +298,8 @@ class TaskSchedulerExecutor:
             session_id
         ]
 
-        logger.info(f"[AI Mode] Executing job {job_id}: {task[:60]}...")
-        self._log_job(job_id, f"Starting execution via agent_manager.py (AI mode)")
+        logger.info(f"[AI Mode] Executing job {job_id}: agent={agent}, runtime={runtime}, model={model}, task={task[:60]}...")
+        self._log_job(job_id, f"Executing (AI mode): agent={agent}, runtime={runtime}, model={model}, session={session_id}")
 
         self._write_checkpoint(job_id)
         try:
@@ -369,8 +369,8 @@ class TaskSchedulerExecutor:
         working_dir = job.get("working_dir", "/opt")
         timeout = int(job.get("timeout") or os.getenv("SCHEDULER_DEFAULT_TIMEOUT", "300"))
 
-        logger.info(f"[Command Mode] Executing job {job_id}: {task[:60]}...")
-        self._log_job(job_id, f"Starting direct command execution (working_dir: {working_dir})")
+        logger.info(f"[Command Mode] Executing job {job_id}: working_dir={working_dir}, task={task[:60]}...")
+        self._log_job(job_id, f"Executing (command mode): working_dir={working_dir}, cmd={task[:120]}")
 
         self._write_checkpoint(job_id)
         try:
