@@ -80,11 +80,21 @@ class TaskSchedulerExecutor:
             return {"jobs": []}
 
     def _save_jobs(self, data: Dict):
-        """Save jobs to JSON."""
+        """Save jobs to JSON atomically (write tmp + rename)."""
+        import tempfile
         try:
-            self.jobs_file.write_text(json.dumps(data, indent=2))
+            tmp_fd, tmp_path = tempfile.mkstemp(
+                dir=str(self.jobs_file.parent), suffix=".tmp"
+            )
+            with os.fdopen(tmp_fd, "w") as f:
+                json.dump(data, f, indent=2)
+            os.replace(tmp_path, str(self.jobs_file))
         except Exception as e:
             logger.error(f"Failed to save jobs: {e}")
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
 
     def _check_stale_checkpoints(self):
         """Check for stale checkpoint files on startup (from crashed executions)."""
@@ -499,6 +509,9 @@ class TaskSchedulerExecutor:
         """Check for ready jobs and execute them."""
         data = self._load_jobs()
 
+        # Track which jobs were modified so we only write back when necessary
+        modified_jobs = {}  # job_id -> dict of updated fields
+
         for job in data.get("jobs", []):
             if not self._is_job_ready(job):
                 continue
@@ -511,7 +524,7 @@ class TaskSchedulerExecutor:
 
             # Update job record
             now = datetime.utcnow()
-            job["last_run"] = now.isoformat() + "Z"
+            updates = {"last_run": now.isoformat() + "Z"}
 
             # Handle recurring vs one-time jobs
             recurring = job.get("recurring", True)  # Default: recurring
@@ -520,17 +533,26 @@ class TaskSchedulerExecutor:
                 # Recurring job - calculate next run
                 next_run = self._calculate_next_run(job.get("schedule", ""))
                 if next_run:
-                    job["next_run"] = next_run
+                    updates["next_run"] = next_run
                 else:
                     # If we can't calculate next run, disable the job
-                    job["enabled"] = False
+                    updates["enabled"] = False
                     self._log_job(job_id, "Could not calculate next run, disabling job")
             else:
                 # One-time job - disable after running
-                job["enabled"] = False
+                updates["enabled"] = False
                 self._log_job(job_id, "One-time job completed, disabling")
 
-        self._save_jobs(data)
+            modified_jobs[job_id] = updates
+
+        # Only write if we actually modified something; re-read fresh data
+        # to avoid overwriting concurrent API changes (e.g. deletes)
+        if modified_jobs:
+            fresh_data = self._load_jobs()
+            for job in fresh_data.get("jobs", []):
+                if job["id"] in modified_jobs:
+                    job.update(modified_jobs[job["id"]])
+            self._save_jobs(fresh_data)
 
     def run(self):
         """Main executor loop - runs forever, checking every 1 second."""

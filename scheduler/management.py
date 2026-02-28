@@ -112,11 +112,32 @@ class TaskScheduler:
 
     def _load_jobs(self) -> Dict:
         """Load jobs from JSON."""
-        return json.loads(self.jobs_file.read_text())
+        if not self.jobs_file.exists():
+            return {"jobs": []}
+        try:
+            content = self.jobs_file.read_text()
+            if not content.strip():
+                return {"jobs": []}
+            return json.loads(content)
+        except (json.JSONDecodeError, FileNotFoundError):
+            return {"jobs": []}
 
     def _save_jobs(self, data: Dict):
-        """Save jobs to JSON."""
-        self.jobs_file.write_text(json.dumps(data, indent=2))
+        """Save jobs to JSON atomically (write tmp + rename)."""
+        import tempfile
+        tmp_fd, tmp_path = tempfile.mkstemp(
+            dir=str(self.jobs_file.parent), suffix=".tmp"
+        )
+        try:
+            with os.fdopen(tmp_fd, "w") as f:
+                json.dump(data, f, indent=2)
+            os.replace(tmp_path, str(self.jobs_file))
+        except Exception:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+            raise
 
     def schedule_task(
         self,
