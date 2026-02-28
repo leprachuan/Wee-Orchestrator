@@ -53,12 +53,13 @@ class TaskSchedulerExecutor:
 
     def __init__(self):
         # Scheduler data lives inside the repo at .task-scheduler/
+        # Respect env-var overrides so executor + API always use the same paths
         self.repo_root = _REPO_ROOT
         scheduler_base = _SCHEDULER_BASE
         
-        self.jobs_file = scheduler_base / "jobs.json"
-        self.logs_dir = scheduler_base / "logs/"
-        self.results_dir = scheduler_base / "results/"
+        self.jobs_file = Path(os.getenv("SCHEDULER_JOBS_FILE", str(scheduler_base / "jobs.json")))
+        self.logs_dir = Path(os.getenv("SCHEDULER_LOGS_DIR", str(scheduler_base / "logs/")))
+        self.results_dir = Path(os.getenv("SCHEDULER_RESULTS_DIR", str(scheduler_base / "results/")))
         self.config_file = self.repo_root / "agents.json"
         self.data_dir = scheduler_base
 
