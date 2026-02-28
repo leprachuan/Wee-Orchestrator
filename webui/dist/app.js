@@ -1237,7 +1237,7 @@ function createStreamingBubble() {
 
   const avatar = document.createElement('div');
   avatar.className = 'message-avatar';
-  avatar.innerHTML = '<img src="/static/icon-192.png" alt="Wee" style="width:24px;height:24px;border-radius:6px;">';
+  avatar.innerHTML = '<img src="/static/icon-192.png" alt="Wee" style="width:32px;height:32px;border-radius:8px;">';
   const bubble = document.createElement('div');
   bubble.className = 'message-bubble streaming';
 
@@ -1268,7 +1268,7 @@ async function renderMessage(role, content, files = []) {
 
   const avatar = document.createElement('div');
   avatar.className = 'message-avatar';
-  avatar.innerHTML = role === 'user' ? '👤' : '<img src="/static/icon-192.png" alt="Wee" style="width:24px;height:24px;border-radius:6px;">';
+  avatar.innerHTML = role === 'user' ? '👤' : '<img src="/static/icon-192.png" alt="Wee" style="width:32px;height:32px;border-radius:8px;">';
 
   const bubble = document.createElement('div');
   bubble.className = 'message-bubble';
