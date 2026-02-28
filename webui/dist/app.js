@@ -1766,6 +1766,7 @@ function renderJobDetailView(job) {
 
 function renderJobEditForm(job, container) {
   container.innerHTML = buildJobForm(job);
+  populateAgentDropdown(container);
   wireJobForm(container, async (payload) => {
     try {
       await schedApi('PUT', `/jobs/${job.id}`, payload);
@@ -1792,6 +1793,7 @@ function openNewJobForm() {
   $('sched-detail-title').textContent = 'New Scheduled Job';
   const body = $('sched-detail-body');
   body.innerHTML = buildJobForm(null);
+  populateAgentDropdown(body);
   wireJobForm(body, async (payload) => {
     try {
       await schedApi('POST', '/jobs', payload);
@@ -1832,13 +1834,8 @@ function buildJobForm(job) {
         <div class="form-row">
           <div class="form-group">
             <label>Agent</label>
-            <select class="glass-input glass-select" name="agent">
-              <option value="fosterbot" ${(job?.agent ?? 'fosterbot') === 'fosterbot' ? 'selected' : ''}>Fosterbot (Orchestrator)</option>
-              <option value="smart_home" ${job?.agent === 'smart_home' ? 'selected' : ''}>Smart Home</option>
-              <option value="email_triage" ${job?.agent === 'email_triage' ? 'selected' : ''}>Email Triage</option>
-              <option value="opencode" ${job?.agent === 'opencode' ? 'selected' : ''}>OpenCode</option>
-              <option value="devops" ${job?.agent === 'devops' ? 'selected' : ''}>DevOps</option>
-              <option value="family" ${job?.agent === 'family' ? 'selected' : ''}>Family Knowledge</option>
+            <select class="glass-input glass-select" name="agent" data-current="${escHtml(job?.agent ?? '')}">
+              <option value="">Loading agents…</option>
             </select>
           </div>
           <div class="form-group">
@@ -1894,6 +1891,28 @@ function buildJobForm(job) {
       <p id="sched-form-error" class="auth-error hidden"></p>
     </form>
   `;
+}
+
+async function populateAgentDropdown(container) {
+  const select = container.querySelector('select[name="agent"]');
+  if (!select) return;
+  const current = select.dataset.current;
+  try {
+    const data = await apiRequest('GET', '/agents');
+    const agents = data.agents || [];
+    select.innerHTML = agents.map(a => {
+      const sel = a.name === current || (!current && a.name === 'orchestrator') ? ' selected' : '';
+      const label = a.description ? `${a.name} — ${a.description}` : a.name;
+      return `<option value="${escHtml(a.name)}"${sel}>${escHtml(label)}</option>`;
+    }).join('');
+    if (!agents.length) {
+      select.innerHTML = '<option value="orchestrator">orchestrator</option>';
+    }
+  } catch (e) {
+    select.innerHTML = current
+      ? `<option value="${escHtml(current)}" selected>${escHtml(current)}</option>`
+      : '<option value="orchestrator">orchestrator</option>';
+  }
 }
 
 function wireJobForm(container, onSubmit) {
