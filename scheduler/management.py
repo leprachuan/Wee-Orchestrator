@@ -137,7 +137,7 @@ class TaskScheduler:
         Args:
             name: Task name
             schedule: Schedule string (e.g. "every day at 9am", "in 5 minutes")
-            agent: Agent name (default: fosterbot)
+            agent: Agent name (default: orchestrator, or SCHEDULER_DEFAULT_AGENT env var)
             runtime: Runtime (default: claude)
             model: Model override
             mode: Execution mode - 'ai' (LLM-based, default) or 'command' (direct shell)
@@ -167,7 +167,7 @@ class TaskScheduler:
             )
         """
         if agent is None:
-            agent = os.getenv("SCHEDULER_DEFAULT_AGENT", "fosterbot")
+            agent = os.getenv("SCHEDULER_DEFAULT_AGENT", "orchestrator")
         if runtime is None:
             runtime = os.getenv("SCHEDULER_DEFAULT_RUNTIME", "claude")
         if working_dir is None:

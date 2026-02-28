@@ -5239,14 +5239,16 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         # Override with comma-separated env vars to add more users without code changes.
         _sched_allowed_telegram = {
             u.strip().lower().lstrip("@")
-            for u in os.environ.get("SCHEDULER_ALLOWED_TELEGRAM", "vtflip").split(",")
+            for u in os.environ.get("SCHEDULER_ALLOWED_TELEGRAM", "").split(",")
             if u.strip()
         }
         _sched_allowed_webex = {
             u.strip().lower()
-            for u in os.environ.get("SCHEDULER_ALLOWED_WEBEX", "flipkey@cisco.com").split(",")
+            for u in os.environ.get("SCHEDULER_ALLOWED_WEBEX", "").split(",")
             if u.strip()
         }
+        if not _sched_allowed_telegram and not _sched_allowed_webex:
+            logger.warning("No scheduler allowlist configured — set SCHEDULER_ALLOWED_TELEGRAM and/or SCHEDULER_ALLOWED_WEBEX env vars")
     
         async def _require_scheduler_auth(request: Request) -> dict:
             """Authenticate AND verify the user is allowed to manage scheduled tasks.

@@ -1960,7 +1960,7 @@ function wireJobForm(container, onSubmit) {
       mode:      isCommand ? 'command' : (data.mode || 'restricted'),
     };
     if (!isCommand) {
-      payload.agent   = data.agent || 'fosterbot';
+      payload.agent   = data.agent || 'orchestrator';
       payload.runtime = data.runtime || 'claude';
       payload.model   = data.model?.trim() || null;
     } else {
