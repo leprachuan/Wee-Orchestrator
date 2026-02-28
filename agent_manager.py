@@ -199,6 +199,10 @@ class BackgroundTaskManager:
             json.dump(tasks, f, indent=2, default=str)
 
     def _user_key(self, channel: str, identity: str) -> str:
+        # Strip channel prefix from identity to avoid double-prefixing
+        prefix = f"{channel}_"
+        if identity.startswith(prefix):
+            return identity
         return f"{channel}_{identity}"
 
     def create_task(self, task_id: str, session_id: str, user_identity: str,
@@ -423,6 +427,10 @@ class HistoryManager:
             self._save({})
 
     def _user_key(self, channel: str, identity: str) -> str:
+        # Strip channel prefix from identity to avoid double-prefixing
+        prefix = f"{channel}_"
+        if identity.startswith(prefix):
+            return identity
         return f"{channel}_{identity}"
 
     def _load(self) -> dict:
