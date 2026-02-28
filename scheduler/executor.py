@@ -270,7 +270,7 @@ class TaskSchedulerExecutor:
         runtime = job.get("runtime", os.getenv("SCHEDULER_DEFAULT_RUNTIME", "claude"))
         task = job.get("task", "")
         notify = job.get("notify", False)
-        timeout = int(job.get("timeout", os.getenv("SCHEDULER_DEFAULT_TIMEOUT", "300")))
+        timeout = int(job.get("timeout") or os.getenv("SCHEDULER_DEFAULT_TIMEOUT", "300"))
 
         # Create session ID
         session_id = f"scheduled-{job_id}-{int(time.time())}"
@@ -367,7 +367,7 @@ class TaskSchedulerExecutor:
         task = job.get("task", "")
         notify = job.get("notify", False)
         working_dir = job.get("working_dir", "/opt")
-        timeout = int(job.get("timeout", os.getenv("SCHEDULER_DEFAULT_TIMEOUT", "300")))
+        timeout = int(job.get("timeout") or os.getenv("SCHEDULER_DEFAULT_TIMEOUT", "300"))
 
         logger.info(f"[Command Mode] Executing job {job_id}: {task[:60]}...")
         self._log_job(job_id, f"Starting direct command execution (working_dir: {working_dir})")
