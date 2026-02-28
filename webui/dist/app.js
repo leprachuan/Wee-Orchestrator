@@ -1422,6 +1422,7 @@ async function initApp() {
   } else {
     show($('empty-state'));
   }
+  startTodoRefresh();
 }
 
 // ─── Boot ─────────────────────────────────────────────────────────────────────
@@ -1477,7 +1478,6 @@ document.addEventListener('DOMContentLoaded', () => {
   // --- TODO panel ---
   const btnRefreshTodos = $('btn-refresh-todos');
   if (btnRefreshTodos) btnRefreshTodos.addEventListener('click', fetchAndRenderTodos);
-  startTodoRefresh();
 
   // --- Textarea ---
   const ta = $('message-input');
