@@ -4,9 +4,9 @@
 ## Status: ✅ FULLY RESOLVED
 
 ### Credentials That Were Exposed
-1. **Telegram Bot Token (ACTUAL):** `8594875048:AAEcvAxxVFQSI-yVZDIV-PTK1wHEYLKGuYU`
+1. **Telegram Bot Token (ACTUAL):** `[REDACTED - ROTATED]`
 2. **WebEx Bot Token Pattern:** `Yzc1OWU0NGItNDU1Yi00N2IzLTkwZjctMmU0NGYyYTExMTdmOGFiMmY3MzAtNzdl`
-3. **RabbitMQ Test Password:** `TestPassword123!`
+3. **RabbitMQ Test Password:** `[REDACTED - ROTATE THIS]`
 
 ### Where They Were Located
 - `TELEGRAM_SETUP_SUMMARY.txt` - Full token with setup examples

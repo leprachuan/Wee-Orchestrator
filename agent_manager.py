@@ -4387,7 +4387,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             "version": "1.0.0",
             "agents_loaded": len(session_mgr.AGENTS),
             "scheduler_enabled": SCHEDULER_ENABLED,
-            "active_sessions": len(session_mgr.session_map),
+            "active_sessions": len(session_mgr.load_session_map()),
         }
 
     @app.get("/api/v1/config")
@@ -4641,10 +4641,15 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             # Tell the browser to create its streaming bubble right away
             yield f"data: {_json.dumps({'type': 'start'})}\n\n"
 
-            # Run execute() in a thread — it may take a long time
-            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-                future = loop.run_in_executor(pool, session_mgr.execute, body.query, session_id)
+            # IMPORTANT: Do NOT use `with ThreadPoolExecutor(...) as pool:` here.
+            # Its __exit__ calls shutdown(wait=True) which blocks the asyncio
+            # event loop when the client disconnects (e.g. /cancel aborts the
+            # SSE stream).  That freeze prevents ALL requests (including the
+            # cancel endpoint) from being processed until execute() finishes.
+            pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+            future = loop.run_in_executor(pool, session_mgr.execute, body.query, session_id)
 
+            try:
                 if is_command:
                     # No subprocess → just wait for the result, no chunks to stream
                     try:
@@ -4680,7 +4685,6 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                                 break  # subprocess finished; final result in future
                     except Exception as exc:
                         yield f"data: {_json.dumps({'type': 'error', 'message': str(exc)})}\n\n"
-                        session_mgr._unregister_stream(session_id)
                         return
 
                     try:
@@ -4688,24 +4692,26 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                     except Exception as exc:
                         result = f"Error: {exc}"
 
+                history_mgr.append_message(
+                    user["channel"], user["identity"], session_id, "user", body.query
+                )
+                history_mgr.append_message(
+                    user["channel"], user["identity"], session_id, "assistant", result
+                )
+
+                session_data = session_mgr.get_or_create_session_data(session_id)
+                runtime = session_data.get("runtime", "copilot")
+                done_payload = _json.dumps({
+                    "type": "done",
+                    "response": result,
+                    "runtime": runtime,
+                    "model": session_data.get("model"),
+                })
+                yield f"data: {done_payload}\n\n"
+            finally:
+                if not is_command:
                     session_mgr._unregister_stream(session_id)
-
-            history_mgr.append_message(
-                user["channel"], user["identity"], session_id, "user", body.query
-            )
-            history_mgr.append_message(
-                user["channel"], user["identity"], session_id, "assistant", result
-            )
-
-            session_data = session_mgr.get_or_create_session_data(session_id)
-            runtime = session_data.get("runtime", "copilot")
-            done_payload = _json.dumps({
-                "type": "done",
-                "response": result,
-                "runtime": runtime,
-                "model": session_data.get("model"),
-            })
-            yield f"data: {done_payload}\n\n"
+                pool.shutdown(wait=False)
 
         return StreamingResponse(
             generate(),
@@ -5481,6 +5487,79 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             await _require_scheduler_auth(request)
             return _get_scheduler().get_logs(job_id)
     
+    # --- TODO list API ---------------------------------------------------
+    def _resolve_todo_file(agent_name: str | None) -> Path:
+        """Resolve the TODOs.md file for a given agent.
+
+        Falls back to the default shared TODOs.md when no agent-specific
+        file exists so that switching agents never hides items.
+        """
+        import json as _json
+        default = Path("/opt/fosterbot-home/TODOs.md")
+        if not agent_name:
+            return default
+        try:
+            agents_file = Path(__file__).parent / "agents.json"
+            agents_data = _json.loads(agents_file.read_text())
+            for a in agents_data.get("agents", []):
+                if a.get("name", "").lower() == agent_name.lower():
+                    agent_path = Path(a.get("path", "/opt"))
+                    for candidate in [agent_path / "TODOs.md",
+                                      agent_path / "fosterbot-home" / "TODOs.md"]:
+                        if candidate.exists():
+                            return candidate
+                    return default  # fall back to shared file
+        except Exception:
+            pass
+        return default
+
+    def _parse_todos_from_md(todo_file: Path, limit: int = 10) -> list:
+        """Parse active TODOs from the markdown file, return up to `limit`."""
+        if not todo_file.exists():
+            return []
+        todos = []
+        import re
+        with open(todo_file) as f:
+            for line in f:
+                line = line.rstrip("\n")
+                stripped = line.strip()
+                if stripped.startswith("- "):
+                    stripped = stripped[2:]
+                if not (stripped.startswith("[ ]") or stripped.startswith("[X]") or stripped.startswith("[x]")):
+                    continue
+                completed = stripped.startswith("[X]") or stripped.startswith("[x]")
+                if completed:
+                    continue  # only active todos
+                content = re.sub(r"^\[.\]\s+", "", stripped)
+                due = None
+                due_match = re.search(r"\(due ([^)]+)\)", content)
+                if due_match:
+                    due = due_match.group(1)
+                labels = []
+                label_match = re.search(r"\{([^}]+)\}", content)
+                if label_match:
+                    labels = [l.strip() for l in label_match.group(1).split(",")]
+                # Remove due and label markers from description
+                content = re.sub(r"\s*\(due [^)]+\)", "", content)
+                content = re.sub(r"\s*\{[^}]+\}", "", content).strip()
+                todos.append({"description": content, "due": due, "labels": labels})
+                if len(todos) >= limit:
+                    break
+        return todos
+
+    @app.get("/api/v1/todos")
+    async def get_todos(request: Request, agent: str = None, limit: int = 10):
+        await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        limit = min(max(1, limit), 50)
+        todo_file = _resolve_todo_file(agent)
+        todos = _parse_todos_from_md(todo_file, limit)
+        return {"todos": todos, "count": len(todos), "agent": agent or "default", "file": str(todo_file)}
+
     # --- AI media — publicly served, no auth (images fetched by the agent) ---
     _ai_media_dir = Path("/tmp/webui_ai_media")
     _ai_media_dir.mkdir(parents=True, exist_ok=True)

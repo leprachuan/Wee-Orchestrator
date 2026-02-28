@@ -172,6 +172,15 @@ function updateSessionMeta(data) {
 
   // Refresh usage indicator whenever meta updates (runtime may have changed)
   if (typeof fetchRuntimeUsage === 'function') fetchRuntimeUsage();
+
+  // Refresh TODOs when agent changes
+  if (typeof fetchAndRenderTodos === 'function') {
+    const newAgent = data?.agent || null;
+    if (newAgent !== _todoCurrentAgent) {
+      _todoCurrentAgent = newAgent;
+      fetchAndRenderTodos();
+    }
+  }
 }
 
 async function fetchAndUpdateMeta(sessionId) {
@@ -764,7 +773,6 @@ function markCurrentQueueAsFailed() {
 
 function processNextQueue() {
   if (STATE.requestQueue.length === 0) {
-    hideQueuePanel();
     STATE.isProcessing = false;
     return;
   }
@@ -793,9 +801,6 @@ function processNextQueue() {
 function deleteQueueItem(queueId) {
   STATE.requestQueue = STATE.requestQueue.filter(item => item.id !== queueId);
   renderQueuePanel();
-  if (STATE.requestQueue.length === 0) {
-    hideQueuePanel();
-  }
 }
 
 function editQueueItem(queueId) {
@@ -811,10 +816,6 @@ function editQueueItem(queueId) {
   autoResizeTextarea(textarea);
   syncMirror();
   renderQueuePanel();
-
-  if (STATE.requestQueue.length === 0) {
-    hideQueuePanel();
-  }
 }
 
 function showQueuePanel() {
@@ -918,6 +919,70 @@ function toggleQueuePause() {
   if (!STATE.queuePaused && !STATE.isProcessing && STATE.requestQueue.length > 0) {
     processNextQueue();
   }
+}
+
+// ─── TODO Panel ───────────────────────────────────────────────────────────────
+let _todoRefreshTimer = null;
+let _todoCurrentAgent = null;
+
+async function fetchAndRenderTodos() {
+  const list = $('todo-items-list');
+  const counter = $('todo-count');
+  if (!list) return;
+
+  // Read current agent from the meta pill
+  const agentEl = $('meta-agent');
+  const agent = agentEl ? agentEl.textContent.trim() : '';
+  const agentParam = agent && agent !== '—' ? `&agent=${encodeURIComponent(agent)}` : '';
+
+  try {
+    const data = await apiRequest('GET', `/todos?limit=10${agentParam}`);
+    const todos = data.todos || [];
+    if (counter) counter.textContent = todos.length;
+
+    if (todos.length === 0) {
+      list.innerHTML = '<p class="todo-empty">No upcoming TODOs</p>';
+      return;
+    }
+
+    const now = new Date();
+    list.innerHTML = todos.map(t => {
+      let dueBadge = '';
+      if (t.due) {
+        // Parse due date
+        let dueDate;
+        const parts = t.due.split(' ');
+        const dateParts = parts[0].split('/');
+        if (parts.length > 1) {
+          dueDate = new Date(`${dateParts[2]}-${dateParts[0].padStart(2,'0')}-${dateParts[1].padStart(2,'0')}T${parts[1]}`);
+        } else {
+          dueDate = new Date(`${dateParts[2]}-${dateParts[0].padStart(2,'0')}-${dateParts[1].padStart(2,'0')}T00:00:00`);
+        }
+        const isOverdue = dueDate < now;
+        const overdueClass = isOverdue ? ' overdue' : '';
+        dueBadge = `<span class="todo-due${overdueClass}">${isOverdue ? '⚠️' : '📅'} ${t.due}</span>`;
+      }
+
+      const labels = (t.labels || []).map(l => `<span class="todo-label">${l}</span>`).join('');
+
+      return `<div class="todo-item">
+        <div class="todo-item-desc">${escHtml(t.description)}</div>
+        <div class="todo-item-meta">${dueBadge}${labels}</div>
+      </div>`;
+    }).join('');
+  } catch (e) {
+    list.innerHTML = '<p class="todo-empty">Could not load TODOs</p>';
+  }
+}
+
+function startTodoRefresh() {
+  fetchAndRenderTodos();
+  if (_todoRefreshTimer) clearInterval(_todoRefreshTimer);
+  _todoRefreshTimer = setInterval(fetchAndRenderTodos, 60000); // refresh every 60s
+}
+
+function stopTodoRefresh() {
+  if (_todoRefreshTimer) { clearInterval(_todoRefreshTimer); _todoRefreshTimer = null; }
 }
 
 // ─── Messaging ────────────────────────────────────────────────────────────────
@@ -1364,6 +1429,7 @@ async function initApp() {
   } else {
     show($('empty-state'));
   }
+  startTodoRefresh();
 }
 
 // ─── Boot ─────────────────────────────────────────────────────────────────────
@@ -1415,6 +1481,10 @@ document.addEventListener('DOMContentLoaded', () => {
   // --- Request Queue ---
   $('btn-toggle-queue').addEventListener('click', toggleQueuePanel);
   $('btn-pause-queue').addEventListener('click', toggleQueuePause);
+
+  // --- TODO panel ---
+  const btnRefreshTodos = $('btn-refresh-todos');
+  if (btnRefreshTodos) btnRefreshTodos.addEventListener('click', fetchAndRenderTodos);
 
   // --- Textarea ---
   const ta = $('message-input');

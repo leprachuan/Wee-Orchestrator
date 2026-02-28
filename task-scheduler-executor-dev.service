@@ -14,6 +14,7 @@ RestartSec=5
 StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=task-scheduler-executor-dev
+EnvironmentFile=/opt/n8n-copilot-shim-dev/.env
 Environment="PYTHONUNBUFFERED=1"
 Environment="HOME=/home/flipkey"
 Environment="PATH=/home/flipkey/.local/bin:/home/flipkey/.nvm/versions/node/v22.22.0/bin:/usr/local/bin:/usr/bin:/bin"

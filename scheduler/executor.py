@@ -53,12 +53,13 @@ class TaskSchedulerExecutor:
 
     def __init__(self):
         # Scheduler data lives inside the repo at .task-scheduler/
+        # Respect env-var overrides so executor + API always use the same paths
         self.repo_root = _REPO_ROOT
         scheduler_base = _SCHEDULER_BASE
         
-        self.jobs_file = scheduler_base / "jobs.json"
-        self.logs_dir = scheduler_base / "logs/"
-        self.results_dir = scheduler_base / "results/"
+        self.jobs_file = Path(os.getenv("SCHEDULER_JOBS_FILE", str(scheduler_base / "jobs.json")))
+        self.logs_dir = Path(os.getenv("SCHEDULER_LOGS_DIR", str(scheduler_base / "logs/")))
+        self.results_dir = Path(os.getenv("SCHEDULER_RESULTS_DIR", str(scheduler_base / "results/")))
         self.config_file = self.repo_root / "agents.json"
         self.data_dir = scheduler_base
 
@@ -79,11 +80,21 @@ class TaskSchedulerExecutor:
             return {"jobs": []}
 
     def _save_jobs(self, data: Dict):
-        """Save jobs to JSON."""
+        """Save jobs to JSON atomically (write tmp + rename)."""
+        import tempfile
         try:
-            self.jobs_file.write_text(json.dumps(data, indent=2))
+            tmp_fd, tmp_path = tempfile.mkstemp(
+                dir=str(self.jobs_file.parent), suffix=".tmp"
+            )
+            with os.fdopen(tmp_fd, "w") as f:
+                json.dump(data, f, indent=2)
+            os.replace(tmp_path, str(self.jobs_file))
         except Exception as e:
             logger.error(f"Failed to save jobs: {e}")
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
 
     def _check_stale_checkpoints(self):
         """Check for stale checkpoint files on startup (from crashed executions)."""
@@ -259,7 +270,7 @@ class TaskSchedulerExecutor:
         runtime = job.get("runtime", os.getenv("SCHEDULER_DEFAULT_RUNTIME", "claude"))
         task = job.get("task", "")
         notify = job.get("notify", False)
-        timeout = int(job.get("timeout", os.getenv("SCHEDULER_DEFAULT_TIMEOUT", "300")))
+        timeout = int(job.get("timeout") or os.getenv("SCHEDULER_DEFAULT_TIMEOUT", "300"))
 
         # Create session ID
         session_id = f"scheduled-{job_id}-{int(time.time())}"
@@ -287,8 +298,8 @@ class TaskSchedulerExecutor:
             session_id
         ]
 
-        logger.info(f"[AI Mode] Executing job {job_id}: {task[:60]}...")
-        self._log_job(job_id, f"Starting execution via agent_manager.py (AI mode)")
+        logger.info(f"[AI Mode] Executing job {job_id}: agent={agent}, runtime={runtime}, model={model}, task={task[:60]}...")
+        self._log_job(job_id, f"Executing (AI mode): agent={agent}, runtime={runtime}, model={model}, session={session_id}")
 
         self._write_checkpoint(job_id)
         try:
@@ -356,10 +367,10 @@ class TaskSchedulerExecutor:
         task = job.get("task", "")
         notify = job.get("notify", False)
         working_dir = job.get("working_dir", "/opt")
-        timeout = int(job.get("timeout", os.getenv("SCHEDULER_DEFAULT_TIMEOUT", "300")))
+        timeout = int(job.get("timeout") or os.getenv("SCHEDULER_DEFAULT_TIMEOUT", "300"))
 
-        logger.info(f"[Command Mode] Executing job {job_id}: {task[:60]}...")
-        self._log_job(job_id, f"Starting direct command execution (working_dir: {working_dir})")
+        logger.info(f"[Command Mode] Executing job {job_id}: working_dir={working_dir}, task={task[:60]}...")
+        self._log_job(job_id, f"Executing (command mode): working_dir={working_dir}, cmd={task[:120]}")
 
         self._write_checkpoint(job_id)
         try:
@@ -498,6 +509,9 @@ class TaskSchedulerExecutor:
         """Check for ready jobs and execute them."""
         data = self._load_jobs()
 
+        # Track which jobs were modified so we only write back when necessary
+        modified_jobs = {}  # job_id -> dict of updated fields
+
         for job in data.get("jobs", []):
             if not self._is_job_ready(job):
                 continue
@@ -510,7 +524,7 @@ class TaskSchedulerExecutor:
 
             # Update job record
             now = datetime.utcnow()
-            job["last_run"] = now.isoformat() + "Z"
+            updates = {"last_run": now.isoformat() + "Z"}
 
             # Handle recurring vs one-time jobs
             recurring = job.get("recurring", True)  # Default: recurring
@@ -519,17 +533,26 @@ class TaskSchedulerExecutor:
                 # Recurring job - calculate next run
                 next_run = self._calculate_next_run(job.get("schedule", ""))
                 if next_run:
-                    job["next_run"] = next_run
+                    updates["next_run"] = next_run
                 else:
                     # If we can't calculate next run, disable the job
-                    job["enabled"] = False
+                    updates["enabled"] = False
                     self._log_job(job_id, "Could not calculate next run, disabling job")
             else:
                 # One-time job - disable after running
-                job["enabled"] = False
+                updates["enabled"] = False
                 self._log_job(job_id, "One-time job completed, disabling")
 
-        self._save_jobs(data)
+            modified_jobs[job_id] = updates
+
+        # Only write if we actually modified something; re-read fresh data
+        # to avoid overwriting concurrent API changes (e.g. deletes)
+        if modified_jobs:
+            fresh_data = self._load_jobs()
+            for job in fresh_data.get("jobs", []):
+                if job["id"] in modified_jobs:
+                    job.update(modified_jobs[job["id"]])
+            self._save_jobs(fresh_data)
 
     def run(self):
         """Main executor loop - runs forever, checking every 1 second."""
