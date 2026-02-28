@@ -5543,6 +5543,10 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
     if _webui_dist.exists():
         app.mount("/ui", StaticFiles(directory=str(_webui_dist), html=True), name="webui")
 
+    _static_dir = Path(__file__).parent / "static"
+    if _static_dir.exists():
+        app.mount("/static", StaticFiles(directory=str(_static_dir)), name="static")
+
     return app
 
 
