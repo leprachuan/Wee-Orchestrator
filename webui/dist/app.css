@@ -1846,7 +1846,7 @@ html, body {
     bottom: 56px; /* above tab bar */
     width: 100%;
     height: auto;
-    z-index: 50;
+    z-index: 100;
     flex-direction: column;
     overflow: hidden;
     backdrop-filter: blur(20px);
@@ -1926,6 +1926,10 @@ html, body {
     right: 0;
     bottom: 56px; /* space for mobile tab bar */
     z-index: 1;
+  }
+
+  .main-panel.hidden {
+    display: none !important;
   }
 
   /* Always show sidebar toggle on mobile */

@@ -3012,17 +3012,20 @@ function switchMobileTab(tabName) {
   });
 
   const panel = $('request-queue-panel');
-  if (!panel) return;
+  const chatPanel = $('chat-panel');
+  if (!panel || !chatPanel) return;
 
   if (tabName === 'chat') {
     // Hide panel overlay, restore minimized state
     panel.classList.remove('mobile-panel-active', 'mobile-show-queue-only', 'mobile-show-todos-only');
+    chatPanel.classList.remove('hidden');
     if (_mobileQueueWasMinimized) panel.classList.add('queue-minimized');
   } else {
     // Save current minimized state before showing
     _mobileQueueWasMinimized = panel.classList.contains('queue-minimized');
     panel.classList.remove('queue-minimized');
     panel.classList.add('mobile-panel-active');
+    chatPanel.classList.add('hidden');
 
     if (tabName === 'queue') {
       panel.classList.add('mobile-show-queue-only');
