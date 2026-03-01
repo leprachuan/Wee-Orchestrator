@@ -2488,7 +2488,7 @@ These commands allow you to control the agent's behavior and are processed by th
 - /schedule logs <job_id> - View logs for a job
 - /schedule results <job_id> - View execution results for a job
 - /background <prompt> - Run a task in the background (doesn't block chat)
-- /background agent=<name> model=<model> <prompt> - Background task with overrides
+- /background agent=<name> model=<model> timeout=<seconds> <prompt> - Background task with overrides
 - /background list - List your background tasks
 - /background status <task_id> - Check background task status
 - /background kill <task_id> - Kill a running background task
@@ -2591,11 +2591,18 @@ curl -s{_curl_insecure} -X POST {_api_scheme}://127.0.0.1:{_api_port_bg}/api/v1/
   -H "Authorization: Bearer shared_{_shared_key}" \\
   -H "X-User-Identity: {_user_identity}" \\
   -H "X-Auth-Channel: {channel}" \\
-  -d '{{"prompt": "<the task prompt here>", "agent": "{agent}"}}'
+  -d '{{"prompt": "<the task prompt here>", "agent": "{agent}", "timeout": <seconds>}}'
 ```
 The API returns a task_id. Tell the user the task was started and they can monitor it in the ⚡ Tasks tab (WebUI) or use `/background status <task_id>`.
 Do NOT run the actual work yourself when backgrounding — the API spawns a separate agent to handle it.
-The default agent for background tasks is `{agent}` (inherited from your current session). Only override `"agent"` in the JSON body if the user explicitly requests a different agent."""
+The default agent for background tasks is `{agent}` (inherited from your current session). Only override `"agent"` in the JSON body if the user explicitly requests a different agent.
+
+**IMPORTANT — You must set the `timeout` field.** Estimate how long the task will realistically take and set an appropriate timeout in seconds. Examples:
+- Quick status check or simple query: 120 (2 min)
+- Standard task (summarize, analyze, write): 600 (10 min)
+- Multi-step or research task: 900 (15 min)
+- Complex build, deploy, or batch job: 1200–1800 (20–30 min)
+Default if truly uncertain: 900 (15 min). Do not omit the `timeout` field."""
 
         context = f"""[Session ID: {n8n_session_id}]
 {runtime_instruction}{agent_desc}{files_context}{render_instruction}{bg_task_instruction}{timeout_instruction}
@@ -3883,6 +3890,7 @@ You can mention an agent in your prompt and it will auto-delegate:
                     "• `/background <prompt>` — Run a task in the background\n"
                     "• `/background agent=devops <prompt>` — Override agent\n"
                     "• `/background runtime=claude model=sonnet <prompt>` — Override runtime/model\n"
+                    "• `/background timeout=600 <prompt>` — Override timeout (seconds)\n"
                     "• `/background list` — List your background tasks\n"
                     "• `/background status <task_id>` — Check task status\n"
                     "• `/background kill <task_id>` — Kill a running task\n\n"
@@ -3938,10 +3946,11 @@ You can mention an agent in your prompt and it will auto-delegate:
                 return f"❌ Could not kill task `{tid}` (not found or not running)."
 
             # Otherwise it's a prompt to run in the background
-            # Parse optional overrides: agent=X runtime=Y model=Z
+            # Parse optional overrides: agent=X runtime=Y model=Z timeout=N
             bg_agent = session_data.get("agent", "orchestrator")
             bg_runtime = session_data.get("runtime", "copilot")
             bg_model = session_data.get("model", "gpt-5-mini")
+            bg_timeout_override = None
             bg_prompt_parts = []
             for word in sub.split():
                 if word.startswith("agent="):
@@ -3950,6 +3959,11 @@ You can mention an agent in your prompt and it will auto-delegate:
                     bg_runtime = word[8:]
                 elif word.startswith("model="):
                     bg_model = word[6:]
+                elif word.startswith("timeout="):
+                    try:
+                        bg_timeout_override = int(word[8:])
+                    except ValueError:
+                        pass
                 else:
                     bg_prompt_parts.append(word)
             bg_prompt = " ".join(bg_prompt_parts)
@@ -3963,7 +3977,7 @@ You can mention an agent in your prompt and it will auto-delegate:
             if running >= BackgroundTaskManager.MAX_TASKS_PER_USER:
                 return f"❌ Maximum {BackgroundTaskManager.MAX_TASKS_PER_USER} concurrent background tasks allowed."
 
-            bg_timeout = estimate_background_timeout(bg_prompt, default=get_bg_command_timeout())
+            bg_timeout = bg_timeout_override if bg_timeout_override is not None else get_bg_command_timeout()
             task_id = f"bg_{str(uuid4())[:8]}"
             bg_session_id = f"bg_{str(uuid4())[:8]}"
             self._bg_task_mgr.create_task(
@@ -5186,6 +5200,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         agent: Optional[str] = None
         runtime: Optional[str] = None
         model: Optional[str] = None
+        timeout: Optional[int] = None
 
         @field_validator("prompt")
         @classmethod
@@ -5267,8 +5282,8 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             prompt=body.prompt,
         )
 
-        # Estimate an appropriate timeout based on the task
-        bg_timeout = estimate_background_timeout(body.prompt, default=get_bg_command_timeout())
+        # Use agent-specified timeout or fall back to default (15 min)
+        bg_timeout = body.timeout if body.timeout is not None else get_bg_command_timeout()
 
         # Run in background thread
         loop = asyncio.get_event_loop()
