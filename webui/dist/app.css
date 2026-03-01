@@ -256,6 +256,8 @@ html, body {
   z-index: 10;
   transition: width var(--transition), transform 0.25s ease;
   overflow: hidden;
+  will-change: transform;
+  isolation: isolate;
 }
 
 .sidebar.collapsed {
