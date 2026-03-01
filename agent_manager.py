@@ -2989,14 +2989,14 @@ User Request:
             ]
             print(f"[Session] Resuming CODEX session: {session_id} in {mode} mode", file=sys.stderr)
         else:
-            # Start new session
-            cmd = [
-                "codex",
-                "exec",
-                context_prompt,
-            ]
+            # Start new session - flags must come BEFORE the prompt positional arg
+            cmd = ["codex", "exec"]
             if mode == "yolo":
+                # Bypass all sandbox restrictions (sudo, DNS, network, filesystem)
                 cmd.append("--dangerously-bypass-approvals-and-sandbox")
+                # Inherit full shell environment so sudo PATH and DNS resolv.conf are available
+                cmd += ["-c", "shell_environment_policy.inherit=all"]
+            cmd.append(context_prompt)
             print(f"[Session] Starting new CODEX session in {mode} mode", file=sys.stderr)
 
         output = self._execute_subprocess_with_tracking(
