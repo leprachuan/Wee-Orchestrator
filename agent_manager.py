@@ -4709,13 +4709,10 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
 
         # Apply per-query overrides for model, runtime, and agent if provided
         if body.model:
-            print(f"[DEBUG] Updating model from {existing.get('model')} to {body.model}", file=sys.stderr)
             session_mgr.update_session_field(session_id, "model", body.model)
         if body.runtime:
-            print(f"[DEBUG] Updating runtime from {existing.get('runtime')} to {body.runtime}", file=sys.stderr)
             session_mgr.update_session_field(session_id, "runtime", body.runtime)
         if body.agent:
-            print(f"[DEBUG] Updating agent from {existing.get('agent')} to {body.agent}", file=sys.stderr)
             session_mgr.update_session_field(session_id, "agent", body.agent)
 
         session_mgr._bg_identity = user["identity"]
