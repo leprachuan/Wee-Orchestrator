@@ -2415,7 +2415,8 @@ html, body {
 }
 
 .queue-items-list {
-  flex: 1;
+  flex: 1 1 0;
+  min-height: 0;
   overflow-y: auto;
   padding: 8px;
   display: flex;
@@ -2511,10 +2512,10 @@ html, body {
 
 /* ========== TODO SECTION (inside queue panel) ========== */
 .todo-section {
-  border-top: 1px solid var(--glass-border);
+  border-bottom: 1px solid var(--glass-border);
   display: flex;
   flex-direction: column;
-  flex: 1;
+  flex: 2 1 0;
   min-height: 0;
 }
 .todo-section-header {

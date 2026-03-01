@@ -173,6 +173,19 @@
 
     <!-- REQUEST QUEUE PANEL (right side) -->
     <aside id="request-queue-panel" class="request-queue-panel queue-minimized">
+      <!-- TODO Section (inside queue panel) -->
+      <div id="todo-section" class="todo-section">
+        <div class="todo-section-header">
+          <span class="todo-section-icon">✅</span>
+          <span class="todo-section-label">Upcoming TODOs</span>
+          <span id="todo-count" class="todo-count">0</span>
+          <button id="btn-refresh-todos" class="todo-refresh-btn" title="Refresh TODOs">↻</button>
+        </div>
+        <div id="todo-items-list" class="todo-items-list">
+          <p class="todo-empty"><img src="/static/icon-192.png" alt="" style="width:48px;height:48px;border-radius:10px;opacity:0.5;display:block;margin:0 auto 8px;"><span>No upcoming TODOs</span></p>
+        </div>
+      </div>
+
       <!-- Queue Header -->
       <div class="queue-header">
         <div class="queue-header-title">
@@ -189,19 +202,6 @@
       <!-- Queue Items List -->
       <div id="queue-items-list" class="queue-items-list">
         <p class="queue-empty"><img src="/static/icon-192.png" alt="" style="width:48px;height:48px;border-radius:10px;opacity:0.5;display:block;margin:0 auto 8px;"><span>No queued requests</span></p>
-      </div>
-
-      <!-- TODO Section (inside queue panel) -->
-      <div id="todo-section" class="todo-section">
-        <div class="todo-section-header">
-          <span class="todo-section-icon">✅</span>
-          <span class="todo-section-label">Upcoming TODOs</span>
-          <span id="todo-count" class="todo-count">0</span>
-          <button id="btn-refresh-todos" class="todo-refresh-btn" title="Refresh TODOs">↻</button>
-        </div>
-        <div id="todo-items-list" class="todo-items-list">
-          <p class="todo-empty"><img src="/static/icon-192.png" alt="" style="width:48px;height:48px;border-radius:10px;opacity:0.5;display:block;margin:0 auto 8px;"><span>No upcoming TODOs</span></p>
-        </div>
       </div>
 
       <!-- Queue Footer -->

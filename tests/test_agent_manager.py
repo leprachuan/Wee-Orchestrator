@@ -239,6 +239,42 @@ class TestSessionPersistence(unittest.TestCase):
         manager = SessionManager(str(self.config_file))
         self.assertEqual(manager.opencode_bin, discovered)
 
+    def test_opencode_session_exists_with_session_diff_layout(self):
+        """OpenCode session detection should support storage/session_diff layout."""
+        manager = SessionManager(str(self.config_file))
+        session_id = "ses_testSessionDiff1234567890"
+        session_diff_dir = (
+            self.temp_path / ".local" / "share" / "opencode" / "storage" / "session_diff"
+        )
+        session_diff_dir.mkdir(parents=True, exist_ok=True)
+        (session_diff_dir / f"{session_id}.json").write_text("{}", encoding="utf-8")
+
+        self.assertTrue(manager.session_exists(session_id, "opencode"))
+
+    @patch("agent_manager.subprocess.run")
+    def test_opencode_recent_session_prefers_filesystem_over_cli(self, mock_run):
+        """Most recent OpenCode session should come from filesystem artifacts."""
+        manager = SessionManager(str(self.config_file))
+        session_diff_dir = (
+            self.temp_path / ".local" / "share" / "opencode" / "storage" / "session_diff"
+        )
+        session_diff_dir.mkdir(parents=True, exist_ok=True)
+
+        older = session_diff_dir / "ses_olderSession1234567890.json"
+        newer = session_diff_dir / "ses_newerSession1234567890.json"
+        older.write_text("{}", encoding="utf-8")
+        newer.write_text("{}", encoding="utf-8")
+        os.utime(older, (100, 100))
+        os.utime(newer, (200, 200))
+
+        # Even if CLI listing fails, filesystem lookup should succeed.
+        mock_run.return_value = MagicMock(returncode=1, stdout="", stderr="error")
+
+        self.assertEqual(
+            manager.get_most_recent_session_id("opencode", "test_devops"),
+            "ses_newerSession1234567890",
+        )
+
 
 class TestSlashCommands(unittest.TestCase):
     """Test slash command parsing and execution"""

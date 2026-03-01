@@ -3007,14 +3007,14 @@ User Request:
             ]
             print(f"[Session] Resuming CODEX session: {session_id} in {mode} mode", file=sys.stderr)
         else:
-            # Start new session
-            cmd = [
-                "codex",
-                "exec",
-                context_prompt,
-            ]
+            # Start new session - flags must come BEFORE the prompt positional arg
+            cmd = ["codex", "exec"]
             if mode == "yolo":
+                # Bypass all sandbox restrictions (sudo, DNS, network, filesystem)
                 cmd.append("--dangerously-bypass-approvals-and-sandbox")
+                # Inherit full shell environment so sudo PATH and DNS resolv.conf are available
+                cmd += ["-c", "shell_environment_policy.inherit=all"]
+            cmd.append(context_prompt)
             print(f"[Session] Starting new CODEX session in {mode} mode", file=sys.stderr)
 
         output = self._execute_subprocess_with_tracking(
@@ -3036,19 +3036,11 @@ User Request:
             # Legacy: also check for old .jsonl format at root level
             return (self.session_state_dir / f"{session_id}.jsonl").exists()
         elif runtime == "opencode":
-            # OpenCode stores sessions in nested directories: ~/.local/share/opencode/storage/session/HASH/ses_*.json
-            # We need to search for the session file in any project directory
+            if not session_id or not session_id.startswith("ses_"):
+                return False
             try:
-                session_dir = (
-                    Path.home()
-                    / ".local"
-                    / "share"
-                    / "opencode"
-                    / "storage"
-                    / "session"
-                )
-                if session_dir.exists():
-                    for session_file in session_dir.glob(f"*/{session_id}.json"):
+                for session_file in self._find_opencode_session_files():
+                    if session_file.stem == session_id:
                         return True
             except Exception:
                 pass
@@ -3106,32 +3098,31 @@ User Request:
                 )
                 return files[0].stem if files else None
             elif runtime == "opencode":
-                # For OpenCode, we list sessions in the agent's directory
-                agent_dir = self.AGENTS.get(agent, self.AGENTS["orchestrator"])["path"]
+                # Prefer filesystem lookup because `opencode session list` may fail on some hosts
+                # (for example due to sqlite/model service issues) even when session files exist.
+                files = self._find_opencode_session_files()
+                if files:
+                    files_sorted = sorted(
+                        files,
+                        key=lambda p: p.stat().st_mtime,
+                        reverse=True,
+                    )
+                    return files_sorted[0].stem
 
-                # Use | cat to bypass pager by setting PAGER env var
+                # Fallback to CLI listing if no files found.
+                agent_dir = self.AGENTS.get(agent, self.AGENTS["orchestrator"])["path"]
                 env = os.environ.copy()
                 env["PAGER"] = "cat"
-
                 cmd = [str(self.opencode_bin), "session", "list"]
                 result = subprocess.run(
                     cmd, capture_output=True, text=True, cwd=agent_dir, env=env
                 )
-
                 if result.returncode != 0:
                     return None
-
-                lines = result.stdout.splitlines()
-                # Output format:
-                # Session ID ...
-                # ─────── ...
-                # ses_123 ...
-
-                for line in lines:
-                    if line.strip().startswith("ses_"):
-                        # Found the first session ID
+                for line in result.stdout.splitlines():
+                    line = line.strip()
+                    if line.startswith("ses_"):
                         return line.split()[0]
-
                 return None
             elif runtime == "gemini":
                 files = sorted(
@@ -3166,6 +3157,21 @@ User Request:
         except Exception as e:
             print(f"Error getting recent session ID: {e}", file=sys.stderr)
             return None
+
+    def _find_opencode_session_files(self) -> List[Path]:
+        """Find OpenCode session JSON files across known storage layouts."""
+        storage_root = Path.home() / ".local" / "share" / "opencode" / "storage"
+        candidates = []
+        # Newer OpenCode layout observed on this host.
+        session_diff_dir = storage_root / "session_diff"
+        if session_diff_dir.exists():
+            candidates.extend(session_diff_dir.glob("ses_*.json"))
+        # Legacy layout used by older OpenCode versions.
+        session_dir = storage_root / "session"
+        if session_dir.exists():
+            candidates.extend(session_dir.glob("*/ses_*.json"))
+            candidates.extend(session_dir.glob("ses_*.json"))
+        return [p for p in candidates if p.is_file()]
 
     # Background task support
     _bg_task_mgr = None  # Set by create_api_app
