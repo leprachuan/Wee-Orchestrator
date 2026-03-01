@@ -1833,7 +1833,7 @@ html, body {
 
   /* Hide queue/TODO panel on mobile — accessible via mobile tab bar instead */
   .request-queue-panel {
-    display: none;
+    display: none !important;
   }
 
   /* Mobile queue/todo panel overlay — activated by JS when tab is selected */
@@ -1926,6 +1926,7 @@ html, body {
     right: 0;
     bottom: 56px; /* space for mobile tab bar */
     z-index: 1;
+    display: flex !important; /* Always visible by default */
   }
 
   .main-panel.hidden {
