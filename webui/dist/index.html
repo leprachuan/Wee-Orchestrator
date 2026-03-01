@@ -13,7 +13,7 @@
   <link rel="icon" type="image/png" sizes="192x192" href="/static/icon-192.png" />
   <link rel="apple-touch-icon" href="/static/apple-touch-icon.png" />
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/highlight.js@11.9.0/styles/github-dark.min.css" />
-  <link rel="stylesheet" href="app.css?v=20260301mobile" />
+  <link rel="stylesheet" href="app.css?v=20260301tabs" />
 </head>
 <body>
   <!-- Auth overlay -->
@@ -269,6 +269,19 @@
         </aside>
       </div>
     </section>
+
+    <!-- Mobile bottom tab bar (hidden on desktop via CSS) -->
+    <nav id="mobile-tab-bar" class="mobile-tab-bar" role="tablist" aria-label="Panel switcher">
+      <button class="mobile-tab active" data-tab="chat" role="tab" aria-selected="true">
+        <span class="mobile-tab-icon">💬</span><span class="mobile-tab-label">Chat</span>
+      </button>
+      <button class="mobile-tab" data-tab="queue" role="tab" aria-selected="false">
+        <span class="mobile-tab-icon">📋</span><span class="mobile-tab-label">Queue <span id="mobile-queue-badge" class="mobile-tab-badge hidden">0</span></span>
+      </button>
+      <button class="mobile-tab" data-tab="todos" role="tab" aria-selected="false">
+        <span class="mobile-tab-icon">✅</span><span class="mobile-tab-label">TODOs <span id="mobile-todo-badge" class="mobile-tab-badge hidden">0</span></span>
+      </button>
+    </nav>
   </div>
 
   <script src="https://cdn.jsdelivr.net/npm/marked@9/marked.min.js"></script>
@@ -278,7 +291,7 @@
   <script src="https://cdn.jsdelivr.net/npm/highlight.js@11.9.0/lib/languages/bash.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/highlight.js@11.9.0/lib/languages/json.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/highlight.js@11.9.0/lib/languages/yaml.min.js"></script>
-  <script src="app.js?v=20260301mobile" type="module"></script>
+  <script src="app.js?v=20260301tabs" type="module"></script>
 </body>
 </html>
 </body></html>

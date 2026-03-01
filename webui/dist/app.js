@@ -2989,6 +2989,99 @@ function _initFileViewer() {
 _initFileViewer();
 document.addEventListener('DOMContentLoaded', _initFileViewer);
 
-// Expose file viewer globally for click handlers
 window.openFileViewer = openFileViewer;
 window.linkifyFilePaths = linkifyFilePaths;
+
+// ─── Mobile Tab Navigation ────────────────────────────────────────────────────
+// Allows users to switch between Chat, Queue, and TODOs views on mobile.
+// Desktop layout is unchanged (panels visible side-by-side).
+
+let _mobileActiveTab = 'chat';
+let _mobileQueueWasMinimized = true; // track queue-minimized state to restore on close
+
+function switchMobileTab(tabName) {
+  if (window.innerWidth > 768) return; // no-op on desktop
+
+  _mobileActiveTab = tabName;
+
+  // Update tab button active states
+  document.querySelectorAll('.mobile-tab').forEach(t => {
+    const isActive = t.dataset.tab === tabName;
+    t.classList.toggle('active', isActive);
+    t.setAttribute('aria-selected', isActive ? 'true' : 'false');
+  });
+
+  const panel = $('request-queue-panel');
+  if (!panel) return;
+
+  if (tabName === 'chat') {
+    // Hide panel overlay, restore minimized state
+    panel.classList.remove('mobile-panel-active', 'mobile-show-queue-only', 'mobile-show-todos-only');
+    if (_mobileQueueWasMinimized) panel.classList.add('queue-minimized');
+  } else {
+    // Save current minimized state before showing
+    _mobileQueueWasMinimized = panel.classList.contains('queue-minimized');
+    panel.classList.remove('queue-minimized');
+    panel.classList.add('mobile-panel-active');
+
+    if (tabName === 'queue') {
+      panel.classList.add('mobile-show-queue-only');
+      panel.classList.remove('mobile-show-todos-only');
+      renderQueuePanel();
+    } else if (tabName === 'todos') {
+      panel.classList.add('mobile-show-todos-only');
+      panel.classList.remove('mobile-show-queue-only');
+      fetchAndRenderTodos();
+    }
+  }
+}
+
+function updateMobileBadges() {
+  // Keep mobile badge counts in sync with queue/todo counters
+  const queueBadge = $('mobile-queue-badge');
+  const todoBadge = $('mobile-todo-badge');
+
+  if (queueBadge) {
+    const count = STATE.requestQueue ? STATE.requestQueue.length : 0;
+    queueBadge.textContent = count;
+    queueBadge.classList.toggle('hidden', count === 0);
+  }
+
+  if (todoBadge) {
+    const todoCountEl = $('todo-count');
+    const count = todoCountEl ? parseInt(todoCountEl.textContent, 10) || 0 : 0;
+    todoBadge.textContent = count;
+    todoBadge.classList.toggle('hidden', count === 0);
+  }
+}
+
+function initMobileTabs() {
+  document.querySelectorAll('.mobile-tab').forEach(tab => {
+    tab.addEventListener('click', () => switchMobileTab(tab.dataset.tab));
+  });
+
+  // Observe todo count changes to update badge
+  const todoCountEl = $('todo-count');
+  if (todoCountEl && window.MutationObserver) {
+    new MutationObserver(updateMobileBadges).observe(todoCountEl, { childList: true, characterData: true, subtree: true });
+  }
+}
+
+// Wire up on DOMContentLoaded and immediately (module scripts defer automatically)
+if (document.readyState !== 'loading') {
+  initMobileTabs();
+} else {
+  document.addEventListener('DOMContentLoaded', initMobileTabs);
+}
+
+// Patch renderQueuePanel to also update mobile badges
+const _origRenderQueuePanel = renderQueuePanel;
+window._mobileUpdateBadges = updateMobileBadges;
+// Hook into queue count updates via MutationObserver on the queue count element
+document.addEventListener('DOMContentLoaded', () => {
+  const queueCountEl = $('queue-count');
+  if (queueCountEl && window.MutationObserver) {
+    new MutationObserver(updateMobileBadges).observe(queueCountEl, { childList: true, characterData: true, subtree: true });
+  }
+  updateMobileBadges();
+});
