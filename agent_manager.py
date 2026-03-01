@@ -1349,9 +1349,9 @@ class SessionManager:
                 ):
                     merged["model"] = "haiku"
             elif runtime == "opencode":
-                if not merged.get("model") or not merged.get(
-                    "model", ""
-                ).startswith("opencode"):
+                # For opencode, only force default if model is truly empty.
+                # Allow any non-empty model string (opencode/*, openai-compatible/*, etc.)
+                if not merged.get("model"):
                     merged["model"] = "opencode/gpt-5-nano"
             elif runtime == "gemini":
                 if (
@@ -4419,6 +4419,9 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
     class ExecuteRequest(BaseModel):
         query: str
         timeout: Optional[int] = None
+        model: Optional[str] = None
+        runtime: Optional[str] = None
+        agent: Optional[str] = None
 
         @field_validator("query")
         @classmethod
@@ -4704,6 +4707,17 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         if not existing:
             raise HTTPException(status_code=404, detail="Session not found")
 
+        # Apply per-query overrides for model, runtime, and agent if provided
+        if body.model:
+            print(f"[DEBUG] Updating model from {existing.get('model')} to {body.model}", file=sys.stderr)
+            session_mgr.update_session_field(session_id, "model", body.model)
+        if body.runtime:
+            print(f"[DEBUG] Updating runtime from {existing.get('runtime')} to {body.runtime}", file=sys.stderr)
+            session_mgr.update_session_field(session_id, "runtime", body.runtime)
+        if body.agent:
+            print(f"[DEBUG] Updating agent from {existing.get('agent')} to {body.agent}", file=sys.stderr)
+            session_mgr.update_session_field(session_id, "agent", body.agent)
+
         session_mgr._bg_identity = user["identity"]
         loop = asyncio.get_event_loop()
         with concurrent.futures.ThreadPoolExecutor() as pool:
@@ -4758,6 +4772,14 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         existing = session_mgr.load_session_data(session_id)
         if not existing:
             raise HTTPException(status_code=404, detail="Session not found")
+
+        # Apply per-query overrides for model, runtime, and agent if provided
+        if body.model:
+            session_mgr.update_session_field(session_id, "model", body.model)
+        if body.runtime:
+            session_mgr.update_session_field(session_id, "runtime", body.runtime)
+        if body.agent:
+            session_mgr.update_session_field(session_id, "agent", body.agent)
 
         session_mgr._bg_identity = user["identity"]
         loop = asyncio.get_event_loop()
