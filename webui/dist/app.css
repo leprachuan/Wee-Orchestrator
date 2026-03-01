@@ -1811,7 +1811,7 @@ html, body {
   .blob-2 { width: 300px; height: 300px; }
   .blob-3 { width: 250px; height: 250px; }
 
-  /* Full-width sidebar on mobile */
+  /* Full-width sidebar on mobile — hidden via .collapsed (matches JS toggleSidebar logic) */
   .sidebar {
     position: fixed;
     top: 0;
@@ -1822,17 +1822,19 @@ html, body {
     border-right: none;
     border-bottom: 1px solid var(--glass-border);
     z-index: 100;
-    transform: translateX(-100%);
-    transition: transform 0.25s ease;
-  }
-
-  .sidebar.open {
     transform: translateX(0);
+    transition: transform 0.25s ease;
   }
 
   .sidebar.collapsed {
     width: 100%;
     transform: translateX(-100%);
+  }
+
+  /* Hide queue/TODO panel on mobile — not useful on small screens and
+     causes z-index overlap over the main chat panel */
+  .request-queue-panel {
+    display: none !important;
   }
 
   .sidebar-header {

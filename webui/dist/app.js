@@ -629,6 +629,7 @@ function renderSessionList() {
           e.target.classList.contains('session-rename-btn') ||
           e.target.classList.contains('session-rename-input')) return;
       selectSession(s.session_id);
+      if (isMobileViewport()) toggleSidebar(false);
     });
     // Double-click on title to rename
     item.querySelector('.session-title').addEventListener('dblclick', e => {
@@ -1492,7 +1493,14 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 
   // --- Sidebar ---
-  $('btn-new-chat').addEventListener('click', startNewSession);
+  // On mobile, sidebar starts collapsed (hidden); JS toggleSidebar uses .collapsed class
+  if (isMobileViewport()) {
+    document.querySelector('.sidebar').classList.add('collapsed');
+  }
+  $('btn-new-chat').addEventListener('click', () => {
+    startNewSession();
+    if (isMobileViewport()) toggleSidebar(false);
+  });
   $('btn-logout').addEventListener('click', () => { clearAuth(); showAuthView(); });
   $('btn-sidebar-toggle').addEventListener('click', () => toggleSidebar(false));
   $('btn-open-sidebar').addEventListener('click',  () => toggleSidebar(true));
@@ -1639,6 +1647,7 @@ function showChatPanel() {
   $('btn-nav-chat').classList.add('active');
   $('btn-nav-scheduler').classList.remove('active');
   $('btn-nav-background').classList.remove('active');
+  if (isMobileViewport()) toggleSidebar(false);
 }
 
 function showSchedulerPanel() {
@@ -1652,6 +1661,7 @@ function showSchedulerPanel() {
   $('btn-nav-background').classList.remove('active');
   loadSchedulerJobs();
   loadSchedulerStatus();
+  if (isMobileViewport()) toggleSidebar(false);
 }
 
 function showBackgroundPanel() {
@@ -1664,6 +1674,7 @@ function showBackgroundPanel() {
   $('btn-nav-chat').classList.remove('active');
   $('btn-nav-scheduler').classList.remove('active');
   loadBackgroundTasks();
+  if (isMobileViewport()) toggleSidebar(false);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
