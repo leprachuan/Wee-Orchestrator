@@ -102,6 +102,16 @@ const $ = id => document.getElementById(id);
 const show = el => el.classList.remove('hidden');
 const hide = el => el.classList.add('hidden');
 
+function isMobileViewport() {
+  return window.matchMedia && window.matchMedia('(max-width: 768px)').matches;
+}
+
+function updateMobileViewportVars() {
+  if (!isMobileViewport()) return;
+  const h = (window.visualViewport && window.visualViewport.height) ? window.visualViewport.height : window.innerHeight;
+  document.documentElement.style.setProperty('--vh', `${h * 0.01}px`);
+}
+
 function showAuthView() {
   hide($('app'));
   show($('auth-overlay'));
@@ -368,6 +378,13 @@ function buildPopoverDOM(pillEl, label, options) {
       hidePillPopover();
       sendCommand(opt.cmd);
     });
+    item.addEventListener('click', e => {
+      if (!isMobileViewport()) return;
+      e.preventDefault();
+      if (!opt.cmd) return;
+      hidePillPopover();
+      sendCommand(opt.cmd);
+    });
     popover.appendChild(item);
   });
   document.body.appendChild(popover);
@@ -494,6 +511,11 @@ function showCommandDropdown(items) {
       `<span class="cmd-row-usage">${escHtml(item.usage)}</span>`;
 
     row.addEventListener('mousedown', e => {
+      e.preventDefault();
+      applyCompletion(item.primary);
+    });
+    row.addEventListener('click', e => {
+      if (!isMobileViewport()) return;
       e.preventDefault();
       applyCompletion(item.primary);
     });
@@ -1434,6 +1456,14 @@ async function initApp() {
 // ─── Boot ─────────────────────────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', () => {
 
+  // --- Mobile viewport sizing (iOS Safari keyboard / browser chrome) ---
+  updateMobileViewportVars();
+  window.addEventListener('resize', updateMobileViewportVars);
+  if (window.visualViewport) {
+    window.visualViewport.addEventListener('resize', updateMobileViewportVars);
+    window.visualViewport.addEventListener('scroll', updateMobileViewportVars);
+  }
+
   // --- Dev Detection ---
   const isDev = window.location.port === '8001';
   if (isDev) {
@@ -1536,8 +1566,12 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 
   ta.addEventListener('blur', () => {
-    // Small delay so mousedown on dropdown fires first
+    // Small delay so (mouse|touch) on dropdown fires first
     setTimeout(() => hideCommandDropdown(), 150);
+  });
+
+  ta.addEventListener('focus', () => {
+    if (isMobileViewport()) setTimeout(scrollToBottom, 50);
   });
 
   // --- File input ---
@@ -2812,7 +2846,8 @@ function renderFileContent(data) {
       // HTML → render in sandboxed iframe to prevent XSS
       const iframe = document.createElement('iframe');
       iframe.sandbox = 'allow-same-origin';
-      iframe.style.cssText = 'width:100%;border:none;min-height:400px;background:#fff';
+      const minH = isMobileViewport() ? 240 : 400;
+      iframe.style.cssText = `width:100%;border:none;min-height:${minH}px;background:#fff`;
       wrap.appendChild(iframe);
       setTimeout(() => {
         const doc = iframe.contentDocument || iframe.contentWindow.document;
