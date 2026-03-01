@@ -62,12 +62,14 @@ class AuthManager:
         pairing_code_length: int = 6,
         pairing_code_ttl: int = 300,
         session_token_ttl: int = 3600,
+        session_token_absolute_ttl: int = 86400,
         sessions_file: Optional[str] = None,
     ):
         self.shared_key = shared_key
         self.pairing_code_length = pairing_code_length
         self.pairing_code_ttl = pairing_code_ttl
         self.session_token_ttl = session_token_ttl
+        self.session_token_absolute_ttl = session_token_absolute_ttl
         self.sessions_file = sessions_file or os.path.join(os.path.dirname(os.path.abspath(__file__)), ".task-scheduler", "sessions.json")
         self.pairing_codes: Dict[str, dict] = {}
         self.session_tokens: Dict[str, dict] = {}
@@ -90,7 +92,12 @@ class AuthManager:
                 now = time.time()
                 with self._lock:
                     for token, entry in data.items():
-                        if entry.get("expires_at", 0) > now:
+                        created_at = entry.get("created_at", now)
+                        absolute_expires_at = entry.get(
+                            "absolute_expires_at", created_at + self.session_token_absolute_ttl
+                        )
+                        entry["absolute_expires_at"] = absolute_expires_at
+                        if entry.get("expires_at", 0) > now and absolute_expires_at > now:
                             self.session_tokens[token] = entry
         except Exception:
             pass
@@ -141,6 +148,7 @@ class AuthManager:
                 "created_at": now,
                 "last_used": now,
                 "expires_at": now + self.session_token_ttl,
+                "absolute_expires_at": now + self.session_token_absolute_ttl,
             }
         self._save_sessions()
         return token
@@ -151,12 +159,19 @@ class AuthManager:
             entry = self.session_tokens.get(token)
             if not entry:
                 return None
-            if time.time() > entry["expires_at"]:
+            now = time.time()
+            created_at = entry.get("created_at", now)
+            absolute_expires_at = entry.get(
+                "absolute_expires_at", created_at + self.session_token_absolute_ttl
+            )
+            entry["absolute_expires_at"] = absolute_expires_at
+            if now > entry["expires_at"] or now > absolute_expires_at:
                 del self.session_tokens[token]
                 self._save_sessions()
                 return None
-            entry["last_used"] = time.time()
-            entry["expires_at"] = time.time() + self.session_token_ttl
+            entry["last_used"] = now
+            # Sliding expiration still applies, but it cannot pass the hard cap.
+            entry["expires_at"] = min(now + self.session_token_ttl, absolute_expires_at)
             self._save_sessions()
             return {"identity": entry["identity"], "channel": entry["channel"]}
 
@@ -168,7 +183,13 @@ class AuthManager:
                 if now > self.pairing_codes[code]["expires_at"]:
                     del self.pairing_codes[code]
             for token in list(self.session_tokens):
-                if now > self.session_tokens[token]["expires_at"]:
+                entry = self.session_tokens[token]
+                created_at = entry.get("created_at", now)
+                absolute_expires_at = entry.get(
+                    "absolute_expires_at", created_at + self.session_token_absolute_ttl
+                )
+                entry["absolute_expires_at"] = absolute_expires_at
+                if now > entry["expires_at"] or now > absolute_expires_at:
                     del self.session_tokens[token]
         self._save_sessions()
 
@@ -4351,6 +4372,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
     PAIRING_CODE_LENGTH = int(os.environ.get("PAIRING_CODE_LENGTH", "6"))
     PAIRING_CODE_TTL = int(os.environ.get("PAIRING_CODE_TTL", "300"))
     SESSION_TOKEN_TTL = int(os.environ.get("SESSION_TOKEN_TTL", "3600"))
+    SESSION_TOKEN_ABSOLUTE_TTL = int(os.environ.get("SESSION_TOKEN_ABSOLUTE_TTL", "86400"))
     CONFIG_FILE = os.environ.get("AGENT_CONFIG_FILE")
     SCHEDULER_JOBS_FILE = os.environ.get("SCHEDULER_JOBS_FILE", os.path.join(os.path.dirname(os.path.abspath(__file__)), ".task-scheduler", "jobs.json"))
     SCHEDULER_ENABLED = os.environ.get("SCHEDULER_ENABLED", "true").strip().lower() not in ("false", "0", "no")
@@ -4361,6 +4383,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         pairing_code_length=PAIRING_CODE_LENGTH,
         pairing_code_ttl=PAIRING_CODE_TTL,
         session_token_ttl=SESSION_TOKEN_TTL,
+        session_token_absolute_ttl=SESSION_TOKEN_ABSOLUTE_TTL,
         sessions_file=os.path.join(os.path.dirname(SCHEDULER_JOBS_FILE), "sessions.json"),
     )
     _api_auth_manager = auth_mgr
@@ -4619,6 +4642,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         return {
             "token": token,
             "expires_in": SESSION_TOKEN_TTL,
+            "absolute_expires_in": SESSION_TOKEN_ABSOLUTE_TTL,
             "identity": body.identity,
             "channel": channel,
             "username": username,
