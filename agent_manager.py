@@ -359,6 +359,7 @@ def find_executable(name: str) -> Optional[str]:
 
     # Search additional common locations
     search_paths = [
+        Path.home() / ".local" / "bin" / name,  # User-local installs
         Path("/opt/homebrew/bin") / name,  # Homebrew ARM64 (M1/M2 Macs)
         Path("/usr/local/bin") / name,      # Homebrew Intel / manual installs
         Path("/usr/bin") / name,            # Standard system location
@@ -776,7 +777,11 @@ class SessionManager:
 
         # OpenCode Paths
         self.opencode_home = Path.home() / ".opencode"
-        self.opencode_bin = self.opencode_home / "bin" / "opencode"
+        # Resolve OpenCode executable like other runtimes; keep legacy path as fallback.
+        self.opencode_bin = Path(
+            find_executable("opencode")
+            or str(self.opencode_home / "bin" / "opencode")
+        )
         self.opencode_session_storage = (
             Path.home()
             / ".local"
