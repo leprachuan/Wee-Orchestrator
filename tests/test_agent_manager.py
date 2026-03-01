@@ -210,6 +210,35 @@ class TestSessionPersistence(unittest.TestCase):
         session_2 = manager2.get_or_create_session_data("persistent_session")
         self.assertEqual(session_2["session_id"], original_id)
 
+    @patch("agent_manager.shutil.which", return_value=None)
+    def test_find_executable_in_user_local_bin(self, _mock_which):
+        """find_executable should discover binaries under ~/.local/bin."""
+        local_bin = self.temp_path / ".local" / "bin"
+        local_bin.mkdir(parents=True, exist_ok=True)
+        exe = local_bin / "opencode"
+        exe.write_text("#!/bin/sh\nexit 0\n")
+        exe.chmod(0o755)
+
+        found = agent_manager.find_executable("opencode")
+        self.assertEqual(found, str(exe))
+
+    @patch("agent_manager.find_executable")
+    def test_session_manager_resolves_opencode_from_discovery(self, mock_find):
+        """SessionManager should use discovered opencode executable path."""
+        discovered = self.temp_path / ".local" / "bin" / "opencode"
+        discovered.parent.mkdir(parents=True, exist_ok=True)
+        discovered.write_text("#!/bin/sh\nexit 0\n")
+        discovered.chmod(0o755)
+
+        def _resolver(name):
+            if name == "opencode":
+                return str(discovered)
+            return None
+
+        mock_find.side_effect = _resolver
+        manager = SessionManager(str(self.config_file))
+        self.assertEqual(manager.opencode_bin, discovered)
+
 
 class TestSlashCommands(unittest.TestCase):
     """Test slash command parsing and execution"""
