@@ -257,7 +257,7 @@ html, body {
   transition: width var(--transition), transform 0.25s ease;
   overflow: hidden;
   will-change: transform;
-  isolation: isolate;
+  contain: paint;
 }
 
 .sidebar.collapsed {
@@ -2312,9 +2312,12 @@ html, body {
   background: var(--glass-bg);
   border-left: 1px solid var(--glass-border);
   backdrop-filter: var(--glass-blur);
+  -webkit-backdrop-filter: var(--glass-blur);
   z-index: 9;
   transition: width var(--transition), transform 0.25s ease;
   overflow: hidden;
+  will-change: transform;
+  transform: translateZ(0);
 }
 
 .request-queue-panel.queue-hidden {
