@@ -256,6 +256,12 @@ html, body {
   z-index: 10;
   transition: width var(--transition), transform 0.25s ease;
   overflow: hidden;
+  /* Override glass-panel backdrop-filter to prevent compositing conflicts
+     with adjacent backdrop-filter elements (queue panel, file viewer).
+     Use a slightly more opaque background to compensate for lost blur. */
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  background: rgba(10, 14, 26, 0.85);
 }
 
 .sidebar.collapsed {
