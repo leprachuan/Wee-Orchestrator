@@ -406,7 +406,63 @@ def get_command_timeout() -> int:
             f"Warning: COMMAND_TIMEOUT must be an integer, using default 300 seconds",
             file=sys.stderr,
         )
-        return 300
+
+
+def get_bg_command_timeout() -> int:
+    """Get background task timeout from environment or use default 900 seconds (15 minutes)"""
+    try:
+        timeout_str = os.environ.get("BG_COMMAND_TIMEOUT", "900")
+        timeout = int(timeout_str)
+        if timeout < 30:
+            return 30
+        return timeout
+    except ValueError:
+        return 900
+
+
+def estimate_background_timeout(prompt: str, default: int = 900) -> int:
+    """Estimate an appropriate timeout for a background task based on the prompt.
+
+    Uses keyword heuristics to assign a timeout that fits the expected task duration:
+    - Quick lookups / status checks: 2 min
+    - Standard tasks: default (15 min)
+    - Long-running: deploy, migrate, process all, index, scan, crawl: 20 min
+    - Very long: full backup, batch process large, generate report for all: 30 min
+    """
+    text = prompt.lower()
+
+    # Very long tasks (~30 min)
+    very_long_keywords = [
+        "backup", "full scan", "batch process", "process all", "index all",
+        "crawl all", "generate report for all", "migrate all", "import all",
+        "export all", "sync all", "reindex",
+    ]
+    # Long tasks (~20 min)
+    long_keywords = [
+        "deploy", "migrate", "migration", "build", "compile", "install",
+        "process", "analyze all", "scan", "crawl", "index", "reprocess",
+        "refactor", "generate report", "summarize all", "bulk",
+    ]
+    # Quick tasks (~2 min)
+    quick_keywords = [
+        "status", "check", "list", "show", "get", "fetch", "ping",
+        "is running", "are running", "what is", "what are", "tell me",
+        "how many", "count", "current", "latest", "recent",
+    ]
+
+    for kw in very_long_keywords:
+        if kw in text:
+            return 1800  # 30 min
+
+    for kw in long_keywords:
+        if kw in text:
+            return 1200  # 20 min
+
+    for kw in quick_keywords:
+        if kw in text:
+            return 120  # 2 min
+
+    return default
 
 
 class HistoryManager:
@@ -707,10 +763,25 @@ class SessionManager:
                 "Claude Opus (Latest)",
                 ["claude-opus", "claude-opus-4-6", "claude-opus-4.6", "opus-4.6"],
             ),
+        ],
+        "US Frontier Models (Comparison)": [
+            ("claude-3-5-sonnet-latest", "Claude 3.5 Sonnet (V2)", ["claude-3-5-sonnet-20241022"]),
+            ("claude-3-5-haiku-latest", "Claude 3.5 Haiku", ["claude-3-5-haiku-20241022"]),
+            ("claude-3-opus-latest", "Claude 3 Opus", ["claude-3-opus-20240229"]),
         ]
     }
 
-    OPENCODE_MODELS = {}
+    OPENCODE_MODELS = {
+        "Meta (US Models)": [
+            ("llama-3.3-70b-versatile", "Llama 3.3 70B", ["llama-3.3", "llama-3-70b"]),
+            ("llama-3.1-405b", "Llama 3.1 405B", ["llama-405b"]),
+            ("llama-3.2-90b-vision", "Llama 3.2 90B Vision", ["llama-90b-vision"]),
+        ],
+        "xAI (US Models)": [
+            ("grok-2", "Grok-2", ["grok"]),
+            ("grok-2-mini", "Grok-2 Mini", ["grok-mini"]),
+        ]
+    }
 
     # Gemini models configuration
     # Note: These are common Gemini models; the CLI may support additional models
@@ -749,6 +820,11 @@ class SessionManager:
             ("gemini-1.5-pro", "Gemini 1.5 Pro", ["gemini-pro-1.5", "pro-1.5"]),
             ("gemini-1.5-flash", "Gemini 1.5 Flash", ["gemini-flash-1.5", "flash-1.5"]),
             ("gemini-pro", "Gemini Pro", ["gemini-1.0-pro"]),
+        ],
+        "US Frontier Models (Comparison)": [
+            ("gemini-1.5-pro-latest", "Gemini 1.5 Pro", ["gemini-1.5-pro"]),
+            ("gemini-1.5-flash-latest", "Gemini 1.5 Flash", ["gemini-1.5-flash"]),
+            ("gemini-2.0-flash-001", "Gemini 2.0 Flash", ["gemini-2.0-flash"]),
         ]
     }
 
@@ -764,6 +840,13 @@ class SessionManager:
             ("gpt-5.1-codex-mini", "GPT-5.1 Codex Mini", ["codex-mini"]),
             ("gpt-5-mini", "GPT-5 Mini", ["gpt-5", "mini"]),
             ("gpt-4.1", "GPT-4.1", ["gpt-4"]),
+        ],
+        "US Frontier Models (Comparison)": [
+            ("gpt-4o", "GPT-4o (Omni)", ["gpt-4o-latest"]),
+            ("gpt-4o-mini", "GPT-4o Mini", ["gpt-4o-mini-latest"]),
+            ("gpt-4-turbo", "GPT-4 Turbo", ["gpt-4-turbo-latest"]),
+            ("o1-preview", "OpenAI o1-preview", ["o1-preview-2024-09-12"]),
+            ("o1-mini", "OpenAI o1-mini", ["o1-mini-2024-09-12"]),
         ]
     }
 
@@ -1049,7 +1132,19 @@ class SessionManager:
             # Method 2: Fallback (if regex fails due to layout changes)
             if not models:
                 # Look for known models as a sanity check/fallback
-                fallback_models = ["gpt-5.2", "claude-sonnet-4.5", "gpt-5"]
+                fallback_models = [
+                    "gpt-4o",
+                    "gpt-4o-mini",
+                    "gpt-4-turbo",
+                    "claude-3.5-sonnet",
+                    "claude-3-5-sonnet",
+                    "claude-3.5-haiku",
+                    "gemini-1.5-pro",
+                    "gemini-1.5-flash",
+                    "gpt-5",
+                    "gpt-5.2",
+                    "claude-sonnet-4.5"
+                ]
                 found_fallbacks = [m for m in fallback_models if m in result.stdout]
                 if found_fallbacks:
                     # If we found known models but regex failed, try a looser regex
@@ -1580,6 +1675,15 @@ class SessionManager:
                     if name_lower == model_id.lower() or name_lower in aliases_lower:
                         return model_id
             return None
+
+        if runtime == "opencode":
+            for category, models in self.OPENCODE_MODELS.items():
+                for model_id, desc, aliases in models:
+                    aliases_lower = [a.lower() for a in aliases]
+                    if name_lower == model_id.lower() or name_lower in aliases_lower:
+                        return model_id
+            # If not in static list, continue to fetch from CLI
+            pass
 
         all_models = []
         if runtime == "opencode":
@@ -3159,7 +3263,7 @@ User Request:
     _bg_task_mgr = None  # Set by create_api_app
     _bg_identity = None   # Set per-call for slash command context
 
-    def _execute_background_task(self, task_id, session_id, prompt, agent, runtime, model, channel):
+    def _execute_background_task(self, task_id, session_id, prompt, agent, runtime, model, channel, timeout=None):
         """Run a background task in the current thread (called from thread pool)."""
         self.get_or_create_session_data(session_id)
         self.update_session_field(session_id, "agent", agent)
@@ -3167,6 +3271,8 @@ User Request:
         self.update_session_field(session_id, "runtime", runtime)
         self.update_session_field(session_id, "channel", channel)
         self.update_session_field(session_id, "render_type", "text")
+        if timeout is not None:
+            self.update_session_field(session_id, "timeout", timeout)
         try:
             result = self.execute(prompt, session_id)
             if self._bg_task_mgr:
@@ -3451,6 +3557,13 @@ You can mention an agent in your prompt and it will auto-delegate:
             if argument == "list" or argument.startswith("list "):
                 if current_runtime == "opencode":
                     models_by_provider = self.fetch_opencode_models()
+                    # Add static models for comparison
+                    for provider, entries in self.OPENCODE_MODELS.items():
+                        if provider not in models_by_provider:
+                            models_by_provider[provider] = []
+                        for model_id, display_name, aliases in entries:
+                            models_by_provider[provider].append(model_id)
+
                     out = f"📋 **Available Models ({current_runtime})**\n\n"
                     if not models_by_provider:
                         return (
@@ -3850,6 +3963,7 @@ You can mention an agent in your prompt and it will auto-delegate:
             if running >= BackgroundTaskManager.MAX_TASKS_PER_USER:
                 return f"❌ Maximum {BackgroundTaskManager.MAX_TASKS_PER_USER} concurrent background tasks allowed."
 
+            bg_timeout = estimate_background_timeout(bg_prompt, default=get_bg_command_timeout())
             task_id = f"bg_{str(uuid4())[:8]}"
             bg_session_id = f"bg_{str(uuid4())[:8]}"
             self._bg_task_mgr.create_task(
@@ -3862,13 +3976,14 @@ You can mention an agent in your prompt and it will auto-delegate:
             import concurrent.futures as _cf
             _cf.ThreadPoolExecutor(max_workers=1).submit(
                 self._execute_background_task,
-                task_id, bg_session_id, bg_prompt, bg_agent, bg_runtime, bg_model, channel,
+                task_id, bg_session_id, bg_prompt, bg_agent, bg_runtime, bg_model, channel, bg_timeout,
             )
 
             return (
                 f"⚡ **Background task started!**\n\n"
                 f"• **Task ID:** `{task_id}`\n"
                 f"• **Agent:** `{bg_agent}` | Runtime: `{bg_runtime}` | Model: `{bg_model}`\n"
+                f"• **Timeout:** `{bg_timeout}s` ({bg_timeout // 60}m)\n"
                 f"• **Prompt:** {bg_prompt[:150]}\n\n"
                 f"Check the ⚡ Tasks tab or use `/background status {task_id}` to monitor."
             )
@@ -4439,6 +4554,10 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             try:
                 raw = session_mgr.fetch_opencode_models()
                 models = [{"id": m, "label": m} for group in raw.values() for m in group]
+                # Add static comparison models
+                for group, entries in session_mgr.OPENCODE_MODELS.items():
+                    for model_id, display_name, aliases in entries:
+                        models.append({"id": model_id, "label": f"{display_name} (Comparison)"})
                 return {"runtime": runtime, "models": models}
             except Exception as e:
                 return {"runtime": runtime, "models": [], "error": str(e)}
@@ -5077,7 +5196,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
 
     def _run_background_task(task_id: str, session_id: str, prompt: str,
                              agent: str, runtime: str, model: str,
-                             channel: str, user_identity: str):
+                             channel: str, user_identity: str, timeout: int = None):
         """Blocking function that runs a background task in a subprocess.
         Called from a thread pool executor."""
         import threading as _thr
@@ -5089,6 +5208,8 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         session_mgr.update_session_field(session_id, "runtime", runtime)
         session_mgr.update_session_field(session_id, "channel", channel)
         session_mgr.update_session_field(session_id, "render_type", "text")
+        if timeout is not None:
+            session_mgr.update_session_field(session_id, "timeout", timeout)
 
         try:
             # Use the existing execute method which handles all runtimes
@@ -5146,12 +5267,15 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             prompt=body.prompt,
         )
 
+        # Estimate an appropriate timeout based on the task
+        bg_timeout = estimate_background_timeout(body.prompt, default=get_bg_command_timeout())
+
         # Run in background thread
         loop = asyncio.get_event_loop()
         loop.run_in_executor(
             concurrent.futures.ThreadPoolExecutor(max_workers=1),
             _run_background_task,
-            task_id, session_id, body.prompt, agent, runtime, model, channel, identity,
+            task_id, session_id, body.prompt, agent, runtime, model, channel, identity, bg_timeout,
         )
 
         return {
@@ -5161,6 +5285,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             "runtime": runtime,
             "model": model,
             "status": "running",
+            "timeout": bg_timeout,
         }
 
     @app.get("/api/v1/background-tasks")
