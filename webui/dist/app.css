@@ -256,6 +256,12 @@ html, body {
   z-index: 10;
   transition: width var(--transition), transform 0.25s ease;
   overflow: hidden;
+  /* Override glass-panel backdrop-filter to prevent compositing conflicts
+     with adjacent backdrop-filter elements (queue panel, file viewer).
+     Use a slightly more opaque background to compensate for lost blur. */
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  background: rgba(10, 14, 26, 0.85);
 }
 
 .sidebar.collapsed {
@@ -347,7 +353,7 @@ html, body {
   height: 22px;
   font-size: 12px;
   border-radius: 4px;
-  opacity: 0;
+  visibility: hidden;
   background: rgba(255,95,109,0.15);
   border: none;
   cursor: pointer;
@@ -355,9 +361,9 @@ html, body {
   display: flex;
   align-items: center;
   justify-content: center;
-  transition: opacity var(--transition), background var(--transition);
+  transition: background var(--transition);
 }
-.session-item:hover .session-delete-btn { opacity: 1; }
+.session-item:hover .session-delete-btn { visibility: visible; }
 .session-delete-btn:hover { background: rgba(255,95,109,0.3); }
 
 /* Rename button */
@@ -369,18 +375,18 @@ html, body {
   height: 22px;
   font-size: 11px;
   border-radius: 4px;
-  opacity: 0;
+  visibility: hidden;
   background: rgba(79,140,255,0.15);
   border: none;
   cursor: pointer;
   display: flex;
   align-items: center;
   justify-content: center;
-  transition: opacity var(--transition), background var(--transition);
+  transition: background var(--transition);
   padding: 0;
   line-height: 1;
 }
-.session-item:hover .session-rename-btn { opacity: 1; }
+.session-item:hover .session-rename-btn { visibility: visible; }
 .session-rename-btn:hover { background: rgba(79,140,255,0.3); }
 
 /* Inline rename input */
@@ -2310,6 +2316,7 @@ html, body {
   background: var(--glass-bg);
   border-left: 1px solid var(--glass-border);
   backdrop-filter: var(--glass-blur);
+  -webkit-backdrop-filter: var(--glass-blur);
   z-index: 9;
   transition: width var(--transition), transform 0.25s ease;
   overflow: hidden;
@@ -2627,6 +2634,7 @@ html, body {
 .file-viewer-panel.fv-hidden {
   transform: translateX(100%);
   opacity: 0;
+  visibility: hidden;
   pointer-events: none;
 }
 

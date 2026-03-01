@@ -487,14 +487,20 @@ class TaskSchedulerExecutor:
             if len(parts) >= 2:
                 try:
                     amount = int(parts[0])
-                    unit = parts[1].rstrip('s')
+                    unit = parts[1].lower().rstrip('s')  # "seconds"->"second", "second"->"second"
+                    # Normalize common aliases
+                    unit = {"sec": "second", "min": "minute", "hr": "hour"}.get(unit, unit)
 
-                    if unit == "minute":
+                    if unit == "second":
+                        next_run = now + timedelta(seconds=amount)
+                    elif unit == "minute":
                         next_run = now + timedelta(minutes=amount)
                     elif unit == "hour":
                         next_run = now + timedelta(hours=amount)
                     elif unit == "day":
                         next_run = now + timedelta(days=amount)
+                    elif unit == "week":
+                        next_run = now + timedelta(weeks=amount)
                     else:
                         return None
 

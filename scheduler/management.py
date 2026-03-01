@@ -47,7 +47,9 @@ def parse_schedule_to_next_run(schedule: str) -> Optional[str]:
                 amount = int(parts[0])
                 unit = parts[1].rstrip('s')
 
-                if unit == "minute":
+                if unit == "second":
+                    next_run = now + timedelta(seconds=amount)
+                elif unit == "minute":
                     next_run = now + timedelta(minutes=amount)
                 elif unit == "hour":
                     next_run = now + timedelta(hours=amount)
