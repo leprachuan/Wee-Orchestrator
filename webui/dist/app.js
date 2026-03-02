@@ -102,6 +102,16 @@ const $ = id => document.getElementById(id);
 const show = el => el.classList.remove('hidden');
 const hide = el => el.classList.add('hidden');
 
+function isMobileViewport() {
+  return window.matchMedia && window.matchMedia('(max-width: 768px)').matches;
+}
+
+function updateMobileViewportVars() {
+  if (!isMobileViewport()) return;
+  const h = (window.visualViewport && window.visualViewport.height) ? window.visualViewport.height : window.innerHeight;
+  document.documentElement.style.setProperty('--vh', `${h * 0.01}px`);
+}
+
 function showAuthView() {
   hide($('app'));
   show($('auth-overlay'));
@@ -368,6 +378,13 @@ function buildPopoverDOM(pillEl, label, options) {
       hidePillPopover();
       sendCommand(opt.cmd);
     });
+    item.addEventListener('click', e => {
+      if (!isMobileViewport()) return;
+      e.preventDefault();
+      if (!opt.cmd) return;
+      hidePillPopover();
+      sendCommand(opt.cmd);
+    });
     popover.appendChild(item);
   });
   document.body.appendChild(popover);
@@ -497,6 +514,11 @@ function showCommandDropdown(items) {
       e.preventDefault();
       applyCompletion(item.primary);
     });
+    row.addEventListener('click', e => {
+      if (!isMobileViewport()) return;
+      e.preventDefault();
+      applyCompletion(item.primary);
+    });
     dd.appendChild(row);
   });
 
@@ -607,6 +629,7 @@ function renderSessionList() {
           e.target.classList.contains('session-rename-btn') ||
           e.target.classList.contains('session-rename-input')) return;
       selectSession(s.session_id);
+      if (isMobileViewport()) toggleSidebar(false);
     });
     // Double-click on title to rename
     item.querySelector('.session-title').addEventListener('dblclick', e => {
@@ -1434,6 +1457,14 @@ async function initApp() {
 // ─── Boot ─────────────────────────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', () => {
 
+  // --- Mobile viewport sizing (iOS Safari keyboard / browser chrome) ---
+  updateMobileViewportVars();
+  window.addEventListener('resize', updateMobileViewportVars);
+  if (window.visualViewport) {
+    window.visualViewport.addEventListener('resize', updateMobileViewportVars);
+    window.visualViewport.addEventListener('scroll', updateMobileViewportVars);
+  }
+
   // --- Dev Detection ---
   const isDev = window.location.port === '8001';
   if (isDev) {
@@ -1462,7 +1493,14 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 
   // --- Sidebar ---
-  $('btn-new-chat').addEventListener('click', startNewSession);
+  // On mobile, sidebar starts collapsed (hidden); JS toggleSidebar uses .collapsed class
+  if (isMobileViewport()) {
+    document.querySelector('.sidebar').classList.add('collapsed');
+  }
+  $('btn-new-chat').addEventListener('click', () => {
+    startNewSession();
+    if (isMobileViewport()) toggleSidebar(false);
+  });
   $('btn-logout').addEventListener('click', () => { clearAuth(); showAuthView(); });
   $('btn-sidebar-toggle').addEventListener('click', () => toggleSidebar(false));
   $('btn-open-sidebar').addEventListener('click',  () => toggleSidebar(true));
@@ -1536,8 +1574,12 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 
   ta.addEventListener('blur', () => {
-    // Small delay so mousedown on dropdown fires first
+    // Small delay so (mouse|touch) on dropdown fires first
     setTimeout(() => hideCommandDropdown(), 150);
+  });
+
+  ta.addEventListener('focus', () => {
+    if (isMobileViewport()) setTimeout(scrollToBottom, 50);
   });
 
   // --- File input ---
@@ -1605,6 +1647,7 @@ function showChatPanel() {
   $('btn-nav-chat').classList.add('active');
   $('btn-nav-scheduler').classList.remove('active');
   $('btn-nav-background').classList.remove('active');
+  if (isMobileViewport()) toggleSidebar(false);
 }
 
 function showSchedulerPanel() {
@@ -1618,6 +1661,7 @@ function showSchedulerPanel() {
   $('btn-nav-background').classList.remove('active');
   loadSchedulerJobs();
   loadSchedulerStatus();
+  if (isMobileViewport()) toggleSidebar(false);
 }
 
 function showBackgroundPanel() {
@@ -1630,6 +1674,7 @@ function showBackgroundPanel() {
   $('btn-nav-chat').classList.remove('active');
   $('btn-nav-scheduler').classList.remove('active');
   loadBackgroundTasks();
+  if (isMobileViewport()) toggleSidebar(false);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -2812,7 +2857,8 @@ function renderFileContent(data) {
       // HTML → render in sandboxed iframe to prevent XSS
       const iframe = document.createElement('iframe');
       iframe.sandbox = 'allow-same-origin';
-      iframe.style.cssText = 'width:100%;border:none;min-height:400px;background:#fff';
+      const minH = isMobileViewport() ? 240 : 400;
+      iframe.style.cssText = `width:100%;border:none;min-height:${minH}px;background:#fff`;
       wrap.appendChild(iframe);
       setTimeout(() => {
         const doc = iframe.contentDocument || iframe.contentWindow.document;
@@ -2943,6 +2989,102 @@ function _initFileViewer() {
 _initFileViewer();
 document.addEventListener('DOMContentLoaded', _initFileViewer);
 
-// Expose file viewer globally for click handlers
 window.openFileViewer = openFileViewer;
 window.linkifyFilePaths = linkifyFilePaths;
+
+// ─── Mobile Tab Navigation ────────────────────────────────────────────────────
+// Allows users to switch between Chat, Queue, and TODOs views on mobile.
+// Desktop layout is unchanged (panels visible side-by-side).
+
+let _mobileActiveTab = 'chat';
+let _mobileQueueWasMinimized = true; // track queue-minimized state to restore on close
+
+function switchMobileTab(tabName) {
+  if (window.innerWidth > 768) return; // no-op on desktop
+
+  _mobileActiveTab = tabName;
+
+  // Update tab button active states
+  document.querySelectorAll('.mobile-tab').forEach(t => {
+    const isActive = t.dataset.tab === tabName;
+    t.classList.toggle('active', isActive);
+    t.setAttribute('aria-selected', isActive ? 'true' : 'false');
+  });
+
+  const panel = $('request-queue-panel');
+  const chatPanel = $('chat-panel');
+  if (!panel || !chatPanel) return;
+
+  if (tabName === 'chat') {
+    // Hide panel overlay, restore minimized state
+    panel.classList.remove('mobile-panel-active', 'mobile-show-queue-only', 'mobile-show-todos-only');
+    chatPanel.classList.remove('hidden');
+    if (_mobileQueueWasMinimized) panel.classList.add('queue-minimized');
+  } else {
+    // Save current minimized state before showing
+    _mobileQueueWasMinimized = panel.classList.contains('queue-minimized');
+    panel.classList.remove('queue-minimized');
+    panel.classList.add('mobile-panel-active');
+    chatPanel.classList.add('hidden');
+
+    if (tabName === 'queue') {
+      panel.classList.add('mobile-show-queue-only');
+      panel.classList.remove('mobile-show-todos-only');
+      renderQueuePanel();
+    } else if (tabName === 'todos') {
+      panel.classList.add('mobile-show-todos-only');
+      panel.classList.remove('mobile-show-queue-only');
+      fetchAndRenderTodos();
+    }
+  }
+}
+
+function updateMobileBadges() {
+  // Keep mobile badge counts in sync with queue/todo counters
+  const queueBadge = $('mobile-queue-badge');
+  const todoBadge = $('mobile-todo-badge');
+
+  if (queueBadge) {
+    const count = STATE.requestQueue ? STATE.requestQueue.length : 0;
+    queueBadge.textContent = count;
+    queueBadge.classList.toggle('hidden', count === 0);
+  }
+
+  if (todoBadge) {
+    const todoCountEl = $('todo-count');
+    const count = todoCountEl ? parseInt(todoCountEl.textContent, 10) || 0 : 0;
+    todoBadge.textContent = count;
+    todoBadge.classList.toggle('hidden', count === 0);
+  }
+}
+
+function initMobileTabs() {
+  document.querySelectorAll('.mobile-tab').forEach(tab => {
+    tab.addEventListener('click', () => switchMobileTab(tab.dataset.tab));
+  });
+
+  // Observe todo count changes to update badge
+  const todoCountEl = $('todo-count');
+  if (todoCountEl && window.MutationObserver) {
+    new MutationObserver(updateMobileBadges).observe(todoCountEl, { childList: true, characterData: true, subtree: true });
+  }
+}
+
+// Wire up on DOMContentLoaded and immediately (module scripts defer automatically)
+if (document.readyState !== 'loading') {
+  initMobileTabs();
+} else {
+  document.addEventListener('DOMContentLoaded', initMobileTabs);
+}
+
+// Patch renderQueuePanel to also update mobile badges
+const _origRenderQueuePanel = renderQueuePanel;
+window._mobileUpdateBadges = updateMobileBadges;
+// Hook into queue count updates via MutationObserver on the queue count element
+document.addEventListener('DOMContentLoaded', () => {
+  const queueCountEl = $('queue-count');
+  if (queueCountEl && window.MutationObserver) {
+    new MutationObserver(updateMobileBadges).observe(queueCountEl, { childList: true, characterData: true, subtree: true });
+  }
+  updateMobileBadges();
+});

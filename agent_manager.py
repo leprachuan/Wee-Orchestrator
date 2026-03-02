@@ -62,12 +62,14 @@ class AuthManager:
         pairing_code_length: int = 6,
         pairing_code_ttl: int = 300,
         session_token_ttl: int = 3600,
+        session_token_absolute_ttl: int = 86400,
         sessions_file: Optional[str] = None,
     ):
         self.shared_key = shared_key
         self.pairing_code_length = pairing_code_length
         self.pairing_code_ttl = pairing_code_ttl
         self.session_token_ttl = session_token_ttl
+        self.session_token_absolute_ttl = session_token_absolute_ttl
         self.sessions_file = sessions_file or os.path.join(os.path.dirname(os.path.abspath(__file__)), ".task-scheduler", "sessions.json")
         self.pairing_codes: Dict[str, dict] = {}
         self.session_tokens: Dict[str, dict] = {}
@@ -90,7 +92,12 @@ class AuthManager:
                 now = time.time()
                 with self._lock:
                     for token, entry in data.items():
-                        if entry.get("expires_at", 0) > now:
+                        created_at = entry.get("created_at", now)
+                        absolute_expires_at = entry.get(
+                            "absolute_expires_at", created_at + self.session_token_absolute_ttl
+                        )
+                        entry["absolute_expires_at"] = absolute_expires_at
+                        if entry.get("expires_at", 0) > now and absolute_expires_at > now:
                             self.session_tokens[token] = entry
         except Exception:
             pass
@@ -141,6 +148,7 @@ class AuthManager:
                 "created_at": now,
                 "last_used": now,
                 "expires_at": now + self.session_token_ttl,
+                "absolute_expires_at": now + self.session_token_absolute_ttl,
             }
         self._save_sessions()
         return token
@@ -151,12 +159,19 @@ class AuthManager:
             entry = self.session_tokens.get(token)
             if not entry:
                 return None
-            if time.time() > entry["expires_at"]:
+            now = time.time()
+            created_at = entry.get("created_at", now)
+            absolute_expires_at = entry.get(
+                "absolute_expires_at", created_at + self.session_token_absolute_ttl
+            )
+            entry["absolute_expires_at"] = absolute_expires_at
+            if now > entry["expires_at"] or now > absolute_expires_at:
                 del self.session_tokens[token]
                 self._save_sessions()
                 return None
-            entry["last_used"] = time.time()
-            entry["expires_at"] = time.time() + self.session_token_ttl
+            entry["last_used"] = now
+            # Sliding expiration still applies, but it cannot pass the hard cap.
+            entry["expires_at"] = min(now + self.session_token_ttl, absolute_expires_at)
             self._save_sessions()
             return {"identity": entry["identity"], "channel": entry["channel"]}
 
@@ -168,7 +183,13 @@ class AuthManager:
                 if now > self.pairing_codes[code]["expires_at"]:
                     del self.pairing_codes[code]
             for token in list(self.session_tokens):
-                if now > self.session_tokens[token]["expires_at"]:
+                entry = self.session_tokens[token]
+                created_at = entry.get("created_at", now)
+                absolute_expires_at = entry.get(
+                    "absolute_expires_at", created_at + self.session_token_absolute_ttl
+                )
+                entry["absolute_expires_at"] = absolute_expires_at
+                if now > entry["expires_at"] or now > absolute_expires_at:
                     del self.session_tokens[token]
         self._save_sessions()
 
@@ -406,7 +427,63 @@ def get_command_timeout() -> int:
             f"Warning: COMMAND_TIMEOUT must be an integer, using default 300 seconds",
             file=sys.stderr,
         )
-        return 300
+
+
+def get_bg_command_timeout() -> int:
+    """Get background task timeout from environment or use default 900 seconds (15 minutes)"""
+    try:
+        timeout_str = os.environ.get("BG_COMMAND_TIMEOUT", "900")
+        timeout = int(timeout_str)
+        if timeout < 30:
+            return 30
+        return timeout
+    except ValueError:
+        return 900
+
+
+def estimate_background_timeout(prompt: str, default: int = 900) -> int:
+    """Estimate an appropriate timeout for a background task based on the prompt.
+
+    Uses keyword heuristics to assign a timeout that fits the expected task duration:
+    - Quick lookups / status checks: 2 min
+    - Standard tasks: default (15 min)
+    - Long-running: deploy, migrate, process all, index, scan, crawl: 20 min
+    - Very long: full backup, batch process large, generate report for all: 30 min
+    """
+    text = prompt.lower()
+
+    # Very long tasks (~30 min)
+    very_long_keywords = [
+        "backup", "full scan", "batch process", "process all", "index all",
+        "crawl all", "generate report for all", "migrate all", "import all",
+        "export all", "sync all", "reindex",
+    ]
+    # Long tasks (~20 min)
+    long_keywords = [
+        "deploy", "migrate", "migration", "build", "compile", "install",
+        "process", "analyze all", "scan", "crawl", "index", "reprocess",
+        "refactor", "generate report", "summarize all", "bulk",
+    ]
+    # Quick tasks (~2 min)
+    quick_keywords = [
+        "status", "check", "list", "show", "get", "fetch", "ping",
+        "is running", "are running", "what is", "what are", "tell me",
+        "how many", "count", "current", "latest", "recent",
+    ]
+
+    for kw in very_long_keywords:
+        if kw in text:
+            return 1800  # 30 min
+
+    for kw in long_keywords:
+        if kw in text:
+            return 1200  # 20 min
+
+    for kw in quick_keywords:
+        if kw in text:
+            return 120  # 2 min
+
+    return default
 
 
 class HistoryManager:
@@ -707,10 +784,25 @@ class SessionManager:
                 "Claude Opus (Latest)",
                 ["claude-opus", "claude-opus-4-6", "claude-opus-4.6", "opus-4.6"],
             ),
+        ],
+        "US Frontier Models (Comparison)": [
+            ("claude-3-5-sonnet-latest", "Claude 3.5 Sonnet (V2)", ["claude-3-5-sonnet-20241022"]),
+            ("claude-3-5-haiku-latest", "Claude 3.5 Haiku", ["claude-3-5-haiku-20241022"]),
+            ("claude-3-opus-latest", "Claude 3 Opus", ["claude-3-opus-20240229"]),
         ]
     }
 
-    OPENCODE_MODELS = {}
+    OPENCODE_MODELS = {
+        "Meta (US Models)": [
+            ("llama-3.3-70b-versatile", "Llama 3.3 70B", ["llama-3.3", "llama-3-70b"]),
+            ("llama-3.1-405b", "Llama 3.1 405B", ["llama-405b"]),
+            ("llama-3.2-90b-vision", "Llama 3.2 90B Vision", ["llama-90b-vision"]),
+        ],
+        "xAI (US Models)": [
+            ("grok-2", "Grok-2", ["grok"]),
+            ("grok-2-mini", "Grok-2 Mini", ["grok-mini"]),
+        ]
+    }
 
     # Gemini models configuration
     # Note: These are common Gemini models; the CLI may support additional models
@@ -749,6 +841,11 @@ class SessionManager:
             ("gemini-1.5-pro", "Gemini 1.5 Pro", ["gemini-pro-1.5", "pro-1.5"]),
             ("gemini-1.5-flash", "Gemini 1.5 Flash", ["gemini-flash-1.5", "flash-1.5"]),
             ("gemini-pro", "Gemini Pro", ["gemini-1.0-pro"]),
+        ],
+        "US Frontier Models (Comparison)": [
+            ("gemini-1.5-pro-latest", "Gemini 1.5 Pro", ["gemini-1.5-pro"]),
+            ("gemini-1.5-flash-latest", "Gemini 1.5 Flash", ["gemini-1.5-flash"]),
+            ("gemini-2.0-flash-001", "Gemini 2.0 Flash", ["gemini-2.0-flash"]),
         ]
     }
 
@@ -764,6 +861,13 @@ class SessionManager:
             ("gpt-5.1-codex-mini", "GPT-5.1 Codex Mini", ["codex-mini"]),
             ("gpt-5-mini", "GPT-5 Mini", ["gpt-5", "mini"]),
             ("gpt-4.1", "GPT-4.1", ["gpt-4"]),
+        ],
+        "US Frontier Models (Comparison)": [
+            ("gpt-4o", "GPT-4o (Omni)", ["gpt-4o-latest"]),
+            ("gpt-4o-mini", "GPT-4o Mini", ["gpt-4o-mini-latest"]),
+            ("gpt-4-turbo", "GPT-4 Turbo", ["gpt-4-turbo-latest"]),
+            ("o1-preview", "OpenAI o1-preview", ["o1-preview-2024-09-12"]),
+            ("o1-mini", "OpenAI o1-mini", ["o1-mini-2024-09-12"]),
         ]
     }
 
@@ -1057,7 +1161,19 @@ class SessionManager:
             # Method 2: Fallback (if regex fails due to layout changes)
             if not models:
                 # Look for known models as a sanity check/fallback
-                fallback_models = ["gpt-5.2", "claude-sonnet-4.5", "gpt-5"]
+                fallback_models = [
+                    "gpt-4o",
+                    "gpt-4o-mini",
+                    "gpt-4-turbo",
+                    "claude-3.5-sonnet",
+                    "claude-3-5-sonnet",
+                    "claude-3.5-haiku",
+                    "gemini-1.5-pro",
+                    "gemini-1.5-flash",
+                    "gpt-5",
+                    "gpt-5.2",
+                    "claude-sonnet-4.5"
+                ]
                 found_fallbacks = [m for m in fallback_models if m in result.stdout]
                 if found_fallbacks:
                     # If we found known models but regex failed, try a looser regex
@@ -1241,9 +1357,9 @@ class SessionManager:
                 ):
                     merged["model"] = "haiku"
             elif runtime == "opencode":
-                if not merged.get("model") or not merged.get(
-                    "model", ""
-                ).startswith("opencode"):
+                # For opencode, only force default if model is truly empty.
+                # Allow any non-empty model string (opencode/*, openai-compatible/*, etc.)
+                if not merged.get("model"):
                     merged["model"] = "opencode/gpt-5-nano"
             elif runtime == "gemini":
                 if (
@@ -1588,6 +1704,15 @@ class SessionManager:
                     if name_lower == model_id.lower() or name_lower in aliases_lower:
                         return model_id
             return None
+
+        if runtime == "opencode":
+            for category, models in self.OPENCODE_MODELS.items():
+                for model_id, desc, aliases in models:
+                    aliases_lower = [a.lower() for a in aliases]
+                    if name_lower == model_id.lower() or name_lower in aliases_lower:
+                        return model_id
+            # If not in static list, continue to fetch from CLI
+            pass
 
         all_models = []
         if runtime == "opencode":
@@ -2392,7 +2517,7 @@ These commands allow you to control the agent's behavior and are processed by th
 - /schedule logs <job_id> - View logs for a job
 - /schedule results <job_id> - View execution results for a job
 - /background <prompt> - Run a task in the background (doesn't block chat)
-- /background agent=<name> model=<model> <prompt> - Background task with overrides
+- /background agent=<name> model=<model> timeout=<seconds> <prompt> - Background task with overrides
 - /background list - List your background tasks
 - /background status <task_id> - Check background task status
 - /background kill <task_id> - Kill a running background task
@@ -2495,11 +2620,18 @@ curl -s{_curl_insecure} -X POST {_api_scheme}://127.0.0.1:{_api_port_bg}/api/v1/
   -H "Authorization: Bearer shared_{_shared_key}" \\
   -H "X-User-Identity: {_user_identity}" \\
   -H "X-Auth-Channel: {channel}" \\
-  -d '{{"prompt": "<the task prompt here>", "agent": "{agent}"}}'
+  -d '{{"prompt": "<the task prompt here>", "agent": "{agent}", "timeout": <seconds>}}'
 ```
 The API returns a task_id. Tell the user the task was started and they can monitor it in the ⚡ Tasks tab (WebUI) or use `/background status <task_id>`.
 Do NOT run the actual work yourself when backgrounding — the API spawns a separate agent to handle it.
-The default agent for background tasks is `{agent}` (inherited from your current session). Only override `"agent"` in the JSON body if the user explicitly requests a different agent."""
+The default agent for background tasks is `{agent}` (inherited from your current session). Only override `"agent"` in the JSON body if the user explicitly requests a different agent.
+
+**IMPORTANT — You must set the `timeout` field.** Estimate how long the task will realistically take and set an appropriate timeout in seconds. Examples:
+- Quick status check or simple query: 120 (2 min)
+- Standard task (summarize, analyze, write): 600 (10 min)
+- Multi-step or research task: 900 (15 min)
+- Complex build, deploy, or batch job: 1200–1800 (20–30 min)
+Default if truly uncertain: 900 (15 min). Do not omit the `timeout` field."""
 
         # Channel-specific injected context files
         injection_dir = Path(os.environ.get("INJECTION_DIR", Path(SCRIPT_BASE_DIR) / "injections"))
@@ -3177,7 +3309,7 @@ User Request:
     _bg_task_mgr = None  # Set by create_api_app
     _bg_identity = None   # Set per-call for slash command context
 
-    def _execute_background_task(self, task_id, session_id, prompt, agent, runtime, model, channel):
+    def _execute_background_task(self, task_id, session_id, prompt, agent, runtime, model, channel, timeout=None):
         """Run a background task in the current thread (called from thread pool)."""
         self.get_or_create_session_data(session_id)
         self.update_session_field(session_id, "agent", agent)
@@ -3185,6 +3317,8 @@ User Request:
         self.update_session_field(session_id, "runtime", runtime)
         self.update_session_field(session_id, "channel", channel)
         self.update_session_field(session_id, "render_type", "text")
+        if timeout is not None:
+            self.update_session_field(session_id, "timeout", timeout)
         try:
             result = self.execute(prompt, session_id)
             if self._bg_task_mgr:
@@ -3469,6 +3603,13 @@ You can mention an agent in your prompt and it will auto-delegate:
             if argument == "list" or argument.startswith("list "):
                 if current_runtime == "opencode":
                     models_by_provider = self.fetch_opencode_models()
+                    # Add static models for comparison
+                    for provider, entries in self.OPENCODE_MODELS.items():
+                        if provider not in models_by_provider:
+                            models_by_provider[provider] = []
+                        for model_id, display_name, aliases in entries:
+                            models_by_provider[provider].append(model_id)
+
                     out = f"📋 **Available Models ({current_runtime})**\n\n"
                     if not models_by_provider:
                         return (
@@ -3788,6 +3929,7 @@ You can mention an agent in your prompt and it will auto-delegate:
                     "• `/background <prompt>` — Run a task in the background\n"
                     "• `/background agent=devops <prompt>` — Override agent\n"
                     "• `/background runtime=claude model=sonnet <prompt>` — Override runtime/model\n"
+                    "• `/background timeout=600 <prompt>` — Override timeout (seconds)\n"
                     "• `/background list` — List your background tasks\n"
                     "• `/background status <task_id>` — Check task status\n"
                     "• `/background kill <task_id>` — Kill a running task\n\n"
@@ -3843,10 +3985,11 @@ You can mention an agent in your prompt and it will auto-delegate:
                 return f"❌ Could not kill task `{tid}` (not found or not running)."
 
             # Otherwise it's a prompt to run in the background
-            # Parse optional overrides: agent=X runtime=Y model=Z
+            # Parse optional overrides: agent=X runtime=Y model=Z timeout=N
             bg_agent = session_data.get("agent", "orchestrator")
             bg_runtime = session_data.get("runtime", "copilot")
             bg_model = session_data.get("model", "gpt-5-mini")
+            bg_timeout_override = None
             bg_prompt_parts = []
             for word in sub.split():
                 if word.startswith("agent="):
@@ -3855,6 +3998,11 @@ You can mention an agent in your prompt and it will auto-delegate:
                     bg_runtime = word[8:]
                 elif word.startswith("model="):
                     bg_model = word[6:]
+                elif word.startswith("timeout="):
+                    try:
+                        bg_timeout_override = int(word[8:])
+                    except ValueError:
+                        pass
                 else:
                     bg_prompt_parts.append(word)
             bg_prompt = " ".join(bg_prompt_parts)
@@ -3868,6 +4016,7 @@ You can mention an agent in your prompt and it will auto-delegate:
             if running >= BackgroundTaskManager.MAX_TASKS_PER_USER:
                 return f"❌ Maximum {BackgroundTaskManager.MAX_TASKS_PER_USER} concurrent background tasks allowed."
 
+            bg_timeout = bg_timeout_override if bg_timeout_override is not None else get_bg_command_timeout()
             task_id = f"bg_{str(uuid4())[:8]}"
             bg_session_id = f"bg_{str(uuid4())[:8]}"
             self._bg_task_mgr.create_task(
@@ -3880,13 +4029,14 @@ You can mention an agent in your prompt and it will auto-delegate:
             import concurrent.futures as _cf
             _cf.ThreadPoolExecutor(max_workers=1).submit(
                 self._execute_background_task,
-                task_id, bg_session_id, bg_prompt, bg_agent, bg_runtime, bg_model, channel,
+                task_id, bg_session_id, bg_prompt, bg_agent, bg_runtime, bg_model, channel, bg_timeout,
             )
 
             return (
                 f"⚡ **Background task started!**\n\n"
                 f"• **Task ID:** `{task_id}`\n"
                 f"• **Agent:** `{bg_agent}` | Runtime: `{bg_runtime}` | Model: `{bg_model}`\n"
+                f"• **Timeout:** `{bg_timeout}s` ({bg_timeout // 60}m)\n"
                 f"• **Prompt:** {bg_prompt[:150]}\n\n"
                 f"Check the ⚡ Tasks tab or use `/background status {task_id}` to monitor."
             )
@@ -4240,6 +4390,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
     PAIRING_CODE_LENGTH = int(os.environ.get("PAIRING_CODE_LENGTH", "6"))
     PAIRING_CODE_TTL = int(os.environ.get("PAIRING_CODE_TTL", "300"))
     SESSION_TOKEN_TTL = int(os.environ.get("SESSION_TOKEN_TTL", "3600"))
+    SESSION_TOKEN_ABSOLUTE_TTL = int(os.environ.get("SESSION_TOKEN_ABSOLUTE_TTL", "86400"))
     CONFIG_FILE = os.environ.get("AGENT_CONFIG_FILE")
     SCHEDULER_JOBS_FILE = os.environ.get("SCHEDULER_JOBS_FILE", os.path.join(os.path.dirname(os.path.abspath(__file__)), ".task-scheduler", "jobs.json"))
     SCHEDULER_ENABLED = os.environ.get("SCHEDULER_ENABLED", "true").strip().lower() not in ("false", "0", "no")
@@ -4250,6 +4401,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         pairing_code_length=PAIRING_CODE_LENGTH,
         pairing_code_ttl=PAIRING_CODE_TTL,
         session_token_ttl=SESSION_TOKEN_TTL,
+        session_token_absolute_ttl=SESSION_TOKEN_ABSOLUTE_TTL,
         sessions_file=os.path.join(os.path.dirname(SCHEDULER_JOBS_FILE), "sessions.json"),
     )
     _api_auth_manager = auth_mgr
@@ -4285,6 +4437,9 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
     class ExecuteRequest(BaseModel):
         query: str
         timeout: Optional[int] = None
+        model: Optional[str] = None
+        runtime: Optional[str] = None
+        agent: Optional[str] = None
 
         @field_validator("query")
         @classmethod
@@ -4472,6 +4627,10 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             try:
                 raw = session_mgr.fetch_opencode_models()
                 models = [{"id": m, "label": m} for group in raw.values() for m in group]
+                # Add static comparison models
+                for group, entries in session_mgr.OPENCODE_MODELS.items():
+                    for model_id, display_name, aliases in entries:
+                        models.append({"id": model_id, "label": f"{display_name} (Comparison)"})
                 return {"runtime": runtime, "models": models}
             except Exception as e:
                 return {"runtime": runtime, "models": [], "error": str(e)}
@@ -4519,6 +4678,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         return {
             "token": token,
             "expires_in": SESSION_TOKEN_TTL,
+            "absolute_expires_in": SESSION_TOKEN_ABSOLUTE_TTL,
             "identity": body.identity,
             "channel": channel,
             "username": username,
@@ -4580,6 +4740,14 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         if not existing:
             raise HTTPException(status_code=404, detail="Session not found")
 
+        # Apply per-query overrides for model, runtime, and agent if provided
+        if body.model:
+            session_mgr.update_session_field(session_id, "model", body.model)
+        if body.runtime:
+            session_mgr.update_session_field(session_id, "runtime", body.runtime)
+        if body.agent:
+            session_mgr.update_session_field(session_id, "agent", body.agent)
+
         session_mgr._bg_identity = user["identity"]
         loop = asyncio.get_event_loop()
         with concurrent.futures.ThreadPoolExecutor() as pool:
@@ -4634,6 +4802,14 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         existing = session_mgr.load_session_data(session_id)
         if not existing:
             raise HTTPException(status_code=404, detail="Session not found")
+
+        # Apply per-query overrides for model, runtime, and agent if provided
+        if body.model:
+            session_mgr.update_session_field(session_id, "model", body.model)
+        if body.runtime:
+            session_mgr.update_session_field(session_id, "runtime", body.runtime)
+        if body.agent:
+            session_mgr.update_session_field(session_id, "agent", body.agent)
 
         session_mgr._bg_identity = user["identity"]
         loop = asyncio.get_event_loop()
@@ -5100,6 +5276,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         agent: Optional[str] = None
         runtime: Optional[str] = None
         model: Optional[str] = None
+        timeout: Optional[int] = None
 
         @field_validator("prompt")
         @classmethod
@@ -5110,7 +5287,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
 
     def _run_background_task(task_id: str, session_id: str, prompt: str,
                              agent: str, runtime: str, model: str,
-                             channel: str, user_identity: str):
+                             channel: str, user_identity: str, timeout: int = None):
         """Blocking function that runs a background task in a subprocess.
         Called from a thread pool executor."""
         import threading as _thr
@@ -5122,6 +5299,8 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         session_mgr.update_session_field(session_id, "runtime", runtime)
         session_mgr.update_session_field(session_id, "channel", channel)
         session_mgr.update_session_field(session_id, "render_type", "text")
+        if timeout is not None:
+            session_mgr.update_session_field(session_id, "timeout", timeout)
 
         try:
             # Use the existing execute method which handles all runtimes
@@ -5179,12 +5358,15 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             prompt=body.prompt,
         )
 
+        # Use agent-specified timeout or fall back to default (15 min)
+        bg_timeout = body.timeout if body.timeout is not None else get_bg_command_timeout()
+
         # Run in background thread
         loop = asyncio.get_event_loop()
         loop.run_in_executor(
             concurrent.futures.ThreadPoolExecutor(max_workers=1),
             _run_background_task,
-            task_id, session_id, body.prompt, agent, runtime, model, channel, identity,
+            task_id, session_id, body.prompt, agent, runtime, model, channel, identity, bg_timeout,
         )
 
         return {
@@ -5194,6 +5376,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             "runtime": runtime,
             "model": model,
             "status": "running",
+            "timeout": bg_timeout,
         }
 
     @app.get("/api/v1/background-tasks")

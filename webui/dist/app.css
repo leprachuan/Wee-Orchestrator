@@ -1811,7 +1811,7 @@ html, body {
   .blob-2 { width: 300px; height: 300px; }
   .blob-3 { width: 250px; height: 250px; }
 
-  /* Full-width sidebar on mobile */
+  /* Full-width sidebar on mobile — hidden via .collapsed (matches JS toggleSidebar logic) */
   .sidebar {
     position: fixed;
     top: 0;
@@ -1822,17 +1822,65 @@ html, body {
     border-right: none;
     border-bottom: 1px solid var(--glass-border);
     z-index: 100;
-    transform: translateX(-100%);
-    transition: transform 0.25s ease;
-  }
-
-  .sidebar.open {
     transform: translateX(0);
+    transition: transform 0.25s ease;
   }
 
   .sidebar.collapsed {
     width: 100%;
     transform: translateX(-100%);
+  }
+
+  /* Hide queue/TODO panel on mobile — accessible via mobile tab bar instead */
+  .request-queue-panel {
+    display: none !important;
+  }
+
+  /* Mobile queue/todo panel overlay — activated by JS when tab is selected */
+  .request-queue-panel.mobile-panel-active {
+    display: flex !important;
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 56px; /* above tab bar */
+    width: 100%;
+    height: auto;
+    z-index: 100;
+    flex-direction: column;
+    overflow: hidden;
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+  }
+
+  /* Override minimized state when showing as mobile overlay */
+  .request-queue-panel.mobile-panel-active.queue-minimized {
+    width: 100%;
+  }
+  .request-queue-panel.mobile-panel-active .queue-header-title,
+  .request-queue-panel.mobile-panel-active .queue-pause-btn {
+    display: flex !important;
+  }
+  .request-queue-panel.mobile-panel-active .queue-items-list {
+    display: flex !important;
+  }
+  .request-queue-panel.mobile-panel-active .queue-footer {
+    display: flex !important;
+  }
+  .request-queue-panel.mobile-panel-active .todo-section {
+    display: flex !important;
+  }
+
+  /* Tab-specific: Queue tab — show queue, hide todos */
+  .request-queue-panel.mobile-show-queue-only .todo-section {
+    display: none !important;
+  }
+
+  /* Tab-specific: TODOs tab — show todos, hide queue */
+  .request-queue-panel.mobile-show-todos-only .queue-header,
+  .request-queue-panel.mobile-show-todos-only .queue-items-list,
+  .request-queue-panel.mobile-show-todos-only .queue-footer {
+    display: none !important;
   }
 
   .sidebar-header {
@@ -1870,14 +1918,19 @@ html, body {
 
   .sidebar-user { font-size: 11px; }
 
-  /* Main panel adjustments */
+  /* Main panel adjustments — leave bottom space for mobile tab bar */
   .main-panel {
     position: fixed;
     top: 0;
     left: 0;
     right: 0;
-    bottom: 0;
+    bottom: 56px; /* space for mobile tab bar */
     z-index: 1;
+    display: flex !important; /* Always visible by default */
+  }
+
+  .main-panel.hidden {
+    display: none !important;
   }
 
   /* Always show sidebar toggle on mobile */
@@ -2896,5 +2949,89 @@ html, body {
 @media (max-width: 768px) {
   .file-viewer-panel {
     width: 100vw;
+  }
+}
+
+/* ============================================
+   MOBILE BOTTOM TAB BAR
+   ============================================ */
+
+/* Hidden on desktop — only shown via media query */
+.mobile-tab-bar {
+  display: none;
+}
+
+.mobile-tab-badge {
+  background: var(--accent);
+  color: #fff;
+  font-size: 10px;
+  font-weight: 700;
+  padding: 0px 5px;
+  border-radius: 8px;
+  min-width: 16px;
+  text-align: center;
+  display: inline-block;
+  vertical-align: middle;
+  margin-left: 2px;
+}
+
+.mobile-tab-badge.hidden {
+  display: none;
+}
+
+@media (max-width: 768px) {
+  .mobile-tab-bar {
+    display: flex;
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    height: 56px;
+    padding-bottom: env(safe-area-inset-bottom, 0);
+    background: rgba(18, 18, 35, 0.97);
+    border-top: 1px solid var(--glass-border);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    z-index: 150;
+    box-shadow: 0 -2px 20px rgba(0, 0, 0, 0.4);
+  }
+
+  .mobile-tab {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 3px;
+    background: none;
+    border: none;
+    border-top: 2px solid transparent;
+    color: var(--text-muted);
+    cursor: pointer;
+    padding: 6px 4px;
+    transition: color 0.2s, background 0.15s, border-color 0.2s;
+    min-height: 44px;
+    touch-action: manipulation;
+  }
+
+  .mobile-tab-icon {
+    font-size: 18px;
+    line-height: 1;
+  }
+
+  .mobile-tab-label {
+    font-size: 10px;
+    font-weight: 500;
+    white-space: nowrap;
+  }
+
+  .mobile-tab.active {
+    color: var(--accent);
+    border-top-color: var(--accent);
+  }
+
+  .mobile-tab:hover,
+  .mobile-tab:active {
+    background: rgba(255, 255, 255, 0.06);
   }
 }
