@@ -2675,7 +2675,7 @@ html, body {
 .request-queue-panel.queue-minimized .todo-section-icon,
 .request-queue-panel.queue-minimized .todo-section-label,
 .request-queue-panel.queue-minimized .todo-count,
-.request-queue-panel.queue-minimized .btn-refresh-todos {
+.request-queue-panel.queue-minimized .todo-refresh-btn {
   display: none;
 }
 
