@@ -18,6 +18,7 @@ class TestAuthManager(unittest.TestCase):
             pairing_code_length=6,
             pairing_code_ttl=300,
             session_token_ttl=3600,
+            session_token_absolute_ttl=86400,
         )
 
     def test_validate_shared_key_success(self):
@@ -98,6 +99,21 @@ class TestAuthManager(unittest.TestCase):
         self.auth.validate_session_token(token)
         after = self.auth.session_tokens[token]["last_used"]
         self.assertGreater(after, before)
+
+    def test_validate_session_token_respects_absolute_expiry(self):
+        code = self.auth.generate_pairing_code("user123", "telegram")
+        token = self.auth.verify_pairing_code(code, "user123")
+        self.auth.session_tokens[token]["absolute_expires_at"] = time.time() - 1
+        result = self.auth.validate_session_token(token)
+        self.assertIsNone(result)
+
+    def test_validate_session_token_does_not_extend_beyond_absolute_expiry(self):
+        code = self.auth.generate_pairing_code("user123", "telegram")
+        token = self.auth.verify_pairing_code(code, "user123")
+        now = time.time()
+        self.auth.session_tokens[token]["absolute_expires_at"] = now + 10
+        self.auth.validate_session_token(token)
+        self.assertLessEqual(self.auth.session_tokens[token]["expires_at"], now + 10.1)
 
     def test_cleanup_expired(self):
         code = self.auth.generate_pairing_code("user123", "telegram")
