@@ -1644,6 +1644,7 @@ function showChatPanel() {
   hide($('background-panel'));
   show($('btn-new-chat'));
   show($('sessions-list'));
+  show($('request-queue-panel'));
   $('btn-nav-chat').classList.add('active');
   $('btn-nav-scheduler').classList.remove('active');
   $('btn-nav-background').classList.remove('active');
@@ -1656,6 +1657,7 @@ function showSchedulerPanel() {
   hide($('background-panel'));
   hide($('btn-new-chat'));
   hide($('sessions-list'));
+  hide($('request-queue-panel'));
   $('btn-nav-scheduler').classList.add('active');
   $('btn-nav-chat').classList.remove('active');
   $('btn-nav-background').classList.remove('active');
@@ -1670,6 +1672,7 @@ function showBackgroundPanel() {
   show($('background-panel'));
   hide($('btn-new-chat'));
   hide($('sessions-list'));
+  hide($('request-queue-panel'));
   $('btn-nav-background').classList.add('active');
   $('btn-nav-chat').classList.remove('active');
   $('btn-nav-scheduler').classList.remove('active');
