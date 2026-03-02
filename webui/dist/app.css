@@ -2665,6 +2665,26 @@ html, body {
   text-transform: uppercase;
   letter-spacing: 0.5px;
 }
+.request-queue-panel.queue-minimized .todo-section-header {
+  flex-direction: column;
+  align-items: center;
+  padding: 8px 4px;
+  gap: 0;
+}
+
+.request-queue-panel.queue-minimized .todo-section-icon,
+.request-queue-panel.queue-minimized .todo-section-label,
+.request-queue-panel.queue-minimized .todo-count,
+.request-queue-panel.queue-minimized .btn-refresh-todos {
+  display: none;
+}
+
+.request-queue-panel.queue-minimized .queue-toggle-btn {
+  width: 100%;
+  padding: 6px 2px;
+  flex-shrink: 0;
+}
+
 .request-queue-panel.queue-minimized .todo-items-list { display: none; }
 
 /* ========== FILE VIEWER PANEL ========== */
