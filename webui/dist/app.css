@@ -2665,7 +2665,7 @@ html, body {
   text-transform: uppercase;
   letter-spacing: 0.5px;
 }
-.request-queue-panel.queue-minimized .todo-section { display: none; }
+.request-queue-panel.queue-minimized .todo-items-list { display: none; }
 
 /* ========== FILE VIEWER PANEL ========== */
 .file-viewer-panel {
