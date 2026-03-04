@@ -152,6 +152,21 @@ function updateSidebarIdentity() {
 function showError(id, msg) { const el = $(id); el.textContent = msg; show(el); }
 function hideError(id) { hide($(id)); }
 
+// ─── Runtime Brand Icons ──────────────────────────────────────────────────────
+const RUNTIME_ICONS = {
+  claude:   '/ui/assets/runtime-icons/claude.svg',
+  copilot:  '/ui/assets/runtime-icons/copilot.svg',
+  gemini:   '/ui/assets/runtime-icons/gemini.svg',
+  opencode: '/ui/assets/runtime-icons/opencode.svg',
+  codex:    '/ui/assets/runtime-icons/openai.svg',
+};
+
+function runtimeIconHTML(runtime, size = 14) {
+  const src = RUNTIME_ICONS[String(runtime || '').toLowerCase()];
+  if (!src) return '';
+  return `<img src="${src}" class="runtime-icon" width="${size}" height="${size}" alt="" aria-hidden="true">`;
+}
+
 // ─── Session Meta Pills ───────────────────────────────────────────────────────
 function updateSessionMeta(data) {
   const set = (id, text, extra = '') => {
@@ -161,7 +176,11 @@ function updateSessionMeta(data) {
       el.classList.add('empty');
       if (extra) el.classList.remove(extra);
     } else {
-      el.textContent = text;
+      if (id === 'meta-runtime') {
+        el.innerHTML = runtimeIconHTML(text) + escHtml(text);
+      } else {
+        el.textContent = text;
+      }
       el.classList.remove('empty');
       if (extra) el.classList.toggle(extra, true);
     }
@@ -320,11 +339,11 @@ const PILL_OPTIONS = {
   'meta-runtime': {
     label: 'Switch Runtime',
     options: [
-      { label: '🟣 claude',         cmd: '/runtime set claude' },
-      { label: '🐙 copilot',        cmd: '/runtime set copilot' },
-      { label: '💎 gemini',         cmd: '/runtime set gemini' },
-      { label: '🔓 opencode',       cmd: '/runtime set opencode' },
-      { label: '🧮 codex',          cmd: '/runtime set codex' },
+      { label: `${runtimeIconHTML('claude')}claude`,         cmd: '/runtime set claude' },
+      { label: `${runtimeIconHTML('copilot')}copilot`,       cmd: '/runtime set copilot' },
+      { label: `${runtimeIconHTML('gemini')}gemini`,         cmd: '/runtime set gemini' },
+      { label: `${runtimeIconHTML('opencode')}opencode`,     cmd: '/runtime set opencode' },
+      { label: `${runtimeIconHTML('codex')}codex`,           cmd: '/runtime set codex' },
     ],
   },
   'meta-model': {
@@ -370,7 +389,7 @@ function buildPopoverDOM(pillEl, label, options) {
   options.forEach(opt => {
     const item = document.createElement('button');
     item.className = 'pill-popover-item';
-    item.textContent = opt.label;
+    item.innerHTML = opt.label;
     if (!opt.cmd) { item.disabled = true; item.style.opacity = '0.5'; }
     item.addEventListener('mousedown', e => {
       e.preventDefault();
@@ -1765,7 +1784,7 @@ function renderSchedulerJobs() {
       </div>
       <div class="sched-job-meta">
         <span title="Schedule">⏰ ${escHtml(job.schedule)}</span>
-        <span title="Agent / Runtime">${job.mode === 'command' ? '⚙️ command' : `🤖 ${escHtml(job.agent)} · ${escHtml(job.runtime)}`}</span>
+        <span title="Agent / Runtime">${job.mode === 'command' ? '⚙️ command' : `${runtimeIconHTML(job.runtime)}${escHtml(job.agent)} · ${escHtml(job.runtime)}`}</span>
       </div>
       <div class="sched-job-times">
         <span title="Next run">Next: ${escHtml(nextRun)}</span>
@@ -1832,7 +1851,7 @@ function renderJobDetailView(job) {
         <dt>Schedule</dt> <dd>${escHtml(job.schedule)}</dd>
         ${job.mode !== 'command' ? `
         <dt>Agent</dt>    <dd>${escHtml(job.agent)}</dd>
-        <dt>Runtime</dt>  <dd>${escHtml(job.runtime)}</dd>
+        <dt>Runtime</dt>  <dd>${runtimeIconHTML(job.runtime)}${escHtml(job.runtime)}</dd>
         ` : `
         <dt>Working Dir</dt> <dd>${escHtml(job.working_dir || '/opt')}</dd>
         `}
@@ -2331,7 +2350,7 @@ function renderBgTasks() {
       <div class="bg-task-card ${active}" data-task-id="${t.task_id}" onclick="selectBgTask('${t.task_id}')">
         <div class="bg-card-top">
           <span class="bg-card-status ${statusClass}">${icon} ${t.status}</span>
-          <span class="bg-card-agent">${escHtml(t.agent || '?')} / ${escHtml(t.runtime || '?')}</span>
+          <span class="bg-card-agent">${escHtml(t.agent || '?')} / ${runtimeIconHTML(t.runtime)}${escHtml(t.runtime || '?')}</span>
         </div>
         <div class="bg-card-prompt">${escHtml(t.prompt || '')}</div>
         <div class="bg-card-time">${fmtDate(t.created_at)}${elapsed ? ` · ${elapsed}` : ''}</div>
@@ -2406,7 +2425,7 @@ async function loadBgTaskDetail(taskId) {
         </div>
         <div class="bg-detail-meta-row">
           <span class="bg-detail-meta-label">Runtime</span>
-          <span class="bg-detail-meta-value">${escHtml(t.runtime || '?')} / ${escHtml(t.model || '?')}</span>
+          <span class="bg-detail-meta-value">${runtimeIconHTML(t.runtime)}${escHtml(t.runtime || '?')} / ${escHtml(t.model || '?')}</span>
         </div>
         <div class="bg-detail-meta-row">
           <span class="bg-detail-meta-label">Started</span>

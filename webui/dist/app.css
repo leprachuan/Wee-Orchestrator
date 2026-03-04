@@ -515,6 +515,14 @@ html, body {
   50% { opacity: 0.7; }
 }
 .meta-pill.empty { opacity: 0.4; }
+.runtime-icon {
+  display: inline-block;
+  vertical-align: middle;
+  margin-right: 4px;
+  filter: brightness(0) invert(1);
+  opacity: 0.85;
+  flex-shrink: 0;
+}
 
 /* ---------- Messages ---------- */
 .messages-container {
@@ -1073,7 +1081,8 @@ html, body {
 }
 
 .pill-popover-item {
-  display: block;
+  display: flex;
+  align-items: center;
   width: 100%;
   text-align: left;
   padding: 8px 14px;
