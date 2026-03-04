@@ -3118,17 +3118,32 @@ User Request:
                 agent, prompt, n8n_session_id, render_type, effective_timeout, "codex", model, channel
             )
 
+        # Add yolo mode instructions for unrestricted privileged access (consistent with copilot runtime)
+        if mode == "yolo":
+            yolo_instruction = (
+                "\n\n[YOLO MODE ENABLED]\n"
+                "Full permissions granted. Sandbox is fully bypassed — localhost APIs are accessible. "
+                "ALL commands requiring elevated privileges MUST automatically prefix with 'sudo' — no exceptions. "
+                "This includes:\n"
+                "• Service management: sudo systemctl restart/start/stop/reload/enable/disable <service>\n"
+                "• Network commands: sudo ping, sudo ssh, sudo iptables, sudo ip, etc.\n"
+                "• System administration: sudo journalctl, sudo systemd-*, sudo chmod/chown on system paths\n"
+                "• API calls: curl -sk https://127.0.0.1:8001/... works — localhost is fully accessible\n"
+                "• Any command that would fail due to insufficient permissions\n"
+                "Sudo is configured without password prompt (NOPASSWD:ALL). "
+                "Never ask for confirmation — execute privileged commands immediately with sudo."
+            )
+            context_prompt = context_prompt + yolo_instruction
+
         if resume and session_id:
-            # Resume existing session
-            # Usage: codex exec resume [SESSION_ID] [PROMPT]
-            # Note: resume does not support --dangerously-bypass-approvals-and-sandbox flag
-            cmd = [
-                "codex",
-                "exec",
-                "resume",
-                session_id,
-                context_prompt,
-            ]
+            # Resume existing session - flags must come before session_id positional arg
+            # codex exec resume supports --dangerously-bypass-approvals-and-sandbox
+            cmd = ["codex", "exec", "resume"]
+            if mode == "yolo":
+                # Apply sandbox bypass and environment inheritance for resumed yolo sessions
+                cmd.append("--dangerously-bypass-approvals-and-sandbox")
+                cmd += ["-c", "shell_environment_policy.inherit=all"]
+            cmd += [session_id, context_prompt]
             print(f"[Session] Resuming CODEX session: {session_id} in {mode} mode", file=sys.stderr)
         else:
             # Start new session - flags must come BEFORE the prompt positional arg
