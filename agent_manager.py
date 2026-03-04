@@ -2822,9 +2822,19 @@ User Request:
                 agent, prompt, n8n_session_id, render_type, effective_timeout, "copilot", model, channel
             )
         
-        # Add yolo mode instructions for unrestricted network/privileged access
+        # Add yolo mode instructions for unrestricted privileged access
         if mode == "yolo":
-            yolo_instruction = "\n\n[YOLO MODE ENABLED]\nFull permissions granted. For network commands (ping, ssh, etc.) that require elevated privileges, automatically prefix with 'sudo' (e.g., 'sudo ping 192.168.1.51'). Sudo is configured without password prompt."
+            yolo_instruction = (
+                "\n\n[YOLO MODE ENABLED]\n"
+                "Full permissions granted. ALL commands requiring elevated privileges MUST automatically "
+                "prefix with 'sudo' — no exceptions. This includes:\n"
+                "• Service management: sudo systemctl restart/start/stop/reload/enable/disable <service>\n"
+                "• Network commands: sudo ping, sudo ssh, sudo iptables, sudo ip, etc.\n"
+                "• System administration: sudo journalctl, sudo systemd-*, sudo chmod/chown on system paths\n"
+                "• Any command that would fail due to insufficient permissions\n"
+                "Sudo is configured without password prompt (NOPASSWD:ALL). "
+                "Never ask for confirmation — execute privileged commands immediately with sudo."
+            )
             context_prompt = context_prompt + yolo_instruction
 
         cmd = [

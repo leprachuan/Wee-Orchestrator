@@ -28,7 +28,7 @@ Environment="RABBITMQ_PASSWORD=YOUR_RABBITMQ_PASSWORD_HERE
 Environment="RABBITMQ_QUEUE=webex-dev"
 
 # Security
-NoNewPrivileges=true
+NoNewPrivileges=false
 PrivateTmp=true
 
 # Resource limits
