@@ -2625,7 +2625,33 @@ The default agent for background tasks is `{agent}` (inherited from your current
 - Complex build, deploy, or batch job: 1200–1800 (20–30 min)
 Default if truly uncertain: 900 (15 min). Do not omit the `timeout` field."""
 
-        context = f"""[Session ID: {n8n_session_id}]
+        # Inject cross-runtime handoff context on the first message of a new session.
+        # get_handoff_context() is one-time: it reads and deletes the handoff file so
+        # subsequent messages in the same session are not affected.
+        handoff_prefix = ""
+        try:
+            from session_handoff import SessionHandoff
+            _handoff = SessionHandoff()
+            _session_data = self.load_session_data(n8n_session_id)
+            if _session_data:
+                _session_id = _session_data.get("session_id")
+                if _session_id:
+                    _ctx = _handoff.get_handoff_context(n8n_session_id, _session_id)
+                    if _ctx:
+                        handoff_prefix = SessionHandoff.format_handoff_prompt(
+                            _ctx["content"],
+                            _ctx["transcript_path"],
+                            _ctx["prev_runtime"],
+                        )
+                        print(
+                            f"[Handoff] Injecting handoff context from {_ctx['prev_runtime']} "
+                            f"into first message of new {runtime} session",
+                            file=sys.stderr,
+                        )
+        except Exception as _handoff_err:
+            print(f"[Handoff] Warning: failed to load handoff context: {_handoff_err}", file=sys.stderr)
+
+        context = f"""{handoff_prefix}[Session ID: {n8n_session_id}]
 {runtime_instruction}{agent_desc}{files_context}{render_instruction}{bg_task_instruction}{timeout_instruction}
 
 User Request:
@@ -3531,11 +3557,43 @@ You can mention an agent in your prompt and it will auto-delegate:
                     "codex",
                 ]:
                     return f"Unknown runtime: '{new_runtime}'. Use 'copilot', 'opencode', 'claude', 'gemini', or 'codex'."
+
+                # Capture previous session state before any updates
+                prev_runtime = current_runtime
+                prev_session_id = session_data.get("session_id")
+
+                # Generate the new session ID up front so the handoff can reference it
+                new_session_id = str(uuid4())
+
+                # Prepare session handoff if the runtime is actually changing and
+                # there is prior history to hand off
+                if prev_runtime != new_runtime and prev_session_id:
+                    try:
+                        from session_handoff import SessionHandoff
+                        handoff = SessionHandoff()
+                        handoff.export_transcript(n8n_session_id, prev_session_id)
+                        handoff.write_handoff_summary(
+                            n8n_session_id,
+                            new_session_id,
+                            prev_session_id,
+                            prev_runtime,
+                            new_runtime,
+                        )
+                        print(
+                            f"[Handoff] Prepared handoff: {prev_runtime} → {new_runtime} "
+                            f"(prev_session={prev_session_id}, new_session={new_session_id})",
+                            file=sys.stderr,
+                        )
+                    except Exception as _handoff_err:
+                        print(
+                            f"[Handoff] Warning: handoff preparation failed: {_handoff_err}",
+                            file=sys.stderr,
+                        )
+
                 self.update_session_field(n8n_session_id, "runtime", new_runtime)
 
                 # When switching runtime, reset the session ID to a new UUID since session formats are incompatible
                 # (e.g., OpenCode uses "ses_*" format, Claude uses UUID format, CODEX uses UUID format, etc.)
-                new_session_id = str(uuid4())
                 self.update_session_field(n8n_session_id, "session_id", new_session_id)
 
                 # When switching runtime, also reset the model to a default for that runtime
