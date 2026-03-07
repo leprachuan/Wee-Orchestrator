@@ -2621,13 +2621,19 @@ html, body {
   flex-direction: column;
   border-bottom: 1px solid var(--glass-border);
   flex-shrink: 0;
-  max-height: 100%;
+  max-height: 33vh;
+  overflow-y: auto;
   transition: max-height 0.3s ease;
 }
 
 .queue-section-collapsed {
-  max-height: 180px;
-  overflow-y: auto;
+  max-height: 46px;
+  overflow: hidden;
+}
+
+.queue-section-collapsed .queue-items-list,
+.queue-section-collapsed .queue-footer {
+  display: none;
 }
 
 .queue-section-collapsed .queue-footer {
@@ -2720,8 +2726,9 @@ html, body {
   border-bottom: 1px solid var(--glass-border);
   display: flex;
   flex-direction: column;
-  flex: 2 1 0;
+  flex: 1 1 0;
   min-height: 0;
+  overflow-y: auto;
 }
 .todo-section-header {
   display: flex;
