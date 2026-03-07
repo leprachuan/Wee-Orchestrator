@@ -2661,8 +2661,11 @@ function renderBgTasks() {
 function formatElapsed(isoDate) {
   if (!isoDate) return '';
   try {
-    const start = new Date(isoDate + 'Z');
-    const secs = Math.floor((Date.now() - start.getTime()) / 1000);
+    const withTz = /(?:Z|[+-]\d{2}:\d{2})$/.test(isoDate) ? isoDate : `${isoDate}Z`;
+    const start = new Date(withTz);
+    const startMs = start.getTime();
+    if (Number.isNaN(startMs)) return '';
+    const secs = Math.max(0, Math.floor((Date.now() - startMs) / 1000));
     if (secs < 60) return `${secs}s`;
     const mins = Math.floor(secs / 60);
     const remSecs = secs % 60;
