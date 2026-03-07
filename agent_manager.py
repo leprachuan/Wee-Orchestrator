@@ -5261,6 +5261,53 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         import audio_transcriber
         return audio_transcriber.get_status()
 
+    # --- Scratch Notes (Session-based) ---
+
+    @app.get("/api/v1/sessions/{session_id}/scratch")
+    async def get_scratch_notes(session_id: str, request: Request):
+        """Retrieve scratch notes for a session."""
+        await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        if not session_mgr.load_session_data(session_id):
+            raise HTTPException(status_code=404, detail="Session not found")
+        
+        session_data = session_mgr.get_session_data(session_id)
+        scratch = session_data.get("scratch", "") if session_data else ""
+        return {"scratch": scratch, "session_id": session_id}
+
+    class ScratchNotesRequest(BaseModel):
+        scratch: str
+
+        @field_validator("scratch")
+        @classmethod
+        def validate_scratch(cls, v):
+            if len(v) > 1000:
+                raise ValueError("Scratch notes must be 1000 characters or less")
+            return v
+
+    @app.post("/api/v1/sessions/{session_id}/scratch")
+    async def save_scratch_notes(session_id: str, request: Request, body: ScratchNotesRequest):
+        """Save scratch notes for a session."""
+        await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        if not session_mgr.load_session_data(session_id):
+            raise HTTPException(status_code=404, detail="Session not found")
+        
+        session_data = session_mgr.get_session_data(session_id)
+        if session_data:
+            session_data["scratch"] = body.scratch
+            session_mgr.save_session_data(session_id, session_data)
+        
+        return {"success": True, "scratch": body.scratch, "session_id": session_id}
+
     # --- Background Tasks ---
 
     class BackgroundTaskRequest(BaseModel):

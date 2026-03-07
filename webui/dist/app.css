@@ -2614,6 +2614,98 @@ html, body {
   line-height: 1.4;
 }
 
+/* ========== QUEUE SECTION (Collapsible) ========== */
+.queue-section {
+  display: flex;
+  flex-direction: column;
+  border-bottom: 1px solid var(--glass-border);
+  flex-shrink: 0;
+  max-height: 100%;
+  transition: max-height 0.3s ease;
+}
+
+.queue-section-collapsed {
+  max-height: 40px;
+  overflow: hidden;
+}
+
+.queue-section-collapsed .queue-items-list,
+.queue-section-collapsed .queue-footer {
+  display: none;
+}
+
+.queue-section-toggle {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 12px;
+  padding: 0;
+  margin-right: 4px;
+  transition: transform 0.2s ease;
+}
+
+.queue-section-collapsed .queue-section-toggle {
+  transform: rotate(-90deg);
+}
+
+/* ========== SCRATCH SECTION ========== */
+.scratch-section {
+  display: flex;
+  flex-direction: column;
+  padding: 12px;
+  border-top: 1px solid var(--glass-border);
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.scratch-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.scratch-icon {
+  font-size: 14px;
+}
+
+.scratch-label {
+  color: var(--text-primary);
+}
+
+.scratch-char-count {
+  color: var(--text-muted);
+  font-size: 10px;
+  margin-left: auto;
+}
+
+.scratch-textarea {
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--glass-border);
+  border-radius: 6px;
+  color: var(--text-primary);
+  font-family: inherit;
+  font-size: 12px;
+  padding: 8px;
+  resize: vertical;
+  max-height: 100px;
+  min-height: 60px;
+  transition: border-color 0.2s ease, background-color 0.2s ease;
+}
+
+.scratch-textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.scratch-textarea::placeholder {
+  color: var(--text-muted);
+  opacity: 0.7;
+}
+
 /* ========== TODO SECTION (inside queue panel) ========== */
 .todo-section {
   border-bottom: 1px solid var(--glass-border);

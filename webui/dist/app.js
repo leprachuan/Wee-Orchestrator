@@ -729,6 +729,7 @@ async function selectSession(sessionId) {
   scrollToBottom();
   await fetchAndUpdateMeta(sessionId);
   fetchRuntimeUsage();  // update usage indicator
+  loadScratchNotes();   // load scratch notes for this session
 }
 
 async function startNewSession() {
@@ -743,6 +744,7 @@ async function startNewSession() {
     await loadSessions();
     await fetchAndUpdateMeta(data.session_id); // get full defaults
     fetchRuntimeUsage();  // update usage indicator
+    loadScratchNotes();   // load scratch notes for new session (will be empty)
   } catch (err) {
     alert('Failed to create session: ' + err.message);
   }
@@ -880,6 +882,8 @@ function renderQueuePanel() {
 
   const pauseBtn = $('btn-pause-queue');
   const statusMsg = $('queue-status-msg');
+  const queueSection = $('queue-section');
+  
   if (pauseBtn) {
     pauseBtn.textContent = STATE.queuePaused ? '▶' : '⏸';
     pauseBtn.title = STATE.queuePaused ? 'Resume auto-submit' : 'Pause auto-submit';
@@ -894,11 +898,20 @@ function renderQueuePanel() {
     queueList.innerHTML = '<p class="queue-empty"><img src="/static/icon-192.png" alt="" style="width:48px;height:48px;border-radius:10px;opacity:0.5;display:block;margin:0 auto 8px;">No queued requests</p>';
     const counter = $('queue-count');
     if (counter) counter.textContent = '0';
+    // Collapse queue section when empty
+    if (queueSection) {
+      queueSection.classList.add('queue-section-collapsed');
+    }
     return;
   }
 
   const counter = $('queue-count');
   if (counter) counter.textContent = STATE.requestQueue.length;
+  
+  // Expand queue section when items added
+  if (queueSection) {
+    queueSection.classList.remove('queue-section-collapsed');
+  }
 
   queueList.innerHTML = STATE.requestQueue.map((item, idx) => {
     const preview = item.text.substring(0, 60).replace(/</g, '&lt;').replace(/>/g, '&gt;');
@@ -960,6 +973,58 @@ function toggleQueuePause() {
   renderQueuePanel();
   if (!STATE.queuePaused && !STATE.isProcessing && STATE.requestQueue.length > 0) {
     processNextQueue();
+  }
+}
+
+function toggleQueueSection() {
+  const section = $('queue-section');
+  if (section) {
+    section.classList.toggle('queue-section-collapsed');
+  }
+}
+
+async function saveScratchNotes(text) {
+  if (!STATE.currentSessionId) return;
+  
+  try {
+    const response = await fetch(`/api/v1/sessions/${STATE.currentSessionId}/scratch`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${STATE.authToken}`
+      },
+      body: JSON.stringify({ scratch: text })
+    });
+    
+    if (!response.ok) {
+      console.warn('Failed to save scratch notes');
+    }
+  } catch (err) {
+    console.warn('Error saving scratch notes:', err);
+  }
+}
+
+async function loadScratchNotes() {
+  if (!STATE.currentSessionId) return;
+  
+  try {
+    const response = await fetch(`/api/v1/sessions/${STATE.currentSessionId}/scratch`, {
+      headers: {
+        'Authorization': `Bearer ${STATE.authToken}`
+      }
+    });
+    
+    if (response.ok) {
+      const data = await response.json();
+      const scratchTextarea = $('scratch-textarea');
+      if (scratchTextarea && data.scratch) {
+        scratchTextarea.value = data.scratch;
+        const charCountEl = $('scratch-char-count');
+        if (charCountEl) charCountEl.textContent = data.scratch.length;
+      }
+    }
+  } catch (err) {
+    console.warn('Error loading scratch notes:', err);
   }
 }
 
@@ -1726,6 +1791,34 @@ document.addEventListener('DOMContentLoaded', () => {
   // --- Request Queue ---
   $('btn-toggle-queue').addEventListener('click', toggleQueuePanel);
   $('btn-pause-queue').addEventListener('click', toggleQueuePause);
+  
+  // --- Queue Section (Collapsible) ---
+  const btnToggleQueueSection = $('btn-toggle-queue-section');
+  if (btnToggleQueueSection) {
+    btnToggleQueueSection.addEventListener('click', toggleQueueSection);
+  }
+  
+  // --- Scratch Notes ---
+  const scratchTextarea = $('scratch-textarea');
+  if (scratchTextarea) {
+    // Load scratch notes from session state
+    loadScratchNotes();
+    
+    // Save on input with debounce
+    let scratchSaveTimer;
+    scratchTextarea.addEventListener('input', (e) => {
+      // Update char count
+      const charCount = e.target.value.length;
+      const charCountEl = $('scratch-char-count');
+      if (charCountEl) charCountEl.textContent = charCount;
+      
+      // Debounce save
+      clearTimeout(scratchSaveTimer);
+      scratchSaveTimer = setTimeout(() => {
+        saveScratchNotes(e.target.value);
+      }, 500);
+    });
+  }
 
   // --- TODO panel ---
   const btnRefreshTodos = $('btn-refresh-todos');
