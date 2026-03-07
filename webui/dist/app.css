@@ -2438,7 +2438,8 @@ html, body {
 .request-queue-panel.queue-minimized .queue-header-title,
 .request-queue-panel.queue-minimized .queue-pause-btn,
 .request-queue-panel.queue-minimized .queue-items-list,
-.request-queue-panel.queue-minimized .queue-footer {
+.request-queue-panel.queue-minimized .queue-footer,
+.request-queue-panel.queue-minimized .scratch-section {
   display: none;
 }
 
