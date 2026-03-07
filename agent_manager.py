@@ -5369,7 +5369,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         model = body.model or defaults.get("model", get_default_model())
 
         task_id = f"bg_{str(uuid4())[:8]}"
-        session_id = f"bg_{str(uuid4())[:8]}"
+        session_id = str(uuid4())  # Must be valid UUID format for Copilot CLI
 
         # Create task record
         task = bg_task_mgr.create_task(
