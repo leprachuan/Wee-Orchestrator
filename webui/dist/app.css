@@ -2625,12 +2625,16 @@ html, body {
 }
 
 .queue-section-collapsed {
-  max-height: 40px;
+  max-height: 46px;
   overflow: hidden;
 }
 
 .queue-section-collapsed .queue-items-list,
 .queue-section-collapsed .queue-footer {
+  display: none;
+}
+
+.queue-section-collapsed .queue-pause-btn {
   display: none;
 }
 
@@ -2640,9 +2644,14 @@ html, body {
   color: var(--text-muted);
   cursor: pointer;
   font-size: 12px;
-  padding: 0;
-  margin-right: 4px;
+  padding: 0 4px;
+  margin-right: 2px;
   transition: transform 0.2s ease;
+  line-height: 1;
+}
+
+.queue-section-toggle:hover {
+  color: var(--text-primary);
 }
 
 .queue-section-collapsed .queue-section-toggle {
