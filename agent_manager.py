@@ -5272,11 +5272,12 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             x_user_identity=request.headers.get("x-user-identity"),
             x_auth_channel=request.headers.get("x-auth-channel"),
         )
-        if not session_mgr.load_session_data(session_id):
+        session_map = session_mgr.load_session_map()
+        session_data = session_map.get(session_id)
+        if not session_data:
             raise HTTPException(status_code=404, detail="Session not found")
         
-        session_data = session_mgr.get_session_data(session_id)
-        scratch = session_data.get("scratch", "") if session_data else ""
+        scratch = session_data.get("scratch", "")
         return {"scratch": scratch, "session_id": session_id}
 
     class ScratchNotesRequest(BaseModel):
@@ -5298,13 +5299,14 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             x_user_identity=request.headers.get("x-user-identity"),
             x_auth_channel=request.headers.get("x-auth-channel"),
         )
-        if not session_mgr.load_session_data(session_id):
+        session_map = session_mgr.load_session_map()
+        session_data = session_map.get(session_id)
+        if not session_data:
             raise HTTPException(status_code=404, detail="Session not found")
         
-        session_data = session_mgr.get_session_data(session_id)
-        if session_data:
-            session_data["scratch"] = body.scratch
-            session_mgr.save_session_data(session_id, session_data)
+        session_data["scratch"] = body.scratch
+        session_map[session_id] = session_data
+        session_mgr.save_session_map(session_map)
         
         return {"success": True, "scratch": body.scratch, "session_id": session_id}
 
