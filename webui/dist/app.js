@@ -1786,6 +1786,10 @@ document.addEventListener('DOMContentLoaded', () => {
     const bar = $('notif-settings-bar');
     bar.classList.toggle('hidden');
   });
+  $('btn-notif-close').addEventListener('click', () => {
+    hideNotificationPanel();
+    showChatPanel();
+  });
   const notifToggle = $('notif-enabled-toggle');
   notifToggle.checked = isNotificationsEnabled();
   notifToggle.addEventListener('change', () => {
