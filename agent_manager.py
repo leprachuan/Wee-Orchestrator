@@ -5282,7 +5282,8 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                              channel: str, user_identity: str, timeout: int = None):
         """Blocking function that runs a background task in a subprocess.
         Called from a thread pool executor."""
-        import threading as _thr
+        import subprocess
+        import shlex
 
         # Build full context prompt
         session_mgr.get_or_create_session_data(session_id)
@@ -5295,9 +5296,41 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             session_mgr.update_session_field(session_id, "timeout", timeout)
 
         try:
-            # Use the existing execute method which handles all runtimes
-            result = session_mgr.execute(prompt, session_id)
-            bg_task_mgr.complete_task(task_id, result)
+            # Spawn a fresh Copilot CLI process for true isolation
+            # This prevents in-process state pollution and ensures proper execution
+            cmd = [
+                "/home/flipkey/.local/bin/copilot",
+                "-p", prompt,
+                "--resume", session_id,
+                "--silent",
+                "--model", model,
+                "--allow-all-tools",
+                "--allow-all-paths"
+            ]
+            
+            # Set timeout for subprocess (30s longer than task timeout to allow graceful shutdown)
+            proc_timeout = (timeout or 900) + 30
+            
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=proc_timeout,
+                env={**os.environ, "COPILOT_AGENT": agent, "COPILOT_RUNTIME": runtime}
+            )
+            
+            # Extract output - combine stdout and stderr for full result
+            output = result.stdout.strip() if result.stdout else ""
+            if result.stderr:
+                output += f"\n[stderr]\n{result.stderr}"
+            
+            if result.returncode == 0:
+                bg_task_mgr.complete_task(task_id, output or "Task completed successfully")
+            else:
+                bg_task_mgr.fail_task(task_id, f"Task failed with code {result.returncode}: {output}")
+                
+        except subprocess.TimeoutExpired:
+            bg_task_mgr.fail_task(task_id, f"Task exceeded timeout of {timeout} seconds")
         except Exception as exc:
             bg_task_mgr.fail_task(task_id, str(exc))
 
