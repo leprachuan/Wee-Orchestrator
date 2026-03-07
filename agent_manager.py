@@ -5788,22 +5788,19 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                         in_details = False
                         details_lines = []
                     else:
-                        # Skip completed todo and its potential notes
-                        if current_todo:
-                            todos.append(current_todo)
-                            current_todo = None
-                            if len(todos) >= limit:
-                                break
-                        current_todo = None  # Mark we are skipping this one
+                        # Completed todo - the active todo was already saved in lines 5763-5769
+                        # Just clear it and don't add the completed todo to the list
+                        current_todo = None
                         in_details = False
                         details_lines = []
                         
                 elif current_todo:
-                    # Check for Details section
-                    if stripped == "### Details" or stripped == "## Details":
+                    # Check for Details section (inline bold format: **Details**)
+                    if stripped == "**Details**":
                         in_details = True
                         details_lines = []
-                    elif in_details and stripped and not stripped.startswith("#"):
+                    elif in_details and stripped and not stripped.startswith("## ") and not stripped.startswith("- ["):
+                        # Collect details until we hit a top-level section (## ) or a todo item
                         details_lines.append(raw_line)
                     elif raw_line.startswith("    ") and not in_details:
                         # This is a note for the current TODO
