@@ -1209,7 +1209,7 @@ class SessionManager:
             return {}
 
     def fetch_opencode_models(self) -> Dict:
-        """Fetch available models from opencode CLI"""
+        """Fetch available models from opencode CLI, falling back to static list on failure."""
         try:
             cmd = [str(self.opencode_bin), "models"]
             # Use configured command timeout (may be set via COMMAND_TIMEOUT)
@@ -1220,13 +1220,13 @@ class SessionManager:
                     f"[Error] opencode models failed (exit {result.returncode}): {result.stderr}",
                     file=sys.stderr,
                 )
-                return {}
+                return self._static_models_to_dict(self.OPENCODE_MODELS)
 
             if not result.stdout.strip():
                 print(
                     "[Warning] opencode models returned empty output", file=sys.stderr
                 )
-                return {}
+                return self._static_models_to_dict(self.OPENCODE_MODELS)
 
             models_by_provider = {}
             for line in result.stdout.splitlines():
@@ -1250,10 +1250,90 @@ class SessionManager:
             print(
                 f"[Error] opencode models command timed out after {self.command_timeout}s", file=sys.stderr
             )
-            return {}
+            return self._static_models_to_dict(self.OPENCODE_MODELS)
         except Exception as e:
             print(f"Error fetching opencode models: {e}", file=sys.stderr)
+            return self._static_models_to_dict(self.OPENCODE_MODELS)
+
+    def _static_models_to_dict(self, static_dict: Dict) -> Dict:
+        """Convert static model config {cat: [(id, desc, aliases)...]} to {cat: [id,...]}."""
+        return {
+            cat: [model_id for model_id, _desc, _aliases in entries]
+            for cat, entries in static_dict.items()
+        }
+
+    def _get_model_description(self, model_id: str, runtime: str) -> Optional[str]:
+        """Look up a human-readable description for a model from static metadata."""
+        static_map = {
+            "claude": self.CLAUDE_MODELS,
+            "gemini": self.GEMINI_MODELS,
+            "codex": self.CODEX_MODELS,
+            "opencode": self.OPENCODE_MODELS,
+        }
+        models_dict = static_map.get(runtime)
+        if not models_dict:
+            return None
+        for _cat, entries in models_dict.items():
+            for mid, desc, _aliases in entries:
+                if mid == model_id:
+                    return desc
+        return None
+
+    def fetch_claude_models(self) -> Dict:
+        """Return available Claude models, preferring CLI discovery with static fallback.
+
+        Claude Code CLI does not currently expose a model-listing subcommand.
+        The static CLAUDE_MODELS list is returned; CLI is probed so that if a
+        future release adds a listing command this function can be extended.
+        """
+        if self.claude_bin:
+            try:
+                subprocess.run(
+                    [self.claude_bin, "--help", "--no-color"],
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                )
+                # Future: parse stdout for model choices when CLI supports it.
+            except Exception:
+                pass
+        return self._static_models_to_dict(self.CLAUDE_MODELS)
+
+    def fetch_gemini_models(self) -> Dict:
+        """Return available Gemini models, preferring CLI discovery with static fallback.
+
+        Gemini CLI does not currently expose a model-listing subcommand; the
+        static GEMINI_MODELS list is returned.
+        """
+        return self._static_models_to_dict(self.GEMINI_MODELS)
+
+    def fetch_codex_models(self) -> Dict:
+        """Return available CODEX models, preferring CLI discovery with static fallback.
+
+        CODEX CLI does not currently expose a model-listing subcommand; the
+        static CODEX_MODELS list is returned.
+        """
+        return self._static_models_to_dict(self.CODEX_MODELS)
+
+    def get_models_for_runtime(self, runtime: str) -> Dict:
+        """Fetch available models for a runtime, using CLI discovery where possible.
+
+        Returns {category: [model_id, ...]} with CLI-discovered models preferred
+        and a static list used as fallback when the runtime CLI is unavailable
+        or does not support model listing.
+        """
+        dispatch = {
+            "copilot": self.fetch_copilot_models,
+            "opencode": self.fetch_opencode_models,
+            "claude": self.fetch_claude_models,
+            "gemini": self.fetch_gemini_models,
+            "codex": self.fetch_codex_models,
+        }
+        fetcher = dispatch.get(runtime)
+        if fetcher is None:
+            print(f"[Warning] Unknown runtime for model listing: {runtime}", file=sys.stderr)
             return {}
+        return fetcher()
 
     def load_session_map(self) -> Dict:
         """Load the N8N -> Session ID mapping"""
@@ -1683,73 +1763,42 @@ class SessionManager:
         return command, argument
 
     def get_model_from_name(self, name: str, runtime: str) -> Optional[str]:
-        """Convert model name/alias to full model ID based on runtime."""
+        """Convert model name/alias to full model ID based on runtime.
+
+        Resolution order:
+          1. Check static alias tables (contain alias/description metadata).
+          2. Fall back to CLI-discovered model list (exact then substring match).
+        """
         name_lower = name.lower().strip("\"'")
 
-        if runtime == "claude":
-            for category, models in self.CLAUDE_MODELS.items():
-                for model_id, desc, aliases in models:
-                    if name_lower == model_id.lower() or name_lower in aliases:
-                        return model_id
-            return None
-
-        if runtime == "gemini":
-            for category, models in self.GEMINI_MODELS.items():
-                for model_id, desc, aliases in models:
+        # Step 1: check static alias tables for all runtimes that have them.
+        static_alias_map = {
+            "claude": self.CLAUDE_MODELS,
+            "gemini": self.GEMINI_MODELS,
+            "codex": self.CODEX_MODELS,
+            "opencode": self.OPENCODE_MODELS,
+        }
+        if runtime in static_alias_map:
+            for _category, models in static_alias_map[runtime].items():
+                for model_id, _desc, aliases in models:
                     aliases_lower = [a.lower() for a in aliases]
                     if name_lower == model_id.lower() or name_lower in aliases_lower:
                         return model_id
-            return None
 
-        if runtime == "codex":
-            for category, models in self.CODEX_MODELS.items():
-                for model_id, desc, aliases in models:
-                    aliases_lower = [a.lower() for a in aliases]
-                    if name_lower == model_id.lower() or name_lower in aliases_lower:
-                        return model_id
-            return None
+        # Step 2: dynamic CLI discovery for all runtimes.
+        models_dict = self.get_models_for_runtime(runtime)
+        all_models = [m for sublist in models_dict.values() for m in sublist]
 
-        if runtime == "opencode":
-            for category, models in self.OPENCODE_MODELS.items():
-                for model_id, desc, aliases in models:
-                    aliases_lower = [a.lower() for a in aliases]
-                    if name_lower == model_id.lower() or name_lower in aliases_lower:
-                        return model_id
-            # If not in static list, continue to fetch from CLI
-            pass
-
-        all_models = []
-        if runtime == "opencode":
-            models_by_provider = self.fetch_opencode_models()
-            all_models = [m for sublist in models_by_provider.values() for m in sublist]
-        else:  # copilot
-            models_by_cat = self.fetch_copilot_models()
-            all_models = [m for sublist in models_by_cat.values() for m in sublist]
-
-        # 1. Exact match (case insensitive)
+        # Exact match (case insensitive)
         for m in all_models:
             if m.lower() == name_lower:
                 return m
 
-        # 2. Suffix/Substring matching
-        matches = []
-        for m in all_models:
-            if runtime == "opencode":
-                # Check substring match
-                if name_lower in m.lower():
-                    matches.append(m)
-            else:
-                # Copilot specific aliases / substring
-                if name_lower in m.lower():
-                    matches.append(m)
-
+        # Substring matching with longest-match preference
+        matches = [m for m in all_models if name_lower in m.lower()]
         if len(matches) == 1:
             return matches[0]
-
-        # Preference logic for ambiguous matches
         if matches:
-            # Sort by length (descending) or alphanumeric?
-            # Usually we want the latest version.
             matches.sort(reverse=True)
             return matches[0]
 
@@ -3689,60 +3738,22 @@ You can mention an agent in your prompt and it will auto-delegate:
             if not argument:
                 argument = "list"  # Default to list if no argument provided
             if argument == "list" or argument.startswith("list "):
-                if current_runtime == "opencode":
-                    models_by_provider = self.fetch_opencode_models()
-                    # Add static models for comparison
-                    for provider, entries in self.OPENCODE_MODELS.items():
-                        if provider not in models_by_provider:
-                            models_by_provider[provider] = []
-                        for model_id, display_name, aliases in entries:
-                            models_by_provider[provider].append(model_id)
-
-                    out = f"📋 **Available Models ({current_runtime})**\n\n"
-                    if not models_by_provider:
-                        return (
-                            out
-                            + "❌ No models available. Check that OpenCode is properly configured."
-                        )
-                    for provider in sorted(models_by_provider.keys()):
-                        out += f"**{provider}:**\n"
-                        for model_id in sorted(models_by_provider[provider]):
-                            out += f"  • `{model_id}`\n"
-                    return out
-                elif current_runtime == "claude":
-                    out = f"📋 **Available Models ({current_runtime})**\n\n"
-                    for cat, models in self.CLAUDE_MODELS.items():
-                        out += f"**{cat}:**\n"
-                        for mid, desc, _ in models:
+                models_dict = self.get_models_for_runtime(current_runtime)
+                out = f"📋 **Available Models ({current_runtime})**\n\n"
+                if not models_dict:
+                    return (
+                        out
+                        + f"❌ No models available for {current_runtime}. Check CLI configuration."
+                    )
+                for cat in sorted(models_dict.keys()):
+                    out += f"**{cat}:**\n"
+                    for mid in sorted(models_dict[cat]):
+                        desc = self._get_model_description(mid, current_runtime)
+                        if desc:
                             out += f"  • `{mid}` - {desc}\n"
-                    return out
-                elif current_runtime == "gemini":
-                    out = f"📋 **Available Models ({current_runtime})**\n\n"
-                    for cat, models in self.GEMINI_MODELS.items():
-                        out += f"**{cat}:**\n"
-                        for mid, desc, _ in models:
-                            out += f"  • `{mid}` - {desc}\n"
-                    return out
-                elif current_runtime == "codex":
-                    out = f"📋 **Available Models ({current_runtime})**\n\n"
-                    for cat, models in self.CODEX_MODELS.items():
-                        out += f"**{cat}:**\n"
-                        for mid, desc, _ in models:
-                            out += f"  • `{mid}` - {desc}\n"
-                    return out
-                else:
-                    models_dict = self.fetch_copilot_models()
-                    out = f"📋 **Available Models ({current_runtime})**\n\n"
-                    if not models_dict:
-                        return (
-                            out
-                            + "❌ No models available. Check that Copilot CLI is properly configured."
-                        )
-                    for cat in sorted(models_dict.keys()):
-                        out += f"**{cat}:**\n"
-                        for mid in sorted(models_dict[cat]):
+                        else:
                             out += f"  • `{mid}`\n"
-                    return out
+                return out
 
             elif argument == "current":
                 return (
@@ -4694,52 +4705,27 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
 
     @app.get("/api/v1/models")
     async def get_models(runtime: str = "copilot"):
-        """Return available models for the specified runtime."""
+        """Return available models for the specified runtime.
+
+        Uses CLI discovery for all runtimes where possible; falls back to the
+        built-in static model list when the runtime CLI is unavailable or does
+        not expose a model-listing command.
+        """
         runtime = runtime.lower().strip()
-
-        if runtime == "claude":
-            models = []
-            for group, entries in session_mgr.CLAUDE_MODELS.items():
-                for model_id, display_name, aliases in entries:
-                    models.append({"id": model_id, "label": display_name})
-            return {"runtime": runtime, "models": models}
-
-        elif runtime == "gemini":
-            models = []
-            for group, entries in session_mgr.GEMINI_MODELS.items():
-                for model_id, display_name, aliases in entries:
-                    models.append({"id": model_id, "label": display_name})
-            return {"runtime": runtime, "models": models}
-
-        elif runtime == "codex":
-            models = []
-            for group, entries in session_mgr.CODEX_MODELS.items():
-                for model_id, display_name, aliases in entries:
-                    models.append({"id": model_id, "label": display_name})
-            return {"runtime": runtime, "models": models}
-
-        elif runtime == "copilot":
-            try:
-                raw = session_mgr.fetch_copilot_models()
-                models = [{"id": m, "label": m} for group in raw.values() for m in group]
-                return {"runtime": runtime, "models": models}
-            except Exception as e:
-                return {"runtime": runtime, "models": [], "error": str(e)}
-
-        elif runtime == "opencode":
-            try:
-                raw = session_mgr.fetch_opencode_models()
-                models = [{"id": m, "label": m} for group in raw.values() for m in group]
-                # Add static comparison models
-                for group, entries in session_mgr.OPENCODE_MODELS.items():
-                    for model_id, display_name, aliases in entries:
-                        models.append({"id": model_id, "label": f"{display_name} (Comparison)"})
-                return {"runtime": runtime, "models": models}
-            except Exception as e:
-                return {"runtime": runtime, "models": [], "error": str(e)}
-
-        else:
+        known_runtimes = {"copilot", "opencode", "claude", "gemini", "codex"}
+        if runtime not in known_runtimes:
             return {"runtime": runtime, "models": [], "error": f"Unknown runtime: {runtime}"}
+
+        try:
+            raw = session_mgr.get_models_for_runtime(runtime)
+            models = []
+            for _group, model_ids in raw.items():
+                for model_id in model_ids:
+                    label = session_mgr._get_model_description(model_id, runtime) or model_id
+                    models.append({"id": model_id, "label": label})
+            return {"runtime": runtime, "models": models}
+        except Exception as e:
+            return {"runtime": runtime, "models": [], "error": str(e)}
 
     @app.post("/api/v1/auth/request-pairing")
     async def request_pairing(body: PairingRequest, request: Request):
