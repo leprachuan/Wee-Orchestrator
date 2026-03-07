@@ -2621,9 +2621,8 @@ html, body {
   flex-direction: column;
   border-bottom: 1px solid var(--glass-border);
   flex-shrink: 0;
-  max-height: 33vh;
   overflow-y: auto;
-  transition: max-height 0.3s ease;
+  transition: min-height 0.3s ease, max-height 0.3s ease;
 }
 
 .queue-section-collapsed {
