@@ -2720,10 +2720,8 @@ html, body {
   border-bottom: 1px solid var(--glass-border);
   display: flex;
   flex-direction: column;
-  flex: 0 1 auto;
+  flex: 2 1 0;
   min-height: 0;
-  max-height: 200px;
-  overflow-y: auto;
 }
 .todo-section-header {
   display: flex;
