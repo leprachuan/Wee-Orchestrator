@@ -47,6 +47,8 @@ try:
 except ImportError:
     _WebEXConnector = None
 
+from scheduler.management import parse_schedule_to_next_run
+
 
 class TaskSchedulerExecutor:
     """Execute scheduled jobs from jobs.json."""
@@ -453,60 +455,9 @@ class TaskSchedulerExecutor:
 
     def _calculate_next_run(self, schedule: str) -> Optional[str]:
         """Calculate next run time from schedule string."""
-        from datetime import timedelta
-
-        schedule = schedule.lower().strip()
-        now = datetime.utcnow()
-
-        # Handle "in X minutes/hours/days" format
-        if schedule.startswith("in "):
-            parts = schedule[3:].split()
-            if len(parts) >= 2:
-                try:
-                    amount = int(parts[0])
-                    unit = parts[1].rstrip('s')
-
-                    if unit == "minute":
-                        next_run = now + timedelta(minutes=amount)
-                    elif unit == "hour":
-                        next_run = now + timedelta(hours=amount)
-                    elif unit == "second":
-                        next_run = now + timedelta(seconds=amount)
-                    elif unit == "day":
-                        next_run = now + timedelta(days=amount)
-                    else:
-                        return None
-
-                    return next_run.isoformat() + "Z"
-                except ValueError:
-                    return None
-
-        # Handle "every X minutes/hours/days" format
-        if schedule.startswith("every "):
-            parts = schedule[6:].split()
-            if len(parts) >= 2:
-                try:
-                    amount = int(parts[0])
-                    unit = parts[1].lower().rstrip('s')  # "seconds"->"second", "second"->"second"
-                    # Normalize common aliases
-                    unit = {"sec": "second", "min": "minute", "hr": "hour"}.get(unit, unit)
-
-                    if unit == "second":
-                        next_run = now + timedelta(seconds=amount)
-                    elif unit == "minute":
-                        next_run = now + timedelta(minutes=amount)
-                    elif unit == "hour":
-                        next_run = now + timedelta(hours=amount)
-                    elif unit == "day":
-                        next_run = now + timedelta(days=amount)
-                    elif unit == "week":
-                        next_run = now + timedelta(weeks=amount)
-                    else:
-                        return None
-
-                    return next_run.isoformat() + "Z"
-                except ValueError:
-                    return None
+        next_run = parse_schedule_to_next_run(schedule)
+        if next_run:
+            return next_run
 
         logger.warning(f"Could not parse schedule: {schedule}")
         return None
