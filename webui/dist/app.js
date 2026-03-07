@@ -901,8 +901,6 @@ function renderQueuePanel() {
     // Collapse queue section when empty
     if (queueSection) {
       queueSection.classList.add('queue-section-collapsed');
-      queueSection.style.minHeight = '';
-      queueSection.style.maxHeight = '';
     }
     return;
   }
@@ -910,15 +908,9 @@ function renderQueuePanel() {
   const counter = $('queue-count');
   if (counter) counter.textContent = STATE.requestQueue.length;
   
-  // Expand queue section when items added — reserve 1/3 of panel height
+  // Expand queue section when items added
   if (queueSection) {
     queueSection.classList.remove('queue-section-collapsed');
-    const panel = document.getElementById('request-queue-panel');
-    if (panel && panel.offsetHeight > 0) {
-      const oneThird = Math.floor(panel.offsetHeight / 3);
-      queueSection.style.minHeight = oneThird + 'px';
-      queueSection.style.maxHeight = oneThird + 'px';
-    }
   }
 
   queueList.innerHTML = STATE.requestQueue.map((item, idx) => {
@@ -1722,18 +1714,6 @@ document.addEventListener('DOMContentLoaded', () => {
   // --- Mobile viewport sizing (iOS Safari keyboard / browser chrome) ---
   updateMobileViewportVars();
   window.addEventListener('resize', updateMobileViewportVars);
-  window.addEventListener('resize', () => {
-    // Recalculate queue section height on resize
-    const qs = document.getElementById('queue-section');
-    if (qs && !qs.classList.contains('queue-section-collapsed') && qs.style.minHeight) {
-      const panel = document.getElementById('request-queue-panel');
-      if (panel && panel.offsetHeight > 0) {
-        const oneThird = Math.floor(panel.offsetHeight / 3);
-        qs.style.minHeight = oneThird + 'px';
-        qs.style.maxHeight = oneThird + 'px';
-      }
-    }
-  });
   if (window.visualViewport) {
     window.visualViewport.addEventListener('resize', updateMobileViewportVars);
     window.visualViewport.addEventListener('scroll', updateMobileViewportVars);
