@@ -987,18 +987,7 @@ async function saveScratchNotes(text) {
   if (!STATE.currentSessionId) return;
   
   try {
-    const response = await fetch(`/api/v1/sessions/${STATE.currentSessionId}/scratch`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${STATE.authToken}`
-      },
-      body: JSON.stringify({ scratch: text })
-    });
-    
-    if (!response.ok) {
-      console.warn('Failed to save scratch notes');
-    }
+    await apiRequest('POST', `/sessions/${STATE.currentSessionId}/scratch`, { scratch: text });
   } catch (err) {
     console.warn('Error saving scratch notes:', err);
   }
@@ -1008,20 +997,12 @@ async function loadScratchNotes() {
   if (!STATE.currentSessionId) return;
   
   try {
-    const response = await fetch(`/api/v1/sessions/${STATE.currentSessionId}/scratch`, {
-      headers: {
-        'Authorization': `Bearer ${STATE.authToken}`
-      }
-    });
-    
-    if (response.ok) {
-      const data = await response.json();
-      const scratchTextarea = $('scratch-textarea');
-      if (scratchTextarea && data.scratch) {
-        scratchTextarea.value = data.scratch;
-        const charCountEl = $('scratch-char-count');
-        if (charCountEl) charCountEl.textContent = data.scratch.length;
-      }
+    const data = await apiRequest('GET', `/sessions/${STATE.currentSessionId}/scratch`);
+    const scratchTextarea = $('scratch-textarea');
+    if (scratchTextarea) {
+      scratchTextarea.value = data.scratch || "";
+      const charCountEl = $('scratch-char-count');
+      if (charCountEl) charCountEl.textContent = (data.scratch || "").length;
     }
   } catch (err) {
     console.warn('Error loading scratch notes:', err);
