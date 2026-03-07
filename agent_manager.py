@@ -4418,6 +4418,14 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
     bg_task_mgr = BackgroundTaskManager()
     session_mgr._bg_task_mgr = bg_task_mgr
     usage_tracker = RuntimeUsageTracker()
+
+    # Notification manager for background task completion notifications
+    try:
+        from notification_manager import NotificationManager
+        notification_mgr = NotificationManager()
+    except ImportError:
+        notification_mgr = None
+        print("[API] NotificationManager not available — notifications disabled", file=sys.stderr)
     
     _start_time = time.time()
 
@@ -5326,6 +5334,25 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 raise ValueError("Prompt must be 10,000 characters or less")
             return v
 
+    def _emit_bg_notification(task_id: str, prompt: str, status: str, channel: str,
+                               user_identity: str, output_preview=None, error=None):
+        """Emit a background task completion notification via notification_mgr."""
+        if notification_mgr is None:
+            return
+        try:
+            user_key = bg_task_mgr._user_key(channel, user_identity)
+            notification_mgr.create_notification(
+                task_id=task_id,
+                description=prompt[:200],
+                status=status,
+                channel=channel,
+                user_key=user_key,
+                output_preview=output_preview,
+                error=error,
+            )
+        except Exception as exc:
+            print(f"[API] Notification emit failed for {task_id}: {exc}", file=sys.stderr)
+
     def _run_background_task(task_id: str, session_id: str, prompt: str,
                              agent: str, runtime: str, model: str,
                              channel: str, user_identity: str, timeout: int = None):
@@ -5374,14 +5401,26 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 output += f"\n[stderr]\n{result.stderr}"
             
             if result.returncode == 0:
-                bg_task_mgr.complete_task(task_id, output or "Task completed successfully")
+                final_output = output or "Task completed successfully"
+                bg_task_mgr.complete_task(task_id, final_output)
+                _emit_bg_notification(task_id, prompt, "completed", channel, user_identity,
+                                      output_preview=final_output, error=None)
             else:
-                bg_task_mgr.fail_task(task_id, f"Task failed with code {result.returncode}: {output}")
-                
+                error_msg = f"Task failed with code {result.returncode}: {output}"
+                bg_task_mgr.fail_task(task_id, error_msg)
+                _emit_bg_notification(task_id, prompt, "failed", channel, user_identity,
+                                      output_preview=None, error=error_msg)
+
         except subprocess.TimeoutExpired:
-            bg_task_mgr.fail_task(task_id, f"Task exceeded timeout of {timeout} seconds")
+            error_msg = f"Task exceeded timeout of {timeout} seconds"
+            bg_task_mgr.fail_task(task_id, error_msg)
+            _emit_bg_notification(task_id, prompt, "failed", channel, user_identity,
+                                  output_preview=None, error=error_msg)
         except Exception as exc:
-            bg_task_mgr.fail_task(task_id, str(exc))
+            error_msg = str(exc)
+            bg_task_mgr.fail_task(task_id, error_msg)
+            _emit_bg_notification(task_id, prompt, "failed", channel, user_identity,
+                                  output_preview=None, error=error_msg)
 
     @app.post("/api/v1/background-tasks")
     async def create_background_task(body: BackgroundTaskRequest, request: Request):
@@ -5556,6 +5595,88 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         else:
             bg_task_mgr.delete_task(task_id)
             return {"task_id": task_id, "action": "deleted"}
+
+    # --- Notifications ---
+
+    @app.get("/api/v1/notifications")
+    async def list_notifications(request: Request, unread_only: bool = False):
+        """Return background task completion notifications for the authenticated user."""
+        user = await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        if notification_mgr is None:
+            return {"notifications": [], "unread_count": 0}
+        user_key = bg_task_mgr._user_key(user["channel"], user["identity"])
+        notifications = notification_mgr.list_notifications(user_key, unread_only=unread_only)
+        unread_count = sum(1 for n in notifications if not n.get("read", False))
+        return {"notifications": notifications, "unread_count": unread_count}
+
+    @app.post("/api/v1/notifications/{notification_id}/read")
+    async def mark_notification_read(notification_id: str, request: Request):
+        """Mark a single notification as read."""
+        user = await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        if notification_mgr is None:
+            raise HTTPException(status_code=503, detail="Notification manager unavailable")
+        user_key = bg_task_mgr._user_key(user["channel"], user["identity"])
+        ok = notification_mgr.mark_read(notification_id, user_key)
+        if not ok:
+            raise HTTPException(status_code=404, detail="Notification not found")
+        return {"notification_id": notification_id, "read": True}
+
+    @app.post("/api/v1/notifications/read-all")
+    async def mark_all_notifications_read(request: Request):
+        """Mark all notifications as read for the current user."""
+        user = await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        if notification_mgr is None:
+            raise HTTPException(status_code=503, detail="Notification manager unavailable")
+        user_key = bg_task_mgr._user_key(user["channel"], user["identity"])
+        count = notification_mgr.mark_all_read(user_key)
+        return {"marked_read": count}
+
+    @app.delete("/api/v1/notifications/{notification_id}")
+    async def delete_notification(notification_id: str, request: Request):
+        """Delete a specific notification."""
+        user = await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        if notification_mgr is None:
+            raise HTTPException(status_code=503, detail="Notification manager unavailable")
+        user_key = bg_task_mgr._user_key(user["channel"], user["identity"])
+        ok = notification_mgr.delete_notification(notification_id, user_key)
+        if not ok:
+            raise HTTPException(status_code=404, detail="Notification not found")
+        return {"notification_id": notification_id, "deleted": True}
+
+    @app.delete("/api/v1/notifications")
+    async def delete_read_notifications(request: Request):
+        """Delete all read notifications for the current user."""
+        user = await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        if notification_mgr is None:
+            raise HTTPException(status_code=503, detail="Notification manager unavailable")
+        user_key = bg_task_mgr._user_key(user["channel"], user["identity"])
+        deleted = notification_mgr.delete_all_read(user_key)
+        return {"deleted": deleted}
 
     # --- Task Scheduler ---
     if SCHEDULER_ENABLED:

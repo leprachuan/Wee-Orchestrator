@@ -140,6 +140,8 @@ function showAppView() {
     // Start background task polling
     startBgTaskPolling();
   }
+  // Start notification polling (always, if notifications are supported)
+  startNotificationPolling();
 }
 
 function updateSidebarIdentity() {
@@ -1765,9 +1767,30 @@ document.addEventListener('DOMContentLoaded', () => {
   $('btn-nav-chat').addEventListener('click', showChatPanel);
   $('btn-nav-background').addEventListener('click', showBackgroundPanel);
   $('btn-nav-scheduler').addEventListener('click', showSchedulerPanel);
+  $('btn-nav-notifications').addEventListener('click', showNotificationPanel);
 
-  // --- Send ---
-  $('btn-send').addEventListener('click', sendMessage);
+  // Notification settings/actions
+  $('btn-notif-mark-all-read').addEventListener('click', async () => {
+    try {
+      await apiRequest('POST', '/notifications/read-all');
+      await pollNotifications();
+    } catch { /* ignore */ }
+  });
+  $('btn-notif-clear-read').addEventListener('click', async () => {
+    try {
+      await apiRequest('DELETE', '/notifications');
+      await pollNotifications();
+    } catch { /* ignore */ }
+  });
+  $('btn-notif-settings').addEventListener('click', () => {
+    const bar = $('notif-settings-bar');
+    bar.classList.toggle('hidden');
+  });
+  const notifToggle = $('notif-enabled-toggle');
+  notifToggle.checked = isNotificationsEnabled();
+  notifToggle.addEventListener('change', () => {
+    setNotificationsEnabled(notifToggle.checked);
+  });
 
   // --- Request Queue ---
   $('btn-toggle-queue').addEventListener('click', toggleQueuePanel);
@@ -1924,12 +1947,14 @@ function showChatPanel() {
   show($('chat-panel'));
   hide($('scheduler-panel'));
   hide($('background-panel'));
+  hide($('notification-panel'));
   show($('btn-new-chat'));
   show($('sessions-list'));
   show($('request-queue-panel'));
   $('btn-nav-chat').classList.add('active');
   $('btn-nav-scheduler').classList.remove('active');
   $('btn-nav-background').classList.remove('active');
+  $('btn-nav-notifications').classList.remove('active');
   if (isMobileViewport()) toggleSidebar(false);
 }
 
@@ -1937,12 +1962,14 @@ function showSchedulerPanel() {
   hide($('chat-panel'));
   show($('scheduler-panel'));
   hide($('background-panel'));
+  hide($('notification-panel'));
   hide($('btn-new-chat'));
   hide($('sessions-list'));
   hide($('request-queue-panel'));
   $('btn-nav-scheduler').classList.add('active');
   $('btn-nav-chat').classList.remove('active');
   $('btn-nav-background').classList.remove('active');
+  $('btn-nav-notifications').classList.remove('active');
   loadSchedulerJobs();
   loadSchedulerStatus();
   if (isMobileViewport()) toggleSidebar(false);
@@ -1952,12 +1979,14 @@ function showBackgroundPanel() {
   hide($('chat-panel'));
   hide($('scheduler-panel'));
   show($('background-panel'));
+  hide($('notification-panel'));
   hide($('btn-new-chat'));
   hide($('sessions-list'));
   hide($('request-queue-panel'));
   $('btn-nav-background').classList.add('active');
   $('btn-nav-chat').classList.remove('active');
   $('btn-nav-scheduler').classList.remove('active');
+  $('btn-nav-notifications').classList.remove('active');
   loadBackgroundTasks();
   if (isMobileViewport()) toggleSidebar(false);
 }
@@ -2789,6 +2818,206 @@ function bgToast(msg, type = 'info') {
   toast.style.opacity = '1';
   clearTimeout(_bgToastTimer);
   _bgToastTimer = setTimeout(() => { toast.style.opacity = '0'; }, 2500);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// ─── Notification Center ────────────────────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════════════════════
+
+const NOTIF = {
+  notifications: [],
+  pollInterval: null,
+  // IDs of notifications shown as popups so we don't show them twice
+  shownPopups: new Set(JSON.parse(localStorage.getItem('wee_shown_notif_popups') || '[]')),
+};
+
+function isNotificationsEnabled() {
+  return localStorage.getItem('wee_notifications_enabled') !== 'false';
+}
+
+function setNotificationsEnabled(val) {
+  localStorage.setItem('wee_notifications_enabled', val ? 'true' : 'false');
+}
+
+async function fetchNotifications() {
+  try {
+    const data = await apiRequest('GET', '/notifications');
+    return data;
+  } catch { return null; }
+}
+
+function startNotificationPolling() {
+  if (NOTIF.pollInterval) return;
+  // Initial fetch
+  pollNotifications();
+  NOTIF.pollInterval = setInterval(pollNotifications, 10000);
+}
+
+async function pollNotifications() {
+  if (!isNotificationsEnabled()) return;
+  const data = await fetchNotifications();
+  if (!data) return;
+
+  const prev = NOTIF.notifications;
+  NOTIF.notifications = data.notifications || [];
+
+  // Show popup for newly completed/failed tasks (not previously shown)
+  const prevIds = new Set(prev.map(n => n.notification_id));
+  for (const n of NOTIF.notifications) {
+    if (!prevIds.has(n.notification_id) && !NOTIF.shownPopups.has(n.notification_id)) {
+      showNotificationPopup(n);
+      NOTIF.shownPopups.add(n.notification_id);
+    }
+  }
+  // Persist shown popup IDs (keep last 100)
+  const arr = Array.from(NOTIF.shownPopups).slice(-100);
+  localStorage.setItem('wee_shown_notif_popups', JSON.stringify(arr));
+
+  updateNotifBadge(data.unread_count || 0);
+
+  // If notification panel is visible, re-render
+  if (!$('notification-panel').classList.contains('hidden')) {
+    renderNotifications();
+  }
+}
+
+function updateNotifBadge(count) {
+  const badge = $('notif-badge');
+  if (!badge) return;
+  if (count > 0) {
+    badge.textContent = count;
+    show(badge);
+  } else {
+    hide(badge);
+  }
+}
+
+function showNotificationPanel() {
+  hide($('chat-panel'));
+  hide($('scheduler-panel'));
+  hide($('background-panel'));
+  show($('notification-panel'));
+  hide($('request-queue-panel'));
+  $('btn-nav-background').classList.remove('active');
+  $('btn-nav-notifications').classList.add('active');
+  renderNotifications();
+}
+
+function hideNotificationPanel() {
+  hide($('notification-panel'));
+}
+
+function renderNotifications() {
+  const list = $('notif-list');
+  if (!list) return;
+
+  if (!NOTIF.notifications.length) {
+    list.innerHTML = '<p class="notif-empty">No notifications yet.<br>Background task completions will appear here.</p>';
+    return;
+  }
+
+  list.innerHTML = NOTIF.notifications.map(n => {
+    const isSuccess = n.status === 'completed';
+    const icon = isSuccess ? '✓' : '✗';
+    const titleText = isSuccess ? 'Task completed' : 'Task failed';
+    const cardClass = `notif-card ${isSuccess ? 'notif-success' : 'notif-failure'} ${n.read ? 'notif-read' : 'notif-unread'}`;
+    const titleClass = isSuccess ? 'notif-title-success' : 'notif-title-failure';
+
+    let previewHtml = '';
+    if (isSuccess && n.output_preview) {
+      previewHtml = `<div class="notif-preview">${escHtml(n.output_preview.slice(0, 300))}</div>`;
+    } else if (!isSuccess && n.error) {
+      previewHtml = `<div class="notif-error-preview">${escHtml(n.error.slice(0, 300))}</div>`;
+    }
+
+    return `
+      <div class="${cardClass}" data-notif-id="${n.notification_id}">
+        <div class="notif-card-header">
+          <div class="notif-card-icon-title">
+            <span class="notif-card-icon">${icon}</span>
+            <span class="notif-card-title ${titleClass}">${escHtml(titleText)}</span>
+          </div>
+          <div class="notif-card-actions">
+            ${!n.read ? `<button class="notif-card-btn" onclick="notifMarkRead('${n.notification_id}')">✓ Read</button>` : ''}
+            <button class="notif-card-btn notif-btn-danger" onclick="notifDelete('${n.notification_id}')">✕</button>
+          </div>
+        </div>
+        <div class="notif-card-description">${escHtml(n.description || '')}</div>
+        ${previewHtml}
+        <div class="notif-card-meta">
+          <span class="notif-card-task-id">${escHtml(n.task_id || '')}</span>
+          <span class="notif-card-time">${fmtDate(n.created_at)}</span>
+        </div>
+      </div>`;
+  }).join('');
+}
+
+window.notifMarkRead = async function(notifId) {
+  try {
+    await apiRequest('POST', `/notifications/${notifId}/read`);
+    await pollNotifications();
+  } catch (e) { /* ignore */ }
+};
+
+window.notifDelete = async function(notifId) {
+  try {
+    await apiRequest('DELETE', `/notifications/${notifId}`);
+    NOTIF.notifications = NOTIF.notifications.filter(n => n.notification_id !== notifId);
+    updateNotifBadge(NOTIF.notifications.filter(n => !n.read).length);
+    renderNotifications();
+  } catch (e) { /* ignore */ }
+};
+
+// Floating popup notification (bottom-right corner)
+let _notifPopupContainer = null;
+function getNotifPopupContainer() {
+  if (!_notifPopupContainer) {
+    _notifPopupContainer = document.createElement('div');
+    _notifPopupContainer.id = 'notif-popup-container';
+    document.body.appendChild(_notifPopupContainer);
+  }
+  return _notifPopupContainer;
+}
+
+function showNotificationPopup(notification) {
+  if (!isNotificationsEnabled()) return;
+  const isSuccess = notification.status === 'completed';
+  const icon = isSuccess ? '✅' : '❌';
+  const title = isSuccess ? '✓ Task completed' : '✗ Task failed';
+  const desc = (notification.description || '').slice(0, 80);
+  const popupClass = isSuccess ? 'notif-popup-success' : 'notif-popup-failure';
+  const titleClass = isSuccess ? 'notif-popup-title-success' : 'notif-popup-title-failure';
+
+  const popup = document.createElement('div');
+  popup.className = `notif-popup ${popupClass}`;
+  popup.innerHTML = `
+    <span class="notif-popup-icon">${icon}</span>
+    <div class="notif-popup-body">
+      <div class="notif-popup-title ${titleClass}">${escHtml(title)}</div>
+      <div class="notif-popup-desc">${escHtml(desc)}</div>
+    </div>
+    <button class="notif-popup-close" title="Dismiss">✕</button>
+  `;
+
+  const container = getNotifPopupContainer();
+  container.appendChild(popup);
+
+  popup.querySelector('.notif-popup-close').addEventListener('click', () => {
+    popup.style.opacity = '0';
+    popup.style.transform = 'translateX(20px)';
+    popup.style.transition = 'opacity 0.2s, transform 0.2s';
+    setTimeout(() => popup.remove(), 220);
+  });
+
+  // Auto-dismiss after 7 seconds
+  setTimeout(() => {
+    if (popup.parentNode) {
+      popup.style.opacity = '0';
+      popup.style.transform = 'translateX(20px)';
+      popup.style.transition = 'opacity 0.3s, transform 0.3s';
+      setTimeout(() => popup.remove(), 320);
+    }
+  }, 7000);
 }
 
 // ─── Microphone Recording ────────────────────────────────────────────────────
