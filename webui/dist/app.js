@@ -980,6 +980,26 @@ async function fetchAndRenderTodos() {
   try {
     const data = await apiRequest('GET', `/todos?limit=10${agentParam}`);
     const todos = data.todos || [];
+    
+    // Sort todos by due date in ascending order (earliest first)
+    todos.sort((a, b) => {
+      if (!a.due && !b.due) return 0;
+      if (!a.due) return 1;  // No due date goes to bottom
+      if (!b.due) return -1;
+      
+      // Parse dates in MM/DD/YYYY or MM/DD/YYYY HH:MM:SS format
+      const parseDate = (due) => {
+        const parts = due.split(' ');
+        const dateParts = parts[0].split('/');
+        if (parts.length > 1) {
+          return new Date(`${dateParts[2]}-${dateParts[0].padStart(2,'0')}-${dateParts[1].padStart(2,'0')}T${parts[1]}`);
+        }
+        return new Date(`${dateParts[2]}-${dateParts[0].padStart(2,'0')}-${dateParts[1].padStart(2,'0')}T00:00:00`);
+      };
+      
+      return parseDate(a.due) - parseDate(b.due);
+    });
+    
     if (counter) counter.textContent = todos.length;
 
     if (todos.length === 0) {
