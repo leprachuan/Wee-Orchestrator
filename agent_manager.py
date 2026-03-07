@@ -5711,33 +5711,77 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             return []
         todos = []
         import re
+        current_todo = None
+        in_details = False
+        details_lines = []
+        
         with open(todo_file) as f:
             for line in f:
-                line = line.rstrip("\n")
-                stripped = line.strip()
-                if stripped.startswith("- "):
-                    stripped = stripped[2:]
-                if not (stripped.startswith("[ ]") or stripped.startswith("[X]") or stripped.startswith("[x]")):
-                    continue
-                completed = stripped.startswith("[X]") or stripped.startswith("[x]")
-                if completed:
-                    continue  # only active todos
-                content = re.sub(r"^\[.\]\s+", "", stripped)
-                due = None
-                due_match = re.search(r"\(due ([^)]+)\)", content)
-                if due_match:
-                    due = due_match.group(1)
-                labels = []
-                label_match = re.search(r"\{([^}]+)\}", content)
-                if label_match:
-                    labels = [l.strip() for l in label_match.group(1).split(",")]
-                # Remove due and label markers from description
-                content = re.sub(r"\s*\(due [^)]+\)", "", content)
-                content = re.sub(r"\s*\{[^}]+\}", "", content).strip()
-                todos.append({"description": content, "due": due, "labels": labels})
-                if len(todos) >= limit:
-                    break
-        return todos
+                raw_line = line.rstrip("\n")
+                stripped = raw_line.strip()
+                
+                # Check for TODO line
+                todo_line = stripped
+                if todo_line.startswith("- "):
+                    todo_line = todo_line[2:]
+                
+                if todo_line.startswith("[ ]") or todo_line.startswith("[X]") or todo_line.startswith("[x]"):
+                    # Save previous todo with details if exists
+                    if current_todo:
+                        if details_lines:
+                            current_todo["details"] = '\n'.join(details_lines).strip()
+                        todos.append(current_todo)
+                        if len(todos) >= limit:
+                            current_todo = None
+                            break
+                    
+                    # Only keep active (non-completed) todos for this list
+                    completed = todo_line.startswith("[X]") or todo_line.startswith("[x]")
+                    
+                    if not completed:
+                        content = re.sub(r"^\[.\]\s+", "", todo_line)
+                        due = None
+                        due_match = re.search(r"\(due ([^)]+)\)", content)
+                        if due_match:
+                            due = due_match.group(1)
+                        labels = []
+                        label_match = re.search(r"\{([^}]+)\}", content)
+                        if label_match:
+                            labels = [l.strip() for l in label_match.group(1).split(",")]
+                        # Remove due and label markers from description
+                        content = re.sub(r"\s*\(due [^)]+\)", "", content)
+                        content = re.sub(r"\s*\{[^}]+\}", "", content).strip()
+                        current_todo = {"description": content, "due": due, "labels": labels, "notes": [], "details": ""}
+                        in_details = False
+                        details_lines = []
+                    else:
+                        # Skip completed todo and its potential notes
+                        if current_todo:
+                            todos.append(current_todo)
+                            current_todo = None
+                            if len(todos) >= limit:
+                                break
+                        current_todo = None  # Mark we are skipping this one
+                        in_details = False
+                        details_lines = []
+                        
+                elif current_todo:
+                    # Check for Details section
+                    if stripped == "### Details" or stripped == "## Details":
+                        in_details = True
+                        details_lines = []
+                    elif in_details and stripped and not stripped.startswith("#"):
+                        details_lines.append(raw_line)
+                    elif raw_line.startswith("    ") and not in_details:
+                        # This is a note for the current TODO
+                        current_todo["notes"].append(raw_line.strip())
+        
+        if current_todo:
+            if details_lines:
+                current_todo["details"] = '\n'.join(details_lines).strip()
+            todos.append(current_todo)
+            
+        return todos[:limit]
 
     @app.get("/api/v1/todos")
     async def get_todos(request: Request, agent: str = None, limit: int = 10):
@@ -5751,8 +5795,83 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         todo_file = _resolve_todo_file(agent)
         todos = _parse_todos_from_md(todo_file, limit)
         return {"todos": todos, "count": len(todos), "agent": agent or "default", "file": str(todo_file)}
-
-    # --- AI media — publicly served, no auth (images fetched by the agent) ---
+    
+    @app.patch("/api/v1/todos/{todo_title}")
+    async def update_todo_details(request: Request, todo_title: str):
+        """Update a TODO's details (markdown content)"""
+        await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        
+        try:
+            body = await request.json()
+            details = body.get("details", "")
+            
+            # Use the todo manager to update details
+            from pathlib import Path
+            todo_file = Path("/opt/fosterbot-home/TODOs.md")
+            
+            # Read current file
+            if not todo_file.exists():
+                return {"success": False, "error": "TODO file not found"}
+            
+            # Parse todos and find the one to update
+            content = todo_file.read_text()
+            lines = content.split('\n')
+            
+            updated_lines = []
+            i = 0
+            while i < len(lines):
+                line = lines[i]
+                updated_lines.append(line)
+                
+                # Check if this is the todo we're looking for
+                stripped = line.strip()
+                if stripped.startswith('- '):
+                    stripped = stripped[2:]
+                
+                if (stripped.startswith('[ ]') or stripped.startswith('[X]')) and todo_title in line:
+                    # This is our todo - skip to end of current todo content
+                    i += 1
+                    
+                    # Skip notes (indented lines)
+                    while i < len(lines) and lines[i].startswith('    '):
+                        updated_lines.append(lines[i])
+                        i += 1
+                    
+                    # Skip old details section if it exists
+                    if i < len(lines) and (lines[i].strip() == '### Details' or lines[i].strip() == '## Details'):
+                        i += 1
+                        # Skip old details content
+                        while i < len(lines) and lines[i] and not lines[i].startswith('#'):
+                            i += 1
+                    
+                    # Add new details if provided
+                    if details and details.strip():
+                        updated_lines.append('')
+                        updated_lines.append('### Details')
+                        updated_lines.append('')
+                        updated_lines.extend(details.split('\n'))
+                    
+                    # Continue from where we left off
+                    continue
+                
+                i += 1
+            
+            # Write back
+            todo_file.write_text('\n'.join(updated_lines))
+            
+            return {"success": True, "updated": True, "todo": todo_title}
+        
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            return {"success": False, "error": str(e)}
+    
+    # --- AI Media ─────────────────────────────────────────────────────────────
     _ai_media_dir = Path("/tmp/webui_ai_media")
     _ai_media_dir.mkdir(parents=True, exist_ok=True)
     app.mount("/ai-media", StaticFiles(directory=str(_ai_media_dir)), name="ai_media")

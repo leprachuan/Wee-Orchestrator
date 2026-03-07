@@ -171,6 +171,31 @@
       <div id="fv-content" class="fv-content"></div>
     </aside>
 
+    <!-- TODO DETAILS PANEL (right side, overlays queue) -->
+    <aside id="todo-details-panel" class="todo-details-panel todo-details-hidden">
+      <div class="td-header">
+        <div class="td-header-title">
+          <span class="td-icon">✅</span>
+          <span id="td-title" class="td-title">TODO Details</span>
+        </div>
+        <div class="td-header-buttons">
+          <button id="btn-td-edit" class="td-edit-btn" title="Edit details">✎</button>
+          <button id="btn-td-close" class="td-close-btn" title="Close panel">✕</button>
+        </div>
+      </div>
+      <div class="td-meta" id="td-meta"></div>
+      <div id="td-view-mode" class="td-view-mode">
+        <div id="td-content" class="td-content"></div>
+      </div>
+      <div id="td-edit-mode" class="td-edit-mode" style="display:none;">
+        <textarea id="td-editor" class="td-editor" placeholder="Enter markdown details..."></textarea>
+        <div class="td-edit-buttons">
+          <button id="btn-td-save" class="td-save-btn">Save</button>
+          <button id="btn-td-cancel" class="td-cancel-btn">Cancel</button>
+        </div>
+      </div>
+    </aside>
+
     <!-- REQUEST QUEUE PANEL (right side) -->
     <aside id="request-queue-panel" class="request-queue-panel queue-minimized">
       <!-- TODO Section (inside queue panel) -->
