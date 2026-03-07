@@ -2626,11 +2626,10 @@ html, body {
 }
 
 .queue-section-collapsed {
-  max-height: 46px;
-  overflow: hidden;
+  max-height: 240px;
+  overflow-y: auto;
 }
 
-.queue-section-collapsed .queue-items-list,
 .queue-section-collapsed .queue-footer {
   display: none;
 }
