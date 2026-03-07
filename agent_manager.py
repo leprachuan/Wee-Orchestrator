@@ -940,16 +940,24 @@ class SessionManager:
         self._stream_queues: Dict[str, tuple] = {}
 
     def _load_agents_config(self, config_file: Optional[str] = None) -> Dict:
-        """Load agents configuration from JSON file"""
-        if config_file is None:
-            # Look for agents.json in current directory or script directory
-            config_path = (
-                Path(config_file) if config_file else Path.cwd() / "agents.json"
-            )
-            if not config_path.exists():
-                config_path = Path(__file__).parent / "agents.json"
-        else:
+        """Load agents configuration from JSON file
+
+        Priority:
+          1. Explicit config_file parameter
+          2. AGENT_CONFIG_FILE environment variable
+          3. ./agents.json in current working directory
+          4. agents.json next to this script
+        """
+        if config_file:
             config_path = Path(config_file)
+        else:
+            env_path = os.environ.get("AGENT_CONFIG_FILE")
+            if env_path:
+                config_path = Path(env_path)
+            else:
+                config_path = Path.cwd() / "agents.json"
+                if not config_path.exists():
+                    config_path = Path(__file__).parent / "agents.json"
 
         if not config_path.exists():
             print(
@@ -2655,8 +2663,19 @@ Default if truly uncertain: 900 (15 min). Do not omit the `timeout` field."""
         except Exception as _handoff_err:
             print(f"[Handoff] Warning: failed to load handoff context: {_handoff_err}", file=sys.stderr)
 
+        # Channel-specific injected context files
+        injection_dir = Path(os.environ.get("INJECTION_DIR", Path(SCRIPT_BASE_DIR) / "injections"))
+        injection_text = ""
+        try:
+            injection_file = injection_dir / f"{channel}.md"
+            if injection_file.exists():
+                injection_content = injection_file.read_text()
+                injection_text = f"\n\n[Injected context file: {injection_file}]\n{injection_content}\n"
+        except Exception:
+            injection_text = ""
+
         context = f"""{handoff_prefix}[Session ID: {n8n_session_id}]
-{runtime_instruction}{agent_desc}{files_context}{render_instruction}{bg_task_instruction}{timeout_instruction}
+{runtime_instruction}{injection_text}{agent_desc}{files_context}{render_instruction}{bg_task_instruction}{timeout_instruction}
 
 User Request:
 {prompt}"""
@@ -4613,6 +4632,21 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         return JSONResponse(status_code=500, content={"detail": str(exc)})
 
     # ---- endpoints ----
+
+    @app.get("/api/v1/agents")
+    async def get_agents():
+        """Return list of configured agents for WebUI."""
+        try:
+            agents = []
+            for name, info in session_mgr.AGENTS.items():
+                agents.append({
+                    "name": name,
+                    "description": info.get("description", ""),
+                    "path": info.get("path", ""),
+                })
+            return {"agents": agents}
+        except Exception as e:
+            return {"agents": [], "error": str(e)}
 
     @app.get("/api/v1/health")
     async def health():
