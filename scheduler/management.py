@@ -6,6 +6,7 @@ Extended with update_job() and get_results() for the REST API.
 
 import json
 import os
+import re
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -13,79 +14,59 @@ from typing import Dict, List, Optional
 
 def parse_schedule_to_next_run(schedule: str) -> Optional[str]:
     """Parse schedule string and return ISO datetime string for next run."""
-    schedule = schedule.lower().strip()
+    schedule = re.sub(r"\s+", " ", schedule.lower().strip())
     now = datetime.utcnow()
 
+    interval_match = re.fullmatch(r"(in|every) (\d+) ([a-z]+)", schedule)
+    if interval_match:
+        mode, amount_str, unit = interval_match.groups()
+        amount = int(amount_str)
+        unit = unit.rstrip("s")
+        unit = {"sec": "second", "min": "minute", "hr": "hour"}.get(unit, unit)
+
+        if unit == "second":
+            delta = timedelta(seconds=amount)
+        elif unit == "minute":
+            delta = timedelta(minutes=amount)
+        elif unit == "hour":
+            delta = timedelta(hours=amount)
+        elif unit == "day":
+            delta = timedelta(days=amount)
+        elif unit == "week" and mode == "every":
+            delta = timedelta(weeks=amount)
+        else:
+            return None
+
+        return (now + delta).isoformat() + "Z"
+
     # Handle "in X minutes/hours/seconds/days" format
-    if schedule.startswith("in "):
-        parts = schedule[3:].split()
-        if len(parts) >= 2:
-            try:
-                amount = int(parts[0])
-                unit = parts[1].rstrip('s')
+    daily_match = re.fullmatch(
+        r"every day at (\d{1,2})(?::(\d{2}))?\s*(am|pm)?",
+        schedule,
+    )
+    if daily_match:
+        hour_str, minute_str, meridiem = daily_match.groups()
+        hour = int(hour_str)
+        minute = int(minute_str or "0")
 
-                if unit == "minute":
-                    next_run = now + timedelta(minutes=amount)
-                elif unit == "hour":
-                    next_run = now + timedelta(hours=amount)
-                elif unit == "second":
-                    next_run = now + timedelta(seconds=amount)
-                elif unit == "day":
-                    next_run = now + timedelta(days=amount)
-                else:
-                    return None
+        if minute > 59:
+            return None
 
-                return next_run.isoformat() + "Z"
-            except ValueError:
-                pass
+        if meridiem:
+            if hour < 1 or hour > 12:
+                return None
+            if meridiem == "am":
+                hour = 0 if hour == 12 else hour
+            else:
+                hour = 12 if hour == 12 else hour + 12
+        elif hour > 23:
+            return None
 
-    # Handle "every X minutes/hours/days" format
-    if schedule.startswith("every "):
-        parts = schedule[6:].split()
-        if len(parts) >= 2:
-            try:
-                amount = int(parts[0])
-                unit = parts[1].rstrip('s')
+        next_run = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+        if next_run <= now:
+            next_run += timedelta(days=1)
 
-                if unit == "second":
-                    next_run = now + timedelta(seconds=amount)
-                elif unit == "minute":
-                    next_run = now + timedelta(minutes=amount)
-                elif unit == "hour":
-                    next_run = now + timedelta(hours=amount)
-                elif unit == "day":
-                    next_run = now + timedelta(days=amount)
-                else:
-                    return None
-
-                return next_run.isoformat() + "Z"
-            except ValueError:
-                pass
-
-        # Handle "every day at HH:MM" or "every day at HHam/pm"
-        if "at" in schedule:
-            time_part = schedule.split("at")[1].strip()
-            try:
-                if "am" in time_part or "pm" in time_part:
-                    time_obj = datetime.strptime(
-                        time_part.replace("am", "").replace("pm", "").strip(), "%I"
-                    ).time()
-                    if "pm" in time_part and time_obj.hour != 12:
-                        time_obj = time_obj.replace(hour=time_obj.hour + 12)
-                    elif "am" in time_part and time_obj.hour == 12:
-                        time_obj = time_obj.replace(hour=0)
-                else:
-                    time_obj = datetime.strptime(time_part, "%H:%M").time()
-
-                next_run = now.replace(
-                    hour=time_obj.hour, minute=time_obj.minute, second=0, microsecond=0
-                )
-                if next_run <= now:
-                    next_run += timedelta(days=1)
-
-                return next_run.isoformat() + "Z"
-            except (ValueError, AttributeError):
-                pass
+        return next_run.isoformat() + "Z"
 
     return None
 
