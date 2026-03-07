@@ -1404,6 +1404,10 @@ class SessionManager:
             self.get_or_create_session_data(n8n_session_id)
             session_map = self.load_session_map()
 
+        # Guard against race-condition where key is still missing after create
+        if n8n_session_id not in session_map:
+            return
+
         if isinstance(session_map[n8n_session_id], str):
             # Convert old string format to dict
             session_map[n8n_session_id] = {
@@ -5422,36 +5426,42 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                              agent: str, runtime: str, model: str,
                              channel: str, user_identity: str, timeout: int = None):
         """Blocking function that runs a background task in a subprocess.
-        Called from a thread pool executor."""
-        import subprocess
-        import shlex
+        Called from a thread pool executor.
 
-        # Build full context prompt
-        session_mgr.get_or_create_session_data(session_id)
-        session_mgr.update_session_field(session_id, "agent", agent)
-        session_mgr.update_session_field(session_id, "model", model)
-        session_mgr.update_session_field(session_id, "runtime", runtime)
-        session_mgr.update_session_field(session_id, "channel", channel)
-        session_mgr.update_session_field(session_id, "render_type", "text")
-        if timeout is not None:
-            session_mgr.update_session_field(session_id, "timeout", timeout)
+        NOTE: The entire function body is wrapped in a single try/except to
+        guarantee that any unexpected exception (e.g. file-lock race on the
+        session-map JSON) always transitions the task to 'failed' instead of
+        leaving it stuck in 'running' forever.
+        """
+        import subprocess
 
         try:
-            # Spawn a fresh Copilot CLI process for true isolation
-            # This prevents in-process state pollution and ensures proper execution
+            # Build full context prompt with agent/runtime/channel metadata
+            # This mirrors what run_copilot() does for interactive sessions.
+            context_prompt = session_mgr.build_agent_context_prompt(
+                agent, prompt, session_id,
+                render_type="text",
+                timeout=timeout,
+                runtime=runtime,
+                model=model,
+                channel=channel,
+            )
+
+            copilot_bin = session_mgr.copilot_bin or "/home/flipkey/.local/bin/copilot"
+
             cmd = [
-                "/home/flipkey/.local/bin/copilot",
-                "-p", prompt,
-                "--resume", session_id,
+                copilot_bin,
+                "-p", context_prompt,
                 "--silent",
+                "--no-color",
                 "--model", model,
                 "--allow-all-tools",
-                "--allow-all-paths"
+                "--allow-all-paths",
             ]
-            
+
             # Set timeout for subprocess (30s longer than task timeout to allow graceful shutdown)
             proc_timeout = (timeout or 900) + 30
-            
+
             result = subprocess.run(
                 cmd,
                 capture_output=True,
@@ -5459,12 +5469,12 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 timeout=proc_timeout,
                 env={**os.environ, "COPILOT_AGENT": agent, "COPILOT_RUNTIME": runtime}
             )
-            
+
             # Extract output - combine stdout and stderr for full result
             output = result.stdout.strip() if result.stdout else ""
             if result.stderr:
                 output += f"\n[stderr]\n{result.stderr}"
-            
+
             if result.returncode == 0:
                 final_output = output or "Task completed successfully"
                 bg_task_mgr.complete_task(task_id, final_output)
@@ -5540,7 +5550,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         bg_timeout = body.timeout if body.timeout is not None else get_bg_command_timeout()
 
         # Run in background thread using shared executor
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         loop.run_in_executor(
             bg_executor,  # Use shared executor instead of creating new one
             _run_background_task,
