@@ -156,6 +156,34 @@
       </div>
     </main>
 
+    <!-- NOTIFICATION PANEL (right side overlay) -->
+    <aside id="notification-panel" class="notification-panel notif-hidden">
+      <div class="notif-header">
+        <div class="notif-header-left">
+          <h2 class="notif-title">🔔 Notifications</h2>
+        </div>
+        <div class="notif-header-actions">
+          <button id="btn-notif-mark-all-read" class="btn btn-ghost btn-sm" title="Mark all as read">✓ All Read</button>
+          <button id="btn-notif-clear-read" class="btn btn-ghost btn-sm" title="Clear read notifications">🗑 Clear Read</button>
+          <button id="btn-notif-settings" class="btn btn-ghost btn-sm" title="Notification settings">⚙</button>
+        </div>
+      </div>
+
+      <!-- Settings bar (hidden by default) -->
+      <div id="notif-settings-bar" class="notif-settings-bar hidden glass-panel">
+        <label class="notif-toggle-label">
+          <input type="checkbox" id="notif-enabled-toggle" checked />
+          <span>Enable background task notifications</span>
+        </label>
+      </div>
+
+      <div class="notif-body">
+        <div id="notif-list" class="notif-list">
+          <p class="notif-empty">No notifications yet.<br>Background task completions will appear here.</p>
+        </div>
+      </div>
+    </aside>
+
     <!-- FILE VIEWER PANEL (right side, overlays queue) -->
     <aside id="file-viewer-panel" class="file-viewer-panel fv-hidden">
       <div class="fv-header">
@@ -307,36 +335,6 @@
           </div>
           <div id="sched-detail-body" class="sched-detail-body"></div>
         </aside>
-      </div>
-    </section>
-
-    <!-- Notification Center Panel -->
-    <section id="notification-panel" class="notification-panel hidden">
-      <header class="notif-header glass-panel">
-        <div class="notif-header-left">
-          <button id="btn-notif-open-sidebar" class="btn-icon sidebar-open-btn hidden" title="Open sidebar">☰</button>
-          <h2 class="notif-title">🔔 Notifications</h2>
-        </div>
-        <div class="notif-header-actions">
-          <button id="btn-notif-mark-all-read" class="btn btn-ghost btn-sm" title="Mark all as read">✓ All Read</button>
-          <button id="btn-notif-clear-read" class="btn btn-ghost btn-sm" title="Clear read notifications">🗑 Clear Read</button>
-          <button id="btn-notif-settings" class="btn btn-ghost btn-sm" title="Notification settings">⚙</button>
-          <button id="btn-notif-close" class="btn btn-ghost btn-sm" title="Close notifications and return to chat">✕ Close</button>
-        </div>
-      </header>
-
-      <!-- Settings bar (hidden by default) -->
-      <div id="notif-settings-bar" class="notif-settings-bar hidden glass-panel">
-        <label class="notif-toggle-label">
-          <input type="checkbox" id="notif-enabled-toggle" checked />
-          <span>Enable background task notifications</span>
-        </label>
-      </div>
-
-      <div class="notif-body">
-        <div id="notif-list" class="notif-list">
-          <p class="notif-empty">No notifications yet.<br>Background task completions will appear here.</p>
-        </div>
       </div>
     </section>
 

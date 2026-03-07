@@ -4477,6 +4477,13 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
     session_mgr._bg_task_mgr = bg_task_mgr
     usage_tracker = RuntimeUsageTracker()
 
+    # Shared thread pool executor for background tasks
+    # Allow up to MAX_TASKS_PER_USER concurrent background tasks
+    bg_executor = concurrent.futures.ThreadPoolExecutor(
+        max_workers=BackgroundTaskManager.MAX_TASKS_PER_USER,
+        thread_name_prefix="bg_task_"
+    )
+
     # Notification manager for background task completion notifications
     try:
         from notification_manager import NotificationManager
@@ -5532,10 +5539,10 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         # Use agent-specified timeout or fall back to default (15 min)
         bg_timeout = body.timeout if body.timeout is not None else get_bg_command_timeout()
 
-        # Run in background thread
+        # Run in background thread using shared executor
         loop = asyncio.get_event_loop()
         loop.run_in_executor(
-            concurrent.futures.ThreadPoolExecutor(max_workers=1),
+            bg_executor,  # Use shared executor instead of creating new one
             _run_background_task,
             task_id, session_id, body.prompt, agent, runtime, model, channel, identity, bg_timeout,
         )

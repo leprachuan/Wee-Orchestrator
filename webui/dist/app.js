@@ -1767,7 +1767,7 @@ document.addEventListener('DOMContentLoaded', () => {
   $('btn-nav-chat').addEventListener('click', showChatPanel);
   $('btn-nav-background').addEventListener('click', showBackgroundPanel);
   $('btn-nav-scheduler').addEventListener('click', showSchedulerPanel);
-  $('btn-nav-notifications').addEventListener('click', showNotificationPanel);
+  $('btn-nav-notifications').addEventListener('click', toggleNotificationPanel);
 
   // Notification settings/actions
   $('btn-notif-mark-all-read').addEventListener('click', async () => {
@@ -1785,10 +1785,6 @@ document.addEventListener('DOMContentLoaded', () => {
   $('btn-notif-settings').addEventListener('click', () => {
     const bar = $('notif-settings-bar');
     bar.classList.toggle('hidden');
-  });
-  $('btn-notif-close').addEventListener('click', () => {
-    hideNotificationPanel();
-    showChatPanel();
   });
   const notifToggle = $('notif-enabled-toggle');
   notifToggle.checked = isNotificationsEnabled();
@@ -1905,6 +1901,13 @@ document.addEventListener('DOMContentLoaded', () => {
     if (file) handleFileSelect(file);
   });
 
+  // Clicking the chat messages area collapses the notification panel
+  $('messages').addEventListener('click', () => {
+    if (!$('notification-panel').classList.contains('notif-hidden')) {
+      hideNotificationPanel();
+    }
+  });
+
   // --- Meta pill popovers ---
   ['meta-agent', 'meta-runtime', 'meta-model', 'meta-mode'].forEach(id => {
     $(id).addEventListener('click', e => { e.stopPropagation(); showPillPopover($(id), id); });
@@ -1951,7 +1954,6 @@ function showChatPanel() {
   show($('chat-panel'));
   hide($('scheduler-panel'));
   hide($('background-panel'));
-  hide($('notification-panel'));
   show($('btn-new-chat'));
   show($('sessions-list'));
   show($('request-queue-panel'));
@@ -1959,6 +1961,7 @@ function showChatPanel() {
   $('btn-nav-scheduler').classList.remove('active');
   $('btn-nav-background').classList.remove('active');
   $('btn-nav-notifications').classList.remove('active');
+  hideNotificationPanel();
   if (isMobileViewport()) toggleSidebar(false);
 }
 
@@ -1966,7 +1969,6 @@ function showSchedulerPanel() {
   hide($('chat-panel'));
   show($('scheduler-panel'));
   hide($('background-panel'));
-  hide($('notification-panel'));
   hide($('btn-new-chat'));
   hide($('sessions-list'));
   hide($('request-queue-panel'));
@@ -1974,6 +1976,7 @@ function showSchedulerPanel() {
   $('btn-nav-chat').classList.remove('active');
   $('btn-nav-background').classList.remove('active');
   $('btn-nav-notifications').classList.remove('active');
+  hideNotificationPanel();
   loadSchedulerJobs();
   loadSchedulerStatus();
   if (isMobileViewport()) toggleSidebar(false);
@@ -1983,7 +1986,6 @@ function showBackgroundPanel() {
   hide($('chat-panel'));
   hide($('scheduler-panel'));
   show($('background-panel'));
-  hide($('notification-panel'));
   hide($('btn-new-chat'));
   hide($('sessions-list'));
   hide($('request-queue-panel'));
@@ -1991,6 +1993,7 @@ function showBackgroundPanel() {
   $('btn-nav-chat').classList.remove('active');
   $('btn-nav-scheduler').classList.remove('active');
   $('btn-nav-notifications').classList.remove('active');
+  hideNotificationPanel();
   loadBackgroundTasks();
   if (isMobileViewport()) toggleSidebar(false);
 }
@@ -2866,11 +2869,13 @@ async function pollNotifications() {
   NOTIF.notifications = data.notifications || [];
 
   // Show popup for newly completed/failed tasks (not previously shown)
+  let hasNew = false;
   const prevIds = new Set(prev.map(n => n.notification_id));
   for (const n of NOTIF.notifications) {
     if (!prevIds.has(n.notification_id) && !NOTIF.shownPopups.has(n.notification_id)) {
       showNotificationPopup(n);
       NOTIF.shownPopups.add(n.notification_id);
+      hasNew = true;
     }
   }
   // Persist shown popup IDs (keep last 100)
@@ -2879,8 +2884,14 @@ async function pollNotifications() {
 
   updateNotifBadge(data.unread_count || 0);
 
+  // Auto-open notification panel when new notifications arrive (on chat view)
+  if (hasNew && $('chat-panel') && !$('chat-panel').classList.contains('hidden')) {
+    $('notification-panel').classList.remove('notif-hidden');
+    $('btn-nav-notifications').classList.add('active');
+  }
+
   // If notification panel is visible, re-render
-  if (!$('notification-panel').classList.contains('hidden')) {
+  if (!$('notification-panel').classList.contains('notif-hidden')) {
     renderNotifications();
   }
 }
@@ -2896,19 +2907,22 @@ function updateNotifBadge(count) {
   }
 }
 
-function showNotificationPanel() {
-  hide($('chat-panel'));
-  hide($('scheduler-panel'));
-  hide($('background-panel'));
-  show($('notification-panel'));
-  hide($('request-queue-panel'));
-  $('btn-nav-background').classList.remove('active');
-  $('btn-nav-notifications').classList.add('active');
-  renderNotifications();
+function toggleNotificationPanel() {
+  const panel = $('notification-panel');
+  const isHidden = panel.classList.contains('notif-hidden');
+  if (isHidden) {
+    panel.classList.remove('notif-hidden');
+    $('btn-nav-notifications').classList.add('active');
+    renderNotifications();
+  } else {
+    panel.classList.add('notif-hidden');
+    $('btn-nav-notifications').classList.remove('active');
+  }
 }
 
 function hideNotificationPanel() {
-  hide($('notification-panel'));
+  $('notification-panel').classList.add('notif-hidden');
+  $('btn-nav-notifications').classList.remove('active');
 }
 
 function renderNotifications() {
