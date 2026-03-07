@@ -171,6 +171,31 @@
       <div id="fv-content" class="fv-content"></div>
     </aside>
 
+    <!-- TODO DETAILS PANEL (right side, overlays queue) -->
+    <aside id="todo-details-panel" class="todo-details-panel todo-details-hidden">
+      <div class="td-header">
+        <div class="td-header-title">
+          <span class="td-icon">✅</span>
+          <span id="td-title" class="td-title">TODO Details</span>
+        </div>
+        <div class="td-header-buttons">
+          <button id="btn-td-edit" class="td-edit-btn" title="Edit details">✎</button>
+          <button id="btn-td-close" class="td-close-btn" title="Close panel">✕</button>
+        </div>
+      </div>
+      <div class="td-meta" id="td-meta"></div>
+      <div id="td-view-mode" class="td-view-mode">
+        <div id="td-content" class="td-content"></div>
+      </div>
+      <div id="td-edit-mode" class="td-edit-mode" style="display:none;">
+        <textarea id="td-editor" class="td-editor" placeholder="Enter markdown details..."></textarea>
+        <div class="td-edit-buttons">
+          <button id="btn-td-save" class="td-save-btn">Save</button>
+          <button id="btn-td-cancel" class="td-cancel-btn">Cancel</button>
+        </div>
+      </div>
+    </aside>
+
     <!-- REQUEST QUEUE PANEL (right side) -->
     <aside id="request-queue-panel" class="request-queue-panel queue-minimized">
       <!-- TODO Section (inside queue panel) -->
@@ -187,26 +212,40 @@
         </div>
       </div>
 
-      <!-- Queue Header -->
-      <div class="queue-header">
-        <div class="queue-header-title">
-          <span class="queue-icon">📋</span>
-          <span class="queue-label">Queued</span>
-          <span id="queue-count" class="queue-count">0</span>
+      <!-- Queue Section (Collapsible) -->
+      <div id="queue-section" class="queue-section queue-section-collapsed">
+        <!-- Queue Header -->
+        <div class="queue-header">
+          <div class="queue-header-title">
+            <button id="btn-toggle-queue-section" class="queue-section-toggle" title="Expand queue">▼</button>
+            <span class="queue-icon">📋</span>
+            <span class="queue-label">Queued</span>
+            <span id="queue-count" class="queue-count">0</span>
+          </div>
+          <div class="queue-header-buttons">
+            <button id="btn-pause-queue" class="queue-pause-btn" title="Pause auto-submit">⏸</button>
+          </div>
         </div>
-        <div class="queue-header-buttons">
-          <button id="btn-pause-queue" class="queue-pause-btn" title="Pause auto-submit">⏸</button>
+
+        <!-- Queue Items List -->
+        <div id="queue-items-list" class="queue-items-list">
+          <p class="queue-empty"><img src="/static/icon-192.png" alt="" style="width:48px;height:48px;border-radius:10px;opacity:0.5;display:block;margin:0 auto 8px;"><span>No queued requests</span></p>
+        </div>
+
+        <!-- Queue Footer -->
+        <div class="queue-footer">
+          <small id="queue-status-msg">Requests will auto-submit when current message completes</small>
         </div>
       </div>
 
-      <!-- Queue Items List -->
-      <div id="queue-items-list" class="queue-items-list">
-        <p class="queue-empty"><img src="/static/icon-192.png" alt="" style="width:48px;height:48px;border-radius:10px;opacity:0.5;display:block;margin:0 auto 8px;"><span>No queued requests</span></p>
-      </div>
-
-      <!-- Queue Footer -->
-      <div class="queue-footer">
-        <small id="queue-status-msg">Requests will auto-submit when current message completes</small>
+      <!-- Scratch Area -->
+      <div id="scratch-section" class="scratch-section">
+        <div class="scratch-header">
+          <span class="scratch-icon">📝</span>
+          <span class="scratch-label">Scratch Notes</span>
+          <small class="scratch-char-count">(<span id="scratch-char-count">0</span>/1000)</small>
+        </div>
+        <textarea id="scratch-textarea" class="scratch-textarea" placeholder="Quick notes saved to this session only (not in git)..." maxlength="1000"></textarea>
       </div>
     </aside>
 

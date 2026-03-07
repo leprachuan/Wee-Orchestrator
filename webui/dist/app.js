@@ -729,6 +729,7 @@ async function selectSession(sessionId) {
   scrollToBottom();
   await fetchAndUpdateMeta(sessionId);
   fetchRuntimeUsage();  // update usage indicator
+  loadScratchNotes();   // load scratch notes for this session
 }
 
 async function startNewSession() {
@@ -743,6 +744,7 @@ async function startNewSession() {
     await loadSessions();
     await fetchAndUpdateMeta(data.session_id); // get full defaults
     fetchRuntimeUsage();  // update usage indicator
+    loadScratchNotes();   // load scratch notes for new session (will be empty)
   } catch (err) {
     alert('Failed to create session: ' + err.message);
   }
@@ -880,6 +882,8 @@ function renderQueuePanel() {
 
   const pauseBtn = $('btn-pause-queue');
   const statusMsg = $('queue-status-msg');
+  const queueSection = $('queue-section');
+  
   if (pauseBtn) {
     pauseBtn.textContent = STATE.queuePaused ? '▶' : '⏸';
     pauseBtn.title = STATE.queuePaused ? 'Resume auto-submit' : 'Pause auto-submit';
@@ -894,11 +898,20 @@ function renderQueuePanel() {
     queueList.innerHTML = '<p class="queue-empty"><img src="/static/icon-192.png" alt="" style="width:48px;height:48px;border-radius:10px;opacity:0.5;display:block;margin:0 auto 8px;">No queued requests</p>';
     const counter = $('queue-count');
     if (counter) counter.textContent = '0';
+    // Collapse queue section when empty
+    if (queueSection) {
+      queueSection.classList.add('queue-section-collapsed');
+    }
     return;
   }
 
   const counter = $('queue-count');
   if (counter) counter.textContent = STATE.requestQueue.length;
+  
+  // Expand queue section when items added
+  if (queueSection) {
+    queueSection.classList.remove('queue-section-collapsed');
+  }
 
   queueList.innerHTML = STATE.requestQueue.map((item, idx) => {
     const preview = item.text.substring(0, 60).replace(/</g, '&lt;').replace(/>/g, '&gt;');
@@ -963,6 +976,39 @@ function toggleQueuePause() {
   }
 }
 
+function toggleQueueSection() {
+  const section = $('queue-section');
+  if (section) {
+    section.classList.toggle('queue-section-collapsed');
+  }
+}
+
+async function saveScratchNotes(text) {
+  if (!STATE.currentSessionId) return;
+  
+  try {
+    await apiRequest('POST', `/sessions/${STATE.currentSessionId}/scratch`, { scratch: text });
+  } catch (err) {
+    console.warn('Error saving scratch notes:', err);
+  }
+}
+
+async function loadScratchNotes() {
+  if (!STATE.currentSessionId) return;
+  
+  try {
+    const data = await apiRequest('GET', `/sessions/${STATE.currentSessionId}/scratch`);
+    const scratchTextarea = $('scratch-textarea');
+    if (scratchTextarea) {
+      scratchTextarea.value = data.scratch || "";
+      const charCountEl = $('scratch-char-count');
+      if (charCountEl) charCountEl.textContent = (data.scratch || "").length;
+    }
+  } catch (err) {
+    console.warn('Error loading scratch notes:', err);
+  }
+}
+
 // ─── TODO Panel ───────────────────────────────────────────────────────────────
 let _todoRefreshTimer = null;
 let _todoCurrentAgent = null;
@@ -980,6 +1026,26 @@ async function fetchAndRenderTodos() {
   try {
     const data = await apiRequest('GET', `/todos?limit=10${agentParam}`);
     const todos = data.todos || [];
+    
+    // Sort todos by due date in ascending order (earliest first)
+    todos.sort((a, b) => {
+      if (!a.due && !b.due) return 0;
+      if (!a.due) return 1;  // No due date goes to bottom
+      if (!b.due) return -1;
+      
+      // Parse dates in MM/DD/YYYY or MM/DD/YYYY HH:MM:SS format
+      const parseDate = (due) => {
+        const parts = due.split(' ');
+        const dateParts = parts[0].split('/');
+        if (parts.length > 1) {
+          return new Date(`${dateParts[2]}-${dateParts[0].padStart(2,'0')}-${dateParts[1].padStart(2,'0')}T${parts[1]}`);
+        }
+        return new Date(`${dateParts[2]}-${dateParts[0].padStart(2,'0')}-${dateParts[1].padStart(2,'0')}T00:00:00`);
+      };
+      
+      return parseDate(a.due) - parseDate(b.due);
+    });
+    
     if (counter) counter.textContent = todos.length;
 
     if (todos.length === 0) {
@@ -988,7 +1054,7 @@ async function fetchAndRenderTodos() {
     }
 
     const now = new Date();
-    list.innerHTML = todos.map(t => {
+    list.innerHTML = todos.map((t, idx) => {
       let dueBadge = '';
       if (t.due) {
         // Parse due date
@@ -1006,10 +1072,24 @@ async function fetchAndRenderTodos() {
       }
 
       const labels = (t.labels || []).map(l => `<span class="todo-label">${l}</span>`).join('');
+      
+      const hasDetails = t.details && t.details.trim().length > 0;
+      const hasNotes = t.notes && t.notes.length > 0;
+      const detailsIcon = hasDetails ? '<span class="todo-details-icon">📝</span>' : '';
+      // Store todo data in data attributes for safe click handling
+      const safeTitle = escHtml(t.description);
+      const detailsB64 = btoa(unescape(encodeURIComponent(t.details || '')));
+      const metaB64 = btoa(JSON.stringify({ due: t.due || '', labels: t.labels || [] }));
 
-      return `<div class="todo-item">
-        <div class="todo-item-desc">${escHtml(t.description)}</div>
-        <div class="todo-item-meta">${dueBadge}${labels}</div>
+      return `
+      <div class="todo-item todo-item-clickable"
+           data-todo-title="${safeTitle}"
+           data-todo-details="${detailsB64}"
+           data-todo-meta="${metaB64}"
+           onclick="openTodoDetailsPanel(this)">
+        <div class="todo-item-desc">${safeTitle}</div>
+        <div class="todo-item-meta">${dueBadge}${labels}${detailsIcon}</div>
+        ${hasNotes ? `<div class="todo-item-notes">${t.notes.map(n => `<div>${escHtml(n)}</div>`).join('')}</div>` : ''}
       </div>`;
     }).join('');
   } catch (e) {
@@ -1025,6 +1105,161 @@ function startTodoRefresh() {
 
 function stopTodoRefresh() {
   if (_todoRefreshTimer) { clearInterval(_todoRefreshTimer); _todoRefreshTimer = null; }
+}
+
+// ─── Todo Details Panel ────────────────────────────────────────────────────────
+let _currentTodoTitle = null;
+let _currentTodoDetails = null;
+let _currentTodoDue = null;
+let _currentTodoLabels = [];
+
+function openTodoDetailsPanel(el) {
+  // Support both element (data-attribute) and legacy (title, detailsB64) call signatures
+  let title, detailsB64, metaB64;
+  if (typeof el === 'string') {
+    // Legacy: openTodoDetailsPanel(title, detailsB64)
+    title = el;
+    detailsB64 = arguments[1] || '';
+    metaB64 = null;
+  } else {
+    title = el.dataset.todoTitle || '';
+    detailsB64 = el.dataset.todoDetails || '';
+    metaB64 = el.dataset.todoMeta || null;
+  }
+
+  _currentTodoTitle = title;
+  _currentTodoDetails = decodeURIComponent(escape(atob(detailsB64)));
+
+  // Parse meta (due + labels)
+  let meta = { due: '', labels: [] };
+  if (metaB64) {
+    try { meta = JSON.parse(atob(metaB64)); } catch(e) {}
+  }
+  _currentTodoDue = meta.due || '';
+  _currentTodoLabels = meta.labels || [];
+
+  const panel = $('todo-details-panel');
+  const titleEl = $('td-title');
+  const contentEl = $('td-content');
+  const metaEl = $('td-meta');
+  const editorEl = $('td-editor');
+
+  if (!panel) return;
+
+  titleEl.textContent = title;
+  editorEl.value = _currentTodoDetails;
+
+  // Populate meta bar with due date and labels
+  if (metaEl) {
+    const parts = [];
+    if (_currentTodoDue) {
+      const now = new Date();
+      const dateParts = _currentTodoDue.split(' ');
+      const dp = dateParts[0].split('/');
+      const d = new Date(`${dp[2]}-${dp[0].padStart(2,'0')}-${dp[1].padStart(2,'0')}T${dateParts[1] || '00:00:00'}`);
+      const isOverdue = d < now;
+      parts.push(`<span class="td-meta-item"><span class="todo-due${isOverdue ? ' overdue' : ''}">${isOverdue ? '⚠️' : '📅'} ${_currentTodoDue}</span></span>`);
+    }
+    _currentTodoLabels.forEach(l => {
+      parts.push(`<span class="td-meta-item"><span class="todo-label">${escHtml(l)}</span></span>`);
+    });
+    metaEl.innerHTML = parts.join('');
+    metaEl.style.display = parts.length ? '' : 'none';
+  }
+
+  // Render markdown using marked if available, else fallback
+  const html = markdownToHtml(_currentTodoDetails);
+  contentEl.innerHTML = html;
+
+  // Show view mode, hide edit mode
+  const viewMode = panel.querySelector('#td-view-mode');
+  const editMode = panel.querySelector('#td-edit-mode');
+  if (viewMode) viewMode.style.display = '';
+  if (editMode) editMode.style.display = 'none';
+
+  // Open panel
+  panel.classList.remove('todo-details-hidden');
+}
+
+function closeTodoDetailsPanel() {
+  const panel = $('todo-details-panel');
+  if (panel) panel.classList.add('todo-details-hidden');
+  _currentTodoTitle = null;
+  _currentTodoDetails = null;
+}
+
+function openTodoEditMode() {
+  const panel = $('todo-details-panel');
+  const viewMode = panel.querySelector('#td-view-mode');
+  const editMode = panel.querySelector('#td-edit-mode');
+  if (viewMode) viewMode.style.display = 'none';
+  if (editMode) editMode.style.display = '';
+}
+
+function closeTodoEditMode() {
+  const panel = $('todo-details-panel');
+  const viewMode = panel.querySelector('#td-view-mode');
+  const editMode = panel.querySelector('#td-edit-mode');
+  if (viewMode) viewMode.style.display = '';
+  if (editMode) editMode.style.display = 'none';
+}
+
+async function saveTodoDetails() {
+  const editorEl = $('td-editor');
+  const newDetails = editorEl.value;
+  
+  if (!_currentTodoTitle) return;
+  
+  try {
+    // Update via API
+    const response = await apiRequest('PATCH', `/todos/${encodeURIComponent(_currentTodoTitle)}`, {
+      details: newDetails
+    });
+    
+    if (response.success || response.updated) {
+      _currentTodoDetails = newDetails;
+      // Update view mode
+      const contentEl = $('td-content');
+      const html = markdownToHtml(newDetails);
+      contentEl.innerHTML = html;
+      // Close edit mode
+      closeTodoEditMode();
+      // Refresh todo list
+      await fetchAndRenderTodos();
+    }
+  } catch (e) {
+    console.error('Failed to save todo details:', e);
+    alert('Failed to save todo details');
+  }
+}
+
+function markdownToHtml(markdown) {
+  if (!markdown || markdown.trim().length === 0) {
+    return '<p style="color: var(--text-muted); font-style: italic;">No details — click ✎ to add some.</p>';
+  }
+
+  // Use marked library (loaded via CDN) for full markdown support
+  if (typeof marked !== 'undefined') {
+    try {
+      return marked.parse(markdown, { breaks: true, gfm: true });
+    } catch(e) { /* fall through to regex fallback */ }
+  }
+
+  // Regex fallback (no external dep)
+  let html = escHtml(markdown)
+    .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
+    .replace(/\*(.*?)\*/g, '<em>$1</em>')
+    .replace(/__(.*?)__/g, '<strong>$1</strong>')
+    .replace(/_(.+?)_/g, '<em>$1</em>')
+    .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank">$1</a>')
+    .replace(/^### (.*?)$/gm, '<h3>$1</h3>')
+    .replace(/^## (.*?)$/gm, '<h2>$1</h2>')
+    .replace(/^# (.*?)$/gm, '<h1>$1</h1>')
+    .replace(/^- (.*?)$/gm, '<li>$1</li>')
+    .replace(/(<li>.*?<\/li>)/s, '<ul>$1</ul>')
+    .replace(/\n/g, '<br>');
+
+  return html;
 }
 
 // ─── Messaging ────────────────────────────────────────────────────────────────
@@ -1537,6 +1772,34 @@ document.addEventListener('DOMContentLoaded', () => {
   // --- Request Queue ---
   $('btn-toggle-queue').addEventListener('click', toggleQueuePanel);
   $('btn-pause-queue').addEventListener('click', toggleQueuePause);
+  
+  // --- Queue Section (Collapsible) ---
+  const btnToggleQueueSection = $('btn-toggle-queue-section');
+  if (btnToggleQueueSection) {
+    btnToggleQueueSection.addEventListener('click', toggleQueueSection);
+  }
+  
+  // --- Scratch Notes ---
+  const scratchTextarea = $('scratch-textarea');
+  if (scratchTextarea) {
+    // Load scratch notes from session state
+    loadScratchNotes();
+    
+    // Save on input with debounce
+    let scratchSaveTimer;
+    scratchTextarea.addEventListener('input', (e) => {
+      // Update char count
+      const charCount = e.target.value.length;
+      const charCountEl = $('scratch-char-count');
+      if (charCountEl) charCountEl.textContent = charCount;
+      
+      // Debounce save
+      clearTimeout(scratchSaveTimer);
+      scratchSaveTimer = setTimeout(() => {
+        saveScratchNotes(e.target.value);
+      }, 500);
+    });
+  }
 
   // --- TODO panel ---
   const btnRefreshTodos = $('btn-refresh-todos');
@@ -3011,8 +3274,56 @@ function _initFileViewer() {
 _initFileViewer();
 document.addEventListener('DOMContentLoaded', _initFileViewer);
 
+function _initTodoDetailsPanel() {
+  const closeBtn = $('btn-td-close');
+  if (closeBtn && !closeBtn._tdBound) {
+    closeBtn._tdBound = true;
+    closeBtn.addEventListener('click', closeTodoDetailsPanel);
+  }
+  
+  const editBtn = $('btn-td-edit');
+  if (editBtn && !editBtn._tdBound) {
+    editBtn._tdBound = true;
+    editBtn.addEventListener('click', openTodoEditMode);
+  }
+  
+  const saveBtn = $('btn-td-save');
+  if (saveBtn && !saveBtn._tdBound) {
+    saveBtn._tdBound = true;
+    saveBtn.addEventListener('click', saveTodoDetails);
+  }
+  
+  const cancelBtn = $('btn-td-cancel');
+  if (cancelBtn && !cancelBtn._tdBound) {
+    cancelBtn._tdBound = true;
+    cancelBtn.addEventListener('click', closeTodoEditMode);
+  }
+  
+  // Close on Escape key
+  if (!window._tdEscBound) {
+    window._tdEscBound = true;
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') {
+        const panel = $('todo-details-panel');
+        if (panel && !panel.classList.contains('todo-details-hidden')) {
+          const editMode = panel.querySelector('#td-edit-mode');
+          if (editMode && editMode.style.display !== 'none') {
+            closeTodoEditMode();
+          } else {
+            closeTodoDetailsPanel();
+          }
+        }
+      }
+    });
+  }
+}
+_initTodoDetailsPanel();
+document.addEventListener('DOMContentLoaded', _initTodoDetailsPanel);
+
 window.openFileViewer = openFileViewer;
 window.linkifyFilePaths = linkifyFilePaths;
+window.openTodoDetailsPanel = openTodoDetailsPanel;
+window.closeTodoDetailsPanel = closeTodoDetailsPanel;
 
 // ─── Mobile Tab Navigation ────────────────────────────────────────────────────
 // Allows users to switch between Chat, Queue, and TODOs views on mobile.
