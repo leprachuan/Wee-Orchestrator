@@ -2620,16 +2620,16 @@ html, body {
   display: flex;
   flex-direction: column;
   border-bottom: 1px solid var(--glass-border);
-  flex: 0 0 auto;
-  min-height: 150px;
-  max-height: 33%;
-  overflow-y: auto;
-  transition: min-height 0.3s ease, max-height 0.3s ease;
+  flex: 1 1 0;
+  min-height: 0;
+  max-height: 33vh;
+  overflow: hidden;
+  transition: max-height 0.3s ease;
 }
 
 .queue-section-collapsed {
+  flex: 0 0 auto;
   max-height: 46px;
-  min-height: 0;
   overflow: hidden;
 }
 
