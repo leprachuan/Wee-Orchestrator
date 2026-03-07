@@ -55,7 +55,8 @@ class SessionHandoff:
         ~/.copilot/session-state/{session_id}/transcript.md.
         Returns the file path, or None if no history was found.
         """
-        messages = self._get_session_messages(session_id)
+        # Chat history is indexed by n8n_session_id, not the internal copilot session_id
+        messages = self._get_session_messages(n8n_session_id)
         if not messages:
             return None
 
@@ -101,7 +102,8 @@ class SessionHandoff:
         Also writes handoff_meta.json with prev_runtime and transcript path.
         Returns the handoff.md file path, or None if no history to summarise.
         """
-        messages = self._get_session_messages(prev_session_id)
+        # Chat history is indexed by n8n_session_id, not the internal copilot session_id
+        messages = self._get_session_messages(n8n_session_id)
         if not messages:
             return None
 
