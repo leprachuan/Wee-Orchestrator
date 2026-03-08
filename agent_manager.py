@@ -3562,12 +3562,12 @@ User Request:
                 effective_timeout, render_type,
             )
         elif runtime == "claude":
-            # Always pass session_id to Claude: when can_resume=True it uses --resume,
-            # when can_resume=False it uses --session-id to create with a specific ID.
-            # Session ID is initialized even when can_resume=False (new session).
+            # For Claude: when can_resume=True it uses --resume to continue existing session,
+            # when can_resume=False it should NOT pass session_id (let Claude create a new one)
+            # to avoid "already in use" errors from stale session IDs.
             return self.run_claude(
                 prompt, model, agent,
-                session_id,
+                session_id if can_resume else None,
                 can_resume, n8n_session_id,
                 effective_timeout, render_type, mode,
             )
