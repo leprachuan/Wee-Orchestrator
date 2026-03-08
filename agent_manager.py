@@ -4352,7 +4352,11 @@ You can mention an agent in your prompt and it will auto-delegate:
 
             while effective_rt and effective_rt not in tried_runtimes:
                 tried_runtimes.add(effective_rt)
-                rt_model = ar.get_default_model(effective_rt)
+                # Use the user's selected model if it exists. The user may have explicitly
+                # chosen a model for the fallback runtime (e.g. selected haiku for copilot).
+                # Only use the default model if the user hasn't made an explicit selection
+                # for the current session.
+                rt_model = model or ar.get_default_model(effective_rt)
                 print(
                     f"[AutoRuntime] Trying runtime '{effective_rt}' with model '{rt_model}'",
                     file=sys.stderr,
