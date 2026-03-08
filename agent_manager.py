@@ -3369,10 +3369,22 @@ User Request:
                 pass
             return False
         elif runtime == "claude":
-            # For Claude, only return True if we have a session_id to resume.
-            # If session_id is None/empty, return False (no session to resume).
-            # If session_id exists, return True and let Claude's --resume flag validate it.
-            return bool(session_id)
+            if not session_id:
+                return False
+            # Verify session actually exists in Claude's project storage.
+            # Claude stores sessions as {session_id}.jsonl under ~/.claude/projects/*/
+            # A pre-generated UUID from session map creation won't have a file yet,
+            # so this correctly returns False on first message and True after Claude
+            # has created the session and we've captured its ID.
+            claude_projects_dir = Path.home() / ".claude" / "projects"
+            try:
+                return any(
+                    (p / f"{session_id}.jsonl").exists()
+                    for p in claude_projects_dir.iterdir()
+                    if p.is_dir()
+                )
+            except (OSError, FileNotFoundError):
+                return False
         elif runtime == "gemini":
             return (self.gemini_session_dir / f"{session_id}.json").exists()
         elif runtime == "codex":
@@ -3563,13 +3575,9 @@ User Request:
                 effective_timeout, render_type,
             )
         elif runtime == "claude":
-            # Always pass session_id to Claude when available: when can_resume=True it uses --resume,
-            # when can_resume=False it uses --session-id to create with a specific ID.
-            # For Claude, session_exists() now returns True if we have any session_id,
-            # so can_resume should be True, which will use --resume flag.
             return self.run_claude(
                 prompt, model, agent,
-                session_id,
+                session_id if can_resume else None,
                 can_resume, n8n_session_id,
                 effective_timeout, render_type, mode,
             )
