@@ -531,8 +531,226 @@ class TestModelResolution(unittest.TestCase):
         result = self.manager.get_model_from_name("5.2", "copilot")
         self.assertEqual(result, "gpt-5.2")
 
+    @patch.object(SessionManager, "fetch_opencode_models")
+    def test_get_opencode_model_alias(self, mock_fetch):
+        """Test that static alias resolution still works for opencode before CLI query"""
+        mock_fetch.return_value = {}
+        result = self.manager.get_model_from_name("grok", "opencode")
+        self.assertEqual(result, "grok-2")
 
-class TestAgentSwitching(unittest.TestCase):
+    @patch.object(SessionManager, "fetch_opencode_models")
+    def test_get_opencode_model_dynamic_fallback(self, mock_fetch):
+        """Test opencode dynamic CLI discovery when model not in static list"""
+        mock_fetch.return_value = {"anthropic": ["anthropic/claude-3-5-sonnet"]}
+        result = self.manager.get_model_from_name("claude-3-5-sonnet", "opencode")
+        self.assertEqual(result, "anthropic/claude-3-5-sonnet")
+
+    def test_get_claude_model_dynamic_fallback(self):
+        """New claude models not in static aliases resolve via dynamic fetch fallback"""
+        # "sonnet" is a known alias in static → should resolve
+        result = self.manager.get_model_from_name("opus", "claude")
+        self.assertEqual(result, "opus")
+
+    def test_get_codex_model_alias(self):
+        """Test codex static alias resolution"""
+        result = self.manager.get_model_from_name("codex-mini", "codex")
+        self.assertEqual(result, "gpt-5.1-codex-mini")
+
+    def test_get_gemini_model_alias(self):
+        """Test gemini static alias resolution"""
+        result = self.manager.get_model_from_name("gemini-3-pro", "gemini")
+        self.assertEqual(result, "gemini-3-pro-preview")
+
+
+class TestDynamicModelListing(unittest.TestCase):
+    """Test dynamic model discovery helpers and get_models_for_runtime dispatcher."""
+
+    def setUp(self):
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.temp_path = Path(self.temp_dir.name)
+        config_file = self.temp_path / "agents.json"
+        with open(config_file, "w") as f:
+            json.dump({"agents": []}, f)
+        self.manager = SessionManager(str(config_file))
+
+    def tearDown(self):
+        self.temp_dir.cleanup()
+
+    # ── _static_models_to_dict ────────────────────────────────────────────────
+
+    def test_static_models_to_dict_structure(self):
+        """_static_models_to_dict converts tuple list to {cat: [id,...]} correctly."""
+        sample = {
+            "Group A": [("id1", "Desc 1", ["alias1"]), ("id2", "Desc 2", [])],
+            "Group B": [("id3", "Desc 3", ["a", "b"])],
+        }
+        result = self.manager._static_models_to_dict(sample)
+        self.assertEqual(result["Group A"], ["id1", "id2"])
+        self.assertEqual(result["Group B"], ["id3"])
+
+    def test_static_models_to_dict_empty(self):
+        self.assertEqual(self.manager._static_models_to_dict({}), {})
+
+    # ── _get_model_description ───────────────────────────────────────────────
+
+    def test_get_model_description_known_claude(self):
+        desc = self.manager._get_model_description("sonnet", "claude")
+        self.assertIsNotNone(desc)
+        self.assertIn("Sonnet", desc)
+
+    def test_get_model_description_known_codex(self):
+        desc = self.manager._get_model_description("gpt-5.1-codex", "codex")
+        self.assertIsNotNone(desc)
+
+    def test_get_model_description_unknown_model(self):
+        desc = self.manager._get_model_description("nonexistent-xyz", "claude")
+        self.assertIsNone(desc)
+
+    def test_get_model_description_copilot_runtime(self):
+        """copilot has no static metadata, description should be None."""
+        desc = self.manager._get_model_description("gpt-5", "copilot")
+        self.assertIsNone(desc)
+
+    # ── fetch_claude_models ───────────────────────────────────────────────────
+
+    def test_fetch_claude_models_returns_dict(self):
+        result = self.manager.fetch_claude_models()
+        self.assertIsInstance(result, dict)
+        self.assertTrue(len(result) > 0)
+
+    def test_fetch_claude_models_contains_sonnet(self):
+        result = self.manager.fetch_claude_models()
+        all_ids = [m for group in result.values() for m in group]
+        self.assertIn("sonnet", all_ids)
+
+    # ── fetch_gemini_models ───────────────────────────────────────────────────
+
+    def test_fetch_gemini_models_returns_dict(self):
+        result = self.manager.fetch_gemini_models()
+        self.assertIsInstance(result, dict)
+        self.assertTrue(len(result) > 0)
+
+    def test_fetch_gemini_models_contains_gemini_id(self):
+        result = self.manager.fetch_gemini_models()
+        all_ids = [m for group in result.values() for m in group]
+        self.assertTrue(any("gemini" in m for m in all_ids))
+
+    # ── fetch_codex_models ───────────────────────────────────────────────────
+
+    def test_fetch_codex_models_returns_dict(self):
+        result = self.manager.fetch_codex_models()
+        self.assertIsInstance(result, dict)
+        self.assertTrue(len(result) > 0)
+
+    def test_fetch_codex_models_contains_gpt(self):
+        result = self.manager.fetch_codex_models()
+        all_ids = [m for group in result.values() for m in group]
+        self.assertTrue(any("gpt" in m for m in all_ids))
+
+    # ── fetch_opencode_models fallback ────────────────────────────────────────
+
+    @patch("subprocess.run")
+    def test_fetch_opencode_fallback_on_nonzero_exit(self, mock_run):
+        """fetch_opencode_models falls back to static when CLI exits non-zero."""
+        mock_run.return_value = MagicMock(returncode=1, stdout="", stderr="error")
+        result = self.manager.fetch_opencode_models()
+        self.assertIsInstance(result, dict)
+        # Should return static dict (non-empty)
+        self.assertTrue(len(result) > 0)
+        all_ids = [m for group in result.values() for m in group]
+        self.assertIn("grok-2", all_ids)
+
+    @patch("subprocess.run")
+    def test_fetch_opencode_fallback_on_empty_output(self, mock_run):
+        """fetch_opencode_models falls back to static when CLI returns empty output."""
+        mock_run.return_value = MagicMock(returncode=0, stdout="  \n  ", stderr="")
+        result = self.manager.fetch_opencode_models()
+        self.assertIsInstance(result, dict)
+        self.assertTrue(len(result) > 0)
+
+    @patch("subprocess.run")
+    def test_fetch_opencode_parses_provider_slash_model(self, mock_run):
+        """fetch_opencode_models parses 'provider/model' lines correctly."""
+        mock_run.return_value = MagicMock(
+            returncode=0,
+            stdout="anthropic/claude-opus-4-5\nopenai/gpt-4o\n",
+            stderr="",
+        )
+        result = self.manager.fetch_opencode_models()
+        self.assertIn("anthropic", result)
+        self.assertIn("anthropic/claude-opus-4-5", result["anthropic"])
+
+    # ── get_models_for_runtime dispatcher ────────────────────────────────────
+
+    def test_get_models_for_runtime_claude(self):
+        result = self.manager.get_models_for_runtime("claude")
+        self.assertIsInstance(result, dict)
+        all_ids = [m for g in result.values() for m in g]
+        self.assertIn("sonnet", all_ids)
+
+    def test_get_models_for_runtime_gemini(self):
+        result = self.manager.get_models_for_runtime("gemini")
+        self.assertIsInstance(result, dict)
+        self.assertTrue(len(result) > 0)
+
+    def test_get_models_for_runtime_codex(self):
+        result = self.manager.get_models_for_runtime("codex")
+        self.assertIsInstance(result, dict)
+        self.assertTrue(len(result) > 0)
+
+    @patch.object(SessionManager, "fetch_copilot_models")
+    def test_get_models_for_runtime_copilot(self, mock_fetch):
+        mock_fetch.return_value = {"GPT Models": ["gpt-5", "gpt-4"]}
+        result = self.manager.get_models_for_runtime("copilot")
+        mock_fetch.assert_called_once()
+        self.assertEqual(result, {"GPT Models": ["gpt-5", "gpt-4"]})
+
+    @patch.object(SessionManager, "fetch_opencode_models")
+    def test_get_models_for_runtime_opencode(self, mock_fetch):
+        mock_fetch.return_value = {"anthropic": ["anthropic/claude-3-5-sonnet"]}
+        result = self.manager.get_models_for_runtime("opencode")
+        mock_fetch.assert_called_once()
+        self.assertIn("anthropic", result)
+
+    def test_get_models_for_runtime_unknown(self):
+        """Unknown runtime returns empty dict, not an exception."""
+        result = self.manager.get_models_for_runtime("nonexistent-runtime")
+        self.assertEqual(result, {})
+
+    # ── model list slash command ──────────────────────────────────────────────
+
+    @patch.object(SessionManager, "get_models_for_runtime")
+    def test_model_list_uses_get_models_for_runtime(self, mock_get):
+        """'/model list' now routes through get_models_for_runtime for all runtimes."""
+        mock_get.return_value = {"OpenAI Models": ["gpt-5", "gpt-4"]}
+        # Pre-create session with copilot runtime
+        self.manager.update_session_field("test_session", "runtime", "copilot")
+        self.manager.update_session_field("test_session", "model", "gpt-5")
+        result = self.manager.execute("/model list", "test_session")
+        mock_get.assert_called_with("copilot")
+        self.assertIn("gpt-5", result)
+        self.assertIn("gpt-4", result)
+
+    @patch.object(SessionManager, "get_models_for_runtime")
+    def test_model_list_shows_descriptions_for_static_runtimes(self, mock_get):
+        """Descriptions from static metadata appear in /model list output."""
+        mock_get.return_value = {"Anthropic Models": ["sonnet", "haiku"]}
+        self.manager.update_session_field("test_session", "runtime", "claude")
+        self.manager.update_session_field("test_session", "model", "sonnet")
+        result = self.manager.execute("/model list", "test_session")
+        mock_get.assert_called_with("claude")
+        self.assertIn("sonnet", result)
+
+    @patch.object(SessionManager, "get_models_for_runtime")
+    def test_model_list_empty_runtime_message(self, mock_get):
+        """Empty model list shows helpful error message."""
+        mock_get.return_value = {}
+        self.manager.update_session_field("test_session", "runtime", "copilot")
+        result = self.manager.execute("/model list", "test_session")
+        self.assertIn("❌", result)
+
+
+
     """Test agent switching functionality"""
 
     def setUp(self):

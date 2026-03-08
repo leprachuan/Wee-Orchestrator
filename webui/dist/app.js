@@ -1035,14 +1035,19 @@ async function fetchAndRenderTodos() {
       if (!a.due) return 1;  // No due date goes to bottom
       if (!b.due) return -1;
       
-      // Parse dates in MM/DD/YYYY or MM/DD/YYYY HH:MM:SS format
+      // Parse dates in MM/DD/YYYY HH:MM:SS or YYYY-MM-DD HH:MM format
       const parseDate = (due) => {
-        const parts = due.split(' ');
-        const dateParts = parts[0].split('/');
-        if (parts.length > 1) {
-          return new Date(`${dateParts[2]}-${dateParts[0].padStart(2,'0')}-${dateParts[1].padStart(2,'0')}T${parts[1]}`);
+        if (!due) return new Date(NaN);
+        const parts = due.trim().split(' ');
+        const datePart = parts[0];
+        const timePart = parts[1] || '00:00:00';
+        if (datePart.includes('-')) {
+          // YYYY-MM-DD format (ISO-style from folder-based todos)
+          return new Date(`${datePart}T${timePart}`);
         }
-        return new Date(`${dateParts[2]}-${dateParts[0].padStart(2,'0')}-${dateParts[1].padStart(2,'0')}T00:00:00`);
+        // MM/DD/YYYY format (legacy flat-file todos)
+        const dp = datePart.split('/');
+        return new Date(`${dp[2]}-${(dp[0]||'01').padStart(2,'0')}-${(dp[1]||'01').padStart(2,'0')}T${timePart}`);
       };
       
       return parseDate(a.due) - parseDate(b.due);
@@ -1059,14 +1064,17 @@ async function fetchAndRenderTodos() {
     list.innerHTML = todos.map((t, idx) => {
       let dueBadge = '';
       if (t.due) {
-        // Parse due date
+        // Parse due date - supports YYYY-MM-DD HH:MM and MM/DD/YYYY HH:MM:SS formats
         let dueDate;
-        const parts = t.due.split(' ');
-        const dateParts = parts[0].split('/');
-        if (parts.length > 1) {
-          dueDate = new Date(`${dateParts[2]}-${dateParts[0].padStart(2,'0')}-${dateParts[1].padStart(2,'0')}T${parts[1]}`);
+        const dueTrim = t.due.trim();
+        const parts = dueTrim.split(' ');
+        const datePart = parts[0];
+        const timePart = parts[1] || '00:00:00';
+        if (datePart.includes('-')) {
+          dueDate = new Date(`${datePart}T${timePart}`);
         } else {
-          dueDate = new Date(`${dateParts[2]}-${dateParts[0].padStart(2,'0')}-${dateParts[1].padStart(2,'0')}T00:00:00`);
+          const dp = datePart.split('/');
+          dueDate = new Date(`${dp[2]}-${(dp[0]||'01').padStart(2,'0')}-${(dp[1]||'01').padStart(2,'0')}T${timePart}`);
         }
         const isOverdue = dueDate < now;
         const overdueClass = isOverdue ? ' overdue' : '';
@@ -1157,8 +1165,15 @@ function openTodoDetailsPanel(el) {
     if (_currentTodoDue) {
       const now = new Date();
       const dateParts = _currentTodoDue.split(' ');
-      const dp = dateParts[0].split('/');
-      const d = new Date(`${dp[2]}-${dp[0].padStart(2,'0')}-${dp[1].padStart(2,'0')}T${dateParts[1] || '00:00:00'}`);
+      const dp0 = dateParts[0];
+      const tp = dateParts[1] || '00:00:00';
+      let d;
+      if (dp0.includes('-')) {
+        d = new Date(`${dp0}T${tp}`);
+      } else {
+        const dp = dp0.split('/');
+        d = new Date(`${dp[2]}-${(dp[0]||'01').padStart(2,'0')}-${(dp[1]||'01').padStart(2,'0')}T${tp}`);
+      }
       const isOverdue = d < now;
       parts.push(`<span class="td-meta-item"><span class="todo-due${isOverdue ? ' overdue' : ''}">${isOverdue ? '⚠️' : '📅'} ${_currentTodoDue}</span></span>`);
     }
@@ -2661,8 +2676,11 @@ function renderBgTasks() {
 function formatElapsed(isoDate) {
   if (!isoDate) return '';
   try {
-    const start = new Date(isoDate + 'Z');
-    const secs = Math.floor((Date.now() - start.getTime()) / 1000);
+    const withTz = /(?:Z|[+-]\d{2}:\d{2})$/.test(isoDate) ? isoDate : `${isoDate}Z`;
+    const start = new Date(withTz);
+    const startMs = start.getTime();
+    if (Number.isNaN(startMs)) return '';
+    const secs = Math.max(0, Math.floor((Date.now() - startMs) / 1000));
     if (secs < 60) return `${secs}s`;
     const mins = Math.floor(secs / 60);
     const remSecs = secs % 60;
