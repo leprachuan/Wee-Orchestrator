@@ -550,6 +550,17 @@ html, body {
   background: rgba(248,113,113,0.12);
   animation: pulse-usage 1.5s ease-in-out infinite;
 }
+.meta-pill.meta-alerts {
+  color: #60a5fa;
+  border-color: rgba(96,165,250,0.25);
+  background: rgba(96,165,250,0.08);
+  cursor: pointer;
+}
+.meta-pill.meta-alerts:hover {
+  color: #93c5fd;
+  border-color: rgba(147,197,253,0.35);
+  background: rgba(147,197,253,0.12);
+}
 @keyframes pulse-usage {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.7; }
