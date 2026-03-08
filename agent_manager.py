@@ -3369,9 +3369,11 @@ User Request:
                 pass
             return False
         elif runtime == "claude":
-            path = self.claude_debug_dir / f"{session_id}.txt"
-            # print(f"DEBUG: checking claude session at {path} -> {path.exists()}", file=sys.stderr)
-            return path.exists()
+            # For Claude, trust the session_id if we have one. Claude CLI's --resume flag
+            # will validate the session and create a new one if the old one is stale.
+            # Checking for a .txt file is unreliable as Claude may not create it every time.
+            # Return True to allow resuming; Claude will handle invalid sessions gracefully.
+            return True
         elif runtime == "gemini":
             return (self.gemini_session_dir / f"{session_id}.json").exists()
         elif runtime == "codex":
@@ -3562,12 +3564,13 @@ User Request:
                 effective_timeout, render_type,
             )
         elif runtime == "claude":
-            # For Claude: when can_resume=True it uses --resume to continue existing session,
-            # when can_resume=False it should NOT pass session_id (let Claude create a new one)
-            # to avoid "already in use" errors from stale session IDs.
+            # Always pass session_id to Claude when available: when can_resume=True it uses --resume,
+            # when can_resume=False it uses --session-id to create with a specific ID.
+            # For Claude, session_exists() now returns True if we have any session_id,
+            # so can_resume should be True, which will use --resume flag.
             return self.run_claude(
                 prompt, model, agent,
-                session_id if can_resume else None,
+                session_id,
                 can_resume, n8n_session_id,
                 effective_timeout, render_type, mode,
             )
