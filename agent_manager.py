@@ -947,6 +947,9 @@ class SessionManager:
         # genuine runtime errors (non-zero) from successful responses that happen to mention
         # rate-limit terms in their content (exit code 0 = success, do not fall back).
         self._last_exit_codes: Dict[str, int] = {}
+        # Raw subprocess output per n8n_session_id (before strip_metadata); auto-runtime
+        # checks this for limit patterns that may be lost during output stripping.
+        self._last_raw_output: Dict[str, str] = {}
 
     def _load_agents_config(self, config_file: Optional[str] = None) -> Dict:
         """Load agents configuration from JSON file
@@ -4344,19 +4347,19 @@ You can mention an agent in your prompt and it will auto-delegate:
                 )
 
                 # Check if the output indicates a limit was hit.
-                # IMPORTANT: only check when the subprocess exited with a non-zero code
-                # (genuine runtime error). If exit code is 0 the runtime succeeded; we
-                # must NOT scan the AI response text for limit patterns because legitimate
-                # responses often discuss rate limiting topics ("Telegram has rate limits",
-                # "the quota was exceeded", etc.) and cause false-positive fallbacks.
+                # IMPORTANT: Check for limit errors REGARDLESS of exit code.
+                # Some runtimes (like Claude) return exit code 0 even when hitting rate limits.
+                # The is_limit_error() method handles the distinction:
+                # - Non-zero exit codes: treat any limit pattern as a real error
+                # - Exit code 0 (success): only treat strong error indicators as limits
+                #   (to avoid false positives from AI responses discussing rate limiting)
                 last_exit_code = self._last_exit_codes.get(n8n_session_id, 0)
-                runtime_errored = (last_exit_code != 0)
                 print(
-                    f"[AutoRuntime] Runtime '{effective_rt}' exited with code {last_exit_code} "
-                    f"(errored={runtime_errored}), output length={len(output)} chars",
+                    f"[AutoRuntime] Runtime '{effective_rt}' exited with code {last_exit_code}, "
+                    f"output length={len(output)} chars",
                     file=sys.stderr,
                 )
-                if runtime_errored and ar.is_limit_error(output, effective_rt):
+                if ar.is_limit_error(output, effective_rt, last_exit_code):
                     ar.mark_runtime_limited(effective_rt)
                     next_rt = ar.get_next_runtime(effective_rt)
                     if next_rt:

@@ -28,6 +28,7 @@ DEFAULT_MODELS = {
 LIMIT_ERROR_PATTERNS = {
     "claude": [
         "rate limit",
+        "rate_limit",
         "429",
         "quota",
         "too many requests",
@@ -49,9 +50,17 @@ LIMIT_ERROR_PATTERNS = {
         "no more requests",
         "limit for this",
         "limit for the",
+        # Claude CLI rate-limit event messages
+        "hit your limit",
+        "hit the limit",
+        "hit a limit",
+        "you've hit",
+        "you have hit",
+        "rate_limit_event",
     ],
     "gemini": [
         "rate limit",
+        "rate_limit",
         "429",
         "quota",
         "resource exhausted",
@@ -60,9 +69,13 @@ LIMIT_ERROR_PATTERNS = {
         "capacity",
         "exceeded",
         "throttl",
+        "hit your limit",
+        "hit the limit",
+        "you've hit",
     ],
     "codex": [
         "rate limit",
+        "rate_limit",
         "429",
         "quota",
         "model not available",
@@ -71,23 +84,34 @@ LIMIT_ERROR_PATTERNS = {
         "exceeded",
         "throttl",
         "capacity",
+        "hit your limit",
+        "hit the limit",
+        "you've hit",
     ],
     "copilot": [
         "rate limit",
+        "rate_limit",
         "429",
         "session error",
         "too many requests",
         "quota",
         "exceeded",
         "throttl",
+        "hit your limit",
+        "hit the limit",
+        "you've hit",
     ],
     "opencode": [
         "rate limit",
+        "rate_limit",
         "429",
         "quota",
         "too many requests",
         "exceeded",
         "throttl",
+        "hit your limit",
+        "hit the limit",
+        "you've hit",
     ],
 }
 
@@ -143,13 +167,28 @@ class AutoRuntimeConfig:
         self.show_fallback = self._load_show_fallback()
         self.auto_select_model = self._load_auto_select_model()
 
-    def is_limit_error(self, output: str, runtime: str) -> bool:
-        """Check if the output indicates the runtime hit a limit."""
+    def is_limit_error(self, output: str, runtime: str, exit_code: int = 0) -> bool:
+        """Check if the output indicates the runtime hit a limit.
+        
+        Args:
+            output: The runtime output/stderr to check
+            runtime: The runtime name (claude, gemini, codex, copilot, opencode)
+            exit_code: The process exit code (0 = success, non-zero = error)
+        
+        Returns:
+            True if output indicates a rate limit or resource exhaustion error.
+            
+        NOTE: Claude and other runtimes can hit rate limits while returning exit code 0.
+        We check the output content. To reduce false positives from AI responses
+        legitimately discussing rate limiting:
+        - Non-zero exit codes: treat any limit pattern as a real error
+        - Exit code 0: require error/failure context or very strong patterns
+        """
         if not output:
             return False
         output_lower = output.lower()
 
-        # Check runtime-unavailable patterns first
+        # Check runtime-unavailable patterns first (always indicate problems)
         for pattern in RUNTIME_UNAVAILABLE_PATTERNS:
             if pattern.lower() in output_lower:
                 return True
@@ -157,8 +196,47 @@ class AutoRuntimeConfig:
         # Check runtime-specific limit patterns
         patterns = LIMIT_ERROR_PATTERNS.get(runtime, [])
         for pattern in patterns:
-            if pattern.lower() in output_lower:
-                return True
+            pattern_lower = pattern.lower()
+            if pattern_lower in output_lower:
+                # If exit code is non-zero (real error), this is definitely a limit error
+                if exit_code != 0:
+                    return True
+                
+                # If exit code is 0 (success), apply stronger signal detection
+                # to avoid false positives from AI responses discussing limits.
+                
+                # Patterns that are ALWAYS strong indicators (even at exit 0)
+                # These appear at the start of error messages, not in discussion
+                very_strong_patterns = [
+                    "resource_exhausted",
+                    "resource exhausted",
+                    "out of requests",
+                    "no more requests",
+                    "usage limit",
+                    "limit reached",
+                    "limit has been",
+                    "reached your",
+                    "plan limit",
+                    "maximum requests",
+                    "rate_limit_error",  # JSON error type
+                ]
+                if any(p.lower() in pattern_lower for p in very_strong_patterns):
+                    return True
+                
+                # For other patterns, check for error/failure context
+                error_indicators = [
+                    "error:",
+                    "error -",
+                    "failed:",
+                    "cannot ",
+                    "unable to ",
+                    "exceeds",
+                    "exceeded",
+                ]
+                has_error_context = any(indicator in output_lower for indicator in error_indicators)
+                
+                if has_error_context:
+                    return True
 
         return False
 
