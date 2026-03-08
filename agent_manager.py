@@ -4227,6 +4227,9 @@ You can mention an agent in your prompt and it will auto-delegate:
             tried_runtimes = set()
             effective_rt = ar.get_first_available_runtime()
 
+            # Track which runtime was last successfully used (for session resume)
+            last_auto_runtime = session_data.get("last_auto_runtime", "")
+
             while effective_rt and effective_rt not in tried_runtimes:
                 tried_runtimes.add(effective_rt)
                 rt_model = ar.get_default_model(effective_rt)
@@ -4235,9 +4238,16 @@ You can mention an agent in your prompt and it will auto-delegate:
                     file=sys.stderr,
                 )
 
-                # For auto mode, always start fresh (no resume across runtimes)
+                # Resume existing session if we're on the same runtime as last time;
+                # start fresh only when falling back to a different runtime.
+                if effective_rt == last_auto_runtime and session_id:
+                    can_resume = self.session_exists(session_id, effective_rt)
+                else:
+                    can_resume = False
+                rt_session_id = session_id if can_resume else None
+
                 output = self._dispatch_single_runtime(
-                    effective_rt, prompt, rt_model, agent, None, False,
+                    effective_rt, prompt, rt_model, agent, rt_session_id, can_resume,
                     n8n_session_id, effective_timeout, render_type, mode,
                 )
 
@@ -4261,6 +4271,7 @@ You can mention an agent in your prompt and it will auto-delegate:
                 else:
                     # Success — update session with the runtime that worked
                     self.update_session_field(n8n_session_id, "model", rt_model)
+                    self.update_session_field(n8n_session_id, "last_auto_runtime", effective_rt)
                     # Find and store new session ID for the effective runtime
                     new_id = self.get_most_recent_session_id(effective_rt, agent)
                     if new_id:
