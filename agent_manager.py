@@ -3356,6 +3356,20 @@ User Request:
                     if line.startswith("ses_"):
                         return line.split()[0]
                 return None
+            elif runtime == "claude":
+                # Prefer the 'latest' symlink if it exists (fastest)
+                latest_link = self.claude_debug_dir / "latest"
+                if latest_link.is_symlink():
+                    target = latest_link.resolve()
+                    if target.exists() and target.suffix == ".txt":
+                        return target.stem
+                # Fallback: most recently modified .txt file in debug dir
+                files = sorted(
+                    self.claude_debug_dir.glob("*.txt"),
+                    key=lambda p: p.stat().st_mtime,
+                    reverse=True,
+                )
+                return files[0].stem if files else None
             elif runtime == "gemini":
                 files = sorted(
                     self.gemini_session_dir.glob("*.json"),
