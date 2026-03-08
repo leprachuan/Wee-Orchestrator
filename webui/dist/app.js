@@ -156,7 +156,6 @@ function hideError(id) { hide($(id)); }
 
 // ─── Runtime Brand Icons ──────────────────────────────────────────────────────
 const RUNTIME_ICONS = {
-  auto:     '/ui/assets/runtime-icons/auto.svg',
   claude:   '/ui/assets/runtime-icons/claude.svg',
   copilot:  '/ui/assets/runtime-icons/copilot.svg',
   gemini:   '/ui/assets/runtime-icons/gemini.svg',
@@ -181,13 +180,8 @@ function updateSessionMeta(data) {
     } else {
       if (id === 'meta-runtime') {
         el.dataset.runtime = text;
-        if (text === 'auto' && data?.active_runtime) {
-          el.innerHTML = runtimeIconHTML('auto') + escHtml('auto') + '  ' + runtimeIconHTML(data.active_runtime);
-          el.title = `Auto mode — active runtime: ${data.active_runtime}`;
-        } else {
-          el.innerHTML = runtimeIconHTML(text) + escHtml(text);
-          el.removeAttribute('title');
-        }
+        el.innerHTML = runtimeIconHTML(text) + escHtml(text);
+        el.removeAttribute('title');
       } else {
         el.textContent = text;
       }
@@ -349,7 +343,6 @@ const PILL_OPTIONS = {
   'meta-runtime': {
     label: 'Switch Runtime',
     options: [
-      { label: `${runtimeIconHTML('auto')}auto`,             cmd: '/runtime set auto' },
       { label: `${runtimeIconHTML('claude')}claude`,         cmd: '/runtime set claude' },
       { label: `${runtimeIconHTML('copilot')}copilot`,       cmd: '/runtime set copilot' },
       { label: `${runtimeIconHTML('gemini')}gemini`,         cmd: '/runtime set gemini' },
