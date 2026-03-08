@@ -179,7 +179,9 @@ function updateSessionMeta(data) {
       if (extra) el.classList.remove(extra);
     } else {
       if (id === 'meta-runtime') {
+        el.dataset.runtime = text;
         el.innerHTML = runtimeIconHTML(text) + escHtml(text);
+        el.removeAttribute('title');
       } else {
         el.textContent = text;
       }
@@ -224,7 +226,7 @@ async function fetchAndUpdateMeta(sessionId) {
 
 // ─── Runtime Usage Indicator ──────────────────────────────────────────────────
 async function fetchRuntimeUsage() {
-  const runtime = $('meta-runtime')?.textContent?.trim();
+  const runtime = $('meta-runtime')?.dataset?.runtime || $('meta-runtime')?.textContent?.trim();
   const el = $('meta-usage');
   if (!el) return;
 
@@ -352,7 +354,7 @@ const PILL_OPTIONS = {
     label: 'Switch Model',
     options: null,   // null = dynamically loaded
     dynamicLoad: async () => {
-      const runtime = $('meta-runtime')?.textContent?.trim() || 'copilot';
+      const runtime = $('meta-runtime')?.dataset?.runtime || $('meta-runtime')?.textContent?.trim() || 'copilot';
       try {
         const data = await apiRequest('GET', `/models?runtime=${encodeURIComponent(runtime)}`);
         const opts = (data.models || []).map(m => ({

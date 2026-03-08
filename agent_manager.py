@@ -20,6 +20,7 @@ from typing import Optional, Tuple, Dict, List
 import secrets as _secrets
 import threading
 
+
 # Dynamically determine the repo base directory (works regardless of where repo is cloned)
 SCRIPT_BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -935,9 +936,17 @@ class SessionManager:
         # Load command timeout from environment
         self.command_timeout = get_command_timeout()
 
+        # Lock for session map file read-modify-write to prevent TOCTOU races
+        self._session_map_lock = threading.Lock()
+
         # Per-session streaming queues: session_id -> (asyncio.Queue, event_loop)
         # Populated by the /stream API endpoint; read by _execute_subprocess_with_tracking.
         self._stream_queues: Dict[str, tuple] = {}
+
+        # Last subprocess exit code per n8n_session_id (for debugging/monitoring)
+        self._last_exit_codes: Dict[str, int] = {}
+
+
 
     def _load_agents_config(self, config_file: Optional[str] = None) -> Dict:
         """Load agents configuration from JSON file
@@ -1347,7 +1356,7 @@ class SessionManager:
             return {}
 
     def save_session_map(self, session_map: dict):
-        """Save the N8N -> Session ID mapping"""
+        """Save the N8N -> Session ID mapping (caller must hold _session_map_lock)"""
         with open(self.session_map_file, "w") as f:
             json.dump(session_map, f, indent=2)
 
@@ -1375,6 +1384,11 @@ class SessionManager:
         Get existing session data or create new default
         Returns dict with keys: session_id, model, agent, runtime, bot_id, channel
         """
+        with self._session_map_lock:
+            return self._get_or_create_session_data_unlocked(n8n_session_id)
+
+    def _get_or_create_session_data_unlocked(self, n8n_session_id: str) -> Dict:
+        """Internal: get or create session data (caller must hold _session_map_lock)"""
         session_map = self.load_session_map()
 
         default_runtime = get_default_runtime()
@@ -1483,35 +1497,31 @@ class SessionManager:
         )
         return {**default_data, "is_new": True}
 
-    def update_session_field(self, n8n_session_id: str, field: str, value: str):
-        """Update a specific field in the session map"""
-        session_map = self.load_session_map()
-
-        if n8n_session_id not in session_map:
-            # Create new if doesn't exist
-            self.get_or_create_session_data(n8n_session_id)
+    def update_session_field(self, n8n_session_id: str, field: str, value):
+        """Update a specific field in the session map (thread-safe)"""
+        with self._session_map_lock:
             session_map = self.load_session_map()
 
-        # Guard against race-condition where key is still missing after create
-        if n8n_session_id not in session_map:
-            return
+            if n8n_session_id not in session_map:
+                # Create new if doesn't exist
+                self._get_or_create_session_data_unlocked(n8n_session_id)
+                session_map = self.load_session_map()
 
-        if isinstance(session_map[n8n_session_id], str):
-            # Convert old string format to dict
-            session_map[n8n_session_id] = {
-                "session_id": session_map[n8n_session_id],
-                "model": get_default_model(),
-                "agent": get_default_agent(),
-                "runtime": get_default_runtime(),
-            }
+            # Guard against race-condition where key is still missing after create
+            if n8n_session_id not in session_map:
+                return
 
-        session_map[n8n_session_id][field] = value
+            if isinstance(session_map[n8n_session_id], str):
+                # Convert old string format to dict
+                session_map[n8n_session_id] = {
+                    "session_id": session_map[n8n_session_id],
+                    "model": get_default_model(),
+                    "agent": get_default_agent(),
+                    "runtime": get_default_runtime(),
+                }
 
-        # If switching runtime, we might want to reset the internal session ID or handle it
-        # But for now we'll just update the field.
-        # The execute method will handle generating a new underlying session ID if needed.
-
-        self.save_session_map(session_map)
+            session_map[n8n_session_id][field] = value
+            self.save_session_map(session_map)
 
     def get_effective_timeout(self, session_data: dict) -> int:
         """Get the effective timeout for a session (session-specific or default)"""
@@ -1663,32 +1673,33 @@ class SessionManager:
             available = ", ".join(self.AGENTS.keys())
             return f"Unknown agent: '{agent}'. Available agents: {available}"
 
-        session_map = self.load_session_map()
+        with self._session_map_lock:
+            session_map = self.load_session_map()
 
-        # Generate a new session ID for the backend because sessions are often project-scoped
-        new_backend_session_id = str(uuid4())
+            # Generate a new session ID for the backend because sessions are often project-scoped
+            new_backend_session_id = str(uuid4())
 
-        if n8n_session_id not in session_map:
-            session_map[n8n_session_id] = {
-                "session_id": new_backend_session_id,
-                "model": "gpt-5-mini",
-                "agent": agent,
-                "runtime": "copilot",
-            }
-        else:
-            if isinstance(session_map[n8n_session_id], dict):
-                session_map[n8n_session_id]["agent"] = agent
-                session_map[n8n_session_id]["session_id"] = new_backend_session_id
-            else:
-                # Convert old format
+            if n8n_session_id not in session_map:
                 session_map[n8n_session_id] = {
                     "session_id": new_backend_session_id,
                     "model": "gpt-5-mini",
                     "agent": agent,
                     "runtime": "copilot",
                 }
+            else:
+                if isinstance(session_map[n8n_session_id], dict):
+                    session_map[n8n_session_id]["agent"] = agent
+                    session_map[n8n_session_id]["session_id"] = new_backend_session_id
+                else:
+                    # Convert old format
+                    session_map[n8n_session_id] = {
+                        "session_id": new_backend_session_id,
+                        "model": "gpt-5-mini",
+                        "agent": agent,
+                        "runtime": "copilot",
+                    }
 
-        self.save_session_map(session_map)
+            self.save_session_map(session_map)
         agent_info = self.AGENTS[agent]
         print(
             f"[Agent] Switched to '{agent}' agent. New backend session: {new_backend_session_id}",
@@ -1891,6 +1902,7 @@ class SessionManager:
             text_parts = []
             assistant_text = ""
             error_result = None
+            has_rate_limit_event = False
             for line in lines:
                 line_stripped = line.strip()
                 if not line_stripped:
@@ -1905,6 +1917,28 @@ class SessionManager:
                             error_result = result_text
                         else:
                             return result_text
+                    # Handle top-level API error events (e.g. rate limits, usage limits).
+                    # These arrive as {"type":"error","error":{"type":"rate_limit_error","message":"..."}}
+                    # and must be surfaced so is_limit_error() can detect them.
+                    elif obj_type == "error":
+                        err_obj = obj.get("error") or {}
+                        err_msg = err_obj.get("message", "") or obj.get("message", "")
+                        err_type = err_obj.get("type", "")
+                        if err_msg:
+                            error_result = f"API Error: {err_type} - {err_msg}" if err_type else f"API Error: {err_msg}"
+                        elif err_type:
+                            error_result = f"API Error: {err_type}"
+                    # Handle rate_limit_event from Claude CLI (plan/usage cap reached)
+                    elif obj_type == "rate_limit_event":
+                        has_rate_limit_event = True
+                        info = obj.get("rate_limit_info") or {}
+                        status = info.get("status", "unknown")
+                        limit_type = info.get("rateLimitType", "")
+                        if status == "rejected":
+                            error_result = (
+                                f"rate_limit_event: {limit_type} limit reached "
+                                f"(status={status})"
+                            )
                     # Collect text deltas as fallback
                     elif obj_type == "stream_event":
                         event = obj.get("event") or {}
@@ -1923,11 +1957,19 @@ class SessionManager:
                         ]
                         if texts:
                             assistant_text = "\n\n".join(texts)
+                        # If assistant event has an error field (e.g. "rate_limit"),
+                        # treat the content as an error, not normal output
+                        if obj.get("error"):
+                            has_rate_limit_event = True
                 except (ValueError, KeyError, AttributeError):
                     # Not JSON — treat as plain text (legacy fallback)
                     result.append(line)
             if text_parts:
                 return "".join(text_parts)
+            # When a rate limit or error was detected, prioritize error_result over
+            # surface so the error signal reaches the caller.
+            if has_rate_limit_event and error_result:
+                return error_result
             if assistant_text:
                 return assistant_text
             if error_result:
@@ -2380,24 +2422,10 @@ Example skill structure:
         agent = delegation_data.get("agent", "orchestrator")
         runtime = delegation_data.get("runtime", "copilot")
 
-        # Check if we can resume (for delegation, usually no)
-        can_resume = False
-
-        output = ""
-        if runtime == "copilot":
-            output = self.run_copilot(prompt, model, agent, None, False, n8n_session_id)
-        elif runtime == "opencode":
-            output = self.run_opencode(
-                prompt, model, agent, None, False, n8n_session_id
-            )
-        elif runtime == "claude":
-            output = self.run_claude(
-                prompt, model, agent, session_id, False, n8n_session_id
-            )
-        elif runtime == "gemini":
-            output = self.run_gemini(prompt, model, agent, None, False, n8n_session_id)
-        elif runtime == "codex":
-            output = self.run_codex(prompt, model, agent, None, False, n8n_session_id)
+        output = self._dispatch_single_runtime(
+            runtime, prompt, model, agent, session_id if runtime == "claude" else None,
+            False, n8n_session_id, self.command_timeout, "text",
+        )
 
         return output
 
@@ -2847,6 +2875,9 @@ User Request:
 
                 output = "".join(stdout_chunks) + ("".join(stderr_buf) if stderr_buf else "")
                 self.update_query_output(n8n_session_id, output)
+                # Record exit code for debugging subprocess errors.
+                # successful responses that discuss rate-limit topics (false positives).
+                self._last_exit_codes[n8n_session_id] = process.returncode if process.returncode is not None else 0
                 # Signal the SSE generator that the subprocess is finished
                 loop.call_soon_threadsafe(queue.put_nowait, ("done", ""))
                 return output
@@ -2857,6 +2888,9 @@ User Request:
                     stdout, stderr = process.communicate(timeout=timeout)
                     output = stdout + (stderr if stderr else "")
                     self.update_query_output(n8n_session_id, output)
+                    # Record exit code for debugging subprocess errors.
+                    # rate-limit detection on successful AI responses.
+                    self._last_exit_codes[n8n_session_id] = process.returncode if process.returncode is not None else 0
                     return output
                 except subprocess.TimeoutExpired:
                     process.kill()
@@ -3099,7 +3133,47 @@ User Request:
         if "Error: Claude command failed" in output:
             return output
 
-        return self.strip_metadata(output, "claude")
+        # Extract session_id from stream-json output and persist it.
+        # Claude emits a {"type":"system","subtype":"init","session_id":"..."} event at
+        # startup and a {"type":"result","session_id":"..."} event on completion.
+        # Capturing it here is race-free and works for both new and resumed sessions.
+        import json as _json
+        _captured_sid = None
+        for _line in output.splitlines():
+            _line = _line.strip()
+            if not _line:
+                continue
+            try:
+                _obj = _json.loads(_line)
+                _sid = _obj.get("session_id")
+                if _sid and _obj.get("type") in ("system", "result"):
+                    _captured_sid = _sid
+                    self.update_session_field(n8n_session_id, "session_id", _sid)
+                    print(f"[Session] Captured claude session_id: {_sid}", file=sys.stderr)
+                    break
+            except (ValueError, KeyError):
+                pass
+
+        if not _captured_sid:
+            print(
+                f"[Session] WARNING: Could not extract session_id from claude stream-json "
+                f"output for n8n_session={n8n_session_id}. Session context may be lost on "
+                f"next message. Output length={len(output)} chars.",
+                file=sys.stderr,
+            )
+
+        stripped = self.strip_metadata(output, "claude")
+        # If strip_metadata returned empty but the raw output is non-empty, fall back to
+        # returning the raw output for debugging purposes.
+        # still detect rate-limit / usage-limit error text (e.g. plain-text stderr output).
+        if not stripped.strip() and output.strip():
+            print(
+                "[Session] WARNING: strip_metadata returned empty for non-empty claude output. "
+                "Returning raw output to preserve error context for limit detection.",
+                file=sys.stderr,
+            )
+            return output
+        return stripped
 
     def run_gemini(
         self,
@@ -3155,9 +3229,12 @@ User Request:
         # For now, we use the default model and do not pass --model flag
         # TODO: Investigate correct model names for --model flag with Gemini CLI
 
-        if resume and session_id:
-            cmd.extend(["--resume", session_id])
-            print(f"[Session] Resuming Gemini session: {session_id}", file=sys.stderr)
+        # For Gemini, we always try to resume the latest session for context retention.
+        # The session_id parameter is not used since Gemini manages sessions internally.
+        # Using "--resume latest" automatically continues with the most recent session.
+        if resume:
+            cmd.extend(["--resume", "latest"])
+            print(f"[Session] Resuming Gemini session (latest)", file=sys.stderr)
         else:
             print(f"[Session] Starting new Gemini session in {mode} mode", file=sys.stderr)
 
@@ -3361,6 +3438,20 @@ User Request:
                     if line.startswith("ses_"):
                         return line.split()[0]
                 return None
+            elif runtime == "claude":
+                # Prefer the 'latest' symlink if it exists (fastest)
+                latest_link = self.claude_debug_dir / "latest"
+                if latest_link.is_symlink():
+                    target = latest_link.resolve()
+                    if target.exists() and target.suffix == ".txt":
+                        return target.stem
+                # Fallback: most recently modified .txt file in debug dir
+                files = sorted(
+                    self.claude_debug_dir.glob("*.txt"),
+                    key=lambda p: p.stat().st_mtime,
+                    reverse=True,
+                )
+                return files[0].stem if files else None
             elif runtime == "gemini":
                 files = sorted(
                     self.gemini_session_dir.glob("*.json"),
@@ -3432,6 +3523,61 @@ User Request:
             if self._bg_task_mgr:
                 self._bg_task_mgr.fail_task(task_id, str(exc))
 
+    def _dispatch_single_runtime(
+        self,
+        runtime: str,
+        prompt: str,
+        model: str,
+        agent: str,
+        session_id: Optional[str],
+        can_resume: bool,
+        n8n_session_id: str,
+        effective_timeout: int,
+        render_type: str,
+        mode: str = "restricted",
+    ) -> str:
+        """Dispatch prompt to a single runtime and return the output."""
+        if runtime == "copilot":
+            return self.run_copilot(
+                prompt, model, agent,
+                session_id if can_resume else None,
+                can_resume, n8n_session_id,
+                effective_timeout, render_type,
+            )
+        elif runtime == "opencode":
+            return self.run_opencode(
+                prompt, model, agent,
+                session_id if can_resume else None,
+                can_resume, n8n_session_id,
+                effective_timeout, render_type,
+            )
+        elif runtime == "claude":
+            # Always pass session_id to Claude: when can_resume=True it uses --resume,
+            # when can_resume=False it uses --session-id to create with a specific ID.
+            # Session ID is initialized even when can_resume=False (new session).
+            return self.run_claude(
+                prompt, model, agent,
+                session_id,
+                can_resume, n8n_session_id,
+                effective_timeout, render_type, mode,
+            )
+        elif runtime == "gemini":
+            return self.run_gemini(
+                prompt, model, agent,
+                session_id if can_resume else None,
+                can_resume, n8n_session_id,
+                effective_timeout, render_type,
+            )
+        elif runtime == "codex":
+            return self.run_codex(
+                prompt, model, agent,
+                session_id if can_resume else None,
+                can_resume, n8n_session_id,
+                effective_timeout, render_type,
+            )
+        else:
+            return f"Error: Unknown runtime '{runtime}'"
+
     def execute(self, prompt: str, n8n_session_id: str) -> str:
         """Main execution logic"""
         # Get session data first
@@ -3481,7 +3627,7 @@ User Request:
 
 **Runtime Management:**
    • /runtime list - Show available runtimes
-   • /runtime set (copilot|opencode|claude|gemini) - Switch runtime
+   • /runtime set (auto|copilot|opencode|claude|gemini|codex) - Switch runtime
    • /runtime current - Show current runtime
 
 **Model Management:**
@@ -3737,18 +3883,22 @@ You can mention an agent in your prompt and it will auto-delegate:
         elif command == "/model":
             if not argument:
                 argument = "list"  # Default to list if no argument provided
+
+            # Handle model selection for the current runtime
+            effective_rt = current_runtime
+
             if argument == "list" or argument.startswith("list "):
-                models_dict = self.get_models_for_runtime(current_runtime)
+                models_dict = self.get_models_for_runtime(effective_rt)
                 out = f"📋 **Available Models ({current_runtime})**\n\n"
                 if not models_dict:
                     return (
                         out
-                        + f"❌ No models available for {current_runtime}. Check CLI configuration."
+                        + f"❌ No models available for {effective_rt}. Check CLI configuration."
                     )
                 for cat in sorted(models_dict.keys()):
                     out += f"**{cat}:**\n"
                     for mid in sorted(models_dict[cat]):
-                        desc = self._get_model_description(mid, current_runtime)
+                        desc = self._get_model_description(mid, effective_rt)
                         if desc:
                             out += f"  • `{mid}` - {desc}\n"
                         else:
@@ -3761,20 +3911,19 @@ You can mention an agent in your prompt and it will auto-delegate:
                 )
             elif argument.startswith("set "):
                 model_name = argument[4:].strip().strip('"')
-                model_id = self.get_model_from_name(model_name, current_runtime)
+                model_id = self.get_model_from_name(model_name, effective_rt)
                 if not model_id:
-                    return f"Unknown model '{model_name}' for runtime {current_runtime}"
+                    return f"Unknown model '{model_name}' for runtime {effective_rt}"
                 self.update_session_field(n8n_session_id, "model", model_id)
                 return f"✓ Switched to model `{model_id}`"
 
         elif command == "/session":
             if argument == "reset":
-                # Remove session from map (or clear session_id)
-                # Actually, simpler to just delete the entry and let next call create new
-                session_map = self.load_session_map()
-                if n8n_session_id in session_map:
-                    del session_map[n8n_session_id]
-                    self.save_session_map(session_map)
+                with self._session_map_lock:
+                    session_map = self.load_session_map()
+                    if n8n_session_id in session_map:
+                        del session_map[n8n_session_id]
+                        self.save_session_map(session_map)
                 return "✓ Session reset. Next message starts fresh."
 
         elif command == "/timeout":
@@ -4151,168 +4300,43 @@ You can mention an agent in your prompt and it will auto-delegate:
         # Get mode for Claude runtime
         mode = "yolo" if session_data.get("yolo_mode") == "on" else "restricted"
 
+        # --- Direct Single-Runtime Dispatch (simplified from auto-runtime logic) ---
+
         # Check if we can resume
-        can_resume = (
-            self.session_exists(session_id, current_runtime) if session_id else False
+        # For Gemini, we always try to resume the latest session for context retention
+        if current_runtime == "gemini":
+            can_resume = True  # Always attempt to resume latest Gemini session
+        else:
+            can_resume = (
+                self.session_exists(session_id, current_runtime) if session_id else False
+            )
+
+        output = self._dispatch_single_runtime(
+            current_runtime, prompt, model, agent, session_id, can_resume,
+            n8n_session_id, effective_timeout, render_type, mode,
         )
 
-        output = ""
-        if current_runtime == "copilot":
-            if can_resume:
-                output = self.run_copilot(
-                    prompt,
-                    model,
-                    agent,
-                    session_id,
-                    True,
-                    n8n_session_id,
-                    effective_timeout,
-                    render_type,
-                )
-            else:
-                output = self.run_copilot(
-                    prompt,
-                    model,
-                    agent,
-                    None,
-                    False,
-                    n8n_session_id,
-                    effective_timeout,
-                    render_type,
-                )
-                # Copilot auto-generates session ID, we need to find it and map it
-                # Logic: Copilot writes to session-state dir. We find newest file.
-                new_id = self.get_most_recent_session_id("copilot", agent)
-                if new_id:
-                    self.update_session_field(n8n_session_id, "session_id", new_id)
+        # Handle session ID mapping for runtimes that auto-generate IDs
+        if not can_resume and current_runtime in ("copilot", "opencode", "gemini", "codex"):
+            new_id = self.get_most_recent_session_id(current_runtime, agent)
+            if new_id:
+                self.update_session_field(n8n_session_id, "session_id", new_id)
 
-        elif current_runtime == "opencode":
-            if can_resume:
-                output = self.run_opencode(
-                    prompt,
-                    model,
-                    agent,
-                    session_id,
-                    True,
-                    n8n_session_id,
-                    effective_timeout,
-                    render_type,
-                )
-                # Check for session loss / resource not found
-                if "Resource not found" in output or "NotFoundError" in output:
-                    print(
-                        f"[Session] Session {session_id} lost/corrupted. Starting new session.",
-                        file=sys.stderr,
-                    )
-                    output = self.run_opencode(
-                        prompt,
-                        model,
-                        agent,
-                        None,
-                        False,
-                        n8n_session_id,
-                        effective_timeout,
-                        render_type,
-                    )
-                    new_id = self.get_most_recent_session_id("opencode", agent)
-                    if new_id:
-                        self.update_session_field(n8n_session_id, "session_id", new_id)
-            else:
-                output = self.run_opencode(
-                    prompt,
-                    model,
-                    agent,
-                    None,
-                    False,
-                    n8n_session_id,
-                    effective_timeout,
-                    render_type,
-                )
-                new_id = self.get_most_recent_session_id("opencode", agent)
-                if new_id:
-                    self.update_session_field(n8n_session_id, "session_id", new_id)
-
-        elif current_runtime == "claude":
-            if can_resume:
-                output = self.run_claude(
-                    prompt,
-                    model,
-                    agent,
-                    session_id,
-                    True,
-                    n8n_session_id,
-                    effective_timeout,
-                    render_type,
-                    mode,
-                )
-            else:
-                output = self.run_claude(
-                    prompt,
-                    model,
-                    agent,
-                    session_id,
-                    False,
-                    n8n_session_id,
-                    effective_timeout,
-                    render_type,
-                    mode,
-                )
-
-        elif current_runtime == "gemini":
-            if can_resume:
-                output = self.run_gemini(
-                    prompt,
-                    model,
-                    agent,
-                    session_id,
-                    True,
-                    n8n_session_id,
-                    effective_timeout,
-                    render_type,
-                )
-            else:
-                output = self.run_gemini(
-                    prompt,
-                    model,
-                    agent,
-                    None,
-                    False,
-                    n8n_session_id,
-                    effective_timeout,
-                    render_type,
-                )
-                # Gemini auto-generates session IDs, we need to find and map it
-                new_id = self.get_most_recent_session_id("gemini", agent)
-                if new_id:
-                    self.update_session_field(n8n_session_id, "session_id", new_id)
-
-        elif current_runtime == "codex":
-            if can_resume:
-                output = self.run_codex(
-                    prompt,
-                    model,
-                    agent,
-                    session_id,
-                    True,
-                    n8n_session_id,
-                    effective_timeout,
-                    render_type,
-                )
-            else:
-                output = self.run_codex(
-                    prompt,
-                    model,
-                    agent,
-                    None,
-                    False,
-                    n8n_session_id,
-                    effective_timeout,
-                    render_type,
-                )
-                # CODEX auto-generates session IDs, we need to find and map it
-                new_id = self.get_most_recent_session_id("codex", agent)
-                if new_id:
-                    self.update_session_field(n8n_session_id, "session_id", new_id)
+        # Handle opencode session loss
+        if current_runtime == "opencode" and can_resume and (
+            "Resource not found" in output or "NotFoundError" in output
+        ):
+            print(
+                f"[Session] Session {session_id} lost/corrupted. Starting new session.",
+                file=sys.stderr,
+            )
+            output = self._dispatch_single_runtime(
+                "opencode", prompt, model, agent, None, False,
+                n8n_session_id, effective_timeout, render_type, mode,
+            )
+            new_id = self.get_most_recent_session_id("opencode", agent)
+            if new_id:
+                self.update_session_field(n8n_session_id, "session_id", new_id)
 
         # Post-process output for telegram_html to ensure Telegram compatibility
         if render_type == "telegram_html":
@@ -4695,6 +4719,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
     async def get_runtimes():
         """Return list of available runtimes."""
         runtimes = [
+            {"id": "auto", "label": "auto"},
             {"id": "copilot", "label": "copilot"},
             {"id": "opencode", "label": "opencode"},
             {"id": "claude", "label": "claude"},
@@ -5012,13 +5037,14 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         if not data:
             raise HTTPException(status_code=404, detail="Session not found")
 
-        return {
+        result = {
             "session_id": session_id,
             "agent": data.get("agent"),
             "runtime": data.get("runtime"),
             "model": data.get("model"),
             "yolo_mode": data.get("yolo_mode", "restricted"),
         }
+        return result
 
     @app.post("/api/v1/sessions/{session_id}/cancel")
     async def cancel_session(session_id: str, request: Request):
