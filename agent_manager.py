@@ -5505,7 +5505,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         runtime: Optional[str] = None
         model: Optional[str] = None
         timeout: Optional[int] = None
-        notify: Optional[bool] = True
+        notify: Optional[bool] = None
 
         @field_validator("prompt")
         @classmethod
@@ -5526,9 +5526,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             if notify:
                 if notification_mgr.is_muted(user_identity) or notification_mgr.is_muted("_global"):
                     notify = False
-                    print(f"[API] _emit_bg_notification: muted at emit time for {user_identity}")
 
-            print(f"[API] _emit_bg_notification: task_id={task_id}, channel={channel}, notify={notify}")
             user_key = bg_task_mgr._user_key(channel, user_identity)
             notification_mgr.create_notification(
                 task_id=task_id,

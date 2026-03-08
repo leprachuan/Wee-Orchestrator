@@ -1165,7 +1165,7 @@ class WebEXConnector:
                 else:
                     # Regular slash commands
                     timeout = self.config.get_user_timeout(person_id)
-                    response = self._execute_command(text, session_id, timeout)
+                    response = self._execute_command(text, session_id, timeout, user_identity=person_id)
                     msg_id = self.send_message(room_id, response)
 
                     # Pin configuration commands (agent, runtime, model, session)
@@ -1180,7 +1180,7 @@ class WebEXConnector:
                 # Check for bash command (!)
                 if text.startswith("!"):
                     timeout = self.config.get_user_timeout(person_id)
-                    response = self._execute_command(text, session_id, timeout)
+                    response = self._execute_command(text, session_id, timeout, user_identity=person_id)
                     self.send_message(room_id, response)
                 else:
                     # Route regular messages to agent_manager with status updates
@@ -1195,14 +1195,15 @@ class WebEXConnector:
             if room_id:
                 self.send_message(room_id, f"❌ Error: {str(e)[:100]}")
 
-    def _execute_command(self, command: str, session_id: str, timeout: int = 300) -> str:
+    def _execute_command(self, command: str, session_id: str, timeout: int = 300, user_identity: str = None) -> str:
         """Execute slash command via agent_manager.execute() with timeout support"""
         result_container = {"response": None, "done": False}
+        effective_identity = user_identity or session_id
 
         def run_command():
             try:
                 if self.use_api:
-                    result_container["response"] = self._execute_via_api(command, session_id, session_id, "webex")
+                    result_container["response"] = self._execute_via_api(command, session_id, effective_identity, "webex")
                 else:
                     session_mgr = self.get_session_manager(session_id)
                     result_container["response"] = session_mgr.execute(command, session_id)

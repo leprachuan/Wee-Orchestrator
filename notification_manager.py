@@ -66,7 +66,7 @@ class NotificationManager:
 
     def _save_prefs(self, prefs: dict):
         import tempfile
-        print(f"[NotificationManager] Saving {len(prefs)} prefs to {self._prefs_path}")
+
         tmp_fd, tmp_path = tempfile.mkstemp(
             dir=os.path.dirname(self._prefs_path), suffix=".tmp"
         )
@@ -74,7 +74,7 @@ class NotificationManager:
             with os.fdopen(tmp_fd, "w") as f:
                 json.dump(prefs, f, indent=2)
             os.replace(tmp_path, self._prefs_path)
-            print(f"[NotificationManager] Successfully saved prefs to {self._prefs_path}")
+
         except Exception as e:
             print(f"[NotificationManager] FAILED to save prefs: {e}")
 
@@ -175,10 +175,8 @@ class NotificationManager:
         if not skip_external:
             if self.is_muted("_global"):
                 skip_external = True
-                print(f"[NotificationManager] Global mute active – suppressing external for {task_id}")
             elif self.is_muted(user_key):
                 skip_external = True
-                print(f"[NotificationManager] Per-identity mute active for {user_key} – suppressing external for {task_id}")
 
         if not skip_external:
             print(f"[NotificationManager] Routing to external channel: {channel} for user {user_key}")
