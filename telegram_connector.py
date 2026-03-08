@@ -1051,7 +1051,7 @@ class TelegramConnector:
                 else:
                     # Regular slash commands - get user timeout
                     timeout = self.config.get_user_timeout(user_id)
-                    response = self._execute_command(text, session_id, timeout)
+                    response = self._execute_command(text, session_id, timeout, user_identity=str(user_id))
                     msg_id = self.send_message(chat_id, response)
 
                     # Pin agent set messages so user always knows which agent they're talking to
@@ -1067,7 +1067,7 @@ class TelegramConnector:
                 if text.startswith("!"):
                     # Bash commands - get user timeout
                     timeout = self.config.get_user_timeout(user_id)
-                    response = self._execute_command(text, session_id, timeout)
+                    response = self._execute_command(text, session_id, timeout, user_identity=str(user_id))
                     self.send_message(chat_id, response)
                 else:
                     # Route regular messages to agent_manager with status updates
@@ -1088,16 +1088,18 @@ class TelegramConnector:
         """Handle Telegram commands - DEPRECATED: Commands now pass to agent_manager"""
         pass  # Commands are now routed to agent_manager
 
-    def _execute_command(self, command: str, session_id: str, timeout: int = 300) -> str:
+    def _execute_command(self, command: str, session_id: str, timeout: int = 300,
+                         user_identity: str = None) -> str:
         """Execute slash command via agent_manager.execute() with timeout support"""
         # Container for result and thread control
         result_container = {"response": None, "done": False}
+        effective_identity = user_identity or session_id
 
         def run_command():
             """Run command in background thread"""
             try:
                 if self.use_api:
-                    result_container["response"] = self._execute_via_api(command, session_id, session_id, "telegram")
+                    result_container["response"] = self._execute_via_api(command, session_id, effective_identity, "telegram")
                 else:
                     session_mgr = self.get_session_manager(session_id)
                     result_container["response"] = session_mgr.execute(command, session_id)
@@ -1206,7 +1208,7 @@ class TelegramConnector:
             
             # Use execute() which routes to the correct runtime automatically
             if self.use_api:
-                result = self._execute_via_api(query, session_id, session_id, "telegram")
+                result = self._execute_via_api(query, session_id, str(user_id), "telegram")
             else:
                 result = session_mgr.execute(query, session_id)
 
