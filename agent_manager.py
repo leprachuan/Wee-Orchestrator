@@ -943,6 +943,9 @@ class SessionManager:
         # Populated by the /stream API endpoint; read by _execute_subprocess_with_tracking.
         self._stream_queues: Dict[str, tuple] = {}
 
+        # Last subprocess exit code per n8n_session_id (for debugging/monitoring)
+        self._last_exit_codes: Dict[str, int] = {}
+
 
 
     def _load_agents_config(self, config_file: Optional[str] = None) -> Dict:
