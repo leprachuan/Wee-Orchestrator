@@ -19,7 +19,7 @@ from uuid import uuid4
 from typing import Optional, Tuple, Dict, List
 import secrets as _secrets
 import threading
-from auto_runtime_config import AutoRuntimeConfig
+
 
 # Dynamically determine the repo base directory (works regardless of where repo is cloned)
 SCRIPT_BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -943,13 +943,7 @@ class SessionManager:
         # Populated by the /stream API endpoint; read by _execute_subprocess_with_tracking.
         self._stream_queues: Dict[str, tuple] = {}
 
-        # Last subprocess exit code per n8n_session_id; used by auto-runtime to distinguish
-        # genuine runtime errors (non-zero) from successful responses that happen to mention
-        # rate-limit terms in their content (exit code 0 = success, do not fall back).
-        self._last_exit_codes: Dict[str, int] = {}
-        # Raw subprocess output per n8n_session_id (before strip_metadata); auto-runtime
-        # checks this for limit patterns that may be lost during output stripping.
-        self._last_raw_output: Dict[str, str] = {}
+
 
     def _load_agents_config(self, config_file: Optional[str] = None) -> Dict:
         """Load agents configuration from JSON file
@@ -1970,7 +1964,7 @@ class SessionManager:
             if text_parts:
                 return "".join(text_parts)
             # When a rate limit or error was detected, prioritize error_result over
-            # assistant_text so the auto-runtime fallback loop sees the error signal.
+            # surface so the error signal reaches the caller.
             if has_rate_limit_event and error_result:
                 return error_result
             if assistant_text:
@@ -2425,14 +2419,6 @@ Example skill structure:
         agent = delegation_data.get("agent", "orchestrator")
         runtime = delegation_data.get("runtime", "copilot")
 
-        # Handle auto runtime in delegation context
-        if runtime == "auto":
-            ar = getattr(self, '_auto_runtime', None)
-            if ar:
-                effective_rt = ar.get_first_available_runtime()
-                model = ar.get_default_model(effective_rt)
-                runtime = effective_rt
-
         output = self._dispatch_single_runtime(
             runtime, prompt, model, agent, session_id if runtime == "claude" else None,
             False, n8n_session_id, self.command_timeout, "text",
@@ -2886,7 +2872,7 @@ User Request:
 
                 output = "".join(stdout_chunks) + ("".join(stderr_buf) if stderr_buf else "")
                 self.update_query_output(n8n_session_id, output)
-                # Record exit code so auto-runtime can distinguish real errors from
+                # Record exit code for debugging subprocess errors.
                 # successful responses that discuss rate-limit topics (false positives).
                 self._last_exit_codes[n8n_session_id] = process.returncode if process.returncode is not None else 0
                 # Signal the SSE generator that the subprocess is finished
@@ -2899,14 +2885,13 @@ User Request:
                     stdout, stderr = process.communicate(timeout=timeout)
                     output = stdout + (stderr if stderr else "")
                     self.update_query_output(n8n_session_id, output)
-                    # Record exit code so auto-runtime can avoid false-positive
+                    # Record exit code for debugging subprocess errors.
                     # rate-limit detection on successful AI responses.
                     self._last_exit_codes[n8n_session_id] = process.returncode if process.returncode is not None else 0
                     return output
                 except subprocess.TimeoutExpired:
                     process.kill()
                     process.wait()
-                    self._last_exit_codes[n8n_session_id] = -1  # timeout = error
                     timeout_min = timeout / 60
                     return f"Error: Command timed out (exceeded {timeout}s / {timeout_min:.1f}min)"
                 finally:
@@ -2914,7 +2899,6 @@ User Request:
 
         except Exception as e:
             self.clear_running_query(n8n_session_id)
-            self._last_exit_codes[n8n_session_id] = 1  # treat as error
             return f"Error: Failed to execute command: {e}"
         finally:
             # clear_running_query is idempotent; ensure it runs for streaming path too
@@ -3177,7 +3161,7 @@ User Request:
 
         stripped = self.strip_metadata(output, "claude")
         # If strip_metadata returned empty but the raw output is non-empty, fall back to
-        # returning the raw output so that is_limit_error() in the auto-runtime loop can
+        # returning the raw output for debugging purposes.
         # still detect rate-limit / usage-limit error text (e.g. plain-text stderr output).
         if not stripped.strip() and output.strip():
             print(
@@ -3564,7 +3548,7 @@ User Request:
         elif runtime == "claude":
             # Always pass session_id to Claude: when can_resume=True it uses --resume,
             # when can_resume=False it uses --session-id to create with a specific ID.
-            # In auto-runtime mode, session_id is already None when can_resume=False.
+            # Session ID is initialized even when can_resume=False (new session).
             return self.run_claude(
                 prompt, model, agent,
                 session_id,
@@ -3772,12 +3756,8 @@ You can mention an agent in your prompt and it will auto-delegate:
             if not argument:
                 return "Usage: /runtime [list|set|current]"
             if argument == "list":
-                return "🤖 **Available Runtimes**\n\n• `auto` 🔄 (Intelligent auto-fallback)\n• `copilot` (GitHub Copilot)\n• `opencode` (OpenCode CLI)\n• `claude` (Claude Code CLI)\n• `gemini` (Google Gemini CLI)\n• `codex` (Codex CLI)"
+                return "🤖 **Available Runtimes**\n\n• `copilot` (GitHub Copilot)\n• `opencode` (OpenCode CLI)\n• `claude` (Claude Code CLI)\n• `gemini` (Google Gemini CLI)\n• `codex` (Codex CLI)"
             elif argument == "current":
-                if current_runtime == "auto":
-                    effective = getattr(self, '_auto_runtime', None)
-                    eff_rt = effective.get_first_available_runtime() if effective else "unknown"
-                    return f"🤖 **Current Runtime:** `auto` 🔄 (effective: `{eff_rt}`)"
                 return f"🤖 **Current Runtime:** `{current_runtime}`"
             elif argument.startswith("set "):
                 new_runtime = argument[4:].strip().lower()
@@ -3787,22 +3767,7 @@ You can mention an agent in your prompt and it will auto-delegate:
                     "claude",
                     "gemini",
                     "codex",
-                    "auto",
                 ]:
-                    return f"Unknown runtime: '{new_runtime}'. Use 'copilot', 'opencode', 'claude', 'gemini', 'codex', or 'auto'."
-
-                if new_runtime == "auto":
-                    self.update_session_field(n8n_session_id, "runtime", "auto")
-                    ar = getattr(self, '_auto_runtime', None)
-                    eff_rt = ar.get_first_available_runtime() if ar else "claude"
-                    default_model = ar.get_default_model(eff_rt) if ar else "sonnet"
-                    self.update_session_field(n8n_session_id, "model", default_model)
-                    priority = ", ".join(ar.priority_list) if ar else "claude, gemini, codex, copilot"
-                    return (
-                        f"✓ Switched to **auto** runtime 🔄\n"
-                        f"Priority: `{priority}`\n"
-                        f"Starting with **{eff_rt}** (model: `{default_model}`)"
-                    )
                     return f"Unknown runtime: '{new_runtime}'. Use 'copilot', 'opencode', 'claude', 'gemini', or 'codex'."
 
                 # Capture previous session state before any updates
@@ -3913,18 +3878,12 @@ You can mention an agent in your prompt and it will auto-delegate:
             if not argument:
                 argument = "list"  # Default to list if no argument provided
 
-            # When in auto mode, resolve to the effective runtime for model operations
+            # Handle model selection for the current runtime
             effective_rt = current_runtime
-            if current_runtime == "auto":
-                ar = getattr(self, '_auto_runtime', None)
-                effective_rt = ar.get_first_available_runtime() if ar else "claude"
 
             if argument == "list" or argument.startswith("list "):
                 models_dict = self.get_models_for_runtime(effective_rt)
-                if current_runtime == "auto":
-                    out = f"📋 **Available Models (auto → {effective_rt})**\n\n"
-                else:
-                    out = f"📋 **Available Models ({current_runtime})**\n\n"
+                out = f"📋 **Available Models ({current_runtime})**\n\n"
                 if not models_dict:
                     return (
                         out
@@ -4335,152 +4294,39 @@ You can mention an agent in your prompt and it will auto-delegate:
         # Get mode for Claude runtime
         mode = "yolo" if session_data.get("yolo_mode") == "on" else "restricted"
 
-        # --- Auto-Runtime Dispatch ---
-        if current_runtime == "auto":
-            ar = getattr(self, '_auto_runtime', None)
-            if not ar:
-                return "Error: Auto-runtime not configured"
+        # --- Direct Single-Runtime Dispatch (simplified from auto-runtime logic) ---
 
-            fallback_messages = []
-            tried_runtimes = set()
-            effective_rt = ar.get_first_available_runtime()
+        # Check if we can resume
+        can_resume = (
+            self.session_exists(session_id, current_runtime) if session_id else False
+        )
 
-            # Track which runtime was last successfully used (for session resume)
-            last_auto_runtime = session_data.get("last_auto_runtime", "")
-            # Per-runtime session IDs: preserves context across runtime switches
-            auto_session_ids = session_data.get("auto_session_ids", {})
+        output = self._dispatch_single_runtime(
+            current_runtime, prompt, model, agent, session_id, can_resume,
+            n8n_session_id, effective_timeout, render_type, mode,
+        )
 
-            while effective_rt and effective_rt not in tried_runtimes:
-                tried_runtimes.add(effective_rt)
-                # Use the user's selected model if it exists. The user may have explicitly
-                # chosen a model for the fallback runtime (e.g. selected haiku for copilot).
-                # Only use the default model if the user hasn't made an explicit selection
-                # for the current session.
-                rt_model = model or ar.get_default_model(effective_rt)
-                print(
-                    f"[AutoRuntime] Trying runtime '{effective_rt}' with model '{rt_model}'",
-                    file=sys.stderr,
-                )
+        # Handle session ID mapping for runtimes that auto-generate IDs
+        if not can_resume and current_runtime in ("copilot", "opencode", "gemini", "codex"):
+            new_id = self.get_most_recent_session_id(current_runtime, agent)
+            if new_id:
+                self.update_session_field(n8n_session_id, "session_id", new_id)
 
-                # Look up the session ID for this specific runtime.
-                # This preserves session context when switching back to a previously
-                # used runtime (e.g. claude→gemini→claude keeps the claude session).
-                rt_stored_sid = auto_session_ids.get(effective_rt) or (
-                    session_id if effective_rt == last_auto_runtime else None
-                )
-
-                if rt_stored_sid:
-                    can_resume = self.session_exists(rt_stored_sid, effective_rt)
-                else:
-                    can_resume = False
-                rt_session_id = rt_stored_sid if can_resume else None
-
-                output = self._dispatch_single_runtime(
-                    effective_rt, prompt, rt_model, agent, rt_session_id, can_resume,
-                    n8n_session_id, effective_timeout, render_type, mode,
-                )
-
-                # Check if the output indicates a limit was hit.
-                # IMPORTANT: Check for limit errors REGARDLESS of exit code.
-                # Some runtimes (like Claude) return exit code 0 even when hitting rate limits.
-                # The is_limit_error() method handles the distinction:
-                # - Non-zero exit codes: treat any limit pattern as a real error
-                # - Exit code 0 (success): only treat strong error indicators as limits
-                #   (to avoid false positives from AI responses discussing rate limiting)
-                last_exit_code = self._last_exit_codes.get(n8n_session_id, 0)
-                raw_output = self._last_raw_output.get(n8n_session_id, "")
-                print(
-                    f"[AutoRuntime] Runtime '{effective_rt}' exited with code {last_exit_code}, "
-                    f"output length={len(output)} chars, raw length={len(raw_output)} chars",
-                    file=sys.stderr,
-                )
-                # Check both stripped output AND raw subprocess output for limit
-                # patterns. The raw output preserves structured error signals (e.g.
-                # Claude's rate_limit_event JSON) that strip_metadata may remove.
-                is_limit = ar.is_limit_error(output, effective_rt, last_exit_code)
-                if not is_limit and raw_output and raw_output != output:
-                    is_limit = ar.is_limit_error(raw_output, effective_rt, last_exit_code)
-                    if is_limit:
-                        print(
-                            f"[AutoRuntime] Limit detected in RAW output (missed in stripped)",
-                            file=sys.stderr,
-                        )
-                if is_limit:
-                    ar.mark_runtime_limited(effective_rt)
-                    next_rt = ar.get_next_runtime(effective_rt)
-                    if next_rt:
-                        msg = ar.build_fallback_message(effective_rt, next_rt)
-                        if msg:
-                            fallback_messages.append(msg)
-                        ar.log_fallback(effective_rt, next_rt, output[:200])
-                        effective_rt = next_rt
-                        continue
-                    else:
-                        # All runtimes exhausted
-                        fallback_messages.append(
-                            "⚠️ All runtimes exhausted. Returning last result."
-                        )
-                        break
-                else:
-                    # Success — update session with the runtime that worked
-                    self.update_session_field(n8n_session_id, "model", rt_model)
-                    self.update_session_field(n8n_session_id, "last_auto_runtime", effective_rt)
-                    # For non-claude runtimes, capture session ID via most-recent lookup.
-                    # For claude, run_claude() already extracted the session_id from the
-                    # stream-json output and saved it directly (race-free).
-                    if effective_rt == "claude":
-                        # Read back the session_id that run_claude saved via stream-json
-                        refreshed = self.load_session_data(n8n_session_id)
-                        new_id = refreshed.get("session_id") if refreshed else None
-                    else:
-                        new_id = self.get_most_recent_session_id(effective_rt, agent)
-                        if new_id:
-                            self.update_session_field(n8n_session_id, "session_id", new_id)
-                    # Persist per-runtime session ID for future switch-back
-                    if new_id:
-                        auto_session_ids[effective_rt] = new_id
-                        self.update_session_field(n8n_session_id, "auto_session_ids", auto_session_ids)
-                    break
-
-            # Prepend fallback messages to output if any
-            if fallback_messages and ar.show_fallback:
-                prefix = "\n".join(fallback_messages) + f"\n🔄 **Used runtime: {effective_rt}**\n\n"
-                output = prefix + output
-
-        else:
-            # --- Standard Single-Runtime Dispatch ---
-
-            # Check if we can resume
-            can_resume = (
-                self.session_exists(session_id, current_runtime) if session_id else False
+        # Handle opencode session loss
+        if current_runtime == "opencode" and can_resume and (
+            "Resource not found" in output or "NotFoundError" in output
+        ):
+            print(
+                f"[Session] Session {session_id} lost/corrupted. Starting new session.",
+                file=sys.stderr,
             )
-
             output = self._dispatch_single_runtime(
-                current_runtime, prompt, model, agent, session_id, can_resume,
+                "opencode", prompt, model, agent, None, False,
                 n8n_session_id, effective_timeout, render_type, mode,
             )
-
-            # Handle session ID mapping for runtimes that auto-generate IDs
-            if not can_resume and current_runtime in ("copilot", "opencode", "gemini", "codex"):
-                new_id = self.get_most_recent_session_id(current_runtime, agent)
-                if new_id:
-                    self.update_session_field(n8n_session_id, "session_id", new_id)
-
-            # Handle opencode session loss
-            if current_runtime == "opencode" and can_resume and (
-                "Resource not found" in output or "NotFoundError" in output
-            ):
-                print(
-                    f"[Session] Session {session_id} lost/corrupted. Starting new session.",
-                    file=sys.stderr,
-                )
-                output = self._dispatch_single_runtime(
-                    "opencode", prompt, model, agent, None, False,
-                    n8n_session_id, effective_timeout, render_type, mode,
-                )
-                new_id = self.get_most_recent_session_id("opencode", agent)
-                if new_id:
-                    self.update_session_field(n8n_session_id, "session_id", new_id)
+            new_id = self.get_most_recent_session_id("opencode", agent)
+            if new_id:
+                self.update_session_field(n8n_session_id, "session_id", new_id)
 
         # Post-process output for telegram_html to ensure Telegram compatibility
         if render_type == "telegram_html":
@@ -4677,8 +4523,6 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
     history_mgr = HistoryManager()
     bg_task_mgr = BackgroundTaskManager()
     session_mgr._bg_task_mgr = bg_task_mgr
-    auto_runtime = AutoRuntimeConfig()
-    session_mgr._auto_runtime = auto_runtime
     usage_tracker = RuntimeUsageTracker()
 
     # Shared thread pool executor for background tasks
@@ -4874,17 +4718,6 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         ]
         return {"runtimes": runtimes}
 
-    @app.get("/api/v1/auto-runtime/status")
-    async def get_auto_runtime_status(request: Request):
-        """Return auto-runtime configuration and current status."""
-        await authenticate(
-            request,
-            authorization=request.headers.get("authorization"),
-            x_user_identity=request.headers.get("x-user-identity"),
-            x_auth_channel=request.headers.get("x-auth-channel"),
-        )
-        return auto_runtime.get_status()
-
     @app.get("/api/v1/models")
     async def get_models(runtime: str = "copilot"):
         """Return available models for the specified runtime.
@@ -4894,23 +4727,9 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         not expose a model-listing command.
         """
         runtime = runtime.lower().strip()
-        known_runtimes = {"copilot", "opencode", "claude", "gemini", "codex", "auto"}
+        known_runtimes = {"copilot", "opencode", "claude", "gemini", "codex"}
         if runtime not in known_runtimes:
             return {"runtime": runtime, "models": [], "error": f"Unknown runtime: {runtime}"}
-
-        # For "auto" runtime, show models for the first available runtime in priority list
-        if runtime == "auto":
-            effective_runtime = auto_runtime.get_first_available_runtime()
-            try:
-                raw = session_mgr.get_models_for_runtime(effective_runtime)
-                models = []
-                for _group, model_ids in raw.items():
-                    for model_id in model_ids:
-                        label = session_mgr._get_model_description(model_id, effective_runtime) or model_id
-                        models.append({"id": model_id, "label": label})
-                return {"runtime": "auto", "effective_runtime": effective_runtime, "models": models}
-            except Exception as e:
-                return {"runtime": "auto", "effective_runtime": effective_runtime, "models": [], "error": str(e)}
 
         try:
             raw = session_mgr.get_models_for_runtime(runtime)
@@ -5215,9 +5034,6 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             "model": data.get("model"),
             "yolo_mode": data.get("yolo_mode", "restricted"),
         }
-        if data.get("runtime") == "auto":
-            ar = getattr(session_mgr, '_auto_runtime', None)
-            result["active_runtime"] = ar.get_first_available_runtime() if ar else None
         return result
 
     @app.post("/api/v1/sessions/{session_id}/cancel")
