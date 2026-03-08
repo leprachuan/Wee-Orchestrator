@@ -1,0 +1,8 @@
+/home/flipkey/.local/lib/python3.12/site-packages/urllib3/connectionpool.py:1097: InsecureRequestWarning: Unverified HTTPS request is being made to host 'localhost'. Adding certificate verification is strongly advised. See: https://urllib3.readthedocs.io/en/latest/advanced-usage.html#tls-warnings
+  warnings.warn(
+
+=== Testing /notifications Command Integration ===
+
+--- Test 1: Initialize Session ---
+Response status: 404
+✗ Error: {"detail":"Not Found"}

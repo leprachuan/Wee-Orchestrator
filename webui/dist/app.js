@@ -203,6 +203,13 @@ function updateSessionMeta(data) {
   modeEl.classList.toggle('yolo', isYolo);
   modeEl.classList.remove('empty');
 
+  // Sync the external notification toggle
+  const syncExternalToggle = $('notif-sync-external-toggle');
+  if (syncExternalToggle) {
+    const pref = data?.notification_preference || 'all';
+    syncExternalToggle.checked = (pref === 'all');
+  }
+
   // Refresh usage indicator whenever meta updates (runtime may have changed)
   if (typeof fetchRuntimeUsage === 'function') fetchRuntimeUsage();
 
@@ -1807,6 +1814,25 @@ document.addEventListener('DOMContentLoaded', () => {
   notifToggle.checked = isNotificationsEnabled();
   notifToggle.addEventListener('change', () => {
     setNotificationsEnabled(notifToggle.checked);
+  });
+
+  const syncExternalToggle = $('notif-sync-external-toggle');
+  // Initialize sync toggle state from current session meta if possible, or assume on
+  syncExternalToggle.checked = true; // Default
+  
+  syncExternalToggle.addEventListener('change', async () => {
+    const val = syncExternalToggle.checked ? 'on' : 'off';
+    try {
+      // Use the existing command system to toggle notifications server-side
+      const ta = $('message-input');
+      const oldVal = ta.value;
+      ta.value = `/notifications ${val}`;
+      await sendMessage();
+      ta.value = oldVal;
+      autoResizeTextarea(ta);
+    } catch (err) {
+      console.error('Failed to sync notification preference:', err);
+    }
   });
 
   // --- Request Queue ---
