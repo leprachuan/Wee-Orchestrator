@@ -3912,18 +3912,28 @@ You can mention an agent in your prompt and it will auto-delegate:
         elif command == "/model":
             if not argument:
                 argument = "list"  # Default to list if no argument provided
+
+            # When in auto mode, resolve to the effective runtime for model operations
+            effective_rt = current_runtime
+            if current_runtime == "auto":
+                ar = getattr(self, '_auto_runtime', None)
+                effective_rt = ar.get_first_available_runtime() if ar else "claude"
+
             if argument == "list" or argument.startswith("list "):
-                models_dict = self.get_models_for_runtime(current_runtime)
-                out = f"📋 **Available Models ({current_runtime})**\n\n"
+                models_dict = self.get_models_for_runtime(effective_rt)
+                if current_runtime == "auto":
+                    out = f"📋 **Available Models (auto → {effective_rt})**\n\n"
+                else:
+                    out = f"📋 **Available Models ({current_runtime})**\n\n"
                 if not models_dict:
                     return (
                         out
-                        + f"❌ No models available for {current_runtime}. Check CLI configuration."
+                        + f"❌ No models available for {effective_rt}. Check CLI configuration."
                     )
                 for cat in sorted(models_dict.keys()):
                     out += f"**{cat}:**\n"
                     for mid in sorted(models_dict[cat]):
-                        desc = self._get_model_description(mid, current_runtime)
+                        desc = self._get_model_description(mid, effective_rt)
                         if desc:
                             out += f"  • `{mid}` - {desc}\n"
                         else:
@@ -3936,9 +3946,9 @@ You can mention an agent in your prompt and it will auto-delegate:
                 )
             elif argument.startswith("set "):
                 model_name = argument[4:].strip().strip('"')
-                model_id = self.get_model_from_name(model_name, current_runtime)
+                model_id = self.get_model_from_name(model_name, effective_rt)
                 if not model_id:
-                    return f"Unknown model '{model_name}' for runtime {current_runtime}"
+                    return f"Unknown model '{model_name}' for runtime {effective_rt}"
                 self.update_session_field(n8n_session_id, "model", model_id)
                 return f"✓ Switched to model `{model_id}`"
 
@@ -5194,13 +5204,17 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         if not data:
             raise HTTPException(status_code=404, detail="Session not found")
 
-        return {
+        result = {
             "session_id": session_id,
             "agent": data.get("agent"),
             "runtime": data.get("runtime"),
             "model": data.get("model"),
             "yolo_mode": data.get("yolo_mode", "restricted"),
         }
+        if data.get("runtime") == "auto":
+            ar = getattr(session_mgr, '_auto_runtime', None)
+            result["active_runtime"] = ar.get_first_available_runtime() if ar else None
+        return result
 
     @app.post("/api/v1/sessions/{session_id}/cancel")
     async def cancel_session(session_id: str, request: Request):
