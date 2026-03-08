@@ -1905,6 +1905,7 @@ class SessionManager:
             text_parts = []
             assistant_text = ""
             error_result = None
+            has_rate_limit_event = False
             for line in lines:
                 line_stripped = line.strip()
                 if not line_stripped:
@@ -1930,6 +1931,17 @@ class SessionManager:
                             error_result = f"API Error: {err_type} - {err_msg}" if err_type else f"API Error: {err_msg}"
                         elif err_type:
                             error_result = f"API Error: {err_type}"
+                    # Handle rate_limit_event from Claude CLI (plan/usage cap reached)
+                    elif obj_type == "rate_limit_event":
+                        has_rate_limit_event = True
+                        info = obj.get("rate_limit_info") or {}
+                        status = info.get("status", "unknown")
+                        limit_type = info.get("rateLimitType", "")
+                        if status == "rejected":
+                            error_result = (
+                                f"rate_limit_event: {limit_type} limit reached "
+                                f"(status={status})"
+                            )
                     # Collect text deltas as fallback
                     elif obj_type == "stream_event":
                         event = obj.get("event") or {}
@@ -1948,11 +1960,19 @@ class SessionManager:
                         ]
                         if texts:
                             assistant_text = "\n\n".join(texts)
+                        # If assistant event has an error field (e.g. "rate_limit"),
+                        # treat the content as an error, not normal output
+                        if obj.get("error"):
+                            has_rate_limit_event = True
                 except (ValueError, KeyError, AttributeError):
                     # Not JSON — treat as plain text (legacy fallback)
                     result.append(line)
             if text_parts:
                 return "".join(text_parts)
+            # When a rate limit or error was detected, prioritize error_result over
+            # assistant_text so the auto-runtime fallback loop sees the error signal.
+            if has_rate_limit_event and error_result:
+                return error_result
             if assistant_text:
                 return assistant_text
             if error_result:
@@ -4354,12 +4374,24 @@ You can mention an agent in your prompt and it will auto-delegate:
                 # - Exit code 0 (success): only treat strong error indicators as limits
                 #   (to avoid false positives from AI responses discussing rate limiting)
                 last_exit_code = self._last_exit_codes.get(n8n_session_id, 0)
+                raw_output = self._last_raw_output.get(n8n_session_id, "")
                 print(
                     f"[AutoRuntime] Runtime '{effective_rt}' exited with code {last_exit_code}, "
-                    f"output length={len(output)} chars",
+                    f"output length={len(output)} chars, raw length={len(raw_output)} chars",
                     file=sys.stderr,
                 )
-                if ar.is_limit_error(output, effective_rt, last_exit_code):
+                # Check both stripped output AND raw subprocess output for limit
+                # patterns. The raw output preserves structured error signals (e.g.
+                # Claude's rate_limit_event JSON) that strip_metadata may remove.
+                is_limit = ar.is_limit_error(output, effective_rt, last_exit_code)
+                if not is_limit and raw_output and raw_output != output:
+                    is_limit = ar.is_limit_error(raw_output, effective_rt, last_exit_code)
+                    if is_limit:
+                        print(
+                            f"[AutoRuntime] Limit detected in RAW output (missed in stripped)",
+                            file=sys.stderr,
+                        )
+                if is_limit:
                     ar.mark_runtime_limited(effective_rt)
                     next_rt = ar.get_next_runtime(effective_rt)
                     if next_rt:

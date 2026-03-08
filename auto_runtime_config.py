@@ -219,6 +219,12 @@ class AutoRuntimeConfig:
                     "plan limit",
                     "maximum requests",
                     "rate_limit_error",  # JSON error type
+                    "rate_limit_event",  # Claude CLI rate limit event
+                    "hit your limit",
+                    "hit the limit",
+                    "hit a limit",
+                    "you've hit",
+                    "you have hit",
                 ]
                 if any(p.lower() in pattern_lower for p in very_strong_patterns):
                     return True
