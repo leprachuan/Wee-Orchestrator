@@ -3369,9 +3369,10 @@ User Request:
                 pass
             return False
         elif runtime == "claude":
-            path = self.claude_debug_dir / f"{session_id}.txt"
-            # print(f"DEBUG: checking claude session at {path} -> {path.exists()}", file=sys.stderr)
-            return path.exists()
+            # For Claude, only return True if we have a session_id to resume.
+            # If session_id is None/empty, return False (no session to resume).
+            # If session_id exists, return True and let Claude's --resume flag validate it.
+            return bool(session_id)
         elif runtime == "gemini":
             return (self.gemini_session_dir / f"{session_id}.json").exists()
         elif runtime == "codex":
