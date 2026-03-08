@@ -182,7 +182,7 @@ function updateSessionMeta(data) {
       if (id === 'meta-runtime') {
         el.dataset.runtime = text;
         if (text === 'auto' && data?.active_runtime) {
-          el.innerHTML = runtimeIconHTML('auto') + escHtml('auto') + ' (' + runtimeIconHTML(data.active_runtime) + ')';
+          el.innerHTML = runtimeIconHTML('auto') + escHtml('auto') + '  ' + runtimeIconHTML(data.active_runtime);
           el.title = `Auto mode — active runtime: ${data.active_runtime}`;
         } else {
           el.innerHTML = runtimeIconHTML(text) + escHtml(text);
