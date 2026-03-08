@@ -936,6 +936,9 @@ class SessionManager:
         # Load command timeout from environment
         self.command_timeout = get_command_timeout()
 
+        # Lock for session map file read-modify-write to prevent TOCTOU races
+        self._session_map_lock = threading.Lock()
+
         # Per-session streaming queues: session_id -> (asyncio.Queue, event_loop)
         # Populated by the /stream API endpoint; read by _execute_subprocess_with_tracking.
         self._stream_queues: Dict[str, tuple] = {}
@@ -1348,7 +1351,7 @@ class SessionManager:
             return {}
 
     def save_session_map(self, session_map: dict):
-        """Save the N8N -> Session ID mapping"""
+        """Save the N8N -> Session ID mapping (caller must hold _session_map_lock)"""
         with open(self.session_map_file, "w") as f:
             json.dump(session_map, f, indent=2)
 
@@ -1376,6 +1379,11 @@ class SessionManager:
         Get existing session data or create new default
         Returns dict with keys: session_id, model, agent, runtime, bot_id, channel
         """
+        with self._session_map_lock:
+            return self._get_or_create_session_data_unlocked(n8n_session_id)
+
+    def _get_or_create_session_data_unlocked(self, n8n_session_id: str) -> Dict:
+        """Internal: get or create session data (caller must hold _session_map_lock)"""
         session_map = self.load_session_map()
 
         default_runtime = get_default_runtime()
@@ -1484,35 +1492,31 @@ class SessionManager:
         )
         return {**default_data, "is_new": True}
 
-    def update_session_field(self, n8n_session_id: str, field: str, value: str):
-        """Update a specific field in the session map"""
-        session_map = self.load_session_map()
-
-        if n8n_session_id not in session_map:
-            # Create new if doesn't exist
-            self.get_or_create_session_data(n8n_session_id)
+    def update_session_field(self, n8n_session_id: str, field: str, value):
+        """Update a specific field in the session map (thread-safe)"""
+        with self._session_map_lock:
             session_map = self.load_session_map()
 
-        # Guard against race-condition where key is still missing after create
-        if n8n_session_id not in session_map:
-            return
+            if n8n_session_id not in session_map:
+                # Create new if doesn't exist
+                self._get_or_create_session_data_unlocked(n8n_session_id)
+                session_map = self.load_session_map()
 
-        if isinstance(session_map[n8n_session_id], str):
-            # Convert old string format to dict
-            session_map[n8n_session_id] = {
-                "session_id": session_map[n8n_session_id],
-                "model": get_default_model(),
-                "agent": get_default_agent(),
-                "runtime": get_default_runtime(),
-            }
+            # Guard against race-condition where key is still missing after create
+            if n8n_session_id not in session_map:
+                return
 
-        session_map[n8n_session_id][field] = value
+            if isinstance(session_map[n8n_session_id], str):
+                # Convert old string format to dict
+                session_map[n8n_session_id] = {
+                    "session_id": session_map[n8n_session_id],
+                    "model": get_default_model(),
+                    "agent": get_default_agent(),
+                    "runtime": get_default_runtime(),
+                }
 
-        # If switching runtime, we might want to reset the internal session ID or handle it
-        # But for now we'll just update the field.
-        # The execute method will handle generating a new underlying session ID if needed.
-
-        self.save_session_map(session_map)
+            session_map[n8n_session_id][field] = value
+            self.save_session_map(session_map)
 
     def get_effective_timeout(self, session_data: dict) -> int:
         """Get the effective timeout for a session (session-specific or default)"""
@@ -1664,32 +1668,33 @@ class SessionManager:
             available = ", ".join(self.AGENTS.keys())
             return f"Unknown agent: '{agent}'. Available agents: {available}"
 
-        session_map = self.load_session_map()
+        with self._session_map_lock:
+            session_map = self.load_session_map()
 
-        # Generate a new session ID for the backend because sessions are often project-scoped
-        new_backend_session_id = str(uuid4())
+            # Generate a new session ID for the backend because sessions are often project-scoped
+            new_backend_session_id = str(uuid4())
 
-        if n8n_session_id not in session_map:
-            session_map[n8n_session_id] = {
-                "session_id": new_backend_session_id,
-                "model": "gpt-5-mini",
-                "agent": agent,
-                "runtime": "copilot",
-            }
-        else:
-            if isinstance(session_map[n8n_session_id], dict):
-                session_map[n8n_session_id]["agent"] = agent
-                session_map[n8n_session_id]["session_id"] = new_backend_session_id
-            else:
-                # Convert old format
+            if n8n_session_id not in session_map:
                 session_map[n8n_session_id] = {
                     "session_id": new_backend_session_id,
                     "model": "gpt-5-mini",
                     "agent": agent,
                     "runtime": "copilot",
                 }
+            else:
+                if isinstance(session_map[n8n_session_id], dict):
+                    session_map[n8n_session_id]["agent"] = agent
+                    session_map[n8n_session_id]["session_id"] = new_backend_session_id
+                else:
+                    # Convert old format
+                    session_map[n8n_session_id] = {
+                        "session_id": new_backend_session_id,
+                        "model": "gpt-5-mini",
+                        "agent": agent,
+                        "runtime": "copilot",
+                    }
 
-        self.save_session_map(session_map)
+            self.save_session_map(session_map)
         agent_info = self.AGENTS[agent]
         print(
             f"[Agent] Switched to '{agent}' agent. New backend session: {new_backend_session_id}",
@@ -3099,6 +3104,7 @@ User Request:
         # startup and a {"type":"result","session_id":"..."} event on completion.
         # Capturing it here is race-free and works for both new and resumed sessions.
         import json as _json
+        _captured_sid = None
         for _line in output.splitlines():
             _line = _line.strip()
             if not _line:
@@ -3107,11 +3113,20 @@ User Request:
                 _obj = _json.loads(_line)
                 _sid = _obj.get("session_id")
                 if _sid and _obj.get("type") in ("system", "result"):
+                    _captured_sid = _sid
                     self.update_session_field(n8n_session_id, "session_id", _sid)
                     print(f"[Session] Captured claude session_id: {_sid}", file=sys.stderr)
                     break
             except (ValueError, KeyError):
                 pass
+
+        if not _captured_sid:
+            print(
+                f"[Session] WARNING: Could not extract session_id from claude stream-json "
+                f"output for n8n_session={n8n_session_id}. Session context may be lost on "
+                f"next message. Output length={len(output)} chars.",
+                file=sys.stderr,
+            )
 
         return self.strip_metadata(output, "claude")
 
@@ -3489,9 +3504,12 @@ User Request:
                 effective_timeout, render_type,
             )
         elif runtime == "claude":
+            # Always pass session_id to Claude: when can_resume=True it uses --resume,
+            # when can_resume=False it uses --session-id to create with a specific ID.
+            # In auto-runtime mode, session_id is already None when can_resume=False.
             return self.run_claude(
                 prompt, model, agent,
-                session_id if can_resume else session_id,
+                session_id,
                 can_resume, n8n_session_id,
                 effective_timeout, render_type, mode,
             )
@@ -3868,12 +3886,11 @@ You can mention an agent in your prompt and it will auto-delegate:
 
         elif command == "/session":
             if argument == "reset":
-                # Remove session from map (or clear session_id)
-                # Actually, simpler to just delete the entry and let next call create new
-                session_map = self.load_session_map()
-                if n8n_session_id in session_map:
-                    del session_map[n8n_session_id]
-                    self.save_session_map(session_map)
+                with self._session_map_lock:
+                    session_map = self.load_session_map()
+                    if n8n_session_id in session_map:
+                        del session_map[n8n_session_id]
+                        self.save_session_map(session_map)
                 return "✓ Session reset. Next message starts fresh."
 
         elif command == "/timeout":
@@ -4262,6 +4279,8 @@ You can mention an agent in your prompt and it will auto-delegate:
 
             # Track which runtime was last successfully used (for session resume)
             last_auto_runtime = session_data.get("last_auto_runtime", "")
+            # Per-runtime session IDs: preserves context across runtime switches
+            auto_session_ids = session_data.get("auto_session_ids", {})
 
             while effective_rt and effective_rt not in tried_runtimes:
                 tried_runtimes.add(effective_rt)
@@ -4271,13 +4290,18 @@ You can mention an agent in your prompt and it will auto-delegate:
                     file=sys.stderr,
                 )
 
-                # Resume existing session if we're on the same runtime as last time;
-                # start fresh only when falling back to a different runtime.
-                if effective_rt == last_auto_runtime and session_id:
-                    can_resume = self.session_exists(session_id, effective_rt)
+                # Look up the session ID for this specific runtime.
+                # This preserves session context when switching back to a previously
+                # used runtime (e.g. claude→gemini→claude keeps the claude session).
+                rt_stored_sid = auto_session_ids.get(effective_rt) or (
+                    session_id if effective_rt == last_auto_runtime else None
+                )
+
+                if rt_stored_sid:
+                    can_resume = self.session_exists(rt_stored_sid, effective_rt)
                 else:
                     can_resume = False
-                rt_session_id = session_id if can_resume else None
+                rt_session_id = rt_stored_sid if can_resume else None
 
                 output = self._dispatch_single_runtime(
                     effective_rt, prompt, rt_model, agent, rt_session_id, can_resume,
@@ -4308,10 +4332,18 @@ You can mention an agent in your prompt and it will auto-delegate:
                     # For non-claude runtimes, capture session ID via most-recent lookup.
                     # For claude, run_claude() already extracted the session_id from the
                     # stream-json output and saved it directly (race-free).
-                    if effective_rt != "claude":
+                    if effective_rt == "claude":
+                        # Read back the session_id that run_claude saved via stream-json
+                        refreshed = self.load_session_data(n8n_session_id)
+                        new_id = refreshed.get("session_id") if refreshed else None
+                    else:
                         new_id = self.get_most_recent_session_id(effective_rt, agent)
                         if new_id:
                             self.update_session_field(n8n_session_id, "session_id", new_id)
+                    # Persist per-runtime session ID for future switch-back
+                    if new_id:
+                        auto_session_ids[effective_rt] = new_id
+                        self.update_session_field(n8n_session_id, "auto_session_ids", auto_session_ids)
                     break
 
             # Prepend fallback messages to output if any
