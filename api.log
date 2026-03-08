@@ -1,0 +1,15 @@
+[Info] No skill_repositories.json found, using default Anthropic repository
+[API] Listening on https://127.0.0.1:8001
+[API] Listening on https://100.124.186.75:8001
+INFO:     Started server process [90738]
+INFO:     Started server process [90738]
+INFO:     Waiting for application startup.
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Application startup complete.
+ERROR:    [Errno 98] error while attempting to bind on address ('100.124.186.75', 8001): address already in use
+ERROR:    [Errno 98] error while attempting to bind on address ('127.0.0.1', 8001): address already in use
+INFO:     Waiting for application shutdown.
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.
+INFO:     Application shutdown complete.

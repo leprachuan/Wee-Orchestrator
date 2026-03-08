@@ -18,16 +18,99 @@ from uuid import uuid4
 
 
 _NOTIF_FILE = os.path.join(os.path.expanduser("~"), ".copilot", "notifications.json")
+_PREFS_FILE = os.path.join(os.path.expanduser("~"), ".copilot", "notification_prefs.json")
 _MAX_NOTIFICATIONS = 200
 
 
 class NotificationManager:
     """Manages task completion notifications with channel-aware routing."""
 
-    def __init__(self, notif_file: str = _NOTIF_FILE):
+    def __init__(self, notif_file: str = _NOTIF_FILE, prefs_file: str = _PREFS_FILE):
         self._path = notif_file
+        self._prefs_path = prefs_file
         self._lock = threading.Lock()
+        self._prefs_lock = threading.Lock()
         os.makedirs(os.path.dirname(self._path), exist_ok=True)
+
+    # ---- Per-identity notification preferences ----
+
+    @staticmethod
+    def _normalize_identity(identity: str) -> str:
+        """Return a canonical identity key by stripping channel prefixes.
+
+        Handles compound Telegram identities (``telegram_botid_userid``)
+        by extracting the bare numeric user-id so it matches the value
+        sent in ``X-User-Identity`` headers by background task creators.
+        """
+        if not identity:
+            return identity
+        # Special keys like "_global" pass through unchanged
+        if identity.startswith("_"):
+            return identity
+        # Handle compound Telegram identity: telegram_<botid>_<userid>
+        if identity.startswith("telegram_"):
+            parts = identity.split("_")
+            # telegram_<userid> → userid, telegram_<botid>_<userid> → userid
+            return parts[-1]
+        for prefix in ("webex_", "webui_", "api_"):
+            if identity.startswith(prefix):
+                return identity[len(prefix):]
+        return identity
+
+    def _load_prefs(self) -> dict:
+        try:
+            with open(self._prefs_path) as f:
+                return json.load(f)
+        except (FileNotFoundError, json.JSONDecodeError):
+            return {}
+
+    def _save_prefs(self, prefs: dict):
+        import tempfile
+
+        tmp_fd, tmp_path = tempfile.mkstemp(
+            dir=os.path.dirname(self._prefs_path), suffix=".tmp"
+        )
+        try:
+            with os.fdopen(tmp_fd, "w") as f:
+                json.dump(prefs, f, indent=2)
+            os.replace(tmp_path, self._prefs_path)
+
+        except Exception as e:
+            print(f"[NotificationManager] FAILED to save prefs: {e}")
+
+    def set_user_pref(self, identity: str, channel: str, preference: str):
+        """Store notification preference for a user identity.
+
+        ``identity`` is the raw identity (e.g. Telegram chat-id or email).
+        ``channel`` is the originating channel (telegram, webex, webui, etc.).
+        ``preference`` is "all" or "off".
+
+        The preference is stored under the normalized bare identity so it
+        applies regardless of which channel created the background task.
+        """
+        bare = self._normalize_identity(identity)
+        with self._prefs_lock:
+            prefs = self._load_prefs()
+            prefs[bare] = {
+                "preference": preference,
+                "channel": channel,
+                "updated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            }
+            self._save_prefs(prefs)
+
+    def get_user_pref(self, identity: str) -> str:
+        """Return notification preference for an identity ("all" or "off")."""
+        bare = self._normalize_identity(identity)
+        with self._prefs_lock:
+            prefs = self._load_prefs()
+        entry = prefs.get(bare)
+        if isinstance(entry, dict):
+            return entry.get("preference", "all")
+        return "all"
+
+    def is_muted(self, identity: str) -> bool:
+        """Convenience: True when external notifications should be suppressed."""
+        return self.get_user_pref(identity) == "off"
 
     def _load(self) -> list:
         try:
@@ -59,6 +142,7 @@ class NotificationManager:
         user_key: str,
         output_preview: Optional[str] = None,
         error: Optional[str] = None,
+        skip_external: bool = False,
     ) -> dict:
         """Create a notification and route it appropriately."""
         notif_id = f"notif_{uuid4().hex[:12]}"
@@ -85,10 +169,23 @@ class NotificationManager:
             self._save(notifications)
 
         # Route to external channels if the task was created from telegram/webex
-        if channel and channel.lower() == "telegram":
-            self._notify_telegram(notification)
-        elif channel and channel.lower() == "webex":
-            self._notify_webex(notification)
+        # Defense-in-depth: check global mute AND per-identity mute even if
+        # skip_external was not explicitly set (covers identity mismatch and
+        # late-mute edge cases).
+        if not skip_external:
+            if self.is_muted("_global"):
+                skip_external = True
+            elif self.is_muted(user_key):
+                skip_external = True
+
+        if not skip_external:
+            print(f"[NotificationManager] Routing to external channel: {channel} for user {user_key}")
+            if channel and channel.lower() == "telegram":
+                self._notify_telegram(notification)
+            elif channel and channel.lower() == "webex":
+                self._notify_webex(notification)
+        else:
+            print(f"[NotificationManager] Skipping external notification for {task_id} (skip_external=True)")
 
         return notification
 

@@ -1379,15 +1379,15 @@ class SessionManager:
                 return numeric_part[-4:] if len(numeric_part) >= 4 else numeric_part
         return session_id[-4:] if len(session_id) >= 4 else session_id
 
-    def get_or_create_session_data(self, n8n_session_id: str) -> Dict:
+    def get_or_create_session_data(self, n8n_session_id: str, identity: Optional[str] = None) -> Dict:
         """
         Get existing session data or create new default
         Returns dict with keys: session_id, model, agent, runtime, bot_id, channel
         """
         with self._session_map_lock:
-            return self._get_or_create_session_data_unlocked(n8n_session_id)
+            return self._get_or_create_session_data_unlocked(n8n_session_id, identity)
 
-    def _get_or_create_session_data_unlocked(self, n8n_session_id: str) -> Dict:
+    def _get_or_create_session_data_unlocked(self, n8n_session_id: str, identity: Optional[str] = None) -> Dict:
         """Internal: get or create session data (caller must hold _session_map_lock)"""
         session_map = self.load_session_map()
 
@@ -1423,6 +1423,10 @@ class SessionManager:
             "render_type": "markdown",
             "channel": channel,
         }
+        
+        # Store identity if provided, so we can find sessions by user later
+        if identity:
+            default_data["identity"] = identity
 
         if n8n_session_id not in session_map:
             # Create new session and save it immediately
@@ -1440,6 +1444,10 @@ class SessionManager:
         elif isinstance(data, dict):
             # Ensure all fields exist
             merged = {**default_data, **data}
+
+            # Backfill identity for existing sessions that lack it
+            if identity and not merged.get("identity"):
+                merged["identity"] = identity
 
             # If the runtime is set but model isn't (or is wrong for the runtime),
             # set a model appropriate for that runtime
@@ -2582,6 +2590,7 @@ These commands allow you to control the agent's behavior and are processed by th
 - /runtime <runtime> - Change execution runtime (e.g., /runtime claude, /runtime opencode)
 - /timeout <seconds> - Adjust execution timeout (e.g., /timeout 600)
 - /render <format> - Change output format (e.g., /render markdown, /render html, /render telegram_html)
+- /notifications <on|off> - Toggle background task notifications for Telegram/WebEx
 - /session <id> - Continue a specific session (e.g., /session abc123)
 - /status - Check running tasks status
 - /cancel - Cancel the current running task
@@ -3504,6 +3513,7 @@ User Request:
     # Background task support
     _bg_task_mgr = None  # Set by create_api_app
     _bg_identity = None   # Set per-call for slash command context
+    _notification_mgr = None  # Set by create_api_app
 
     def _execute_background_task(self, task_id, session_id, prompt, agent, runtime, model, channel, timeout=None):
         """Run a background task in the current thread (called from thread pool)."""
@@ -3580,8 +3590,11 @@ User Request:
 
     def execute(self, prompt: str, n8n_session_id: str) -> str:
         """Main execution logic"""
-        # Get session data first
-        session_data = self.get_or_create_session_data(n8n_session_id)
+        # Get session data first — pass identity so it's persisted in the
+        # session map, enabling preference lookups by identity later.
+        session_data = self.get_or_create_session_data(
+            n8n_session_id, identity=self._bg_identity
+        )
         current_runtime = session_data.get("runtime", "copilot")
         current_agent = session_data.get("agent", "orchestrator")
 
@@ -3980,6 +3993,49 @@ You can mention an agent in your prompt and it will auto-delegate:
                 return f"✓ Render type set to `{render_type}` for this session"
             else:
                 return "Usage: `/render` or `/render current` to show current render type\n       `/render set [text|markdown|html|telegram_html]` to set render type"
+
+        elif command == "/notifications":
+            if not argument:
+                argument = "current"
+
+            # Resolve identity for per-user preference store
+            _notif_identity = self._bg_identity or session_data.get("identity")
+            _notif_channel = session_data.get("channel", "webui")
+
+            if argument == "current":
+                # Check global preference first, then per-identity, then session
+                if self._notification_mgr:
+                    if self._notification_mgr.is_muted("_global"):
+                        pref = "off"
+                    elif _notif_identity:
+                        pref = self._notification_mgr.get_user_pref(_notif_identity)
+                    else:
+                        pref = session_data.get("notification_preference", "all")
+                else:
+                    pref = session_data.get("notification_preference", "all")
+                status = "ON (All updates)" if pref == "all" else "OFF (WebUI only)"
+                return f"🔔 **Background Notifications:** `{status}`"
+
+            elif argument in ["on", "all"]:
+                self.update_session_field(n8n_session_id, "notification_preference", "all")
+                if self._notification_mgr:
+                    # Store under specific identity if available
+                    if _notif_identity:
+                        self._notification_mgr.set_user_pref(_notif_identity, _notif_channel, "all")
+                    # Always store global preference so it applies across all channels
+                    self._notification_mgr.set_user_pref("_global", _notif_channel, "all")
+                return "✓ Background task notifications enabled for Telegram/WebEx."
+
+            elif argument in ["off", "mute"]:
+                self.update_session_field(n8n_session_id, "notification_preference", "off")
+                if self._notification_mgr:
+                    if _notif_identity:
+                        self._notification_mgr.set_user_pref(_notif_identity, _notif_channel, "off")
+                    # Always store global preference so it applies across all channels
+                    self._notification_mgr.set_user_pref("_global", _notif_channel, "off")
+                return "✓ Background task notifications muted for Telegram/WebEx (WebUI only)."
+            else:
+                return "Usage: `/notifications [on|off]` to toggle background task notifications."
 
         elif command == "/mode":
             if not argument:
@@ -4549,6 +4605,8 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
     except ImportError:
         notification_mgr = None
         print("[API] NotificationManager not available — notifications disabled", file=sys.stderr)
+
+    session_mgr._notification_mgr = notification_mgr
     
     _start_time = time.time()
 
@@ -4813,7 +4871,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         )
         # Use provided session_id or generate a new one
         session_id = body.session_id if body.session_id else str(uuid4())[:8]
-        session_mgr.get_or_create_session_data(session_id)
+        session_mgr.get_or_create_session_data(session_id, identity=user["identity"])
         history_mgr.create_session(user["channel"], user["identity"], session_id)
 
         # Store channel in session so file instructions are channel-aware
@@ -4854,6 +4912,9 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         if not existing:
             raise HTTPException(status_code=404, detail="Session not found")
 
+        # Persist identity so mute preferences can be discovered later
+        session_mgr.update_session_field(session_id, "identity", user["identity"])
+
         # Apply per-query overrides for model, runtime, and agent if provided
         if body.model:
             session_mgr.update_session_field(session_id, "model", body.model)
@@ -4872,7 +4933,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         history_mgr.append_message(user["channel"], user["identity"], session_id, "user", body.query)
         history_mgr.append_message(user["channel"], user["identity"], session_id, "assistant", result)
 
-        session_data = session_mgr.get_or_create_session_data(session_id)
+        session_data = session_mgr.get_or_create_session_data(session_id, identity=user["identity"])
         runtime = session_data.get("runtime", "copilot")
         return {
             "session_id": session_id,
@@ -4916,6 +4977,9 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         existing = session_mgr.load_session_data(session_id)
         if not existing:
             raise HTTPException(status_code=404, detail="Session not found")
+
+        # Persist identity so mute preferences can be discovered later
+        session_mgr.update_session_field(session_id, "identity", user["identity"])
 
         # Apply per-query overrides for model, runtime, and agent if provided
         if body.model:
@@ -5441,6 +5505,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         runtime: Optional[str] = None
         model: Optional[str] = None
         timeout: Optional[int] = None
+        notify: Optional[bool] = None
 
         @field_validator("prompt")
         @classmethod
@@ -5450,11 +5515,18 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             return v
 
     def _emit_bg_notification(task_id: str, prompt: str, status: str, channel: str,
-                               user_identity: str, output_preview=None, error=None):
+                               user_identity: str, output_preview=None, error=None, notify: bool = True):
         """Emit a background task completion notification via notification_mgr."""
         if notification_mgr is None:
             return
         try:
+            # Re-check per-identity AND global mute preference at emit time
+            # (user may have muted after the task was created, or muted from
+            # a different channel whose identity doesn't match).
+            if notify:
+                if notification_mgr.is_muted(user_identity) or notification_mgr.is_muted("_global"):
+                    notify = False
+
             user_key = bg_task_mgr._user_key(channel, user_identity)
             notification_mgr.create_notification(
                 task_id=task_id,
@@ -5464,13 +5536,15 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 user_key=user_key,
                 output_preview=output_preview,
                 error=error,
+                skip_external=not notify,
             )
         except Exception as exc:
             print(f"[API] Notification emit failed for {task_id}: {exc}", file=sys.stderr)
 
     def _run_background_task(task_id: str, session_id: str, prompt: str,
                              agent: str, runtime: str, model: str,
-                             channel: str, user_identity: str, timeout: int = None):
+                             channel: str, user_identity: str, timeout: int = None,
+                             notify: bool = True):
         """Blocking function that runs a background task in a subprocess.
         Called from a thread pool executor.
 
@@ -5525,23 +5599,23 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 final_output = output or "Task completed successfully"
                 bg_task_mgr.complete_task(task_id, final_output)
                 _emit_bg_notification(task_id, prompt, "completed", channel, user_identity,
-                                      output_preview=final_output, error=None)
+                                      output_preview=final_output, error=None, notify=notify)
             else:
                 error_msg = f"Task failed with code {result.returncode}: {output}"
                 bg_task_mgr.fail_task(task_id, error_msg)
                 _emit_bg_notification(task_id, prompt, "failed", channel, user_identity,
-                                      output_preview=None, error=error_msg)
+                                      output_preview=None, error=error_msg, notify=notify)
 
         except subprocess.TimeoutExpired:
             error_msg = f"Task exceeded timeout of {timeout} seconds"
             bg_task_mgr.fail_task(task_id, error_msg)
             _emit_bg_notification(task_id, prompt, "failed", channel, user_identity,
-                                  output_preview=None, error=error_msg)
+                                  output_preview=None, error=error_msg, notify=notify)
         except Exception as exc:
             error_msg = str(exc)
             bg_task_mgr.fail_task(task_id, error_msg)
             _emit_bg_notification(task_id, prompt, "failed", channel, user_identity,
-                                  output_preview=None, error=error_msg)
+                                  output_preview=None, error=error_msg, notify=notify)
 
     @app.post("/api/v1/background-tasks")
     async def create_background_task(body: BackgroundTaskRequest, request: Request):
@@ -5564,14 +5638,57 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             )
 
         # Resolve agent/runtime/model — default to user's current session config
-        current_sessions = history_mgr.get_sessions(channel, identity)
+        # Determine defaults by searching for ANY session for this identity across all channels
+        # to inherit preferences (like notification_preference).
         defaults = {}
-        if current_sessions:
-            latest_sid = current_sessions[0].get("session_id", "")
-            if latest_sid:
-                sd = session_mgr.load_session_data(latest_sid)
-                if sd:
-                    defaults = sd
+        session_map = session_mgr.load_session_map()
+        
+        # Search session_map for matching n8n_session_ids by identity (highest priority)
+        # Then by channel, always respecting notification_preference if set
+        matching_sessions_same_channel = []
+        matching_sessions_other_channel = []
+        
+        for n8n_sid, data in session_map.items():
+            # Handle legacy string format
+            if isinstance(data, str):
+                data = {"session_id": data}
+            
+            # Check if this session belongs to this user (by identity if stored)
+            sid_identity = data.get("identity")
+            sid_channel = data.get("channel")
+            
+            # Match by identity first (most reliable)
+            if sid_identity and sid_identity == identity:
+                if sid_channel == channel:
+                    matching_sessions_same_channel.append((n8n_sid, data))
+                else:
+                    matching_sessions_other_channel.append((n8n_sid, data))
+        
+        # Use sessions from the same channel first
+        for n8n_sid, data in matching_sessions_same_channel:
+            if not defaults:
+                defaults = dict(data)
+                print(f"[API] Found matching session '{n8n_sid}' for {channel}/{identity}")
+            
+            # Always check for notification_preference (highest priority)
+            pref = data.get("notification_preference")
+            if pref:
+                defaults["notification_preference"] = pref
+                print(f"[API] Inherited notification_preference '{pref}' from session '{n8n_sid}'")
+        
+        # Fall back to other channels for the same user
+        for n8n_sid, data in matching_sessions_other_channel:
+            if not defaults:
+                defaults = dict(data)
+                print(f"[API] Found matching cross-channel session '{n8n_sid}' for {identity}")
+            
+            # Always prioritize notification_preference across channels
+            pref = data.get("notification_preference")
+            if pref:
+                # If "off" is set anywhere, respect it
+                if pref == "off" or not defaults.get("notification_preference"):
+                    defaults["notification_preference"] = pref
+                    print(f"[API] Inherited notification_preference '{pref}' from cross-channel session '{n8n_sid}'")
 
         agent = body.agent or defaults.get("agent", get_default_agent())
         runtime = body.runtime or defaults.get("runtime", get_default_runtime())
@@ -5597,10 +5714,27 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
 
         # Run in background thread using shared executor
         loop = asyncio.get_running_loop()
+        
+        # Determine notification preference:
+        #   body override > global mute > per-identity store > session default > True
+        notify_pref = body.notify
+        if notify_pref is None:
+            if notification_mgr:
+                # Global mute takes priority (covers cross-channel identity mismatch)
+                if notification_mgr.is_muted("_global"):
+                    notify_pref = False
+                # Per-identity store is authoritative
+                elif notification_mgr.is_muted(identity):
+                    notify_pref = False
+            if notify_pref is None:
+                session_pref = defaults.get("notification_preference", "all")
+                notify_pref = (session_pref != "off")
+
         loop.run_in_executor(
             bg_executor,  # Use shared executor instead of creating new one
             _run_background_task,
             task_id, session_id, body.prompt, agent, runtime, model, channel, identity, bg_timeout,
+            notify_pref
         )
 
         return {
