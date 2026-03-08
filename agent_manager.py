@@ -1911,6 +1911,17 @@ class SessionManager:
                             error_result = result_text
                         else:
                             return result_text
+                    # Handle top-level API error events (e.g. rate limits, usage limits).
+                    # These arrive as {"type":"error","error":{"type":"rate_limit_error","message":"..."}}
+                    # and must be surfaced so is_limit_error() can detect them.
+                    elif obj_type == "error":
+                        err_obj = obj.get("error") or {}
+                        err_msg = err_obj.get("message", "") or obj.get("message", "")
+                        err_type = err_obj.get("type", "")
+                        if err_msg:
+                            error_result = f"API Error: {err_type} - {err_msg}" if err_type else f"API Error: {err_msg}"
+                        elif err_type:
+                            error_result = f"API Error: {err_type}"
                     # Collect text deltas as fallback
                     elif obj_type == "stream_event":
                         event = obj.get("event") or {}
@@ -3128,7 +3139,18 @@ User Request:
                 file=sys.stderr,
             )
 
-        return self.strip_metadata(output, "claude")
+        stripped = self.strip_metadata(output, "claude")
+        # If strip_metadata returned empty but the raw output is non-empty, fall back to
+        # returning the raw output so that is_limit_error() in the auto-runtime loop can
+        # still detect rate-limit / usage-limit error text (e.g. plain-text stderr output).
+        if not stripped.strip() and output.strip():
+            print(
+                "[Session] WARNING: strip_metadata returned empty for non-empty claude output. "
+                "Returning raw output to preserve error context for limit detection.",
+                file=sys.stderr,
+            )
+            return output
+        return stripped
 
     def run_gemini(
         self,

@@ -38,6 +38,17 @@ LIMIT_ERROR_PATTERNS = {
         "exceeded",
         "throttl",
         "resource_exhausted",
+        # Claude.ai plan/usage limit messages (e.g. daily cap, pro plan limit)
+        "usage limit",
+        "limit reached",
+        "limit has been",
+        "reached your",
+        "plan limit",
+        "maximum requests",
+        "out of requests",
+        "no more requests",
+        "limit for this",
+        "limit for the",
     ],
     "gemini": [
         "rate limit",
