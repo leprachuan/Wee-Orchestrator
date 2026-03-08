@@ -5972,39 +5972,129 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             return _get_scheduler().get_logs(job_id)
     
     # --- TODO list API ---------------------------------------------------
-    def _resolve_todo_file(agent_name: str | None) -> Path:
-        """Resolve the TODOs.md file for a given agent.
+    def _resolve_todo_dir(agent_name: str | None) -> Path | None:
+        """Resolve the TODOs/ folder for a given agent.
 
-        Returns the agent-specific TODOs.md path.  When the agent has no
-        TODOs.md the caller receives a non-existent path so that
-        _parse_todos_from_md correctly returns an empty list, ensuring the
-        UI reflects that the agent has no TODOs.
+        Returns the agent-specific TODOs/ directory if it exists, else None.
+        Checks both the new folder-based structure (TODOs/) and falls back to
+        the legacy TODOs.md flat file (returned as None to signal legacy mode).
         """
         import json as _json
-        default = Path("/opt/fosterbot-home/TODOs.md")
+        default_dir = Path("/opt/fosterbot-home/TODOs")
+        default_md = Path("/opt/fosterbot-home/TODOs.md")
+
+        def _pick(base: Path):
+            """Return folder path or md path for a given base directory."""
+            d = base / "TODOs"
+            if d.is_dir():
+                return d
+            md = base / "TODOs.md"
+            if md.exists():
+                return md
+            return None
+
         if not agent_name:
-            return default
+            if default_dir.is_dir():
+                return default_dir
+            return default_md if default_md.exists() else None
+
         try:
             agents_file = Path(__file__).parent / "agents.json"
             agents_data = _json.loads(agents_file.read_text())
             for a in agents_data.get("agents", []):
                 if a.get("name", "").lower() == agent_name.lower():
                     agent_path = Path(a.get("path", "/opt"))
-                    for candidate in [agent_path / "TODOs.md",
-                                      agent_path / "fosterbot-home" / "TODOs.md"]:
-                        if candidate.exists():
-                            return candidate
-                    # No TODOs.md for this agent — return non-existent
-                    # path so the panel shows empty instead of falling
-                    # back to another agent's TODOs.
-                    return agent_path / "TODOs.md"
+                    result = _pick(agent_path)
+                    if result:
+                        return result
+                    # Also check <agent_path>/fosterbot-home/
+                    result = _pick(agent_path / "fosterbot-home")
+                    if result:
+                        return result
+                    # No TODOs found — return non-existent path so UI shows empty
+                    return agent_path / "TODOs"
         except Exception:
             pass
-        # Unknown agent — return non-existent path
-        return Path(f"/opt/{agent_name}/TODOs.md")
+        return Path(f"/opt/{agent_name}/TODOs")
+
+    def _resolve_todo_file(agent_name: str | None) -> Path:
+        """Legacy resolver — returns a Path (may be dir or md file).
+
+        Kept for backwards compatibility. New code should use _resolve_todo_dir.
+        """
+        result = _resolve_todo_dir(agent_name)
+        if result is None:
+            return Path("/opt/fosterbot-home/TODOs.md")
+        return result
+
+    def _parse_todo_file(todo_path: Path) -> dict | None:
+        """Parse a single TODO file with DUE:/LABELS: header format.
+
+        Returns a dict with description, due, labels, details, notes keys,
+        or None if the file cannot be parsed.
+        """
+        import re as _re
+        try:
+            lines = todo_path.read_text().splitlines()
+        except Exception:
+            return None
+
+        due = None
+        labels = []
+        detail_start = 0
+
+        for idx, line in enumerate(lines):
+            if line.startswith("DUE:"):
+                due = line[4:].strip()
+                detail_start = idx + 1
+            elif line.startswith("LABELS:"):
+                raw = line[7:].strip()
+                # Parse {LABEL1},{LABEL2} format
+                labels = [l.strip().strip("{}") for l in _re.split(r"[,\s]+", raw) if l.strip().strip("{}")]
+                detail_start = idx + 1
+            else:
+                break  # headers must be contiguous at top of file
+
+        # Everything after the headers is the details body
+        details_lines = lines[detail_start:]
+        # Strip leading blank line if present
+        while details_lines and not details_lines[0].strip():
+            details_lines = details_lines[1:]
+        details = "\n".join(details_lines).strip()
+
+        return {
+            "description": todo_path.name,
+            "due": due,
+            "labels": labels,
+            "notes": [],
+            "details": details,
+        }
+
+    def _parse_todos_from_dir(todo_dir: Path, limit: int = 10) -> list:
+        """Read TODOs from the folder-based structure (ACTIVE/ subfolder)."""
+        active_dir = todo_dir / "ACTIVE"
+        if not active_dir.is_dir():
+            return []
+        todos = []
+        for entry in sorted(active_dir.iterdir()):
+            if entry.is_file():
+                parsed = _parse_todo_file(entry)
+                if parsed:
+                    todos.append(parsed)
+                    if len(todos) >= limit:
+                        break
+        return todos
 
     def _parse_todos_from_md(todo_file: Path, limit: int = 10) -> list:
-        """Parse active TODOs from the markdown file, return up to `limit`."""
+        """Parse active TODOs from the markdown file, return up to `limit`.
+
+        Supports both the legacy flat TODOs.md format and the new folder-based
+        structure (when todo_file is actually a directory).
+        """
+        # New folder-based structure
+        if todo_file.is_dir():
+            return _parse_todos_from_dir(todo_file, limit)
+
         if not todo_file.exists():
             return []
         todos = []
@@ -6053,8 +6143,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                         in_details = False
                         details_lines = []
                     else:
-                        # Completed todo - the active todo was already saved in lines 5763-5769
-                        # Just clear it and don't add the completed todo to the list
+                        # Completed todo — clear state without adding to active list
                         current_todo = None
                         in_details = False
                         details_lines = []
@@ -6087,13 +6176,50 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             x_auth_channel=request.headers.get("x-auth-channel"),
         )
         limit = min(max(1, limit), 50)
-        todo_file = _resolve_todo_file(agent)
-        todos = _parse_todos_from_md(todo_file, limit)
-        return {"todos": todos, "count": len(todos), "agent": agent or "default", "file": str(todo_file)}
-    
+        todo_path = _resolve_todo_file(agent)
+        todos = _parse_todos_from_md(todo_path, limit)
+        return {"todos": todos, "count": len(todos), "agent": agent or "default", "file": str(todo_path)}
+
+    @app.post("/api/v1/todos/{todo_title}/complete")
+    async def complete_todo(request: Request, todo_title: str):
+        """Mark a TODO as complete by moving it from ACTIVE/ to COMPLETED/."""
+        await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        try:
+            body = await request.json()
+            agent = body.get("agent")
+        except Exception:
+            agent = None
+
+        todo_path = _resolve_todo_file(agent)
+        if not todo_path.is_dir():
+            return {"success": False, "error": "Folder-based TODO structure not found"}
+
+        active_dir = todo_path / "ACTIVE"
+        completed_dir = todo_path / "COMPLETED"
+        completed_dir.mkdir(parents=True, exist_ok=True)
+
+        # Find the file (exact match or partial)
+        match = None
+        for entry in active_dir.iterdir():
+            if entry.is_file() and (entry.name == todo_title or todo_title in entry.name):
+                match = entry
+                break
+
+        if not match:
+            return {"success": False, "error": f"TODO '{todo_title}' not found in ACTIVE/"}
+
+        dest = completed_dir / match.name
+        match.rename(dest)
+        return {"success": True, "moved": str(dest), "todo": match.name}
+
     @app.patch("/api/v1/todos/{todo_title}")
     async def update_todo_details(request: Request, todo_title: str):
-        """Update a TODO's details (markdown content)"""
+        """Update a TODO's details (markdown content)."""
         await authenticate(
             request,
             authorization=request.headers.get("authorization"),
@@ -6104,16 +6230,41 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         try:
             body = await request.json()
             details = body.get("details", "")
-            
-            # Use the todo manager to update details
-            from pathlib import Path
-            todo_file = Path("/opt/fosterbot-home/TODOs.md")
-            
-            # Read current file
+            agent = body.get("agent")
+
+            todo_path = _resolve_todo_file(agent)
+
+            # --- New folder-based structure ---
+            if todo_path.is_dir():
+                active_dir = todo_path / "ACTIVE"
+                match = None
+                for entry in active_dir.iterdir():
+                    if entry.is_file() and (entry.name == todo_title or todo_title in entry.name):
+                        match = entry
+                        break
+                if not match:
+                    return {"success": False, "error": f"TODO '{todo_title}' not found in ACTIVE/"}
+
+                # Preserve existing DUE:/LABELS: header lines
+                existing = match.read_text().splitlines()
+                header_lines = []
+                for line in existing:
+                    if line.startswith("DUE:") or line.startswith("LABELS:"):
+                        header_lines.append(line)
+                    else:
+                        break
+
+                new_content = "\n".join(header_lines)
+                if details and details.strip():
+                    new_content += "\n\n" + details.strip()
+                match.write_text(new_content + "\n")
+                return {"success": True, "updated": True, "todo": match.name}
+
+            # --- Legacy flat-file structure ---
+            todo_file = todo_path
             if not todo_file.exists():
                 return {"success": False, "error": "TODO file not found"}
             
-            # Parse todos and find the one to update
             content = todo_file.read_text()
             lines = content.split('\n')
             
@@ -6123,42 +6274,33 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 line = lines[i]
                 updated_lines.append(line)
                 
-                # Check if this is the todo we're looking for
                 stripped = line.strip()
                 if stripped.startswith('- '):
                     stripped = stripped[2:]
                 
                 if (stripped.startswith('[ ]') or stripped.startswith('[X]')) and todo_title in line:
-                    # This is our todo - skip to end of current todo content
                     i += 1
                     
-                    # Skip notes (indented lines)
                     while i < len(lines) and lines[i].startswith('    '):
                         updated_lines.append(lines[i])
                         i += 1
                     
-                    # Skip old details section if it exists
                     if i < len(lines) and (lines[i].strip() == '### Details' or lines[i].strip() == '## Details'):
                         i += 1
-                        # Skip old details content
                         while i < len(lines) and lines[i] and not lines[i].startswith('#'):
                             i += 1
                     
-                    # Add new details if provided
                     if details and details.strip():
                         updated_lines.append('')
                         updated_lines.append('### Details')
                         updated_lines.append('')
                         updated_lines.extend(details.split('\n'))
                     
-                    # Continue from where we left off
                     continue
                 
                 i += 1
             
-            # Write back
             todo_file.write_text('\n'.join(updated_lines))
-            
             return {"success": True, "updated": True, "todo": todo_title}
         
         except Exception as e:
