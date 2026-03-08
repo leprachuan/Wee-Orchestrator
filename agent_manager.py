@@ -3094,6 +3094,25 @@ User Request:
         if "Error: Claude command failed" in output:
             return output
 
+        # Extract session_id from stream-json output and persist it.
+        # Claude emits a {"type":"system","subtype":"init","session_id":"..."} event at
+        # startup and a {"type":"result","session_id":"..."} event on completion.
+        # Capturing it here is race-free and works for both new and resumed sessions.
+        import json as _json
+        for _line in output.splitlines():
+            _line = _line.strip()
+            if not _line:
+                continue
+            try:
+                _obj = _json.loads(_line)
+                _sid = _obj.get("session_id")
+                if _sid and _obj.get("type") in ("system", "result"):
+                    self.update_session_field(n8n_session_id, "session_id", _sid)
+                    print(f"[Session] Captured claude session_id: {_sid}", file=sys.stderr)
+                    break
+            except (ValueError, KeyError):
+                pass
+
         return self.strip_metadata(output, "claude")
 
     def run_gemini(
@@ -4286,10 +4305,13 @@ You can mention an agent in your prompt and it will auto-delegate:
                     # Success — update session with the runtime that worked
                     self.update_session_field(n8n_session_id, "model", rt_model)
                     self.update_session_field(n8n_session_id, "last_auto_runtime", effective_rt)
-                    # Find and store new session ID for the effective runtime
-                    new_id = self.get_most_recent_session_id(effective_rt, agent)
-                    if new_id:
-                        self.update_session_field(n8n_session_id, "session_id", new_id)
+                    # For non-claude runtimes, capture session ID via most-recent lookup.
+                    # For claude, run_claude() already extracted the session_id from the
+                    # stream-json output and saved it directly (race-free).
+                    if effective_rt != "claude":
+                        new_id = self.get_most_recent_session_id(effective_rt, agent)
+                        if new_id:
+                            self.update_session_field(n8n_session_id, "session_id", new_id)
                     break
 
             # Prepend fallback messages to output if any
