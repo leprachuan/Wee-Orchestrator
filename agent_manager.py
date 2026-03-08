@@ -3229,9 +3229,12 @@ User Request:
         # For now, we use the default model and do not pass --model flag
         # TODO: Investigate correct model names for --model flag with Gemini CLI
 
-        if resume and session_id:
-            cmd.extend(["--resume", session_id])
-            print(f"[Session] Resuming Gemini session: {session_id}", file=sys.stderr)
+        # For Gemini, we always try to resume the latest session for context retention.
+        # The session_id parameter is not used since Gemini manages sessions internally.
+        # Using "--resume latest" automatically continues with the most recent session.
+        if resume:
+            cmd.extend(["--resume", "latest"])
+            print(f"[Session] Resuming Gemini session (latest)", file=sys.stderr)
         else:
             print(f"[Session] Starting new Gemini session in {mode} mode", file=sys.stderr)
 
@@ -4300,9 +4303,13 @@ You can mention an agent in your prompt and it will auto-delegate:
         # --- Direct Single-Runtime Dispatch (simplified from auto-runtime logic) ---
 
         # Check if we can resume
-        can_resume = (
-            self.session_exists(session_id, current_runtime) if session_id else False
-        )
+        # For Gemini, we always try to resume the latest session for context retention
+        if current_runtime == "gemini":
+            can_resume = True  # Always attempt to resume latest Gemini session
+        else:
+            can_resume = (
+                self.session_exists(session_id, current_runtime) if session_id else False
+            )
 
         output = self._dispatch_single_runtime(
             current_runtime, prompt, model, agent, session_id, can_resume,
