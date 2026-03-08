@@ -3369,11 +3369,10 @@ User Request:
                 pass
             return False
         elif runtime == "claude":
-            # For Claude, trust the session_id if we have one. Claude CLI's --resume flag
-            # will validate the session and create a new one if the old one is stale.
-            # Checking for a .txt file is unreliable as Claude may not create it every time.
-            # Return True to allow resuming; Claude will handle invalid sessions gracefully.
-            return True
+            # For Claude, only return True if we have a session_id to resume.
+            # If session_id is None/empty, return False (no session to resume).
+            # If session_id exists, return True and let Claude's --resume flag validate it.
+            return bool(session_id)
         elif runtime == "gemini":
             return (self.gemini_session_dir / f"{session_id}.json").exists()
         elif runtime == "codex":
