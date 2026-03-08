@@ -4003,9 +4003,14 @@ You can mention an agent in your prompt and it will auto-delegate:
             _notif_channel = session_data.get("channel", "webui")
 
             if argument == "current":
-                # Check per-identity store first, fall back to session
-                if _notif_identity and self._notification_mgr:
-                    pref = self._notification_mgr.get_user_pref(_notif_identity)
+                # Check global preference first, then per-identity, then session
+                if self._notification_mgr:
+                    if self._notification_mgr.is_muted("_global"):
+                        pref = "off"
+                    elif _notif_identity:
+                        pref = self._notification_mgr.get_user_pref(_notif_identity)
+                    else:
+                        pref = session_data.get("notification_preference", "all")
                 else:
                     pref = session_data.get("notification_preference", "all")
                 status = "ON (All updates)" if pref == "all" else "OFF (WebUI only)"
@@ -4013,14 +4018,21 @@ You can mention an agent in your prompt and it will auto-delegate:
 
             elif argument in ["on", "all"]:
                 self.update_session_field(n8n_session_id, "notification_preference", "all")
-                if _notif_identity and self._notification_mgr:
-                    self._notification_mgr.set_user_pref(_notif_identity, _notif_channel, "all")
+                if self._notification_mgr:
+                    # Store under specific identity if available
+                    if _notif_identity:
+                        self._notification_mgr.set_user_pref(_notif_identity, _notif_channel, "all")
+                    # Always store global preference so it applies across all channels
+                    self._notification_mgr.set_user_pref("_global", _notif_channel, "all")
                 return "✓ Background task notifications enabled for Telegram/WebEx."
 
             elif argument in ["off", "mute"]:
                 self.update_session_field(n8n_session_id, "notification_preference", "off")
-                if _notif_identity and self._notification_mgr:
-                    self._notification_mgr.set_user_pref(_notif_identity, _notif_channel, "off")
+                if self._notification_mgr:
+                    if _notif_identity:
+                        self._notification_mgr.set_user_pref(_notif_identity, _notif_channel, "off")
+                    # Always store global preference so it applies across all channels
+                    self._notification_mgr.set_user_pref("_global", _notif_channel, "off")
                 return "✓ Background task notifications muted for Telegram/WebEx (WebUI only)."
             else:
                 return "Usage: `/notifications [on|off]` to toggle background task notifications."
@@ -5508,6 +5520,14 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         if notification_mgr is None:
             return
         try:
+            # Re-check per-identity AND global mute preference at emit time
+            # (user may have muted after the task was created, or muted from
+            # a different channel whose identity doesn't match).
+            if notify:
+                if notification_mgr.is_muted(user_identity) or notification_mgr.is_muted("_global"):
+                    notify = False
+                    print(f"[API] _emit_bg_notification: muted at emit time for {user_identity}")
+
             print(f"[API] _emit_bg_notification: task_id={task_id}, channel={channel}, notify={notify}")
             user_key = bg_task_mgr._user_key(channel, user_identity)
             notification_mgr.create_notification(
@@ -5698,13 +5718,15 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         loop = asyncio.get_running_loop()
         
         # Determine notification preference:
-        #   body override > per-identity store > session default > True
+        #   body override > global mute > per-identity store > session default > True
         notify_pref = body.notify
         if notify_pref is None:
-            # Per-identity store is authoritative (works across channels)
             if notification_mgr:
-                id_pref = notification_mgr.get_user_pref(identity)
-                if id_pref == "off":
+                # Global mute takes priority (covers cross-channel identity mismatch)
+                if notification_mgr.is_muted("_global"):
+                    notify_pref = False
+                # Per-identity store is authoritative
+                elif notification_mgr.is_muted(identity):
                     notify_pref = False
             if notify_pref is None:
                 session_pref = defaults.get("notification_preference", "all")

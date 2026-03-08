@@ -146,6 +146,12 @@ class NotificationManager:
             self._save(notifications)
 
         # Route to external channels if the task was created from telegram/webex
+        # Defense-in-depth: also check the global mute preference even if
+        # skip_external was not set (covers identity mismatch edge cases).
+        if not skip_external and self.is_muted("_global"):
+            skip_external = True
+            print(f"[NotificationManager] Global mute active – suppressing external for {task_id}")
+
         if not skip_external:
             print(f"[NotificationManager] Routing to external channel: {channel} for user {user_key}")
             if channel and channel.lower() == "telegram":
