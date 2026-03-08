@@ -19,6 +19,7 @@ from uuid import uuid4
 from typing import Optional, Tuple, Dict, List
 import secrets as _secrets
 import threading
+from auto_runtime_config import AutoRuntimeConfig
 
 # Dynamically determine the repo base directory (works regardless of where repo is cloned)
 SCRIPT_BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -2380,24 +2381,18 @@ Example skill structure:
         agent = delegation_data.get("agent", "orchestrator")
         runtime = delegation_data.get("runtime", "copilot")
 
-        # Check if we can resume (for delegation, usually no)
-        can_resume = False
+        # Handle auto runtime in delegation context
+        if runtime == "auto":
+            ar = getattr(self, '_auto_runtime', None)
+            if ar:
+                effective_rt = ar.get_first_available_runtime()
+                model = ar.get_default_model(effective_rt)
+                runtime = effective_rt
 
-        output = ""
-        if runtime == "copilot":
-            output = self.run_copilot(prompt, model, agent, None, False, n8n_session_id)
-        elif runtime == "opencode":
-            output = self.run_opencode(
-                prompt, model, agent, None, False, n8n_session_id
-            )
-        elif runtime == "claude":
-            output = self.run_claude(
-                prompt, model, agent, session_id, False, n8n_session_id
-            )
-        elif runtime == "gemini":
-            output = self.run_gemini(prompt, model, agent, None, False, n8n_session_id)
-        elif runtime == "codex":
-            output = self.run_codex(prompt, model, agent, None, False, n8n_session_id)
+        output = self._dispatch_single_runtime(
+            runtime, prompt, model, agent, session_id if runtime == "claude" else None,
+            False, n8n_session_id, self.command_timeout, "text",
+        )
 
         return output
 
@@ -3432,6 +3427,58 @@ User Request:
             if self._bg_task_mgr:
                 self._bg_task_mgr.fail_task(task_id, str(exc))
 
+    def _dispatch_single_runtime(
+        self,
+        runtime: str,
+        prompt: str,
+        model: str,
+        agent: str,
+        session_id: Optional[str],
+        can_resume: bool,
+        n8n_session_id: str,
+        effective_timeout: int,
+        render_type: str,
+        mode: str = "restricted",
+    ) -> str:
+        """Dispatch prompt to a single runtime and return the output."""
+        if runtime == "copilot":
+            return self.run_copilot(
+                prompt, model, agent,
+                session_id if can_resume else None,
+                can_resume, n8n_session_id,
+                effective_timeout, render_type,
+            )
+        elif runtime == "opencode":
+            return self.run_opencode(
+                prompt, model, agent,
+                session_id if can_resume else None,
+                can_resume, n8n_session_id,
+                effective_timeout, render_type,
+            )
+        elif runtime == "claude":
+            return self.run_claude(
+                prompt, model, agent,
+                session_id if can_resume else session_id,
+                can_resume, n8n_session_id,
+                effective_timeout, render_type, mode,
+            )
+        elif runtime == "gemini":
+            return self.run_gemini(
+                prompt, model, agent,
+                session_id if can_resume else None,
+                can_resume, n8n_session_id,
+                effective_timeout, render_type,
+            )
+        elif runtime == "codex":
+            return self.run_codex(
+                prompt, model, agent,
+                session_id if can_resume else None,
+                can_resume, n8n_session_id,
+                effective_timeout, render_type,
+            )
+        else:
+            return f"Error: Unknown runtime '{runtime}'"
+
     def execute(self, prompt: str, n8n_session_id: str) -> str:
         """Main execution logic"""
         # Get session data first
@@ -3481,7 +3528,7 @@ User Request:
 
 **Runtime Management:**
    • /runtime list - Show available runtimes
-   • /runtime set (copilot|opencode|claude|gemini) - Switch runtime
+   • /runtime set (auto|copilot|opencode|claude|gemini|codex) - Switch runtime
    • /runtime current - Show current runtime
 
 **Model Management:**
@@ -3616,8 +3663,12 @@ You can mention an agent in your prompt and it will auto-delegate:
             if not argument:
                 return "Usage: /runtime [list|set|current]"
             if argument == "list":
-                return "🤖 **Available Runtimes**\n\n• `copilot` (GitHub Copilot)\n• `opencode` (OpenCode CLI)\n• `claude` (Claude Code CLI)\n• `gemini` (Google Gemini CLI)\n• `codex` (Codex CLI)"
+                return "🤖 **Available Runtimes**\n\n• `auto` 🔄 (Intelligent auto-fallback)\n• `copilot` (GitHub Copilot)\n• `opencode` (OpenCode CLI)\n• `claude` (Claude Code CLI)\n• `gemini` (Google Gemini CLI)\n• `codex` (Codex CLI)"
             elif argument == "current":
+                if current_runtime == "auto":
+                    effective = getattr(self, '_auto_runtime', None)
+                    eff_rt = effective.get_first_available_runtime() if effective else "unknown"
+                    return f"🤖 **Current Runtime:** `auto` 🔄 (effective: `{eff_rt}`)"
                 return f"🤖 **Current Runtime:** `{current_runtime}`"
             elif argument.startswith("set "):
                 new_runtime = argument[4:].strip().lower()
@@ -3627,7 +3678,22 @@ You can mention an agent in your prompt and it will auto-delegate:
                     "claude",
                     "gemini",
                     "codex",
+                    "auto",
                 ]:
+                    return f"Unknown runtime: '{new_runtime}'. Use 'copilot', 'opencode', 'claude', 'gemini', 'codex', or 'auto'."
+
+                if new_runtime == "auto":
+                    self.update_session_field(n8n_session_id, "runtime", "auto")
+                    ar = getattr(self, '_auto_runtime', None)
+                    eff_rt = ar.get_first_available_runtime() if ar else "claude"
+                    default_model = ar.get_default_model(eff_rt) if ar else "sonnet"
+                    self.update_session_field(n8n_session_id, "model", default_model)
+                    priority = ", ".join(ar.priority_list) if ar else "claude, gemini, codex, copilot"
+                    return (
+                        f"✓ Switched to **auto** runtime 🔄\n"
+                        f"Priority: `{priority}`\n"
+                        f"Starting with **{eff_rt}** (model: `{default_model}`)"
+                    )
                     return f"Unknown runtime: '{new_runtime}'. Use 'copilot', 'opencode', 'claude', 'gemini', or 'codex'."
 
                 # Capture previous session state before any updates
@@ -4151,166 +4217,93 @@ You can mention an agent in your prompt and it will auto-delegate:
         # Get mode for Claude runtime
         mode = "yolo" if session_data.get("yolo_mode") == "on" else "restricted"
 
-        # Check if we can resume
-        can_resume = (
-            self.session_exists(session_id, current_runtime) if session_id else False
-        )
+        # --- Auto-Runtime Dispatch ---
+        if current_runtime == "auto":
+            ar = getattr(self, '_auto_runtime', None)
+            if not ar:
+                return "Error: Auto-runtime not configured"
 
-        output = ""
-        if current_runtime == "copilot":
-            if can_resume:
-                output = self.run_copilot(
-                    prompt,
-                    model,
-                    agent,
-                    session_id,
-                    True,
-                    n8n_session_id,
-                    effective_timeout,
-                    render_type,
-                )
-            else:
-                output = self.run_copilot(
-                    prompt,
-                    model,
-                    agent,
-                    None,
-                    False,
-                    n8n_session_id,
-                    effective_timeout,
-                    render_type,
-                )
-                # Copilot auto-generates session ID, we need to find it and map it
-                # Logic: Copilot writes to session-state dir. We find newest file.
-                new_id = self.get_most_recent_session_id("copilot", agent)
-                if new_id:
-                    self.update_session_field(n8n_session_id, "session_id", new_id)
+            fallback_messages = []
+            tried_runtimes = set()
+            effective_rt = ar.get_first_available_runtime()
 
-        elif current_runtime == "opencode":
-            if can_resume:
-                output = self.run_opencode(
-                    prompt,
-                    model,
-                    agent,
-                    session_id,
-                    True,
-                    n8n_session_id,
-                    effective_timeout,
-                    render_type,
+            while effective_rt and effective_rt not in tried_runtimes:
+                tried_runtimes.add(effective_rt)
+                rt_model = ar.get_default_model(effective_rt)
+                print(
+                    f"[AutoRuntime] Trying runtime '{effective_rt}' with model '{rt_model}'",
+                    file=sys.stderr,
                 )
-                # Check for session loss / resource not found
-                if "Resource not found" in output or "NotFoundError" in output:
-                    print(
-                        f"[Session] Session {session_id} lost/corrupted. Starting new session.",
-                        file=sys.stderr,
-                    )
-                    output = self.run_opencode(
-                        prompt,
-                        model,
-                        agent,
-                        None,
-                        False,
-                        n8n_session_id,
-                        effective_timeout,
-                        render_type,
-                    )
-                    new_id = self.get_most_recent_session_id("opencode", agent)
+
+                # For auto mode, always start fresh (no resume across runtimes)
+                output = self._dispatch_single_runtime(
+                    effective_rt, prompt, rt_model, agent, None, False,
+                    n8n_session_id, effective_timeout, render_type, mode,
+                )
+
+                # Check if the output indicates a limit was hit
+                if ar.is_limit_error(output, effective_rt):
+                    ar.mark_runtime_limited(effective_rt)
+                    next_rt = ar.get_next_runtime(effective_rt)
+                    if next_rt:
+                        msg = ar.build_fallback_message(effective_rt, next_rt)
+                        if msg:
+                            fallback_messages.append(msg)
+                        ar.log_fallback(effective_rt, next_rt, output[:200])
+                        effective_rt = next_rt
+                        continue
+                    else:
+                        # All runtimes exhausted
+                        fallback_messages.append(
+                            "⚠️ All runtimes exhausted. Returning last result."
+                        )
+                        break
+                else:
+                    # Success — update session with the runtime that worked
+                    self.update_session_field(n8n_session_id, "model", rt_model)
+                    # Find and store new session ID for the effective runtime
+                    new_id = self.get_most_recent_session_id(effective_rt, agent)
                     if new_id:
                         self.update_session_field(n8n_session_id, "session_id", new_id)
-            else:
-                output = self.run_opencode(
-                    prompt,
-                    model,
-                    agent,
-                    None,
-                    False,
-                    n8n_session_id,
-                    effective_timeout,
-                    render_type,
+                    break
+
+            # Prepend fallback messages to output if any
+            if fallback_messages and ar.show_fallback:
+                prefix = "\n".join(fallback_messages) + f"\n🔄 **Used runtime: {effective_rt}**\n\n"
+                output = prefix + output
+
+        else:
+            # --- Standard Single-Runtime Dispatch ---
+
+            # Check if we can resume
+            can_resume = (
+                self.session_exists(session_id, current_runtime) if session_id else False
+            )
+
+            output = self._dispatch_single_runtime(
+                current_runtime, prompt, model, agent, session_id, can_resume,
+                n8n_session_id, effective_timeout, render_type, mode,
+            )
+
+            # Handle session ID mapping for runtimes that auto-generate IDs
+            if not can_resume and current_runtime in ("copilot", "opencode", "gemini", "codex"):
+                new_id = self.get_most_recent_session_id(current_runtime, agent)
+                if new_id:
+                    self.update_session_field(n8n_session_id, "session_id", new_id)
+
+            # Handle opencode session loss
+            if current_runtime == "opencode" and can_resume and (
+                "Resource not found" in output or "NotFoundError" in output
+            ):
+                print(
+                    f"[Session] Session {session_id} lost/corrupted. Starting new session.",
+                    file=sys.stderr,
+                )
+                output = self._dispatch_single_runtime(
+                    "opencode", prompt, model, agent, None, False,
+                    n8n_session_id, effective_timeout, render_type, mode,
                 )
                 new_id = self.get_most_recent_session_id("opencode", agent)
-                if new_id:
-                    self.update_session_field(n8n_session_id, "session_id", new_id)
-
-        elif current_runtime == "claude":
-            if can_resume:
-                output = self.run_claude(
-                    prompt,
-                    model,
-                    agent,
-                    session_id,
-                    True,
-                    n8n_session_id,
-                    effective_timeout,
-                    render_type,
-                    mode,
-                )
-            else:
-                output = self.run_claude(
-                    prompt,
-                    model,
-                    agent,
-                    session_id,
-                    False,
-                    n8n_session_id,
-                    effective_timeout,
-                    render_type,
-                    mode,
-                )
-
-        elif current_runtime == "gemini":
-            if can_resume:
-                output = self.run_gemini(
-                    prompt,
-                    model,
-                    agent,
-                    session_id,
-                    True,
-                    n8n_session_id,
-                    effective_timeout,
-                    render_type,
-                )
-            else:
-                output = self.run_gemini(
-                    prompt,
-                    model,
-                    agent,
-                    None,
-                    False,
-                    n8n_session_id,
-                    effective_timeout,
-                    render_type,
-                )
-                # Gemini auto-generates session IDs, we need to find and map it
-                new_id = self.get_most_recent_session_id("gemini", agent)
-                if new_id:
-                    self.update_session_field(n8n_session_id, "session_id", new_id)
-
-        elif current_runtime == "codex":
-            if can_resume:
-                output = self.run_codex(
-                    prompt,
-                    model,
-                    agent,
-                    session_id,
-                    True,
-                    n8n_session_id,
-                    effective_timeout,
-                    render_type,
-                )
-            else:
-                output = self.run_codex(
-                    prompt,
-                    model,
-                    agent,
-                    None,
-                    False,
-                    n8n_session_id,
-                    effective_timeout,
-                    render_type,
-                )
-                # CODEX auto-generates session IDs, we need to find and map it
-                new_id = self.get_most_recent_session_id("codex", agent)
                 if new_id:
                     self.update_session_field(n8n_session_id, "session_id", new_id)
 
@@ -4509,6 +4502,8 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
     history_mgr = HistoryManager()
     bg_task_mgr = BackgroundTaskManager()
     session_mgr._bg_task_mgr = bg_task_mgr
+    auto_runtime = AutoRuntimeConfig()
+    session_mgr._auto_runtime = auto_runtime
     usage_tracker = RuntimeUsageTracker()
 
     # Shared thread pool executor for background tasks
@@ -4695,6 +4690,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
     async def get_runtimes():
         """Return list of available runtimes."""
         runtimes = [
+            {"id": "auto", "label": "auto"},
             {"id": "copilot", "label": "copilot"},
             {"id": "opencode", "label": "opencode"},
             {"id": "claude", "label": "claude"},
@@ -4702,6 +4698,17 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             {"id": "codex", "label": "codex"},
         ]
         return {"runtimes": runtimes}
+
+    @app.get("/api/v1/auto-runtime/status")
+    async def get_auto_runtime_status(request: Request):
+        """Return auto-runtime configuration and current status."""
+        await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        return auto_runtime.get_status()
 
     @app.get("/api/v1/models")
     async def get_models(runtime: str = "copilot"):
@@ -4712,9 +4719,23 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         not expose a model-listing command.
         """
         runtime = runtime.lower().strip()
-        known_runtimes = {"copilot", "opencode", "claude", "gemini", "codex"}
+        known_runtimes = {"copilot", "opencode", "claude", "gemini", "codex", "auto"}
         if runtime not in known_runtimes:
             return {"runtime": runtime, "models": [], "error": f"Unknown runtime: {runtime}"}
+
+        # For "auto" runtime, show models for the first available runtime in priority list
+        if runtime == "auto":
+            effective_runtime = auto_runtime.get_first_available_runtime()
+            try:
+                raw = session_mgr.get_models_for_runtime(effective_runtime)
+                models = []
+                for _group, model_ids in raw.items():
+                    for model_id in model_ids:
+                        label = session_mgr._get_model_description(model_id, effective_runtime) or model_id
+                        models.append({"id": model_id, "label": label})
+                return {"runtime": "auto", "effective_runtime": effective_runtime, "models": models}
+            except Exception as e:
+                return {"runtime": "auto", "effective_runtime": effective_runtime, "models": [], "error": str(e)}
 
         try:
             raw = session_mgr.get_models_for_runtime(runtime)

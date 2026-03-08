@@ -156,6 +156,7 @@ function hideError(id) { hide($(id)); }
 
 // ─── Runtime Brand Icons ──────────────────────────────────────────────────────
 const RUNTIME_ICONS = {
+  auto:     '/ui/assets/runtime-icons/auto.svg',
   claude:   '/ui/assets/runtime-icons/claude.svg',
   copilot:  '/ui/assets/runtime-icons/copilot.svg',
   gemini:   '/ui/assets/runtime-icons/gemini.svg',
@@ -341,6 +342,7 @@ const PILL_OPTIONS = {
   'meta-runtime': {
     label: 'Switch Runtime',
     options: [
+      { label: `${runtimeIconHTML('auto')}auto`,             cmd: '/runtime set auto' },
       { label: `${runtimeIconHTML('claude')}claude`,         cmd: '/runtime set claude' },
       { label: `${runtimeIconHTML('copilot')}copilot`,       cmd: '/runtime set copilot' },
       { label: `${runtimeIconHTML('gemini')}gemini`,         cmd: '/runtime set gemini' },
