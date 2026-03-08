@@ -943,6 +943,11 @@ class SessionManager:
         # Populated by the /stream API endpoint; read by _execute_subprocess_with_tracking.
         self._stream_queues: Dict[str, tuple] = {}
 
+        # Last subprocess exit code per n8n_session_id; used by auto-runtime to distinguish
+        # genuine runtime errors (non-zero) from successful responses that happen to mention
+        # rate-limit terms in their content (exit code 0 = success, do not fall back).
+        self._last_exit_codes: Dict[str, int] = {}
+
     def _load_agents_config(self, config_file: Optional[str] = None) -> Dict:
         """Load agents configuration from JSON file
 
@@ -2858,6 +2863,9 @@ User Request:
 
                 output = "".join(stdout_chunks) + ("".join(stderr_buf) if stderr_buf else "")
                 self.update_query_output(n8n_session_id, output)
+                # Record exit code so auto-runtime can distinguish real errors from
+                # successful responses that discuss rate-limit topics (false positives).
+                self._last_exit_codes[n8n_session_id] = process.returncode if process.returncode is not None else 0
                 # Signal the SSE generator that the subprocess is finished
                 loop.call_soon_threadsafe(queue.put_nowait, ("done", ""))
                 return output
@@ -2868,10 +2876,14 @@ User Request:
                     stdout, stderr = process.communicate(timeout=timeout)
                     output = stdout + (stderr if stderr else "")
                     self.update_query_output(n8n_session_id, output)
+                    # Record exit code so auto-runtime can avoid false-positive
+                    # rate-limit detection on successful AI responses.
+                    self._last_exit_codes[n8n_session_id] = process.returncode if process.returncode is not None else 0
                     return output
                 except subprocess.TimeoutExpired:
                     process.kill()
                     process.wait()
+                    self._last_exit_codes[n8n_session_id] = -1  # timeout = error
                     timeout_min = timeout / 60
                     return f"Error: Command timed out (exceeded {timeout}s / {timeout_min:.1f}min)"
                 finally:
@@ -2879,6 +2891,7 @@ User Request:
 
         except Exception as e:
             self.clear_running_query(n8n_session_id)
+            self._last_exit_codes[n8n_session_id] = 1  # treat as error
             return f"Error: Failed to execute command: {e}"
         finally:
             # clear_running_query is idempotent; ensure it runs for streaming path too
@@ -4330,8 +4343,20 @@ You can mention an agent in your prompt and it will auto-delegate:
                     n8n_session_id, effective_timeout, render_type, mode,
                 )
 
-                # Check if the output indicates a limit was hit
-                if ar.is_limit_error(output, effective_rt):
+                # Check if the output indicates a limit was hit.
+                # IMPORTANT: only check when the subprocess exited with a non-zero code
+                # (genuine runtime error). If exit code is 0 the runtime succeeded; we
+                # must NOT scan the AI response text for limit patterns because legitimate
+                # responses often discuss rate limiting topics ("Telegram has rate limits",
+                # "the quota was exceeded", etc.) and cause false-positive fallbacks.
+                last_exit_code = self._last_exit_codes.get(n8n_session_id, 0)
+                runtime_errored = (last_exit_code != 0)
+                print(
+                    f"[AutoRuntime] Runtime '{effective_rt}' exited with code {last_exit_code} "
+                    f"(errored={runtime_errored}), output length={len(output)} chars",
+                    file=sys.stderr,
+                )
+                if runtime_errored and ar.is_limit_error(output, effective_rt):
                     ar.mark_runtime_limited(effective_rt)
                     next_rt = ar.get_next_runtime(effective_rt)
                     if next_rt:
