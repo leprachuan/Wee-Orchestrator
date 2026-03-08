@@ -34,6 +34,29 @@ class NotificationManager:
 
     # ---- Per-identity notification preferences ----
 
+    @staticmethod
+    def _normalize_identity(identity: str) -> str:
+        """Return a canonical identity key by stripping channel prefixes.
+
+        Handles compound Telegram identities (``telegram_botid_userid``)
+        by extracting the bare numeric user-id so it matches the value
+        sent in ``X-User-Identity`` headers by background task creators.
+        """
+        if not identity:
+            return identity
+        # Special keys like "_global" pass through unchanged
+        if identity.startswith("_"):
+            return identity
+        # Handle compound Telegram identity: telegram_<botid>_<userid>
+        if identity.startswith("telegram_"):
+            parts = identity.split("_")
+            # telegram_<userid> → userid, telegram_<botid>_<userid> → userid
+            return parts[-1]
+        for prefix in ("webex_", "webui_", "api_"):
+            if identity.startswith(prefix):
+                return identity[len(prefix):]
+        return identity
+
     def _load_prefs(self) -> dict:
         try:
             with open(self._prefs_path) as f:
@@ -43,6 +66,7 @@ class NotificationManager:
 
     def _save_prefs(self, prefs: dict):
         import tempfile
+        print(f"[NotificationManager] Saving {len(prefs)} prefs to {self._prefs_path}")
         tmp_fd, tmp_path = tempfile.mkstemp(
             dir=os.path.dirname(self._prefs_path), suffix=".tmp"
         )
@@ -50,12 +74,9 @@ class NotificationManager:
             with os.fdopen(tmp_fd, "w") as f:
                 json.dump(prefs, f, indent=2)
             os.replace(tmp_path, self._prefs_path)
-        except Exception:
-            try:
-                os.unlink(tmp_path)
-            except OSError:
-                pass
-            raise
+            print(f"[NotificationManager] Successfully saved prefs to {self._prefs_path}")
+        except Exception as e:
+            print(f"[NotificationManager] FAILED to save prefs: {e}")
 
     def set_user_pref(self, identity: str, channel: str, preference: str):
         """Store notification preference for a user identity.
@@ -64,12 +85,13 @@ class NotificationManager:
         ``channel`` is the originating channel (telegram, webex, webui, etc.).
         ``preference`` is "all" or "off".
 
-        The preference is stored under the bare identity so it applies
-        regardless of which channel created the background task.
+        The preference is stored under the normalized bare identity so it
+        applies regardless of which channel created the background task.
         """
+        bare = self._normalize_identity(identity)
         with self._prefs_lock:
             prefs = self._load_prefs()
-            prefs[identity] = {
+            prefs[bare] = {
                 "preference": preference,
                 "channel": channel,
                 "updated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
@@ -78,9 +100,10 @@ class NotificationManager:
 
     def get_user_pref(self, identity: str) -> str:
         """Return notification preference for an identity ("all" or "off")."""
+        bare = self._normalize_identity(identity)
         with self._prefs_lock:
             prefs = self._load_prefs()
-        entry = prefs.get(identity)
+        entry = prefs.get(bare)
         if isinstance(entry, dict):
             return entry.get("preference", "all")
         return "all"
@@ -146,11 +169,16 @@ class NotificationManager:
             self._save(notifications)
 
         # Route to external channels if the task was created from telegram/webex
-        # Defense-in-depth: also check the global mute preference even if
-        # skip_external was not set (covers identity mismatch edge cases).
-        if not skip_external and self.is_muted("_global"):
-            skip_external = True
-            print(f"[NotificationManager] Global mute active – suppressing external for {task_id}")
+        # Defense-in-depth: check global mute AND per-identity mute even if
+        # skip_external was not explicitly set (covers identity mismatch and
+        # late-mute edge cases).
+        if not skip_external:
+            if self.is_muted("_global"):
+                skip_external = True
+                print(f"[NotificationManager] Global mute active – suppressing external for {task_id}")
+            elif self.is_muted(user_key):
+                skip_external = True
+                print(f"[NotificationManager] Per-identity mute active for {user_key} – suppressing external for {task_id}")
 
         if not skip_external:
             print(f"[NotificationManager] Routing to external channel: {channel} for user {user_key}")
