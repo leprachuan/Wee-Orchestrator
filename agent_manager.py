@@ -1364,9 +1364,11 @@ class SessionManager:
         """
         Load existing session data without creating new ones.
         Returns session data dict or None if not found.
+        Thread-safe: acquires lock to prevent race conditions.
         """
-        session_map = self.load_session_map()
-        return session_map.get(n8n_session_id)
+        with self._session_map_lock:
+            session_map = self.load_session_map()
+            return session_map.get(n8n_session_id)
 
     def _extract_bot_identifier(self, session_id: str) -> str:
         """Extract bot identifier (last 4 chars of numeric part) from session ID"""
