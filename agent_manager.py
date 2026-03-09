@@ -14,6 +14,7 @@ import signal
 import time
 import argparse
 import shutil
+import logging
 from pathlib import Path
 from uuid import uuid4
 from typing import Optional, Tuple, Dict, List
@@ -3816,8 +3817,16 @@ You can mention an agent in your prompt and it will auto-delegate:
                 # there is prior history to hand off
                 if prev_runtime != new_runtime and prev_session_id:
                     try:
-                        from session_handoff import SessionHandoff
+                        from session_handoff import SessionHandoff, _handoff_logger
                         handoff = SessionHandoff()
+
+                        # Log the reason for handoff (user command: /runtime set)
+                        _handoff_logger.info(
+                            f"HANDOFF REASON: User executed '/runtime set {new_runtime}' command | "
+                            f"n8n_session={n8n_session_id} | "
+                            f"current_agent={session_data.get('agent', 'unknown')}"
+                        )
+
                         handoff.export_transcript(n8n_session_id, prev_session_id)
                         handoff.write_handoff_summary(
                             n8n_session_id,
@@ -3836,6 +3845,14 @@ You can mention an agent in your prompt and it will auto-delegate:
                             f"[Handoff] Warning: handoff preparation failed: {_handoff_err}",
                             file=sys.stderr,
                         )
+                        try:
+                            from session_handoff import _handoff_logger
+                            _handoff_logger.error(
+                                f"HANDOFF FAILED: {_handoff_err} | "
+                                f"prev_runtime={prev_runtime} new_runtime={new_runtime}"
+                            )
+                        except Exception:
+                            pass
 
                 self.update_session_field(n8n_session_id, "runtime", new_runtime)
 
