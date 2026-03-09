@@ -872,13 +872,17 @@ class SessionManager:
         ]
     }
 
-    def __init__(self, config_file: Optional[str] = None):
+    def __init__(self, config_file: Optional[str] = None, app_env: str = "PROD"):
         # Copilot Paths
         self.copilot_home = Path.home() / ".copilot"
-        self.session_map_file = self.copilot_home / "n8n-session-map.json"
+        # Dev and prod instances MUST use separate session map files to
+        # prevent save_session_map() in one instance from overwriting the
+        # other's sessions (root cause of "Stream request failed: HTTP 404").
+        _env_suffix = "-dev" if app_env == "DEV" else ""
+        self.session_map_file = self.copilot_home / f"n8n-session-map{_env_suffix}.json"
         self.session_state_dir = self.copilot_home / "session-state"
         self.logs_dir = self.copilot_home / "logs"
-        self.running_queries_file = self.copilot_home / "running-queries.json"
+        self.running_queries_file = self.copilot_home / f"running-queries{_env_suffix}.json"
 
         # OpenCode Paths
         self.opencode_home = Path.home() / ".opencode"
@@ -3371,10 +3375,22 @@ User Request:
                 pass
             return False
         elif runtime == "claude":
-            # For Claude, only return True if we have a session_id to resume.
-            # If session_id is None/empty, return False (no session to resume).
-            # If session_id exists, return True and let Claude's --resume flag validate it.
-            return bool(session_id)
+            if not session_id:
+                return False
+            # Verify session actually exists in Claude's project storage.
+            # Claude stores sessions as {session_id}.jsonl under ~/.claude/projects/*/
+            # A pre-generated UUID from session map creation won't have a file yet,
+            # so this correctly returns False on first message and True after Claude
+            # has created the session and we've captured its ID.
+            claude_projects_dir = Path.home() / ".claude" / "projects"
+            try:
+                return any(
+                    (p / f"{session_id}.jsonl").exists()
+                    for p in claude_projects_dir.iterdir()
+                    if p.is_dir()
+                )
+            except (OSError, FileNotFoundError):
+                return False
         elif runtime == "gemini":
             return (self.gemini_session_dir / f"{session_id}.json").exists()
         elif runtime == "codex":
@@ -3565,12 +3581,9 @@ User Request:
                 effective_timeout, render_type,
             )
         elif runtime == "claude":
-            # Always pass session_id to Claude: when can_resume=True it uses --resume,
-            # when can_resume=False it uses --session-id to create with a specific ID.
-            # Session ID is initialized even when can_resume=False (new session).
             return self.run_claude(
                 prompt, model, agent,
-                session_id,
+                session_id if can_resume else None,
                 can_resume, n8n_session_id,
                 effective_timeout, render_type, mode,
             )
@@ -4588,7 +4601,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
     )
     _api_auth_manager = auth_mgr
     rate_limiter = RateLimiter()
-    session_mgr = SessionManager(config_file=CONFIG_FILE)
+    session_mgr = SessionManager(config_file=CONFIG_FILE, app_env=APP_ENV)
     history_mgr = HistoryManager()
     bg_task_mgr = BackgroundTaskManager()
     session_mgr._bg_task_mgr = bg_task_mgr
@@ -6652,7 +6665,7 @@ Examples:
         args.config_file = args.config_file_positional
 
     # Initialize manager
-    manager = SessionManager(args.config_file)
+    manager = SessionManager(args.config_file, app_env=os.environ.get("APP_ENV", "PROD").upper())
 
     # Apply runtime setting first if provided (so list commands use the correct runtime)
     if args.runtime:
