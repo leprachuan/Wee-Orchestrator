@@ -4926,7 +4926,16 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
 
         existing = session_mgr.load_session_data(session_id)
         if not existing:
-            raise HTTPException(status_code=404, detail="Session not found")
+            # Session may be in history but session_map entry was lost (service restart,
+            # dev/prod map mismatch, etc).  Auto-recreate with defaults so the user's
+            # conversation history remains accessible rather than returning a hard 404.
+            history_sessions = history_mgr.get_sessions(user["channel"], user["identity"])
+            session_ids_in_history = {s["session_id"] for s in history_sessions}
+            if session_id not in session_ids_in_history:
+                raise HTTPException(status_code=404, detail="Session not found")
+            existing = session_mgr.get_or_create_session_data(session_id, identity=user["identity"])
+            session_mgr.update_session_field(session_id, "channel", user["channel"])
+            session_mgr.update_session_field(session_id, "render_type", "markdown")
 
         # Persist identity so mute preferences can be discovered later
         session_mgr.update_session_field(session_id, "identity", user["identity"])
@@ -4992,7 +5001,16 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
 
         existing = session_mgr.load_session_data(session_id)
         if not existing:
-            raise HTTPException(status_code=404, detail="Session not found")
+            # Session may be in history but session_map entry was lost (service restart,
+            # dev/prod map mismatch, etc).  Auto-recreate with defaults so the user's
+            # conversation history remains accessible rather than returning a hard 404.
+            history_sessions = history_mgr.get_sessions(user["channel"], user["identity"])
+            session_ids_in_history = {s["session_id"] for s in history_sessions}
+            if session_id not in session_ids_in_history:
+                raise HTTPException(status_code=404, detail="Session not found")
+            existing = session_mgr.get_or_create_session_data(session_id, identity=user["identity"])
+            session_mgr.update_session_field(session_id, "channel", user["channel"])
+            session_mgr.update_session_field(session_id, "render_type", "markdown")
 
         # Persist identity so mute preferences can be discovered later
         session_mgr.update_session_field(session_id, "identity", user["identity"])
@@ -5115,7 +5133,15 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
 
         data = session_mgr.load_session_data(session_id)
         if not data:
-            raise HTTPException(status_code=404, detail="Session not found")
+            # Auto-recreate session_map entry for sessions that exist in history
+            # but whose session_map entry was lost (restart, map mismatch, etc.)
+            history_sessions = history_mgr.get_sessions(user["channel"], user["identity"])
+            session_ids_in_history = {s["session_id"] for s in history_sessions}
+            if session_id not in session_ids_in_history:
+                raise HTTPException(status_code=404, detail="Session not found")
+            data = session_mgr.get_or_create_session_data(session_id, identity=user["identity"])
+            session_mgr.update_session_field(session_id, "channel", user["channel"])
+            session_mgr.update_session_field(session_id, "render_type", "markdown")
 
         result = {
             "session_id": session_id,
