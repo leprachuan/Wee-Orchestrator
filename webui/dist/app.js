@@ -1906,6 +1906,9 @@ document.addEventListener('DOMContentLoaded', () => {
     if (isMobileViewport()) setTimeout(scrollToBottom, 50);
   });
 
+  // --- Send button ---
+  $('btn-send').addEventListener('click', sendMessage);
+
   // --- File input ---
   $('file-input').addEventListener('change', e => {
     const file = e.target.files[0];
