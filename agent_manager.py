@@ -941,6 +941,12 @@ class SessionManager:
         # Load command timeout from environment
         self.command_timeout = get_command_timeout()
 
+        # Session idle timeout — sessions inactive longer than this are
+        # candidates for cleanup.  Defaults to 30 min; override via env var.
+        self.session_idle_timeout = int(
+            os.environ.get("SESSION_IDLE_TIMEOUT", "1800")
+        )
+
         # Lock for session map file read-modify-write to prevent TOCTOU races
         self._session_map_lock = threading.Lock()
 
@@ -1429,6 +1435,7 @@ class SessionManager:
             "bot_id": bot_id,
             "render_type": "markdown",
             "channel": channel,
+            "last_activity": time.time(),
         }
         
         # Store identity if provided, so we can find sessions by user later
@@ -1537,6 +1544,34 @@ class SessionManager:
 
             session_map[n8n_session_id][field] = value
             self.save_session_map(session_map)
+
+    def touch_session(self, n8n_session_id: str) -> None:
+        """Update the last_activity timestamp for a session.
+
+        Called before and after each operation so that the cleanup daemon
+        and any future idle-timeout logic can distinguish live sessions
+        from abandoned ones.  Also touches the backend session-state
+        directory (if it exists) to reset its mtime, preventing the
+        cleanup daemon from treating it as stale.
+        """
+        now = time.time()
+        with self._session_map_lock:
+            session_map = self.load_session_map()
+            entry = session_map.get(n8n_session_id)
+            if entry and isinstance(entry, dict):
+                entry["last_activity"] = now
+                self.save_session_map(session_map)
+
+                # Touch the backend session-state directory to reset mtime
+                backend_sid = entry.get("session_id")
+                if backend_sid:
+                    backend_dir = self.session_state_dir / backend_sid
+                    if backend_dir.exists():
+                        try:
+                            backend_dir.stat()  # read
+                            os.utime(backend_dir, (now, now))
+                        except OSError:
+                            pass
 
     def get_effective_timeout(self, session_data: dict) -> int:
         """Get the effective timeout for a session (session-specific or default)"""
@@ -3567,36 +3602,39 @@ User Request:
         mode: str = "restricted",
     ) -> str:
         """Dispatch prompt to a single runtime and return the output."""
+        # Touch before dispatch to keep session alive during long operations
+        self.touch_session(n8n_session_id)
+
         if runtime == "copilot":
-            return self.run_copilot(
+            result = self.run_copilot(
                 prompt, model, agent,
                 session_id if can_resume else None,
                 can_resume, n8n_session_id,
                 effective_timeout, render_type,
             )
         elif runtime == "opencode":
-            return self.run_opencode(
+            result = self.run_opencode(
                 prompt, model, agent,
                 session_id if can_resume else None,
                 can_resume, n8n_session_id,
                 effective_timeout, render_type,
             )
         elif runtime == "claude":
-            return self.run_claude(
+            result = self.run_claude(
                 prompt, model, agent,
                 session_id if can_resume else None,
                 can_resume, n8n_session_id,
                 effective_timeout, render_type, mode,
             )
         elif runtime == "gemini":
-            return self.run_gemini(
+            result = self.run_gemini(
                 prompt, model, agent,
                 session_id if can_resume else None,
                 can_resume, n8n_session_id,
                 effective_timeout, render_type,
             )
         elif runtime == "codex":
-            return self.run_codex(
+            result = self.run_codex(
                 prompt, model, agent,
                 session_id if can_resume else None,
                 can_resume, n8n_session_id,
@@ -3605,8 +3643,15 @@ User Request:
         else:
             return f"Error: Unknown runtime '{runtime}'"
 
+        # Touch after dispatch to record completion activity
+        self.touch_session(n8n_session_id)
+        return result
+
     def execute(self, prompt: str, n8n_session_id: str) -> str:
         """Main execution logic"""
+        # Touch session to mark activity and prevent cleanup
+        self.touch_session(n8n_session_id)
+
         # Get session data first — pass identity so it's persisted in the
         # session map, enabling preference lookups by identity later.
         session_data = self.get_or_create_session_data(
@@ -4943,16 +4988,29 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
 
         existing = session_mgr.load_session_data(session_id)
         if not existing:
-            # Session may be in history but session_map entry was lost (service restart,
-            # dev/prod map mismatch, etc).  Auto-recreate with defaults so the user's
-            # conversation history remains accessible rather than returning a hard 404.
+            print(
+                f"[Session Recovery] Session {session_id} not in session map, "
+                f"attempting recovery (user={user['identity']}, channel={user['channel']})",
+                file=sys.stderr,
+            )
             history_sessions = history_mgr.get_sessions(user["channel"], user["identity"])
             session_ids_in_history = {s["session_id"] for s in history_sessions}
             if session_id not in session_ids_in_history:
+                print(
+                    f"[Session Recovery] Session {session_id} not in history — 404",
+                    file=sys.stderr,
+                )
                 raise HTTPException(status_code=404, detail="Session not found")
+            print(
+                f"[Session Recovery] Restored session {session_id} from history",
+                file=sys.stderr,
+            )
             existing = session_mgr.get_or_create_session_data(session_id, identity=user["identity"])
             session_mgr.update_session_field(session_id, "channel", user["channel"])
             session_mgr.update_session_field(session_id, "render_type", "markdown")
+
+        # Touch session to mark activity
+        session_mgr.touch_session(session_id)
 
         # Persist identity so mute preferences can be discovered later
         session_mgr.update_session_field(session_id, "identity", user["identity"])
@@ -5018,16 +5076,34 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
 
         existing = session_mgr.load_session_data(session_id)
         if not existing:
-            # Session may be in history but session_map entry was lost (service restart,
-            # dev/prod map mismatch, etc).  Auto-recreate with defaults so the user's
-            # conversation history remains accessible rather than returning a hard 404.
+            # Session map entry was lost — likely due to cleanup daemon
+            # removing the backend session while the UI was idle.
+            print(
+                f"[Session Recovery] Stream: session {session_id} not in map, "
+                f"attempting recovery (user={user['identity']}, "
+                f"channel={user['channel']})",
+                file=sys.stderr,
+            )
             history_sessions = history_mgr.get_sessions(user["channel"], user["identity"])
             session_ids_in_history = {s["session_id"] for s in history_sessions}
             if session_id not in session_ids_in_history:
+                print(
+                    f"[Session Recovery] Stream: session {session_id} not in "
+                    f"history — returning 404",
+                    file=sys.stderr,
+                )
                 raise HTTPException(status_code=404, detail="Session not found")
+            print(
+                f"[Session Recovery] Stream: restored session {session_id} "
+                f"from chat history — backend will be recreated",
+                file=sys.stderr,
+            )
             existing = session_mgr.get_or_create_session_data(session_id, identity=user["identity"])
             session_mgr.update_session_field(session_id, "channel", user["channel"])
             session_mgr.update_session_field(session_id, "render_type", "markdown")
+
+        # Touch session to mark activity and prevent cleanup
+        session_mgr.touch_session(session_id)
 
         # Persist identity so mute preferences can be discovered later
         session_mgr.update_session_field(session_id, "identity", user["identity"])
