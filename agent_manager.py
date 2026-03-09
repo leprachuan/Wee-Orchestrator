@@ -872,13 +872,17 @@ class SessionManager:
         ]
     }
 
-    def __init__(self, config_file: Optional[str] = None):
+    def __init__(self, config_file: Optional[str] = None, app_env: str = "PROD"):
         # Copilot Paths
         self.copilot_home = Path.home() / ".copilot"
-        self.session_map_file = self.copilot_home / "n8n-session-map.json"
+        # Dev and prod instances MUST use separate session map files to
+        # prevent save_session_map() in one instance from overwriting the
+        # other's sessions (root cause of "Stream request failed: HTTP 404").
+        _env_suffix = "-dev" if app_env == "DEV" else ""
+        self.session_map_file = self.copilot_home / f"n8n-session-map{_env_suffix}.json"
         self.session_state_dir = self.copilot_home / "session-state"
         self.logs_dir = self.copilot_home / "logs"
-        self.running_queries_file = self.copilot_home / "running-queries.json"
+        self.running_queries_file = self.copilot_home / f"running-queries{_env_suffix}.json"
 
         # OpenCode Paths
         self.opencode_home = Path.home() / ".opencode"
@@ -4597,7 +4601,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
     )
     _api_auth_manager = auth_mgr
     rate_limiter = RateLimiter()
-    session_mgr = SessionManager(config_file=CONFIG_FILE)
+    session_mgr = SessionManager(config_file=CONFIG_FILE, app_env=APP_ENV)
     history_mgr = HistoryManager()
     bg_task_mgr = BackgroundTaskManager()
     session_mgr._bg_task_mgr = bg_task_mgr
@@ -6661,7 +6665,7 @@ Examples:
         args.config_file = args.config_file_positional
 
     # Initialize manager
-    manager = SessionManager(args.config_file)
+    manager = SessionManager(args.config_file, app_env=os.environ.get("APP_ENV", "PROD").upper())
 
     # Apply runtime setting first if provided (so list commands use the correct runtime)
     if args.runtime:
