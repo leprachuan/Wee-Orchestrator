@@ -1722,7 +1722,9 @@ async function initApp() {
   if (STATE.sessions.length === 0) {
     await startNewSession();
   } else {
-    show($('empty-state'));
+    // Auto-select the most recent session so agent/runtime meta is immediately visible
+    // instead of showing a blank empty-state that requires a manual click to restore.
+    await selectSession(STATE.sessions[0].session_id);
   }
   startTodoRefresh();
 }
