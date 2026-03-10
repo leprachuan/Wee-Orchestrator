@@ -262,10 +262,22 @@ class BackgroundTaskManager:
                     return t
         return None
 
+    def _identity_matches(self, task: dict, channel: str, identity: str) -> bool:
+        """Check if a task belongs to this user, matching across channels.
+        Uses user_identity (raw identity without channel prefix) for cross-channel
+        visibility so tasks created from the webui channel are visible to users
+        authenticated via webex/telegram and vice versa.
+        Falls back to user_key comparison for backward compatibility.
+        """
+        stored_identity = task.get("user_identity")
+        if stored_identity is not None:
+            return stored_identity == identity
+        # Fallback: check user_key with any channel prefix
+        return task.get("user_key") == self._user_key(channel, identity)
+
     def list_tasks(self, channel: str, identity: str) -> list:
-        key = self._user_key(channel, identity)
         with self._lock:
-            return [t for t in self._load() if t["user_key"] == key]
+            return [t for t in self._load() if self._identity_matches(t, channel, identity)]
 
     def count_running(self, channel: str, identity: str) -> int:
         return sum(1 for t in self.list_tasks(channel, identity) if t["status"] == "running")
@@ -5926,7 +5938,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         task = bg_task_mgr.get_task(task_id)
         if not task:
             raise HTTPException(status_code=404, detail="Task not found")
-        if task["user_key"] != bg_task_mgr._user_key(user["channel"], user["identity"]):
+        if not bg_task_mgr._identity_matches(task, user["channel"], user["identity"]):
             raise HTTPException(status_code=403, detail="Not your task")
         # Return detail with last 50 output lines
         return {
@@ -5955,7 +5967,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         task = bg_task_mgr.get_task(task_id)
         if not task:
             raise HTTPException(status_code=404, detail="Task not found")
-        if task["user_key"] != bg_task_mgr._user_key(user["channel"], user["identity"]):
+        if not bg_task_mgr._identity_matches(task, user["channel"], user["identity"]):
             raise HTTPException(status_code=403, detail="Not your task")
         return {
             "task_id": task["task_id"],
@@ -5976,7 +5988,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         task = bg_task_mgr.get_task(task_id)
         if not task:
             raise HTTPException(status_code=404, detail="Task not found")
-        if task["user_key"] != bg_task_mgr._user_key(user["channel"], user["identity"]):
+        if not bg_task_mgr._identity_matches(task, user["channel"], user["identity"]):
             raise HTTPException(status_code=403, detail="Not your task")
 
         if task["status"] == "running":
