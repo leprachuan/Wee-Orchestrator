@@ -206,7 +206,10 @@ class BackgroundTaskManager:
         home = os.path.expanduser("~")
         copilot_dir = os.path.join(home, ".copilot")
         os.makedirs(copilot_dir, exist_ok=True)
-        self._path = os.path.join(copilot_dir, "background-tasks.json")
+        # Use environment-specific file path to avoid prod/dev contamination
+        api_port = os.environ.get("API_PORT", "8001")
+        env_suffix = "-dev" if api_port == "8001" else ""
+        self._path = os.path.join(copilot_dir, f"background-tasks{env_suffix}.json")
         self._lock = threading.Lock()
 
     def _load(self) -> list:
