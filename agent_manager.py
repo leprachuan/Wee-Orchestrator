@@ -856,6 +856,7 @@ class SessionManager:
     # CODEX models configuration (from copilot CLI --model choices)
     CODEX_MODELS = {
         "OpenAI Models": [
+            ("gpt-5.4", "GPT-5.4", ["gpt-5.4", "gpt-5.4-pro"]),
             ("gpt-5.3-codex", "GPT-5.3 Codex", ["gpt-5.3", "codex-latest"]),
             ("gpt-5.2-codex", "GPT-5.2 Codex", ["gpt-5.2-codex"]),
             ("gpt-5.2", "GPT-5.2", ["gpt-5.2"]),
@@ -939,6 +940,11 @@ class SessionManager:
 
         # Load skill repositories from configuration
         self.skill_repositories = self._load_skill_repositories()
+
+        # Cache env-loaded model configurations for runtime description lookup
+        self._env_claude_models = None
+        self._env_gemini_models = None
+        self._env_codex_models = None
 
         # Load command timeout from environment
         self.command_timeout = get_command_timeout()
@@ -1184,17 +1190,24 @@ class SessionManager:
             if not models:
                 # Look for known models as a sanity check/fallback
                 fallback_models = [
-                    "gpt-4o",
-                    "gpt-4o-mini",
-                    "gpt-4-turbo",
-                    "claude-3.5-sonnet",
-                    "claude-3-5-sonnet",
-                    "claude-3.5-haiku",
-                    "gemini-1.5-pro",
-                    "gemini-1.5-flash",
-                    "gpt-5",
+                    "claude-sonnet-4.6",
+                    "claude-sonnet-4.5",
+                    "claude-haiku-4.5",
+                    "claude-opus-4.6",
+                    "claude-opus-4.6-fast",
+                    "claude-opus-4.5",
+                    "claude-sonnet-4",
+                    "gemini-3-pro-preview",
+                    "gpt-5.4",
+                    "gpt-5.3-codex",
+                    "gpt-5.2-codex",
                     "gpt-5.2",
-                    "claude-sonnet-4.5"
+                    "gpt-5.1-codex-max",
+                    "gpt-5.1-codex",
+                    "gpt-5.1",
+                    "gpt-5.1-codex-mini",
+                    "gpt-5-mini",
+                    "gpt-4.1"
                 ]
                 found_fallbacks = [m for m in fallback_models if m in result.stdout]
                 if found_fallbacks:
@@ -1286,6 +1299,20 @@ class SessionManager:
 
     def _get_model_description(self, model_id: str, runtime: str) -> Optional[str]:
         """Look up a human-readable description for a model from static metadata."""
+        # First check env-loaded models (if cached)
+        env_models_map = {
+            "claude": self._env_claude_models,
+            "gemini": self._env_gemini_models,
+            "codex": self._env_codex_models,
+        }
+        env_models = env_models_map.get(runtime)
+        if env_models:
+            for _cat, entries in env_models.items():
+                for mid, desc, _aliases in entries:
+                    if mid == model_id:
+                        return desc
+        
+        # Fall back to static models
         static_map = {
             "claude": self.CLAUDE_MODELS,
             "gemini": self.GEMINI_MODELS,
@@ -1314,6 +1341,8 @@ class SessionManager:
             try:
                 import json
                 models_dict = json.loads(env_models)
+                # Cache the full model dict with descriptions for lookup later
+                self._env_claude_models = models_dict
                 # Convert to the expected format {category: [model_ids]}
                 return self._static_models_to_dict(models_dict)
             except (json.JSONDecodeError, ValueError) as e:
@@ -1335,6 +1364,8 @@ class SessionManager:
             try:
                 import json
                 models_dict = json.loads(env_models)
+                # Cache the full model dict with descriptions for lookup later
+                self._env_gemini_models = models_dict
                 # Convert to the expected format {category: [model_ids]}
                 return self._static_models_to_dict(models_dict)
             except (json.JSONDecodeError, ValueError) as e:
@@ -1356,6 +1387,8 @@ class SessionManager:
             try:
                 import json
                 models_dict = json.loads(env_models)
+                # Cache the full model dict with descriptions for lookup later
+                self._env_codex_models = models_dict
                 # Convert to the expected format {category: [model_ids]}
                 return self._static_models_to_dict(models_dict)
             except (json.JSONDecodeError, ValueError) as e:
@@ -1444,7 +1477,7 @@ class SessionManager:
         elif default_runtime == "gemini":
             default_model = "gemini-1.5-flash"
         elif default_runtime == "codex":
-            default_model = "gpt-5.1-codex-max"
+            default_model = "gpt-5.4"
 
         # Extract bot identifier from session ID (last 4 chars of numeric part)
         bot_id = self._extract_bot_identifier(n8n_session_id)
@@ -1513,11 +1546,15 @@ class SessionManager:
                 ):
                     merged["model"] = "gemini-1.5-flash"
             elif runtime == "codex":
+                current_model = merged.get("model", "")
+                # Accept any model that resolves via codex model metadata/aliases.
+                # This avoids clobbering valid models like "gpt-5.4" that do not
+                # include the "codex" substring.
                 if (
-                    not merged.get("model")
-                    or "codex" not in merged.get("model", "").lower()
+                    not current_model
+                    or not self.get_model_from_name(current_model, "codex")
                 ):
-                    merged["model"] = "gpt-5.1-codex-max"
+                    merged["model"] = "gpt-5.4"
 
             # Validate and fix session_id if corrupted
             session_id = merged.get("session_id", "")
@@ -1856,23 +1893,38 @@ class SessionManager:
         """Convert model name/alias to full model ID based on runtime.
 
         Resolution order:
-          1. Check static alias tables (contain alias/description metadata).
+          1. Check env-loaded or static alias tables (contain alias/description metadata).
           2. Fall back to CLI-discovered model list (exact then substring match).
         """
         name_lower = name.lower().strip("\"'")
 
-        # Step 1: check static alias tables for all runtimes that have them.
+        # Ensure env models are loaded/cached by triggering fetch for this runtime
+        if runtime in ("claude", "gemini", "codex"):
+            self.get_models_for_runtime(runtime)
+
+        # Step 1: check env-loaded or static alias tables for all runtimes that have them.
+        env_alias_map = {
+            "claude": self._env_claude_models,
+            "gemini": self._env_gemini_models,
+            "codex": self._env_codex_models,
+        }
         static_alias_map = {
             "claude": self.CLAUDE_MODELS,
             "gemini": self.GEMINI_MODELS,
             "codex": self.CODEX_MODELS,
             "opencode": self.OPENCODE_MODELS,
         }
-        if runtime in static_alias_map:
-            for _category, models in static_alias_map[runtime].items():
-                for model_id, _desc, aliases in models:
+        
+        # Try env-loaded models first, fall back to static
+        models_to_check = env_alias_map.get(runtime) or static_alias_map.get(runtime)
+        
+        if runtime in static_alias_map and models_to_check:
+            for _category, entries in models_to_check.items():
+                for model_id, desc, aliases in entries:
                     aliases_lower = [a.lower() for a in aliases]
-                    if name_lower == model_id.lower() or name_lower in aliases_lower:
+                    if (name_lower == model_id.lower() or 
+                        name_lower == desc.lower() or
+                        name_lower in aliases_lower):
                         return model_id
 
         # Step 2: dynamic CLI discovery for all runtimes.
@@ -3933,7 +3985,7 @@ You can mention an agent in your prompt and it will auto-delegate:
                 elif new_runtime == "gemini":
                     default_model = "gemini-1.5-flash"
                 elif new_runtime == "codex":
-                    default_model = "gpt-5.1-codex-max"
+                    default_model = "gpt-5.4"
 
                 self.update_session_field(n8n_session_id, "model", default_model)
                 return f"✓ Switched runtime to **{new_runtime}**. Model set to `{default_model}`. Session reset."
@@ -5033,10 +5085,17 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         session_mgr.update_session_field(session_id, "identity", user["identity"])
 
         # Apply per-query overrides for model, runtime, and agent if provided
-        if body.model:
-            session_mgr.update_session_field(session_id, "model", body.model)
         if body.runtime:
             session_mgr.update_session_field(session_id, "runtime", body.runtime)
+        if body.model:
+            # Resolve model name/alias to actual model ID for current runtime
+            current_rt = body.runtime or existing.get("runtime", "copilot")
+            model_id = session_mgr.get_model_from_name(body.model, current_rt)
+            if model_id:
+                session_mgr.update_session_field(session_id, "model", model_id)
+            else:
+                # Fallback: use the name as-is if lookup fails
+                session_mgr.update_session_field(session_id, "model", body.model)
         if body.agent:
             session_mgr.update_session_field(session_id, "agent", body.agent)
 
@@ -5126,10 +5185,17 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         session_mgr.update_session_field(session_id, "identity", user["identity"])
 
         # Apply per-query overrides for model, runtime, and agent if provided
-        if body.model:
-            session_mgr.update_session_field(session_id, "model", body.model)
         if body.runtime:
             session_mgr.update_session_field(session_id, "runtime", body.runtime)
+        if body.model:
+            # Resolve model name/alias to actual model ID for current runtime
+            current_rt = body.runtime or existing.get("runtime", "copilot")
+            model_id = session_mgr.get_model_from_name(body.model, current_rt)
+            if model_id:
+                session_mgr.update_session_field(session_id, "model", model_id)
+            else:
+                # Fallback: use the name as-is if lookup fails
+                session_mgr.update_session_field(session_id, "model", body.model)
         if body.agent:
             session_mgr.update_session_field(session_id, "agent", body.agent)
 
