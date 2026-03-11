@@ -3398,8 +3398,10 @@ User Request:
                 # Apply sandbox bypass and environment inheritance for resumed yolo sessions
                 cmd.append("--dangerously-bypass-approvals-and-sandbox")
                 cmd += ["-c", "shell_environment_policy.inherit=all"]
+            if model:
+                cmd += ["-m", model]
             cmd += [session_id, context_prompt]
-            print(f"[Session] Resuming CODEX session: {session_id} in {mode} mode", file=sys.stderr)
+            print(f"[Session] Resuming CODEX session: {session_id} with model {model} in {mode} mode", file=sys.stderr)
         else:
             # Start new session - flags must come BEFORE the prompt positional arg
             cmd = ["codex", "exec"]
@@ -3408,8 +3410,10 @@ User Request:
                 cmd.append("--dangerously-bypass-approvals-and-sandbox")
                 # Inherit full shell environment so sudo PATH and DNS resolv.conf are available
                 cmd += ["-c", "shell_environment_policy.inherit=all"]
+            if model:
+                cmd += ["-m", model]
             cmd.append(context_prompt)
-            print(f"[Session] Starting new CODEX session in {mode} mode", file=sys.stderr)
+            print(f"[Session] Starting new CODEX session with model {model} in {mode} mode", file=sys.stderr)
 
         output = self._execute_subprocess_with_tracking(
             cmd, agent_dir, effective_timeout, "codex", agent, prompt, n8n_session_id
