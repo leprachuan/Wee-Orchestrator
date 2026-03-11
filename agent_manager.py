@@ -1302,39 +1302,63 @@ class SessionManager:
         return None
 
     def fetch_claude_models(self) -> Dict:
-        """Return available Claude models, preferring CLI discovery with static fallback.
+        """Return available Claude models from environment or fallback to static list.
 
         Claude Code CLI does not currently expose a model-listing subcommand.
-        The static CLAUDE_MODELS list is returned; CLI is probed so that if a
-        future release adds a listing command this function can be extended.
+        Models are read from CLAUDE_MODELS_JSON environment variable, with
+        static CLAUDE_MODELS as fallback.
         """
-        if self.claude_bin:
+        # Try to load from environment variable first
+        env_models = os.getenv("CLAUDE_MODELS_JSON")
+        if env_models:
             try:
-                subprocess.run(
-                    [self.claude_bin, "--help", "--no-color"],
-                    capture_output=True,
-                    text=True,
-                    timeout=10,
-                )
-                # Future: parse stdout for model choices when CLI supports it.
-            except Exception:
-                pass
+                import json
+                models_dict = json.loads(env_models)
+                return models_dict
+            except (json.JSONDecodeError, ValueError) as e:
+                print(f"Warning: Failed to parse CLAUDE_MODELS_JSON: {e}", file=sys.stderr)
+        
+        # Fallback to static configuration
         return self._static_models_to_dict(self.CLAUDE_MODELS)
 
     def fetch_gemini_models(self) -> Dict:
-        """Return available Gemini models, preferring CLI discovery with static fallback.
+        """Return available Gemini models from environment or fallback to static list.
 
-        Gemini CLI does not currently expose a model-listing subcommand; the
-        static GEMINI_MODELS list is returned.
+        Gemini CLI does not currently expose a model-listing subcommand.
+        Models are read from GEMINI_MODELS_JSON environment variable, with
+        static GEMINI_MODELS as fallback.
         """
+        # Try to load from environment variable first
+        env_models = os.getenv("GEMINI_MODELS_JSON")
+        if env_models:
+            try:
+                import json
+                models_dict = json.loads(env_models)
+                return models_dict
+            except (json.JSONDecodeError, ValueError) as e:
+                print(f"Warning: Failed to parse GEMINI_MODELS_JSON: {e}", file=sys.stderr)
+        
+        # Fallback to static configuration
         return self._static_models_to_dict(self.GEMINI_MODELS)
 
     def fetch_codex_models(self) -> Dict:
-        """Return available CODEX models, preferring CLI discovery with static fallback.
+        """Return available Codex models from environment or fallback to static list.
 
-        CODEX CLI does not currently expose a model-listing subcommand; the
-        static CODEX_MODELS list is returned.
+        Codex CLI does not currently expose a model-listing subcommand.
+        Models are read from CODEX_MODELS_JSON environment variable, with
+        static CODEX_MODELS as fallback.
         """
+        # Try to load from environment variable first
+        env_models = os.getenv("CODEX_MODELS_JSON")
+        if env_models:
+            try:
+                import json
+                models_dict = json.loads(env_models)
+                return models_dict
+            except (json.JSONDecodeError, ValueError) as e:
+                print(f"Warning: Failed to parse CODEX_MODELS_JSON: {e}", file=sys.stderr)
+        
+        # Fallback to static configuration
         return self._static_models_to_dict(self.CODEX_MODELS)
 
     def get_models_for_runtime(self, runtime: str) -> Dict:
