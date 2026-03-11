@@ -1184,17 +1184,24 @@ class SessionManager:
             if not models:
                 # Look for known models as a sanity check/fallback
                 fallback_models = [
-                    "gpt-4o",
-                    "gpt-4o-mini",
-                    "gpt-4-turbo",
-                    "claude-3.5-sonnet",
-                    "claude-3-5-sonnet",
-                    "claude-3.5-haiku",
-                    "gemini-1.5-pro",
-                    "gemini-1.5-flash",
-                    "gpt-5",
+                    "claude-sonnet-4.6",
+                    "claude-sonnet-4.5",
+                    "claude-haiku-4.5",
+                    "claude-opus-4.6",
+                    "claude-opus-4.6-fast",
+                    "claude-opus-4.5",
+                    "claude-sonnet-4",
+                    "gemini-3-pro-preview",
+                    "gpt-5.4",
+                    "gpt-5.3-codex",
+                    "gpt-5.2-codex",
                     "gpt-5.2",
-                    "claude-sonnet-4.5"
+                    "gpt-5.1-codex-max",
+                    "gpt-5.1-codex",
+                    "gpt-5.1",
+                    "gpt-5.1-codex-mini",
+                    "gpt-5-mini",
+                    "gpt-4.1"
                 ]
                 found_fallbacks = [m for m in fallback_models if m in result.stdout]
                 if found_fallbacks:
