@@ -1314,7 +1314,8 @@ class SessionManager:
             try:
                 import json
                 models_dict = json.loads(env_models)
-                return models_dict
+                # Convert to the expected format {category: [model_ids]}
+                return self._static_models_to_dict(models_dict)
             except (json.JSONDecodeError, ValueError) as e:
                 print(f"Warning: Failed to parse CLAUDE_MODELS_JSON: {e}", file=sys.stderr)
         
@@ -1334,7 +1335,8 @@ class SessionManager:
             try:
                 import json
                 models_dict = json.loads(env_models)
-                return models_dict
+                # Convert to the expected format {category: [model_ids]}
+                return self._static_models_to_dict(models_dict)
             except (json.JSONDecodeError, ValueError) as e:
                 print(f"Warning: Failed to parse GEMINI_MODELS_JSON: {e}", file=sys.stderr)
         
@@ -1354,7 +1356,8 @@ class SessionManager:
             try:
                 import json
                 models_dict = json.loads(env_models)
-                return models_dict
+                # Convert to the expected format {category: [model_ids]}
+                return self._static_models_to_dict(models_dict)
             except (json.JSONDecodeError, ValueError) as e:
                 print(f"Warning: Failed to parse CODEX_MODELS_JSON: {e}", file=sys.stderr)
         
