@@ -926,11 +926,27 @@ class SessionManager:
     DEVIN_MODELS = {
         "Anthropic Models": [
             ("claude-sonnet-4", "Claude Sonnet 4", ["sonnet-4", "sonnet"]),
+            ("claude-sonnet-4.5", "Claude Sonnet 4.5", ["sonnet-4.5"]),
+            ("claude-sonnet-4.5-thinking", "Claude Sonnet 4.5 Thinking", ["sonnet-thinking"]),
             ("claude-sonnet-4.6", "Claude Sonnet 4.6", ["sonnet-4.6"]),
+            ("claude-opus-4.5", "Claude Opus 4.5", ["opus-4.5"]),
             ("claude-opus-4.6", "Claude Opus 4.6", ["opus-4.6", "opus"]),
+            ("claude-haiku-4.5", "Claude Haiku 4.5", ["haiku-4.5", "haiku"]),
+        ],
+        "Google Models": [
+            ("gemini-3-flash", "Gemini 3 Flash", ["gemini-flash"]),
+            ("gemini-3-pro", "Gemini 3 Pro", ["gemini-pro"]),
+            ("gemini-3.1-pro", "Gemini 3.1 Pro", ["gemini-3.1"]),
         ],
         "OpenAI Models": [
-            ("codex", "Codex", ["codex"]),
+            ("gpt-5.2", "GPT-5.2", []),
+            ("gpt-5.3-codex", "GPT-5.3 Codex", ["codex"]),
+            ("gpt-5.4", "GPT-5.4", []),
+        ],
+        "Other Models": [
+            ("phoenix-alpha", "Phoenix Alpha", ["phoenix"]),
+            ("swe-1.5", "SWE-1.5", ["swe"]),
+            ("swe-1.5-fast", "SWE-1.5 Fast", ["swe-fast"]),
         ],
     }
 
@@ -1466,21 +1482,44 @@ class SessionManager:
         return self._static_models_to_dict(self.CODEX_MODELS)
 
     def fetch_devin_models(self) -> Dict:
-        """Return available Devin models from environment or fallback to static list.
+        """Return available Devin models by querying the CLI directly.
 
-        Devin CLI does not currently expose a model-listing subcommand.
-        Models are read from DEVIN_MODELS_JSON environment variable, with
-        static DEVIN_MODELS as fallback.
+        Devin prints available models when given an invalid model name:
+          devin --model __invalid__ -p -- ""
+          → Error: Unknown model: '__invalid__'
+          → Available: claude-sonnet-4, claude-opus-4.6, ...
+
+        Falls back to static DEVIN_MODELS if the CLI is unavailable or
+        the output cannot be parsed.
         """
-        env_models = os.getenv("DEVIN_MODELS_JSON")
-        if env_models:
-            try:
-                import json
-                models_dict = json.loads(env_models)
-                self._env_devin_models = models_dict
-                return self._static_models_to_dict(models_dict)
-            except (json.JSONDecodeError, ValueError) as e:
-                print(f"Warning: Failed to parse DEVIN_MODELS_JSON: {e}", file=sys.stderr)
+        try:
+            devin_bin = getattr(self, "devin_bin", None) or "devin"
+            result = subprocess.run(
+                [devin_bin, "--model", "__invalid__", "-p", "--", ""],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            # Parse "Available: model1, model2, ..." from stderr or stdout
+            output = result.stderr + result.stdout
+            for line in output.splitlines():
+                if line.strip().startswith("Available:"):
+                    models_str = line.split(":", 1)[1].strip()
+                    model_ids = [m.strip() for m in models_str.split(",") if m.strip()]
+                    if model_ids:
+                        # Group into a single category for display
+                        discovered = {
+                            "Available Models": [
+                                (mid, mid, []) for mid in model_ids
+                            ]
+                        }
+                        print(
+                            f"[devin] Auto-discovered {len(model_ids)} models",
+                            file=sys.stderr,
+                        )
+                        return self._static_models_to_dict(discovered)
+        except Exception as e:
+            print(f"[devin] Model discovery failed, using static list: {e}", file=sys.stderr)
 
         return self._static_models_to_dict(self.DEVIN_MODELS)
 
