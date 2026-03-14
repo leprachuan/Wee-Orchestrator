@@ -4106,13 +4106,14 @@ function _cvCol(comp) {
 function _cvTable(comp) {
   const w = document.createElement('div');
   w.className = 'glass-panel';
-  w.style.overflowX = 'auto';
   if (comp.label || comp.title) {
     const h = document.createElement('div');
     h.style.cssText = 'font-weight:600;font-size:12px;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em;margin-bottom:10px;';
     h.textContent = comp.label || comp.title;
     w.appendChild(h);
   }
+  const scrollWrap = document.createElement('div');
+  scrollWrap.className = 'glass-table-wrap';
   const table = document.createElement('table');
   table.className = 'glass-table';
   if (comp.headers?.length) {
@@ -4130,7 +4131,8 @@ function _cvTable(comp) {
     tbody.appendChild(tr);
   }
   table.appendChild(tbody);
-  w.appendChild(table);
+  scrollWrap.appendChild(table);
+  w.appendChild(scrollWrap);
   return w;
 }
 
@@ -4350,9 +4352,18 @@ function _cvMarkdown(comp) {
 
 function _cvHtml(comp) {
   const el = document.createElement('div');
-  el.style.cssText = 'font-size:13px;line-height:1.7;color:var(--text-secondary);';
-  const html = comp.content || comp.html || '';
-  el.innerHTML = typeof DOMPurify !== 'undefined' ? DOMPurify.sanitize(html) : html;
+  const htmlContent = comp.content || comp.html || '';
+  const iframe = document.createElement('iframe');
+  iframe.sandbox = 'allow-scripts';
+  iframe.style.cssText = 'width:100%;border:none;border-radius:8px;background:transparent;';
+  iframe.style.height = (comp.height || 400) + 'px';
+  iframe.srcdoc = htmlContent;
+  window.addEventListener('message', function(evt) {
+    if (evt.data && evt.data.type === 'resize' && evt.source === iframe.contentWindow) {
+      iframe.style.height = (evt.data.height || 400) + 'px';
+    }
+  });
+  el.appendChild(iframe);
   return el;
 }
 

@@ -4210,10 +4210,12 @@ html, body {
 .canvas-content .trend-up { color: var(--accent); }
 .canvas-content .trend-down { color: var(--danger); }
 
-.canvas-content .glass-table { width: 100%; border-collapse: collapse; font-size: 12px; }
-.canvas-content .glass-table th { text-align: left; padding: 8px 10px; color: var(--text-muted); font-weight: 600; font-size: 10px; text-transform: uppercase; letter-spacing: 0.06em; border-bottom: 1px solid var(--glass-border); }
-.canvas-content .glass-table td { padding: 8px 10px; border-bottom: 1px solid rgba(255,255,255,0.05); color: var(--text-primary); }
-.canvas-content .glass-table tr:hover td { background: rgba(255,255,255,0.04); }
+.canvas-content .glass-table-wrap { width: 100%; overflow-x: auto; -webkit-overflow-scrolling: touch; }
+.canvas-content .glass-table { width: 100%; border-collapse: collapse; table-layout: auto; font-size: 13px; }
+.canvas-content .glass-table th { text-align: left; padding: 10px 12px; color: var(--text-muted); font-weight: 600; font-size: 12px; text-transform: uppercase; letter-spacing: 0.06em; border-bottom: 1px solid var(--glass-border); white-space: nowrap; }
+.canvas-content .glass-table td { padding: 8px 12px; border-bottom: 1px solid rgba(255,255,255,0.05); color: var(--text-primary); font-size: 13px; word-break: break-word; }
+.canvas-content .glass-table tbody tr:nth-child(even) td { background: rgba(255,255,255,0.025); }
+.canvas-content .glass-table tbody tr:hover td { background: rgba(255,255,255,0.06); }
 
 .canvas-content .log-area { background: rgba(0,0,0,0.3); border: 1px solid var(--glass-border); border-radius: var(--radius-sm); padding: 10px; font-family: var(--font-mono); font-size: 11px; max-height: 200px; overflow-y: auto; color: #7fffd4; white-space: pre-wrap; word-break: break-all; }
 .canvas-content .code-block { background: rgba(0,0,0,0.4); border: 1px solid var(--glass-border); border-radius: var(--radius-sm); padding: 12px; font-family: var(--font-mono); font-size: 11px; overflow-x: auto; color: #e2e8f0; white-space: pre; }

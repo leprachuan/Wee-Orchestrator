@@ -77,6 +77,25 @@ class Canvas:
 
     # ── Public API ────────────────────────────────────────────────────────────
 
+    def push_component(self, component: dict):
+        """Push a single component to the canvas."""
+        self.render([component])
+
+    def push_html(self, html_content: str, height: int = 400, component_id: Optional[str] = None) -> str:
+        """Push arbitrary HTML/JS into the canvas, rendered in a sandboxed iframe.
+
+        Args:
+            html_content: Full HTML string (can include <script> tags).
+            height: Default iframe height in pixels (default 400).
+            component_id: Optional component ID; auto-generated if omitted.
+
+        Returns:
+            The component_id used.
+        """
+        cid = component_id or f"html-{uuid.uuid4().hex[:8]}"
+        self.push_component({"id": cid, "type": "html", "content": html_content, "height": height})
+        return cid
+
     def render(self, components: list):
         """Push a full component tree to the canvas."""
         self._send({"type": "render", "components": components, "session_id": self.session_id})

@@ -67,6 +67,7 @@ c.clear()
 | `c.open()` | Open the panel in the WebUI |
 | `c.render_template(name, data)` | Render a named template with data |
 | `c.push_component(component_dict)` | Push a raw component |
+| `c.push_html(html, height, id)` | Push HTML/JS in a sandboxed iframe |
 | `c.update_component(id, changes)` | Update a rendered component by ID |
 | `c.clear()` | Clear all components |
 | `c.wait_for_action(timeout=60)` | Block until user interaction; returns action dict |
@@ -91,6 +92,82 @@ c.clear()
 
 ## WebSocket endpoint
 `ws://127.0.0.1:<API_PORT>/canvas/ws?session=SESSION_ID`
+
+## HTML Component (Sandboxed Iframe)
+
+The `html` component type renders arbitrary HTML and JavaScript inside a **sandboxed iframe** (`sandbox="allow-scripts"`, no `allow-same-origin`). This is ideal for interactive visualisations, embedded charts, or any self-contained HTML snippet.
+
+### Component schema
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `type` | `"html"` | ✅ | Component type |
+| `content` | `str` | ✅ | Full HTML string (may include `<script>` tags) |
+| `height` | `int` | ❌ | Iframe height in pixels (default `400`) |
+| `id` | `str` | ❌ | Component ID for later updates |
+
+### Python convenience method — `push_html()`
+
+```python
+c = Canvas()
+c.push_html(html_content, height=500, component_id="my-chart")
+```
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `html_content` | `str` | — | Full HTML string |
+| `height` | `int` | `400` | Iframe height in pixels |
+| `component_id` | `str\|None` | auto | Optional ID; auto-generated if omitted |
+
+**Returns:** the `component_id` used.
+
+### Iframe sandbox notes
+
+- The iframe uses `sandbox="allow-scripts"` — scripts can run but **cannot** access the parent page (no `allow-same-origin`).
+- To resize the iframe dynamically from inside the content, post a message:
+  ```js
+  parent.postMessage({ type: "resize", height: document.body.scrollHeight }, "*");
+  ```
+  The canvas listener will update the iframe height accordingly.
+
+### Example — Chart.js chart via `push_html()`
+
+```python
+import sys; sys.path.insert(0, '/opt/n8n-copilot-shim-dev')
+from canvas import Canvas
+
+chart_html = """
+<!DOCTYPE html>
+<html><head>
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<style>body{margin:0;background:transparent;}</style>
+</head><body>
+<canvas id="c"></canvas>
+<script>
+new Chart(document.getElementById('c'), {
+  type: 'bar',
+  data: {
+    labels: ['Jan','Feb','Mar','Apr','May'],
+    datasets: [{
+      label: 'Revenue ($k)',
+      data: [12, 19, 8, 15, 22],
+      backgroundColor: 'rgba(62,207,142,0.6)'
+    }]
+  },
+  options: { responsive: true }
+});
+// Auto-resize iframe to fit content
+setTimeout(() => {
+  parent.postMessage({ type: 'resize', height: document.body.scrollHeight }, '*');
+}, 500);
+</script>
+</body></html>
+"""
+
+c = Canvas()
+c.push_html(chart_html, height=350, component_id="revenue-chart")
+c.open()
+```
 
 ## Configuration
 
