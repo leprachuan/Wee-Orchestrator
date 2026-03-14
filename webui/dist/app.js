@@ -1789,7 +1789,6 @@ document.addEventListener('DOMContentLoaded', () => {
   $('btn-nav-background').addEventListener('click', showBackgroundPanel);
   $('btn-nav-scheduler').addEventListener('click', showSchedulerPanel);
   $('btn-nav-notifications').addEventListener('click', toggleNotificationPanel);
-  if ($('btn-nav-canvas')) $('btn-nav-canvas').addEventListener('click', toggleCanvasPanel);
 
   // Notification settings/actions
   $('btn-notif-mark-all-read').addEventListener('click', async () => {
@@ -3751,7 +3750,6 @@ function openCanvasPanel() {
   panel.classList.remove('canvas-hidden');
   panel.classList.add('canvas-open');
   _canvasPanelOpen = true;
-  $('btn-nav-canvas')?.classList.add('active');
 }
 
 function closeCanvasPanel() {
@@ -3760,7 +3758,6 @@ function closeCanvasPanel() {
   panel.classList.add('canvas-hidden');
   panel.classList.remove('canvas-open');
   _canvasPanelOpen = false;
-  $('btn-nav-canvas')?.classList.remove('active');
 }
 
 // ── Session management ───────────────────────────────────────────────────────
