@@ -3684,24 +3684,66 @@ User Request:
         # Resolve the devin binary
         devin_bin = self.devin_bin or "devin"
 
-        # Devin CLI does not support session resume — always start fresh
+        # Look up the devin-native session UUID stored from a previous run
+        devin_sid = self._get_devin_session_id(n8n_session_id)
+
         # -p is a boolean flag (print/non-interactive mode); prompt goes after --
         cmd = [devin_bin, "-p"]
         if model:
             cmd += ["--model", model]
-        # Always use dangerous permission mode for non-interactive execution
-        cmd += ["--permission-mode", "dangerous", "--", context_prompt]
+        cmd += ["--permission-mode", "dangerous"]
 
-        print(f"[Session] Starting Devin session with model {model} in {mode} mode", file=sys.stderr)
+        if resume and devin_sid:
+            cmd += ["-r", devin_sid]
+            print(f"[Session] Resuming Devin session {devin_sid[:8]}... with model {model} in {mode} mode", file=sys.stderr)
+        else:
+            print(f"[Session] Starting new Devin session with model {model} in {mode} mode", file=sys.stderr)
+
+        cmd += ["--", context_prompt]
 
         output = self._execute_subprocess_with_tracking(
             cmd, agent_dir, effective_timeout, "devin", agent, prompt, n8n_session_id
         )
 
+        # After each run, capture and persist the most recent devin session UUID
+        # so subsequent messages in this n8n session can resume it.
+        self._save_devin_session_id(n8n_session_id, devin_bin)
+
         if "Error: Devin command failed" in output:
             return output
 
         return self.strip_metadata(output, "devin")
+
+    def _get_devin_session_id(self, n8n_session_id: str) -> Optional[str]:
+        """Return the stored devin session UUID for this n8n session, or None."""
+        mapping_file = self.devin_session_dir / f"{n8n_session_id}.json"
+        try:
+            with open(mapping_file) as f:
+                data = json.load(f)
+                return data.get("devin_session_id")
+        except (FileNotFoundError, json.JSONDecodeError):
+            return None
+
+    def _save_devin_session_id(self, n8n_session_id: str, devin_bin: str):
+        """Capture the most recently active devin session UUID and store it."""
+        try:
+            result = subprocess.run(
+                [devin_bin, "list", "--format", "json"],
+                capture_output=True, text=True, timeout=10,
+            )
+            sessions = json.loads(result.stdout)
+            if not sessions:
+                return
+            # Most recent session is first in the list
+            devin_sid = sessions[0].get("id")
+            if not devin_sid:
+                return
+            mapping_file = self.devin_session_dir / f"{n8n_session_id}.json"
+            with open(mapping_file, "w") as f:
+                json.dump({"devin_session_id": devin_sid}, f)
+            print(f"[Session] Stored devin session mapping: {n8n_session_id[:8]}... → {devin_sid[:8]}...", file=sys.stderr)
+        except Exception as e:
+            print(f"[Session] Warning: could not save devin session ID: {e}", file=sys.stderr)
 
     def session_exists(self, session_id: str, runtime: str) -> bool:
         """Check if session state exists for runtime"""
@@ -3760,8 +3802,8 @@ User Request:
                 pass
             return False
         elif runtime == "devin":
-            # Devin CLI does not persist resumable sessions locally
-            return False
+            # Check if we have a stored devin session UUID for this n8n session
+            return (self.devin_session_dir / f"{session_id}.json").exists()
         return False
 
     def get_most_recent_session_id(
