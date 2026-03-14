@@ -7051,18 +7051,87 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             return {"success": False, "error": str(e)}
     
     # --- Wee Canvas ───────────────────────────────────────────────────────────
-    # In-memory canvas session state: session_id → {components, connections, action_watchers, pending_actions}
+    # In-memory canvas session state: session_id → {components, connections, action_watchers, pending_actions, name, created_at, last_activity}
     _canvas_sessions: dict = {}
+    _CANVAS_PERSIST_DIR = Path(SCRIPT_BASE_DIR) / ".canvas-sessions"
+    _CANVAS_PERSIST_DIR.mkdir(parents=True, exist_ok=True)
+    _CANVAS_SESSION_TIMEOUT = int(os.environ.get("CANVAS_SESSION_TIMEOUT_MINUTES", "30")) * 60
+    _canvas_cleanup_started = False
 
     def _get_canvas_session(session_id: str) -> dict:
+        now = time.time()
         if session_id not in _canvas_sessions:
             _canvas_sessions[session_id] = {
                 "components": [],
                 "connections": set(),
                 "action_watchers": set(),
                 "pending_actions": [],
+                "name": None,
+                "created_at": now,
+                "last_activity": now,
             }
         return _canvas_sessions[session_id]
+
+    def _canvas_touch(sess: dict):
+        sess["last_activity"] = time.time()
+
+    def _canvas_persist_to_disk(session_id: str, sess: dict, closed_at: float = None):
+        """Save session state to disk as JSON."""
+        data = {
+            "session_id": session_id,
+            "name": sess.get("name"),
+            "components": sess.get("components", []),
+            "created_at": sess.get("created_at", time.time()),
+            "last_activity": sess.get("last_activity", time.time()),
+            "closed_at": closed_at or time.time(),
+        }
+        path = _CANVAS_PERSIST_DIR / f"{session_id}.json"
+        path.write_text(json.dumps(data, default=str), encoding="utf-8")
+
+    def _canvas_load_from_disk(session_id: str) -> dict | None:
+        path = _CANVAS_PERSIST_DIR / f"{session_id}.json"
+        if not path.exists():
+            return None
+        try:
+            return json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            return None
+
+    def _canvas_list_persisted() -> list[dict]:
+        """List all persisted (closed) sessions from disk."""
+        results = []
+        for f in _CANVAS_PERSIST_DIR.glob("*.json"):
+            try:
+                data = json.loads(f.read_text(encoding="utf-8"))
+                sid = data.get("session_id", f.stem)
+                # Skip sessions that are currently active in memory
+                if sid not in _canvas_sessions:
+                    results.append(data)
+            except Exception:
+                continue
+        return results
+
+    def _canvas_delete_persisted(session_id: str):
+        path = _CANVAS_PERSIST_DIR / f"{session_id}.json"
+        if path.exists():
+            path.unlink()
+
+    async def _canvas_cleanup_loop():
+        """Background task: every 5 min, expire idle sessions to disk."""
+        while True:
+            await asyncio.sleep(300)
+            try:
+                now = time.time()
+                to_expire = []
+                for sid, sess in list(_canvas_sessions.items()):
+                    if not sess["connections"] and (now - sess["last_activity"]) > _CANVAS_SESSION_TIMEOUT:
+                        to_expire.append(sid)
+                for sid in to_expire:
+                    sess = _canvas_sessions.pop(sid, None)
+                    if sess and sess.get("components"):
+                        _canvas_persist_to_disk(sid, sess)
+            except Exception:
+                pass
 
     async def _canvas_broadcast(session: dict, skip_ws, message: dict):
         payload = json.dumps(message)
@@ -7088,9 +7157,15 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
 
     @app.websocket("/canvas/ws")
     async def canvas_websocket(websocket: WebSocket, session: str = "default"):
+        nonlocal _canvas_cleanup_started
+        if not _canvas_cleanup_started:
+            _canvas_cleanup_started = True
+            asyncio.create_task(_canvas_cleanup_loop())
+
         await websocket.accept()
         sess = _get_canvas_session(session)
         sess["connections"].add(websocket)
+        _canvas_touch(sess)
 
         # Restore current state for new connections
         if sess["components"]:
@@ -7106,6 +7181,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         try:
             while True:
                 raw = await websocket.receive_text()
+                _canvas_touch(sess)
                 try:
                     data = json.loads(raw)
                 except Exception:
@@ -7162,21 +7238,93 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         finally:
             sess["connections"].discard(websocket)
             sess["action_watchers"].discard(websocket)
-            # Clean up empty sessions
+            _canvas_touch(sess)
+            # Clean up empty sessions with no components
             if not sess["connections"] and not sess["components"]:
                 _canvas_sessions.pop(session, None)
 
     @app.get("/api/v1/canvas/sessions")
     async def get_canvas_sessions():
-        """Return list of active canvas sessions."""
+        """Return list of active and closed canvas sessions."""
         result = []
         for sid, sess in _canvas_sessions.items():
             result.append({
                 "session_id": sid,
+                "name": sess.get("name"),
                 "component_count": len(sess["components"]),
                 "connection_count": len(sess["connections"]),
+                "created_at": sess.get("created_at"),
+                "last_activity": sess.get("last_activity"),
+                "status": "active",
+            })
+        # Include persisted (closed) sessions from disk
+        for data in _canvas_list_persisted():
+            result.append({
+                "session_id": data["session_id"],
+                "name": data.get("name"),
+                "component_count": len(data.get("components", [])),
+                "connection_count": 0,
+                "created_at": data.get("created_at"),
+                "last_activity": data.get("last_activity"),
+                "closed_at": data.get("closed_at"),
+                "status": "closed",
             })
         return {"sessions": result}
+
+    @app.patch("/api/v1/canvas/sessions/{session_id}/name")
+    async def set_canvas_session_name(session_id: str, request: Request):
+        """Set or update the name of a canvas session."""
+        body = await request.json()
+        name = body.get("name", "").strip() or None
+        if session_id in _canvas_sessions:
+            _canvas_sessions[session_id]["name"] = name
+            return {"success": True, "session_id": session_id, "name": name}
+        # Check if it's a persisted session
+        data = _canvas_load_from_disk(session_id)
+        if data:
+            data["name"] = name
+            (_CANVAS_PERSIST_DIR / f"{session_id}.json").write_text(
+                json.dumps(data, default=str), encoding="utf-8"
+            )
+            return {"success": True, "session_id": session_id, "name": name}
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    @app.post("/api/v1/canvas/sessions/{session_id}/restore")
+    async def restore_canvas_session(session_id: str):
+        """Restore a persisted session back into memory."""
+        data = _canvas_load_from_disk(session_id)
+        if not data:
+            if session_id in _canvas_sessions:
+                return {"success": True, "session_id": session_id, "status": "already_active"}
+            raise HTTPException(status_code=404, detail="Session not found on disk")
+        # Re-create in-memory session
+        _canvas_sessions[session_id] = {
+            "components": data.get("components", []),
+            "connections": set(),
+            "action_watchers": set(),
+            "pending_actions": [],
+            "name": data.get("name"),
+            "created_at": data.get("created_at", time.time()),
+            "last_activity": time.time(),
+        }
+        _canvas_delete_persisted(session_id)
+        return {"success": True, "session_id": session_id, "name": data.get("name"), "status": "restored"}
+
+    @app.post("/api/v1/canvas/sessions/{session_id}/close")
+    async def close_canvas_session(session_id: str):
+        """Explicitly close a session — persist to disk and remove from memory."""
+        sess = _canvas_sessions.pop(session_id, None)
+        if not sess:
+            raise HTTPException(status_code=404, detail="Session not found")
+        if sess.get("components"):
+            _canvas_persist_to_disk(session_id, sess)
+        # Close all WS connections
+        for conn in list(sess.get("connections", set())):
+            try:
+                await conn.close()
+            except Exception:
+                pass
+        return {"success": True, "session_id": session_id, "status": "closed"}
 
     @app.get("/api/v1/canvas")
     async def get_canvas_summary():
@@ -7186,6 +7334,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             sessions[sid] = {
                 "components": sess["components"],
                 "connection_count": len(sess["connections"]),
+                "name": sess.get("name"),
             }
         return {"sessions": sessions, "count": len(_canvas_sessions)}
 

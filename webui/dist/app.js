@@ -3729,10 +3729,11 @@ document.addEventListener('DOMContentLoaded', () => {
 // ─── Wee Canvas Panel ───────────────────────────────────────────────────────
 // ═══════════════════════════════════════════════════════════════════════════════
 
-const _canvasSessions = new Map(); // sessionId → { ws, components, connected }
+const _canvasSessions = new Map(); // sessionId → { ws, components, connected, name }
 const _dismissedCanvasSessions = new Set(); // sessions manually closed by user — poller skips these
 let _activeCanvasSession = null;
 let _canvasPanelOpen = false;
+let _closedCanvasExpanded = false;
 
 // ── Canvas node registry (for partial updates) ──────────────────────────────
 const _canvasNodeRegistry = new Map();
@@ -3785,6 +3786,11 @@ function closeCanvasSession(sessionId) {
     const keys = [..._canvasSessions.keys()];
     _activeCanvasSession = keys.length ? keys[keys.length - 1] : null;
   }
+  // Persist session to disk via backend
+  fetch(`${API_BASE}/canvas/sessions/${sessionId}/close`, {
+    method: 'POST',
+    headers: { 'Authorization': `Bearer ${STATE.token}` }
+  }).catch(() => {});
   _renderCanvasTabs();
   _renderActiveCanvas();
   _updateCanvasBadge();
@@ -3797,7 +3803,7 @@ function closeCanvasSession(sessionId) {
 function _connectCanvasWS(sessionId) {
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
   const wsUrl = `${proto}://${location.host}/canvas/ws?session=${sessionId}`;
-  const sess = { ws: null, components: [], connected: false };
+  const sess = { ws: null, components: [], connected: false, name: null };
   _canvasSessions.set(sessionId, sess);
 
   const ws = new WebSocket(wsUrl);
@@ -3879,13 +3885,20 @@ function _renderCanvasTabs() {
   if (!bar) return;
   bar.innerHTML = '';
 
-  for (const [sid] of _canvasSessions) {
+  for (const [sid, sessData] of _canvasSessions) {
     const tab = document.createElement('div');
     tab.className = 'canvas-tab' + (sid === _activeCanvasSession ? ' active' : '');
 
     const label = document.createElement('span');
-    label.textContent = sid.length > 8 ? sid.slice(0, 8) : sid;
+    label.className = 'canvas-tab-label';
+    label.textContent = sessData.name || (sid.length > 8 ? sid.slice(0, 8) : sid);
     tab.appendChild(label);
+
+    // Double-click to rename
+    label.addEventListener('dblclick', (e) => {
+      e.stopPropagation();
+      _startCanvasRename(tab, label, sid, sessData);
+    });
 
     const closeBtn = document.createElement('button');
     closeBtn.className = 'canvas-tab-close';
@@ -3901,6 +3914,43 @@ function _renderCanvasTabs() {
 
     bar.appendChild(tab);
   }
+}
+
+function _startCanvasRename(tab, label, sessionId, sessData) {
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.className = 'canvas-tab-rename';
+  input.value = sessData.name || '';
+  input.placeholder = sessionId.slice(0, 8);
+
+  label.replaceWith(input);
+  input.focus();
+  input.select();
+
+  function save() {
+    const newName = input.value.trim();
+    sessData.name = newName || null;
+    // Persist name to backend
+    fetch(`${API_BASE}/canvas/sessions/${sessionId}/name`, {
+      method: 'PATCH',
+      headers: {
+        'Authorization': `Bearer ${STATE.token}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ name: newName }),
+    }).catch(() => {});
+    _renderCanvasTabs();
+  }
+
+  function cancel() {
+    _renderCanvasTabs();
+  }
+
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); save(); }
+    if (e.key === 'Escape') { e.preventDefault(); cancel(); }
+  });
+  input.addEventListener('blur', save);
 }
 
 // ── Canvas content rendering ─────────────────────────────────────────────────
@@ -4397,15 +4447,115 @@ async function _pollCanvasSessions() {
     if (!resp.ok) return;
     const data = await resp.json();
 
-    // Only auto-connect to sessions that have components, are not already open,
+    // Only auto-connect to active sessions that have components, are not already open,
     // and have not been manually dismissed by the user this session.
     for (const s of (data.sessions || [])) {
-      if (s.component_count > 0 && !_canvasSessions.has(s.session_id) && !_dismissedCanvasSessions.has(s.session_id)) {
+      if (s.status === 'active' && s.component_count > 0 && !_canvasSessions.has(s.session_id) && !_dismissedCanvasSessions.has(s.session_id)) {
         openCanvasSession(s.session_id);
       }
+      // Sync name from server for active sessions
+      if (s.status === 'active' && _canvasSessions.has(s.session_id) && s.name) {
+        const local = _canvasSessions.get(s.session_id);
+        if (!local.name && s.name) {
+          local.name = s.name;
+          _renderCanvasTabs();
+        }
+      }
     }
+
+    // Update closed sessions list
+    const closedSessions = (data.sessions || []).filter(s => s.status === 'closed');
+    _renderClosedCanvasSessions(closedSessions);
+
     _updateCanvasBadge();
   } catch(e) { /* ignore polling errors */ }
+}
+
+// ── Closed sessions UI ───────────────────────────────────────────────────────
+
+function _renderClosedCanvasSessions(closedSessions) {
+  const container = $('canvas-closed-sessions');
+  if (!container) return;
+
+  if (!closedSessions || closedSessions.length === 0) {
+    container.innerHTML = '';
+    return;
+  }
+
+  const count = closedSessions.length;
+  container.innerHTML = '';
+
+  const toggleBtn = document.createElement('button');
+  toggleBtn.className = 'canvas-closed-toggle';
+  toggleBtn.textContent = `${count} closed session${count !== 1 ? 's' : ''} ${_closedCanvasExpanded ? '▲' : '▼'}`;
+  toggleBtn.addEventListener('click', () => {
+    _closedCanvasExpanded = !_closedCanvasExpanded;
+    _renderClosedCanvasSessions(closedSessions);
+  });
+  container.appendChild(toggleBtn);
+
+  const list = document.createElement('div');
+  list.className = 'canvas-closed-list' + (_closedCanvasExpanded ? ' expanded' : '');
+
+  for (const s of closedSessions) {
+    const item = document.createElement('div');
+    item.className = 'canvas-closed-item';
+
+    const info = document.createElement('div');
+    info.className = 'canvas-closed-item-info';
+
+    const name = document.createElement('div');
+    name.className = 'canvas-closed-item-name';
+    name.textContent = s.name || (s.session_id.length > 8 ? s.session_id.slice(0, 8) : s.session_id);
+    info.appendChild(name);
+
+    if (s.closed_at) {
+      const timeEl = document.createElement('div');
+      timeEl.className = 'canvas-closed-item-time';
+      timeEl.textContent = _formatClosedTime(s.closed_at);
+      info.appendChild(timeEl);
+    }
+
+    item.appendChild(info);
+
+    const restoreBtn = document.createElement('button');
+    restoreBtn.className = 'canvas-closed-restore-btn';
+    restoreBtn.textContent = 'Restore';
+    restoreBtn.addEventListener('click', () => _restoreCanvasSession(s.session_id));
+    item.appendChild(restoreBtn);
+
+    list.appendChild(item);
+  }
+
+  container.appendChild(list);
+}
+
+function _formatClosedTime(ts) {
+  try {
+    const d = typeof ts === 'number' ? new Date(ts * 1000) : new Date(ts);
+    const now = new Date();
+    const diffMs = now - d;
+    const diffMin = Math.floor(diffMs / 60000);
+    if (diffMin < 1) return 'just now';
+    if (diffMin < 60) return `${diffMin}m ago`;
+    const diffHr = Math.floor(diffMin / 60);
+    if (diffHr < 24) return `${diffHr}h ago`;
+    return d.toLocaleDateString();
+  } catch(e) { return ''; }
+}
+
+async function _restoreCanvasSession(sessionId) {
+  try {
+    const resp = await fetch(`${API_BASE}/canvas/sessions/${sessionId}/restore`, {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${STATE.token}` }
+    });
+    if (!resp.ok) return;
+    // Remove from dismissed set so it can auto-open
+    _dismissedCanvasSessions.delete(sessionId);
+    // Open the session
+    openCanvasSession(sessionId);
+  } catch(e) { /* ignore */ }
 }
 
 // ── Init ─────────────────────────────────────────────────────────────────────

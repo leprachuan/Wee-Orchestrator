@@ -4050,6 +4050,102 @@ html, body {
   color: var(--danger);
 }
 
+.canvas-tab-rename {
+  background: rgba(0,0,0,0.4);
+  border: 1px solid var(--accent);
+  border-radius: 4px;
+  color: var(--text-primary);
+  font-size: 11px;
+  padding: 1px 4px;
+  outline: none;
+  width: 80px;
+  font-family: inherit;
+}
+
+.canvas-closed-sessions {
+  padding: 0 10px;
+}
+
+.canvas-closed-sessions:empty {
+  display: none;
+}
+
+.canvas-closed-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 8px;
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  font-size: 11px;
+  cursor: pointer;
+  width: 100%;
+  text-align: left;
+}
+
+.canvas-closed-toggle:hover {
+  color: var(--text-secondary);
+}
+
+.canvas-closed-list {
+  display: none;
+  flex-direction: column;
+  gap: 4px;
+  padding: 4px 0 8px 0;
+}
+
+.canvas-closed-list.expanded {
+  display: flex;
+}
+
+.canvas-closed-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 8px;
+  background: rgba(255,255,255,0.03);
+  border: 1px solid rgba(255,255,255,0.06);
+  border-radius: var(--radius-sm);
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.canvas-closed-item-info {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.canvas-closed-item-name {
+  font-weight: 500;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.canvas-closed-item-time {
+  font-size: 10px;
+  color: var(--text-muted);
+}
+
+.canvas-closed-restore-btn {
+  background: rgba(62,207,142,0.12);
+  border: 1px solid rgba(62,207,142,0.3);
+  color: var(--accent);
+  font-size: 10px;
+  padding: 2px 8px;
+  border-radius: 4px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.canvas-closed-restore-btn:hover {
+  background: rgba(62,207,142,0.25);
+}
+
 .canvas-content {
   flex: 1;
   min-height: 0;

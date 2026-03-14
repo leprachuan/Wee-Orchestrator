@@ -9,6 +9,27 @@ A native real-time visual panel built into the WebUI. Slides in from the right s
 - **Config gathering**: render a form and wait for user input
 - **Long deploys or batch jobs**: live status updates
 
+## Session Lifecycle
+
+### Auto-Expiry
+Sessions automatically expire after **30 minutes** of inactivity (no active WebSocket connections). When a session expires:
+- Its state (components, name) is **persisted to disk** at `.canvas-sessions/{session_id}.json`
+- It appears in the **closed sessions** list in the WebUI
+- The timeout is configurable via `CANVAS_SESSION_TIMEOUT_MINUTES` env var (default: 30)
+
+### Session Naming
+- **Double-click** a tab label to rename a session
+- Names are saved immediately via `PATCH /api/v1/canvas/sessions/{session_id}/name`
+- Named sessions are easier to identify in the closed sessions list
+
+### Restoring Closed Sessions
+Closed sessions can be restored in two ways:
+
+1. **WebUI**: Click the **Restore** button in the closed sessions list below the tab bar
+2. **API**: `POST /api/v1/canvas/sessions/{session_id}/restore`
+
+When restored, the session's components are loaded back into memory and it becomes active again.
+
 ## Quick start
 
 ```python
@@ -58,8 +79,21 @@ c.clear()
 - `table` — headed rows of data
 - `card_grid` — grid of cards with title/body/optional button
 
+## REST API
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `GET` | `/api/v1/canvas/sessions` | List active and closed sessions |
+| `GET` | `/api/v1/canvas` | Summary of active sessions with components |
+| `PATCH` | `/api/v1/canvas/sessions/{id}/name` | Set session name (`{"name": "My Dashboard"}`) |
+| `POST` | `/api/v1/canvas/sessions/{id}/restore` | Restore a closed session |
+| `POST` | `/api/v1/canvas/sessions/{id}/close` | Explicitly close and persist a session |
+
 ## WebSocket endpoint
 `ws://127.0.0.1:<API_PORT>/canvas/ws?session=SESSION_ID`
 
-## Sessions API
-`GET /api/v1/canvas/sessions` — list active sessions and their component state
+## Configuration
+
+| Env Var | Default | Description |
+|---------|---------|-------------|
+| `CANVAS_SESSION_TIMEOUT_MINUTES` | `30` | Minutes of inactivity before auto-persist |
