@@ -14,17 +14,34 @@ import json
 import os
 import time
 import uuid
+from pathlib import Path
 from typing import Optional
 
-SERVER_PORT = int(os.environ.get("CANVAS_PORT", 8001))
+# Auto-load .env from the project root so SSL_CERTFILE, API_PORT etc. are available.
+# Use override=True so the local project config wins over inherited env vars
+# (e.g. when invoked from prod, the dev .env port must take precedence).
+try:
+    from dotenv import load_dotenv
+    _env_path = Path(__file__).resolve().parent / ".env"
+    if _env_path.exists():
+        load_dotenv(_env_path, override=True)
+except ImportError:
+    pass
+
+SERVER_PORT = int(os.environ.get("CANVAS_PORT", os.environ.get("API_PORT", 8001)))
 SERVER_HOST = os.environ.get("CANVAS_HOST", "127.0.0.1")
 
 
 def _tls_enabled() -> bool:
+    """Detect TLS: explicit CANVAS_HTTPS flag, or infer from SSL_CERTFILE."""
     env = os.environ.get("CANVAS_HTTPS", "").strip().lower()
     if env in {"1", "true", "yes", "on"}:
         return True
-    return False
+    if env in {"0", "false", "no", "off"}:
+        return False
+    # Auto-detect: if SSL cert is configured, assume HTTPS
+    cert = os.environ.get("SSL_CERTFILE", "")
+    return bool(cert and os.path.isfile(cert))
 
 
 class Canvas:
@@ -54,6 +71,9 @@ class Canvas:
             ssl_ctx.verify_mode = _ssl.CERT_NONE
         async with websockets.connect(self._ws_url(), ssl=ssl_ctx) as ws:
             await ws.send(json.dumps(message))
+            # Wait for server to process the message before the connection closes.
+            # Without this, the close frame can arrive before the server reads the data.
+            await asyncio.sleep(0.15)
 
     # ── Public API ────────────────────────────────────────────────────────────
 

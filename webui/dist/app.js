@@ -4394,12 +4394,11 @@ async function _pollCanvasSessions() {
     });
     if (!resp.ok) return;
     const data = await resp.json();
-    const serverSessions = new Set((data.sessions || []).map(s => s.session_id));
 
-    // Connect to new sessions we don't have
-    for (const sid of serverSessions) {
-      if (!_canvasSessions.has(sid)) {
-        openCanvasSession(sid);
+    // Only auto-connect to sessions that have components (skip stale/empty ones)
+    for (const s of (data.sessions || [])) {
+      if (s.component_count > 0 && !_canvasSessions.has(s.session_id)) {
+        openCanvasSession(s.session_id);
       }
     }
     _updateCanvasBadge();
