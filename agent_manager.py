@@ -3656,8 +3656,18 @@ User Request:
         # Get channel for file handling instructions
         channel = session_data.get("channel", "webui")
 
+        # Resolve the devin binary
+        devin_bin = self.devin_bin or "devin"
+
+        # Devin manages its own session UUIDs independently of the backend
+        # session_id.  Use _get_devin_session_id() as the sole source of truth
+        # for whether we can resume — the caller's `resume` flag is based on
+        # session_exists() which checks the wrong key for devin.
+        devin_sid = self._get_devin_session_id(n8n_session_id)
+        actually_resuming = bool(devin_sid)
+
         # Only inject full context on new sessions; resumed sessions already have it
-        if resume and session_id:
+        if actually_resuming:
             context_prompt = prompt
         else:
             context_prompt = self.build_agent_context_prompt(
@@ -3681,19 +3691,13 @@ User Request:
             )
             context_prompt = context_prompt + yolo_instruction
 
-        # Resolve the devin binary
-        devin_bin = self.devin_bin or "devin"
-
-        # Look up the devin-native session UUID stored from a previous run
-        devin_sid = self._get_devin_session_id(n8n_session_id)
-
         # -p is a boolean flag (print/non-interactive mode); prompt goes after --
         cmd = [devin_bin, "-p"]
         if model:
             cmd += ["--model", model]
         cmd += ["--permission-mode", "dangerous"]
 
-        if resume and devin_sid:
+        if actually_resuming:
             cmd += ["-r", devin_sid]
             print(f"[Session] Resuming Devin session {devin_sid[:8]}... with model {model} in {mode} mode", file=sys.stderr)
         else:
@@ -3707,7 +3711,7 @@ User Request:
 
         # After each run, capture and persist the most recent devin session UUID
         # so subsequent messages in this n8n session can resume it.
-        self._save_devin_session_id(n8n_session_id, devin_bin)
+        self._save_devin_session_id(n8n_session_id, devin_bin, agent_dir)
 
         if "Error: Devin command failed" in output:
             return output
@@ -3724,12 +3728,13 @@ User Request:
         except (FileNotFoundError, json.JSONDecodeError):
             return None
 
-    def _save_devin_session_id(self, n8n_session_id: str, devin_bin: str):
+    def _save_devin_session_id(self, n8n_session_id: str, devin_bin: str, cwd: Optional[str] = None):
         """Capture the most recently active devin session UUID and store it."""
         try:
             result = subprocess.run(
                 [devin_bin, "list", "--format", "json"],
                 capture_output=True, text=True, timeout=10,
+                cwd=cwd,
             )
             sessions = json.loads(result.stdout)
             if not sessions:
@@ -3745,7 +3750,7 @@ User Request:
         except Exception as e:
             print(f"[Session] Warning: could not save devin session ID: {e}", file=sys.stderr)
 
-    def session_exists(self, session_id: str, runtime: str) -> bool:
+    def session_exists(self, session_id: str, runtime: str, n8n_session_id: Optional[str] = None) -> bool:
         """Check if session state exists for runtime"""
         if runtime == "copilot":
             # Modern Copilot stores sessions as directories with events.jsonl inside
@@ -3802,8 +3807,9 @@ User Request:
                 pass
             return False
         elif runtime == "devin":
-            # Check if we have a stored devin session UUID for this n8n session
-            return (self.devin_session_dir / f"{session_id}.json").exists()
+            # Devin session mappings are keyed by n8n_session_id, not backend session_id
+            key = n8n_session_id if n8n_session_id else session_id
+            return (self.devin_session_dir / f"{key}.json").exists()
         return False
 
     def get_most_recent_session_id(
@@ -4810,6 +4816,14 @@ You can mention an agent in your prompt and it will auto-delegate:
         # For Gemini, we always try to resume the latest session for context retention
         if current_runtime == "gemini":
             can_resume = True  # Always attempt to resume latest Gemini session
+        elif current_runtime == "devin":
+            # Devin handles its own session resumption internally via
+            # _get_devin_session_id(); pass n8n_session_id for correct lookup
+            can_resume = self.session_exists(
+                session_id, current_runtime, n8n_session_id=n8n_session_id
+            ) if session_id else self.session_exists(
+                "", current_runtime, n8n_session_id=n8n_session_id
+            )
         else:
             can_resume = (
                 self.session_exists(session_id, current_runtime) if session_id else False
