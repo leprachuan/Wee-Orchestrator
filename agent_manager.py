@@ -2969,58 +2969,12 @@ To add custom skill repositories or manage repository settings:
         bg_task_instruction = ""
         if _shared_key:
             bg_task_instruction = f"""
-[Background Tasks — IMPORTANT]
-When the user asks you to run something "in the background", you MUST create a background task via the orchestrator API. Do NOT use your own internal background/async task mechanism (e.g. task tool with mode:"background") — those are invisible to the user.
+[Background Tasks] Run long tasks via the orchestrator API (visible in ⚡ Tasks tab). Full docs: {SCRIPT_BASE_DIR}/docs/background-tasks.md
+curl -s{_curl_insecure} -X POST {_api_scheme}://127.0.0.1:{_api_port_bg}/api/v1/background-tasks -H "Content-Type: application/json" -H "Authorization: Bearer shared_{_shared_key}" -H "X-User-Identity: {_user_identity}" -H "X-Auth-Channel: {channel}" -d '{{"prompt": "...", "agent": "{agent}", "timeout": 900}}'"""
 
-To create a background task, run this curl command:
-```
-curl -s{_curl_insecure} -X POST {_api_scheme}://127.0.0.1:{_api_port_bg}/api/v1/background-tasks \\
-  -H "Content-Type: application/json" \\
-  -H "Authorization: Bearer shared_{_shared_key}" \\
-  -H "X-User-Identity: {_user_identity}" \\
-  -H "X-Auth-Channel: {channel}" \\
-  -d '{{"prompt": "<the task prompt here>", "agent": "{agent}", "timeout": <seconds>}}'
-```
-The API returns a task_id. Tell the user the task was started and they can monitor it in the ⚡ Tasks tab (WebUI) or use `/background status <task_id>`.
-Do NOT run the actual work yourself when backgrounding — the API spawns a separate agent to handle it.
-The default agent for background tasks is `{agent}` (inherited from your current session). Only override `"agent"` in the JSON body if the user explicitly requests a different agent.
-
-**IMPORTANT — You must set the `timeout` field.** Estimate how long the task will realistically take and set an appropriate timeout in seconds. Examples:
-- Quick status check or simple query: 120 (2 min)
-- Standard task (summarize, analyze, write): 600 (10 min)
-- Multi-step or research task: 900 (15 min)
-- Complex build, deploy, or batch job: 1200–1800 (20–30 min)
-Default if truly uncertain: 900 (15 min). Do not omit the `timeout` field."""
-
-        # Inject Live Canvas capability instructions
+        # Inject Live Canvas capability hint
         canvas_instruction = f"""
-[Live Canvas — Native Capability]
-You have a built-in live canvas panel in the WebUI. Use it to display visual content (dashboards, progress boards, charts, tables, forms, approval flows) that updates in real time as you work.
-
-The canvas is served natively by this orchestrator. Use the Python client at `{SCRIPT_BASE_DIR}/canvas.py`:
-
-```python
-import sys; sys.path.insert(0, '{SCRIPT_BASE_DIR}')
-from canvas import Canvas
-
-c = Canvas()          # auto-generates a session ID
-c.open()              # opens the canvas panel in the WebUI (Tailscale: 100.124.186.75:{_api_port_bg})
-c.render_template("progress_board", {{
-    "title": "Task Progress",
-    "items": [{{"label": "Step 1", "status": "done"}}, {{"label": "Step 2", "status": "in_progress"}}]
-}})
-action = c.wait_for_action(timeout=60)  # blocks until user clicks a button
-```
-
-**When to use the canvas:**
-- Multi-step tasks: show a live progress board as you work
-- Presenting options or plans: render a flowchart or card grid with approval buttons
-- Data results: render charts, tables, or dashboards
-- Config gathering: render a form and wait for user input
-
-**Canvas WebSocket endpoint:** `ws://127.0.0.1:{_api_port_bg}/canvas/ws?session=SESSION_ID`
-**Canvas sessions API:** `GET {_api_scheme}://127.0.0.1:{_api_port_bg}/api/v1/canvas/sessions`
-Multiple canvas sessions show as tabs in the panel. The panel slides in from the right and can be collapsed."""
+[Live Canvas] Native real-time visual panel in the WebUI (progress boards, charts, forms, approval flows). Client: `{SCRIPT_BASE_DIR}/canvas.py` — `from canvas import Canvas; c = Canvas(); c.open()`. Full docs: {SCRIPT_BASE_DIR}/docs/canvas.md"""
 
         # Inject cross-runtime handoff context on the first message of a new session.
         # get_handoff_context() is one-time: it reads and deletes the handoff file so
