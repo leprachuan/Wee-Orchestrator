@@ -2972,9 +2972,9 @@ To add custom skill repositories or manage repository settings:
 [Background Tasks] Run long tasks via the orchestrator API (visible in ⚡ Tasks tab). Full docs: {SCRIPT_BASE_DIR}/docs/background-tasks.md
 curl -s{_curl_insecure} -X POST {_api_scheme}://127.0.0.1:{_api_port_bg}/api/v1/background-tasks -H "Content-Type: application/json" -H "Authorization: Bearer shared_{_shared_key}" -H "X-User-Identity: {_user_identity}" -H "X-Auth-Channel: {channel}" -d '{{"prompt": "...", "agent": "{agent}", "timeout": 900}}'"""
 
-        # Inject Live Canvas capability hint
+        # Inject Wee Canvas capability hint
         canvas_instruction = f"""
-[Live Canvas] Native real-time visual panel in the WebUI (progress boards, charts, forms, approval flows). Client: `{SCRIPT_BASE_DIR}/canvas.py` — `from canvas import Canvas; c = Canvas(); c.open()`. Full docs: {SCRIPT_BASE_DIR}/docs/canvas.md"""
+[Wee Canvas] Native real-time visual panel in the WebUI (progress boards, charts, forms, approval flows). Client: `{SCRIPT_BASE_DIR}/canvas.py` — `from canvas import Canvas; c = Canvas(); c.open()`. Full docs: {SCRIPT_BASE_DIR}/docs/canvas.md"""
 
         # Inject cross-runtime handoff context on the first message of a new session.
         # get_handoff_context() is one-time: it reads and deletes the handoff file so
@@ -7050,7 +7050,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             traceback.print_exc()
             return {"success": False, "error": str(e)}
     
-    # --- Live Canvas ──────────────────────────────────────────────────────────
+    # --- Wee Canvas ───────────────────────────────────────────────────────────
     # In-memory canvas session state: session_id → {components, connections, action_watchers, pending_actions}
     _canvas_sessions: dict = {}
 

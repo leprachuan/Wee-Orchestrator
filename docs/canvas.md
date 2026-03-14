@@ -1,4 +1,4 @@
-# Live Canvas
+# Wee Canvas
 
 A native real-time visual panel built into the WebUI. Slides in from the right side of the screen. Multiple sessions appear as tabs. Users can interact via buttons and forms.
 
