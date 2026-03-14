@@ -161,6 +161,7 @@ const RUNTIME_ICONS = {
   gemini:   '/ui/assets/runtime-icons/gemini.svg',
   opencode: '/ui/assets/runtime-icons/opencode.svg',
   codex:    '/ui/assets/runtime-icons/openai.svg',
+  devin:    '/ui/assets/runtime-icons/devin.svg',
 };
 
 function runtimeIconHTML(runtime, size = 14) {
@@ -348,6 +349,7 @@ const PILL_OPTIONS = {
       { label: `${runtimeIconHTML('gemini')}gemini`,         cmd: '/runtime set gemini' },
       { label: `${runtimeIconHTML('opencode')}opencode`,     cmd: '/runtime set opencode' },
       { label: `${runtimeIconHTML('codex')}codex`,           cmd: '/runtime set codex' },
+      { label: `${runtimeIconHTML('devin')}devin`,           cmd: '/runtime set devin' },
     ],
   },
   'meta-model': {
