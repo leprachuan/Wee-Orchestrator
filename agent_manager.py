@@ -3646,11 +3646,12 @@ User Request:
         devin_bin = self.devin_bin or "devin"
 
         # Devin CLI does not support session resume — always start fresh
-        cmd = [devin_bin, "-p", context_prompt]
+        # -p is a boolean flag (print/non-interactive mode); prompt goes after --
+        cmd = [devin_bin, "-p"]
         if model:
             cmd += ["--model", model]
         # Always use dangerous permission mode for non-interactive execution
-        cmd += ["--permission-mode", "dangerous"]
+        cmd += ["--permission-mode", "dangerous", "--", context_prompt]
 
         print(f"[Session] Starting Devin session with model {model} in {mode} mode", file=sys.stderr)
 
