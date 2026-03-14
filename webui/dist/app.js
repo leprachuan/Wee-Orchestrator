@@ -1789,6 +1789,7 @@ document.addEventListener('DOMContentLoaded', () => {
   $('btn-nav-background').addEventListener('click', showBackgroundPanel);
   $('btn-nav-scheduler').addEventListener('click', showSchedulerPanel);
   $('btn-nav-notifications').addEventListener('click', toggleNotificationPanel);
+  if ($('btn-nav-canvas')) $('btn-nav-canvas').addEventListener('click', toggleCanvasPanel);
 
   // Notification settings/actions
   $('btn-notif-mark-all-read').addEventListener('click', async () => {
@@ -3723,3 +3724,730 @@ document.addEventListener('DOMContentLoaded', () => {
   }
   updateMobileBadges();
 });
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// ─── Live Canvas Panel ──────────────────────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════════════════════
+
+const _canvasSessions = new Map(); // sessionId → { ws, components, connected }
+let _activeCanvasSession = null;
+let _canvasPanelOpen = false;
+
+// ── Canvas node registry (for partial updates) ──────────────────────────────
+const _canvasNodeRegistry = new Map();
+
+// ── Panel toggle ─────────────────────────────────────────────────────────────
+
+function toggleCanvasPanel() {
+  if (_canvasPanelOpen) closeCanvasPanel();
+  else openCanvasPanel();
+}
+
+function openCanvasPanel() {
+  const panel = $('canvas-panel');
+  if (!panel) return;
+  panel.classList.remove('canvas-hidden');
+  panel.classList.add('canvas-open');
+  _canvasPanelOpen = true;
+  $('btn-nav-canvas')?.classList.add('active');
+}
+
+function closeCanvasPanel() {
+  const panel = $('canvas-panel');
+  if (!panel) return;
+  panel.classList.add('canvas-hidden');
+  panel.classList.remove('canvas-open');
+  _canvasPanelOpen = false;
+  $('btn-nav-canvas')?.classList.remove('active');
+}
+
+// ── Session management ───────────────────────────────────────────────────────
+
+function openCanvasSession(sessionId) {
+  if (!_canvasSessions.has(sessionId)) {
+    _connectCanvasWS(sessionId);
+  }
+  _activeCanvasSession = sessionId;
+  _renderCanvasTabs();
+  _renderActiveCanvas();
+  if (!_canvasPanelOpen) openCanvasPanel();
+}
+
+function closeCanvasSession(sessionId) {
+  const sess = _canvasSessions.get(sessionId);
+  if (sess && sess.ws) {
+    try { sess.ws.close(); } catch(e) {}
+  }
+  _canvasSessions.delete(sessionId);
+  if (_activeCanvasSession === sessionId) {
+    const keys = [..._canvasSessions.keys()];
+    _activeCanvasSession = keys.length ? keys[keys.length - 1] : null;
+  }
+  _renderCanvasTabs();
+  _renderActiveCanvas();
+  _updateCanvasBadge();
+  if (_canvasSessions.size === 0) {
+    const empty = $('canvas-empty');
+    if (empty) empty.style.display = '';
+  }
+}
+
+function _connectCanvasWS(sessionId) {
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  const wsUrl = `${proto}://${location.host}/canvas/ws?session=${sessionId}`;
+  const sess = { ws: null, components: [], connected: false };
+  _canvasSessions.set(sessionId, sess);
+
+  const ws = new WebSocket(wsUrl);
+  sess.ws = ws;
+
+  ws.onopen = () => {
+    sess.connected = true;
+    _renderCanvasTabs();
+  };
+
+  ws.onmessage = (evt) => {
+    let msg;
+    try { msg = JSON.parse(evt.data); } catch(e) { return; }
+    _handleCanvasMessage(sessionId, msg);
+  };
+
+  ws.onclose = () => {
+    sess.connected = false;
+    // Auto-reconnect after 3s if session still tracked
+    if (_canvasSessions.has(sessionId)) {
+      setTimeout(() => {
+        if (_canvasSessions.has(sessionId)) {
+          _canvasSessions.delete(sessionId);
+          _connectCanvasWS(sessionId);
+          if (_activeCanvasSession === sessionId) _renderActiveCanvas();
+        }
+      }, 3000);
+    }
+  };
+
+  ws.onerror = () => { sess.connected = false; };
+}
+
+function _handleCanvasMessage(sessionId, msg) {
+  const sess = _canvasSessions.get(sessionId);
+  if (!sess) return;
+
+  if (msg.type === 'render' || msg.type === 'restore') {
+    sess.components = msg.components || [];
+    if (_activeCanvasSession === sessionId) _renderActiveCanvas();
+  } else if (msg.type === 'update') {
+    _canvasApplyUpdate(sess.components, msg.node_id, msg.changes);
+    if (_activeCanvasSession === sessionId) {
+      // Try partial update first
+      const el = _canvasNodeRegistry.get(msg.node_id);
+      if (el && el._compData) {
+        Object.assign(el._compData, msg.changes);
+        const newEl = _canvasRenderComponent(el._compData);
+        if (newEl && el.parentNode) {
+          el.parentNode.replaceChild(newEl, el);
+          _canvasNodeRegistry.set(msg.node_id, newEl);
+        }
+      } else {
+        _renderActiveCanvas();
+      }
+    }
+  } else if (msg.type === 'clear') {
+    sess.components = [];
+    if (_activeCanvasSession === sessionId) _renderActiveCanvas();
+  }
+}
+
+function _canvasApplyUpdate(components, nodeId, changes) {
+  for (const comp of components) {
+    if (typeof comp !== 'object' || !comp) continue;
+    if (comp.id === nodeId) { Object.assign(comp, changes); return true; }
+    for (const key of ['children', 'items', 'columns', 'steps', 'rows', 'metrics', 'fields']) {
+      const arr = comp[key];
+      if (Array.isArray(arr) && _canvasApplyUpdate(arr, nodeId, changes)) return true;
+    }
+  }
+  return false;
+}
+
+// ── Tab rendering ────────────────────────────────────────────────────────────
+
+function _renderCanvasTabs() {
+  const bar = $('canvas-tab-bar');
+  if (!bar) return;
+  bar.innerHTML = '';
+
+  for (const [sid] of _canvasSessions) {
+    const tab = document.createElement('div');
+    tab.className = 'canvas-tab' + (sid === _activeCanvasSession ? ' active' : '');
+
+    const label = document.createElement('span');
+    label.textContent = sid.length > 8 ? sid.slice(0, 8) : sid;
+    tab.appendChild(label);
+
+    const closeBtn = document.createElement('button');
+    closeBtn.className = 'canvas-tab-close';
+    closeBtn.textContent = '×';
+    closeBtn.addEventListener('click', (e) => { e.stopPropagation(); closeCanvasSession(sid); });
+    tab.appendChild(closeBtn);
+
+    tab.addEventListener('click', () => {
+      _activeCanvasSession = sid;
+      _renderCanvasTabs();
+      _renderActiveCanvas();
+    });
+
+    bar.appendChild(tab);
+  }
+}
+
+// ── Canvas content rendering ─────────────────────────────────────────────────
+
+function _renderActiveCanvas() {
+  const content = $('canvas-content');
+  const empty = $('canvas-empty');
+  if (!content) return;
+
+  const sess = _activeCanvasSession ? _canvasSessions.get(_activeCanvasSession) : null;
+
+  if (!sess || !sess.components || sess.components.length === 0) {
+    // Show empty state
+    content.innerHTML = '';
+    if (empty) { content.appendChild(empty); empty.style.display = ''; }
+    return;
+  }
+
+  if (empty) empty.style.display = 'none';
+  _canvasNodeRegistry.clear();
+  content.innerHTML = '';
+
+  for (const comp of sess.components) {
+    const el = _canvasRenderComponent(comp);
+    if (el) content.appendChild(el);
+  }
+
+  // Re-render mermaid diagrams
+  const flowcharts = content.querySelectorAll('.mermaid-src');
+  flowcharts.forEach(node => _canvasRenderMermaid(node));
+}
+
+function _canvasRenderComponent(comp) {
+  if (!comp || typeof comp !== 'object') return null;
+  const el = _canvasDispatch(comp);
+  if (!el) return null;
+  if (comp.id) {
+    el.dataset.nodeId = comp.id;
+    _canvasNodeRegistry.set(comp.id, el);
+  }
+  el._compData = comp;
+  el.classList.add('anim-in');
+  return el;
+}
+
+function _canvasDispatch(comp) {
+  switch (comp.type) {
+    case 'board':       return _cvBoard(comp);
+    case 'card':        return _cvCard(comp);
+    case 'grid':        return _cvGrid(comp);
+    case 'row':         return _cvRow(comp);
+    case 'col':         return _cvCol(comp);
+    case 'table':       return _cvTable(comp);
+    case 'chart_bar':   case 'chart_line': case 'chart_pie':
+    case 'chart_doughnut': case 'chart_radar': case 'chart_polar':
+      return _cvChart(comp);
+    case 'metric':      return _cvMetric(comp);
+    case 'progress':    return _cvProgress(comp);
+    case 'badge':       return _cvBadge(comp);
+    case 'log':         return _cvLog(comp);
+    case 'button':      return _cvButton(comp);
+    case 'form':        return _cvForm(comp);
+    case 'heading':     return _cvHeading(comp);
+    case 'text':        return _cvText(comp);
+    case 'markdown':    return _cvMarkdown(comp);
+    case 'html':        return _cvHtml(comp);
+    case 'list':        return _cvList(comp);
+    case 'divider':     { const hr = document.createElement('hr'); hr.className = 'glass-divider'; return hr; }
+    case 'flowchart':   return _cvFlowchart(comp);
+    case 'code':        return _cvCode(comp);
+    default: {
+      const d = document.createElement('div');
+      d.style.cssText = 'color:var(--text-muted);font-size:11px;';
+      d.textContent = `[unknown: ${comp.type}]`;
+      return d;
+    }
+  }
+}
+
+// ── Component renderers ─────────────────────────────────────────────────────
+
+function _cvBoard(comp) {
+  const w = document.createElement('div');
+  w.className = 'board-wrap glass-panel';
+  for (const col of (comp.columns || [])) {
+    const c = document.createElement('div');
+    c.className = 'board-col';
+    if (col.id) { c.dataset.nodeId = col.id; _canvasNodeRegistry.set(col.id, c); }
+    const t = document.createElement('div');
+    t.className = 'board-col-title';
+    t.textContent = col.title || '';
+    c.appendChild(t);
+    for (const item of (col.items || [])) {
+      const el = document.createElement('div');
+      el.className = 'board-item anim-in';
+      if (item.id) { el.dataset.nodeId = item.id; _canvasNodeRegistry.set(item.id, el); el._compData = item; }
+      el.textContent = item.title || item.name || '';
+      if (item.status) {
+        const colors = { done:'#3ecf8e', running:'#f5c542', pending:'rgba(255,255,255,0.3)', error:'#ff5f6d' };
+        el.style.borderLeft = `3px solid ${colors[item.status] || 'rgba(255,255,255,0.2)'}`;
+      }
+      c.appendChild(el);
+    }
+    w.appendChild(c);
+  }
+  return w;
+}
+
+function _cvCard(comp) {
+  const w = document.createElement('div');
+  w.className = 'glass-card';
+  if (comp.title) {
+    const h = document.createElement('div');
+    h.style.cssText = 'font-weight:600;font-size:13px;margin-bottom:8px;';
+    h.textContent = comp.title;
+    w.appendChild(h);
+  }
+  for (const ch of (comp.children || [])) {
+    const el = _canvasRenderComponent(ch);
+    if (el) w.appendChild(el);
+  }
+  if (comp.content && typeof comp.content === 'string') {
+    const p = document.createElement('p');
+    p.style.cssText = 'font-size:12px;color:var(--text-secondary);';
+    p.textContent = comp.content;
+    w.appendChild(p);
+  }
+  return w;
+}
+
+function _cvGrid(comp) {
+  const w = document.createElement('div');
+  w.className = 'c-grid';
+  w.style.gridTemplateColumns = `repeat(${comp.cols || 2}, 1fr)`;
+  for (const ch of (comp.children || [])) { const el = _canvasRenderComponent(ch); if (el) w.appendChild(el); }
+  return w;
+}
+
+function _cvRow(comp) {
+  const w = document.createElement('div');
+  w.className = 'c-row';
+  for (const ch of (comp.children || [])) { const el = _canvasRenderComponent(ch); if (el) w.appendChild(el); }
+  return w;
+}
+
+function _cvCol(comp) {
+  const w = document.createElement('div');
+  w.className = 'c-col';
+  for (const ch of (comp.children || [])) { const el = _canvasRenderComponent(ch); if (el) w.appendChild(el); }
+  return w;
+}
+
+function _cvTable(comp) {
+  const w = document.createElement('div');
+  w.className = 'glass-panel';
+  w.style.overflowX = 'auto';
+  if (comp.label || comp.title) {
+    const h = document.createElement('div');
+    h.style.cssText = 'font-weight:600;font-size:12px;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em;margin-bottom:10px;';
+    h.textContent = comp.label || comp.title;
+    w.appendChild(h);
+  }
+  const table = document.createElement('table');
+  table.className = 'glass-table';
+  if (comp.headers?.length) {
+    const thead = document.createElement('thead');
+    const tr = document.createElement('tr');
+    for (const h of comp.headers) { const th = document.createElement('th'); th.textContent = h; tr.appendChild(th); }
+    thead.appendChild(tr);
+    table.appendChild(thead);
+  }
+  const tbody = document.createElement('tbody');
+  for (const row of (comp.rows || [])) {
+    const tr = document.createElement('tr');
+    const cells = Array.isArray(row) ? row : Object.values(row);
+    for (const cell of cells) { const td = document.createElement('td'); td.textContent = cell; tr.appendChild(td); }
+    tbody.appendChild(tr);
+  }
+  table.appendChild(tbody);
+  w.appendChild(table);
+  return w;
+}
+
+function _cvChart(comp) {
+  const w = document.createElement('div');
+  w.className = 'glass-panel';
+  if (comp.label || comp.title) {
+    const h = document.createElement('div');
+    h.style.cssText = 'font-weight:600;font-size:12px;color:var(--text-muted);margin-bottom:10px;';
+    h.textContent = comp.label || comp.title;
+    w.appendChild(h);
+  }
+  const canvas = document.createElement('canvas');
+  canvas.style.maxHeight = '250px';
+  w.appendChild(canvas);
+  setTimeout(() => {
+    if (typeof Chart === 'undefined') return;
+    const typeMap = { chart_bar:'bar', chart_line:'line', chart_pie:'pie', chart_doughnut:'doughnut', chart_radar:'radar', chart_polar:'polarArea' };
+    const chartType = typeMap[comp.type] || 'line';
+    const datasets = (comp.datasets || []).map((ds, i) => ({
+      ...ds,
+      borderColor: ds.borderColor || ['#3ecf8e','#f5c542','#7fb5ff','#ff8888','#c084fc'][i % 5],
+      backgroundColor: ds.backgroundColor || (chartType === 'line' ? 'transparent' : undefined),
+    }));
+    new Chart(canvas, {
+      type: chartType,
+      data: { labels: comp.labels || [], datasets },
+      options: {
+        responsive: true,
+        plugins: { legend: { labels: { color: 'rgba(255,255,255,0.6)' } } },
+        scales: chartType === 'line' || chartType === 'bar' ? {
+          x: { ticks: { color: 'rgba(255,255,255,0.4)' }, grid: { color: 'rgba(255,255,255,0.06)' } },
+          y: { ticks: { color: 'rgba(255,255,255,0.4)' }, grid: { color: 'rgba(255,255,255,0.06)' } }
+        } : undefined
+      }
+    });
+  }, 50);
+  return w;
+}
+
+function _cvMetric(comp) {
+  const w = document.createElement('div');
+  w.className = 'glass-card';
+  w.style.cssText = 'min-width:100px;text-align:center;';
+  const val = document.createElement('div');
+  val.className = 'metric-value';
+  if (comp.trend === 'up') val.classList.add('trend-up');
+  if (comp.trend === 'down') val.classList.add('trend-down');
+  val.textContent = comp.value || '—';
+  if (comp.trend === 'up') { const s = document.createElement('span'); s.textContent = ' ↑'; s.className = 'trend-up'; val.appendChild(s); }
+  if (comp.trend === 'down') { const s = document.createElement('span'); s.textContent = ' ↓'; s.className = 'trend-down'; val.appendChild(s); }
+  w.appendChild(val);
+  const lbl = document.createElement('div');
+  lbl.className = 'metric-label';
+  lbl.textContent = comp.label || '';
+  w.appendChild(lbl);
+  return w;
+}
+
+function _cvProgress(comp) {
+  const w = document.createElement('div');
+  w.className = 'glass-panel';
+  w.style.padding = '14px';
+  const top = document.createElement('div');
+  top.style.cssText = 'display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;';
+  const label = document.createElement('span');
+  label.style.cssText = 'font-size:12px;color:var(--text-secondary);';
+  label.textContent = comp.label || '';
+  top.appendChild(label);
+  const pct = Math.max(0, Math.min(100, comp.pct || 0));
+  const pctLabel = document.createElement('span');
+  pctLabel.style.cssText = 'font-size:12px;font-weight:600;color:var(--accent);';
+  pctLabel.textContent = `${pct}%`;
+  top.appendChild(pctLabel);
+  w.appendChild(top);
+  const track = document.createElement('div');
+  track.className = 'progress-wrap';
+  const bar = document.createElement('div');
+  bar.className = 'progress-bar';
+  bar.style.width = `${pct}%`;
+  track.appendChild(bar);
+  w.appendChild(track);
+  return w;
+}
+
+function _cvBadge(comp) {
+  const el = document.createElement('span');
+  el.className = `badge badge-${comp.variant || 'neutral'}`;
+  el.textContent = comp.text || comp.label || '';
+  return el;
+}
+
+function _cvLog(comp) {
+  const w = document.createElement('div');
+  w.className = 'glass-panel';
+  w.style.padding = '10px';
+  if (comp.label) {
+    const h = document.createElement('div');
+    h.style.cssText = 'font-size:10px;color:var(--text-muted);margin-bottom:6px;text-transform:uppercase;letter-spacing:.06em;';
+    h.textContent = comp.label;
+    w.appendChild(h);
+  }
+  const pre = document.createElement('div');
+  pre.className = 'log-area';
+  const lines = comp.lines || comp.content || '';
+  pre.textContent = Array.isArray(lines) ? lines.join('\n') : String(lines);
+  requestAnimationFrame(() => { pre.scrollTop = pre.scrollHeight; });
+  w.appendChild(pre);
+  return w;
+}
+
+function _cvButton(comp) {
+  const btn = document.createElement('button');
+  const vmap = { primary:'btn-primary', ghost:'btn-ghost', danger:'btn-danger', gold:'btn-gold', secondary:'btn-ghost' };
+  btn.className = `btn ${vmap[comp.variant] || 'btn-primary'}`;
+  btn.textContent = comp.label || comp.text || 'Button';
+  if (comp.disabled) btn.disabled = true;
+  btn.addEventListener('click', () => {
+    if (comp.action_id) _canvasSendAction(comp.action_id, {});
+  });
+  return btn;
+}
+
+function _cvForm(comp) {
+  const w = document.createElement('div');
+  w.className = 'glass-panel';
+  const fieldValues = {};
+  for (const field of (comp.fields || [])) {
+    const fw = document.createElement('div');
+    fw.style.marginBottom = '12px';
+    if (field.label) {
+      const lbl = document.createElement('label');
+      lbl.style.cssText = 'display:block;font-size:11px;color:var(--text-muted);margin-bottom:4px;text-transform:uppercase;letter-spacing:.04em;';
+      lbl.textContent = field.label;
+      fw.appendChild(lbl);
+    }
+    const inputType = field.type || field.input_type || 'text';
+    if (inputType === 'select' || (field.options && field.options.length)) {
+      const sel = document.createElement('select');
+      sel.className = 'glass-select';
+      for (const opt of (field.options || [])) {
+        const o = document.createElement('option');
+        o.value = o.textContent = opt;
+        if (field.default && opt === field.default) o.selected = true;
+        sel.appendChild(o);
+      }
+      sel.addEventListener('change', () => { fieldValues[field.name] = sel.value; });
+      fieldValues[field.name] = sel.value;
+      fw.appendChild(sel);
+    } else if (inputType === 'checkbox') {
+      const row = document.createElement('div');
+      row.style.cssText = 'display:flex;align-items:center;gap:8px;';
+      const cb = document.createElement('input');
+      cb.type = 'checkbox';
+      cb.style.accentColor = 'var(--accent)';
+      cb.checked = !!field.default;
+      cb.addEventListener('change', () => { fieldValues[field.name] = cb.checked; });
+      fieldValues[field.name] = cb.checked;
+      row.appendChild(cb);
+      fw.innerHTML = '';
+      fw.appendChild(row);
+    } else {
+      const inp = document.createElement('input');
+      inp.type = inputType === 'number' ? 'number' : 'text';
+      inp.className = 'glass-input';
+      inp.placeholder = field.placeholder || '';
+      inp.value = field.default || '';
+      inp.addEventListener('input', () => { fieldValues[field.name] = inp.value; });
+      fieldValues[field.name] = inp.value;
+      fw.appendChild(inp);
+    }
+    w.appendChild(fw);
+  }
+  if (comp.actions?.length) {
+    const btnRow = document.createElement('div');
+    btnRow.style.cssText = 'display:flex;gap:8px;justify-content:flex-end;margin-top:14px;';
+    for (const act of comp.actions) {
+      const btn = document.createElement('button');
+      const vmap = { primary:'btn-primary', ghost:'btn-ghost', danger:'btn-danger' };
+      btn.className = `btn ${vmap[act.variant] || 'btn-primary'}`;
+      btn.textContent = act.label;
+      btn.addEventListener('click', () => _canvasSendAction(act.action_id, { ...fieldValues }));
+      btnRow.appendChild(btn);
+    }
+    w.appendChild(btnRow);
+  }
+  return w;
+}
+
+function _cvHeading(comp) {
+  const level = Math.min(4, Math.max(1, comp.level || 2));
+  const el = document.createElement(`h${level}`);
+  el.className = `c-h${level}`;
+  el.textContent = comp.text || '';
+  return el;
+}
+
+function _cvText(comp) {
+  const el = document.createElement('p');
+  el.style.cssText = `font-size:13px;line-height:1.6;color:${comp.muted ? 'var(--text-muted)' : 'var(--text-secondary)'};`;
+  el.textContent = comp.text || comp.content || '';
+  return el;
+}
+
+function _cvMarkdown(comp) {
+  const el = document.createElement('div');
+  el.style.cssText = 'font-size:13px;line-height:1.7;color:var(--text-secondary);';
+  const md = comp.content || comp.text || '';
+  if (typeof marked !== 'undefined') {
+    const html = marked.parse(md);
+    el.innerHTML = typeof DOMPurify !== 'undefined' ? DOMPurify.sanitize(html) : html;
+  } else {
+    el.textContent = md;
+  }
+  return el;
+}
+
+function _cvHtml(comp) {
+  const el = document.createElement('div');
+  el.style.cssText = 'font-size:13px;line-height:1.7;color:var(--text-secondary);';
+  const html = comp.content || comp.html || '';
+  el.innerHTML = typeof DOMPurify !== 'undefined' ? DOMPurify.sanitize(html) : html;
+  return el;
+}
+
+function _cvList(comp) {
+  const el = document.createElement(comp.ordered ? 'ol' : 'ul');
+  el.style.cssText = 'padding-left:18px;font-size:13px;color:var(--text-secondary);display:flex;flex-direction:column;gap:3px;';
+  for (const item of (comp.items || [])) {
+    const li = document.createElement('li');
+    li.textContent = typeof item === 'string' ? item : item.text || '';
+    el.appendChild(li);
+  }
+  return el;
+}
+
+function _cvFlowchart(comp) {
+  const w = document.createElement('div');
+  w.className = 'glass-panel mermaid-wrap';
+  const md = document.createElement('div');
+  md.className = 'mermaid-src';
+  md.dataset.mermaidSrc = comp.content || 'flowchart TD\n  A[No content]';
+  w.appendChild(md);
+  setTimeout(() => _canvasRenderMermaid(md), 100);
+  return w;
+}
+
+function _cvCode(comp) {
+  const w = document.createElement('div');
+  w.className = 'glass-panel';
+  w.style.padding = '0';
+  if (comp.label || comp.language) {
+    const h = document.createElement('div');
+    h.style.cssText = 'padding:6px 12px;font-size:10px;color:var(--text-muted);border-bottom:1px solid var(--glass-border);font-family:var(--font-mono);';
+    h.textContent = comp.label || comp.language;
+    w.appendChild(h);
+  }
+  const pre = document.createElement('div');
+  pre.className = 'code-block';
+  pre.textContent = comp.content || comp.code || '';
+  w.appendChild(pre);
+  return w;
+}
+
+// ── Mermaid renderer ─────────────────────────────────────────────────────────
+
+async function _canvasRenderMermaid(el) {
+  const src = (el.dataset.mermaidSrc || el.textContent || '').trim();
+  if (!src || typeof mermaid === 'undefined') return;
+  el.innerHTML = '';
+  try {
+    const id = 'mermaid-cv-' + Date.now() + '-' + Math.random().toString(36).slice(2);
+    const { svg } = await mermaid.render(id, src);
+    el.innerHTML = svg;
+  } catch (e) {
+    el.style.cssText = 'color:var(--danger);font-family:var(--font-mono);font-size:11px;';
+    el.textContent = 'Mermaid error: ' + e.message;
+  }
+}
+
+// ── Send action back to agent ────────────────────────────────────────────────
+
+function _canvasSendAction(actionId, formData) {
+  if (!_activeCanvasSession) return;
+  const sess = _canvasSessions.get(_activeCanvasSession);
+  if (!sess || !sess.ws || sess.ws.readyState !== WebSocket.OPEN) return;
+  sess.ws.send(JSON.stringify({
+    type: 'action',
+    action_id: actionId,
+    data: formData,
+    session_id: _activeCanvasSession,
+    timestamp: new Date().toISOString(),
+  }));
+}
+
+// ── Badge update ─────────────────────────────────────────────────────────────
+
+function _updateCanvasBadge() {
+  const badge = $('canvas-badge');
+  if (!badge) return;
+  const count = _canvasSessions.size;
+  badge.textContent = count;
+  if (count > 0) { badge.classList.remove('hidden'); }
+  else { badge.classList.add('hidden'); }
+}
+
+// ── Poll for new sessions ────────────────────────────────────────────────────
+
+async function _pollCanvasSessions() {
+  try {
+    const resp = await fetch(`${API_BASE}/canvas/sessions`, {
+      headers: { 'Authorization': `Bearer ${STATE.token}` }
+    });
+    if (!resp.ok) return;
+    const data = await resp.json();
+    const serverSessions = new Set((data.sessions || []).map(s => s.session_id));
+
+    // Connect to new sessions we don't have
+    for (const sid of serverSessions) {
+      if (!_canvasSessions.has(sid)) {
+        openCanvasSession(sid);
+      }
+    }
+    _updateCanvasBadge();
+  } catch(e) { /* ignore polling errors */ }
+}
+
+// ── Init ─────────────────────────────────────────────────────────────────────
+
+function _initCanvas() {
+  // Edge tab toggle
+  const edgeTab = $('canvas-edge-tab');
+  if (edgeTab) edgeTab.addEventListener('click', toggleCanvasPanel);
+
+  // Close button
+  const closeBtn = $('btn-canvas-close');
+  if (closeBtn) closeBtn.addEventListener('click', closeCanvasPanel);
+
+  // Initialize mermaid for canvas
+  if (typeof mermaid !== 'undefined') {
+    mermaid.initialize({
+      startOnLoad: false,
+      theme: 'dark',
+      themeVariables: {
+        primaryColor: '#1a2a1a', primaryTextColor: '#fff',
+        primaryBorderColor: '#3ecf8e', lineColor: '#3ecf8e',
+        secondaryColor: '#0d2a1a', tertiaryColor: '#1a1a2e',
+      },
+    });
+  }
+
+  // Check URL for canvas parameter
+  const urlParams = new URLSearchParams(location.search);
+  const canvasParam = urlParams.get('canvas');
+  if (canvasParam) {
+    openCanvasSession(canvasParam);
+  }
+
+  // Poll for new canvas sessions every 5 seconds
+  setInterval(_pollCanvasSessions, 5000);
+}
+
+// Make openCanvasSession available globally (for other parts of the app)
+window.openCanvasSession = openCanvasSession;
+window.toggleCanvasPanel = toggleCanvasPanel;
+
+// Initialize when DOM ready
+if (document.readyState !== 'loading') {
+  _initCanvas();
+} else {
+  document.addEventListener('DOMContentLoaded', _initCanvas);
+}

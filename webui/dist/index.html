@@ -77,6 +77,7 @@
         <button id="btn-nav-chat" class="sidebar-nav-btn active" title="Chat">💬 Chat</button>
         <button id="btn-nav-background" class="sidebar-nav-btn" title="Background Tasks">⚡ Tasks <span id="bg-task-badge" class="nav-badge hidden">0</span></button>
         <button id="btn-nav-scheduler" class="sidebar-nav-btn" title="Scheduled Tasks">📅 Scheduler</button>
+        <button id="btn-nav-canvas" class="sidebar-nav-btn" title="Live Canvas">🎨 Canvas <span id="canvas-badge" class="nav-badge hidden">0</span></button>
       </div>
 
       <button id="btn-new-chat" class="btn btn-primary new-chat-btn">+ New Chat</button>
@@ -338,6 +339,25 @@
       </div>
     </section>
 
+    <!-- Canvas slide-over panel (right side) -->
+    <aside id="canvas-panel" class="canvas-panel canvas-hidden">
+      <div class="canvas-edge-tab" id="canvas-edge-tab" title="Toggle Canvas">🎨</div>
+      <div class="canvas-inner">
+        <div class="canvas-header">
+          <h2 class="canvas-title">🎨 Live Canvas</h2>
+          <button id="btn-canvas-close" class="btn-icon" title="Close canvas">✕</button>
+        </div>
+        <div id="canvas-tab-bar" class="canvas-tab-bar"></div>
+        <div id="canvas-content" class="canvas-content">
+          <div id="canvas-empty" class="canvas-empty">
+            <div style="font-size:48px;opacity:0.4;">🎨</div>
+            <div style="font-size:16px;font-weight:600;color:var(--text-secondary);margin-top:8px;">No active canvas</div>
+            <div style="font-size:13px;color:var(--text-muted);margin-top:4px;">Canvas sessions will appear here when agents push content.</div>
+          </div>
+        </div>
+      </div>
+    </aside>
+
     <!-- Mobile bottom tab bar (hidden on desktop via CSS) -->
     <nav id="mobile-tab-bar" class="mobile-tab-bar" role="tablist" aria-label="Panel switcher">
       <button class="mobile-tab active" data-tab="chat" role="tab" aria-selected="true">
@@ -353,6 +373,9 @@
   </div>
 
   <script src="https://cdn.jsdelivr.net/npm/marked@9/marked.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/dompurify@3/dist/purify.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/highlight.js@11.9.0/lib/core.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/highlight.js@11.9.0/lib/languages/javascript.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/highlight.js@11.9.0/lib/languages/python.min.js"></script>

@@ -5015,7 +5015,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
     import concurrent.futures
     from enum import Enum
 
-    from fastapi import FastAPI, Header, HTTPException, Request, UploadFile, File
+    from fastapi import FastAPI, Header, HTTPException, Request, UploadFile, File, WebSocket, WebSocketDisconnect
     from fastapi.responses import JSONResponse, FileResponse, StreamingResponse
     from fastapi.staticfiles import StaticFiles
     from fastapi.middleware.cors import CORSMiddleware
@@ -7066,6 +7066,145 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             traceback.print_exc()
             return {"success": False, "error": str(e)}
     
+    # --- Live Canvas ──────────────────────────────────────────────────────────
+    # In-memory canvas session state: session_id → {components, connections, action_watchers, pending_actions}
+    _canvas_sessions: dict = {}
+
+    def _get_canvas_session(session_id: str) -> dict:
+        if session_id not in _canvas_sessions:
+            _canvas_sessions[session_id] = {
+                "components": [],
+                "connections": set(),
+                "action_watchers": set(),
+                "pending_actions": [],
+            }
+        return _canvas_sessions[session_id]
+
+    async def _canvas_broadcast(session: dict, skip_ws, message: dict):
+        payload = json.dumps(message)
+        for conn in list(session["connections"]):
+            if conn is not skip_ws:
+                try:
+                    await conn.send_text(payload)
+                except Exception:
+                    session["connections"].discard(conn)
+                    session["action_watchers"].discard(conn)
+
+    def _canvas_apply_update(components: list, node_id: str, changes: dict) -> bool:
+        for comp in components:
+            if isinstance(comp, dict):
+                if comp.get("id") == node_id:
+                    comp.update(changes)
+                    return True
+                for key in ("children", "items", "columns", "steps", "rows", "metrics", "fields"):
+                    children = comp.get(key, [])
+                    if isinstance(children, list) and _canvas_apply_update(children, node_id, changes):
+                        return True
+        return False
+
+    @app.websocket("/canvas/ws")
+    async def canvas_websocket(websocket: WebSocket, session: str = "default"):
+        await websocket.accept()
+        sess = _get_canvas_session(session)
+        sess["connections"].add(websocket)
+
+        # Restore current state for new connections
+        if sess["components"]:
+            try:
+                await websocket.send_text(json.dumps({
+                    "type": "restore",
+                    "components": sess["components"],
+                    "session_id": session,
+                }))
+            except Exception:
+                pass
+
+        try:
+            while True:
+                raw = await websocket.receive_text()
+                try:
+                    data = json.loads(raw)
+                except Exception:
+                    continue
+
+                msg_type = data.get("type")
+
+                if msg_type == "render":
+                    sess["components"] = data.get("components", [])
+                    await _canvas_broadcast(sess, websocket, {
+                        "type": "render",
+                        "components": sess["components"],
+                        "session_id": session,
+                    })
+
+                elif msg_type == "update":
+                    node_id = data.get("node_id")
+                    changes = data.get("changes", {})
+                    _canvas_apply_update(sess["components"], node_id, changes)
+                    await _canvas_broadcast(sess, websocket, {
+                        "type": "update",
+                        "node_id": node_id,
+                        "changes": changes,
+                    })
+
+                elif msg_type == "clear":
+                    sess["components"] = []
+                    await _canvas_broadcast(sess, websocket, {
+                        "type": "clear",
+                        "session_id": session,
+                    })
+
+                elif msg_type == "action":
+                    sess["pending_actions"].append(data)
+                    for watcher in list(sess["action_watchers"]):
+                        try:
+                            await watcher.send_text(json.dumps(data))
+                        except Exception:
+                            sess["action_watchers"].discard(watcher)
+
+                elif msg_type == "subscribe_actions":
+                    sess["action_watchers"].add(websocket)
+                    for action in list(sess["pending_actions"]):
+                        try:
+                            await websocket.send_text(json.dumps(action))
+                        except Exception:
+                            break
+                    sess["pending_actions"].clear()
+
+        except WebSocketDisconnect:
+            pass
+        except Exception:
+            pass
+        finally:
+            sess["connections"].discard(websocket)
+            sess["action_watchers"].discard(websocket)
+            # Clean up empty sessions
+            if not sess["connections"] and not sess["components"]:
+                _canvas_sessions.pop(session, None)
+
+    @app.get("/api/v1/canvas/sessions")
+    async def get_canvas_sessions():
+        """Return list of active canvas sessions."""
+        result = []
+        for sid, sess in _canvas_sessions.items():
+            result.append({
+                "session_id": sid,
+                "component_count": len(sess["components"]),
+                "connection_count": len(sess["connections"]),
+            })
+        return {"sessions": result}
+
+    @app.get("/api/v1/canvas")
+    async def get_canvas_summary():
+        """Return summary of all canvas sessions."""
+        sessions = {}
+        for sid, sess in _canvas_sessions.items():
+            sessions[sid] = {
+                "components": sess["components"],
+                "connection_count": len(sess["connections"]),
+            }
+        return {"sessions": sessions, "count": len(_canvas_sessions)}
+
     # --- AI Media ─────────────────────────────────────────────────────────────
     _ai_media_dir = Path("/tmp/webui_ai_media")
     _ai_media_dir.mkdir(parents=True, exist_ok=True)
