@@ -2992,6 +2992,36 @@ The default agent for background tasks is `{agent}` (inherited from your current
 - Complex build, deploy, or batch job: 1200–1800 (20–30 min)
 Default if truly uncertain: 900 (15 min). Do not omit the `timeout` field."""
 
+        # Inject Live Canvas capability instructions
+        canvas_instruction = f"""
+[Live Canvas — Native Capability]
+You have a built-in live canvas panel in the WebUI. Use it to display visual content (dashboards, progress boards, charts, tables, forms, approval flows) that updates in real time as you work.
+
+The canvas is served natively by this orchestrator. Use the Python client at `{SCRIPT_BASE_DIR}/canvas.py`:
+
+```python
+import sys; sys.path.insert(0, '{SCRIPT_BASE_DIR}')
+from canvas import Canvas
+
+c = Canvas()          # auto-generates a session ID
+c.open()              # opens the canvas panel in the WebUI (Tailscale: 100.124.186.75:{_api_port_bg})
+c.render_template("progress_board", {{
+    "title": "Task Progress",
+    "items": [{{"label": "Step 1", "status": "done"}}, {{"label": "Step 2", "status": "in_progress"}}]
+}})
+action = c.wait_for_action(timeout=60)  # blocks until user clicks a button
+```
+
+**When to use the canvas:**
+- Multi-step tasks: show a live progress board as you work
+- Presenting options or plans: render a flowchart or card grid with approval buttons
+- Data results: render charts, tables, or dashboards
+- Config gathering: render a form and wait for user input
+
+**Canvas WebSocket endpoint:** `ws://127.0.0.1:{_api_port_bg}/canvas/ws?session=SESSION_ID`
+**Canvas sessions API:** `GET {_api_scheme}://127.0.0.1:{_api_port_bg}/api/v1/canvas/sessions`
+Multiple canvas sessions show as tabs in the panel. The panel slides in from the right and can be collapsed."""
+
         # Inject cross-runtime handoff context on the first message of a new session.
         # get_handoff_context() is one-time: it reads and deletes the handoff file so
         # subsequent messages in the same session are not affected.
@@ -3030,7 +3060,7 @@ Default if truly uncertain: 900 (15 min). Do not omit the `timeout` field."""
             injection_text = ""
 
         context = f"""{handoff_prefix}[Session ID: {n8n_session_id}]
-{runtime_instruction}{injection_text}{agent_desc}{files_context}{render_instruction}{bg_task_instruction}{timeout_instruction}
+{runtime_instruction}{injection_text}{agent_desc}{files_context}{render_instruction}{bg_task_instruction}{canvas_instruction}{timeout_instruction}
 
 User Request:
 {prompt}"""
