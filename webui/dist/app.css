@@ -1302,6 +1302,7 @@ html, body {
 .bg-status-completed { background: rgba(62,207,142,0.15); color: #8df0ba; border: 1px solid rgba(62,207,142,0.3); }
 .bg-status-failed    { background: rgba(255,95,109,0.15);  color: #ff8888; border: 1px solid rgba(255,95,109,0.3);  }
 .bg-status-killed    { background: rgba(245,197,66,0.15);  color: #f5c542; border: 1px solid rgba(245,197,66,0.3);  }
+.bg-status-queued    { background: rgba(139,120,255,0.15); color: #b8a9ff; border: 1px solid rgba(139,120,255,0.3); }
 
 .bg-card-agent {
   font-size: 11px;

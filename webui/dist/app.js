@@ -1906,6 +1906,9 @@ document.addEventListener('DOMContentLoaded', () => {
     if (isMobileViewport()) setTimeout(scrollToBottom, 50);
   });
 
+  // --- Send button ---
+  $('btn-send').addEventListener('click', sendMessage);
+
   // --- File input ---
   $('file-input').addEventListener('change', e => {
     const file = e.target.files[0];
@@ -2605,7 +2608,7 @@ function startBgTaskPolling() {
         // If we have a selected running task, refresh its detail
         if (BG.selectedTaskId) {
           const t = BG.tasks.find(x => x.task_id === BG.selectedTaskId);
-          if (t && t.status === 'running') {
+          if (t && (t.status === 'running' || t.status === 'queued')) {
             loadBgTaskDetail(BG.selectedTaskId);
           }
         }
@@ -2618,8 +2621,10 @@ function updateBgBadge() {
   const badge = $('bg-task-badge');
   if (!badge) return;
   const running = BG.tasks.filter(t => t.status === 'running').length;
-  if (running > 0) {
-    badge.textContent = running;
+  const queued = BG.tasks.filter(t => t.status === 'queued').length;
+  const total = running + queued;
+  if (total > 0) {
+    badge.textContent = queued > 0 ? `${running}+${queued}` : running;
     show(badge);
   } else {
     hide(badge);
@@ -2651,23 +2656,36 @@ function renderBgTasks() {
     return;
   }
 
-  // Sort: running first, then by created_at descending
+  // Sort: running first, then queued (by created_at asc = oldest first = pos 1), then completed/failed by created_at desc
+  const statusOrder = { running: 0, queued: 1 };
   const sorted = [...BG.tasks].sort((a, b) => {
-    if (a.status === 'running' && b.status !== 'running') return -1;
-    if (b.status === 'running' && a.status !== 'running') return 1;
+    const ao = statusOrder[a.status] ?? 2;
+    const bo = statusOrder[b.status] ?? 2;
+    if (ao !== bo) return ao - bo;
+    // Within queued: oldest first (ascending) so position 1 is at top
+    if (a.status === 'queued') return (a.created_at || '').localeCompare(b.created_at || '');
+    // Within running/completed: newest first
     return (b.created_at || '').localeCompare(a.created_at || '');
   });
 
+  // Build queue position map for queued tasks
+  const queuedTasks = sorted.filter(t => t.status === 'queued');
+
   list.innerHTML = sorted.map(t => {
-    const icons = { running: '🟢', completed: '✅', failed: '❌', killed: '🛑' };
+    const icons = { running: '🟢', completed: '✅', failed: '❌', killed: '🛑', queued: '⏳' };
     const icon = icons[t.status] || '❓';
     const statusClass = `bg-status-${t.status}`;
     const active = t.task_id === BG.selectedTaskId ? 'active' : '';
     const elapsed = t.status === 'running' ? formatElapsed(t.created_at) : '';
+    let statusLabel = t.status;
+    if (t.status === 'queued') {
+      const pos = queuedTasks.findIndex(q => q.task_id === t.task_id) + 1;
+      statusLabel = `queued #${pos}`;
+    }
     return `
       <div class="bg-task-card ${active}" data-task-id="${t.task_id}" onclick="selectBgTask('${t.task_id}')">
         <div class="bg-card-top">
-          <span class="bg-card-status ${statusClass}">${icon} ${t.status}</span>
+          <span class="bg-card-status ${statusClass}">${icon} ${statusLabel}</span>
           <span class="bg-card-agent">${escHtml(t.agent || '?')} / ${runtimeIconHTML(t.runtime)}${escHtml(t.runtime || '?')}</span>
         </div>
         <div class="bg-card-prompt">${escHtml(t.prompt || '')}</div>
@@ -2707,15 +2725,27 @@ async function loadBgTaskDetail(taskId) {
 
   try {
     const t = await bgApi('GET', `/${taskId}`);
-    const icons = { running: '🟢', completed: '✅', failed: '❌', killed: '🛑' };
+    const icons = { running: '🟢', completed: '✅', failed: '❌', killed: '🛑', queued: '⏳' };
     const icon = icons[t.status] || '❓';
     const statusClass = `bg-status-${t.status}`;
     const elapsed = t.status === 'running' ? formatElapsed(t.created_at) : '';
+
+    // Compute queue position for queued tasks
+    let statusLabel = t.status;
+    if (t.status === 'queued') {
+      const queuedInList = BG.tasks.filter(x => x.status === 'queued').sort((a,b) => (a.created_at||'').localeCompare(b.created_at||''));
+      const pos = queuedInList.findIndex(x => x.task_id === t.task_id) + 1;
+      if (pos > 0) statusLabel = `queued #${pos}`;
+    }
 
     let actionsHtml = '';
     if (t.status === 'running') {
       actionsHtml = `<div class="bg-detail-actions">
         <button class="btn btn-danger btn-sm" onclick="killBgTask('${t.task_id}')">🛑 Kill Task</button>
+      </div>`;
+    } else if (t.status === 'queued') {
+      actionsHtml = `<div class="bg-detail-actions">
+        <button class="btn btn-danger btn-sm" onclick="killBgTask('${t.task_id}')">✖ Cancel</button>
       </div>`;
     } else {
       actionsHtml = `<div class="bg-detail-actions">
@@ -2737,8 +2767,9 @@ async function loadBgTaskDetail(taskId) {
       <div class="bg-detail-meta">
         <div class="bg-detail-meta-row">
           <span class="bg-detail-meta-label">Status</span>
-          <span class="bg-card-status ${statusClass}">${icon} ${t.status}</span>
+          <span class="bg-card-status ${statusClass}">${icon} ${statusLabel}</span>
           ${elapsed ? `<span style="font-size:11px;color:var(--text-muted);margin-left:8px">${elapsed}</span>` : ''}
+          ${t.status === 'queued' ? `<span style="font-size:11px;color:var(--text-muted);margin-left:8px">Waiting for a slot to open…</span>` : ''}
         </div>
         <div class="bg-detail-meta-row">
           <span class="bg-detail-meta-label">Agent</span>

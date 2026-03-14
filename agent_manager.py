@@ -233,7 +233,8 @@ class BackgroundTaskManager:
 
     def create_task(self, task_id: str, session_id: str, user_identity: str,
                     channel: str, agent: str, runtime: str, model: str,
-                    prompt: str, pid: int = 0) -> dict:
+                    prompt: str, pid: int = 0, status: str = "running",
+                    timeout: int = None, notify: bool = True) -> dict:
         task = {
             "task_id": task_id,
             "session_id": session_id,
@@ -244,13 +245,16 @@ class BackgroundTaskManager:
             "runtime": runtime,
             "model": model,
             "prompt": prompt,
-            "status": "running",
+            "status": status,
             "pid": pid,
             "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "started_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()) if status == "running" else None,
             "completed_at": None,
             "output_lines": [],
             "final_response": None,
             "error": None,
+            "timeout": timeout,
+            "notify": notify,
         }
         with self._lock:
             tasks = self._load()
@@ -284,6 +288,25 @@ class BackgroundTaskManager:
 
     def count_running(self, channel: str, identity: str) -> int:
         return sum(1 for t in self.list_tasks(channel, identity) if t["status"] == "running")
+
+    def count_queued(self, channel: str, identity: str) -> int:
+        return sum(1 for t in self.list_tasks(channel, identity) if t["status"] == "queued")
+
+    def get_next_queued(self, channel: str, identity: str) -> Optional[dict]:
+        """Return the oldest queued task for this user, or None."""
+        queued = [t for t in self.list_tasks(channel, identity) if t["status"] == "queued"]
+        if not queued:
+            return None
+        return min(queued, key=lambda t: t.get("created_at", ""))
+
+    def promote_queued_task(self, task_id: str, session_id: str):
+        """Transition a queued task to running status with a fresh session_id."""
+        self.update_task(
+            task_id,
+            status="running",
+            session_id=session_id,
+            started_at=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        )
 
     def update_task(self, task_id: str, **fields):
         with self._lock:
@@ -324,7 +347,17 @@ class BackgroundTaskManager:
 
     def kill_task(self, task_id: str) -> bool:
         task = self.get_task(task_id)
-        if not task or task["status"] != "running":
+        if not task:
+            return False
+        if task["status"] == "queued":
+            # Cancel queued tasks directly (no process to kill)
+            self.update_task(
+                task_id,
+                status="killed",
+                completed_at=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            )
+            return True
+        if task["status"] != "running":
             return False
         pid = task.get("pid", 0)
         if pid:
@@ -5863,6 +5896,24 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             bg_task_mgr.fail_task(task_id, error_msg)
             _emit_bg_notification(task_id, prompt, "failed", channel, user_identity,
                                   output_preview=None, error=error_msg, notify=notify)
+        finally:
+            # Promote next queued task for this user if a slot just opened
+            try:
+                next_q = bg_task_mgr.get_next_queued(channel, user_identity)
+                if next_q:
+                    new_sid = str(uuid4())
+                    bg_task_mgr.promote_queued_task(next_q["task_id"], new_sid)
+                    print(f"[BG] Promoting queued task {next_q['task_id']} → running")
+                    bg_executor.submit(
+                        _run_background_task,
+                        next_q["task_id"], new_sid, next_q["prompt"],
+                        next_q["agent"], next_q["runtime"], next_q["model"],
+                        next_q["channel"], next_q["user_identity"],
+                        next_q.get("timeout") or 900,
+                        next_q.get("notify", True),
+                    )
+            except Exception as promo_exc:
+                print(f"[BG] Error promoting queued task: {promo_exc}")
 
     @app.post("/api/v1/background-tasks")
     async def create_background_task(body: BackgroundTaskRequest, request: Request):
@@ -5876,13 +5927,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         channel = user["channel"]
         identity = user["identity"]
 
-        # Check concurrent limit
-        running = bg_task_mgr.count_running(channel, identity)
-        if running >= BackgroundTaskManager.MAX_TASKS_PER_USER:
-            raise HTTPException(
-                status_code=429,
-                detail=f"Maximum {BackgroundTaskManager.MAX_TASKS_PER_USER} concurrent background tasks allowed.",
-            )
+        # Check concurrent limit (used below after resolving params)
 
         # Resolve agent/runtime/model — default to user's current session config
         # Determine defaults by searching for ANY session for this identity across all channels
@@ -5944,24 +5989,9 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         task_id = f"bg_{str(uuid4())[:8]}"
         session_id = str(uuid4())  # Must be valid UUID format for Copilot CLI
 
-        # Create task record
-        task = bg_task_mgr.create_task(
-            task_id=task_id,
-            session_id=session_id,
-            user_identity=identity,
-            channel=channel,
-            agent=agent,
-            runtime=runtime,
-            model=model,
-            prompt=body.prompt,
-        )
-
         # Use agent-specified timeout or fall back to default (15 min)
         bg_timeout = body.timeout if body.timeout is not None else get_bg_command_timeout()
 
-        # Run in background thread using shared executor
-        loop = asyncio.get_running_loop()
-        
         # Determine notification preference:
         #   body override > global mute > per-identity store > session default > True
         notify_pref = body.notify
@@ -5977,6 +6007,53 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 session_pref = defaults.get("notification_preference", "all")
                 notify_pref = (session_pref != "off")
 
+        # Check concurrent limit — queue instead of rejecting
+        running = bg_task_mgr.count_running(channel, identity)
+        if running >= BackgroundTaskManager.MAX_TASKS_PER_USER:
+            # Queue the task — it will be promoted when a running task finishes
+            task = bg_task_mgr.create_task(
+                task_id=task_id,
+                session_id=session_id,
+                user_identity=identity,
+                channel=channel,
+                agent=agent,
+                runtime=runtime,
+                model=model,
+                prompt=body.prompt,
+                status="queued",
+                timeout=bg_timeout,
+                notify=notify_pref,
+            )
+            queue_pos = bg_task_mgr.count_queued(channel, identity)
+            print(f"[API] Task {task_id} queued (position {queue_pos}, {running}/{BackgroundTaskManager.MAX_TASKS_PER_USER} slots full)")
+            return {
+                "task_id": task_id,
+                "session_id": session_id,
+                "agent": agent,
+                "runtime": runtime,
+                "model": model,
+                "status": "queued",
+                "queue_position": queue_pos,
+                "timeout": bg_timeout,
+            }
+
+        # Create task record (running immediately)
+        task = bg_task_mgr.create_task(
+            task_id=task_id,
+            session_id=session_id,
+            user_identity=identity,
+            channel=channel,
+            agent=agent,
+            runtime=runtime,
+            model=model,
+            prompt=body.prompt,
+            status="running",
+            timeout=bg_timeout,
+            notify=notify_pref,
+        )
+
+        # Run in background thread using shared executor
+        loop = asyncio.get_running_loop()
         loop.run_in_executor(
             bg_executor,  # Use shared executor instead of creating new one
             _run_background_task,
@@ -6091,8 +6168,26 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         if not bg_task_mgr._identity_matches(task, user["channel"], user["identity"]):
             raise HTTPException(status_code=403, detail="Not your task")
 
-        if task["status"] == "running":
+        if task["status"] in ("running", "queued"):
+            was_running = task["status"] == "running"
             bg_task_mgr.kill_task(task_id)
+            # If a running task was killed, promote the next queued task
+            if was_running:
+                next_q = bg_task_mgr.get_next_queued(user["channel"], user["identity"])
+                if next_q:
+                    new_sid = str(uuid4())
+                    bg_task_mgr.promote_queued_task(next_q["task_id"], new_sid)
+                    print(f"[BG] Kill triggered promotion of queued task {next_q['task_id']}")
+                    loop = asyncio.get_running_loop()
+                    loop.run_in_executor(
+                        bg_executor,
+                        _run_background_task,
+                        next_q["task_id"], new_sid, next_q["prompt"],
+                        next_q["agent"], next_q["runtime"], next_q["model"],
+                        next_q["channel"], next_q["user_identity"],
+                        next_q.get("timeout") or 900,
+                        next_q.get("notify", True),
+                    )
             return {"task_id": task_id, "action": "killed"}
         else:
             bg_task_mgr.delete_task(task_id)
