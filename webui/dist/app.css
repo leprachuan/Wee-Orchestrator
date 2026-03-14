@@ -3933,7 +3933,7 @@ html, body {
 .canvas-edge-tab {
   position: absolute;
   left: -36px;
-  top: 50%;
+  top: 75%;
   transform: translateY(-50%);
   width: 36px;
   height: 64px;
@@ -4052,6 +4052,7 @@ html, body {
 
 .canvas-content {
   flex: 1;
+  min-height: 0;
   overflow-y: auto;
   padding: 16px;
   display: flex;
