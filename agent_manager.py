@@ -3692,10 +3692,12 @@ User Request:
             context_prompt = context_prompt + yolo_instruction
 
         # -p is a boolean flag (print/non-interactive mode); prompt goes after --
+        # Permission mode: dangerous (auto-approve all) for yolo, auto (read-only) otherwise
+        permission_mode = "dangerous" if mode == "yolo" else "auto"
         cmd = [devin_bin, "-p"]
         if model:
             cmd += ["--model", model]
-        cmd += ["--permission-mode", "dangerous"]
+        cmd += ["--permission-mode", permission_mode]
 
         if actually_resuming:
             cmd += ["-r", devin_sid]
