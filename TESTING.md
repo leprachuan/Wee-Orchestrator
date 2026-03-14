@@ -53,7 +53,7 @@ TEST_WITH_RUNTIMES=1 ./run_tests.sh
 
 **Features:**
 - ✓ All 54 tests execute (45 unit + 9 integration)
-- ✓ Requires CLI runtimes (copilot, opencode, claude, gemini, codex)
+- ✓ Requires CLI runtimes (copilot, opencode, claude, gemini, codex, devin)
 - ✓ Tests actual command execution
 - ✓ Validates metadata stripping with real output
 - ✓ Comprehensive integration verification
@@ -213,7 +213,7 @@ Tests display configuration at startup:
 if ENABLE_RUNTIME_TESTS:
     print("✓ Runtime tests ENABLED (TEST_WITH_RUNTIMES=1)")
     print("\nAvailable runtimes:")
-    for runtime in ['copilot', 'opencode', 'claude', 'gemini', 'codex']:
+    for runtime in ['copilot', 'opencode', 'claude', 'gemini', 'codex', 'devin']:
         available = "✓ AVAILABLE" if has_runtime(runtime) else "✗ NOT FOUND"
         print(f"  {runtime:12} {available}")
 else:

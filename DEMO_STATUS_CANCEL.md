@@ -4,7 +4,7 @@ This document demonstrates the new query tracking and management features.
 
 ## Overview
 
-The `/status` and `/cancel` commands allow you to monitor and control long-running queries across all AI runtimes (copilot, opencode, claude, gemini, codex).
+The `/status` and `/cancel` commands allow you to monitor and control long-running queries across all AI runtimes (copilot, opencode, claude, gemini, codex, devin).
 
 ## Use Cases
 
@@ -69,7 +69,7 @@ When you execute a query, the system:
 2. Captures the Process ID (PID)
 3. Stores tracking info in `~/.copilot/running-queries.json`:
    - PID
-   - Runtime (copilot, opencode, claude, gemini, codex)
+   - Runtime (copilot, opencode, claude, gemini, codex, devin)
    - Agent name
    - Prompt (first 200 chars)
    - Start timestamp

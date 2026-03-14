@@ -922,6 +922,18 @@ class SessionManager:
         ]
     }
 
+    # DEVIN models configuration
+    DEVIN_MODELS = {
+        "Anthropic Models": [
+            ("claude-sonnet-4", "Claude Sonnet 4", ["sonnet-4", "sonnet"]),
+            ("claude-sonnet-4.6", "Claude Sonnet 4.6", ["sonnet-4.6"]),
+            ("claude-opus-4.6", "Claude Opus 4.6", ["opus-4.6", "opus"]),
+        ],
+        "OpenAI Models": [
+            ("codex", "Codex", ["codex"]),
+        ],
+    }
+
     def __init__(self, config_file: Optional[str] = None, app_env: str = "PROD"):
         # Copilot Paths
         self.copilot_home = Path.home() / ".copilot"
@@ -963,9 +975,14 @@ class SessionManager:
         self.codex_home = Path.home() / ".codex"
         self.codex_session_dir = self.codex_home / "sessions"
 
+        # Devin Paths
+        self.devin_home = Path.home() / ".devin"
+        self.devin_session_dir = self.devin_home / "sessions"
+
         # Executable paths (resolved dynamically)
         self.copilot_bin = find_executable("copilot")
         self.claude_bin = find_executable("claude")
+        self.devin_bin = find_executable("devin")
 
         # CLI mode setting for claude (yolo or restricted)
         self.mode = None
@@ -980,6 +997,8 @@ class SessionManager:
         self.gemini_session_dir.mkdir(exist_ok=True)
         self.codex_home.mkdir(exist_ok=True)
         self.codex_session_dir.mkdir(exist_ok=True)
+        self.devin_home.mkdir(exist_ok=True)
+        self.devin_session_dir.mkdir(exist_ok=True)
 
         # Load agents from config file
         self.AGENTS = self._load_agents_config(config_file)
@@ -991,6 +1010,7 @@ class SessionManager:
         self._env_claude_models = None
         self._env_gemini_models = None
         self._env_codex_models = None
+        self._env_devin_models = None
 
         # Load command timeout from environment
         self.command_timeout = get_command_timeout()
@@ -1350,6 +1370,7 @@ class SessionManager:
             "claude": self._env_claude_models,
             "gemini": self._env_gemini_models,
             "codex": self._env_codex_models,
+            "devin": self._env_devin_models,
         }
         env_models = env_models_map.get(runtime)
         if env_models:
@@ -1364,6 +1385,7 @@ class SessionManager:
             "gemini": self.GEMINI_MODELS,
             "codex": self.CODEX_MODELS,
             "opencode": self.OPENCODE_MODELS,
+            "devin": self.DEVIN_MODELS,
         }
         models_dict = static_map.get(runtime)
         if not models_dict:
@@ -1443,6 +1465,25 @@ class SessionManager:
         # Fallback to static configuration
         return self._static_models_to_dict(self.CODEX_MODELS)
 
+    def fetch_devin_models(self) -> Dict:
+        """Return available Devin models from environment or fallback to static list.
+
+        Devin CLI does not currently expose a model-listing subcommand.
+        Models are read from DEVIN_MODELS_JSON environment variable, with
+        static DEVIN_MODELS as fallback.
+        """
+        env_models = os.getenv("DEVIN_MODELS_JSON")
+        if env_models:
+            try:
+                import json
+                models_dict = json.loads(env_models)
+                self._env_devin_models = models_dict
+                return self._static_models_to_dict(models_dict)
+            except (json.JSONDecodeError, ValueError) as e:
+                print(f"Warning: Failed to parse DEVIN_MODELS_JSON: {e}", file=sys.stderr)
+
+        return self._static_models_to_dict(self.DEVIN_MODELS)
+
     def get_models_for_runtime(self, runtime: str) -> Dict:
         """Fetch available models for a runtime, using CLI discovery where possible.
 
@@ -1456,6 +1497,7 @@ class SessionManager:
             "claude": self.fetch_claude_models,
             "gemini": self.fetch_gemini_models,
             "codex": self.fetch_codex_models,
+            "devin": self.fetch_devin_models,
         }
         fetcher = dispatch.get(runtime)
         if fetcher is None:
@@ -1524,6 +1566,8 @@ class SessionManager:
             default_model = "gemini-1.5-flash"
         elif default_runtime == "codex":
             default_model = "gpt-5.4"
+        elif default_runtime == "devin":
+            default_model = os.getenv("DEVIN_DEFAULT_MODEL", "claude-sonnet-4")
 
         # Extract bot identifier from session ID (last 4 chars of numeric part)
         bot_id = self._extract_bot_identifier(n8n_session_id)
@@ -1601,10 +1645,17 @@ class SessionManager:
                     or not self.get_model_from_name(current_model, "codex")
                 ):
                     merged["model"] = "gpt-5.4"
+            elif runtime == "devin":
+                current_model = merged.get("model", "")
+                if (
+                    not current_model
+                    or not self.get_model_from_name(current_model, "devin")
+                ):
+                    merged["model"] = os.getenv("DEVIN_DEFAULT_MODEL", "claude-sonnet-4")
 
             # Validate and fix session_id if corrupted
             session_id = merged.get("session_id", "")
-            if runtime in ["claude", "gemini", "codex", "copilot"]:
+            if runtime in ["claude", "gemini", "codex", "copilot", "devin"]:
                 if not session_id or not (len(session_id) == 36 and "-" in session_id):
                     merged["session_id"] = str(uuid4())
             elif runtime == "opencode":
@@ -1945,7 +1996,7 @@ class SessionManager:
         name_lower = name.lower().strip("\"'")
 
         # Ensure env models are loaded/cached by triggering fetch for this runtime
-        if runtime in ("claude", "gemini", "codex"):
+        if runtime in ("claude", "gemini", "codex", "devin"):
             self.get_models_for_runtime(runtime)
 
         # Step 1: check env-loaded or static alias tables for all runtimes that have them.
@@ -1953,12 +2004,14 @@ class SessionManager:
             "claude": self._env_claude_models,
             "gemini": self._env_gemini_models,
             "codex": self._env_codex_models,
+            "devin": self._env_devin_models,
         }
         static_alias_map = {
             "claude": self.CLAUDE_MODELS,
             "gemini": self.GEMINI_MODELS,
             "codex": self.CODEX_MODELS,
             "opencode": self.OPENCODE_MODELS,
+            "devin": self.DEVIN_MODELS,
         }
         
         # Try env-loaded models first, fall back to static
@@ -2217,6 +2270,14 @@ class SessionManager:
                 response_lines.pop()
 
             result.extend(response_lines)
+
+        elif runtime == "devin":
+            # Devin CLI outputs the response directly to stdout.
+            # Strip any leading/trailing whitespace lines.
+            for line in lines:
+                if not line.strip() and not result:
+                    continue
+                result.append(line)
 
         # Remove trailing empty lines
         while result and not result[-1].strip():
@@ -3522,6 +3583,86 @@ User Request:
 
         return self.strip_metadata(output, "codex")
 
+    def run_devin(
+        self,
+        prompt: str,
+        model: str,
+        agent: str,
+        session_id: Optional[str],
+        resume: bool,
+        n8n_session_id: str,
+        timeout: Optional[int] = None,
+        render_type: str = "text",
+    ) -> str:
+        """Execute Devin CLI in non-interactive mode.
+
+        Uses --permission-mode dangerous to bypass all approval prompts
+        and allow full system access.
+        """
+        # Parse /mode command from prompt
+        prompt, mode = self._parse_mode_command(prompt)
+
+        # Get session data once - reuse for mode and channel
+        session_data = self.get_or_create_session_data(n8n_session_id)
+
+        # If mode not specified in prompt, check session setting
+        if mode == "restricted":
+            session_mode = session_data.get("yolo_mode", "restricted")
+            if session_mode == "on":
+                mode = "yolo"
+
+        agent_dir = self.AGENTS.get(agent, self.AGENTS["orchestrator"])["path"]
+        effective_timeout = timeout if timeout is not None else self.command_timeout
+
+        # Get channel for file handling instructions
+        channel = session_data.get("channel", "webui")
+
+        # Only inject full context on new sessions; resumed sessions already have it
+        if resume and session_id:
+            context_prompt = prompt
+        else:
+            context_prompt = self.build_agent_context_prompt(
+                agent, prompt, n8n_session_id, render_type, effective_timeout, "devin", model, channel
+            )
+
+        # Add yolo mode instructions for unrestricted privileged access
+        if mode == "yolo":
+            yolo_instruction = (
+                "\n\n[YOLO MODE ENABLED]\n"
+                "Full permissions granted. "
+                "ALL commands requiring elevated privileges MUST automatically prefix with 'sudo' — no exceptions. "
+                "This includes:\n"
+                "• Service management: sudo systemctl restart/start/stop/reload/enable/disable <service>\n"
+                "• Network commands: sudo ping, sudo ssh, sudo iptables, sudo ip, etc.\n"
+                "• System administration: sudo journalctl, sudo systemd-*, sudo chmod/chown on system paths\n"
+                "• API calls: curl -sk https://127.0.0.1:8001/... works — localhost is fully accessible\n"
+                "• Any command that would fail due to insufficient permissions\n"
+                "Sudo is configured without password prompt (NOPASSWD:ALL). "
+                "Never ask for confirmation — execute privileged commands immediately with sudo."
+            )
+            context_prompt = context_prompt + yolo_instruction
+
+        # Resolve the devin binary
+        devin_bin = self.devin_bin or "devin"
+
+        # Devin CLI does not support session resume — always start fresh
+        cmd = [devin_bin, "-p", context_prompt]
+        if model:
+            cmd += ["--model", model]
+        # Always use dangerous permission mode for non-interactive execution
+        cmd += ["--permission-mode", "dangerous"]
+
+        print(f"[Session] Starting Devin session with model {model} in {mode} mode", file=sys.stderr)
+
+        output = self._execute_subprocess_with_tracking(
+            cmd, agent_dir, effective_timeout, "devin", agent, prompt, n8n_session_id
+        )
+
+        if "Error: Devin command failed" in output:
+            return output
+
+        return self.strip_metadata(output, "devin")
+
     def session_exists(self, session_id: str, runtime: str) -> bool:
         """Check if session state exists for runtime"""
         if runtime == "copilot":
@@ -3577,6 +3718,9 @@ User Request:
                         return True
             except Exception:
                 pass
+            return False
+        elif runtime == "devin":
+            # Devin CLI does not persist resumable sessions locally
             return False
         return False
 
@@ -3677,6 +3821,9 @@ User Request:
                     )
                     return session_id
                 return None
+            elif runtime == "devin":
+                # Devin CLI does not persist local session files
+                return None
         except Exception as e:
             print(f"Error getting recent session ID: {e}", file=sys.stderr)
             return None
@@ -3771,6 +3918,13 @@ User Request:
                 can_resume, n8n_session_id,
                 effective_timeout, render_type,
             )
+        elif runtime == "devin":
+            result = self.run_devin(
+                prompt, model, agent,
+                session_id if can_resume else None,
+                can_resume, n8n_session_id,
+                effective_timeout, render_type,
+            )
         else:
             return f"Error: Unknown runtime '{runtime}'"
 
@@ -3833,7 +3987,7 @@ User Request:
 
 **Runtime Management:**
    • /runtime list - Show available runtimes
-   • /runtime set (auto|copilot|opencode|claude|gemini|codex) - Switch runtime
+   • /runtime set (auto|copilot|opencode|claude|gemini|codex|devin) - Switch runtime
    • /runtime current - Show current runtime
 
 **Model Management:**
@@ -3968,7 +4122,7 @@ You can mention an agent in your prompt and it will auto-delegate:
             if not argument:
                 return "Usage: /runtime [list|set|current]"
             if argument == "list":
-                return "🤖 **Available Runtimes**\n\n• `copilot` (GitHub Copilot)\n• `opencode` (OpenCode CLI)\n• `claude` (Claude Code CLI)\n• `gemini` (Google Gemini CLI)\n• `codex` (Codex CLI)"
+                return "🤖 **Available Runtimes**\n\n• `copilot` (GitHub Copilot)\n• `opencode` (OpenCode CLI)\n• `claude` (Claude Code CLI)\n• `gemini` (Google Gemini CLI)\n• `codex` (Codex CLI)\n• `devin` (Devin CLI)"
             elif argument == "current":
                 return f"🤖 **Current Runtime:** `{current_runtime}`"
             elif argument.startswith("set "):
@@ -3979,8 +4133,9 @@ You can mention an agent in your prompt and it will auto-delegate:
                     "claude",
                     "gemini",
                     "codex",
+                    "devin",
                 ]:
-                    return f"Unknown runtime: '{new_runtime}'. Use 'copilot', 'opencode', 'claude', 'gemini', or 'codex'."
+                    return f"Unknown runtime: '{new_runtime}'. Use 'copilot', 'opencode', 'claude', 'gemini', 'codex', or 'devin'."
 
                 # Capture previous session state before any updates
                 prev_runtime = current_runtime
@@ -4048,6 +4203,8 @@ You can mention an agent in your prompt and it will auto-delegate:
                     default_model = "gemini-1.5-flash"
                 elif new_runtime == "codex":
                     default_model = "gpt-5.4"
+                elif new_runtime == "devin":
+                    default_model = os.getenv("DEVIN_DEFAULT_MODEL", "claude-sonnet-4")
 
                 self.update_session_field(n8n_session_id, "model", default_model)
                 return f"✓ Switched runtime to **{new_runtime}**. Model set to `{default_model}`. Session reset."
@@ -4992,6 +5149,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             {"id": "claude", "label": "claude"},
             {"id": "gemini", "label": "gemini"},
             {"id": "codex", "label": "codex"},
+            {"id": "devin", "label": "devin"},
         ]
         return {"runtimes": runtimes}
 
@@ -5004,7 +5162,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         not expose a model-listing command.
         """
         runtime = runtime.lower().strip()
-        known_runtimes = {"copilot", "opencode", "claude", "gemini", "codex"}
+        known_runtimes = {"copilot", "opencode", "claude", "gemini", "codex", "devin"}
         if runtime not in known_runtimes:
             return {"runtime": runtime, "models": [], "error": f"Unknown runtime: {runtime}"}
 
@@ -6966,8 +7124,8 @@ Examples:
     runtime_group.add_argument(
         "--runtime",
         metavar="NAME",
-        choices=["copilot", "opencode", "claude", "gemini", "codex"],
-        help="Set the runtime to use (choices: copilot, opencode, claude, gemini, codex)",
+        choices=["copilot", "opencode", "claude", "gemini", "codex", "devin"],
+        help="Set the runtime to use (choices: copilot, opencode, claude, gemini, codex, devin)",
     )
     runtime_group.add_argument(
         "--list-runtimes",

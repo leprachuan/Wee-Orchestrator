@@ -12,7 +12,7 @@ Tests cover:
 
 Environment Variables:
 - TEST_WITH_RUNTIMES: Set to "1" or "true" to run real runtime tests.
-  These tests require CLI tools (copilot, opencode, claude, gemini, codex)
+  These tests require CLI tools (copilot, opencode, claude, gemini, codex, devin)
   to be installed and available in PATH. Default: disabled (safe for CI/CD)
 """
 
@@ -1658,7 +1658,7 @@ if __name__ == "__main__":
         print("\n=== TEST CONFIGURATION ===")
         print("✓ Runtime tests ENABLED (TEST_WITH_RUNTIMES=1)")
         print("\nAvailable runtimes:")
-        for runtime in ["copilot", "opencode", "claude", "gemini", "codex"]:
+        for runtime in ["copilot", "opencode", "claude", "gemini", "codex", "devin"]:
             available = "✓ AVAILABLE" if has_runtime(runtime) else "✗ NOT FOUND"
             print(f"  {runtime:12} {available}")
         print("========================\n")

@@ -135,7 +135,7 @@ Then open `http://localhost:8000/ui` in your browser and pair via Telegram or We
 |---------|-------------|
 | `/agent <name>` | Switch to a different agent |
 | `/model <model>` | Change AI model mid-conversation |
-| `/runtime <runtime>` | Switch AI runtime (copilot, claude, gemini, opencode, codex) |
+| `/runtime <runtime>` | Switch AI runtime (copilot, claude, gemini, opencode, codex, devin) |
 | `/timeout <seconds>` | Adjust execution timeout |
 | `/status` | Check running task status |
 | `/cancel` | Cancel the current running task |
@@ -712,7 +712,7 @@ Model Options:
 - `--list-models` - List all available models for current runtime and exit
 
 Runtime Options:
-- `--runtime NAME` - Set the runtime to use (choices: copilot, opencode, claude, gemini, codex)
+- `--runtime NAME` - Set the runtime to use (choices: copilot, opencode, claude, gemini, codex, devin)
 - `--list-runtimes` - List all available runtimes and exit
 
 Configuration:

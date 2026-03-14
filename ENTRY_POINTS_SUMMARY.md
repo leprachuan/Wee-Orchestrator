@@ -416,7 +416,7 @@ The N8N Copilot Shim is a multi-layered system:
 1. **Core Engine** (agent_manager.py): SessionManager handles all execution, model resolution, CLI integration
 2. **Connectors** (telegram/webex): Bridge between chat platforms and engine
 3. **Models**: Static dicts + dynamic CLI fetching with alias resolution
-4. **Runtimes**: Subprocess execution via CLI (copilot, claude, opencode, gemini, codex)
+4. **Runtimes**: Subprocess execution via CLI (copilot, claude, opencode, gemini, codex, devin)
 5. **Persistence**: JSON-based session storage with per-user model/runtime configuration
 6. **APIs**: FastAPI REST endpoints + CLI interface
 
