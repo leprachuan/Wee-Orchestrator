@@ -3730,6 +3730,7 @@ document.addEventListener('DOMContentLoaded', () => {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 const _canvasSessions = new Map(); // sessionId → { ws, components, connected }
+const _dismissedCanvasSessions = new Set(); // sessions manually closed by user — poller skips these
 let _activeCanvasSession = null;
 let _canvasPanelOpen = false;
 
@@ -3779,6 +3780,7 @@ function closeCanvasSession(sessionId) {
     try { sess.ws.close(); } catch(e) {}
   }
   _canvasSessions.delete(sessionId);
+  _dismissedCanvasSessions.add(sessionId); // prevent poller from re-opening
   if (_activeCanvasSession === sessionId) {
     const keys = [..._canvasSessions.keys()];
     _activeCanvasSession = keys.length ? keys[keys.length - 1] : null;
@@ -4395,9 +4397,10 @@ async function _pollCanvasSessions() {
     if (!resp.ok) return;
     const data = await resp.json();
 
-    // Only auto-connect to sessions that have components (skip stale/empty ones)
+    // Only auto-connect to sessions that have components, are not already open,
+    // and have not been manually dismissed by the user this session.
     for (const s of (data.sessions || [])) {
-      if (s.component_count > 0 && !_canvasSessions.has(s.session_id)) {
+      if (s.component_count > 0 && !_canvasSessions.has(s.session_id) && !_dismissedCanvasSessions.has(s.session_id)) {
         openCanvasSession(s.session_id);
       }
     }
