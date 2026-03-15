@@ -223,8 +223,6 @@ async function fetchAndUpdateMeta(sessionId) {
   } catch (_) { /* non-fatal */ }
 }
 
-function fetchRuntimeUsage() { /* disabled on dev */ }
-
 // ─── Auth Flow ────────────────────────────────────────────────────────────────
 let _authState = 'IDLE';
 
@@ -698,7 +696,6 @@ async function selectSession(sessionId) {
   }
   scrollToBottom();
   await fetchAndUpdateMeta(sessionId);
-  fetchRuntimeUsage();  // update usage indicator
   loadScratchNotes();   // load scratch notes for this session
 }
 
@@ -713,7 +710,6 @@ async function startNewSession() {
     updateSessionMeta(data);  // initial meta from create response
     await loadSessions();
     await fetchAndUpdateMeta(data.session_id); // get full defaults
-    fetchRuntimeUsage();  // update usage indicator
     loadScratchNotes();   // load scratch notes for new session (will be empty)
   } catch (err) {
     alert('Failed to create session: ' + err.message);
@@ -1345,7 +1341,6 @@ async function sendMessage() {
 
     // Refresh meta — a /agent set etc. may have changed things
     await fetchAndUpdateMeta(STATE.currentSessionId);
-    fetchRuntimeUsage();  // update usage after each round trip
     await loadSessions();
   } catch (err) {
     hideTyping();
