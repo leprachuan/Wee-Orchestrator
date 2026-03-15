@@ -23,6 +23,7 @@ const STATE = {
   bgTasksEnabled:  true,  // overridden by /api/v1/config on boot
   requestQueue:    [],     // queued requests while processing
   queuePaused:     false,  // true to prevent auto-submit of next queued message
+  pagination:      {},     // per-session pagination state: { sessionId: { offset, total } }
   currentProcessingQueueId: null,  // ID of queue item currently being processed
   currentAbortController: null,    // AbortController for the active streaming fetch
   fileViewerOpen:  false,          // whether file viewer panel is open
@@ -687,10 +688,15 @@ async function selectSession(sessionId) {
 
   clearMessages();
   try {
-    const data = await apiRequest('GET', `/history/sessions/${sessionId}/messages`);
-    for (const msg of (data.messages || [])) {
+    const data = await apiRequest('GET', `/history/sessions/${sessionId}/messages?limit=100`);
+    const msgs = data.messages || [];
+    const total = data.total || msgs.length;
+    const offset = data.offset || 0;
+    STATE.pagination[sessionId] = { offset, total };
+    for (const msg of msgs) {
       await renderMessage(msg.role, msg.content, msg.files || []);
     }
+    updateLoadMoreButton();
   } catch (err) {
     renderSystemMessage('Could not load messages: ' + err.message);
   }
@@ -1514,6 +1520,86 @@ function clearMessages() {
   es.className = 'empty-state hidden';
   es.innerHTML = '<div class="empty-icon"><img src="/static/icon-192.png" alt="Wee Orchestrator" style="width:160px;height:160px;border-radius:24px;opacity:0.7;"></div><p>Start a conversation or select a session from the sidebar.</p>';
   container.appendChild(es);
+}
+
+// ─── Pagination: Load Earlier Messages ────────────────────────────────────────
+function updateLoadMoreButton() {
+  const container = $('messages');
+  const existing = container.querySelector('.load-more-btn');
+  if (existing) existing.remove();
+
+  const sid = STATE.activeSessionId;
+  const pg = STATE.pagination[sid];
+  if (!pg || pg.offset <= 0) return;
+
+  const btn = document.createElement('button');
+  btn.className = 'load-more-btn btn-ghost';
+  btn.textContent = '⬆ Load earlier messages';
+  btn.addEventListener('click', () => loadEarlierMessages());
+  container.insertBefore(btn, container.firstChild);
+}
+
+async function loadEarlierMessages() {
+  const sid = STATE.activeSessionId;
+  const pg = STATE.pagination[sid];
+  if (!pg || pg.offset <= 0) return;
+
+  const container = $('messages');
+  const btn = container.querySelector('.load-more-btn');
+  if (btn) { btn.disabled = true; btn.textContent = '⏳ Loading…'; }
+
+  const prevScrollHeight = container.scrollHeight;
+
+  const newOffset = Math.max(pg.offset - 100, 0);
+  const fetchLimit = pg.offset - newOffset;
+
+  try {
+    const data = await apiRequest('GET',
+      `/history/sessions/${sid}/messages?limit=${fetchLimit}&offset=${newOffset}`);
+    const msgs = data.messages || [];
+
+    STATE.pagination[sid].offset = newOffset;
+
+    // Insert messages before existing content (after load-more button or at top)
+    const insertRef = btn ? btn.nextSibling : container.firstChild;
+    for (const msg of msgs) {
+      const row = document.createElement('div');
+      row.className = `message-row ${msg.role}`;
+      const avatar = document.createElement('div');
+      avatar.className = 'message-avatar';
+      avatar.innerHTML = msg.role === 'user' ? '👤' : '<img src="/static/icon-192.png" alt="Wee" style="width:32px;height:32px;border-radius:8px;">';
+      const bubble = document.createElement('div');
+      bubble.className = 'message-bubble';
+      if (msg.role === 'user') {
+        const esc = escHtml(msg.content);
+        const highlighted = esc.replace(
+          /((?:^|[ \t\n]))(\/\w+)/g,
+          (_, prefix, token) => `${prefix}<span class="cmd-token">${token}</span>`
+        );
+        bubble.innerHTML = `<span style="white-space:pre-wrap">${highlighted}</span>`;
+      } else {
+        try {
+          bubble.innerHTML = marked.parse(msg.content, { breaks: true });
+          bubble.querySelectorAll('pre code').forEach(block => {
+            if (window.hljs) hljs.highlightElement(block);
+          });
+        } catch (_) { bubble.textContent = msg.content; }
+      }
+      if (typeof linkifyFilePaths === 'function') linkifyFilePaths(bubble);
+      row.appendChild(avatar);
+      row.appendChild(bubble);
+      container.insertBefore(row, insertRef);
+    }
+
+    // Maintain scroll position so user doesn't jump
+    const newScrollHeight = container.scrollHeight;
+    container.scrollTop += (newScrollHeight - prevScrollHeight);
+
+    updateLoadMoreButton();
+  } catch (err) {
+    if (btn) { btn.disabled = false; btn.textContent = '⬆ Load earlier messages'; }
+    renderSystemMessage('Could not load earlier messages: ' + err.message);
+  }
 }
 
 async function renderMessage(role, content, files = []) {

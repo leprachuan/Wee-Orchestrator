@@ -568,6 +568,34 @@ html, body {
 .messages-container::-webkit-scrollbar-track { background: transparent; }
 .messages-container::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.12); border-radius: 3px; }
 
+/* Load earlier messages button */
+.load-more-btn {
+  display: block;
+  margin: 0 auto 8px auto;
+  padding: 8px 20px;
+  font-size: 13px;
+  font-weight: 500;
+  border-radius: var(--radius-sm, 8px);
+  background: rgba(255,255,255,0.06);
+  color: var(--text-secondary, rgba(255,255,255,0.65));
+  border: 1px solid var(--glass-border, rgba(255,255,255,0.12));
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  cursor: pointer;
+  transition: background 0.2s, color 0.2s, border-color 0.2s, transform 0.2s;
+  user-select: none;
+}
+.load-more-btn:not(:disabled):hover {
+  background: rgba(255,255,255,0.12);
+  color: var(--text-primary, #fff);
+  border-color: rgba(62,207,142,0.25);
+  transform: translateY(-1px);
+}
+.load-more-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 .empty-state {
   display: flex;
   flex-direction: column;

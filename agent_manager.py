@@ -4999,7 +4999,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
     import concurrent.futures
     from enum import Enum
 
-    from fastapi import FastAPI, Header, HTTPException, Request, UploadFile, File, WebSocket, WebSocketDisconnect
+    from fastapi import FastAPI, Header, HTTPException, Request, UploadFile, File, WebSocket, WebSocketDisconnect, Query
     from fastapi.responses import JSONResponse, FileResponse, StreamingResponse
     from fastapi.staticfiles import StaticFiles
     from fastapi.middleware.cors import CORSMiddleware
@@ -5689,7 +5689,12 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         return {"sessions": history_mgr.get_sessions(user["channel"], user["identity"])}
 
     @app.get("/api/v1/history/sessions/{session_id}/messages")
-    async def get_history_messages(session_id: str, request: Request):
+    async def get_history_messages(
+        session_id: str,
+        request: Request,
+        limit: int = Query(100, ge=1, le=1000),
+        offset: Optional[int] = Query(None, ge=0),
+    ):
         user = await authenticate(
             request,
             authorization=request.headers.get("authorization"),
@@ -5699,7 +5704,18 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         messages = history_mgr.get_session_messages(user["channel"], user["identity"], session_id)
         if messages is None:
             raise HTTPException(status_code=404, detail="Session not found in history")
-        return {"session_id": session_id, "messages": messages}
+        total = len(messages)
+        # Default offset: from the end (most recent messages)
+        if offset is None:
+            offset = max(total - limit, 0)
+        page = messages[offset : offset + limit]
+        return {
+            "session_id": session_id,
+            "messages": page,
+            "total": total,
+            "offset": offset,
+            "limit": limit,
+        }
 
     @app.delete("/api/v1/history/sessions/{session_id}")
     async def delete_history_session(session_id: str, request: Request):
