@@ -4063,6 +4063,7 @@ function _canvasDispatch(comp) {
     case 'divider':     { const hr = document.createElement('hr'); hr.className = 'glass-divider'; return hr; }
     case 'flowchart':   return _cvFlowchart(comp);
     case 'code':        return _cvCode(comp);
+    case '__board_item__': return _cvBoardItem(comp);
     default: {
       const d = document.createElement('div');
       d.style.cssText = 'color:var(--text-muted);font-size:11px;';
@@ -4088,7 +4089,7 @@ function _cvBoard(comp) {
     for (const item of (col.items || [])) {
       const el = document.createElement('div');
       el.className = 'board-item anim-in';
-      if (item.id) { el.dataset.nodeId = item.id; _canvasNodeRegistry.set(item.id, el); el._compData = item; }
+      if (item.id) { el.dataset.nodeId = item.id; _canvasNodeRegistry.set(item.id, el); el._compData = Object.assign({}, item, {type: '__board_item__'}); }
       el.textContent = item.title || item.name || '';
       if (item.status) {
         const colors = { done:'#3ecf8e', running:'#f5c542', pending:'rgba(255,255,255,0.3)', error:'#ff5f6d' };
@@ -4099,6 +4100,17 @@ function _cvBoard(comp) {
     w.appendChild(c);
   }
   return w;
+}
+
+function _cvBoardItem(item) {
+  const el = document.createElement('div');
+  el.className = 'board-item anim-in';
+  el.textContent = item.title || item.name || '';
+  const colors = { done:'#3ecf8e', running:'#f5c542', pending:'rgba(255,255,255,0.3)', error:'#ff5f6d' };
+  el.style.borderLeft = item.status
+    ? `3px solid ${colors[item.status] || 'rgba(255,255,255,0.2)'}`
+    : '3px solid rgba(255,255,255,0.1)';
+  return el;
 }
 
 function _cvCard(comp) {
