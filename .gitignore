@@ -100,3 +100,4 @@ telegram_config.json
 certs/
 .task-scheduler/
 .canvas-sessions/
+sessions.db
