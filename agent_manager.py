@@ -5249,7 +5249,8 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             return {"runtime": runtime, "models": [], "error": f"Unknown runtime: {runtime}"}
 
         try:
-            raw = session_mgr.get_models_for_runtime(runtime)
+            loop = asyncio.get_event_loop()
+            raw = await loop.run_in_executor(None, session_mgr.get_models_for_runtime, runtime)
             models = []
             for _group, model_ids in raw.items():
                 for model_id in model_ids:
@@ -5672,7 +5673,8 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             x_user_identity=request.headers.get("x-user-identity"),
             x_auth_channel=request.headers.get("x-auth-channel"),
         )
-        return usage_tracker.get_usage()
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(None, usage_tracker.get_usage)
 
     # --- History endpoints ---
 
@@ -7372,14 +7374,20 @@ def start_api_server():
     host = os.environ.get("API_HOST", "127.0.0.1")
 
     # SSL support — set SSL_CERTFILE and SSL_KEYFILE env vars to enable HTTPS
+    # In development (APP_ENV=DEV) prefer HTTP even if cert files exist to avoid surprising TLS-only bindings.
     ssl_certfile = os.environ.get("SSL_CERTFILE")
     ssl_keyfile = os.environ.get("SSL_KEYFILE")
     ssl_kwargs = {}
+    proto = "http"
     if ssl_certfile and ssl_keyfile and os.path.isfile(ssl_certfile) and os.path.isfile(ssl_keyfile):
-        ssl_kwargs = {"ssl_certfile": ssl_certfile, "ssl_keyfile": ssl_keyfile}
-        proto = "https"
-    else:
-        proto = "http"
+        # Only enable HTTPS when not in DEV, unless FORCE_SSL is explicitly set.
+        app_env = os.environ.get("APP_ENV", "").upper()
+        force_ssl = os.environ.get("FORCE_SSL", "") in ("1", "true", "True", "TRUE")
+        if app_env != "DEV" or force_ssl:
+            ssl_kwargs = {"ssl_certfile": ssl_certfile, "ssl_keyfile": ssl_keyfile}
+            proto = "https"
+        else:
+            print("[API] SSL cert/key found but APP_ENV=DEV — serving HTTP for development. Set FORCE_SSL=1 to force HTTPS.", file=sys.stderr)
 
     # Support comma-separated hosts (e.g. "127.0.0.1,100.x.x.x" for Tailscale + localhost).
     # When multiple hosts are specified, run each in a background thread and block on the last.
