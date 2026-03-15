@@ -14,10 +14,37 @@ Lifecycle:
 """
 
 import json
+import logging
 import os
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
+
+# Configure handoff logging
+logger = logging.getLogger(__name__)
+HANDOFF_LOG_DIR = Path(os.path.expanduser("~")) / ".copilot" / "logs"
+HANDOFF_LOG_FILE = HANDOFF_LOG_DIR / "handoff.log"
+
+def _setup_handoff_logger():
+    """Initialize handoff logger with file handler."""
+    HANDOFF_LOG_DIR.mkdir(parents=True, exist_ok=True)
+
+    handoff_logger = logging.getLogger("session_handoff")
+
+    # Only add handler if not already configured
+    if not handoff_logger.handlers:
+        handler = logging.FileHandler(HANDOFF_LOG_FILE)
+        formatter = logging.Formatter(
+            "%(asctime)s [%(levelname)s] %(message)s",
+            datefmt="%Y-%m-%d %H:%M:%S"
+        )
+        handler.setFormatter(formatter)
+        handoff_logger.addHandler(handler)
+        handoff_logger.setLevel(logging.INFO)
+
+    return handoff_logger
+
+_handoff_logger = _setup_handoff_logger()
 
 
 class SessionHandoff:
@@ -44,8 +71,17 @@ class SessionHandoff:
             if not entry or not isinstance(entry, dict):
                 return False
             current_runtime = entry.get("runtime", "")
-            return current_runtime != new_runtime and current_runtime != ""
-        except Exception:
+            changed = current_runtime != new_runtime and current_runtime != ""
+            if changed:
+                _handoff_logger.info(
+                    f"Runtime change detected: {current_runtime} → {new_runtime} "
+                    f"(n8n_session={n8n_session_id})"
+                )
+            return changed
+        except Exception as e:
+            _handoff_logger.warning(
+                f"Error detecting runtime change for {n8n_session_id}: {e}"
+            )
             return False
 
     def export_transcript(self, n8n_session_id: str, session_id: str) -> Optional[str]:
@@ -58,6 +94,10 @@ class SessionHandoff:
         # Chat history is indexed by n8n_session_id, not the internal copilot session_id
         messages = self._get_session_messages(n8n_session_id)
         if not messages:
+            _handoff_logger.debug(
+                f"No chat history to export for session_id={session_id} "
+                f"(n8n_session={n8n_session_id})"
+            )
             return None
 
         recent = messages[-self.MAX_TRANSCRIPT_MESSAGES:]
@@ -86,6 +126,12 @@ class SessionHandoff:
         out_path = self._session_state_path(session_id) / "transcript.md"
         out_path.parent.mkdir(parents=True, exist_ok=True)
         out_path.write_text("\n".join(lines), encoding="utf-8")
+
+        _handoff_logger.debug(
+            f"Transcript exported: {out_path} | "
+            f"session_id={session_id} | messages={len(recent)}"
+        )
+
         return str(out_path)
 
     def write_handoff_summary(
@@ -102,9 +148,20 @@ class SessionHandoff:
         Also writes handoff_meta.json with prev_runtime and transcript path.
         Returns the handoff.md file path, or None if no history to summarise.
         """
+        # Log handoff initiation
+        _handoff_logger.info(
+            f"HANDOFF INITIATED: {prev_runtime} → {new_runtime} | "
+            f"prev_session={prev_session_id} new_session={new_session_id} | "
+            f"n8n_session={n8n_session_id}"
+        )
+
         # Chat history is indexed by n8n_session_id, not the internal copilot session_id
         messages = self._get_session_messages(n8n_session_id)
         if not messages:
+            _handoff_logger.warning(
+                f"No chat history found for n8n_session={n8n_session_id}. "
+                f"Handoff cancelled."
+            )
             return None
 
         recent = messages[-self.MAX_SUMMARY_MESSAGES:]
@@ -173,6 +230,13 @@ class SessionHandoff:
             json.dumps(meta, indent=2), encoding="utf-8"
         )
 
+        # Log successful handoff summary creation
+        _handoff_logger.info(
+            f"HANDOFF SUMMARY WRITTEN: {handoff_path} | "
+            f"transcript={transcript_path} | "
+            f"messages_included={len(recent)}"
+        )
+
         return str(handoff_path)
 
     def get_handoff_context(
@@ -189,6 +253,9 @@ class SessionHandoff:
         meta_path = out_dir / "handoff_meta.json"
 
         if not handoff_path.exists():
+            _handoff_logger.debug(
+                f"No handoff context found for session_id={session_id}"
+            )
             return None
 
         try:
@@ -196,15 +263,34 @@ class SessionHandoff:
             meta: dict = {}
             if meta_path.exists():
                 meta = json.loads(meta_path.read_text(encoding="utf-8"))
-        except Exception:
+
+            prev_runtime = meta.get("prev_runtime", "unknown")
+            new_runtime = meta.get("new_runtime", "unknown")
+
+            # Log successful handoff context retrieval
+            _handoff_logger.info(
+                f"HANDOFF CONTEXT LOADED: session_id={session_id} | "
+                f"{prev_runtime} → {new_runtime} | "
+                f"switched_at={meta.get('switched_at', 'unknown')}"
+            )
+
+        except Exception as e:
+            _handoff_logger.error(
+                f"Error reading handoff context for session_id={session_id}: {e}"
+            )
             return None
         finally:
             # Always delete after first read (one-time use)
             try:
                 handoff_path.unlink(missing_ok=True)
                 meta_path.unlink(missing_ok=True)
-            except Exception:
-                pass
+                _handoff_logger.debug(
+                    f"Handoff files cleaned up for session_id={session_id}"
+                )
+            except Exception as e:
+                _handoff_logger.warning(
+                    f"Error cleaning up handoff files for session_id={session_id}: {e}"
+                )
 
         return {
             "content": content,

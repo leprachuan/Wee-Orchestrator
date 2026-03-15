@@ -23,6 +23,7 @@ const STATE = {
   bgTasksEnabled:  true,  // overridden by /api/v1/config on boot
   requestQueue:    [],     // queued requests while processing
   queuePaused:     false,  // true to prevent auto-submit of next queued message
+  pagination:      {},     // per-session pagination state: { sessionId: { offset, total } }
   currentProcessingQueueId: null,  // ID of queue item currently being processed
   currentAbortController: null,    // AbortController for the active streaming fetch
   fileViewerOpen:  false,          // whether file viewer panel is open
@@ -161,6 +162,7 @@ const RUNTIME_ICONS = {
   gemini:   '/ui/assets/runtime-icons/gemini.svg',
   opencode: '/ui/assets/runtime-icons/opencode.svg',
   codex:    '/ui/assets/runtime-icons/openai.svg',
+  devin:    '/ui/assets/runtime-icons/devin.svg',
 };
 
 function runtimeIconHTML(runtime, size = 14) {
@@ -203,8 +205,6 @@ function updateSessionMeta(data) {
   modeEl.classList.toggle('yolo', isYolo);
   modeEl.classList.remove('empty');
 
-  // Refresh usage indicator whenever meta updates (runtime may have changed)
-  if (typeof fetchRuntimeUsage === 'function') fetchRuntimeUsage();
 
   // Refresh TODOs when agent changes
   if (typeof fetchAndRenderTodos === 'function') {
@@ -221,42 +221,6 @@ async function fetchAndUpdateMeta(sessionId) {
   try {
     const data = await apiRequest('GET', `/sessions/${sessionId}/status`);
     updateSessionMeta(data);
-  } catch (_) { /* non-fatal */ }
-}
-
-// ─── Runtime Usage Indicator ──────────────────────────────────────────────────
-async function fetchRuntimeUsage() {
-  const runtime = $('meta-runtime')?.dataset?.runtime || $('meta-runtime')?.textContent?.trim();
-  const el = $('meta-usage');
-  if (!el) return;
-
-  // Only show usage for copilot runtime
-  if (runtime !== 'copilot') {
-    el.textContent = ''; el.classList.add('empty'); el.removeAttribute('title');
-    return;
-  }
-  try {
-    const data = await apiRequest('GET', `/runtime-usage`);
-    el.classList.remove('empty', 'usage-low', 'usage-critical');
-
-    const used = data.requests_used ?? 0;
-    const limit = data.quota_limit;
-    const reset = data.reset_date?.slice(0, 10) || '1st';
-    const usedDisplay = Number.isInteger(used) ? used : used.toFixed(1);
-
-    el.textContent = `${usedDisplay}/${limit} reqs`;
-    let tip = `${usedDisplay} of ${limit} premium requests used · resets ${reset}`;
-    if (data.breakdown) {
-      const bd = data.breakdown;
-      tip += `\nChat: ${bd.premium_requests ?? 0} · Agent: ${bd.coding_agent_requests ?? 0}`;
-    }
-    if (used > limit) tip += `\n⚠️ Over quota — overage billed at $0.04/request`;
-    el.title = tip;
-
-    const remaining = Math.max(0, limit - used);
-    const pct = limit > 0 ? remaining / limit : 0;
-    if (used > limit || pct <= 0.1) el.classList.add('usage-critical');
-    else if (pct <= 0.25) el.classList.add('usage-low');
   } catch (_) { /* non-fatal */ }
 }
 
@@ -348,6 +312,7 @@ const PILL_OPTIONS = {
       { label: `${runtimeIconHTML('gemini')}gemini`,         cmd: '/runtime set gemini' },
       { label: `${runtimeIconHTML('opencode')}opencode`,     cmd: '/runtime set opencode' },
       { label: `${runtimeIconHTML('codex')}codex`,           cmd: '/runtime set codex' },
+      { label: `${runtimeIconHTML('devin')}devin`,           cmd: '/runtime set devin' },
     ],
   },
   'meta-model': {
@@ -723,16 +688,20 @@ async function selectSession(sessionId) {
 
   clearMessages();
   try {
-    const data = await apiRequest('GET', `/history/sessions/${sessionId}/messages`);
-    for (const msg of (data.messages || [])) {
+    const data = await apiRequest('GET', `/history/sessions/${sessionId}/messages?limit=100`);
+    const msgs = data.messages || [];
+    const total = data.total || msgs.length;
+    const offset = data.offset || 0;
+    STATE.pagination[sessionId] = { offset, total };
+    for (const msg of msgs) {
       await renderMessage(msg.role, msg.content, msg.files || []);
     }
+    updateLoadMoreButton();
   } catch (err) {
     renderSystemMessage('Could not load messages: ' + err.message);
   }
   scrollToBottom();
   await fetchAndUpdateMeta(sessionId);
-  fetchRuntimeUsage();  // update usage indicator
   loadScratchNotes();   // load scratch notes for this session
 }
 
@@ -747,7 +716,6 @@ async function startNewSession() {
     updateSessionMeta(data);  // initial meta from create response
     await loadSessions();
     await fetchAndUpdateMeta(data.session_id); // get full defaults
-    fetchRuntimeUsage();  // update usage indicator
     loadScratchNotes();   // load scratch notes for new session (will be empty)
   } catch (err) {
     alert('Failed to create session: ' + err.message);
@@ -1379,7 +1347,6 @@ async function sendMessage() {
 
     // Refresh meta — a /agent set etc. may have changed things
     await fetchAndUpdateMeta(STATE.currentSessionId);
-    fetchRuntimeUsage();  // update usage after each round trip
     await loadSessions();
   } catch (err) {
     hideTyping();
@@ -1553,6 +1520,86 @@ function clearMessages() {
   es.className = 'empty-state hidden';
   es.innerHTML = '<div class="empty-icon"><img src="/static/icon-192.png" alt="Wee Orchestrator" style="width:160px;height:160px;border-radius:24px;opacity:0.7;"></div><p>Start a conversation or select a session from the sidebar.</p>';
   container.appendChild(es);
+}
+
+// ─── Pagination: Load Earlier Messages ────────────────────────────────────────
+function updateLoadMoreButton() {
+  const container = $('messages');
+  const existing = container.querySelector('.load-more-btn');
+  if (existing) existing.remove();
+
+  const sid = STATE.activeSessionId;
+  const pg = STATE.pagination[sid];
+  if (!pg || pg.offset <= 0) return;
+
+  const btn = document.createElement('button');
+  btn.className = 'load-more-btn btn-ghost';
+  btn.textContent = '⬆ Load earlier messages';
+  btn.addEventListener('click', () => loadEarlierMessages());
+  container.insertBefore(btn, container.firstChild);
+}
+
+async function loadEarlierMessages() {
+  const sid = STATE.activeSessionId;
+  const pg = STATE.pagination[sid];
+  if (!pg || pg.offset <= 0) return;
+
+  const container = $('messages');
+  const btn = container.querySelector('.load-more-btn');
+  if (btn) { btn.disabled = true; btn.textContent = '⏳ Loading…'; }
+
+  const prevScrollHeight = container.scrollHeight;
+
+  const newOffset = Math.max(pg.offset - 100, 0);
+  const fetchLimit = pg.offset - newOffset;
+
+  try {
+    const data = await apiRequest('GET',
+      `/history/sessions/${sid}/messages?limit=${fetchLimit}&offset=${newOffset}`);
+    const msgs = data.messages || [];
+
+    STATE.pagination[sid].offset = newOffset;
+
+    // Insert messages before existing content (after load-more button or at top)
+    const insertRef = btn ? btn.nextSibling : container.firstChild;
+    for (const msg of msgs) {
+      const row = document.createElement('div');
+      row.className = `message-row ${msg.role}`;
+      const avatar = document.createElement('div');
+      avatar.className = 'message-avatar';
+      avatar.innerHTML = msg.role === 'user' ? '👤' : '<img src="/static/icon-192.png" alt="Wee" style="width:32px;height:32px;border-radius:8px;">';
+      const bubble = document.createElement('div');
+      bubble.className = 'message-bubble';
+      if (msg.role === 'user') {
+        const esc = escHtml(msg.content);
+        const highlighted = esc.replace(
+          /((?:^|[ \t\n]))(\/\w+)/g,
+          (_, prefix, token) => `${prefix}<span class="cmd-token">${token}</span>`
+        );
+        bubble.innerHTML = `<span style="white-space:pre-wrap">${highlighted}</span>`;
+      } else {
+        try {
+          bubble.innerHTML = marked.parse(msg.content, { breaks: true });
+          bubble.querySelectorAll('pre code').forEach(block => {
+            if (window.hljs) hljs.highlightElement(block);
+          });
+        } catch (_) { bubble.textContent = msg.content; }
+      }
+      if (typeof linkifyFilePaths === 'function') linkifyFilePaths(bubble);
+      row.appendChild(avatar);
+      row.appendChild(bubble);
+      container.insertBefore(row, insertRef);
+    }
+
+    // Maintain scroll position so user doesn't jump
+    const newScrollHeight = container.scrollHeight;
+    container.scrollTop += (newScrollHeight - prevScrollHeight);
+
+    updateLoadMoreButton();
+  } catch (err) {
+    if (btn) { btn.disabled = false; btn.textContent = '⬆ Load earlier messages'; }
+    renderSystemMessage('Could not load earlier messages: ' + err.message);
+  }
 }
 
 async function renderMessage(role, content, files = []) {
@@ -2608,7 +2655,7 @@ function startBgTaskPolling() {
         // If we have a selected running task, refresh its detail
         if (BG.selectedTaskId) {
           const t = BG.tasks.find(x => x.task_id === BG.selectedTaskId);
-          if (t && t.status === 'running') {
+          if (t && (t.status === 'running' || t.status === 'queued')) {
             loadBgTaskDetail(BG.selectedTaskId);
           }
         }
@@ -2621,8 +2668,10 @@ function updateBgBadge() {
   const badge = $('bg-task-badge');
   if (!badge) return;
   const running = BG.tasks.filter(t => t.status === 'running').length;
-  if (running > 0) {
-    badge.textContent = running;
+  const queued = BG.tasks.filter(t => t.status === 'queued').length;
+  const total = running + queued;
+  if (total > 0) {
+    badge.textContent = queued > 0 ? `${running}+${queued}` : running;
     show(badge);
   } else {
     hide(badge);
@@ -2654,23 +2703,36 @@ function renderBgTasks() {
     return;
   }
 
-  // Sort: running first, then by created_at descending
+  // Sort: running first, then queued (by created_at asc = oldest first = pos 1), then completed/failed by created_at desc
+  const statusOrder = { running: 0, queued: 1 };
   const sorted = [...BG.tasks].sort((a, b) => {
-    if (a.status === 'running' && b.status !== 'running') return -1;
-    if (b.status === 'running' && a.status !== 'running') return 1;
+    const ao = statusOrder[a.status] ?? 2;
+    const bo = statusOrder[b.status] ?? 2;
+    if (ao !== bo) return ao - bo;
+    // Within queued: oldest first (ascending) so position 1 is at top
+    if (a.status === 'queued') return (a.created_at || '').localeCompare(b.created_at || '');
+    // Within running/completed: newest first
     return (b.created_at || '').localeCompare(a.created_at || '');
   });
 
+  // Build queue position map for queued tasks
+  const queuedTasks = sorted.filter(t => t.status === 'queued');
+
   list.innerHTML = sorted.map(t => {
-    const icons = { running: '🟢', completed: '✅', failed: '❌', killed: '🛑' };
+    const icons = { running: '🟢', completed: '✅', failed: '❌', killed: '🛑', queued: '⏳' };
     const icon = icons[t.status] || '❓';
     const statusClass = `bg-status-${t.status}`;
     const active = t.task_id === BG.selectedTaskId ? 'active' : '';
     const elapsed = t.status === 'running' ? formatElapsed(t.created_at) : '';
+    let statusLabel = t.status;
+    if (t.status === 'queued') {
+      const pos = queuedTasks.findIndex(q => q.task_id === t.task_id) + 1;
+      statusLabel = `queued #${pos}`;
+    }
     return `
       <div class="bg-task-card ${active}" data-task-id="${t.task_id}" onclick="selectBgTask('${t.task_id}')">
         <div class="bg-card-top">
-          <span class="bg-card-status ${statusClass}">${icon} ${t.status}</span>
+          <span class="bg-card-status ${statusClass}">${icon} ${statusLabel}</span>
           <span class="bg-card-agent">${escHtml(t.agent || '?')} / ${runtimeIconHTML(t.runtime)}${escHtml(t.runtime || '?')}</span>
         </div>
         <div class="bg-card-prompt">${escHtml(t.prompt || '')}</div>
@@ -2710,15 +2772,27 @@ async function loadBgTaskDetail(taskId) {
 
   try {
     const t = await bgApi('GET', `/${taskId}`);
-    const icons = { running: '🟢', completed: '✅', failed: '❌', killed: '🛑' };
+    const icons = { running: '🟢', completed: '✅', failed: '❌', killed: '🛑', queued: '⏳' };
     const icon = icons[t.status] || '❓';
     const statusClass = `bg-status-${t.status}`;
     const elapsed = t.status === 'running' ? formatElapsed(t.created_at) : '';
+
+    // Compute queue position for queued tasks
+    let statusLabel = t.status;
+    if (t.status === 'queued') {
+      const queuedInList = BG.tasks.filter(x => x.status === 'queued').sort((a,b) => (a.created_at||'').localeCompare(b.created_at||''));
+      const pos = queuedInList.findIndex(x => x.task_id === t.task_id) + 1;
+      if (pos > 0) statusLabel = `queued #${pos}`;
+    }
 
     let actionsHtml = '';
     if (t.status === 'running') {
       actionsHtml = `<div class="bg-detail-actions">
         <button class="btn btn-danger btn-sm" onclick="killBgTask('${t.task_id}')">🛑 Kill Task</button>
+      </div>`;
+    } else if (t.status === 'queued') {
+      actionsHtml = `<div class="bg-detail-actions">
+        <button class="btn btn-danger btn-sm" onclick="killBgTask('${t.task_id}')">✖ Cancel</button>
       </div>`;
     } else {
       actionsHtml = `<div class="bg-detail-actions">
@@ -2740,8 +2814,9 @@ async function loadBgTaskDetail(taskId) {
       <div class="bg-detail-meta">
         <div class="bg-detail-meta-row">
           <span class="bg-detail-meta-label">Status</span>
-          <span class="bg-card-status ${statusClass}">${icon} ${t.status}</span>
+          <span class="bg-card-status ${statusClass}">${icon} ${statusLabel}</span>
           ${elapsed ? `<span style="font-size:11px;color:var(--text-muted);margin-left:8px">${elapsed}</span>` : ''}
+          ${t.status === 'queued' ? `<span style="font-size:11px;color:var(--text-muted);margin-left:8px">Waiting for a slot to open…</span>` : ''}
         </div>
         <div class="bg-detail-meta-row">
           <span class="bg-detail-meta-label">Agent</span>
@@ -3693,3 +3768,891 @@ document.addEventListener('DOMContentLoaded', () => {
   }
   updateMobileBadges();
 });
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// ─── Wee Canvas Panel ───────────────────────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════════════════════
+
+const _canvasSessions = new Map(); // sessionId → { ws, components, connected, name }
+const _dismissedCanvasSessions = new Set(); // sessions manually closed by user — poller skips these
+let _activeCanvasSession = null;
+let _canvasPanelOpen = false;
+let _closedCanvasExpanded = false;
+
+// ── Canvas node registry (for partial updates) ──────────────────────────────
+const _canvasNodeRegistry = new Map();
+
+// ── Panel toggle ─────────────────────────────────────────────────────────────
+
+function toggleCanvasPanel() {
+  if (_canvasPanelOpen) closeCanvasPanel();
+  else openCanvasPanel();
+}
+
+function openCanvasPanel() {
+  const panel = $('canvas-panel');
+  if (!panel) return;
+  panel.classList.remove('canvas-hidden');
+  panel.classList.add('canvas-open');
+  _canvasPanelOpen = true;
+}
+
+function closeCanvasPanel() {
+  const panel = $('canvas-panel');
+  if (!panel) return;
+  panel.classList.add('canvas-hidden');
+  panel.classList.remove('canvas-open');
+  _canvasPanelOpen = false;
+}
+
+// ── Session management ───────────────────────────────────────────────────────
+
+function openCanvasSession(sessionId) {
+  if (!_canvasSessions.has(sessionId)) {
+    _connectCanvasWS(sessionId);
+  }
+  _activeCanvasSession = sessionId;
+  _renderCanvasTabs();
+  _renderActiveCanvas();
+  if (!_canvasPanelOpen) openCanvasPanel();
+}
+
+function closeCanvasSession(sessionId) {
+  const sess = _canvasSessions.get(sessionId);
+  if (sess && sess.ws) {
+    try { sess.ws.close(); } catch(e) {}
+  }
+  _canvasSessions.delete(sessionId);
+  _dismissedCanvasSessions.add(sessionId); // prevent poller from re-opening
+  if (_activeCanvasSession === sessionId) {
+    const keys = [..._canvasSessions.keys()];
+    _activeCanvasSession = keys.length ? keys[keys.length - 1] : null;
+  }
+  // Persist session to disk via backend
+  fetch(`${API_BASE}/canvas/sessions/${sessionId}/close`, {
+    method: 'POST',
+    headers: { 'Authorization': `Bearer ${STATE.token}` }
+  }).catch(() => {});
+  _renderCanvasTabs();
+  _renderActiveCanvas();
+  _updateCanvasBadge();
+  if (_canvasSessions.size === 0) {
+    const empty = $('canvas-empty');
+    if (empty) empty.style.display = '';
+  }
+}
+
+function _connectCanvasWS(sessionId) {
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  const wsUrl = `${proto}://${location.host}/canvas/ws?session=${sessionId}`;
+  const sess = { ws: null, components: [], connected: false, name: null };
+  _canvasSessions.set(sessionId, sess);
+
+  const ws = new WebSocket(wsUrl);
+  sess.ws = ws;
+
+  ws.onopen = () => {
+    sess.connected = true;
+    _renderCanvasTabs();
+  };
+
+  ws.onmessage = (evt) => {
+    let msg;
+    try { msg = JSON.parse(evt.data); } catch(e) { return; }
+    _handleCanvasMessage(sessionId, msg);
+  };
+
+  ws.onclose = () => {
+    sess.connected = false;
+    // Auto-reconnect after 3s if session still tracked
+    if (_canvasSessions.has(sessionId)) {
+      setTimeout(() => {
+        if (_canvasSessions.has(sessionId)) {
+          _canvasSessions.delete(sessionId);
+          _connectCanvasWS(sessionId);
+          if (_activeCanvasSession === sessionId) _renderActiveCanvas();
+        }
+      }, 3000);
+    }
+  };
+
+  ws.onerror = () => { sess.connected = false; };
+}
+
+function _handleCanvasMessage(sessionId, msg) {
+  const sess = _canvasSessions.get(sessionId);
+  if (!sess) return;
+
+  if (msg.type === 'render' || msg.type === 'restore') {
+    sess.components = msg.components || [];
+    if (_activeCanvasSession === sessionId) _renderActiveCanvas();
+  } else if (msg.type === 'update') {
+    _canvasApplyUpdate(sess.components, msg.node_id, msg.changes);
+    if (_activeCanvasSession === sessionId) {
+      // Try partial update first
+      const el = _canvasNodeRegistry.get(msg.node_id);
+      if (el && el._compData) {
+        Object.assign(el._compData, msg.changes);
+        const newEl = _canvasRenderComponent(el._compData);
+        if (newEl && el.parentNode) {
+          el.parentNode.replaceChild(newEl, el);
+          _canvasNodeRegistry.set(msg.node_id, newEl);
+        }
+      } else {
+        _renderActiveCanvas();
+      }
+    }
+  } else if (msg.type === 'clear') {
+    sess.components = [];
+    if (_activeCanvasSession === sessionId) _renderActiveCanvas();
+  }
+}
+
+function _canvasApplyUpdate(components, nodeId, changes) {
+  for (const comp of components) {
+    if (typeof comp !== 'object' || !comp) continue;
+    if (comp.id === nodeId) { Object.assign(comp, changes); return true; }
+    for (const key of ['children', 'items', 'columns', 'steps', 'rows', 'metrics', 'fields']) {
+      const arr = comp[key];
+      if (Array.isArray(arr) && _canvasApplyUpdate(arr, nodeId, changes)) return true;
+    }
+  }
+  return false;
+}
+
+// ── Tab rendering ────────────────────────────────────────────────────────────
+
+function _renderCanvasTabs() {
+  const bar = $('canvas-tab-bar');
+  if (!bar) return;
+  bar.innerHTML = '';
+
+  for (const [sid, sessData] of _canvasSessions) {
+    const tab = document.createElement('div');
+    tab.className = 'canvas-tab' + (sid === _activeCanvasSession ? ' active' : '');
+
+    const label = document.createElement('span');
+    label.className = 'canvas-tab-label';
+    label.textContent = sessData.name || (sid.length > 8 ? sid.slice(0, 8) : sid);
+    tab.appendChild(label);
+
+    // Double-click to rename
+    label.addEventListener('dblclick', (e) => {
+      e.stopPropagation();
+      _startCanvasRename(tab, label, sid, sessData);
+    });
+
+    const closeBtn = document.createElement('button');
+    closeBtn.className = 'canvas-tab-close';
+    closeBtn.textContent = '×';
+    closeBtn.addEventListener('click', (e) => { e.stopPropagation(); closeCanvasSession(sid); });
+    tab.appendChild(closeBtn);
+
+    tab.addEventListener('click', () => {
+      _activeCanvasSession = sid;
+      _renderCanvasTabs();
+      _renderActiveCanvas();
+    });
+
+    bar.appendChild(tab);
+  }
+}
+
+function _startCanvasRename(tab, label, sessionId, sessData) {
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.className = 'canvas-tab-rename';
+  input.value = sessData.name || '';
+  input.placeholder = sessionId.slice(0, 8);
+
+  label.replaceWith(input);
+  input.focus();
+  input.select();
+
+  function save() {
+    const newName = input.value.trim();
+    sessData.name = newName || null;
+    // Persist name to backend
+    fetch(`${API_BASE}/canvas/sessions/${sessionId}/name`, {
+      method: 'PATCH',
+      headers: {
+        'Authorization': `Bearer ${STATE.token}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ name: newName }),
+    }).catch(() => {});
+    _renderCanvasTabs();
+  }
+
+  function cancel() {
+    _renderCanvasTabs();
+  }
+
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); save(); }
+    if (e.key === 'Escape') { e.preventDefault(); cancel(); }
+  });
+  input.addEventListener('blur', save);
+}
+
+// ── Canvas content rendering ─────────────────────────────────────────────────
+
+function _renderActiveCanvas() {
+  const content = $('canvas-content');
+  const empty = $('canvas-empty');
+  if (!content) return;
+
+  const sess = _activeCanvasSession ? _canvasSessions.get(_activeCanvasSession) : null;
+
+  if (!sess || !sess.components || sess.components.length === 0) {
+    // Show empty state
+    content.innerHTML = '';
+    if (empty) { content.appendChild(empty); empty.style.display = ''; }
+    return;
+  }
+
+  if (empty) empty.style.display = 'none';
+  _canvasNodeRegistry.clear();
+  content.innerHTML = '';
+
+  for (const comp of sess.components) {
+    const el = _canvasRenderComponent(comp);
+    if (el) content.appendChild(el);
+  }
+
+  // Re-render mermaid diagrams
+  const flowcharts = content.querySelectorAll('.mermaid-src');
+  flowcharts.forEach(node => _canvasRenderMermaid(node));
+}
+
+function _canvasRenderComponent(comp) {
+  if (!comp || typeof comp !== 'object') return null;
+  const el = _canvasDispatch(comp);
+  if (!el) return null;
+  if (comp.id) {
+    el.dataset.nodeId = comp.id;
+    _canvasNodeRegistry.set(comp.id, el);
+  }
+  el._compData = comp;
+  el.classList.add('anim-in');
+  return el;
+}
+
+function _canvasDispatch(comp) {
+  switch (comp.type) {
+    case 'board':       return _cvBoard(comp);
+    case 'card':        return _cvCard(comp);
+    case 'grid':        return _cvGrid(comp);
+    case 'row':         return _cvRow(comp);
+    case 'col':         return _cvCol(comp);
+    case 'table':       return _cvTable(comp);
+    case 'chart_bar':   case 'chart_line': case 'chart_pie':
+    case 'chart_doughnut': case 'chart_radar': case 'chart_polar':
+      return _cvChart(comp);
+    case 'metric':      return _cvMetric(comp);
+    case 'progress':    return _cvProgress(comp);
+    case 'badge':       return _cvBadge(comp);
+    case 'log':         return _cvLog(comp);
+    case 'button':      return _cvButton(comp);
+    case 'form':        return _cvForm(comp);
+    case 'heading':     return _cvHeading(comp);
+    case 'text':        return _cvText(comp);
+    case 'markdown':    return _cvMarkdown(comp);
+    case 'html':        return _cvHtml(comp);
+    case 'list':        return _cvList(comp);
+    case 'divider':     { const hr = document.createElement('hr'); hr.className = 'glass-divider'; return hr; }
+    case 'flowchart':   return _cvFlowchart(comp);
+    case 'code':        return _cvCode(comp);
+    default: {
+      const d = document.createElement('div');
+      d.style.cssText = 'color:var(--text-muted);font-size:11px;';
+      d.textContent = `[unknown: ${comp.type}]`;
+      return d;
+    }
+  }
+}
+
+// ── Component renderers ─────────────────────────────────────────────────────
+
+function _cvBoard(comp) {
+  const w = document.createElement('div');
+  w.className = 'board-wrap glass-panel';
+  for (const col of (comp.columns || [])) {
+    const c = document.createElement('div');
+    c.className = 'board-col';
+    if (col.id) { c.dataset.nodeId = col.id; _canvasNodeRegistry.set(col.id, c); }
+    const t = document.createElement('div');
+    t.className = 'board-col-title';
+    t.textContent = col.title || '';
+    c.appendChild(t);
+    for (const item of (col.items || [])) {
+      const el = document.createElement('div');
+      el.className = 'board-item anim-in';
+      if (item.id) { el.dataset.nodeId = item.id; _canvasNodeRegistry.set(item.id, el); el._compData = item; }
+      el.textContent = item.title || item.name || '';
+      if (item.status) {
+        const colors = { done:'#3ecf8e', running:'#f5c542', pending:'rgba(255,255,255,0.3)', error:'#ff5f6d' };
+        el.style.borderLeft = `3px solid ${colors[item.status] || 'rgba(255,255,255,0.2)'}`;
+      }
+      c.appendChild(el);
+    }
+    w.appendChild(c);
+  }
+  return w;
+}
+
+function _cvCard(comp) {
+  const w = document.createElement('div');
+  w.className = 'glass-card';
+  if (comp.title) {
+    const h = document.createElement('div');
+    h.style.cssText = 'font-weight:600;font-size:13px;margin-bottom:8px;';
+    h.textContent = comp.title;
+    w.appendChild(h);
+  }
+  for (const ch of (comp.children || [])) {
+    const el = _canvasRenderComponent(ch);
+    if (el) w.appendChild(el);
+  }
+  if (comp.content && typeof comp.content === 'string') {
+    const p = document.createElement('p');
+    p.style.cssText = 'font-size:12px;color:var(--text-secondary);';
+    p.textContent = comp.content;
+    w.appendChild(p);
+  }
+  return w;
+}
+
+function _cvGrid(comp) {
+  const w = document.createElement('div');
+  w.className = 'c-grid';
+  w.style.gridTemplateColumns = `repeat(${comp.cols || 2}, 1fr)`;
+  for (const ch of (comp.children || [])) { const el = _canvasRenderComponent(ch); if (el) w.appendChild(el); }
+  return w;
+}
+
+function _cvRow(comp) {
+  const w = document.createElement('div');
+  w.className = 'c-row';
+  for (const ch of (comp.children || [])) { const el = _canvasRenderComponent(ch); if (el) w.appendChild(el); }
+  return w;
+}
+
+function _cvCol(comp) {
+  const w = document.createElement('div');
+  w.className = 'c-col';
+  for (const ch of (comp.children || [])) { const el = _canvasRenderComponent(ch); if (el) w.appendChild(el); }
+  return w;
+}
+
+function _cvTable(comp) {
+  const w = document.createElement('div');
+  w.className = 'glass-panel';
+  if (comp.label || comp.title) {
+    const h = document.createElement('div');
+    h.style.cssText = 'font-weight:600;font-size:12px;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em;margin-bottom:10px;';
+    h.textContent = comp.label || comp.title;
+    w.appendChild(h);
+  }
+  const scrollWrap = document.createElement('div');
+  scrollWrap.className = 'glass-table-wrap';
+  const table = document.createElement('table');
+  table.className = 'glass-table';
+  if (comp.headers?.length) {
+    const thead = document.createElement('thead');
+    const tr = document.createElement('tr');
+    for (const h of comp.headers) { const th = document.createElement('th'); th.textContent = h; tr.appendChild(th); }
+    thead.appendChild(tr);
+    table.appendChild(thead);
+  }
+  const tbody = document.createElement('tbody');
+  for (const row of (comp.rows || [])) {
+    const tr = document.createElement('tr');
+    const cells = Array.isArray(row) ? row : Object.values(row);
+    for (const cell of cells) { const td = document.createElement('td'); td.textContent = cell; tr.appendChild(td); }
+    tbody.appendChild(tr);
+  }
+  table.appendChild(tbody);
+  scrollWrap.appendChild(table);
+  w.appendChild(scrollWrap);
+  return w;
+}
+
+function _cvChart(comp) {
+  const w = document.createElement('div');
+  w.className = 'glass-panel';
+  if (comp.label || comp.title) {
+    const h = document.createElement('div');
+    h.style.cssText = 'font-weight:600;font-size:12px;color:var(--text-muted);margin-bottom:10px;';
+    h.textContent = comp.label || comp.title;
+    w.appendChild(h);
+  }
+  const canvas = document.createElement('canvas');
+  canvas.style.maxHeight = '250px';
+  w.appendChild(canvas);
+  setTimeout(() => {
+    if (typeof Chart === 'undefined') return;
+    const typeMap = { chart_bar:'bar', chart_line:'line', chart_pie:'pie', chart_doughnut:'doughnut', chart_radar:'radar', chart_polar:'polarArea' };
+    const chartType = typeMap[comp.type] || 'line';
+    const datasets = (comp.datasets || []).map((ds, i) => ({
+      ...ds,
+      borderColor: ds.borderColor || ['#3ecf8e','#f5c542','#7fb5ff','#ff8888','#c084fc'][i % 5],
+      backgroundColor: ds.backgroundColor || (chartType === 'line' ? 'transparent' : undefined),
+    }));
+    new Chart(canvas, {
+      type: chartType,
+      data: { labels: comp.labels || [], datasets },
+      options: {
+        responsive: true,
+        plugins: { legend: { labels: { color: 'rgba(255,255,255,0.6)' } } },
+        scales: chartType === 'line' || chartType === 'bar' ? {
+          x: { ticks: { color: 'rgba(255,255,255,0.4)' }, grid: { color: 'rgba(255,255,255,0.06)' } },
+          y: { ticks: { color: 'rgba(255,255,255,0.4)' }, grid: { color: 'rgba(255,255,255,0.06)' } }
+        } : undefined
+      }
+    });
+  }, 50);
+  return w;
+}
+
+function _cvMetric(comp) {
+  const w = document.createElement('div');
+  w.className = 'glass-card';
+  w.style.cssText = 'min-width:100px;text-align:center;';
+  const val = document.createElement('div');
+  val.className = 'metric-value';
+  if (comp.trend === 'up') val.classList.add('trend-up');
+  if (comp.trend === 'down') val.classList.add('trend-down');
+  val.textContent = comp.value || '—';
+  if (comp.trend === 'up') { const s = document.createElement('span'); s.textContent = ' ↑'; s.className = 'trend-up'; val.appendChild(s); }
+  if (comp.trend === 'down') { const s = document.createElement('span'); s.textContent = ' ↓'; s.className = 'trend-down'; val.appendChild(s); }
+  w.appendChild(val);
+  const lbl = document.createElement('div');
+  lbl.className = 'metric-label';
+  lbl.textContent = comp.label || '';
+  w.appendChild(lbl);
+  return w;
+}
+
+function _cvProgress(comp) {
+  const w = document.createElement('div');
+  w.className = 'glass-panel';
+  w.style.padding = '14px';
+  const top = document.createElement('div');
+  top.style.cssText = 'display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;';
+  const label = document.createElement('span');
+  label.style.cssText = 'font-size:12px;color:var(--text-secondary);';
+  label.textContent = comp.label || '';
+  top.appendChild(label);
+  const pct = Math.max(0, Math.min(100, comp.pct || 0));
+  const pctLabel = document.createElement('span');
+  pctLabel.style.cssText = 'font-size:12px;font-weight:600;color:var(--accent);';
+  pctLabel.textContent = `${pct}%`;
+  top.appendChild(pctLabel);
+  w.appendChild(top);
+  const track = document.createElement('div');
+  track.className = 'progress-wrap';
+  const bar = document.createElement('div');
+  bar.className = 'progress-bar';
+  bar.style.width = `${pct}%`;
+  track.appendChild(bar);
+  w.appendChild(track);
+  return w;
+}
+
+function _cvBadge(comp) {
+  const el = document.createElement('span');
+  el.className = `badge badge-${comp.variant || 'neutral'}`;
+  el.textContent = comp.text || comp.label || '';
+  return el;
+}
+
+function _cvLog(comp) {
+  const w = document.createElement('div');
+  w.className = 'glass-panel';
+  w.style.padding = '10px';
+  if (comp.label) {
+    const h = document.createElement('div');
+    h.style.cssText = 'font-size:10px;color:var(--text-muted);margin-bottom:6px;text-transform:uppercase;letter-spacing:.06em;';
+    h.textContent = comp.label;
+    w.appendChild(h);
+  }
+  const pre = document.createElement('div');
+  pre.className = 'log-area';
+  const lines = comp.lines || comp.content || '';
+  pre.textContent = Array.isArray(lines) ? lines.join('\n') : String(lines);
+  requestAnimationFrame(() => { pre.scrollTop = pre.scrollHeight; });
+  w.appendChild(pre);
+  return w;
+}
+
+function _cvButton(comp) {
+  const btn = document.createElement('button');
+  const vmap = { primary:'btn-primary', ghost:'btn-ghost', danger:'btn-danger', gold:'btn-gold', secondary:'btn-ghost' };
+  btn.className = `btn ${vmap[comp.variant] || 'btn-primary'}`;
+  btn.textContent = comp.label || comp.text || 'Button';
+  if (comp.disabled) btn.disabled = true;
+  btn.addEventListener('click', () => {
+    if (comp.action_id) _canvasSendAction(comp.action_id, {});
+  });
+  return btn;
+}
+
+function _cvForm(comp) {
+  const w = document.createElement('div');
+  w.className = 'glass-panel';
+  const fieldValues = {};
+  for (const field of (comp.fields || [])) {
+    const fw = document.createElement('div');
+    fw.style.marginBottom = '12px';
+    if (field.label) {
+      const lbl = document.createElement('label');
+      lbl.style.cssText = 'display:block;font-size:11px;color:var(--text-muted);margin-bottom:4px;text-transform:uppercase;letter-spacing:.04em;';
+      lbl.textContent = field.label;
+      fw.appendChild(lbl);
+    }
+    const inputType = field.type || field.input_type || 'text';
+    if (inputType === 'select' || (field.options && field.options.length)) {
+      const sel = document.createElement('select');
+      sel.className = 'glass-select';
+      for (const opt of (field.options || [])) {
+        const o = document.createElement('option');
+        o.value = o.textContent = opt;
+        if (field.default && opt === field.default) o.selected = true;
+        sel.appendChild(o);
+      }
+      sel.addEventListener('change', () => { fieldValues[field.name] = sel.value; });
+      fieldValues[field.name] = sel.value;
+      fw.appendChild(sel);
+    } else if (inputType === 'checkbox') {
+      const row = document.createElement('div');
+      row.style.cssText = 'display:flex;align-items:center;gap:8px;';
+      const cb = document.createElement('input');
+      cb.type = 'checkbox';
+      cb.style.accentColor = 'var(--accent)';
+      cb.checked = !!field.default;
+      cb.addEventListener('change', () => { fieldValues[field.name] = cb.checked; });
+      fieldValues[field.name] = cb.checked;
+      row.appendChild(cb);
+      fw.innerHTML = '';
+      fw.appendChild(row);
+    } else {
+      const inp = document.createElement('input');
+      inp.type = inputType === 'number' ? 'number' : 'text';
+      inp.className = 'glass-input';
+      inp.placeholder = field.placeholder || '';
+      inp.value = field.default || '';
+      inp.addEventListener('input', () => { fieldValues[field.name] = inp.value; });
+      fieldValues[field.name] = inp.value;
+      fw.appendChild(inp);
+    }
+    w.appendChild(fw);
+  }
+  if (comp.actions?.length) {
+    const btnRow = document.createElement('div');
+    btnRow.style.cssText = 'display:flex;gap:8px;justify-content:flex-end;margin-top:14px;';
+    for (const act of comp.actions) {
+      const btn = document.createElement('button');
+      const vmap = { primary:'btn-primary', ghost:'btn-ghost', danger:'btn-danger' };
+      btn.className = `btn ${vmap[act.variant] || 'btn-primary'}`;
+      btn.textContent = act.label;
+      btn.addEventListener('click', () => _canvasSendAction(act.action_id, { ...fieldValues }));
+      btnRow.appendChild(btn);
+    }
+    w.appendChild(btnRow);
+  }
+  return w;
+}
+
+function _cvHeading(comp) {
+  const level = Math.min(4, Math.max(1, comp.level || 2));
+  const el = document.createElement(`h${level}`);
+  el.className = `c-h${level}`;
+  el.textContent = comp.text || '';
+  return el;
+}
+
+function _cvText(comp) {
+  const el = document.createElement('p');
+  el.style.cssText = `font-size:13px;line-height:1.6;color:${comp.muted ? 'var(--text-muted)' : 'var(--text-secondary)'};`;
+  el.textContent = comp.text || comp.content || '';
+  return el;
+}
+
+function _cvMarkdown(comp) {
+  const el = document.createElement('div');
+  el.style.cssText = 'font-size:13px;line-height:1.7;color:var(--text-secondary);';
+  const md = comp.content || comp.text || '';
+  if (typeof marked !== 'undefined') {
+    const html = marked.parse(md);
+    el.innerHTML = typeof DOMPurify !== 'undefined' ? DOMPurify.sanitize(html) : html;
+  } else {
+    el.textContent = md;
+  }
+  return el;
+}
+
+function _cvHtml(comp) {
+  const el = document.createElement('div');
+  const htmlContent = comp.content || comp.html || '';
+  const iframe = document.createElement('iframe');
+  iframe.sandbox = 'allow-scripts';
+  iframe.style.cssText = 'width:100%;border:none;border-radius:8px;background:transparent;';
+  iframe.style.height = (comp.height || 400) + 'px';
+  iframe.srcdoc = htmlContent;
+  window.addEventListener('message', function(evt) {
+    if (evt.data && evt.data.type === 'resize' && evt.source === iframe.contentWindow) {
+      iframe.style.height = (evt.data.height || 400) + 'px';
+    }
+  });
+  el.appendChild(iframe);
+  return el;
+}
+
+function _cvList(comp) {
+  const el = document.createElement(comp.ordered ? 'ol' : 'ul');
+  el.style.cssText = 'padding-left:18px;font-size:13px;color:var(--text-secondary);display:flex;flex-direction:column;gap:3px;';
+  for (const item of (comp.items || [])) {
+    const li = document.createElement('li');
+    li.textContent = typeof item === 'string' ? item : item.text || '';
+    el.appendChild(li);
+  }
+  return el;
+}
+
+function _cvFlowchart(comp) {
+  const w = document.createElement('div');
+  w.className = 'glass-panel mermaid-wrap';
+  const md = document.createElement('div');
+  md.className = 'mermaid-src';
+  md.dataset.mermaidSrc = comp.content || 'flowchart TD\n  A[No content]';
+  w.appendChild(md);
+  setTimeout(() => _canvasRenderMermaid(md), 100);
+  return w;
+}
+
+function _cvCode(comp) {
+  const w = document.createElement('div');
+  w.className = 'glass-panel';
+  w.style.padding = '0';
+  if (comp.label || comp.language) {
+    const h = document.createElement('div');
+    h.style.cssText = 'padding:6px 12px;font-size:10px;color:var(--text-muted);border-bottom:1px solid var(--glass-border);font-family:var(--font-mono);';
+    h.textContent = comp.label || comp.language;
+    w.appendChild(h);
+  }
+  const pre = document.createElement('div');
+  pre.className = 'code-block';
+  pre.textContent = comp.content || comp.code || '';
+  w.appendChild(pre);
+  return w;
+}
+
+// ── Mermaid renderer ─────────────────────────────────────────────────────────
+
+async function _canvasRenderMermaid(el) {
+  const src = (el.dataset.mermaidSrc || el.textContent || '').trim();
+  if (!src || typeof mermaid === 'undefined') return;
+  el.innerHTML = '';
+  try {
+    const id = 'mermaid-cv-' + Date.now() + '-' + Math.random().toString(36).slice(2);
+    const { svg } = await mermaid.render(id, src);
+    el.innerHTML = svg;
+  } catch (e) {
+    el.style.cssText = 'color:var(--danger);font-family:var(--font-mono);font-size:11px;';
+    el.textContent = 'Mermaid error: ' + e.message;
+  }
+}
+
+// ── Send action back to agent ────────────────────────────────────────────────
+
+function _canvasSendAction(actionId, formData) {
+  if (!_activeCanvasSession) return;
+  const sess = _canvasSessions.get(_activeCanvasSession);
+  if (!sess || !sess.ws || sess.ws.readyState !== WebSocket.OPEN) return;
+  sess.ws.send(JSON.stringify({
+    type: 'action',
+    action_id: actionId,
+    data: formData,
+    session_id: _activeCanvasSession,
+    timestamp: new Date().toISOString(),
+  }));
+}
+
+// ── Badge update ─────────────────────────────────────────────────────────────
+
+function _updateCanvasBadge() {
+  const badge = $('canvas-badge');
+  if (!badge) return;
+  const count = _canvasSessions.size;
+  badge.textContent = count;
+  if (count > 0) { badge.classList.remove('hidden'); }
+  else { badge.classList.add('hidden'); }
+}
+
+// ── Poll for new sessions ────────────────────────────────────────────────────
+
+async function _pollCanvasSessions() {
+  try {
+    const resp = await fetch(`${API_BASE}/canvas/sessions`, {
+      headers: { 'Authorization': `Bearer ${STATE.token}` }
+    });
+    if (!resp.ok) return;
+    const data = await resp.json();
+
+    // Only auto-connect to active sessions that have components, are not already open,
+    // and have not been manually dismissed by the user this session.
+    for (const s of (data.sessions || [])) {
+      if (s.status === 'active' && s.component_count > 0 && !_canvasSessions.has(s.session_id) && !_dismissedCanvasSessions.has(s.session_id)) {
+        openCanvasSession(s.session_id);
+      }
+      // Sync name from server for active sessions
+      if (s.status === 'active' && _canvasSessions.has(s.session_id) && s.name) {
+        const local = _canvasSessions.get(s.session_id);
+        if (!local.name && s.name) {
+          local.name = s.name;
+          _renderCanvasTabs();
+        }
+      }
+    }
+
+    // Update closed sessions list
+    const closedSessions = (data.sessions || []).filter(s => s.status === 'closed');
+    _renderClosedCanvasSessions(closedSessions);
+
+    _updateCanvasBadge();
+  } catch(e) { /* ignore polling errors */ }
+}
+
+// ── Closed sessions UI ───────────────────────────────────────────────────────
+
+function _renderClosedCanvasSessions(closedSessions) {
+  const container = $('canvas-closed-sessions');
+  if (!container) return;
+
+  if (!closedSessions || closedSessions.length === 0) {
+    container.innerHTML = '';
+    return;
+  }
+
+  const count = closedSessions.length;
+  container.innerHTML = '';
+
+  const toggleBtn = document.createElement('button');
+  toggleBtn.className = 'canvas-closed-toggle';
+  toggleBtn.textContent = `${count} closed session${count !== 1 ? 's' : ''} ${_closedCanvasExpanded ? '▲' : '▼'}`;
+  toggleBtn.addEventListener('click', () => {
+    _closedCanvasExpanded = !_closedCanvasExpanded;
+    _renderClosedCanvasSessions(closedSessions);
+  });
+  container.appendChild(toggleBtn);
+
+  const list = document.createElement('div');
+  list.className = 'canvas-closed-list' + (_closedCanvasExpanded ? ' expanded' : '');
+
+  for (const s of closedSessions) {
+    const item = document.createElement('div');
+    item.className = 'canvas-closed-item';
+
+    const info = document.createElement('div');
+    info.className = 'canvas-closed-item-info';
+
+    const name = document.createElement('div');
+    name.className = 'canvas-closed-item-name';
+    name.textContent = s.name || (s.session_id.length > 8 ? s.session_id.slice(0, 8) : s.session_id);
+    info.appendChild(name);
+
+    if (s.closed_at) {
+      const timeEl = document.createElement('div');
+      timeEl.className = 'canvas-closed-item-time';
+      timeEl.textContent = _formatClosedTime(s.closed_at);
+      info.appendChild(timeEl);
+    }
+
+    item.appendChild(info);
+
+    const restoreBtn = document.createElement('button');
+    restoreBtn.className = 'canvas-closed-restore-btn';
+    restoreBtn.textContent = 'Restore';
+    restoreBtn.addEventListener('click', () => _restoreCanvasSession(s.session_id));
+    item.appendChild(restoreBtn);
+
+    list.appendChild(item);
+  }
+
+  container.appendChild(list);
+}
+
+function _formatClosedTime(ts) {
+  try {
+    const d = typeof ts === 'number' ? new Date(ts * 1000) : new Date(ts);
+    const now = new Date();
+    const diffMs = now - d;
+    const diffMin = Math.floor(diffMs / 60000);
+    if (diffMin < 1) return 'just now';
+    if (diffMin < 60) return `${diffMin}m ago`;
+    const diffHr = Math.floor(diffMin / 60);
+    if (diffHr < 24) return `${diffHr}h ago`;
+    return d.toLocaleDateString();
+  } catch(e) { return ''; }
+}
+
+async function _restoreCanvasSession(sessionId) {
+  try {
+    const resp = await fetch(`${API_BASE}/canvas/sessions/${sessionId}/restore`, {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${STATE.token}` }
+    });
+    if (!resp.ok) return;
+    // Remove from dismissed set so it can auto-open
+    _dismissedCanvasSessions.delete(sessionId);
+    // Open the session
+    openCanvasSession(sessionId);
+  } catch(e) { /* ignore */ }
+}
+
+// ── Init ─────────────────────────────────────────────────────────────────────
+
+function _initCanvas() {
+  // Edge tab toggle
+  const edgeTab = $('canvas-edge-tab');
+  if (edgeTab) edgeTab.addEventListener('click', toggleCanvasPanel);
+
+  // Close button
+  const closeBtn = $('btn-canvas-close');
+  if (closeBtn) closeBtn.addEventListener('click', closeCanvasPanel);
+
+  // Initialize mermaid for canvas
+  if (typeof mermaid !== 'undefined') {
+    mermaid.initialize({
+      startOnLoad: false,
+      theme: 'dark',
+      themeVariables: {
+        primaryColor: '#1a2a1a', primaryTextColor: '#fff',
+        primaryBorderColor: '#3ecf8e', lineColor: '#3ecf8e',
+        secondaryColor: '#0d2a1a', tertiaryColor: '#1a1a2e',
+      },
+    });
+  }
+
+  // Check URL for canvas parameter
+  const urlParams = new URLSearchParams(location.search);
+  const canvasParam = urlParams.get('canvas');
+  if (canvasParam) {
+    openCanvasSession(canvasParam);
+  }
+
+  // Poll for new canvas sessions every 5 seconds
+  setInterval(_pollCanvasSessions, 5000);
+}
+
+// Make openCanvasSession available globally (for other parts of the app)
+window.openCanvasSession = openCanvasSession;
+window.toggleCanvasPanel = toggleCanvasPanel;
+
+// Initialize when DOM ready
+if (document.readyState !== 'loading') {
+  _initCanvas();
+} else {
+  document.addEventListener('DOMContentLoaded', _initCanvas);
+}

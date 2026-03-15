@@ -14,6 +14,7 @@ import signal
 import time
 import argparse
 import shutil
+import logging
 from pathlib import Path
 from uuid import uuid4
 from typing import Optional, Tuple, Dict, List
@@ -232,7 +233,8 @@ class BackgroundTaskManager:
 
     def create_task(self, task_id: str, session_id: str, user_identity: str,
                     channel: str, agent: str, runtime: str, model: str,
-                    prompt: str, pid: int = 0) -> dict:
+                    prompt: str, pid: int = 0, status: str = "running",
+                    timeout: int = None, notify: bool = True) -> dict:
         task = {
             "task_id": task_id,
             "session_id": session_id,
@@ -243,13 +245,16 @@ class BackgroundTaskManager:
             "runtime": runtime,
             "model": model,
             "prompt": prompt,
-            "status": "running",
+            "status": status,
             "pid": pid,
             "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "started_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()) if status == "running" else None,
             "completed_at": None,
             "output_lines": [],
             "final_response": None,
             "error": None,
+            "timeout": timeout,
+            "notify": notify,
         }
         with self._lock:
             tasks = self._load()
@@ -264,13 +269,44 @@ class BackgroundTaskManager:
                     return t
         return None
 
+    def _identity_matches(self, task: dict, channel: str, identity: str) -> bool:
+        """Check if a task belongs to this user, matching across channels.
+        Uses user_identity (raw identity without channel prefix) for cross-channel
+        visibility so tasks created from the webui channel are visible to users
+        authenticated via webex/telegram and vice versa.
+        Falls back to user_key comparison for backward compatibility.
+        """
+        stored_identity = task.get("user_identity")
+        if stored_identity is not None:
+            return stored_identity == identity
+        # Fallback: check user_key with any channel prefix
+        return task.get("user_key") == self._user_key(channel, identity)
+
     def list_tasks(self, channel: str, identity: str) -> list:
-        key = self._user_key(channel, identity)
         with self._lock:
-            return [t for t in self._load() if t["user_key"] == key]
+            return [t for t in self._load() if self._identity_matches(t, channel, identity)]
 
     def count_running(self, channel: str, identity: str) -> int:
         return sum(1 for t in self.list_tasks(channel, identity) if t["status"] == "running")
+
+    def count_queued(self, channel: str, identity: str) -> int:
+        return sum(1 for t in self.list_tasks(channel, identity) if t["status"] == "queued")
+
+    def get_next_queued(self, channel: str, identity: str) -> Optional[dict]:
+        """Return the oldest queued task for this user, or None."""
+        queued = [t for t in self.list_tasks(channel, identity) if t["status"] == "queued"]
+        if not queued:
+            return None
+        return min(queued, key=lambda t: t.get("created_at", ""))
+
+    def promote_queued_task(self, task_id: str, session_id: str):
+        """Transition a queued task to running status with a fresh session_id."""
+        self.update_task(
+            task_id,
+            status="running",
+            session_id=session_id,
+            started_at=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        )
 
     def update_task(self, task_id: str, **fields):
         with self._lock:
@@ -311,7 +347,17 @@ class BackgroundTaskManager:
 
     def kill_task(self, task_id: str) -> bool:
         task = self.get_task(task_id)
-        if not task or task["status"] != "running":
+        if not task:
+            return False
+        if task["status"] == "queued":
+            # Cancel queued tasks directly (no process to kill)
+            self.update_task(
+                task_id,
+                status="killed",
+                completed_at=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            )
+            return True
+        if task["status"] != "running":
             return False
         pid = task.get("pid", 0)
         if pid:
@@ -876,6 +922,34 @@ class SessionManager:
         ]
     }
 
+    # DEVIN models configuration
+    DEVIN_MODELS = {
+        "Anthropic Models": [
+            ("claude-sonnet-4", "Claude Sonnet 4", ["sonnet-4", "sonnet"]),
+            ("claude-sonnet-4.5", "Claude Sonnet 4.5", ["sonnet-4.5"]),
+            ("claude-sonnet-4.5-thinking", "Claude Sonnet 4.5 Thinking", ["sonnet-thinking"]),
+            ("claude-sonnet-4.6", "Claude Sonnet 4.6", ["sonnet-4.6"]),
+            ("claude-opus-4.5", "Claude Opus 4.5", ["opus-4.5"]),
+            ("claude-opus-4.6", "Claude Opus 4.6", ["opus-4.6", "opus"]),
+            ("claude-haiku-4.5", "Claude Haiku 4.5", ["haiku-4.5", "haiku"]),
+        ],
+        "Google Models": [
+            ("gemini-3-flash", "Gemini 3 Flash", ["gemini-flash"]),
+            ("gemini-3-pro", "Gemini 3 Pro", ["gemini-pro"]),
+            ("gemini-3.1-pro", "Gemini 3.1 Pro", ["gemini-3.1"]),
+        ],
+        "OpenAI Models": [
+            ("gpt-5.2", "GPT-5.2", []),
+            ("gpt-5.3-codex", "GPT-5.3 Codex", ["codex"]),
+            ("gpt-5.4", "GPT-5.4", []),
+        ],
+        "Other Models": [
+            ("phoenix-alpha", "Phoenix Alpha", ["phoenix"]),
+            ("swe-1.5", "SWE-1.5", ["swe"]),
+            ("swe-1.5-fast", "SWE-1.5 Fast", ["swe-fast"]),
+        ],
+    }
+
     def __init__(self, config_file: Optional[str] = None, app_env: str = "PROD"):
         # Copilot Paths
         self.copilot_home = Path.home() / ".copilot"
@@ -917,9 +991,14 @@ class SessionManager:
         self.codex_home = Path.home() / ".codex"
         self.codex_session_dir = self.codex_home / "sessions"
 
+        # Devin Paths
+        self.devin_home = Path.home() / ".devin"
+        self.devin_session_dir = self.devin_home / "sessions"
+
         # Executable paths (resolved dynamically)
         self.copilot_bin = find_executable("copilot")
         self.claude_bin = find_executable("claude")
+        self.devin_bin = find_executable("devin")
 
         # CLI mode setting for claude (yolo or restricted)
         self.mode = None
@@ -934,6 +1013,8 @@ class SessionManager:
         self.gemini_session_dir.mkdir(exist_ok=True)
         self.codex_home.mkdir(exist_ok=True)
         self.codex_session_dir.mkdir(exist_ok=True)
+        self.devin_home.mkdir(exist_ok=True)
+        self.devin_session_dir.mkdir(exist_ok=True)
 
         # Load agents from config file
         self.AGENTS = self._load_agents_config(config_file)
@@ -945,6 +1026,7 @@ class SessionManager:
         self._env_claude_models = None
         self._env_gemini_models = None
         self._env_codex_models = None
+        self._env_devin_models = None
 
         # Load command timeout from environment
         self.command_timeout = get_command_timeout()
@@ -1304,6 +1386,7 @@ class SessionManager:
             "claude": self._env_claude_models,
             "gemini": self._env_gemini_models,
             "codex": self._env_codex_models,
+            "devin": self._env_devin_models,
         }
         env_models = env_models_map.get(runtime)
         if env_models:
@@ -1318,6 +1401,7 @@ class SessionManager:
             "gemini": self.GEMINI_MODELS,
             "codex": self.CODEX_MODELS,
             "opencode": self.OPENCODE_MODELS,
+            "devin": self.DEVIN_MODELS,
         }
         models_dict = static_map.get(runtime)
         if not models_dict:
@@ -1397,6 +1481,48 @@ class SessionManager:
         # Fallback to static configuration
         return self._static_models_to_dict(self.CODEX_MODELS)
 
+    def fetch_devin_models(self) -> Dict:
+        """Return available Devin models by querying the CLI directly.
+
+        Devin prints available models when given an invalid model name:
+          devin --model __invalid__ -p -- ""
+          → Error: Unknown model: '__invalid__'
+          → Available: claude-sonnet-4, claude-opus-4.6, ...
+
+        Falls back to static DEVIN_MODELS if the CLI is unavailable or
+        the output cannot be parsed.
+        """
+        try:
+            devin_bin = getattr(self, "devin_bin", None) or "devin"
+            result = subprocess.run(
+                [devin_bin, "--model", "__invalid__", "-p", "--", ""],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            # Parse "Available: model1, model2, ..." from stderr or stdout
+            output = result.stderr + result.stdout
+            for line in output.splitlines():
+                if line.strip().startswith("Available:"):
+                    models_str = line.split(":", 1)[1].strip()
+                    model_ids = [m.strip() for m in models_str.split(",") if m.strip()]
+                    if model_ids:
+                        # Group into a single category for display
+                        discovered = {
+                            "Available Models": [
+                                (mid, mid, []) for mid in model_ids
+                            ]
+                        }
+                        print(
+                            f"[devin] Auto-discovered {len(model_ids)} models",
+                            file=sys.stderr,
+                        )
+                        return self._static_models_to_dict(discovered)
+        except Exception as e:
+            print(f"[devin] Model discovery failed, using static list: {e}", file=sys.stderr)
+
+        return self._static_models_to_dict(self.DEVIN_MODELS)
+
     def get_models_for_runtime(self, runtime: str) -> Dict:
         """Fetch available models for a runtime, using CLI discovery where possible.
 
@@ -1410,6 +1536,7 @@ class SessionManager:
             "claude": self.fetch_claude_models,
             "gemini": self.fetch_gemini_models,
             "codex": self.fetch_codex_models,
+            "devin": self.fetch_devin_models,
         }
         fetcher = dispatch.get(runtime)
         if fetcher is None:
@@ -1478,6 +1605,8 @@ class SessionManager:
             default_model = "gemini-1.5-flash"
         elif default_runtime == "codex":
             default_model = "gpt-5.4"
+        elif default_runtime == "devin":
+            default_model = os.getenv("DEVIN_DEFAULT_MODEL", "claude-sonnet-4")
 
         # Extract bot identifier from session ID (last 4 chars of numeric part)
         bot_id = self._extract_bot_identifier(n8n_session_id)
@@ -1555,10 +1684,17 @@ class SessionManager:
                     or not self.get_model_from_name(current_model, "codex")
                 ):
                     merged["model"] = "gpt-5.4"
+            elif runtime == "devin":
+                current_model = merged.get("model", "")
+                if (
+                    not current_model
+                    or not self.get_model_from_name(current_model, "devin")
+                ):
+                    merged["model"] = os.getenv("DEVIN_DEFAULT_MODEL", "claude-sonnet-4")
 
             # Validate and fix session_id if corrupted
             session_id = merged.get("session_id", "")
-            if runtime in ["claude", "gemini", "codex", "copilot"]:
+            if runtime in ["claude", "gemini", "codex", "copilot", "devin"]:
                 if not session_id or not (len(session_id) == 36 and "-" in session_id):
                     merged["session_id"] = str(uuid4())
             elif runtime == "opencode":
@@ -1899,7 +2035,7 @@ class SessionManager:
         name_lower = name.lower().strip("\"'")
 
         # Ensure env models are loaded/cached by triggering fetch for this runtime
-        if runtime in ("claude", "gemini", "codex"):
+        if runtime in ("claude", "gemini", "codex", "devin"):
             self.get_models_for_runtime(runtime)
 
         # Step 1: check env-loaded or static alias tables for all runtimes that have them.
@@ -1907,12 +2043,14 @@ class SessionManager:
             "claude": self._env_claude_models,
             "gemini": self._env_gemini_models,
             "codex": self._env_codex_models,
+            "devin": self._env_devin_models,
         }
         static_alias_map = {
             "claude": self.CLAUDE_MODELS,
             "gemini": self.GEMINI_MODELS,
             "codex": self.CODEX_MODELS,
             "opencode": self.OPENCODE_MODELS,
+            "devin": self.DEVIN_MODELS,
         }
         
         # Try env-loaded models first, fall back to static
@@ -2171,6 +2309,14 @@ class SessionManager:
                 response_lines.pop()
 
             result.extend(response_lines)
+
+        elif runtime == "devin":
+            # Devin CLI outputs the response directly to stdout.
+            # Strip any leading/trailing whitespace lines.
+            for line in lines:
+                if not line.strip() and not result:
+                    continue
+                result.append(line)
 
         # Remove trailing empty lines
         while result and not result[-1].strip():
@@ -2823,28 +2969,12 @@ To add custom skill repositories or manage repository settings:
         bg_task_instruction = ""
         if _shared_key:
             bg_task_instruction = f"""
-[Background Tasks — IMPORTANT]
-When the user asks you to run something "in the background", you MUST create a background task via the orchestrator API. Do NOT use your own internal background/async task mechanism (e.g. task tool with mode:"background") — those are invisible to the user.
+[Background Tasks] Run long tasks via the orchestrator API (visible in ⚡ Tasks tab). Full docs: {SCRIPT_BASE_DIR}/docs/background-tasks.md
+curl -s{_curl_insecure} -X POST {_api_scheme}://127.0.0.1:{_api_port_bg}/api/v1/background-tasks -H "Content-Type: application/json" -H "Authorization: Bearer shared_{_shared_key}" -H "X-User-Identity: {_user_identity}" -H "X-Auth-Channel: {channel}" -d '{{"prompt": "...", "agent": "{agent}", "timeout": 900}}'"""
 
-To create a background task, run this curl command:
-```
-curl -s{_curl_insecure} -X POST {_api_scheme}://127.0.0.1:{_api_port_bg}/api/v1/background-tasks \\
-  -H "Content-Type: application/json" \\
-  -H "Authorization: Bearer shared_{_shared_key}" \\
-  -H "X-User-Identity: {_user_identity}" \\
-  -H "X-Auth-Channel: {channel}" \\
-  -d '{{"prompt": "<the task prompt here>", "agent": "{agent}", "timeout": <seconds>}}'
-```
-The API returns a task_id. Tell the user the task was started and they can monitor it in the ⚡ Tasks tab (WebUI) or use `/background status <task_id>`.
-Do NOT run the actual work yourself when backgrounding — the API spawns a separate agent to handle it.
-The default agent for background tasks is `{agent}` (inherited from your current session). Only override `"agent"` in the JSON body if the user explicitly requests a different agent.
-
-**IMPORTANT — You must set the `timeout` field.** Estimate how long the task will realistically take and set an appropriate timeout in seconds. Examples:
-- Quick status check or simple query: 120 (2 min)
-- Standard task (summarize, analyze, write): 600 (10 min)
-- Multi-step or research task: 900 (15 min)
-- Complex build, deploy, or batch job: 1200–1800 (20–30 min)
-Default if truly uncertain: 900 (15 min). Do not omit the `timeout` field."""
+        # Inject Wee Canvas capability hint
+        canvas_instruction = f"""
+[Wee Canvas] Native real-time visual panel in the WebUI (progress boards, charts, forms, approval flows). Client: `{SCRIPT_BASE_DIR}/canvas.py` — `from canvas import Canvas; c = Canvas(); c.open()`. Full docs: {SCRIPT_BASE_DIR}/docs/canvas.md"""
 
         # Inject cross-runtime handoff context on the first message of a new session.
         # get_handoff_context() is one-time: it reads and deletes the handoff file so
@@ -2884,7 +3014,7 @@ Default if truly uncertain: 900 (15 min). Do not omit the `timeout` field."""
             injection_text = ""
 
         context = f"""{handoff_prefix}[Session ID: {n8n_session_id}]
-{runtime_instruction}{injection_text}{agent_desc}{files_context}{render_instruction}{bg_task_instruction}{timeout_instruction}
+{runtime_instruction}{injection_text}{agent_desc}{files_context}{render_instruction}{bg_task_instruction}{canvas_instruction}{timeout_instruction}
 
 User Request:
 {prompt}"""
@@ -3476,7 +3606,137 @@ User Request:
 
         return self.strip_metadata(output, "codex")
 
-    def session_exists(self, session_id: str, runtime: str) -> bool:
+    def run_devin(
+        self,
+        prompt: str,
+        model: str,
+        agent: str,
+        session_id: Optional[str],
+        resume: bool,
+        n8n_session_id: str,
+        timeout: Optional[int] = None,
+        render_type: str = "text",
+    ) -> str:
+        """Execute Devin CLI in non-interactive mode.
+
+        Uses --permission-mode dangerous to bypass all approval prompts
+        and allow full system access.
+        """
+        # Parse /mode command from prompt
+        prompt, mode = self._parse_mode_command(prompt)
+
+        # Get session data once - reuse for mode and channel
+        session_data = self.get_or_create_session_data(n8n_session_id)
+
+        # If mode not specified in prompt, check session setting
+        if mode == "restricted":
+            session_mode = session_data.get("yolo_mode", "restricted")
+            if session_mode == "on":
+                mode = "yolo"
+
+        agent_dir = self.AGENTS.get(agent, self.AGENTS["orchestrator"])["path"]
+        effective_timeout = timeout if timeout is not None else self.command_timeout
+
+        # Get channel for file handling instructions
+        channel = session_data.get("channel", "webui")
+
+        # Resolve the devin binary
+        devin_bin = self.devin_bin or "devin"
+
+        # Devin manages its own session UUIDs independently of the backend
+        # session_id.  Use _get_devin_session_id() as the sole source of truth
+        # for whether we can resume — the caller's `resume` flag is based on
+        # session_exists() which checks the wrong key for devin.
+        devin_sid = self._get_devin_session_id(n8n_session_id)
+        actually_resuming = bool(devin_sid)
+
+        # Only inject full context on new sessions; resumed sessions already have it
+        if actually_resuming:
+            context_prompt = prompt
+        else:
+            context_prompt = self.build_agent_context_prompt(
+                agent, prompt, n8n_session_id, render_type, effective_timeout, "devin", model, channel
+            )
+
+        # Add yolo mode instructions for unrestricted privileged access
+        if mode == "yolo":
+            yolo_instruction = (
+                "\n\n[YOLO MODE ENABLED]\n"
+                "Full permissions granted. "
+                "ALL commands requiring elevated privileges MUST automatically prefix with 'sudo' — no exceptions. "
+                "This includes:\n"
+                "• Service management: sudo systemctl restart/start/stop/reload/enable/disable <service>\n"
+                "• Network commands: sudo ping, sudo ssh, sudo iptables, sudo ip, etc.\n"
+                "• System administration: sudo journalctl, sudo systemd-*, sudo chmod/chown on system paths\n"
+                "• API calls: curl -sk https://127.0.0.1:8001/... works — localhost is fully accessible\n"
+                "• Any command that would fail due to insufficient permissions\n"
+                "Sudo is configured without password prompt (NOPASSWD:ALL). "
+                "Never ask for confirmation — execute privileged commands immediately with sudo."
+            )
+            context_prompt = context_prompt + yolo_instruction
+
+        # -p is a boolean flag (print/non-interactive mode); prompt goes after --
+        # Permission mode: dangerous (auto-approve all) for yolo, auto (read-only) otherwise
+        permission_mode = "dangerous" if mode == "yolo" else "auto"
+        cmd = [devin_bin, "-p"]
+        if model:
+            cmd += ["--model", model]
+        cmd += ["--permission-mode", permission_mode]
+
+        if actually_resuming:
+            cmd += ["-r", devin_sid]
+            print(f"[Session] Resuming Devin session {devin_sid[:8]}... with model {model} in {mode} mode", file=sys.stderr)
+        else:
+            print(f"[Session] Starting new Devin session with model {model} in {mode} mode", file=sys.stderr)
+
+        cmd += ["--", context_prompt]
+
+        output = self._execute_subprocess_with_tracking(
+            cmd, agent_dir, effective_timeout, "devin", agent, prompt, n8n_session_id
+        )
+
+        # After each run, capture and persist the most recent devin session UUID
+        # so subsequent messages in this n8n session can resume it.
+        self._save_devin_session_id(n8n_session_id, devin_bin, agent_dir)
+
+        if "Error: Devin command failed" in output:
+            return output
+
+        return self.strip_metadata(output, "devin")
+
+    def _get_devin_session_id(self, n8n_session_id: str) -> Optional[str]:
+        """Return the stored devin session UUID for this n8n session, or None."""
+        mapping_file = self.devin_session_dir / f"{n8n_session_id}.json"
+        try:
+            with open(mapping_file) as f:
+                data = json.load(f)
+                return data.get("devin_session_id")
+        except (FileNotFoundError, json.JSONDecodeError):
+            return None
+
+    def _save_devin_session_id(self, n8n_session_id: str, devin_bin: str, cwd: Optional[str] = None):
+        """Capture the most recently active devin session UUID and store it."""
+        try:
+            result = subprocess.run(
+                [devin_bin, "list", "--format", "json"],
+                capture_output=True, text=True, timeout=10,
+                cwd=cwd,
+            )
+            sessions = json.loads(result.stdout)
+            if not sessions:
+                return
+            # Most recent session is first in the list
+            devin_sid = sessions[0].get("id")
+            if not devin_sid:
+                return
+            mapping_file = self.devin_session_dir / f"{n8n_session_id}.json"
+            with open(mapping_file, "w") as f:
+                json.dump({"devin_session_id": devin_sid}, f)
+            print(f"[Session] Stored devin session mapping: {n8n_session_id[:8]}... → {devin_sid[:8]}...", file=sys.stderr)
+        except Exception as e:
+            print(f"[Session] Warning: could not save devin session ID: {e}", file=sys.stderr)
+
+    def session_exists(self, session_id: str, runtime: str, n8n_session_id: Optional[str] = None) -> bool:
         """Check if session state exists for runtime"""
         if runtime == "copilot":
             # Modern Copilot stores sessions as directories with events.jsonl inside
@@ -3532,6 +3792,10 @@ User Request:
             except Exception:
                 pass
             return False
+        elif runtime == "devin":
+            # Devin session mappings are keyed by n8n_session_id, not backend session_id
+            key = n8n_session_id if n8n_session_id else session_id
+            return (self.devin_session_dir / f"{key}.json").exists()
         return False
 
     def get_most_recent_session_id(
@@ -3631,6 +3895,9 @@ User Request:
                     )
                     return session_id
                 return None
+            elif runtime == "devin":
+                # Devin CLI does not persist local session files
+                return None
         except Exception as e:
             print(f"Error getting recent session ID: {e}", file=sys.stderr)
             return None
@@ -3725,6 +3992,13 @@ User Request:
                 can_resume, n8n_session_id,
                 effective_timeout, render_type,
             )
+        elif runtime == "devin":
+            result = self.run_devin(
+                prompt, model, agent,
+                session_id if can_resume else None,
+                can_resume, n8n_session_id,
+                effective_timeout, render_type,
+            )
         else:
             return f"Error: Unknown runtime '{runtime}'"
 
@@ -3787,7 +4061,7 @@ User Request:
 
 **Runtime Management:**
    • /runtime list - Show available runtimes
-   • /runtime set (auto|copilot|opencode|claude|gemini|codex) - Switch runtime
+   • /runtime set (auto|copilot|opencode|claude|gemini|codex|devin) - Switch runtime
    • /runtime current - Show current runtime
 
 **Model Management:**
@@ -3922,7 +4196,7 @@ You can mention an agent in your prompt and it will auto-delegate:
             if not argument:
                 return "Usage: /runtime [list|set|current]"
             if argument == "list":
-                return "🤖 **Available Runtimes**\n\n• `copilot` (GitHub Copilot)\n• `opencode` (OpenCode CLI)\n• `claude` (Claude Code CLI)\n• `gemini` (Google Gemini CLI)\n• `codex` (Codex CLI)"
+                return "🤖 **Available Runtimes**\n\n• `copilot` (GitHub Copilot)\n• `opencode` (OpenCode CLI)\n• `claude` (Claude Code CLI)\n• `gemini` (Google Gemini CLI)\n• `codex` (Codex CLI)\n• `devin` (Devin CLI)"
             elif argument == "current":
                 return f"🤖 **Current Runtime:** `{current_runtime}`"
             elif argument.startswith("set "):
@@ -3933,8 +4207,9 @@ You can mention an agent in your prompt and it will auto-delegate:
                     "claude",
                     "gemini",
                     "codex",
+                    "devin",
                 ]:
-                    return f"Unknown runtime: '{new_runtime}'. Use 'copilot', 'opencode', 'claude', 'gemini', or 'codex'."
+                    return f"Unknown runtime: '{new_runtime}'. Use 'copilot', 'opencode', 'claude', 'gemini', 'codex', or 'devin'."
 
                 # Capture previous session state before any updates
                 prev_runtime = current_runtime
@@ -3947,8 +4222,16 @@ You can mention an agent in your prompt and it will auto-delegate:
                 # there is prior history to hand off
                 if prev_runtime != new_runtime and prev_session_id:
                     try:
-                        from session_handoff import SessionHandoff
+                        from session_handoff import SessionHandoff, _handoff_logger
                         handoff = SessionHandoff()
+
+                        # Log the reason for handoff (user command: /runtime set)
+                        _handoff_logger.info(
+                            f"HANDOFF REASON: User executed '/runtime set {new_runtime}' command | "
+                            f"n8n_session={n8n_session_id} | "
+                            f"current_agent={session_data.get('agent', 'unknown')}"
+                        )
+
                         handoff.export_transcript(n8n_session_id, prev_session_id)
                         handoff.write_handoff_summary(
                             n8n_session_id,
@@ -3967,6 +4250,14 @@ You can mention an agent in your prompt and it will auto-delegate:
                             f"[Handoff] Warning: handoff preparation failed: {_handoff_err}",
                             file=sys.stderr,
                         )
+                        try:
+                            from session_handoff import _handoff_logger
+                            _handoff_logger.error(
+                                f"HANDOFF FAILED: {_handoff_err} | "
+                                f"prev_runtime={prev_runtime} new_runtime={new_runtime}"
+                            )
+                        except Exception:
+                            pass
 
                 self.update_session_field(n8n_session_id, "runtime", new_runtime)
 
@@ -3986,6 +4277,8 @@ You can mention an agent in your prompt and it will auto-delegate:
                     default_model = "gemini-1.5-flash"
                 elif new_runtime == "codex":
                     default_model = "gpt-5.4"
+                elif new_runtime == "devin":
+                    default_model = os.getenv("DEVIN_DEFAULT_MODEL", "claude-sonnet-4")
 
                 self.update_session_field(n8n_session_id, "model", default_model)
                 return f"✓ Switched runtime to **{new_runtime}**. Model set to `{default_model}`. Session reset."
@@ -4509,6 +4802,14 @@ You can mention an agent in your prompt and it will auto-delegate:
         # For Gemini, we always try to resume the latest session for context retention
         if current_runtime == "gemini":
             can_resume = True  # Always attempt to resume latest Gemini session
+        elif current_runtime == "devin":
+            # Devin handles its own session resumption internally via
+            # _get_devin_session_id(); pass n8n_session_id for correct lookup
+            can_resume = self.session_exists(
+                session_id, current_runtime, n8n_session_id=n8n_session_id
+            ) if session_id else self.session_exists(
+                "", current_runtime, n8n_session_id=n8n_session_id
+            )
         else:
             can_resume = (
                 self.session_exists(session_id, current_runtime) if session_id else False
@@ -4698,7 +4999,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
     import concurrent.futures
     from enum import Enum
 
-    from fastapi import FastAPI, Header, HTTPException, Request, UploadFile, File
+    from fastapi import FastAPI, Header, HTTPException, Request, UploadFile, File, WebSocket, WebSocketDisconnect, Query
     from fastapi.responses import JSONResponse, FileResponse, StreamingResponse
     from fastapi.staticfiles import StaticFiles
     from fastapi.middleware.cors import CORSMiddleware
@@ -4930,6 +5231,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             {"id": "claude", "label": "claude"},
             {"id": "gemini", "label": "gemini"},
             {"id": "codex", "label": "codex"},
+            {"id": "devin", "label": "devin"},
         ]
         return {"runtimes": runtimes}
 
@@ -4942,12 +5244,13 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         not expose a model-listing command.
         """
         runtime = runtime.lower().strip()
-        known_runtimes = {"copilot", "opencode", "claude", "gemini", "codex"}
+        known_runtimes = {"copilot", "opencode", "claude", "gemini", "codex", "devin"}
         if runtime not in known_runtimes:
             return {"runtime": runtime, "models": [], "error": f"Unknown runtime: {runtime}"}
 
         try:
-            raw = session_mgr.get_models_for_runtime(runtime)
+            loop = asyncio.get_event_loop()
+            raw = await loop.run_in_executor(None, session_mgr.get_models_for_runtime, runtime)
             models = []
             for _group, model_ids in raw.items():
                 for model_id in model_ids:
@@ -5370,7 +5673,8 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             x_user_identity=request.headers.get("x-user-identity"),
             x_auth_channel=request.headers.get("x-auth-channel"),
         )
-        return usage_tracker.get_usage()
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(None, usage_tracker.get_usage)
 
     # --- History endpoints ---
 
@@ -5385,7 +5689,12 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         return {"sessions": history_mgr.get_sessions(user["channel"], user["identity"])}
 
     @app.get("/api/v1/history/sessions/{session_id}/messages")
-    async def get_history_messages(session_id: str, request: Request):
+    async def get_history_messages(
+        session_id: str,
+        request: Request,
+        limit: int = Query(100, ge=1, le=1000),
+        offset: Optional[int] = Query(None, ge=0),
+    ):
         user = await authenticate(
             request,
             authorization=request.headers.get("authorization"),
@@ -5395,7 +5704,18 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         messages = history_mgr.get_session_messages(user["channel"], user["identity"], session_id)
         if messages is None:
             raise HTTPException(status_code=404, detail="Session not found in history")
-        return {"session_id": session_id, "messages": messages}
+        total = len(messages)
+        # Default offset: from the end (most recent messages)
+        if offset is None:
+            offset = max(total - limit, 0)
+        page = messages[offset : offset + limit]
+        return {
+            "session_id": session_id,
+            "messages": page,
+            "total": total,
+            "offset": offset,
+            "limit": limit,
+        }
 
     @app.delete("/api/v1/history/sessions/{session_id}")
     async def delete_history_session(session_id: str, request: Request):
@@ -5834,6 +6154,24 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             bg_task_mgr.fail_task(task_id, error_msg)
             _emit_bg_notification(task_id, prompt, "failed", channel, user_identity,
                                   output_preview=None, error=error_msg, notify=notify)
+        finally:
+            # Promote next queued task for this user if a slot just opened
+            try:
+                next_q = bg_task_mgr.get_next_queued(channel, user_identity)
+                if next_q:
+                    new_sid = str(uuid4())
+                    bg_task_mgr.promote_queued_task(next_q["task_id"], new_sid)
+                    print(f"[BG] Promoting queued task {next_q['task_id']} → running")
+                    bg_executor.submit(
+                        _run_background_task,
+                        next_q["task_id"], new_sid, next_q["prompt"],
+                        next_q["agent"], next_q["runtime"], next_q["model"],
+                        next_q["channel"], next_q["user_identity"],
+                        next_q.get("timeout") or 900,
+                        next_q.get("notify", True),
+                    )
+            except Exception as promo_exc:
+                print(f"[BG] Error promoting queued task: {promo_exc}")
 
     @app.post("/api/v1/background-tasks")
     async def create_background_task(body: BackgroundTaskRequest, request: Request):
@@ -5847,13 +6185,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         channel = user["channel"]
         identity = user["identity"]
 
-        # Check concurrent limit
-        running = bg_task_mgr.count_running(channel, identity)
-        if running >= BackgroundTaskManager.MAX_TASKS_PER_USER:
-            raise HTTPException(
-                status_code=429,
-                detail=f"Maximum {BackgroundTaskManager.MAX_TASKS_PER_USER} concurrent background tasks allowed.",
-            )
+        # Check concurrent limit (used below after resolving params)
 
         # Resolve agent/runtime/model — default to user's current session config
         # Determine defaults by searching for ANY session for this identity across all channels
@@ -5915,24 +6247,9 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         task_id = f"bg_{str(uuid4())[:8]}"
         session_id = str(uuid4())  # Must be valid UUID format for Copilot CLI
 
-        # Create task record
-        task = bg_task_mgr.create_task(
-            task_id=task_id,
-            session_id=session_id,
-            user_identity=identity,
-            channel=channel,
-            agent=agent,
-            runtime=runtime,
-            model=model,
-            prompt=body.prompt,
-        )
-
         # Use agent-specified timeout or fall back to default (15 min)
         bg_timeout = body.timeout if body.timeout is not None else get_bg_command_timeout()
 
-        # Run in background thread using shared executor
-        loop = asyncio.get_running_loop()
-        
         # Determine notification preference:
         #   body override > global mute > per-identity store > session default > True
         notify_pref = body.notify
@@ -5948,6 +6265,53 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 session_pref = defaults.get("notification_preference", "all")
                 notify_pref = (session_pref != "off")
 
+        # Check concurrent limit — queue instead of rejecting
+        running = bg_task_mgr.count_running(channel, identity)
+        if running >= BackgroundTaskManager.MAX_TASKS_PER_USER:
+            # Queue the task — it will be promoted when a running task finishes
+            task = bg_task_mgr.create_task(
+                task_id=task_id,
+                session_id=session_id,
+                user_identity=identity,
+                channel=channel,
+                agent=agent,
+                runtime=runtime,
+                model=model,
+                prompt=body.prompt,
+                status="queued",
+                timeout=bg_timeout,
+                notify=notify_pref,
+            )
+            queue_pos = bg_task_mgr.count_queued(channel, identity)
+            print(f"[API] Task {task_id} queued (position {queue_pos}, {running}/{BackgroundTaskManager.MAX_TASKS_PER_USER} slots full)")
+            return {
+                "task_id": task_id,
+                "session_id": session_id,
+                "agent": agent,
+                "runtime": runtime,
+                "model": model,
+                "status": "queued",
+                "queue_position": queue_pos,
+                "timeout": bg_timeout,
+            }
+
+        # Create task record (running immediately)
+        task = bg_task_mgr.create_task(
+            task_id=task_id,
+            session_id=session_id,
+            user_identity=identity,
+            channel=channel,
+            agent=agent,
+            runtime=runtime,
+            model=model,
+            prompt=body.prompt,
+            status="running",
+            timeout=bg_timeout,
+            notify=notify_pref,
+        )
+
+        # Run in background thread using shared executor
+        loop = asyncio.get_running_loop()
         loop.run_in_executor(
             bg_executor,  # Use shared executor instead of creating new one
             _run_background_task,
@@ -6009,7 +6373,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         task = bg_task_mgr.get_task(task_id)
         if not task:
             raise HTTPException(status_code=404, detail="Task not found")
-        if task["user_key"] != bg_task_mgr._user_key(user["channel"], user["identity"]):
+        if not bg_task_mgr._identity_matches(task, user["channel"], user["identity"]):
             raise HTTPException(status_code=403, detail="Not your task")
         # Return detail with last 50 output lines
         return {
@@ -6038,7 +6402,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         task = bg_task_mgr.get_task(task_id)
         if not task:
             raise HTTPException(status_code=404, detail="Task not found")
-        if task["user_key"] != bg_task_mgr._user_key(user["channel"], user["identity"]):
+        if not bg_task_mgr._identity_matches(task, user["channel"], user["identity"]):
             raise HTTPException(status_code=403, detail="Not your task")
         return {
             "task_id": task["task_id"],
@@ -6059,11 +6423,29 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         task = bg_task_mgr.get_task(task_id)
         if not task:
             raise HTTPException(status_code=404, detail="Task not found")
-        if task["user_key"] != bg_task_mgr._user_key(user["channel"], user["identity"]):
+        if not bg_task_mgr._identity_matches(task, user["channel"], user["identity"]):
             raise HTTPException(status_code=403, detail="Not your task")
 
-        if task["status"] == "running":
+        if task["status"] in ("running", "queued"):
+            was_running = task["status"] == "running"
             bg_task_mgr.kill_task(task_id)
+            # If a running task was killed, promote the next queued task
+            if was_running:
+                next_q = bg_task_mgr.get_next_queued(user["channel"], user["identity"])
+                if next_q:
+                    new_sid = str(uuid4())
+                    bg_task_mgr.promote_queued_task(next_q["task_id"], new_sid)
+                    print(f"[BG] Kill triggered promotion of queued task {next_q['task_id']}")
+                    loop = asyncio.get_running_loop()
+                    loop.run_in_executor(
+                        bg_executor,
+                        _run_background_task,
+                        next_q["task_id"], new_sid, next_q["prompt"],
+                        next_q["agent"], next_q["runtime"], next_q["model"],
+                        next_q["channel"], next_q["user_identity"],
+                        next_q.get("timeout") or 900,
+                        next_q.get("notify", True),
+                    )
             return {"task_id": task_id, "action": "killed"}
         else:
             bg_task_mgr.delete_task(task_id)
@@ -6686,6 +7068,294 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             traceback.print_exc()
             return {"success": False, "error": str(e)}
     
+    # --- Wee Canvas ───────────────────────────────────────────────────────────
+    # In-memory canvas session state: session_id → {components, connections, action_watchers, pending_actions, name, created_at, last_activity}
+    _canvas_sessions: dict = {}
+    _CANVAS_PERSIST_DIR = Path(SCRIPT_BASE_DIR) / ".canvas-sessions"
+    _CANVAS_PERSIST_DIR.mkdir(parents=True, exist_ok=True)
+    _CANVAS_SESSION_TIMEOUT = int(os.environ.get("CANVAS_SESSION_TIMEOUT_MINUTES", "30")) * 60
+    _canvas_cleanup_started = False
+
+    def _get_canvas_session(session_id: str) -> dict:
+        now = time.time()
+        if session_id not in _canvas_sessions:
+            _canvas_sessions[session_id] = {
+                "components": [],
+                "connections": set(),
+                "action_watchers": set(),
+                "pending_actions": [],
+                "name": None,
+                "created_at": now,
+                "last_activity": now,
+            }
+        return _canvas_sessions[session_id]
+
+    def _canvas_touch(sess: dict):
+        sess["last_activity"] = time.time()
+
+    def _canvas_persist_to_disk(session_id: str, sess: dict, closed_at: float = None):
+        """Save session state to disk as JSON."""
+        data = {
+            "session_id": session_id,
+            "name": sess.get("name"),
+            "components": sess.get("components", []),
+            "created_at": sess.get("created_at", time.time()),
+            "last_activity": sess.get("last_activity", time.time()),
+            "closed_at": closed_at or time.time(),
+        }
+        path = _CANVAS_PERSIST_DIR / f"{session_id}.json"
+        path.write_text(json.dumps(data, default=str), encoding="utf-8")
+
+    def _canvas_load_from_disk(session_id: str) -> dict | None:
+        path = _CANVAS_PERSIST_DIR / f"{session_id}.json"
+        if not path.exists():
+            return None
+        try:
+            return json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            return None
+
+    def _canvas_list_persisted() -> list[dict]:
+        """List all persisted (closed) sessions from disk."""
+        results = []
+        for f in _CANVAS_PERSIST_DIR.glob("*.json"):
+            try:
+                data = json.loads(f.read_text(encoding="utf-8"))
+                sid = data.get("session_id", f.stem)
+                # Skip sessions that are currently active in memory
+                if sid not in _canvas_sessions:
+                    results.append(data)
+            except Exception:
+                continue
+        return results
+
+    def _canvas_delete_persisted(session_id: str):
+        path = _CANVAS_PERSIST_DIR / f"{session_id}.json"
+        if path.exists():
+            path.unlink()
+
+    async def _canvas_cleanup_loop():
+        """Background task: every 5 min, expire idle sessions to disk."""
+        while True:
+            await asyncio.sleep(300)
+            try:
+                now = time.time()
+                to_expire = []
+                for sid, sess in list(_canvas_sessions.items()):
+                    if not sess["connections"] and (now - sess["last_activity"]) > _CANVAS_SESSION_TIMEOUT:
+                        to_expire.append(sid)
+                for sid in to_expire:
+                    sess = _canvas_sessions.pop(sid, None)
+                    if sess and sess.get("components"):
+                        _canvas_persist_to_disk(sid, sess)
+            except Exception:
+                pass
+
+    async def _canvas_broadcast(session: dict, skip_ws, message: dict):
+        payload = json.dumps(message)
+        for conn in list(session["connections"]):
+            if conn is not skip_ws:
+                try:
+                    await conn.send_text(payload)
+                except Exception:
+                    session["connections"].discard(conn)
+                    session["action_watchers"].discard(conn)
+
+    def _canvas_apply_update(components: list, node_id: str, changes: dict) -> bool:
+        for comp in components:
+            if isinstance(comp, dict):
+                if comp.get("id") == node_id:
+                    comp.update(changes)
+                    return True
+                for key in ("children", "items", "columns", "steps", "rows", "metrics", "fields"):
+                    children = comp.get(key, [])
+                    if isinstance(children, list) and _canvas_apply_update(children, node_id, changes):
+                        return True
+        return False
+
+    @app.websocket("/canvas/ws")
+    async def canvas_websocket(websocket: WebSocket, session: str = "default"):
+        nonlocal _canvas_cleanup_started
+        if not _canvas_cleanup_started:
+            _canvas_cleanup_started = True
+            asyncio.create_task(_canvas_cleanup_loop())
+
+        await websocket.accept()
+        sess = _get_canvas_session(session)
+        sess["connections"].add(websocket)
+        _canvas_touch(sess)
+
+        # Restore current state for new connections
+        if sess["components"]:
+            try:
+                await websocket.send_text(json.dumps({
+                    "type": "restore",
+                    "components": sess["components"],
+                    "session_id": session,
+                }))
+            except Exception:
+                pass
+
+        try:
+            while True:
+                raw = await websocket.receive_text()
+                _canvas_touch(sess)
+                try:
+                    data = json.loads(raw)
+                except Exception:
+                    continue
+
+                msg_type = data.get("type")
+
+                if msg_type == "render":
+                    sess["components"] = data.get("components", [])
+                    await _canvas_broadcast(sess, websocket, {
+                        "type": "render",
+                        "components": sess["components"],
+                        "session_id": session,
+                    })
+
+                elif msg_type == "update":
+                    node_id = data.get("node_id")
+                    changes = data.get("changes", {})
+                    _canvas_apply_update(sess["components"], node_id, changes)
+                    await _canvas_broadcast(sess, websocket, {
+                        "type": "update",
+                        "node_id": node_id,
+                        "changes": changes,
+                    })
+
+                elif msg_type == "clear":
+                    sess["components"] = []
+                    await _canvas_broadcast(sess, websocket, {
+                        "type": "clear",
+                        "session_id": session,
+                    })
+
+                elif msg_type == "action":
+                    sess["pending_actions"].append(data)
+                    for watcher in list(sess["action_watchers"]):
+                        try:
+                            await watcher.send_text(json.dumps(data))
+                        except Exception:
+                            sess["action_watchers"].discard(watcher)
+
+                elif msg_type == "subscribe_actions":
+                    sess["action_watchers"].add(websocket)
+                    for action in list(sess["pending_actions"]):
+                        try:
+                            await websocket.send_text(json.dumps(action))
+                        except Exception:
+                            break
+                    sess["pending_actions"].clear()
+
+        except WebSocketDisconnect:
+            pass
+        except Exception:
+            pass
+        finally:
+            sess["connections"].discard(websocket)
+            sess["action_watchers"].discard(websocket)
+            _canvas_touch(sess)
+            # Clean up empty sessions with no components
+            if not sess["connections"] and not sess["components"]:
+                _canvas_sessions.pop(session, None)
+
+    @app.get("/api/v1/canvas/sessions")
+    async def get_canvas_sessions():
+        """Return list of active and closed canvas sessions."""
+        result = []
+        for sid, sess in _canvas_sessions.items():
+            result.append({
+                "session_id": sid,
+                "name": sess.get("name"),
+                "component_count": len(sess["components"]),
+                "connection_count": len(sess["connections"]),
+                "created_at": sess.get("created_at"),
+                "last_activity": sess.get("last_activity"),
+                "status": "active",
+            })
+        # Include persisted (closed) sessions from disk
+        for data in _canvas_list_persisted():
+            result.append({
+                "session_id": data["session_id"],
+                "name": data.get("name"),
+                "component_count": len(data.get("components", [])),
+                "connection_count": 0,
+                "created_at": data.get("created_at"),
+                "last_activity": data.get("last_activity"),
+                "closed_at": data.get("closed_at"),
+                "status": "closed",
+            })
+        return {"sessions": result}
+
+    @app.patch("/api/v1/canvas/sessions/{session_id}/name")
+    async def set_canvas_session_name(session_id: str, request: Request):
+        """Set or update the name of a canvas session."""
+        body = await request.json()
+        name = body.get("name", "").strip() or None
+        if session_id in _canvas_sessions:
+            _canvas_sessions[session_id]["name"] = name
+            return {"success": True, "session_id": session_id, "name": name}
+        # Check if it's a persisted session
+        data = _canvas_load_from_disk(session_id)
+        if data:
+            data["name"] = name
+            (_CANVAS_PERSIST_DIR / f"{session_id}.json").write_text(
+                json.dumps(data, default=str), encoding="utf-8"
+            )
+            return {"success": True, "session_id": session_id, "name": name}
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    @app.post("/api/v1/canvas/sessions/{session_id}/restore")
+    async def restore_canvas_session(session_id: str):
+        """Restore a persisted session back into memory."""
+        data = _canvas_load_from_disk(session_id)
+        if not data:
+            if session_id in _canvas_sessions:
+                return {"success": True, "session_id": session_id, "status": "already_active"}
+            raise HTTPException(status_code=404, detail="Session not found on disk")
+        # Re-create in-memory session
+        _canvas_sessions[session_id] = {
+            "components": data.get("components", []),
+            "connections": set(),
+            "action_watchers": set(),
+            "pending_actions": [],
+            "name": data.get("name"),
+            "created_at": data.get("created_at", time.time()),
+            "last_activity": time.time(),
+        }
+        _canvas_delete_persisted(session_id)
+        return {"success": True, "session_id": session_id, "name": data.get("name"), "status": "restored"}
+
+    @app.post("/api/v1/canvas/sessions/{session_id}/close")
+    async def close_canvas_session(session_id: str):
+        """Explicitly close a session — persist to disk and remove from memory."""
+        sess = _canvas_sessions.pop(session_id, None)
+        if not sess:
+            raise HTTPException(status_code=404, detail="Session not found")
+        if sess.get("components"):
+            _canvas_persist_to_disk(session_id, sess)
+        # Close all WS connections
+        for conn in list(sess.get("connections", set())):
+            try:
+                await conn.close()
+            except Exception:
+                pass
+        return {"success": True, "session_id": session_id, "status": "closed"}
+
+    @app.get("/api/v1/canvas")
+    async def get_canvas_summary():
+        """Return summary of all canvas sessions."""
+        sessions = {}
+        for sid, sess in _canvas_sessions.items():
+            sessions[sid] = {
+                "components": sess["components"],
+                "connection_count": len(sess["connections"]),
+                "name": sess.get("name"),
+            }
+        return {"sessions": sessions, "count": len(_canvas_sessions)}
+
     # --- AI Media ─────────────────────────────────────────────────────────────
     _ai_media_dir = Path("/tmp/webui_ai_media")
     _ai_media_dir.mkdir(parents=True, exist_ok=True)
@@ -6720,14 +7390,20 @@ def start_api_server():
     host = os.environ.get("API_HOST", "127.0.0.1")
 
     # SSL support — set SSL_CERTFILE and SSL_KEYFILE env vars to enable HTTPS
+    # In development (APP_ENV=DEV) prefer HTTP even if cert files exist to avoid surprising TLS-only bindings.
     ssl_certfile = os.environ.get("SSL_CERTFILE")
     ssl_keyfile = os.environ.get("SSL_KEYFILE")
     ssl_kwargs = {}
+    proto = "http"
     if ssl_certfile and ssl_keyfile and os.path.isfile(ssl_certfile) and os.path.isfile(ssl_keyfile):
-        ssl_kwargs = {"ssl_certfile": ssl_certfile, "ssl_keyfile": ssl_keyfile}
-        proto = "https"
-    else:
-        proto = "http"
+        # Only enable HTTPS when not in DEV, unless FORCE_SSL is explicitly set.
+        app_env = os.environ.get("APP_ENV", "").upper()
+        force_ssl = os.environ.get("FORCE_SSL", "") in ("1", "true", "True", "TRUE")
+        if app_env != "DEV" or force_ssl:
+            ssl_kwargs = {"ssl_certfile": ssl_certfile, "ssl_keyfile": ssl_keyfile}
+            proto = "https"
+        else:
+            print("[API] SSL cert/key found but APP_ENV=DEV — serving HTTP for development. Set FORCE_SSL=1 to force HTTPS.", file=sys.stderr)
 
     # Support comma-separated hosts (e.g. "127.0.0.1,100.x.x.x" for Tailscale + localhost).
     # When multiple hosts are specified, run each in a background thread and block on the last.
@@ -6842,8 +7518,8 @@ Examples:
     runtime_group.add_argument(
         "--runtime",
         metavar="NAME",
-        choices=["copilot", "opencode", "claude", "gemini", "codex"],
-        help="Set the runtime to use (choices: copilot, opencode, claude, gemini, codex)",
+        choices=["copilot", "opencode", "claude", "gemini", "codex", "devin"],
+        help="Set the runtime to use (choices: copilot, opencode, claude, gemini, codex, devin)",
     )
     runtime_group.add_argument(
         "--list-runtimes",

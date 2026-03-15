@@ -99,4 +99,5 @@ telegram_config.json
 # SSL certs
 certs/
 .task-scheduler/
+.canvas-sessions/
 sessions.db
