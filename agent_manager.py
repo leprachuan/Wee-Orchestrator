@@ -3070,10 +3070,28 @@ User Request:
             import pty as _pty_mod
             _pty_master, _pty_slave = _pty_mod.openpty()
 
+            # Configure PTY for clean streaming:
+            # 1. Set a reasonable window size so programs don't get confused by 0×0
+            # 2. Disable output post-processing (OPOST/ONLCR) to avoid extra \r
+            # 3. Disable echo to prevent input echo artifacts
+            try:
+                import termios as _termios_mod, struct as _struct_mod, fcntl as _fcntl_mod
+                # Set window size to 120 cols × 40 rows
+                _ws = _struct_mod.pack("HHHH", 40, 120, 0, 0)
+                _fcntl_mod.ioctl(_pty_master, _termios_mod.TIOCSWINSZ, _ws)
+                # Disable output processing and echo on the slave
+                _attrs = _termios_mod.tcgetattr(_pty_slave)
+                _attrs[1] &= ~_termios_mod.OPOST   # no output processing (\n stays \n)
+                _attrs[3] &= ~_termios_mod.ECHO     # no echo
+                _termios_mod.tcsetattr(_pty_slave, _termios_mod.TCSANOW, _attrs)
+            except Exception:
+                pass  # non-fatal; streaming still works with defaults
+
         try:
             if _pty_master is not None:
                 process = subprocess.Popen(
                     cmd,
+                    stdin=subprocess.DEVNULL,
                     stdout=_pty_slave,
                     stderr=subprocess.PIPE,
                     cwd=cwd,
@@ -3121,12 +3139,15 @@ User Request:
                     # Read from the PTY master fd for incremental output from
                     # runtimes whose compiled binaries buffer stdout when not
                     # connected to a TTY (e.g. the Rust-based Devin CLI).
-                    import re as _re
+                    import codecs as _codecs, re as _re
                     _ansi_escape = _re.compile(
                         r'\x1b\[[0-9;]*[a-zA-Z]'     # CSI sequences
                         r'|\x1b\][^\x07]*\x07'        # OSC sequences
                         r'|\x1b\([A-Z0-9]'            # charset selection
                     )
+                    # Incremental decoder avoids garbled output when a
+                    # multi-byte UTF-8 character is split across reads.
+                    _utf8_decoder = _codecs.getincrementaldecoder("utf-8")("replace")
                     try:
                         while True:
                             try:
@@ -3136,9 +3157,7 @@ User Request:
                                 break
                             if not data:
                                 break
-                            text = data.decode("utf-8", errors="replace")
-                            # Normalise PTY line-endings (\r\n → \n)
-                            text = text.replace("\r\n", "\n").replace("\r", "")
+                            text = _utf8_decoder.decode(data, final=False)
                             text = _ansi_escape.sub("", text)
                             stdout_chunks.append(text)
                             if text.strip():
