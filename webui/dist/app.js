@@ -4408,10 +4408,18 @@ function _cvHtml(comp) {
   const el = document.createElement('div');
   const htmlContent = comp.content || comp.html || '';
   const iframe = document.createElement('iframe');
-  iframe.sandbox = 'allow-scripts';
+  if (comp.src) {
+    // External URL mode: use src attribute with full permissions for interactive embeds
+    iframe.sandbox = 'allow-scripts allow-same-origin allow-forms allow-popups allow-pointer-lock';
+    iframe.src = comp.src;
+    iframe.allow = 'fullscreen';
+  } else {
+    // Inline HTML mode: sandboxed srcdoc
+    iframe.sandbox = 'allow-scripts';
+    iframe.srcdoc = htmlContent;
+  }
   iframe.style.cssText = 'width:100%;border:none;border-radius:8px;background:transparent;';
   iframe.style.height = (comp.height || 400) + 'px';
-  iframe.srcdoc = htmlContent;
   window.addEventListener('message', function(evt) {
     if (evt.data && evt.data.type === 'resize' && evt.source === iframe.contentWindow) {
       iframe.style.height = (evt.data.height || 400) + 'px';

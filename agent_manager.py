@@ -3043,6 +3043,7 @@ User Request:
         agent: str,
         prompt: str,
         n8n_session_id: str,
+        use_pty: bool = False,
     ) -> str:
         """Execute a subprocess with PID tracking.
 
@@ -3053,20 +3054,58 @@ User Request:
 
         Without a queue the behaviour is identical to the original
         communicate()-based approach (blocking, full-output return).
+
+        When *use_pty* is True and streaming is active, stdout is connected to
+        a pseudo-terminal so that runtimes whose binaries buffer stdout (e.g.
+        the Rust-based Devin CLI) flush output incrementally.
         """
         import threading as _threading
 
         stream_info = self._stream_queues.get(n8n_session_id)
 
+        # Allocate a PTY for stdout when streaming + use_pty are both active.
+        # This tricks compiled binaries into line-buffering their output.
+        _pty_master = None
+        if use_pty and stream_info:
+            import pty as _pty_mod
+            _pty_master, _pty_slave = _pty_mod.openpty()
+
+            # Configure PTY for clean streaming:
+            # 1. Set a reasonable window size so programs don't get confused by 0×0
+            # 2. Disable output post-processing (OPOST/ONLCR) to avoid extra \r
+            # 3. Disable echo to prevent input echo artifacts
+            try:
+                import termios as _termios_mod, struct as _struct_mod, fcntl as _fcntl_mod
+                # Set window size to 120 cols × 40 rows
+                _ws = _struct_mod.pack("HHHH", 40, 120, 0, 0)
+                _fcntl_mod.ioctl(_pty_master, _termios_mod.TIOCSWINSZ, _ws)
+                # Disable output processing and echo on the slave
+                _attrs = _termios_mod.tcgetattr(_pty_slave)
+                _attrs[1] &= ~_termios_mod.OPOST   # no output processing (\n stays \n)
+                _attrs[3] &= ~_termios_mod.ECHO     # no echo
+                _termios_mod.tcsetattr(_pty_slave, _termios_mod.TCSANOW, _attrs)
+            except Exception:
+                pass  # non-fatal; streaming still works with defaults
+
         try:
-            process = subprocess.Popen(
-                cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                cwd=cwd,
-                bufsize=1,  # line-buffered for faster streaming chunk delivery
-            )
+            if _pty_master is not None:
+                process = subprocess.Popen(
+                    cmd,
+                    stdin=subprocess.DEVNULL,
+                    stdout=_pty_slave,
+                    stderr=subprocess.PIPE,
+                    cwd=cwd,
+                )
+                os.close(_pty_slave)
+            else:
+                process = subprocess.Popen(
+                    cmd,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    cwd=cwd,
+                    bufsize=1,  # line-buffered for faster streaming chunk delivery
+                )
 
             self.track_running_query(
                 n8n_session_id, process.pid, runtime, agent, prompt
@@ -3074,66 +3113,111 @@ User Request:
 
             if stream_info:
                 # ── Streaming path ──────────────────────────────────────────
-                # Read stdout line-by-line and push each line to the async
-                # queue so the SSE generator can forward it immediately.
+                # Read stdout and push each chunk to the async queue so the
+                # SSE generator can forward it immediately.
                 # stderr is drained in a background thread to avoid blocking.
                 queue, loop = stream_info
                 stderr_buf: list = []
 
                 def _drain_stderr() -> None:
                     try:
-                        stderr_buf.append(process.stderr.read())
+                        raw = process.stderr.read()
+                        stderr_buf.append(
+                            raw.decode("utf-8", errors="replace")
+                            if isinstance(raw, bytes) else raw
+                        )
                     except Exception:
                         pass
 
                 stderr_thread = _threading.Thread(target=_drain_stderr, daemon=True)
                 stderr_thread.start()
 
-                import json as _json
-
                 stdout_chunks: list = []
-                _claude_text_block_count = 0  # track text blocks for separators
-                try:
-                    for line in process.stdout:
-                        stdout_chunks.append(line)
-                        if runtime == "claude":
-                            # Parse stream-json output and push text deltas
+
+                if _pty_master is not None:
+                    # ── PTY streaming path ──────────────────────────────────
+                    # Read from the PTY master fd for incremental output from
+                    # runtimes whose compiled binaries buffer stdout when not
+                    # connected to a TTY (e.g. the Rust-based Devin CLI).
+                    import codecs as _codecs, re as _re
+                    _ansi_escape = _re.compile(
+                        r'\x1b\[[0-9;]*[a-zA-Z]'     # CSI sequences
+                        r'|\x1b\][^\x07]*\x07'        # OSC sequences
+                        r'|\x1b\([A-Z0-9]'            # charset selection
+                    )
+                    # Incremental decoder avoids garbled output when a
+                    # multi-byte UTF-8 character is split across reads.
+                    _utf8_decoder = _codecs.getincrementaldecoder("utf-8")("replace")
+                    try:
+                        while True:
                             try:
-                                obj = _json.loads(line.strip())
-                                evt_type = obj.get("type")
-                                if evt_type == "stream_event":
-                                    event = obj.get("event") or {}
-                                    inner_type = event.get("type", "")
-                                    if inner_type == "content_block_start":
-                                        cb = event.get("content_block") or {}
-                                        if cb.get("type") == "text":
-                                            # Push newline separator between text blocks
-                                            # (e.g. text before tool call vs text after)
-                                            if _claude_text_block_count > 0:
-                                                loop.call_soon_threadsafe(
-                                                    queue.put_nowait,
-                                                    ("chunk", {"text": "\n\n"}),
-                                                )
-                                            _claude_text_block_count += 1
-                                    elif inner_type == "content_block_delta":
-                                        delta = event.get("delta") or {}
-                                        if delta.get("type") == "text_delta":
-                                            text = delta.get("text", "")
-                                            if text:
-                                                loop.call_soon_threadsafe(
-                                                    queue.put_nowait,
-                                                    ("chunk", {"text": text}),
-                                                )
-                            except (ValueError, KeyError, AttributeError):
-                                pass
-                        else:
-                            loop.call_soon_threadsafe(queue.put_nowait, ("chunk", line))
-                except Exception:
-                    pass
-                finally:
-                    process.stdout.close()
-                    stderr_thread.join(timeout=5)
-                    process.wait()
+                                data = os.read(_pty_master, 4096)
+                            except OSError:
+                                # EIO when the slave side is closed (process exited)
+                                break
+                            if not data:
+                                break
+                            text = _utf8_decoder.decode(data, final=False)
+                            text = _ansi_escape.sub("", text)
+                            stdout_chunks.append(text)
+                            if text.strip():
+                                loop.call_soon_threadsafe(
+                                    queue.put_nowait, ("chunk", text)
+                                )
+                    except Exception:
+                        pass
+                    finally:
+                        try:
+                            os.close(_pty_master)
+                        except OSError:
+                            pass
+                        stderr_thread.join(timeout=5)
+                        process.wait()
+                else:
+                    # ── Pipe streaming path ─────────────────────────────────
+                    import json as _json
+                    _claude_text_block_count = 0  # track text blocks for separators
+                    try:
+                        for line in process.stdout:
+                            stdout_chunks.append(line)
+                            if runtime == "claude":
+                                # Parse stream-json output and push text deltas
+                                try:
+                                    obj = _json.loads(line.strip())
+                                    evt_type = obj.get("type")
+                                    if evt_type == "stream_event":
+                                        event = obj.get("event") or {}
+                                        inner_type = event.get("type", "")
+                                        if inner_type == "content_block_start":
+                                            cb = event.get("content_block") or {}
+                                            if cb.get("type") == "text":
+                                                # Push newline separator between text blocks
+                                                # (e.g. text before tool call vs text after)
+                                                if _claude_text_block_count > 0:
+                                                    loop.call_soon_threadsafe(
+                                                        queue.put_nowait,
+                                                        ("chunk", {"text": "\n\n"}),
+                                                    )
+                                                _claude_text_block_count += 1
+                                        elif inner_type == "content_block_delta":
+                                            delta = event.get("delta") or {}
+                                            if delta.get("type") == "text_delta":
+                                                text = delta.get("text", "")
+                                                if text:
+                                                    loop.call_soon_threadsafe(
+                                                        queue.put_nowait,
+                                                        ("chunk", {"text": text}),
+                                                    )
+                                except (ValueError, KeyError, AttributeError):
+                                    pass
+                            else:
+                                loop.call_soon_threadsafe(queue.put_nowait, ("chunk", line))
+                    except Exception:
+                        pass
+                    finally:
+                        process.stdout.close()
+                        stderr_thread.join(timeout=5)
+                        process.wait()
 
                 output = "".join(stdout_chunks) + ("".join(stderr_buf) if stderr_buf else "")
                 self.update_query_output(n8n_session_id, output)
@@ -3169,6 +3253,12 @@ User Request:
             # clear_running_query is idempotent; ensure it runs for streaming path too
             if stream_info:
                 self.clear_running_query(n8n_session_id)
+            # Ensure PTY master fd is cleaned up even on unexpected errors
+            if _pty_master is not None:
+                try:
+                    os.close(_pty_master)
+                except OSError:
+                    pass
 
     def run_copilot(
         self,
@@ -3692,7 +3782,8 @@ User Request:
         cmd += ["--", context_prompt]
 
         output = self._execute_subprocess_with_tracking(
-            cmd, agent_dir, effective_timeout, "devin", agent, prompt, n8n_session_id
+            cmd, agent_dir, effective_timeout, "devin", agent, prompt, n8n_session_id,
+            use_pty=True,
         )
 
         # After each run, capture and persist the most recent devin session UUID
