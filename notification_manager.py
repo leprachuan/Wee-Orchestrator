@@ -179,11 +179,9 @@ class NotificationManager:
                 skip_external = True
 
         if not skip_external:
-            print(f"[NotificationManager] Routing to external channel: {channel} for user {user_key}")
-            if channel and channel.lower() == "telegram":
-                self._notify_telegram(notification)
-            elif channel and channel.lower() == "webex":
-                self._notify_webex(notification)
+            print(f"[NotificationManager] Broadcasting to all external channels for task {task_id}")
+            self._notify_telegram_broadcast(notification)
+            self._notify_webex_broadcast(notification)
         else:
             print(f"[NotificationManager] Skipping external notification for {task_id} (skip_external=True)")
 
@@ -254,7 +252,7 @@ class NotificationManager:
         return deleted
 
     def _notify_telegram(self, notification: dict):
-        """Send completion notification via Telegram."""
+        """Send completion notification via Telegram to the task's originating user."""
         import sys
         try:
             repo_root = os.path.dirname(os.path.abspath(__file__))
@@ -276,8 +274,34 @@ class NotificationManager:
             import sys as _sys
             print(f"[NotificationManager] Telegram notify failed: {e}", file=_sys.stderr)
 
+    def _notify_telegram_broadcast(self, notification: dict):
+        """Send completion notification to ALL configured Telegram users."""
+        import sys
+        try:
+            repo_root = os.path.dirname(os.path.abspath(__file__))
+            sys.path.insert(0, repo_root)
+            from telegram_connector import TelegramConnector
+            config_path = os.path.join(repo_root, "telegram_config.json")
+            if not os.path.exists(config_path):
+                return
+            with open(config_path) as f:
+                cfg = json.load(f)
+            allowed_users = cfg.get("allowed_users", [])
+            if not allowed_users:
+                return
+            connector = TelegramConnector(cfg)
+            msg = _format_notification_message(notification)
+            for chat_id in allowed_users:
+                try:
+                    connector.send_message(chat_id, msg)
+                except Exception as e:
+                    print(f"[NotificationManager] Telegram broadcast to {chat_id} failed: {e}", file=sys.stderr)
+        except Exception as e:
+            import sys as _sys
+            print(f"[NotificationManager] Telegram broadcast failed: {e}", file=_sys.stderr)
+
     def _notify_webex(self, notification: dict):
-        """Send completion notification via WebEx."""
+        """Send completion notification via WebEx to the task's originating user."""
         import sys
         try:
             repo_root = os.path.dirname(os.path.abspath(__file__))
@@ -298,6 +322,32 @@ class NotificationManager:
         except Exception as e:
             import sys as _sys
             print(f"[NotificationManager] WebEx notify failed: {e}", file=_sys.stderr)
+
+    def _notify_webex_broadcast(self, notification: dict):
+        """Send completion notification to ALL configured WebEx users."""
+        import sys
+        try:
+            repo_root = os.path.dirname(os.path.abspath(__file__))
+            sys.path.insert(0, repo_root)
+            from webex_connector import WebEXConnector
+            config_path = os.path.join(repo_root, "webex_config.json")
+            if not os.path.exists(config_path):
+                return
+            with open(config_path) as f:
+                cfg = json.load(f)
+            allowed_users = cfg.get("allowed_users", [])
+            if not allowed_users:
+                return
+            connector = WebEXConnector(cfg)
+            msg = _format_notification_message(notification)
+            for person_id in allowed_users:
+                try:
+                    connector.send_message(person_id, msg)
+                except Exception as e:
+                    print(f"[NotificationManager] WebEx broadcast to {person_id} failed: {e}", file=sys.stderr)
+        except Exception as e:
+            import sys as _sys
+            print(f"[NotificationManager] WebEx broadcast failed: {e}", file=_sys.stderr)
 
 
 def _format_notification_message(notification: dict) -> str:

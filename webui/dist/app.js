@@ -4676,3 +4676,184 @@ if (document.readyState !== 'loading') {
 } else {
   document.addEventListener('DOMContentLoaded', _initCanvas);
 }
+
+/* ── Settings & Logs Module ─────────────────────────────────────────────── */
+(function initSettingsAndLogs() {
+  /* --- Settings Modal --- */
+  const btnSettings     = document.getElementById('btn-settings');
+  const modalSettings   = document.getElementById('modal-settings');
+  const settingsTA      = document.getElementById('settings-textarea');
+  const settingsErr     = document.getElementById('settings-error');
+  const btnSettingsSave = document.getElementById('btn-settings-save');
+  const btnSettingsClose = document.getElementById('btn-settings-close');
+  const btnSettingsCancel = document.getElementById('btn-settings-cancel');
+
+  function showSettingsErr(msg) {
+    if (!settingsErr) return;
+    settingsErr.textContent = msg;
+    settingsErr.classList.remove('hidden');
+  }
+  function hideSettingsErr() {
+    if (settingsErr) settingsErr.classList.add('hidden');
+  }
+
+  async function openSettings() {
+    if (!modalSettings || !settingsTA) return;
+    hideSettingsErr();
+    settingsTA.value = 'Loading...';
+    modalSettings.classList.remove('hidden');
+    try {
+      const data = await apiRequest('GET', '/agents-config');
+      settingsTA.value = JSON.stringify(data, null, 2);
+    } catch (e) {
+      settingsTA.value = '';
+      showSettingsErr('Failed to load: ' + e.message);
+    }
+  }
+
+  function closeSettings() {
+    if (modalSettings) modalSettings.classList.add('hidden');
+  }
+
+  async function saveSettings() {
+    hideSettingsErr();
+    let parsed;
+    try {
+      parsed = JSON.parse(settingsTA.value);
+    } catch (e) {
+      showSettingsErr('Invalid JSON: ' + e.message);
+      return;
+    }
+    try {
+      const result = await apiRequest('PUT', '/agents-config', parsed);
+      closeSettings();
+      // Brief success toast using existing notification pattern if available
+      console.log('Settings saved:', result);
+    } catch (e) {
+      showSettingsErr('Save failed: ' + e.message);
+    }
+  }
+
+  if (btnSettings)       btnSettings.addEventListener('click', openSettings);
+  if (btnSettingsSave)   btnSettingsSave.addEventListener('click', saveSettings);
+  if (btnSettingsClose)  btnSettingsClose.addEventListener('click', closeSettings);
+  if (btnSettingsCancel) btnSettingsCancel.addEventListener('click', closeSettings);
+  // Close on overlay click
+  if (modalSettings) {
+    modalSettings.addEventListener('click', (e) => {
+      if (e.target === modalSettings) closeSettings();
+    });
+  }
+
+  /* --- Logs Panel --- */
+  const btnLogs      = document.getElementById('btn-logs');
+  const panelLogs    = document.getElementById('panel-logs');
+  const logsOutput   = document.getElementById('logs-output');
+  const logsService  = document.getElementById('logs-service');
+  const logsSearch   = document.getElementById('logs-search');
+  const logsSince    = document.getElementById('logs-since');
+  const logsLive     = document.getElementById('logs-live');
+  const btnLogsRefresh = document.getElementById('btn-logs-refresh');
+  const btnLogsClose = document.getElementById('btn-logs-close');
+
+  let _logsEventSource = null;
+
+  function classifyLine(text) {
+    const lower = text.toLowerCase();
+    if (lower.includes('error') || lower.includes('traceback') || lower.includes('exception') || lower.includes('critical'))
+      return 'log-line-error';
+    if (lower.includes('warn'))
+      return 'log-line-warn';
+    if (lower.includes(' info') || lower.includes('[info]'))
+      return 'log-line-info';
+    return '';
+  }
+
+  function appendLogLine(text) {
+    if (!logsOutput) return;
+    const span = document.createElement('span');
+    const cls = classifyLine(text);
+    if (cls) span.className = cls;
+    span.textContent = text + '\n';
+    logsOutput.appendChild(span);
+    // Auto-scroll if near bottom
+    const atBottom = logsOutput.scrollHeight - logsOutput.scrollTop - logsOutput.clientHeight < 80;
+    if (atBottom) logsOutput.scrollTop = logsOutput.scrollHeight;
+  }
+
+  function stopLiveStream() {
+    if (_logsEventSource) {
+      _logsEventSource.close();
+      _logsEventSource = null;
+    }
+  }
+
+  function startLiveStream() {
+    stopLiveStream();
+    if (!STATE.token) return;
+    const service = logsService ? logsService.value : 'agent-manager-api-dev';
+    const url = `${API_BASE}/logs/stream?service=${encodeURIComponent(service)}&token=${encodeURIComponent(STATE.token)}`;
+    _logsEventSource = new EventSource(url);
+    _logsEventSource.onmessage = (evt) => {
+      try {
+        const data = JSON.parse(evt.data);
+        if (data.line) appendLogLine(data.line);
+      } catch (_) {
+        appendLogLine(evt.data);
+      }
+    };
+    _logsEventSource.onerror = () => {
+      // EventSource auto-reconnects; if we deliberately closed, do nothing
+      if (logsLive && !logsLive.checked) stopLiveStream();
+    };
+  }
+
+  async function loadLogs() {
+    if (!logsOutput) return;
+    logsOutput.innerHTML = '';
+    const service = logsService ? logsService.value : 'agent-manager-api-dev';
+    const search  = logsSearch ? logsSearch.value.trim() : '';
+    const since   = logsSince ? logsSince.value : '';
+    const params = new URLSearchParams({ service, lines: '200' });
+    if (search) params.set('search', search);
+    if (since) params.set('since', new Date(since).toISOString());
+    try {
+      const data = await apiRequest('GET', `/logs?${params.toString()}`);
+      (data.lines || []).forEach(line => appendLogLine(line));
+    } catch (e) {
+      appendLogLine('⚠ Error loading logs: ' + e.message);
+    }
+    // Start live if checkbox is on
+    if (logsLive && logsLive.checked) startLiveStream();
+  }
+
+  function toggleLogs() {
+    if (!panelLogs) return;
+    const willShow = panelLogs.classList.contains('hidden');
+    panelLogs.classList.toggle('hidden');
+    if (willShow) {
+      loadLogs();
+    } else {
+      stopLiveStream();
+    }
+  }
+
+  if (btnLogs)        btnLogs.addEventListener('click', toggleLogs);
+  if (btnLogsClose)   btnLogsClose.addEventListener('click', () => {
+    if (panelLogs) panelLogs.classList.add('hidden');
+    stopLiveStream();
+    if (logsLive) logsLive.checked = false;
+  });
+  if (btnLogsRefresh) btnLogsRefresh.addEventListener('click', loadLogs);
+  if (logsService)    logsService.addEventListener('change', loadLogs);
+  if (logsLive)       logsLive.addEventListener('change', () => {
+    if (logsLive.checked) startLiveStream();
+    else stopLiveStream();
+  });
+  // Search on Enter
+  if (logsSearch) {
+    logsSearch.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') loadLogs();
+    });
+  }
+})();
