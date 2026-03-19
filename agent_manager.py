@@ -1267,6 +1267,8 @@ class SessionManager:
             if match:
                 raw_content = match.group(1)
                 models = re.findall(r'"([^"]+)"', raw_content)
+                # Validate: filter out false positives (e.g. --output-format choices: "text", "json")
+                models = [m for m in models if any(kw in m.lower() for kw in ["gpt", "claude", "gemini", "o1", "o3", "o4"])]
 
             # Method 2: Fallback (if regex fails due to layout changes)
             if not models:
@@ -1303,7 +1305,34 @@ class SessionManager:
                     ]
 
             if not models:
-                return {}
+                # copilot CLI no longer lists models in --help (choices removed in newer versions).
+                # Return the static fallback list so /model list and /model set still work.
+                return {
+                    "Claude Models": [
+                        "claude-sonnet-4.6",
+                        "claude-opus-4.6",
+                        "claude-haiku-4.5",
+                        "claude-sonnet-4.5",
+                        "claude-opus-4.6-fast",
+                        "claude-opus-4.5",
+                        "claude-sonnet-4",
+                    ],
+                    "GPT Models": [
+                        "gpt-5.4",
+                        "gpt-5.3-codex",
+                        "gpt-5.2-codex",
+                        "gpt-5.2",
+                        "gpt-5.1-codex-max",
+                        "gpt-5.1-codex",
+                        "gpt-5.1",
+                        "gpt-5.1-codex-mini",
+                        "gpt-5-mini",
+                        "gpt-4.1",
+                    ],
+                    "Google Models": [
+                        "gemini-3-pro-preview",
+                    ],
+                }
 
             # Categorize
             categorized = {}
