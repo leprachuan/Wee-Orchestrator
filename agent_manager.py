@@ -286,6 +286,11 @@ class BackgroundTaskManager:
         with self._lock:
             return [t for t in self._load() if self._identity_matches(t, channel, identity)]
 
+    def list_all_tasks(self) -> list:
+        """Return all tasks regardless of identity/channel."""
+        with self._lock:
+            return list(self._load())
+
     def count_running(self, channel: str, identity: str) -> int:
         return sum(1 for t in self.list_tasks(channel, identity) if t["status"] == "running")
 
@@ -6457,7 +6462,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             x_user_identity=request.headers.get("x-user-identity"),
             x_auth_channel=request.headers.get("x-auth-channel"),
         )
-        tasks = bg_task_mgr.list_tasks(user["channel"], user["identity"])
+        tasks = bg_task_mgr.list_all_tasks()
         # Check if running tasks are still alive
         for t in tasks:
             if t["status"] == "running" and t.get("pid"):
