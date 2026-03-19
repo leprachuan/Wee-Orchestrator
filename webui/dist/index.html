@@ -81,6 +81,10 @@
 
       <button id="btn-new-chat" class="btn btn-primary new-chat-btn">+ New Chat</button>
       <div id="sessions-list" class="sessions-list"></div>
+      <div class="sidebar-toolbar">
+        <button id="btn-settings" class="btn btn-ghost btn-sm sidebar-tool-btn" title="Agent Settings">⚙️ Settings</button>
+        <button id="btn-logs" class="btn btn-ghost btn-sm sidebar-tool-btn" title="Service Logs">📋 Logs</button>
+      </div>
       <div class="sidebar-footer">
         <span id="sidebar-identity" class="sidebar-user"></span>
         <button id="btn-logout" class="btn btn-ghost btn-sm">Logout</button>
@@ -369,6 +373,45 @@
         <span class="mobile-tab-icon">✅</span><span class="mobile-tab-label">TODOs <span id="mobile-todo-badge" class="mobile-tab-badge hidden">0</span></span>
       </button>
     </nav>
+  </div>
+
+  <!-- Settings Modal -->
+  <div id="modal-settings" class="modal-overlay hidden">
+    <div class="modal-box glass-panel">
+      <div class="modal-header">
+        <h3>⚙️ Agent Settings</h3>
+        <button id="btn-settings-close" class="btn btn-ghost btn-sm">✕</button>
+      </div>
+      <div class="modal-body">
+        <textarea id="settings-textarea" class="settings-textarea" spellcheck="false" placeholder="Loading agents.json..."></textarea>
+        <div id="settings-error" class="settings-error hidden"></div>
+      </div>
+      <div class="modal-footer">
+        <button id="btn-settings-save" class="btn btn-primary btn-sm">Save</button>
+        <button id="btn-settings-cancel" class="btn btn-ghost btn-sm">Cancel</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Logs Panel -->
+  <div id="panel-logs" class="logs-panel glass-panel hidden">
+    <div class="logs-header">
+      <span class="logs-title">📋 Service Logs</span>
+      <div class="logs-controls">
+        <select id="logs-service" class="glass-input logs-select">
+          <option value="agent-manager-api-dev">API (dev)</option>
+          <option value="telegram-bot-listener-dev">Telegram (dev)</option>
+          <option value="webex-connector-dev">WebEx (dev)</option>
+          <option value="task-scheduler-executor-dev">Scheduler (dev)</option>
+        </select>
+        <input id="logs-search" class="glass-input logs-search-input" type="text" placeholder="Search..." />
+        <input id="logs-since" class="glass-input logs-date-input" type="datetime-local" title="Since" />
+        <label class="logs-live-label"><input id="logs-live" type="checkbox" /> Live</label>
+        <button id="btn-logs-refresh" class="btn btn-ghost btn-sm">🔄</button>
+        <button id="btn-logs-close" class="btn btn-ghost btn-sm">✕</button>
+      </div>
+    </div>
+    <pre id="logs-output" class="logs-output"></pre>
   </div>
 
   <script src="https://cdn.jsdelivr.net/npm/marked@9/marked.min.js"></script>

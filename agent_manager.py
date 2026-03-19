@@ -7447,6 +7447,161 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             }
         return {"sessions": sessions, "count": len(_canvas_sessions)}
 
+    # --- Settings & Logs API ──────────────────────────────────────────────────
+
+    _agents_json_path = Path(SCRIPT_BASE_DIR) / "agents.json"
+
+    @app.get("/api/v1/agents-config")
+    async def get_agents_config(request: Request):
+        """Return current agents.json content."""
+        auth = await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        try:
+            content = _agents_json_path.read_text()
+            return JSONResponse(content=json.loads(content))
+        except FileNotFoundError:
+            raise HTTPException(status_code=404, detail="agents.json not found")
+        except json.JSONDecodeError as exc:
+            return JSONResponse(
+                status_code=200,
+                content={"_raw": _agents_json_path.read_text(), "_parse_error": str(exc)},
+            )
+
+    @app.put("/api/v1/agents-config")
+    async def put_agents_config(request: Request):
+        """Save updated agents.json after validation."""
+        auth = await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        body = await request.body()
+        try:
+            data = json.loads(body)
+        except json.JSONDecodeError as exc:
+            raise HTTPException(status_code=400, detail=f"Invalid JSON: {exc}")
+        if not isinstance(data, dict) or "agents" not in data:
+            raise HTTPException(status_code=400, detail="Payload must have an 'agents' key")
+        if not isinstance(data["agents"], list):
+            raise HTTPException(status_code=400, detail="'agents' must be an array")
+        for idx, ag in enumerate(data["agents"]):
+            if not isinstance(ag, dict):
+                raise HTTPException(status_code=400, detail=f"agents[{idx}] must be an object")
+            if "name" not in ag or "path" not in ag:
+                raise HTTPException(status_code=400, detail=f"agents[{idx}] requires 'name' and 'path'")
+        # Backup existing file
+        backup = _agents_json_path.with_suffix(".json.bak")
+        if _agents_json_path.exists():
+            shutil.copy2(str(_agents_json_path), str(backup))
+        _agents_json_path.write_text(json.dumps(data, indent=2) + "\n")
+        logger.info("agents.json updated by %s", auth.get("identity", "unknown"))
+        return {"status": "saved", "agent_count": len(data["agents"])}
+
+    @app.get("/api/v1/logs")
+    async def get_logs(
+        request: Request,
+        service: str = Query("agent-manager-api-dev"),
+        lines: int = Query(200, ge=1, le=5000),
+        search: str = Query(""),
+        since: str = Query(""),
+    ):
+        """Fetch recent journalctl logs for a systemd service."""
+        auth = await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        allowed_services = {
+            "agent-manager-api-dev",
+            "telegram-bot-listener-dev",
+            "webex-connector-dev",
+            "task-scheduler-executor-dev",
+        }
+        if service not in allowed_services:
+            raise HTTPException(status_code=400, detail=f"Service not allowed. Choose from: {', '.join(sorted(allowed_services))}")
+        cmd = ["journalctl", "-u", service, "--no-pager", "-n", str(lines), "-o", "short-iso"]
+        if since:
+            cmd += ["--since", since]
+        if search:
+            cmd += ["--grep", search]
+        try:
+            proc = await asyncio.get_event_loop().run_in_executor(
+                None,
+                lambda: subprocess.run(cmd, capture_output=True, text=True, timeout=15),
+            )
+            raw = proc.stdout or ""
+            return {"lines": raw.strip().split("\n") if raw.strip() else [], "service": service}
+        except subprocess.TimeoutExpired:
+            raise HTTPException(status_code=504, detail="journalctl timed out")
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=str(exc))
+
+    @app.get("/api/v1/logs/stream")
+    async def stream_logs(
+        service: str = Query("agent-manager-api-dev"),
+        token: str = Query(""),
+        request: Request = None,
+    ):
+        """SSE endpoint streaming live journalctl -f output."""
+        # Auth via query param for EventSource (can't set headers)
+        if not token:
+            raise HTTPException(status_code=401, detail="Missing token query parameter")
+        if token.startswith("shared_"):
+            if not auth_mgr.validate_shared_key(token):
+                raise HTTPException(status_code=401, detail="Invalid shared key")
+        elif token.startswith("session_"):
+            if not auth_mgr.validate_session_token(token):
+                raise HTTPException(status_code=401, detail="Invalid or expired session token")
+        else:
+            raise HTTPException(status_code=401, detail="Unrecognized token type")
+
+        allowed_services = {
+            "agent-manager-api-dev",
+            "telegram-bot-listener-dev",
+            "webex-connector-dev",
+            "task-scheduler-executor-dev",
+        }
+        if service not in allowed_services:
+            raise HTTPException(status_code=400, detail=f"Service not allowed")
+
+        async def _event_generator():
+            proc = await asyncio.create_subprocess_exec(
+                "journalctl", "-u", service, "-f", "--no-pager", "-o", "short-iso", "-n", "0",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.DEVNULL,
+            )
+            try:
+                while True:
+                    if await request.is_disconnected():
+                        break
+                    try:
+                        line = await asyncio.wait_for(proc.stdout.readline(), timeout=30)
+                        if line:
+                            text = line.decode("utf-8", errors="replace").rstrip()
+                            yield f"data: {json.dumps({'line': text})}\n\n"
+                        else:
+                            break
+                    except asyncio.TimeoutError:
+                        yield f": keepalive\n\n"
+            finally:
+                proc.terminate()
+                try:
+                    await asyncio.wait_for(proc.wait(), timeout=3)
+                except asyncio.TimeoutError:
+                    proc.kill()
+
+        return StreamingResponse(
+            _event_generator(),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
+
     # --- AI Media ─────────────────────────────────────────────────────────────
     _ai_media_dir = Path("/tmp/webui_ai_media")
     _ai_media_dir.mkdir(parents=True, exist_ok=True)
