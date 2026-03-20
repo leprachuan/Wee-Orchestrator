@@ -2919,6 +2919,7 @@ These commands allow you to control the agent's behavior and are processed by th
 - /background list - List your background tasks
 - /background status <task_id> - Check background task status
 - /background kill <task_id> - Kill a running background task
+- /update - Pull latest code from dev branch and restart all dev services (aliases: /upgrade, /pull)
 
 [Skills Discovery & Management]
 You can help users discover and load additional skills for this agent from configured skill repositories.
@@ -4350,6 +4351,10 @@ User Request:
    • /background status <task_id> - Check task status
    • /background kill <task_id> - Kill a running task
 
+**System:**
+   • /update - Pull latest dev code and restart all dev services
+   • /update status - Show last update log
+
 **Auto-Delegation:**
 You can mention an agent in your prompt and it will auto-delegate:
    • ask the family agent for Parkers Christmas ideas
@@ -5023,6 +5028,46 @@ You can mention an agent in your prompt and it will auto-delegate:
                 f"• **Timeout:** `{bg_timeout}s` ({bg_timeout // 60}m)\n"
                 f"• **Prompt:** {bg_prompt[:150]}\n\n"
                 f"Check the ⚡ Tasks tab or use `/background status {task_id}` to monitor."
+            )
+
+        elif command in ("/update", "/upgrade", "/pull"):
+            sub = (argument or "").strip().lower()
+
+            if sub == "status":
+                log_path = "/tmp/wee-update.log"
+                try:
+                    with open(log_path) as f:
+                        tail = f.readlines()[-30:]
+                    return f"📋 **Last update log** (`{log_path}`):\n```\n{''.join(tail)}```"
+                except FileNotFoundError:
+                    return "ℹ️ No update log found. No update has been run yet."
+                except Exception as e:
+                    return f"❌ Error reading update log: {e}"
+
+            if sub == "help":
+                return (
+                    "🔄 **Update Commands**\n\n"
+                    "• `/update` — Pull latest dev code and restart all dev services\n"
+                    "• `/update status` — Show last update log\n"
+                    "• `/update help` — This message\n\n"
+                    "Aliases: `/upgrade`, `/pull`\n\n"
+                    "The update runs fully detached — it survives the service restart.\n"
+                    "You'll get a Telegram notification when it completes."
+                )
+
+            # Launch the detached update process
+            try:
+                from update_launcher import launch_update
+                pid = launch_update()
+            except Exception as e:
+                return f"❌ Failed to launch update: {e}"
+
+            return (
+                f"🔄 **Update started** (PID: `{pid}`)\n\n"
+                f"Pulling latest code and restarting dev services.\n"
+                f"I may go offline briefly — you will receive a Telegram notification when complete.\n\n"
+                f"Log: `/tmp/wee-update.log`\n"
+                f"Check status later: `/update status`"
             )
 
         # --- Execution ---
