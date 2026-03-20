@@ -2180,6 +2180,48 @@ document.addEventListener('DOMContentLoaded', () => {
   });
   document.addEventListener('keydown', e => { if (e.key === 'Escape') hidePillPopover(); });
 
+  // --- Ctrl+C global shortcut: cancel the running request ---
+  document.addEventListener('keydown', async e => {
+    if (!e.ctrlKey || e.key !== 'c') return;
+    // Only intercept when focus is outside any text input/textarea/contenteditable
+    const active = document.activeElement || document.body;
+    const tag = active.tagName;
+    if (tag === 'INPUT' || tag === 'TEXTAREA' || active.isContentEditable) return;
+    if (!STATE.isProcessing || !STATE.currentSessionId) return;
+
+    e.preventDefault();
+
+    // Abort the in-flight streaming fetch
+    if (STATE.currentAbortController) {
+      STATE.currentAbortController.abort();
+      STATE.currentAbortController = null;
+    }
+
+    // Call the dedicated cancel endpoint
+    try {
+      const headers = { 'Content-Type': 'application/json' };
+      if (STATE.token) headers['Authorization'] = `Bearer ${STATE.token}`;
+      const res = await fetch(`${API_BASE}/sessions/${STATE.currentSessionId}/cancel`, {
+        method: 'POST',
+        headers,
+      });
+      const data = await res.json();
+      renderSystemMessage(data.cancelled ? `✓ ${data.message}` : `ℹ️ ${data.message}`);
+    } catch (err) {
+      renderSystemMessage('❌ Failed to cancel: ' + err.message);
+    }
+
+    // Clean up processing state
+    hideTyping();
+    STATE.isProcessing = false;
+    delete STATE.sessionStreams[STATE.currentSessionId];
+    $('btn-send').disabled = false;
+    scrollToBottom();
+
+    // Brief visual feedback
+    schedToast('⌨️ Ctrl+C — request cancelled', 'error');
+  });
+
   // --- Scheduler UI events ---
   $('btn-sched-refresh').addEventListener('click', () => loadSchedulerJobs(true));
   $('btn-sched-new').addEventListener('click', openNewJobForm);
