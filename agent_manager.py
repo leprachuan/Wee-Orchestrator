@@ -1049,6 +1049,11 @@ class SessionManager:
         # Populated by the /stream API endpoint; read by _execute_subprocess_with_tracking.
         self._stream_queues: Dict[str, tuple] = {}
 
+        # Per-session stream buffers for multi-session streaming support.
+        # Buffers all chunks so disconnected clients can reconnect and replay.
+        # session_id -> _StreamBuffer
+        self._stream_buffers: Dict[str, '_StreamBuffer'] = {}
+
         # Last subprocess exit code per n8n_session_id (for debugging/monitoring)
         self._last_exit_codes: Dict[str, int] = {}
 
@@ -2914,6 +2919,7 @@ These commands allow you to control the agent's behavior and are processed by th
 - /background list - List your background tasks
 - /background status <task_id> - Check background task status
 - /background kill <task_id> - Kill a running background task
+- /update - Pull latest code from dev branch and restart all dev services (aliases: /upgrade, /pull)
 
 [Skills Discovery & Management]
 You can help users discover and load additional skills for this agent from configured skill repositories.
@@ -3056,15 +3062,107 @@ User Request:
 
     # ------------------------------------------------------------------ streaming
 
+    class _StreamBuffer:
+        """Thread-safe buffer that stores stream chunks and broadcasts to consumers.
+
+        Supports multiple concurrent SSE consumers per session.  When a client
+        disconnects and reconnects, the reconnect endpoint replays buffered
+        chunks and then subscribes to live updates.
+        """
+
+        def __init__(self):
+            self.chunks: list = []       # [(kind, data), ...]
+            self.finished: bool = False
+            self.done_result: Optional[str] = None
+            self.created_at: float = time.time()
+            self._consumers: list = []   # [(queue, loop, start_index)]
+            self._lock = threading.Lock()
+
+        def push(self, kind, data):
+            """Push a chunk from the subprocess thread.  Appends to buffer and
+            forwards to all registered consumer queues."""
+            with self._lock:
+                idx = len(self.chunks)
+                self.chunks.append((kind, data))
+                if kind == "done":
+                    self.finished = True
+                    self.done_result = data
+                for q, lp, start_idx in self._consumers:
+                    if idx >= start_idx:
+                        try:
+                            lp.call_soon_threadsafe(q.put_nowait, (kind, data))
+                        except Exception:
+                            pass
+
+        def add_consumer(self, queue, loop):
+            """Register a new SSE consumer.  Returns the replay index — the
+            caller should replay ``self.chunks[:replay_index]`` before draining
+            the queue."""
+            with self._lock:
+                replay_index = len(self.chunks)
+                self._consumers.append((queue, loop, replay_index))
+                return replay_index
+
+        def remove_consumer(self, queue):
+            """Remove a consumer queue (e.g. on SSE disconnect)."""
+            with self._lock:
+                self._consumers = [
+                    (q, lp, si) for q, lp, si in self._consumers if q is not queue
+                ]
+
+        def get_replay_chunks(self, up_to: int):
+            """Return a copy of buffered chunks up to *up_to* index."""
+            with self._lock:
+                return list(self.chunks[:up_to])
+
+        def has_consumers(self) -> bool:
+            """True if at least one SSE consumer is connected."""
+            with self._lock:
+                return len(self._consumers) > 0
+
+    def _get_or_create_stream_buffer(self, session_id: str) -> '_StreamBuffer':
+        """Get existing buffer for session or create a new one."""
+        buf = self._stream_buffers.get(session_id)
+        if buf is None:
+            buf = self._StreamBuffer()
+            self._stream_buffers[session_id] = buf
+        return buf
+
     def _register_stream(
         self, session_id: str, queue, loop  # asyncio.Queue, asyncio.AbstractEventLoop
     ) -> None:
         """Register an asyncio queue for the /stream endpoint to receive chunks."""
         self._stream_queues[session_id] = (queue, loop)
+        # Also create/get the stream buffer and add this queue as a consumer
+        buf = self._get_or_create_stream_buffer(session_id)
+        buf.add_consumer(queue, loop)
 
-    def _unregister_stream(self, session_id: str) -> None:
-        """Remove the streaming queue for a session."""
+    def _unregister_stream(self, session_id: str, queue=None) -> None:
+        """Remove the streaming queue for a session.
+
+        If *queue* is provided, only remove that consumer from the buffer
+        (the buffer itself stays alive for reconnection).  The legacy
+        ``_stream_queues`` entry is removed regardless so that new streams
+        can register without conflict.
+        """
         self._stream_queues.pop(session_id, None)
+        buf = self._stream_buffers.get(session_id)
+        if buf and queue is not None:
+            buf.remove_consumer(queue)
+
+    def _cleanup_stream_buffer(self, session_id: str) -> None:
+        """Remove the stream buffer entirely (called after query completes)."""
+        self._stream_buffers.pop(session_id, None)
+
+    def _cleanup_stale_stream_buffers(self, max_age: float = 600.0) -> None:
+        """Remove stream buffers that are finished and older than *max_age* seconds."""
+        now = time.time()
+        stale = [
+            sid for sid, buf in self._stream_buffers.items()
+            if buf.finished and (now - buf.created_at) > max_age
+        ]
+        for sid in stale:
+            self._stream_buffers.pop(sid, None)
 
     # ------------------------------------------------------------------
 
@@ -3096,6 +3194,9 @@ User Request:
         import threading as _threading
 
         stream_info = self._stream_queues.get(n8n_session_id)
+        # Get the stream buffer — pushes go through the buffer which
+        # broadcasts to all connected consumer queues.
+        stream_buffer = self._stream_buffers.get(n8n_session_id)
 
         # Allocate a PTY for stdout when streaming + use_pty are both active.
         # This tricks compiled binaries into line-buffering their output.
@@ -3147,8 +3248,8 @@ User Request:
 
             if stream_info:
                 # ── Streaming path ──────────────────────────────────────────
-                # Read stdout and push each chunk to the async queue so the
-                # SSE generator can forward it immediately.
+                # Read stdout and push each chunk through the stream buffer
+                # which broadcasts to all connected SSE consumers.
                 # stderr is drained in a background thread to avoid blocking.
                 queue, loop = stream_info
                 stderr_buf: list = []
@@ -3195,9 +3296,12 @@ User Request:
                             text = _ansi_escape.sub("", text)
                             stdout_chunks.append(text)
                             if text.strip():
-                                loop.call_soon_threadsafe(
-                                    queue.put_nowait, ("chunk", text)
-                                )
+                                if stream_buffer:
+                                    stream_buffer.push("chunk", text)
+                                else:
+                                    loop.call_soon_threadsafe(
+                                        queue.put_nowait, ("chunk", text)
+                                    )
                     except Exception:
                         pass
                     finally:
@@ -3228,24 +3332,33 @@ User Request:
                                                 # Push newline separator between text blocks
                                                 # (e.g. text before tool call vs text after)
                                                 if _claude_text_block_count > 0:
-                                                    loop.call_soon_threadsafe(
-                                                        queue.put_nowait,
-                                                        ("chunk", {"text": "\n\n"}),
-                                                    )
+                                                    if stream_buffer:
+                                                        stream_buffer.push("chunk", {"text": "\n\n"})
+                                                    else:
+                                                        loop.call_soon_threadsafe(
+                                                            queue.put_nowait,
+                                                            ("chunk", {"text": "\n\n"}),
+                                                        )
                                                 _claude_text_block_count += 1
                                         elif inner_type == "content_block_delta":
                                             delta = event.get("delta") or {}
                                             if delta.get("type") == "text_delta":
                                                 text = delta.get("text", "")
                                                 if text:
-                                                    loop.call_soon_threadsafe(
-                                                        queue.put_nowait,
-                                                        ("chunk", {"text": text}),
-                                                    )
+                                                    if stream_buffer:
+                                                        stream_buffer.push("chunk", {"text": text})
+                                                    else:
+                                                        loop.call_soon_threadsafe(
+                                                            queue.put_nowait,
+                                                            ("chunk", {"text": text}),
+                                                        )
                                 except (ValueError, KeyError, AttributeError):
                                     pass
                             else:
-                                loop.call_soon_threadsafe(queue.put_nowait, ("chunk", line))
+                                if stream_buffer:
+                                    stream_buffer.push("chunk", line)
+                                else:
+                                    loop.call_soon_threadsafe(queue.put_nowait, ("chunk", line))
                     except Exception:
                         pass
                     finally:
@@ -3259,7 +3372,10 @@ User Request:
                 # successful responses that discuss rate-limit topics (false positives).
                 self._last_exit_codes[n8n_session_id] = process.returncode if process.returncode is not None else 0
                 # Signal the SSE generator that the subprocess is finished
-                loop.call_soon_threadsafe(queue.put_nowait, ("done", ""))
+                if stream_buffer:
+                    stream_buffer.push("done", output)
+                else:
+                    loop.call_soon_threadsafe(queue.put_nowait, ("done", ""))
                 return output
 
             else:
@@ -4235,6 +4351,10 @@ User Request:
    • /background status <task_id> - Check task status
    • /background kill <task_id> - Kill a running task
 
+**System:**
+   • /update - Pull latest dev code and restart all dev services
+   • /update status - Show last update log
+
 **Auto-Delegation:**
 You can mention an agent in your prompt and it will auto-delegate:
    • ask the family agent for Parkers Christmas ideas
@@ -4908,6 +5028,46 @@ You can mention an agent in your prompt and it will auto-delegate:
                 f"• **Timeout:** `{bg_timeout}s` ({bg_timeout // 60}m)\n"
                 f"• **Prompt:** {bg_prompt[:150]}\n\n"
                 f"Check the ⚡ Tasks tab or use `/background status {task_id}` to monitor."
+            )
+
+        elif command in ("/update", "/upgrade", "/pull"):
+            sub = (argument or "").strip().lower()
+
+            if sub == "status":
+                log_path = "/tmp/wee-update.log"
+                try:
+                    with open(log_path) as f:
+                        tail = f.readlines()[-30:]
+                    return f"📋 **Last update log** (`{log_path}`):\n```\n{''.join(tail)}```"
+                except FileNotFoundError:
+                    return "ℹ️ No update log found. No update has been run yet."
+                except Exception as e:
+                    return f"❌ Error reading update log: {e}"
+
+            if sub == "help":
+                return (
+                    "🔄 **Update Commands**\n\n"
+                    "• `/update` — Pull latest dev code and restart all dev services\n"
+                    "• `/update status` — Show last update log\n"
+                    "• `/update help` — This message\n\n"
+                    "Aliases: `/upgrade`, `/pull`\n\n"
+                    "The update runs fully detached — it survives the service restart.\n"
+                    "You'll get a Telegram notification when it completes."
+                )
+
+            # Launch the detached update process
+            try:
+                from update_launcher import launch_update
+                pid = launch_update()
+            except Exception as e:
+                return f"❌ Failed to launch update: {e}"
+
+            return (
+                f"🔄 **Update started** (PID: `{pid}`)\n\n"
+                f"Pulling latest code and restarting dev services.\n"
+                f"I may go offline briefly — you will receive a Telegram notification when complete.\n\n"
+                f"Log: `/tmp/wee-update.log`\n"
+                f"Check status later: `/update status`"
             )
 
         # --- Execution ---
@@ -5644,6 +5804,11 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             # Tell the browser to create its streaming bubble right away
             yield f"data: {_json.dumps({'type': 'start'})}\n\n"
 
+            # Track whether we successfully delivered the done event to the
+            # client.  If we didn't (client disconnected), keep the buffer
+            # alive so a reconnecting client can replay it.
+            done_delivered = False
+
             # IMPORTANT: Do NOT use `with ThreadPoolExecutor(...) as pool:` here.
             # Its __exit__ calls shutdown(wait=True) which blocks the asyncio
             # event loop when the client disconnects (e.g. /cancel aborts the
@@ -5711,10 +5876,146 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                     "model": session_data.get("model"),
                 })
                 yield f"data: {done_payload}\n\n"
+                done_delivered = True
             finally:
                 if not is_command:
-                    session_mgr._unregister_stream(session_id)
+                    session_mgr._unregister_stream(session_id, queue=queue)
+                    # Only clean up the buffer if we successfully delivered
+                    # the done event to the client.  If the client disconnected
+                    # mid-stream, keep the buffer so they can reconnect and
+                    # replay the missed output.
+                    if done_delivered:
+                        session_mgr._cleanup_stream_buffer(session_id)
                 pool.shutdown(wait=False)
+
+        return StreamingResponse(
+            generate(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "X-Accel-Buffering": "no",
+                "Connection": "keep-alive",
+            },
+        )
+
+    @app.get("/api/v1/sessions/{session_id}/stream/reconnect")
+    async def reconnect_stream(session_id: str, request: Request):
+        """Reconnect to an active or recently-finished stream for *session_id*.
+
+        Replays all buffered chunks, then continues streaming live output
+        until the query completes.  Returns 200 JSON ``{"active": false}``
+        when there is nothing to reconnect to.
+
+        This enables the WebUI to switch between session tabs without losing
+        stream output — when the user switches back, the frontend calls this
+        endpoint to catch up on missed chunks and resume live streaming.
+        """
+        import json as _json
+
+        user = await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+
+        # Opportunistically clean up stale buffers
+        session_mgr._cleanup_stale_stream_buffers()
+
+        buf = session_mgr._stream_buffers.get(session_id)
+        query_info = session_mgr.get_running_query(session_id)
+
+        # Nothing to reconnect to
+        if not buf and not query_info:
+            return {"active": False, "message": "No active stream for this session"}
+
+        # If there's a query running but no buffer (e.g. non-streaming command),
+        # just report it as active so the UI can show a spinner
+        if not buf:
+            return {"active": True, "streaming": False, "message": "Query running (non-streaming)"}
+
+        loop = asyncio.get_event_loop()
+        queue: asyncio.Queue = asyncio.Queue()
+
+        async def generate():
+            # Register as consumer FIRST so we don't miss chunks
+            replay_index = buf.add_consumer(queue, loop)
+            # Also register in _stream_queues so new connections are tracked
+            session_mgr._stream_queues[session_id] = (queue, loop)
+
+            try:
+                yield f"data: {_json.dumps({'type': 'reconnect', 'buffered_chunks': replay_index})}\n\n"
+
+                # Replay buffered chunks up to the registration point
+                replay_chunks = buf.get_replay_chunks(replay_index)
+                for kind, data in replay_chunks:
+                    if kind == "chunk":
+                        if isinstance(data, dict):
+                            yield f"data: {_json.dumps({'type': 'chunk', **data})}\n\n"
+                        else:
+                            yield f"data: {_json.dumps({'type': 'chunk', 'text': data})}\n\n"
+                    elif kind == "done":
+                        # Query already finished — send done event with stored result
+                        session_data = session_mgr.get_or_create_session_data(session_id)
+                        runtime = session_data.get("runtime", "copilot")
+                        done_payload = _json.dumps({
+                            "type": "done",
+                            "response": data if isinstance(data, str) else str(data),
+                            "runtime": runtime,
+                            "model": session_data.get("model"),
+                        })
+                        yield f"data: {done_payload}\n\n"
+                        return
+
+                # If buffer is already finished after replay, send done
+                if buf.finished:
+                    session_data = session_mgr.get_or_create_session_data(session_id)
+                    runtime = session_data.get("runtime", "copilot")
+                    result = buf.done_result if isinstance(buf.done_result, str) else ""
+                    done_payload = _json.dumps({
+                        "type": "done",
+                        "response": result,
+                        "runtime": runtime,
+                        "model": session_data.get("model"),
+                    })
+                    yield f"data: {done_payload}\n\n"
+                    return
+
+                # Drain live chunks from the queue
+                while True:
+                    try:
+                        kind, data = await asyncio.wait_for(queue.get(), timeout=1.0)
+                    except asyncio.TimeoutError:
+                        yield ": keepalive\n\n"
+                        if buf.finished:
+                            break
+                        continue
+
+                    if kind == "chunk":
+                        if isinstance(data, dict):
+                            yield f"data: {_json.dumps({'type': 'chunk', **data})}\n\n"
+                        else:
+                            yield f"data: {_json.dumps({'type': 'chunk', 'text': data})}\n\n"
+                    elif kind == "done":
+                        break
+
+                # Send final done event
+                session_data = session_mgr.get_or_create_session_data(session_id)
+                runtime = session_data.get("runtime", "copilot")
+                result = buf.done_result if isinstance(buf.done_result, str) else ""
+                done_payload = _json.dumps({
+                    "type": "done",
+                    "response": result,
+                    "runtime": runtime,
+                    "model": session_data.get("model"),
+                })
+                yield f"data: {done_payload}\n\n"
+            finally:
+                buf.remove_consumer(queue)
+                session_mgr._stream_queues.pop(session_id, None)
+                # Clean up buffer only if done AND no other consumers remain
+                if buf.finished and not buf.has_consumers():
+                    session_mgr._cleanup_stream_buffer(session_id)
 
         return StreamingResponse(
             generate(),
@@ -5754,6 +6055,17 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             "model": data.get("model"),
             "yolo_mode": data.get("yolo_mode", "restricted"),
         }
+
+        # Include running query info so the frontend can reconnect streams
+        query_info = session_mgr.get_running_query(session_id)
+        has_buffer = session_id in session_mgr._stream_buffers
+        if query_info:
+            result["running_query"] = True
+            result["has_stream_buffer"] = has_buffer
+        else:
+            result["running_query"] = False
+            result["has_stream_buffer"] = has_buffer
+
         return result
 
     @app.post("/api/v1/sessions/{session_id}/cancel")
@@ -5783,6 +6095,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         runtime = query_info.get("runtime", "unknown")
         if session_mgr.kill_process(pid):
             session_mgr.clear_running_query(session_id)
+            session_mgr._cleanup_stream_buffer(session_id)
             return {"cancelled": True, "message": f"Cancelled running query (PID: {pid}, Runtime: {runtime})"}
         else:
             return {"cancelled": False, "message": f"Failed to cancel query (PID: {pid})"}

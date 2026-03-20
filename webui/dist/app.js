@@ -30,6 +30,8 @@ const STATE = {
   fileViewerRaw:   false,          // true = raw view, false = preview
   fileViewerPath:  null,           // currently viewed file path
   fileViewerData:  null,           // cached file data
+  // Per-session stream tracking for multi-session streaming support
+  sessionStreams:  {},             // sessionId -> { isProcessing, abortController, query }
 };
 
 // ─── Persist ──────────────────────────────────────────────────────────────────
@@ -221,6 +223,20 @@ async function fetchAndUpdateMeta(sessionId) {
   try {
     const data = await apiRequest('GET', `/sessions/${sessionId}/status`);
     updateSessionMeta(data);
+
+    // If the server has a stream buffer for this session (running or recently
+    // finished) and we aren't already processing or reconnecting, reconnect
+    // to replay any missed output and resume live streaming.
+    if (data.has_stream_buffer
+        && sessionId === STATE.currentSessionId
+        && !STATE.isProcessing
+        && !(STATE.sessionStreams[sessionId] && STATE.sessionStreams[sessionId].reconnectAttempted)) {
+      STATE.sessionStreams[sessionId] = {
+        ...(STATE.sessionStreams[sessionId] || {}),
+        reconnectAttempted: true,
+      };
+      reconnectToStream(sessionId);
+    }
   } catch (_) { /* non-fatal */ }
 }
 
@@ -678,6 +694,24 @@ function startInlineRename(item, sessionId, currentTitle) {
 }
 
 async function selectSession(sessionId) {
+  const previousSessionId = STATE.activeSessionId;
+
+  // If switching away from a session with an active stream, abort the fetch
+  // but mark it as still processing so we can reconnect later.
+  if (previousSessionId && previousSessionId !== sessionId) {
+    if (STATE.currentAbortController) {
+      STATE.currentAbortController.abort();
+      STATE.currentAbortController = null;
+    }
+    // Save processing state for the departing session
+    if (STATE.isProcessing) {
+      STATE.sessionStreams[previousSessionId] = {
+        ...(STATE.sessionStreams[previousSessionId] || {}),
+        isProcessing: true,
+      };
+    }
+  }
+
   STATE.activeSessionId  = sessionId;
   STATE.currentSessionId = sessionId;
   $('header-session-id').textContent = sessionId;
@@ -687,6 +721,11 @@ async function selectSession(sessionId) {
   );
 
   clearMessages();
+
+  // Reset global processing state — will be set true if we reconnect
+  STATE.isProcessing = false;
+  hideTyping();
+
   try {
     const data = await apiRequest('GET', `/history/sessions/${sessionId}/messages?limit=100`);
     const msgs = data.messages || [];
@@ -1288,6 +1327,7 @@ async function sendMessage() {
       // Clean up processing state
       hideTyping();
       STATE.isProcessing = false;
+      delete STATE.sessionStreams[STATE.currentSessionId];
       $('btn-send').disabled = false;
       scrollToBottom();
       return;
@@ -1331,11 +1371,13 @@ async function sendMessage() {
   hideCommandDropdown();
 
   STATE.isProcessing = true;
+  STATE.sessionStreams[STATE.currentSessionId] = { isProcessing: true, query };
   showTyping();
   try {
     const result = await sendMessageStreaming(query, STATE.currentSessionId);
     hideTyping();
     STATE.isProcessing = false;
+    delete STATE.sessionStreams[STATE.currentSessionId];
 
     // Mark current queue item as completed
     markCurrentQueueAsCompleted();
@@ -1351,6 +1393,7 @@ async function sendMessage() {
   } catch (err) {
     hideTyping();
     STATE.isProcessing = false;
+    delete STATE.sessionStreams[STATE.currentSessionId];
 
     // If aborted by /cancel, don't show an error — the cancel handler already reported
     if (err.name === 'AbortError') {
@@ -1471,6 +1514,157 @@ async function sendMessageStreaming(query, sessionId) {
     STATE.currentAbortController = null;
   }
   return null;
+}
+
+/**
+ * Reconnect to an active stream for a session.
+ * Called when the user switches back to a session that had a running query.
+ * Replays buffered chunks and continues streaming live output.
+ */
+async function reconnectToStream(sessionId) {
+  STATE.isProcessing = true;
+  showTyping();
+
+  const headers = {};
+  if (STATE.token) headers['Authorization'] = `Bearer ${STATE.token}`;
+
+  const abortController = new AbortController();
+  STATE.currentAbortController = abortController;
+
+  try {
+    const res = await fetch(`${API_BASE}/sessions/${sessionId}/stream/reconnect`, {
+      method: 'GET',
+      headers,
+      signal: abortController.signal,
+    });
+
+    // Non-streaming JSON response means nothing to reconnect to
+    const contentType = res.headers.get('content-type') || '';
+    if (contentType.includes('application/json')) {
+      const data = await res.json();
+      if (!data.active && !data.has_stream_buffer) {
+        // Query must have finished while we were away — clean up
+        STATE.isProcessing = false;
+        hideTyping();
+        delete STATE.sessionStreams[sessionId];
+        return;
+      }
+    }
+
+    if (!res.ok || !contentType.includes('text/event-stream')) {
+      STATE.isProcessing = false;
+      hideTyping();
+      delete STATE.sessionStreams[sessionId];
+      return;
+    }
+
+    const reader  = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer    = '';
+    let streamRow    = null;
+    let streamBubble = null;
+    let rawText      = '';
+
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        // Verify we're still on the same session
+        if (STATE.currentSessionId !== sessionId) {
+          abortController.abort();
+          break;
+        }
+
+        buffer += decoder.decode(value, { stream: true });
+        const frames = buffer.split('\n\n');
+        buffer = frames.pop();
+
+        for (const frame of frames) {
+          for (const line of frame.split('\n')) {
+            if (!line.startsWith('data: ')) continue;
+            const payload = line.slice(6).trim();
+            if (!payload) continue;
+
+            let evt;
+            try { evt = JSON.parse(payload); } catch { continue; }
+
+            if (evt.type === 'reconnect') {
+              // Create streaming bubble for reconnected stream
+              hideTyping();
+              ({ row: streamRow, bubble: streamBubble } = createStreamingBubble());
+
+            } else if (evt.type === 'chunk' && streamBubble) {
+              rawText += evt.text;
+              streamBubble.classList.add('streaming');
+              let formatted = rawText
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/\n\n+/g, '</p><p>')
+                .replace(/\n/g, '<br>');
+              streamBubble.innerHTML = formatted ? `<p>${formatted}</p>` : '';
+              scrollToBottom();
+
+            } else if (evt.type === 'done') {
+              const finalContent = rawText.trim()
+                ? rawText
+                : (evt.response || '(no response)');
+              if (streamBubble) {
+                streamBubble.classList.remove('streaming');
+                applyMarkdownToBubble(streamBubble, finalContent);
+                scrollToBottom();
+              } else {
+                await renderMessage('assistant', finalContent, []);
+              }
+              STATE.isProcessing = false;
+              hideTyping();
+              delete STATE.sessionStreams[sessionId];
+              await fetchAndUpdateMeta(sessionId);
+              await loadSessions();
+
+              // Auto-submit next queued request if any
+              if (STATE.requestQueue.length > 0 && !STATE.queuePaused) {
+                processNextQueue();
+              }
+              return;
+
+            } else if (evt.type === 'error') {
+              if (streamBubble) streamBubble.remove();
+              if (streamRow)    streamRow.remove();
+              STATE.isProcessing = false;
+              hideTyping();
+              delete STATE.sessionStreams[sessionId];
+              renderSystemMessage('Stream error: ' + (evt.message || 'Unknown error'));
+              return;
+            }
+          }
+        }
+      }
+    } finally {
+      reader.releaseLock();
+      STATE.currentAbortController = null;
+    }
+
+    // Stream ended without done event — clean up
+    STATE.isProcessing = false;
+    hideTyping();
+    delete STATE.sessionStreams[sessionId];
+
+  } catch (err) {
+    STATE.currentAbortController = null;
+    if (err.name === 'AbortError') {
+      // Aborted by session switch or cancel — don't show error
+      const streamingBubble = document.querySelector('.streaming');
+      if (streamingBubble) {
+        streamingBubble.classList.remove('streaming');
+      }
+    } else {
+      STATE.isProcessing = false;
+      hideTyping();
+      delete STATE.sessionStreams[sessionId];
+      renderSystemMessage('Reconnect failed: ' + err.message);
+    }
+  }
 }
 
 /** Inject markdown+highlight into an existing bubble element. */
@@ -1985,6 +2179,48 @@ document.addEventListener('DOMContentLoaded', () => {
     if (_pillPopover && !_pillPopover.contains(e.target)) hidePillPopover();
   });
   document.addEventListener('keydown', e => { if (e.key === 'Escape') hidePillPopover(); });
+
+  // --- Ctrl+C global shortcut: cancel the running request ---
+  document.addEventListener('keydown', async e => {
+    if (!e.ctrlKey || e.key !== 'c') return;
+    // Only intercept when focus is outside any text input/textarea/contenteditable
+    const active = document.activeElement || document.body;
+    const tag = active.tagName;
+    if (tag === 'INPUT' || tag === 'TEXTAREA' || active.isContentEditable) return;
+    if (!STATE.isProcessing || !STATE.currentSessionId) return;
+
+    e.preventDefault();
+
+    // Abort the in-flight streaming fetch
+    if (STATE.currentAbortController) {
+      STATE.currentAbortController.abort();
+      STATE.currentAbortController = null;
+    }
+
+    // Call the dedicated cancel endpoint
+    try {
+      const headers = { 'Content-Type': 'application/json' };
+      if (STATE.token) headers['Authorization'] = `Bearer ${STATE.token}`;
+      const res = await fetch(`${API_BASE}/sessions/${STATE.currentSessionId}/cancel`, {
+        method: 'POST',
+        headers,
+      });
+      const data = await res.json();
+      renderSystemMessage(data.cancelled ? `✓ ${data.message}` : `ℹ️ ${data.message}`);
+    } catch (err) {
+      renderSystemMessage('❌ Failed to cancel: ' + err.message);
+    }
+
+    // Clean up processing state
+    hideTyping();
+    STATE.isProcessing = false;
+    delete STATE.sessionStreams[STATE.currentSessionId];
+    $('btn-send').disabled = false;
+    scrollToBottom();
+
+    // Brief visual feedback
+    schedToast('⌨️ Ctrl+C — request cancelled', 'error');
+  });
 
   // --- Scheduler UI events ---
   $('btn-sched-refresh').addEventListener('click', () => loadSchedulerJobs(true));
