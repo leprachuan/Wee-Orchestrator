@@ -1416,6 +1416,42 @@ async function sendMessage() {
   }
 }
 
+
+/**
+ * Refresh inline spinning gear tool icons at the bottom of a streaming bubble.
+ * toolsMap: { key: toolName } — one entry per active tool call.
+ */
+function refreshInlineToolIcons(bubble, toolsMap) {
+  if (!bubble) return;
+  let cont = bubble.querySelector('.stream-inline-tools');
+  const entries = Object.entries(toolsMap);
+  if (!entries.length) {
+    if (cont) cont.remove();
+    return;
+  }
+  const html = entries.map(([, name]) =>
+    '<span class="tool-inline-icon"><span class="tool-gear">\u2699\ufe0f</span> <span class="tool-name">' + escHtml(name) + '</span>\u2026</span>'
+  ).join('');
+  if (cont) {
+    cont.innerHTML = html;
+  } else {
+    bubble.insertAdjacentHTML('beforeend', '<span class="stream-inline-tools">' + html + '</span>');
+  }
+}
+
+/**
+ * Detect whether a raw output line looks like a tool call invocation.
+ * Used to add gear markers when rendering background task logs.
+ */
+function detectToolCallLine(line) {
+  const s = line.trimStart();
+  if (/^[●⬤•]\s+/.test(s)) return true;
+  if (/^\$\s+\S/.test(s)) return true;
+  if (/^\|\s+(Read|Write|Glob|Bash|Edit|grep|find|Fetch)\b/i.test(s)) return true;
+  if (/^\[tool\]\s*/i.test(s)) return true;
+  return false;
+}
+
 /**
  * Send a message using the SSE /stream endpoint and update the UI live.
  * Returns the `done` event payload {response, runtime, model} on success.
@@ -1446,6 +1482,7 @@ async function sendMessageStreaming(query, sessionId) {
   let streamRow    = null;
   let streamBubble = null;
   let rawText      = '';
+  let activeStreamTools = {};
 
   try {
     while (true) {
@@ -1484,24 +1521,26 @@ async function sendMessageStreaming(query, sessionId) {
               .replace(/\n\n+/g, '</p><p>')  // paragraph breaks
               .replace(/\n/g, '<br>');      // line breaks
             streamBubble.innerHTML = formatted ? `<p>${formatted}</p>` : '';
+            refreshInlineToolIcons(streamBubble, activeStreamTools);
             scrollToBottom();
 
           } else if (evt.type === 'tool_call') {
-            // Tool call event from streaming — show inline indicator
+            // Tool call — inject inline gear icon at current bubble position
             if (streamBubble) {
-              let indicator = streamBubble.querySelector('.stream-tool-indicator');
-              if (!indicator) {
-                indicator = document.createElement('div');
-                indicator.className = 'stream-tool-indicator';
-                streamBubble.parentNode.insertBefore(indicator, streamBubble);
-              }
               const evtKind = evt.event || 'detected';
-              const toolName = escHtml(evt.name || 'tool');
+              const toolName = evt.name || 'tool';
+              const key = evt.id || toolName;
               if (evtKind === 'start' || evtKind === 'detected' || evtKind === 'input_complete') {
-                indicator.innerHTML = `<span class="tool-indicator-dot"></span> Using <strong>${toolName}</strong>…`;
-                indicator.style.display = '';
+                activeStreamTools[key] = toolName;
+                refreshInlineToolIcons(streamBubble, activeStreamTools);
               } else if (evtKind === 'result') {
-                indicator.style.display = 'none';
+                delete activeStreamTools[key];
+                const cont = streamBubble.querySelector('.stream-inline-tools');
+                if (cont) {
+                  cont.style.transition = 'opacity 0.3s';
+                  cont.style.opacity = '0';
+                  setTimeout(() => refreshInlineToolIcons(streamBubble, activeStreamTools), 320);
+                }
               }
             }
 
@@ -1584,6 +1623,7 @@ async function reconnectToStream(sessionId) {
     let streamRow    = null;
     let streamBubble = null;
     let rawText      = '';
+    let activeStreamTools = {};
 
     try {
       while (true) {
@@ -1623,24 +1663,26 @@ async function reconnectToStream(sessionId) {
                 .replace(/\n\n+/g, '</p><p>')
                 .replace(/\n/g, '<br>');
               streamBubble.innerHTML = formatted ? `<p>${formatted}</p>` : '';
+              refreshInlineToolIcons(streamBubble, activeStreamTools);
               scrollToBottom();
 
             } else if (evt.type === 'tool_call') {
-              // Tool call event from reconnected stream
+              // Tool call — inject inline gear icon at current bubble position
               if (streamBubble) {
-                let indicator = streamBubble.querySelector('.stream-tool-indicator');
-                if (!indicator) {
-                  indicator = document.createElement('div');
-                  indicator.className = 'stream-tool-indicator';
-                  streamBubble.parentNode.insertBefore(indicator, streamBubble);
-                }
                 const evtKind = evt.event || 'detected';
-                const toolName = escHtml(evt.name || 'tool');
+                const toolName = evt.name || 'tool';
+                const key = evt.id || toolName;
                 if (evtKind === 'start' || evtKind === 'detected' || evtKind === 'input_complete') {
-                  indicator.innerHTML = `<span class="tool-indicator-dot"></span> Using <strong>${toolName}</strong>…`;
-                  indicator.style.display = '';
+                  activeStreamTools[key] = toolName;
+                  refreshInlineToolIcons(streamBubble, activeStreamTools);
                 } else if (evtKind === 'result') {
-                  indicator.style.display = 'none';
+                  delete activeStreamTools[key];
+                  const cont = streamBubble.querySelector('.stream-inline-tools');
+                  if (cont) {
+                    cont.style.transition = 'opacity 0.3s';
+                    cont.style.opacity = '0';
+                    setTimeout(() => refreshInlineToolIcons(streamBubble, activeStreamTools), 320);
+                  }
                 }
               }
 
@@ -3341,8 +3383,15 @@ async function loadBgTaskLogs(taskId, status) {
       }
 
       const wasAtBottom = panel.scrollHeight - panel.scrollTop - panel.clientHeight < 40;
-      const content = lines.join('\n');
-      panel.innerHTML = `<pre class="bg-transcript-pre">${escHtml(content)}${error ? `\n\n[error] ${error}` : ''}</pre>`;
+      const isRunning = (BG.tasks.find(x => x.task_id === taskId)?.status || status) === 'running';
+      const renderedLines = lines.map((line, i) => {
+        const esc = escHtml(line);
+        if (!detectToolCallLine(line)) return esc;
+        const isLastLine = i === lines.length - 1 && isRunning;
+        const gearCls = isLastLine ? 'tool-gear bg-tool-spinning' : 'tool-gear';
+        return '<span class="bg-tool-line"><span class="' + gearCls + '">⚙️</span> ' + esc + '</span>';
+      }).join('\n');
+      panel.innerHTML = `<pre class="bg-transcript-pre">${renderedLines}${error ? `\n\n[error] ${error}` : ''}</pre>`;
       if (wasAtBottom || status === 'running') {
         panel.scrollTop = panel.scrollHeight;
       }

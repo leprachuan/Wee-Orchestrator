@@ -5378,38 +5378,57 @@ html, body {
 }
 
 /* Streaming tool indicator (inline in chat) */
-.stream-tool-indicator {
-  display: flex;
+/* Inline tool call spinning gear icons */
+@keyframes toolSpin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+/* Container appended at end of streaming bubble */
+.stream-inline-tools {
+  display: inline-block;
+  margin-left: 2px;
+}
+
+/* Each active tool call */
+.tool-inline-icon {
+  display: inline-flex;
   align-items: center;
-  gap: 6px;
-  padding: 4px 10px;
+  gap: 3px;
   font-size: 12px;
   color: var(--text-muted, #6b7280);
-  background: rgba(255, 170, 51, 0.06);
-  border-radius: 6px;
-  margin-bottom: 4px;
-  border: 1px solid rgba(255, 170, 51, 0.15);
+  opacity: 1;
+  margin-right: 4px;
+  vertical-align: middle;
 }
 
-.stream-tool-indicator strong {
-  color: var(--accent, #3ecf8e);
-  font-family: var(--font-mono);
+.tool-inline-icon .tool-name {
+  font-family: var(--font-mono, monospace);
   font-size: 11px;
+  color: var(--accent, #3ecf8e);
 }
 
-.tool-indicator-dot {
+/* Spinning gear element */
+.tool-gear {
   display: inline-block;
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: #ffaa33;
-  animation: tool-dot-pulse 1.2s ease-in-out infinite;
+  animation: toolSpin 2s linear infinite;
+  line-height: 1;
 }
 
-@keyframes tool-dot-pulse {
-  0%, 100% { opacity: 1; transform: scale(1); }
-  50% { opacity: 0.4; transform: scale(0.8); }
+/* Background task log: tool call line marker */
+.bg-tool-line {
+  display: block;
 }
+
+/* Spinning gear on last tool call line in running bg tasks */
+.bg-tool-spinning {
+  display: inline-block;
+  animation: toolSpin 2s linear infinite;
+}
+
+/* Legacy: keep for any remaining references */
+.stream-tool-indicator { display: none; }
+.tool-indicator-dot { display: none; }
 
 /* Cron preview for schedule validation */
 .sched-cron-preview {
