@@ -1437,20 +1437,18 @@ function getToolInputSummary(toolName, input) {
 /**
  * Insert an interleaved tool-call block row into the messages container.
  */
-function insertToolCallBlock(toolId, toolName, inputSummary) {
-  const messagesEl = $('messages');
-  if (!messagesEl) return;
-  const row = document.createElement('div');
-  row.className = 'msg-row tool-call-row';
-  row.id = 'tc-' + toolId;
-  row.innerHTML = '<div class="tool-call-block">' +
+function insertToolCallBlock(streamBubble, toolId, toolName, inputSummary) {
+  if (!streamBubble) return;
+  const line = document.createElement('div');
+  line.className = 'tc-line';
+  line.id = 'tc-' + toolId;
+  line.innerHTML =
     '<span class="tc-spinner spinning">⚙️</span>' +
     '<span class="tc-name">' + escHtml(toolName) + '</span>' +
-    (inputSummary ? '<span class="tc-input">' + escHtml(inputSummary) + '</span>' : '') +
-    '<span class="tc-status running">running…</span>' +
-    '</div>';
-  messagesEl.appendChild(row);
-  row.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    (inputSummary ? '<code class="tc-input">' + escHtml(inputSummary) + '</code>' : '') +
+    '<span class="tc-status running">running…</span>';
+  streamBubble.appendChild(line);
+  line.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 }
 
 /**
@@ -1580,7 +1578,7 @@ async function sendMessageStreaming(query, sessionId) {
             if (evtKind === 'input_complete' || evtKind === 'start') {
               if (!activeStreamTools[key]) {
                 activeStreamTools[key] = toolName;
-                insertToolCallBlock(key, toolName, getToolInputSummary(toolName, evt.input));
+                insertToolCallBlock(streamBubble, key, toolName, getToolInputSummary(toolName, evt.input));
               } else if (evtKind === 'input_complete' && evt.input) {
                 // Update input summary if we get it later
                 const row = document.getElementById('tc-' + key);
@@ -1600,7 +1598,7 @@ async function sendMessageStreaming(query, sessionId) {
               }
             } else if (evtKind === 'detected' && !activeStreamTools[key]) {
               activeStreamTools[key] = toolName;
-              insertToolCallBlock(key, toolName, getToolInputSummary(toolName, evt.input));
+              insertToolCallBlock(streamBubble, key, toolName, getToolInputSummary(toolName, evt.input));
             } else if (evtKind === 'result') {
               delete activeStreamTools[key];
               completeToolCallBlock(key);
@@ -1737,7 +1735,7 @@ async function reconnectToStream(sessionId) {
               if (evtKind === 'input_complete' || evtKind === 'start') {
                 if (!activeStreamTools[key]) {
                   activeStreamTools[key] = toolName;
-                  insertToolCallBlock(key, toolName, getToolInputSummary(toolName, evt.input));
+                  insertToolCallBlock(streamBubble, key, toolName, getToolInputSummary(toolName, evt.input));
                 } else if (evtKind === 'input_complete' && evt.input) {
                   const row = document.getElementById('tc-' + key);
                   if (row) {
@@ -1756,7 +1754,7 @@ async function reconnectToStream(sessionId) {
                 }
               } else if (evtKind === 'detected' && !activeStreamTools[key]) {
                 activeStreamTools[key] = toolName;
-                insertToolCallBlock(key, toolName, getToolInputSummary(toolName, evt.input));
+                insertToolCallBlock(streamBubble, key, toolName, getToolInputSummary(toolName, evt.input));
               } else if (evtKind === 'result') {
                 delete activeStreamTools[key];
                 completeToolCallBlock(key);

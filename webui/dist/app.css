@@ -5497,53 +5497,55 @@ html, body {
 .tool-inline-icon .tool-name { display: none; }
 .tool-gear { display: none; }
 
-/* ─── Interleaved tool call rows ─── */
-.tool-call-row {
-  display: flex;
-  justify-content: flex-start;
-  padding: 2px 16px;
-  margin: 2px 0;
+/* ─── Tool calls rendered inside the streaming bubble ─── */
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
 }
-.tool-call-block {
+.tc-line {
   display: flex;
   align-items: center;
-  gap: 7px;
-  background: rgba(255,255,255,0.04);
-  border: 1px solid rgba(255,255,255,0.08);
-  border-radius: 8px;
-  padding: 5px 12px;
+  gap: 6px;
+  margin: 4px 0;
   font-size: 12px;
   color: var(--text-muted, #6b7280);
-  max-width: 80%;
+  padding: 2px 0;
 }
 .tc-spinner {
-  font-size: 13px;
+  font-size: 12px;
   display: inline-block;
+  flex-shrink: 0;
 }
 .tc-spinner.spinning {
-  animation: toolSpin 1.2s linear infinite;
+  animation: spin 1.2s linear infinite;
 }
 .tc-name {
   font-weight: 600;
   color: var(--text-secondary, #d1d5db);
   font-size: 12px;
+  flex-shrink: 0;
 }
 .tc-input {
   font-family: var(--font-mono, monospace);
   font-size: 11px;
   color: var(--text-muted, #6b7280);
+  background: rgba(255,255,255,0.06);
+  padding: 1px 5px;
+  border-radius: 3px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  max-width: 400px;
+  max-width: 350px;
+  display: inline-block;
 }
 .tc-status {
   font-size: 11px;
-  margin-left: 4px;
-  white-space: nowrap;
+  flex-shrink: 0;
 }
 .tc-status.running { color: #f5c542; }
 .tc-status.done { color: #3ecf8e; }
+/* Hide old standalone row */
+.tool-call-row { display: none; }
 
 /* Background task log: tool call line marker */
 .bg-tool-line {
