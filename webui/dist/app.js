@@ -2310,7 +2310,6 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // --- Background Tasks UI events ---
   $('btn-bg-refresh').addEventListener('click', () => loadBackgroundTasks(true));
-  $('btn-bg-detail-close').addEventListener('click', closeBgDetail);
 
   // --- Bootstrap ---
   // Fetch feature flags first (no auth needed) then decide what to show
@@ -3213,9 +3212,6 @@ window.selectBgTask = function(taskId) {
 async function loadBgTaskDetail(taskId) {
   const detail = $('bg-detail');
   const body = $('bg-detail-body');
-  const closeBtn = $('btn-bg-detail-close');
-  if (closeBtn) closeBtn.style.display = '';
-  $('bg-detail-title').textContent = `Task: ${taskId}`;
 
   // Clear any previous logs poller
   if (BG.logsPoller) {
@@ -3287,6 +3283,10 @@ async function loadBgTaskDetail(taskId) {
           </div>
           <div id="bg-tab-details" class="bg-tab-pane">
             <div class="bg-detail-meta">
+              <div class="bg-detail-meta-row">
+                <span class="bg-detail-meta-label">Task ID</span>
+                <span class="bg-detail-meta-value" style="font-family:var(--font-mono);font-size:11px">${escHtml(taskId)}</span>
+              </div>
               <div class="bg-detail-meta-row">
                 <span class="bg-detail-meta-label">Status</span>
                 <span class="bg-card-status ${statusClass}">${icon} ${statusLabel}</span>
@@ -3610,10 +3610,7 @@ function closeBgDetail() {
     clearInterval(BG.toolsPoller);
     BG.toolsPoller = null;
   }
-  $('bg-detail-title').textContent = 'Task Details';
   $('bg-detail-body').innerHTML = '<p class="bg-detail-empty">Select a task from the sidebar to view details</p>';
-  const closeBtn = $('btn-bg-detail-close');
-  if (closeBtn) closeBtn.style.display = 'none';
   BG.selectedTaskId = null;
   BG.activeDetailTab = null;
   renderBgTasks();
