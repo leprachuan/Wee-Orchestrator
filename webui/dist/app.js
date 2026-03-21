@@ -2948,6 +2948,7 @@ const BG = {
   isLoading: false,
   pollInterval: null,
   logsPoller: null,
+  activeDetailTab: null,
 };
 
 function startBgTaskPolling() {
@@ -2961,11 +2962,21 @@ function startBgTaskPolling() {
       // If background panel is visible, refresh the list
       if (!$('background-panel').classList.contains('hidden')) {
         renderBgTasks();
-        // If we have a selected running task, refresh its detail
+        // If we have a selected task, do lightweight updates without destroying tab state
         if (BG.selectedTaskId) {
           const t = BG.tasks.find(x => x.task_id === BG.selectedTaskId);
-          if (t && (t.status === 'running' || t.status === 'queued')) {
-            loadBgTaskDetail(BG.selectedTaskId);
+          if (t) {
+            if (t.status !== 'running' && t.status !== 'queued') {
+              // Task finished — do a full re-render now (once)
+              loadBgTaskDetail(BG.selectedTaskId);
+            } else {
+              // Still running — just tick the elapsed timer; BG.logsPoller handles log updates
+              const elapsedEl = document.querySelector('.bg-elapsed-live');
+              if (elapsedEl) {
+                const start = elapsedEl.dataset.start;
+                if (start) elapsedEl.textContent = `Elapsed: ${formatElapsed(start)}`;
+              }
+            }
           }
         }
       }
@@ -3069,6 +3080,7 @@ function formatElapsed(isoDate) {
 // Make selectBgTask global so onclick works
 window.selectBgTask = function(taskId) {
   BG.selectedTaskId = taskId;
+  BG.activeDetailTab = null;  // reset tab choice for new task
   renderBgTasks();
   loadBgTaskDetail(taskId);
 };
@@ -3187,14 +3199,16 @@ async function loadBgTaskDetail(taskId) {
         body.querySelectorAll('.bg-tab-pane').forEach(p => hide(p));
         const pane = $(`bg-tab-${tab.dataset.tab}`);
         show(pane);
+        BG.activeDetailTab = tab.dataset.tab;
         if (tab.dataset.tab === 'logs') loadBgTaskLogs(taskId, t.status);
       });
     });
 
-    // Auto-open logs tab for running tasks
-    if (t.status === 'running') {
-      const logsTab = body.querySelector('.bg-tab[data-tab="logs"]');
-      if (logsTab) logsTab.click();
+    // Restore previously active tab, or auto-open logs for running tasks on first open
+    const tabToOpen = BG.activeDetailTab || (t.status === 'running' ? 'logs' : null);
+    if (tabToOpen) {
+      const targetTab = body.querySelector(`.bg-tab[data-tab="${tabToOpen}"]`);
+      if (targetTab) targetTab.click();
     }
 
   } catch (err) {
@@ -3277,6 +3291,7 @@ function closeBgDetail() {
   }
   hide($('bg-detail'));
   BG.selectedTaskId = null;
+  BG.activeDetailTab = null;
   renderBgTasks();
 }
 
