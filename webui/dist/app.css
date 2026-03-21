@@ -1759,6 +1759,21 @@ html, body {
   margin-top: 4px;
 }
 
+.timeout-input-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.timeout-input {
+  width: 120px;
+  flex-shrink: 0;
+}
+.timeout-display {
+  font-size: 12px;
+  color: var(--text-muted);
+  font-style: italic;
+}
+
 /* ─── Results ─── */
 .sched-result-card {
   border-radius: var(--radius-xs);

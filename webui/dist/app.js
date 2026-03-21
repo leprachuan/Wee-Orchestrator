@@ -2462,6 +2462,7 @@ function renderJobDetailView(job) {
         `}
         <dt>Recurring</dt><dd>${job.recurring ? 'Yes' : 'No (one-shot)'}</dd>
         <dt>Notify</dt>   <dd>${job.notify ? 'Yes (Telegram)' : 'No'}</dd>
+        <dt>Timeout</dt>  <dd>${job.timeout ? `${job.timeout}s (${fmtTimeout(job.timeout)})` : '300s (5 minutes)'}</dd>
         <dt>Next run</dt> <dd>${escHtml(job.next_run ? fmtDate(job.next_run) : '—')}</dd>
         <dt>Last run</dt> <dd>${escHtml(job.last_run ? fmtDate(job.last_run) : 'never')}</dd>
         <dt>Created</dt>  <dd>${escHtml(job.created_at ? fmtDate(job.created_at) : '—')}</dd>
@@ -2558,10 +2559,24 @@ function openNewJobForm() {
   show($('sched-detail'));
 }
 
+function fmtTimeout(secs) {
+  const s = parseInt(secs, 10);
+  if (!s || isNaN(s)) return '';
+  if (s < 60) return `${s}s`;
+  if (s < 3600) {
+    const m = Math.round(s / 60);
+    return m === 1 ? '1 minute' : `${m} minutes`;
+  }
+  const h = (s / 3600).toFixed(1).replace(/\.0$/, '');
+  return h === '1' ? '1 hour' : `${h} hours`;
+}
+
 function buildJobForm(job) {
   const v = (field, fallback = '') => escHtml(job?.[field] ?? fallback);
   const checked = (field, fallback = false) => (job?.[field] ?? fallback) ? 'checked' : '';
   const isCmd = job?.mode === 'command';
+  const timeoutVal = job?.timeout ?? 300;
+  const timeoutDisplay = fmtTimeout(timeoutVal);
   return `
     <form class="sched-form" id="sched-job-form">
       <div class="form-group">
@@ -2633,6 +2648,14 @@ function buildJobForm(job) {
           <span>Telegram notify</span>
           <small>Send result via Telegram when complete</small>
         </label>
+      </div>
+      <div class="form-group">
+        <label>Timeout (seconds)</label>
+        <div class="timeout-input-row">
+          <input class="glass-input timeout-input" type="number" name="timeout" value="${timeoutVal}" min="60" max="3600" step="30" />
+          <span class="timeout-display" id="sched-timeout-display">${timeoutDisplay ? `= ${timeoutDisplay}` : ''}</span>
+        </div>
+        <p class="form-hint">Default is 300 seconds (5 minutes). Min: 60s, Max: 3600s (1 hour).</p>
       </div>
       <div class="sched-form-actions">
         <button type="submit" class="btn btn-primary">💾 Save</button>
@@ -2713,6 +2736,20 @@ function wireJobForm(container, onSubmit) {
   const execModeInput = form.querySelector('input[name="exec_mode"]');
   const taskLabel = container.querySelector('#sched-task-label');
   const taskInput = form.querySelector('textarea[name="task"]');
+  const timeoutInput = form.querySelector('input[name="timeout"]');
+  const timeoutDisplay = form.querySelector('#sched-timeout-display');
+
+  // Live timeout display
+  if (timeoutInput && timeoutDisplay) {
+    timeoutInput.addEventListener('input', () => {
+      const secs = parseInt(timeoutInput.value, 10);
+      if (!isNaN(secs) && secs > 0) {
+        timeoutDisplay.textContent = `= ${fmtTimeout(secs)}`;
+      } else {
+        timeoutDisplay.textContent = '';
+      }
+    });
+  }
 
   // Wire Task Type toggle buttons
   const toggleBtns = container.querySelectorAll('.mode-toggle-btn');
@@ -2739,6 +2776,14 @@ function wireJobForm(container, onSubmit) {
     if (!data.schedule?.trim()) { showFormErr(errEl, 'Schedule is required'); return; }
     if (!data.task?.trim())     { showFormErr(errEl, 'Task prompt is required'); return; }
 
+    const timeoutSecs = parseInt(data.timeout, 10);
+    if (isNaN(timeoutSecs) || timeoutSecs < 60) {
+      showFormErr(errEl, 'Timeout must be at least 60 seconds'); return;
+    }
+    if (timeoutSecs > 3600) {
+      showFormErr(errEl, 'Timeout cannot exceed 3600 seconds (1 hour) via the UI'); return;
+    }
+
     const isCommand = data.exec_mode === 'command';
     const payload = {
       name:      data.name.trim(),
@@ -2747,6 +2792,7 @@ function wireJobForm(container, onSubmit) {
       recurring: !!data.recurring,
       notify:    !!data.notify,
       mode:      isCommand ? 'command' : (data.mode || 'restricted'),
+      timeout:   timeoutSecs,
     };
     if (!isCommand) {
       payload.agent   = data.agent || 'orchestrator';

@@ -7055,6 +7055,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             task: str = ""
             notify: bool = False
             recurring: bool = True
+            timeout: Optional[int] = None  # Execution timeout in seconds (default: 300)
     
         class UpdateJobRequest(BaseModel):
             name: Optional[str] = None
@@ -7067,6 +7068,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             notify: Optional[bool] = None
             recurring: Optional[bool] = None
             enabled: Optional[bool] = None
+            timeout: Optional[int] = None  # Execution timeout in seconds
     
         @app.get("/api/v1/scheduler/status")
         async def scheduler_status(request: Request):
@@ -7104,6 +7106,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 notify=body.notify,
                 recurring=body.recurring,
                 created_by=created_by,
+                timeout=body.timeout,
             )
             if not result.get("success"):
                 raise HTTPException(status_code=400, detail=result.get("message", "Failed"))
