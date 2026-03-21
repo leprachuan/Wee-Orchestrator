@@ -2442,7 +2442,8 @@ function showSchedulerPanel() {
   hideNotificationPanel();
   loadSchedulerJobs();
   loadSchedulerStatus();
-  if (isMobileViewport()) toggleSidebar(false);
+  // On mobile, keep sidebar open so job list is visible immediately
+  if (isMobileViewport()) toggleSidebar(true);
 }
 
 function showBackgroundPanel() {
@@ -2460,7 +2461,8 @@ function showBackgroundPanel() {
   $('btn-nav-notifications').classList.remove('active');
   hideNotificationPanel();
   loadBackgroundTasks();
-  if (isMobileViewport()) toggleSidebar(false);
+  // On mobile, keep sidebar open so task list is visible immediately
+  if (isMobileViewport()) toggleSidebar(true);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -2554,6 +2556,8 @@ window.selectSchedJob = function(jobId) {
   SCHED.selectedJobId = jobId;
   renderSchedJobsSidebar();
   openJobDetail(jobId);
+  // On mobile, close sidebar to show detail panel
+  if (isMobileViewport()) toggleSidebar(false);
 };
 
 function fmtDate(iso) {
@@ -3265,6 +3269,8 @@ window.selectBgTask = function(taskId) {
   BG.detailRenderedFinal = false;
   renderBgTasks();
   loadBgTaskDetail(taskId);
+  // On mobile, close sidebar to show detail panel
+  if (isMobileViewport()) toggleSidebar(false);
 };
 
 async function loadBgTaskDetail(taskId) {
