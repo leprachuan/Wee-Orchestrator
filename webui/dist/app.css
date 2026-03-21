@@ -5378,37 +5378,201 @@ html, body {
 }
 
 /* Streaming tool indicator (inline in chat) */
-.stream-tool-indicator {
+.stream-tool-container {
   display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 4px 10px;
-  font-size: 12px;
-  color: var(--text-muted, #6b7280);
-  background: rgba(255, 170, 51, 0.06);
-  border-radius: 6px;
-  margin-bottom: 4px;
-  border: 1px solid rgba(255, 170, 51, 0.15);
+  flex-wrap: wrap;
+  gap: 4px;
+  margin: 4px 0;
 }
 
-.stream-tool-indicator strong {
-  color: var(--accent, #3ecf8e);
+.stream-tool-indicator {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 10px 3px 8px;
+  font-size: 11px;
+  color: var(--text-secondary, rgba(255,255,255,0.62));
+  background: rgba(85, 153, 255, 0.08);
+  border-radius: 20px;
+  border: 1px solid rgba(85, 153, 255, 0.22);
+  backdrop-filter: blur(8px);
+  transition: opacity 0.5s ease, transform 0.5s ease, background 0.3s ease, border-color 0.3s ease;
+  max-width: fit-content;
+}
+
+.stream-tool-indicator.stream-tool-done {
+  background: rgba(62, 207, 142, 0.08);
+  border-color: rgba(62, 207, 142, 0.22);
+}
+
+.stream-tool-indicator.stream-tool-fading {
+  opacity: 0;
+  transform: translateY(-6px) scale(0.92);
+}
+
+.stool-icon {
+  font-size: 12px;
+  line-height: 1;
+}
+
+.stool-name {
+  font-weight: 600;
   font-family: var(--font-mono);
+  font-size: 11px;
+  color: rgba(255,255,255,0.78);
+}
+
+.stool-check {
+  color: var(--accent, #3ecf8e);
+  font-weight: 700;
   font-size: 11px;
 }
 
 .tool-indicator-dot {
   display: inline-block;
-  width: 6px;
-  height: 6px;
+  width: 5px;
+  height: 5px;
   border-radius: 50%;
-  background: #ffaa33;
+  background: #5599ff;
   animation: tool-dot-pulse 1.2s ease-in-out infinite;
+  flex-shrink: 0;
 }
 
 @keyframes tool-dot-pulse {
   0%, 100% { opacity: 1; transform: scale(1); }
-  50% { opacity: 0.4; transform: scale(0.8); }
+  50% { opacity: 0.4; transform: scale(0.75); }
+}
+
+/* ── Inline Tool Call Badges (background task output) ─────────── */
+.bg-transcript-inline {
+  margin: 0;
+}
+
+.inline-tool-call {
+  display: flex;
+  flex-direction: column;
+  margin: 3px 0;
+  border-radius: 8px;
+  background: rgba(85, 153, 255, 0.05);
+  border: 1px solid rgba(85, 153, 255, 0.18);
+  overflow: hidden;
+  transition: background 0.15s;
+}
+
+.inline-tool-call.itc-done {
+  background: rgba(62, 207, 142, 0.05);
+  border-color: rgba(62, 207, 142, 0.18);
+}
+
+.inline-tool-call.itc-error {
+  background: rgba(255, 95, 109, 0.07);
+  border-color: rgba(255, 95, 109, 0.25);
+}
+
+.inline-tool-call:hover {
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.itc-header {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 6px 10px;
+  cursor: pointer;
+  user-select: none;
+  font-size: 12px;
+  min-height: 32px;
+}
+
+.itc-icon {
+  font-size: 13px;
+  flex-shrink: 0;
+  width: 16px;
+  text-align: center;
+}
+
+.itc-name {
+  font-weight: 600;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-primary, rgba(255,255,255,0.92));
+  flex-shrink: 0;
+}
+
+.inline-tool-call.itc-done .itc-name {
+  color: var(--accent, #3ecf8e);
+}
+
+.inline-tool-call.itc-error .itc-name {
+  color: var(--danger, #ff5f6d);
+}
+
+.itc-preview {
+  font-size: 11px;
+  color: var(--text-muted, rgba(255,255,255,0.38));
+  font-family: var(--font-mono);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+  min-width: 0;
+}
+
+.itc-time {
+  font-size: 10px;
+  color: var(--text-muted, rgba(255,255,255,0.38));
+  flex-shrink: 0;
+  margin-left: auto;
+}
+
+.itc-chevron {
+  font-size: 9px;
+  color: var(--text-muted);
+  transition: transform 0.2s;
+  flex-shrink: 0;
+}
+
+.inline-tool-call.itc-expanded .itc-chevron {
+  transform: rotate(90deg);
+}
+
+.itc-body {
+  display: none;
+  padding: 0 10px 10px 33px;
+  border-top: 1px solid rgba(255,255,255,0.06);
+}
+
+.inline-tool-call.itc-expanded .itc-body {
+  display: block;
+}
+
+.itc-section {
+  margin-top: 8px;
+}
+
+.itc-section-label {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-muted);
+  margin-bottom: 4px;
+}
+
+.itc-code {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--text-secondary, rgba(255,255,255,0.62));
+  background: rgba(0, 0, 0, 0.22);
+  border: 1px solid rgba(255,255,255,0.07);
+  border-radius: 6px;
+  padding: 8px 10px;
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-all;
+  max-height: 200px;
+  overflow-y: auto;
 }
 
 /* Cron preview for schedule validation */
