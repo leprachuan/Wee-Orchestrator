@@ -81,6 +81,8 @@
 
       <button id="btn-new-chat" class="btn btn-primary new-chat-btn">+ New Chat</button>
       <div id="sessions-list" class="sessions-list"></div>
+      <div id="bg-sidebar-list" class="sessions-list bg-sidebar-list hidden"></div>
+      <div id="sched-sidebar-list" class="sessions-list sched-sidebar-list hidden"></div>
       <div class="sidebar-toolbar">
         <button id="btn-settings" class="btn btn-ghost btn-sm sidebar-tool-btn" title="Agent Settings">⚙️ Settings</button>
         <button id="btn-logs" class="btn btn-ghost btn-sm sidebar-tool-btn" title="Service Logs">📋 Logs</button>
@@ -294,18 +296,11 @@
       </header>
 
       <div class="bg-body">
-        <!-- Tasks list -->
-        <div id="bg-tasks-list" class="bg-tasks-list">
-          <p class="bg-empty"><img src="/static/icon-192.png" alt="" style="width:48px;height:48px;border-radius:10px;opacity:0.5;display:block;margin:0 auto 8px;"><span>No background tasks</span></p>
-        </div>
-
-        <!-- Detail panel -->
-        <aside id="bg-detail" class="bg-detail glass-panel hidden">
-          <div class="bg-detail-header">
-            <h3 id="bg-detail-title">Task Details</h3>
-            <button id="btn-bg-detail-close" class="btn-icon" title="Close">✕</button>
+        <!-- Detail panel (full width — task list is now in the sidebar) -->
+        <aside id="bg-detail" class="bg-detail glass-panel">
+          <div id="bg-detail-body" class="bg-detail-body">
+            <p class="bg-detail-empty">Select a task from the sidebar to view details</p>
           </div>
-          <div id="bg-detail-body" class="bg-detail-body"></div>
         </aside>
       </div>
     </section>
@@ -325,19 +320,12 @@
       </header>
 
       <div class="sched-body">
-        <!-- Jobs list -->
-        <div id="sched-jobs-list" class="sched-jobs-list">
-          <p class="sched-empty">Loading…</p>
-        </div>
-
-        <!-- Detail / form panel -->
-        <aside id="sched-detail" class="sched-detail glass-panel hidden">
-          <div class="sched-detail-header">
-            <h3 id="sched-detail-title">Job Details</h3>
-            <button id="btn-sched-detail-close" class="btn-icon" title="Close">✕</button>
+        <!-- Detail panel -->
+        <div id="sched-detail" class="sched-detail">
+          <div id="sched-detail-body" class="sched-detail-body">
+            <p class="sched-detail-empty">Select a job from the sidebar to view details</p>
           </div>
-          <div id="sched-detail-body" class="sched-detail-body"></div>
-        </aside>
+        </div>
       </div>
     </section>
 
@@ -375,21 +363,212 @@
     </nav>
   </div>
 
-  <!-- Settings Modal -->
+  <!-- Agent Settings Modal -->
   <div id="modal-settings" class="modal-overlay hidden">
-    <div class="modal-box glass-panel">
+    <div class="modal-box modal-box-agent glass-panel">
+
+      <!-- Header -->
       <div class="modal-header">
-        <h3>⚙️ Agent Settings</h3>
+        <div class="asf-header-left">
+          <h3 style="margin:0;font-size:1rem;">☘ Agent Settings</h3>
+          <span id="asf-dirty-dot" class="asf-dirty-dot hidden">unsaved</span>
+          <select id="asf-agent-selector" class="glass-input glass-select asf-selector" title="Select agent to edit"></select>
+          <button id="btn-settings-add-agent" class="asf-add-agent-btn" title="Add new agent">+</button>
+        </div>
         <button id="btn-settings-close" class="btn btn-ghost btn-sm">✕</button>
       </div>
-      <div class="modal-body">
-        <textarea id="settings-textarea" class="settings-textarea" spellcheck="false" placeholder="Loading agents.json..."></textarea>
-        <div id="settings-error" class="settings-error hidden"></div>
+
+      <!-- Error/success banners -->
+      <div id="asf-error" class="settings-error hidden" style="margin:8px 18px 0;"></div>
+      <div id="asf-success" class="asf-success hidden" style="margin:8px 18px 0;"></div>
+
+      <!-- Scrollable form body -->
+      <div class="modal-body asf-body">
+
+        <!-- Basic Info -->
+        <div class="asf-section">
+          <div class="asf-section-title">📋 Basic Info</div>
+          <div class="asf-grid">
+            <div class="asf-field">
+              <label class="asf-label" for="asf-name">Name <span class="asf-req">*</span></label>
+              <input id="asf-name" type="text" class="glass-input asf-input" placeholder="agent-name" autocomplete="off" />
+            </div>
+            <div class="asf-field">
+              <label class="asf-label" for="asf-path">Working Path <span class="asf-req">*</span></label>
+              <input id="asf-path" type="text" class="glass-input asf-input asf-mono" placeholder="/opt/my-agent" autocomplete="off" />
+            </div>
+            <div class="asf-field asf-full">
+              <label class="asf-label" for="asf-description">Description</label>
+              <textarea id="asf-description" class="glass-input asf-textarea" rows="2" placeholder="What this agent does…"></textarea>
+            </div>
+            <div class="asf-field">
+              <label class="asf-label" for="asf-todo-dir">TODO Directory</label>
+              <input id="asf-todo-dir" type="text" class="glass-input asf-input asf-mono" placeholder="/opt/fosterbot-home/TODOs" autocomplete="off" />
+            </div>
+          </div>
+        </div>
+
+        <!-- Runtime Config -->
+        <div class="asf-section">
+          <div class="asf-section-title">⚡ Runtime Config</div>
+          <div class="asf-grid">
+            <div class="asf-field">
+              <label class="asf-label" for="asf-runtime">Runtime</label>
+              <select id="asf-runtime" class="glass-input glass-select asf-select">
+                <option value="">Default</option>
+                <option value="copilot">copilot</option>
+                <option value="claude">claude</option>
+                <option value="gemini">gemini</option>
+                <option value="opencode">opencode</option>
+                <option value="codex">codex</option>
+              </select>
+            </div>
+            <div class="asf-field">
+              <label class="asf-label" for="asf-model">Model</label>
+              <input id="asf-model" type="text" class="glass-input asf-input asf-mono" placeholder="e.g. claude-sonnet-4.6" autocomplete="off" />
+            </div>
+          </div>
+        </div>
+
+        <!-- Permissions -->
+        <div class="asf-section">
+          <div class="asf-section-title">
+            🔒 Permissions
+            <span id="asf-perm-mode-badge" class="asf-mode-badge"></span>
+            <span id="asf-perm-changed" class="asf-changed-badge hidden">⚠ changed</span>
+          </div>
+
+          <!-- Mode -->
+          <div class="asf-field" style="margin-bottom:14px;">
+            <label class="asf-label" for="asf-perm-mode">Mode</label>
+            <select id="asf-perm-mode" class="glass-input glass-select asf-select">
+              <option value="elevated">elevated — full access</option>
+              <option value="restricted">restricted — curated tools only</option>
+              <option value="sandboxed">sandboxed — no external access</option>
+            </select>
+          </div>
+
+          <!-- Directories -->
+          <details class="asf-details" open>
+            <summary class="asf-details-summary">📁 Directories</summary>
+            <div class="asf-details-body">
+              <div class="asf-perm-group">
+                <div class="asf-perm-group-label asf-allow-label">Allow Read</div>
+                <div id="asf-dir-allow-read" class="asf-tag-list"></div>
+                <div class="asf-add-row">
+                  <input type="text" class="glass-input asf-tag-input asf-mono" placeholder="/opt/my-path" data-add-target="asf-dir-allow-read" />
+                  <button type="button" class="btn btn-ghost btn-xs asf-add-btn" data-add-target="asf-dir-allow-read">+ Add</button>
+                </div>
+              </div>
+              <div class="asf-perm-group">
+                <div class="asf-perm-group-label asf-allow-label">Allow Write</div>
+                <div id="asf-dir-allow-write" class="asf-tag-list"></div>
+                <div class="asf-add-row">
+                  <input type="text" class="glass-input asf-tag-input asf-mono" placeholder="/opt/my-path" data-add-target="asf-dir-allow-write" />
+                  <button type="button" class="btn btn-ghost btn-xs asf-add-btn" data-add-target="asf-dir-allow-write">+ Add</button>
+                </div>
+              </div>
+              <div class="asf-perm-group">
+                <div class="asf-perm-group-label asf-deny-label">Deny</div>
+                <div id="asf-dir-deny" class="asf-tag-list"></div>
+                <div class="asf-add-row">
+                  <input type="text" class="glass-input asf-tag-input asf-mono" placeholder="/etc/shadow" data-add-target="asf-dir-deny" />
+                  <button type="button" class="btn btn-ghost btn-xs asf-add-btn asf-btn-deny" data-add-target="asf-dir-deny">+ Add</button>
+                </div>
+              </div>
+            </div>
+          </details>
+
+          <!-- Tools -->
+          <details class="asf-details">
+            <summary class="asf-details-summary">🔧 Tools</summary>
+            <div class="asf-details-body">
+              <div class="asf-perm-group">
+                <div class="asf-perm-group-label asf-allow-label">Allow</div>
+                <div id="asf-tools-allow" class="asf-tag-list"></div>
+                <div class="asf-add-row">
+                  <input type="text" class="glass-input asf-tag-input asf-mono" placeholder="* or Bash(grep:*)" data-add-target="asf-tools-allow" />
+                  <button type="button" class="btn btn-ghost btn-xs asf-add-btn" data-add-target="asf-tools-allow">+ Add</button>
+                </div>
+              </div>
+              <div class="asf-perm-group">
+                <div class="asf-perm-group-label asf-deny-label">Deny</div>
+                <div id="asf-tools-deny" class="asf-tag-list"></div>
+                <div class="asf-add-row">
+                  <input type="text" class="glass-input asf-tag-input asf-mono" placeholder="Bash(rm -rf /)" data-add-target="asf-tools-deny" />
+                  <button type="button" class="btn btn-ghost btn-xs asf-add-btn asf-btn-deny" data-add-target="asf-tools-deny">+ Add</button>
+                </div>
+              </div>
+            </div>
+          </details>
+
+          <!-- Network -->
+          <details class="asf-details">
+            <summary class="asf-details-summary">🌐 Network</summary>
+            <div class="asf-details-body">
+              <div class="asf-perm-group">
+                <div class="asf-perm-group-label asf-allow-label">Allow URLs</div>
+                <div id="asf-net-allow" class="asf-tag-list"></div>
+                <div class="asf-add-row">
+                  <input type="text" class="glass-input asf-tag-input asf-mono" placeholder="* or github.com" data-add-target="asf-net-allow" />
+                  <button type="button" class="btn btn-ghost btn-xs asf-add-btn" data-add-target="asf-net-allow">+ Add</button>
+                </div>
+              </div>
+              <div class="asf-perm-group">
+                <div class="asf-perm-group-label asf-deny-label">Deny URLs</div>
+                <div id="asf-net-deny" class="asf-tag-list"></div>
+                <div class="asf-add-row">
+                  <input type="text" class="glass-input asf-tag-input asf-mono" placeholder="* to block all" data-add-target="asf-net-deny" />
+                  <button type="button" class="btn btn-ghost btn-xs asf-add-btn asf-btn-deny" data-add-target="asf-net-deny">+ Add</button>
+                </div>
+              </div>
+            </div>
+          </details>
+
+          <!-- MCP -->
+          <details class="asf-details">
+            <summary class="asf-details-summary">🔌 MCP Servers</summary>
+            <div class="asf-details-body">
+              <div class="asf-perm-group">
+                <div class="asf-perm-group-label asf-allow-label">Allow</div>
+                <div id="asf-mcp-allow" class="asf-tag-list"></div>
+                <div class="asf-add-row">
+                  <input type="text" class="glass-input asf-tag-input asf-mono" placeholder="* or github-mcp-server" data-add-target="asf-mcp-allow" />
+                  <button type="button" class="btn btn-ghost btn-xs asf-add-btn" data-add-target="asf-mcp-allow">+ Add</button>
+                </div>
+              </div>
+              <div class="asf-perm-group">
+                <div class="asf-perm-group-label asf-deny-label">Deny</div>
+                <div id="asf-mcp-deny" class="asf-tag-list"></div>
+                <div class="asf-add-row">
+                  <input type="text" class="glass-input asf-tag-input asf-mono" placeholder="* to block all" data-add-target="asf-mcp-deny" />
+                  <button type="button" class="btn btn-ghost btn-xs asf-add-btn asf-btn-deny" data-add-target="asf-mcp-deny">+ Add</button>
+                </div>
+              </div>
+            </div>
+          </details>
+
+        </div><!-- /Permissions -->
+
+        <!-- Danger Zone -->
+        <div class="asf-section asf-danger-section">
+          <div class="asf-section-title">⚠️ Danger Zone</div>
+          <button id="asf-delete-agent" class="asf-delete-btn">🗑 Delete Agent</button>
+        </div>
+
+      </div><!-- /asf-body -->
+
+      <!-- Footer -->
+      <div class="modal-footer asf-footer">
+        <div class="asf-footer-left">
+          <button id="btn-settings-reload" class="btn btn-sm asf-btn-reload hidden" title="Permissions changed — service restart recommended">🔄 Reload Services</button>
+        </div>
+        <div class="asf-footer-right">
+          <button id="btn-settings-cancel" class="btn btn-ghost btn-sm">Discard</button>
+          <button id="btn-settings-save" class="btn btn-primary btn-sm">💾 Save</button>
+        </div>
       </div>
-      <div class="modal-footer">
-        <button id="btn-settings-save" class="btn btn-primary btn-sm">Save</button>
-        <button id="btn-settings-cancel" class="btn btn-ghost btn-sm">Cancel</button>
-      </div>
+
     </div>
   </div>
 
@@ -427,3 +606,4 @@
   <script src="app.js?v=20260301tabs" type="module"></script>
 </body>
 </html>
+___BEGIN___COMMAND_DONE_MARKER___0

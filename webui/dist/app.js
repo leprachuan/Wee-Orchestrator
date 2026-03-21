@@ -1416,6 +1416,42 @@ async function sendMessage() {
   }
 }
 
+
+/**
+ * Refresh inline spinning gear tool icons at the bottom of a streaming bubble.
+ * toolsMap: { key: toolName } — one entry per active tool call.
+ */
+function refreshInlineToolIcons(bubble, toolsMap) {
+  if (!bubble) return;
+  let cont = bubble.querySelector('.stream-inline-tools');
+  const entries = Object.entries(toolsMap);
+  if (!entries.length) {
+    if (cont) cont.remove();
+    return;
+  }
+  const html = entries.map(([, name]) =>
+    '<span class="tool-inline-icon"><span class="tool-gear">\u2699\ufe0f</span> <span class="tool-name">' + escHtml(name) + '</span>\u2026</span>'
+  ).join('');
+  if (cont) {
+    cont.innerHTML = html;
+  } else {
+    bubble.insertAdjacentHTML('beforeend', '<span class="stream-inline-tools">' + html + '</span>');
+  }
+}
+
+/**
+ * Detect whether a raw output line looks like a tool call invocation.
+ * Used to add gear markers when rendering background task logs.
+ */
+function detectToolCallLine(line) {
+  const s = line.trimStart();
+  if (/^[●⬤•]\s+/.test(s)) return true;
+  if (/^\$\s+\S/.test(s)) return true;
+  if (/^\|\s+(Read|Write|Glob|Bash|Edit|grep|find|Fetch)\b/i.test(s)) return true;
+  if (/^\[tool\]\s*/i.test(s)) return true;
+  return false;
+}
+
 /**
  * Send a message using the SSE /stream endpoint and update the UI live.
  * Returns the `done` event payload {response, runtime, model} on success.
@@ -1446,6 +1482,7 @@ async function sendMessageStreaming(query, sessionId) {
   let streamRow    = null;
   let streamBubble = null;
   let rawText      = '';
+  let activeStreamTools = {};
 
   try {
     while (true) {
@@ -1484,7 +1521,28 @@ async function sendMessageStreaming(query, sessionId) {
               .replace(/\n\n+/g, '</p><p>')  // paragraph breaks
               .replace(/\n/g, '<br>');      // line breaks
             streamBubble.innerHTML = formatted ? `<p>${formatted}</p>` : '';
+            refreshInlineToolIcons(streamBubble, activeStreamTools);
             scrollToBottom();
+
+          } else if (evt.type === 'tool_call') {
+            // Tool call — inject inline gear icon at current bubble position
+            if (streamBubble) {
+              const evtKind = evt.event || 'detected';
+              const toolName = evt.name || 'tool';
+              const key = evt.id || toolName;
+              if (evtKind === 'start' || evtKind === 'detected' || evtKind === 'input_complete') {
+                activeStreamTools[key] = toolName;
+                refreshInlineToolIcons(streamBubble, activeStreamTools);
+              } else if (evtKind === 'result') {
+                delete activeStreamTools[key];
+                const cont = streamBubble.querySelector('.stream-inline-tools');
+                if (cont) {
+                  cont.style.transition = 'opacity 0.3s';
+                  cont.style.opacity = '0';
+                  setTimeout(() => refreshInlineToolIcons(streamBubble, activeStreamTools), 320);
+                }
+              }
+            }
 
           } else if (evt.type === 'done') {
             // Use accumulated streaming text when available (captures all
@@ -1565,6 +1623,7 @@ async function reconnectToStream(sessionId) {
     let streamRow    = null;
     let streamBubble = null;
     let rawText      = '';
+    let activeStreamTools = {};
 
     try {
       while (true) {
@@ -1604,7 +1663,28 @@ async function reconnectToStream(sessionId) {
                 .replace(/\n\n+/g, '</p><p>')
                 .replace(/\n/g, '<br>');
               streamBubble.innerHTML = formatted ? `<p>${formatted}</p>` : '';
+              refreshInlineToolIcons(streamBubble, activeStreamTools);
               scrollToBottom();
+
+            } else if (evt.type === 'tool_call') {
+              // Tool call — inject inline gear icon at current bubble position
+              if (streamBubble) {
+                const evtKind = evt.event || 'detected';
+                const toolName = evt.name || 'tool';
+                const key = evt.id || toolName;
+                if (evtKind === 'start' || evtKind === 'detected' || evtKind === 'input_complete') {
+                  activeStreamTools[key] = toolName;
+                  refreshInlineToolIcons(streamBubble, activeStreamTools);
+                } else if (evtKind === 'result') {
+                  delete activeStreamTools[key];
+                  const cont = streamBubble.querySelector('.stream-inline-tools');
+                  if (cont) {
+                    cont.style.transition = 'opacity 0.3s';
+                    cont.style.opacity = '0';
+                    setTimeout(() => refreshInlineToolIcons(streamBubble, activeStreamTools), 320);
+                  }
+                }
+              }
 
             } else if (evt.type === 'done') {
               const finalContent = rawText.trim()
@@ -2226,11 +2306,9 @@ document.addEventListener('DOMContentLoaded', () => {
   // --- Scheduler UI events ---
   $('btn-sched-refresh').addEventListener('click', () => loadSchedulerJobs(true));
   $('btn-sched-new').addEventListener('click', openNewJobForm);
-  $('btn-sched-detail-close').addEventListener('click', closeSchedDetail);
 
   // --- Background Tasks UI events ---
   $('btn-bg-refresh').addEventListener('click', () => loadBackgroundTasks(true));
-  $('btn-bg-detail-close').addEventListener('click', closeBgDetail);
 
   // --- Bootstrap ---
   // Fetch feature flags first (no auth needed) then decide what to show
@@ -2262,6 +2340,8 @@ function showChatPanel() {
   hide($('background-panel'));
   show($('btn-new-chat'));
   show($('sessions-list'));
+  hide($('bg-sidebar-list'));
+  hide($('sched-sidebar-list'));
   show($('request-queue-panel'));
   $('btn-nav-chat').classList.add('active');
   $('btn-nav-scheduler').classList.remove('active');
@@ -2277,6 +2357,8 @@ function showSchedulerPanel() {
   hide($('background-panel'));
   hide($('btn-new-chat'));
   hide($('sessions-list'));
+  hide($('bg-sidebar-list'));
+  show($('sched-sidebar-list'));
   hide($('request-queue-panel'));
   $('btn-nav-scheduler').classList.add('active');
   $('btn-nav-chat').classList.remove('active');
@@ -2294,6 +2376,8 @@ function showBackgroundPanel() {
   show($('background-panel'));
   hide($('btn-new-chat'));
   hide($('sessions-list'));
+  show($('bg-sidebar-list'));
+  hide($('sched-sidebar-list'));
   hide($('request-queue-panel'));
   $('btn-nav-background').classList.add('active');
   $('btn-nav-chat').classList.remove('active');
@@ -2329,15 +2413,14 @@ const SCHED = {
 async function loadSchedulerJobs(showToast = false) {
   if (SCHED.isLoadingJobs) return;
   SCHED.isLoadingJobs = true;
-  const list = $('sched-jobs-list');
-  list.innerHTML = '<p class="sched-empty">Loading…</p>';
   try {
     const data = await schedApi('GET', '/jobs');
     SCHED.jobs = data.result || [];
-    renderSchedulerJobs();
+    renderSchedJobsSidebar();
     if (showToast) schedToast('Jobs refreshed', 'success');
   } catch (err) {
-    list.innerHTML = `<p class="sched-empty sched-error">Failed to load jobs: ${escHtml(err.message)}</p>`;
+    const list = $('sched-sidebar-list');
+    if (list) list.innerHTML = '<p class="sched-empty sched-error" style="padding:24px 12px;text-align:center;">Failed to load jobs: ' + escHtml(err.message) + '</p>';
   } finally {
     SCHED.isLoadingJobs = false;
   }
@@ -2364,43 +2447,39 @@ async function loadSchedulerStatus() {
   }
 }
 
-function renderSchedulerJobs() {
-  const list = $('sched-jobs-list');
+function renderSchedJobsSidebar() {
+  const list = $('sched-sidebar-list');
+  if (!list) return;
   if (!SCHED.jobs.length) {
-    list.innerHTML = '<p class="sched-empty">No scheduled jobs. Click <strong>+ New Job</strong> to create one.</p>';
+    list.innerHTML = '<p class="sched-empty" style="padding:24px 12px;text-align:center;color:var(--text-muted);font-size:13px;">No scheduled jobs yet.<br>Click <strong>+ New Job</strong> to create one.</p>';
     return;
   }
 
-  list.innerHTML = '';
-  for (const job of SCHED.jobs) {
-    const card = document.createElement('div');
-    card.className = 'sched-job-card' + (job.id === SCHED.selectedJobId ? ' selected' : '');
-    card.dataset.jobId = job.id;
-
-    const statusClass = job.enabled ? 'status-enabled' : 'status-disabled';
-    const statusLabel = job.enabled ? 'enabled' : 'paused';
+  const icons = { true: '🟢', false: '🟡' };
+  list.innerHTML = SCHED.jobs.map(job => {
+    const icon = icons[String(job.enabled)] || '❓';
+    const active = job.id === SCHED.selectedJobId ? 'active' : '';
     const nextRun = job.next_run ? fmtDate(job.next_run) : '—';
-    const lastRun = job.last_run ? fmtDate(job.last_run) : 'never';
-
-    card.innerHTML = `
-      <div class="sched-job-top">
-        <span class="sched-job-name">${escHtml(job.name)}</span>
-        <span class="sched-job-status ${statusClass}">${statusLabel}</span>
-      </div>
-      <div class="sched-job-meta">
-        <span title="Schedule">⏰ ${escHtml(job.schedule)}</span>
-        <span title="Agent / Runtime">${job.mode === 'command' ? '⚙️ command' : `${runtimeIconHTML(job.runtime)}${escHtml(job.agent)} · ${escHtml(job.runtime)}`}</span>
-      </div>
-      <div class="sched-job-times">
-        <span title="Next run">Next: ${escHtml(nextRun)}</span>
-        <span title="Last run">Last: ${escHtml(lastRun)}</span>
-      </div>
-    `;
-
-    card.addEventListener('click', () => openJobDetail(job.id));
-    list.appendChild(card);
-  }
+    const name = escHtml(job.name || job.id);
+    const sched = escHtml(job.schedule || '');
+    return `
+      <div class="session-item sched-sidebar-item ${active}" onclick="selectSchedJob('${job.id}')">
+        <div class="session-title">${icon} ${name}</div>
+        <div class="session-preview">${sched} · Next: ${nextRun}</div>
+      </div>`;
+  }).join('');
 }
+
+// Keep backward compat alias
+function renderSchedulerJobs() { renderSchedJobsSidebar(); }
+
+window.selectSchedJob = function(jobId) {
+  const job = SCHED.jobs.find(j => j.id === jobId);
+  if (!job) return;
+  SCHED.selectedJobId = jobId;
+  renderSchedJobsSidebar();
+  openJobDetail(jobId);
+};
 
 function fmtDate(iso) {
   if (!iso) return '—';
@@ -2418,23 +2497,17 @@ function fmtDate(iso) {
 
 function closeSchedDetail() {
   SCHED.selectedJobId = null;
-  hide($('sched-detail'));
-  document.querySelectorAll('.sched-job-card').forEach(c => c.classList.remove('selected'));
+  $('sched-detail-body').innerHTML = '<p class="sched-detail-empty">Select a job from the sidebar to view details</p>';
+  renderSchedJobsSidebar();
 }
 
 async function openJobDetail(jobId) {
   SCHED.selectedJobId = jobId;
-  document.querySelectorAll('.sched-job-card').forEach(c =>
-    c.classList.toggle('selected', c.dataset.jobId === jobId)
-  );
-
   const job = SCHED.jobs.find(j => j.id === jobId);
   if (!job) return;
 
-  $('sched-detail-title').textContent = job.name;
   const body = $('sched-detail-body');
   body.innerHTML = '<p style="color:var(--text-muted);font-size:13px;">Loading…</p>';
-  show($('sched-detail'));
 
   renderJobDetailView(job);
 }
@@ -2453,7 +2526,7 @@ function renderJobDetailView(job) {
       <dl class="sched-dl">
         <dt>ID</dt>       <dd><code>${escHtml(job.id)}</code></dd>
         <dt>Type</dt>     <dd>${job.mode === 'command' ? '⚙️ Command' : '🤖 AI'}</dd>
-        <dt>Schedule</dt> <dd>${escHtml(job.schedule)}</dd>
+        <dt>Schedule</dt> <dd>${escHtml(job.schedule)}${job.cron ? ' \u2192 <code>' + escHtml(job.cron) + '</code>' : ''}</dd>
         ${job.mode !== 'command' ? `
         <dt>Agent</dt>    <dd>${escHtml(job.agent)}</dd>
         <dt>Runtime</dt>  <dd>${runtimeIconHTML(job.runtime)}${escHtml(job.runtime)}</dd>
@@ -2462,6 +2535,7 @@ function renderJobDetailView(job) {
         `}
         <dt>Recurring</dt><dd>${job.recurring ? 'Yes' : 'No (one-shot)'}</dd>
         <dt>Notify</dt>   <dd>${job.notify ? 'Yes (Telegram)' : 'No'}</dd>
+        <dt>Timeout</dt>  <dd>${job.timeout ? `${job.timeout}s (${fmtTimeout(job.timeout)})` : '300s (5 minutes)'}</dd>
         <dt>Next run</dt> <dd>${escHtml(job.next_run ? fmtDate(job.next_run) : '—')}</dd>
         <dt>Last run</dt> <dd>${escHtml(job.last_run ? fmtDate(job.last_run) : 'never')}</dd>
         <dt>Created</dt>  <dd>${escHtml(job.created_at ? fmtDate(job.created_at) : '—')}</dd>
@@ -2471,6 +2545,7 @@ function renderJobDetailView(job) {
         <pre class="sched-task-pre">${escHtml(job.task || '(empty)')}</pre>
       </div>
       <div class="sched-detail-actions">
+        <button class="btn btn-accent btn-sm" id="btn-job-run-now">▶ Run Now</button>
         ${isEnabled
           ? `<button class="btn btn-ghost btn-sm" id="btn-job-pause">⏸ Pause</button>`
           : `<button class="btn btn-primary btn-sm" id="btn-job-resume">▶ Resume</button>`
@@ -2496,10 +2571,12 @@ function renderJobDetailView(job) {
   });
 
   // Action buttons
+  const runNowBtn  = body.querySelector('#btn-job-run-now');
   const pauseBtn   = body.querySelector('#btn-job-pause');
   const resumeBtn  = body.querySelector('#btn-job-resume');
   const deleteBtn  = body.querySelector('#btn-job-delete');
 
+  if (runNowBtn) runNowBtn.addEventListener('click', () => doJobRunNow(job.id, runNowBtn));
   if (pauseBtn)  pauseBtn.addEventListener('click',  () => doJobPause(job.id));
   if (resumeBtn) resumeBtn.addEventListener('click', () => doJobResume(job.id));
   if (deleteBtn) deleteBtn.addEventListener('click', () => doJobDelete(job.id));
@@ -2520,7 +2597,6 @@ function renderJobEditForm(job, container) {
       await loadSchedulerJobs();
       const updated = SCHED.jobs.find(j => j.id === job.id);
       if (updated) {
-        $('sched-detail-title').textContent = updated.name;
         renderJobDetailView(updated);
       }
     } catch (err) {
@@ -2535,8 +2611,7 @@ function renderJobEditForm(job, container) {
 
 function openNewJobForm() {
   SCHED.selectedJobId = null;
-  document.querySelectorAll('.sched-job-card').forEach(c => c.classList.remove('selected'));
-  $('sched-detail-title').textContent = 'New Scheduled Job';
+  renderSchedJobsSidebar();
   const body = $('sched-detail-body');
   body.innerHTML = buildJobForm(null);
   populateAgentDropdown(body);
@@ -2555,13 +2630,26 @@ function openNewJobForm() {
       schedToast('Create failed: ' + err.message, 'error');
     }
   });
-  show($('sched-detail'));
+}
+
+function fmtTimeout(secs) {
+  const s = parseInt(secs, 10);
+  if (!s || isNaN(s)) return '';
+  if (s < 60) return `${s}s`;
+  if (s < 3600) {
+    const m = Math.round(s / 60);
+    return m === 1 ? '1 minute' : `${m} minutes`;
+  }
+  const h = (s / 3600).toFixed(1).replace(/\.0$/, '');
+  return h === '1' ? '1 hour' : `${h} hours`;
 }
 
 function buildJobForm(job) {
   const v = (field, fallback = '') => escHtml(job?.[field] ?? fallback);
   const checked = (field, fallback = false) => (job?.[field] ?? fallback) ? 'checked' : '';
   const isCmd = job?.mode === 'command';
+  const timeoutVal = job?.timeout ?? 300;
+  const timeoutDisplay = fmtTimeout(timeoutVal);
   return `
     <form class="sched-form" id="sched-job-form">
       <div class="form-group">
@@ -2578,8 +2666,10 @@ function buildJobForm(job) {
       </div>
       <div class="form-group">
         <label>Schedule <span class="req">*</span></label>
-        <input class="glass-input" name="schedule" value="${v('schedule')}" placeholder="every day at 9am" required />
-        <p class="form-hint">e.g. "in 5 minutes", "every day at 9am", "every Monday at 8am", "every 6 hours"</p>
+        <input class="glass-input" name="schedule" id="sched-schedule-input" value="${v('schedule')}" placeholder="every day at 9am" required />
+        <p class="form-hint">e.g. "in 5 minutes", "every day at 9am", "every Monday at 8am", "every 6 hours", or cron: "0 9 * * 1-5"</p>
+        <div id="sched-cron-preview" class="sched-cron-preview hidden"></div>
+        ${job?.cron ? '<div class="sched-cron-preview sched-cron-saved"><span class="cron-badge">cron</span> <code>' + escHtml(job.cron) + '</code></div>' : ''}
       </div>
       <div id="sched-ai-fields" class="${isCmd ? 'hidden' : ''}">
         <div class="form-row">
@@ -2633,6 +2723,14 @@ function buildJobForm(job) {
           <span>Telegram notify</span>
           <small>Send result via Telegram when complete</small>
         </label>
+      </div>
+      <div class="form-group">
+        <label>Timeout (seconds)</label>
+        <div class="timeout-input-row">
+          <input class="glass-input timeout-input" type="number" name="timeout" value="${timeoutVal}" min="60" max="3600" step="30" />
+          <span class="timeout-display" id="sched-timeout-display">${timeoutDisplay ? `= ${timeoutDisplay}` : ''}</span>
+        </div>
+        <p class="form-hint">Default is 300 seconds (5 minutes). Min: 60s, Max: 3600s (1 hour).</p>
       </div>
       <div class="sched-form-actions">
         <button type="submit" class="btn btn-primary">💾 Save</button>
@@ -2713,6 +2811,57 @@ function wireJobForm(container, onSubmit) {
   const execModeInput = form.querySelector('input[name="exec_mode"]');
   const taskLabel = container.querySelector('#sched-task-label');
   const taskInput = form.querySelector('textarea[name="task"]');
+  const timeoutInput = form.querySelector('input[name="timeout"]');
+  const timeoutDisplay = form.querySelector('#sched-timeout-display');
+
+  // Live timeout display
+  if (timeoutInput && timeoutDisplay) {
+    timeoutInput.addEventListener('input', () => {
+      const secs = parseInt(timeoutInput.value, 10);
+      if (!isNaN(secs) && secs > 0) {
+        timeoutDisplay.textContent = `= ${fmtTimeout(secs)}`;
+      } else {
+        timeoutDisplay.textContent = '';
+      }
+    });
+  }
+
+  // Wire schedule validation (AI-powered cron conversion preview)
+  const schedInput = form.querySelector('#sched-schedule-input') || form.querySelector('input[name="schedule"]');
+  const cronPreview = container.querySelector('#sched-cron-preview');
+  let _schedValidateTimer = null;
+  if (schedInput && cronPreview) {
+    schedInput.addEventListener('input', () => {
+      clearTimeout(_schedValidateTimer);
+      const val = schedInput.value.trim();
+      if (!val || val.length < 3) { cronPreview.classList.add('hidden'); return; }
+      _schedValidateTimer = setTimeout(async () => {
+        try {
+          cronPreview.classList.remove('hidden');
+          cronPreview.innerHTML = '<span class="cron-loading">\u23f3 Validating schedule\u2026</span>';
+          const res = await schedulerRequest('POST', '/validate-schedule', { schedule: val });
+          if (res.success && res.cron) {
+            const methodBadge = res.method === 'ai' ? '\ud83e\udd16 AI' : res.method === 'deterministic' ? '\ud83d\udcd0 Parsed' : '\u2713';
+            cronPreview.innerHTML = `<span class="cron-badge">${methodBadge}</span> <code>${escHtml(res.cron)}</code> \u2014 ${escHtml(res.human_readable)}${res.next_run ? ` <small>(next: ${fmtDate(res.next_run)})</small>` : ''}`;
+            cronPreview.classList.remove('hidden', 'cron-error');
+            cronPreview.classList.add('cron-ok');
+          } else if (res.success && res.next_run) {
+            cronPreview.innerHTML = `<span class="cron-badge">\u23f1 One-time</span> runs at <code>${escHtml(res.next_run)}</code>`;
+            cronPreview.classList.remove('hidden', 'cron-error');
+            cronPreview.classList.add('cron-ok');
+          } else {
+            cronPreview.innerHTML = '<span class="cron-badge cron-warn">\u26a0\ufe0f</span> Could not parse schedule \u2014 will try AI conversion on save';
+            cronPreview.classList.remove('hidden', 'cron-ok');
+            cronPreview.classList.add('cron-error');
+          }
+        } catch (e) {
+          cronPreview.innerHTML = '<span class="cron-badge cron-warn">\u26a0\ufe0f</span> Validation unavailable';
+          cronPreview.classList.remove('hidden', 'cron-ok');
+          cronPreview.classList.add('cron-error');
+        }
+      }, 600);
+    });
+  }
 
   // Wire Task Type toggle buttons
   const toggleBtns = container.querySelectorAll('.mode-toggle-btn');
@@ -2739,6 +2888,14 @@ function wireJobForm(container, onSubmit) {
     if (!data.schedule?.trim()) { showFormErr(errEl, 'Schedule is required'); return; }
     if (!data.task?.trim())     { showFormErr(errEl, 'Task prompt is required'); return; }
 
+    const timeoutSecs = parseInt(data.timeout, 10);
+    if (isNaN(timeoutSecs) || timeoutSecs < 60) {
+      showFormErr(errEl, 'Timeout must be at least 60 seconds'); return;
+    }
+    if (timeoutSecs > 3600) {
+      showFormErr(errEl, 'Timeout cannot exceed 3600 seconds (1 hour) via the UI'); return;
+    }
+
     const isCommand = data.exec_mode === 'command';
     const payload = {
       name:      data.name.trim(),
@@ -2747,6 +2904,7 @@ function wireJobForm(container, onSubmit) {
       recurring: !!data.recurring,
       notify:    !!data.notify,
       mode:      isCommand ? 'command' : (data.mode || 'restricted'),
+      timeout:   timeoutSecs,
     };
     if (!isCommand) {
       payload.agent   = data.agent || 'orchestrator';
@@ -2778,6 +2936,23 @@ function showFormErr(el, msg) {
 // ═══════════════════════════════════════════════════════════════════════════════
 // ─── Scheduler: Job Actions ──────────────────────────────────────────────────
 // ═══════════════════════════════════════════════════════════════════════════════
+
+async function doJobRunNow(jobId, btn) {
+  if (btn) { btn.disabled = true; btn.textContent = '⏳ Starting…'; }
+  try {
+    const result = await schedApi('POST', `/jobs/${jobId}/run`);
+    const taskId = result.task_id || '';
+    schedToast(taskId
+      ? `✅ Job started — task ${taskId} running`
+      : '✅ Job triggered successfully', 'success');
+    await loadSchedulerJobs();
+    const updated = SCHED.jobs.find(j => j.id === jobId);
+    if (updated) renderJobDetailView(updated);
+  } catch (err) {
+    schedToast('Run failed: ' + err.message, 'error');
+    if (btn) { btn.disabled = false; btn.textContent = '▶ Run Now'; }
+  }
+}
 
 async function doJobPause(jobId) {
   try {
@@ -2876,6 +3051,9 @@ const BG = {
   selectedTaskId: null,
   isLoading: false,
   pollInterval: null,
+  logsPoller: null,
+  toolsPoller: null,
+  activeDetailTab: null,
 };
 
 function startBgTaskPolling() {
@@ -2888,12 +3066,25 @@ function startBgTaskPolling() {
       updateBgBadge();
       // If background panel is visible, refresh the list
       if (!$('background-panel').classList.contains('hidden')) {
-        renderBgTasks();
-        // If we have a selected running task, refresh its detail
+        renderBgTasksSidebar();
+        // If we have a selected task, do lightweight updates without destroying tab state
         if (BG.selectedTaskId) {
           const t = BG.tasks.find(x => x.task_id === BG.selectedTaskId);
-          if (t && (t.status === 'running' || t.status === 'queued')) {
-            loadBgTaskDetail(BG.selectedTaskId);
+          if (t) {
+            if (t.status !== 'running' && t.status !== 'queued') {
+              // Task finished — render detail once, then stop
+              if (!BG.detailRenderedFinal) {
+                BG.detailRenderedFinal = true;
+                loadBgTaskDetail(BG.selectedTaskId);
+              }
+            } else {
+              // Still running — just tick the elapsed timer; BG.logsPoller handles log updates
+              const elapsedEl = document.querySelector('.bg-elapsed-live');
+              if (elapsedEl) {
+                const start = elapsedEl.dataset.start;
+                if (start) elapsedEl.textContent = `Elapsed: ${formatElapsed(start)}`;
+              }
+            }
           }
         }
       }
@@ -2918,25 +3109,26 @@ function updateBgBadge() {
 async function loadBackgroundTasks(showToast = false) {
   if (BG.isLoading) return;
   BG.isLoading = true;
-  const list = $('bg-tasks-list');
-  list.innerHTML = '<p class="bg-empty">Loading…</p>';
+  const list = $('bg-sidebar-list');
+  list.innerHTML = '<p class="bg-empty" style="padding:20px;text-align:center;color:var(--text-muted);font-size:13px;">Loading…</p>';
   try {
     const data = await bgApi('GET', '');
     BG.tasks = data.tasks || [];
-    renderBgTasks();
+    renderBgTasksSidebar();
     updateBgBadge();
     if (showToast) bgToast('Tasks refreshed', 'success');
   } catch (err) {
-    list.innerHTML = `<p class="bg-empty" style="color:#ff8888">Failed: ${escHtml(err.message)}</p>`;
+    list.innerHTML = `<p class="bg-empty" style="padding:20px;text-align:center;color:#ff8888;font-size:13px;">Failed: ${escHtml(err.message)}</p>`;
   } finally {
     BG.isLoading = false;
   }
 }
 
-function renderBgTasks() {
-  const list = $('bg-tasks-list');
+function renderBgTasksSidebar() {
+  const list = $('bg-sidebar-list');
+  if (!list) return;
   if (!BG.tasks.length) {
-    list.innerHTML = '<p class="bg-empty">No background tasks yet.<br>Use <code>/background &lt;prompt&gt;</code> in chat to start one.</p>';
+    list.innerHTML = '<p class="bg-empty" style="padding:24px 12px;text-align:center;color:var(--text-muted);font-size:13px;">No background tasks yet.<br>Use <code>/background &lt;prompt&gt;</code> in chat to start one.</p>';
     return;
   }
 
@@ -2946,38 +3138,35 @@ function renderBgTasks() {
     const ao = statusOrder[a.status] ?? 2;
     const bo = statusOrder[b.status] ?? 2;
     if (ao !== bo) return ao - bo;
-    // Within queued: oldest first (ascending) so position 1 is at top
     if (a.status === 'queued') return (a.created_at || '').localeCompare(b.created_at || '');
-    // Within running/completed: newest first
     return (b.created_at || '').localeCompare(a.created_at || '');
   });
 
-  // Build queue position map for queued tasks
   const queuedTasks = sorted.filter(t => t.status === 'queued');
+  const icons = { running: '🟢', completed: '✅', failed: '❌', killed: '🛑', queued: '⏳' };
 
   list.innerHTML = sorted.map(t => {
-    const icons = { running: '🟢', completed: '✅', failed: '❌', killed: '🛑', queued: '⏳' };
     const icon = icons[t.status] || '❓';
-    const statusClass = `bg-status-${t.status}`;
     const active = t.task_id === BG.selectedTaskId ? 'active' : '';
-    const elapsed = t.status === 'running' ? formatElapsed(t.created_at) : '';
+    const elapsed = t.status === 'running' ? ` · ${formatElapsed(t.created_at)}` : '';
     let statusLabel = t.status;
     if (t.status === 'queued') {
       const pos = queuedTasks.findIndex(q => q.task_id === t.task_id) + 1;
       statusLabel = `queued #${pos}`;
     }
+    const prompt = escHtml((t.prompt || '').slice(0, 80));
+    const agentLabel = escHtml(t.agent || '?');
+    const dateStr = fmtDate(t.created_at);
     return `
-      <div class="bg-task-card ${active}" data-task-id="${t.task_id}" onclick="selectBgTask('${t.task_id}')">
-        <div class="bg-card-top">
-          <span class="bg-card-status ${statusClass}">${icon} ${statusLabel}</span>
-          <span class="bg-card-agent">${escHtml(t.agent || '?')} / ${runtimeIconHTML(t.runtime)}${escHtml(t.runtime || '?')}</span>
-        </div>
-        <div class="bg-card-prompt">${escHtml(t.prompt || '')}</div>
-        <div class="bg-card-time">${fmtDate(t.created_at)}${elapsed ? ` · ${elapsed}` : ''}</div>
-      </div>
-    `;
+      <div class="session-item bg-sidebar-item ${active}" onclick="selectBgTask('${t.task_id}')">
+        <div class="session-title">${icon} ${prompt || '(no prompt)'}</div>
+        <div class="session-preview">${agentLabel} · ${statusLabel}${elapsed} · ${dateStr}</div>
+      </div>`;
   }).join('');
 }
+
+// Keep backward compat alias
+function renderBgTasks() { renderBgTasksSidebar(); }
 
 function formatElapsed(isoDate) {
   if (!isoDate) return '';
@@ -2997,6 +3186,8 @@ function formatElapsed(isoDate) {
 // Make selectBgTask global so onclick works
 window.selectBgTask = function(taskId) {
   BG.selectedTaskId = taskId;
+  BG.activeDetailTab = null;  // reset tab choice for new task
+  BG.detailRenderedFinal = false;
   renderBgTasks();
   loadBgTaskDetail(taskId);
 };
@@ -3004,8 +3195,12 @@ window.selectBgTask = function(taskId) {
 async function loadBgTaskDetail(taskId) {
   const detail = $('bg-detail');
   const body = $('bg-detail-body');
-  show(detail);
-  $('bg-detail-title').textContent = `Task: ${taskId}`;
+
+  // Clear any previous logs poller
+  if (BG.logsPoller) {
+    clearInterval(BG.logsPoller);
+    BG.logsPoller = null;
+  }
 
   try {
     const t = await bgApi('GET', `/${taskId}`);
@@ -3014,7 +3209,6 @@ async function loadBgTaskDetail(taskId) {
     const statusClass = `bg-status-${t.status}`;
     const elapsed = t.status === 'running' ? formatElapsed(t.created_at) : '';
 
-    // Compute queue position for queued tasks
     let statusLabel = t.status;
     if (t.status === 'queued') {
       const queuedInList = BG.tasks.filter(x => x.status === 'queued').sort((a,b) => (a.created_at||'').localeCompare(b.created_at||''));
@@ -3025,6 +3219,7 @@ async function loadBgTaskDetail(taskId) {
     let actionsHtml = '';
     if (t.status === 'running') {
       actionsHtml = `<div class="bg-detail-actions">
+        <button class="btn btn-ghost btn-sm" onclick="showBgTaskLogs('${t.task_id}')">📋 Live Logs</button>
         <button class="btn btn-danger btn-sm" onclick="killBgTask('${t.task_id}')">🛑 Kill Task</button>
       </div>`;
     } else if (t.status === 'queued') {
@@ -3033,58 +3228,374 @@ async function loadBgTaskDetail(taskId) {
       </div>`;
     } else {
       actionsHtml = `<div class="bg-detail-actions">
-        <button class="btn btn-ghost btn-sm" onclick="viewBgTranscript('${t.task_id}')">📋 Full Transcript</button>
+        <button class="btn btn-ghost btn-sm" onclick="showBgTaskLogs('${t.task_id}')">📋 Logs</button>
+        <button class="btn btn-ghost btn-sm" onclick="viewBgTranscript('${t.task_id}')">📄 Transcript</button>
         <button class="btn btn-ghost btn-sm" onclick="deleteBgTask('${t.task_id}')">🗑️ Remove</button>
       </div>`;
     }
 
-    let outputHtml = '';
-    if (t.status === 'completed' && t.final_response) {
-      // For completed tasks, show nothing here — transcript button handles it
-    } else if (t.recent_output && t.recent_output.length > 0) {
-      outputHtml = `<div class="bg-detail-output">${escHtml(t.recent_output.join('\n'))}</div>`;
-    } else if (t.error) {
-      outputHtml = `<div class="bg-detail-output" style="color:#ff8888">${escHtml(t.error)}</div>`;
-    }
+    const timingHtml = (() => {
+      const started = t.created_at ? fmtDate(t.created_at) : '—';
+      const finished = t.completed_at ? fmtDate(t.completed_at) : null;
+      const dur = (t.created_at && t.completed_at)
+        ? (() => {
+            try {
+              const s = new Date(t.created_at).getTime();
+              const e = new Date(t.completed_at).getTime();
+              const sec = Math.round((e - s) / 1000);
+              return sec < 60 ? `${sec}s` : `${Math.floor(sec/60)}m ${sec%60}s`;
+            } catch { return null; }
+          })()
+        : null;
+      return `<div class="bg-transcript-timing">
+        <span>⏱ Started: ${escHtml(started)}</span>
+        ${elapsed ? `<span class="bg-elapsed-live" data-start="${escHtml(t.created_at || '')}">Elapsed: ${elapsed}</span>` : ''}
+        ${finished ? `<span>Finished: ${escHtml(finished)}</span>` : ''}
+        ${dur ? `<span>Duration: ${dur}</span>` : ''}
+      </div>`;
+    })();
+
+    const toolCallBadge = t.tool_call_count ? `<span class="bg-tool-badge">${t.tool_call_count}</span>` : '';
 
     body.innerHTML = `
-      <div class="bg-detail-meta">
-        <div class="bg-detail-meta-row">
-          <span class="bg-detail-meta-label">Status</span>
-          <span class="bg-card-status ${statusClass}">${icon} ${statusLabel}</span>
-          ${elapsed ? `<span style="font-size:11px;color:var(--text-muted);margin-left:8px">${elapsed}</span>` : ''}
-          ${t.status === 'queued' ? `<span style="font-size:11px;color:var(--text-muted);margin-left:8px">Waiting for a slot to open…</span>` : ''}
+      <div class="bg-detail-split">
+        <div class="bg-detail-left">
+          <div class="bg-detail-tabs">
+            <button class="bg-tab active" data-tab="details">Details</button>
+            <button class="bg-tab" data-tab="tools">🔧 Tools ${toolCallBadge}${t.status === 'running' ? '<span class="bg-live-dot"></span>' : ''}</button>
+          </div>
+          <div id="bg-tab-details" class="bg-tab-pane">
+            <div class="bg-detail-meta">
+              <div class="bg-detail-meta-row">
+                <span class="bg-detail-meta-label">Task ID</span>
+                <span class="bg-detail-meta-value" style="font-family:var(--font-mono);font-size:11px">${escHtml(taskId)}</span>
+              </div>
+              <div class="bg-detail-meta-row">
+                <span class="bg-detail-meta-label">Status</span>
+                <span class="bg-card-status ${statusClass}">${icon} ${statusLabel}</span>
+                ${elapsed ? `<span style="font-size:11px;color:var(--text-muted);margin-left:8px">${elapsed}</span>` : ''}
+                ${t.status === 'queued' ? `<span style="font-size:11px;color:var(--text-muted);margin-left:8px">Waiting for a slot to open…</span>` : ''}
+              </div>
+              <div class="bg-detail-meta-row">
+                <span class="bg-detail-meta-label">Agent</span>
+                <span class="bg-detail-meta-value">${escHtml(t.agent || '?')}</span>
+              </div>
+              <div class="bg-detail-meta-row">
+                <span class="bg-detail-meta-label">Runtime</span>
+                <span class="bg-detail-meta-value">${runtimeIconHTML(t.runtime)}${escHtml(t.runtime || '?')} / ${escHtml(t.model || '?')}</span>
+              </div>
+              <div class="bg-detail-meta-row">
+                <span class="bg-detail-meta-label">Started</span>
+                <span class="bg-detail-meta-value">${fmtDate(t.created_at)}</span>
+              </div>
+              ${t.completed_at ? `<div class="bg-detail-meta-row">
+                <span class="bg-detail-meta-label">Finished</span>
+                <span class="bg-detail-meta-value">${fmtDate(t.completed_at)}</span>
+              </div>` : ''}
+            </div>
+            <div class="bg-detail-prompt">${escHtml(t.prompt || '')}</div>
+            ${actionsHtml}
+          </div>
+          <div id="bg-tab-tools" class="bg-tab-pane hidden">
+            <div class="bg-tool-calls-panel" id="bg-tools-${taskId}">
+              <p style="color:var(--text-muted);font-size:12px;padding:8px">Loading tool calls…</p>
+            </div>
+          </div>
         </div>
-        <div class="bg-detail-meta-row">
-          <span class="bg-detail-meta-label">Agent</span>
-          <span class="bg-detail-meta-value">${escHtml(t.agent || '?')}</span>
+        <div class="bg-detail-right">
+          <div class="bg-logs-header">
+            <span class="bg-logs-title">Logs ${t.status === 'running' ? '<span class="bg-live-dot"></span>' : ''}</span>
+          </div>
+          ${timingHtml}
+          <div class="bg-transcript-panel" id="bg-transcript-${taskId}">
+            <p style="color:var(--text-muted);font-size:12px;padding:8px">Loading logs…</p>
+          </div>
         </div>
-        <div class="bg-detail-meta-row">
-          <span class="bg-detail-meta-label">Runtime</span>
-          <span class="bg-detail-meta-value">${runtimeIconHTML(t.runtime)}${escHtml(t.runtime || '?')} / ${escHtml(t.model || '?')}</span>
-        </div>
-        <div class="bg-detail-meta-row">
-          <span class="bg-detail-meta-label">Started</span>
-          <span class="bg-detail-meta-value">${fmtDate(t.created_at)}</span>
-        </div>
-        ${t.completed_at ? `<div class="bg-detail-meta-row">
-          <span class="bg-detail-meta-label">Finished</span>
-          <span class="bg-detail-meta-value">${fmtDate(t.completed_at)}</span>
-        </div>` : ''}
       </div>
-      <div class="bg-detail-prompt">${escHtml(t.prompt || '')}</div>
-      ${outputHtml}
-      ${actionsHtml}
     `;
+
+    // Tab switching (Details / Tools only — Logs always visible on right)
+    body.querySelectorAll('.bg-tab').forEach(tab => {
+      tab.addEventListener('click', () => {
+        body.querySelectorAll('.bg-tab').forEach(t2 => t2.classList.remove('active'));
+        tab.classList.add('active');
+        body.querySelectorAll('.bg-detail-left .bg-tab-pane').forEach(p => hide(p));
+        const pane = $(`bg-tab-${tab.dataset.tab}`);
+        show(pane);
+        BG.activeDetailTab = tab.dataset.tab;
+        if (tab.dataset.tab === 'tools') loadBgTaskToolCalls(taskId, t.status);
+      });
+    });
+
+    // Always load logs immediately (visible on right side)
+    loadBgTaskLogs(taskId, t.status);
+
+    // Restore previously active left tab, or default to details
+    const tabToOpen = BG.activeDetailTab || 'details';
+    if (tabToOpen !== 'logs') {
+      const targetTab = body.querySelector(`.bg-tab[data-tab="${tabToOpen}"]`);
+      if (targetTab) targetTab.click();
+    }
+
   } catch (err) {
     body.innerHTML = `<p style="color:#ff8888">Failed to load: ${escHtml(err.message)}</p>`;
   }
 }
 window.loadBgTaskDetail = loadBgTaskDetail;
 
+async function loadBgTaskLogs(taskId, status) {
+  const panel = $(`bg-transcript-${taskId}`);
+  if (!panel) return;
+
+  // If already loaded for a finished task, skip re-fetch (prevents flicker)
+  const currentStatus = BG.tasks.find(x => x.task_id === taskId)?.status || status;
+  if (panel.dataset.loaded === 'true' && currentStatus !== 'running' && currentStatus !== 'queued') return;
+
+  // Clear any previous poller
+  if (BG.logsPoller) {
+    clearInterval(BG.logsPoller);
+    BG.logsPoller = null;
+  }
+
+  async function fetchAndRender() {
+    try {
+      const currentStatus = BG.tasks.find(x => x.task_id === taskId)?.status || status;
+      let lines = [];
+      let error = null;
+      let finalResponse = null;
+
+      if (currentStatus === 'running' || currentStatus === 'queued') {
+        const t = await bgApi('GET', `/${taskId}`);
+        lines = t.recent_output || [];
+        error = t.error;
+      } else {
+        const data = await bgApi('GET', `/${taskId}/transcript`);
+        if (data.final_response) {
+          finalResponse = data.final_response;
+          lines = data.final_response.split('\n');
+        } else {
+          lines = data.output_lines || [];
+          error = data.error;
+        }
+      }
+
+      if (!lines.length && !error && !finalResponse) {
+        panel.innerHTML = '<p style="color:var(--text-muted);font-size:12px;padding:8px">No output yet…</p>';
+        return;
+      }
+
+      const wasAtBottom = panel.scrollHeight - panel.scrollTop - panel.clientHeight < 40;
+      const isRunning = currentStatus === 'running';
+
+      // For completed tasks with final_response, render as markdown
+      if (finalResponse && typeof marked !== 'undefined' && !isRunning) {
+        try {
+          const html = marked.parse(finalResponse, { breaks: true, gfm: true });
+          const sanitized = typeof DOMPurify !== 'undefined' ? DOMPurify.sanitize(html) : html;
+          panel.innerHTML = `<div class="bg-log-rendered">${sanitized}</div>`;
+        } catch {
+          panel.innerHTML = `<pre class="bg-transcript-pre">${escHtml(finalResponse)}</pre>`;
+        }
+      } else {
+        // Pre-formatted lines (running tasks or fallback)
+        const renderedLines = lines.map((line, i) => {
+          const esc = escHtml(line);
+          if (!detectToolCallLine(line)) return esc;
+          const isLastLine = i === lines.length - 1 && isRunning;
+          const gearCls = isLastLine ? 'tool-gear bg-tool-spinning' : 'tool-gear';
+          return '<span class="bg-tool-line"><span class="' + gearCls + '">⚙️</span> ' + esc + '</span>';
+        }).join('\n');
+        panel.innerHTML = `<pre class="bg-transcript-pre">${renderedLines}${error ? `\n\n[error] ${error}` : ''}</pre>`;
+      }
+
+      if (wasAtBottom || isRunning) {
+        panel.scrollTop = panel.scrollHeight;
+      }
+
+      // Mark as loaded for finished tasks to prevent re-fetching
+      if (currentStatus !== 'running' && currentStatus !== 'queued') {
+        panel.dataset.loaded = 'true';
+      }
+    } catch { /* ignore transient fetch errors */ }
+  }
+
+  await fetchAndRender();
+
+  // Poll every 3s for live output while task is running
+  const liveStatus = BG.tasks.find(x => x.task_id === taskId)?.status || status;
+  if (liveStatus === 'running') {
+    BG.logsPoller = setInterval(async () => {
+      const current = BG.tasks.find(x => x.task_id === taskId)?.status;
+      await fetchAndRender();
+      const elapsedEl = document.querySelector('.bg-elapsed-live');
+      if (elapsedEl) {
+        const start = elapsedEl.dataset.start;
+        if (start) elapsedEl.textContent = `Elapsed: ${formatElapsed(start)}`;
+      }
+      if (current && current !== 'running' && current !== 'queued') {
+        clearInterval(BG.logsPoller);
+        BG.logsPoller = null;
+      }
+    }, 3000);
+  }
+}
+
+// ── Tool Call Panel ─────────────────────────────────────────
+
+async function loadBgTaskToolCalls(taskId, status) {
+  const panel = $(`bg-tools-${taskId}`);
+  if (!panel) return;
+
+  // Clear any previous tool poller
+  if (BG.toolsPoller) {
+    clearInterval(BG.toolsPoller);
+    BG.toolsPoller = null;
+  }
+
+  async function fetchAndRenderTools() {
+    try {
+      const data = await bgApi('GET', `/${taskId}/tool-calls`);
+      const calls = data.tool_calls || [];
+
+      if (!calls.length) {
+        panel.innerHTML = `<div class="bg-tools-empty">
+          <span style="font-size:24px">🔧</span>
+          <p>No tool calls detected yet.</p>
+          <p style="font-size:11px;color:var(--text-muted)">Tool calls will appear here as the agent works.<br>Best visibility with Claude runtime (stream-json).</p>
+        </div>`;
+        return;
+      }
+
+      const wasAtBottom = panel.scrollHeight - panel.scrollTop - panel.clientHeight < 40;
+
+      panel.innerHTML = `
+        <div class="bg-tools-header">
+          <span class="bg-tools-count">${calls.length} tool call${calls.length !== 1 ? 's' : ''}</span>
+          <span class="bg-tools-runtime">${escHtml(data.status || '')}</span>
+        </div>
+        <div class="bg-tools-timeline">
+          ${calls.map((tc, i) => renderToolCall(tc, i)).join('')}
+        </div>
+      `;
+
+      // Toggle expand/collapse on tool call items
+      panel.querySelectorAll('.bg-tc-header').forEach(hdr => {
+        hdr.addEventListener('click', () => {
+          const item = hdr.closest('.bg-tc-item');
+          item.classList.toggle('expanded');
+        });
+      });
+
+      if (wasAtBottom || status === 'running') {
+        panel.scrollTop = panel.scrollHeight;
+      }
+    } catch (err) {
+      panel.innerHTML = `<p style="color:#ff8888;font-size:12px;padding:8px">Error loading tool calls: ${escHtml(err.message)}</p>`;
+    }
+  }
+
+  await fetchAndRenderTools();
+
+  // Poll for live tool calls while task is running
+  const liveStatus = BG.tasks.find(x => x.task_id === taskId)?.status || status;
+  if (liveStatus === 'running') {
+    BG.toolsPoller = setInterval(async () => {
+      const current = BG.tasks.find(x => x.task_id === taskId)?.status;
+      await fetchAndRenderTools();
+      if (current && current !== 'running' && current !== 'queued') {
+        clearInterval(BG.toolsPoller);
+        BG.toolsPoller = null;
+      }
+    }, 3000);
+  }
+}
+
+function renderToolCall(tc, index) {
+  const statusIcons = {
+    'detected': '🔵',
+    'start': '🟡',
+    'input_complete': '🟠',
+    'result': tc.is_error ? '🔴' : '🟢',
+    'completed': '🟢',
+    'failed': '🔴',
+  };
+  const statusColors = {
+    'detected': 'var(--tc-detected, #5599ff)',
+    'start': 'var(--tc-pending, #ffaa33)',
+    'input_complete': 'var(--tc-running, #ff8833)',
+    'result': tc.is_error ? 'var(--tc-failed, #ff4444)' : 'var(--tc-success, #44cc66)',
+    'completed': 'var(--tc-success, #44cc66)',
+    'failed': 'var(--tc-failed, #ff4444)',
+  };
+  const icon = statusIcons[tc.event || tc.status] || '⚪';
+  const color = statusColors[tc.event || tc.status] || '#888';
+  const name = escHtml(tc.name || 'unknown');
+  const tcId = escHtml(tc.id || '');
+  const timestamp = tc.timestamp || tc.started_at || '';
+  const timeStr = timestamp ? fmtTime(timestamp) : '';
+
+  let inputHtml = '';
+  if (tc.input !== undefined && tc.input !== null && tc.input !== '') {
+    const inputStr = typeof tc.input === 'object' ? JSON.stringify(tc.input, null, 2) : String(tc.input);
+    if (inputStr.length > 0) {
+      inputHtml = `<div class="bg-tc-section">
+        <div class="bg-tc-section-label">Input</div>
+        <pre class="bg-tc-code">${escHtml(inputStr)}</pre>
+      </div>`;
+    }
+  }
+
+  let outputHtml = '';
+  if (tc.output !== undefined && tc.output !== null && tc.output !== '') {
+    const outputStr = typeof tc.output === 'object' ? JSON.stringify(tc.output, null, 2) : String(tc.output);
+    outputHtml = `<div class="bg-tc-section">
+      <div class="bg-tc-section-label">Output</div>
+      <pre class="bg-tc-code">${escHtml(outputStr.substring(0, 2000))}${outputStr.length > 2000 ? '\n…truncated' : ''}</pre>
+    </div>`;
+  }
+
+  const runtimeBadge = tc.runtime ? `<span class="bg-tc-runtime">${escHtml(tc.runtime)}</span>` : '';
+
+  return `
+    <div class="bg-tc-item" style="--tc-color: ${color}">
+      <div class="bg-tc-connector"></div>
+      <div class="bg-tc-header">
+        <span class="bg-tc-icon">${icon}</span>
+        <span class="bg-tc-name">${name}</span>
+        ${runtimeBadge}
+        <span class="bg-tc-time">${timeStr}</span>
+        <span class="bg-tc-expand">▶</span>
+      </div>
+      <div class="bg-tc-body">
+        <div class="bg-tc-id">${tcId}</div>
+        ${inputHtml}
+        ${outputHtml}
+      </div>
+    </div>
+  `;
+}
+
+function fmtTime(isoDate) {
+  if (!isoDate) return '';
+  try {
+    const withTz = /(?:Z|[+-]\d{2}:\d{2})$/.test(isoDate) ? isoDate : `${isoDate}Z`;
+    const d = new Date(withTz);
+    return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+  } catch { return ''; }
+}
+
 function closeBgDetail() {
-  hide($('bg-detail'));
+  if (BG.logsPoller) {
+    clearInterval(BG.logsPoller);
+    BG.logsPoller = null;
+  }
+  if (BG.toolsPoller) {
+    clearInterval(BG.toolsPoller);
+    BG.toolsPoller = null;
+  }
+  $('bg-detail-body').innerHTML = '<p class="bg-detail-empty">Select a task from the sidebar to view details</p>';
   BG.selectedTaskId = null;
+  BG.activeDetailTab = null;
   renderBgTasks();
 }
 
@@ -3146,6 +3657,51 @@ window.viewBgTranscript = async function(taskId) {
   } catch (err) {
     body.innerHTML = `<p style="color:#ff8888">Failed: ${escHtml(err.message)}</p>`;
   }
+};
+
+// Live Logs viewer
+let _bgLogsPollerTimer = null;
+
+window.showBgTaskLogs = async function(taskId) {
+  const body = $('bg-detail-body');
+  if (_bgLogsPollerTimer) { clearInterval(_bgLogsPollerTimer); _bgLogsPollerTimer = null; }
+
+  async function renderLogs() {
+    try {
+      const data = await bgApi('GET', '/' + taskId + '/logs');
+      const lines = data.output_lines || [];
+      const status = data.status || 'unknown';
+      const started = data.created_at ? fmtDate(data.created_at) : '--';
+      const finished = data.completed_at ? fmtDate(data.completed_at) : '';
+      const elapsed = data.created_at ? formatElapsed(data.created_at) : '';
+      const sicons = { running: '\u{1F7E2}', completed: '\u2705', failed: '\u274C', queued: '\u23F3' };
+      const icon = sicons[status] || '\u2753';
+      let timing = '<div style="font-size:11px;color:var(--text-muted);margin-bottom:8px">' + icon + ' ' + escHtml(status);
+      if (started) timing += ' &middot; Started: ' + escHtml(started);
+      if (finished) timing += ' &middot; Finished: ' + escHtml(finished);
+      else if (elapsed) timing += ' &middot; Elapsed: ' + escHtml(elapsed);
+      timing += '</div>';
+      const logText = lines.length ? lines.join('\n') : '(no output yet)';
+      const oldDiv = $('bg-logs-output');
+      const atBottom = !oldDiv || (oldDiv.scrollHeight - oldDiv.scrollTop <= oldDiv.clientHeight + 40);
+      const polling = status === 'running' ? '<span style="font-size:11px;color:var(--text-muted)">Auto-updating...</span>' : '';
+      body.innerHTML = '<div style="margin-bottom:12px;display:flex;gap:8px;align-items:center"><button class="btn btn-ghost btn-sm" onclick="loadBgTaskDetail(\'' + taskId + '\')">&#8592; Back</button>' + polling + '</div>'
+        + timing + '<pre id="bg-logs-output" style="background:var(--bg-secondary,#111);border:1px solid var(--border-color,#333);border-radius:6px;padding:12px;font-size:11px;line-height:1.5;max-height:420px;overflow-y:auto;white-space:pre-wrap;word-break:break-all">' + escHtml(logText) + '</pre>';
+      const nd = $('bg-logs-output');
+      if (nd && atBottom) nd.scrollTop = nd.scrollHeight;
+      if (status !== 'running' && _bgLogsPollerTimer) { clearInterval(_bgLogsPollerTimer); _bgLogsPollerTimer = null; }
+    } catch (err) {
+      body.innerHTML = '<div style="margin-bottom:12px"><button class="btn btn-ghost btn-sm" onclick="loadBgTaskDetail(\'' + taskId + '\')">&#8592; Back</button></div><p style="color:#ff8888">Log error: ' + escHtml(err.message) + '</p>';
+      if (_bgLogsPollerTimer) { clearInterval(_bgLogsPollerTimer); _bgLogsPollerTimer = null; }
+    }
+  }
+
+  body.innerHTML = '<p style="color:var(--text-muted);font-size:13px;">Loading logs...</p>';
+  await renderLogs();
+  try {
+    const s = await bgApi('GET', '/' + taskId + '/logs');
+    if (s.status === 'running') _bgLogsPollerTimer = setInterval(renderLogs, 2000);
+  } catch (_) {}
 };
 
 // Toast helper
@@ -4916,35 +5472,264 @@ if (document.readyState !== 'loading') {
 
 /* ── Settings & Logs Module ─────────────────────────────────────────────── */
 (function initSettingsAndLogs() {
-  /* --- Settings Modal --- */
-  const btnSettings     = document.getElementById('btn-settings');
-  const modalSettings   = document.getElementById('modal-settings');
-  const settingsTA      = document.getElementById('settings-textarea');
-  const settingsErr     = document.getElementById('settings-error');
-  const btnSettingsSave = document.getElementById('btn-settings-save');
-  const btnSettingsClose = document.getElementById('btn-settings-close');
-  const btnSettingsCancel = document.getElementById('btn-settings-cancel');
+  /* ── Agent Settings Form Panel ─────────────────────────────────────────── */
 
-  function showSettingsErr(msg) {
-    if (!settingsErr) return;
-    settingsErr.textContent = msg;
-    settingsErr.classList.remove('hidden');
-  }
-  function hideSettingsErr() {
-    if (settingsErr) settingsErr.classList.add('hidden');
+  /** State for the settings panel */
+  const ASF = {
+    config: null,         // full { agents: [...] }
+    originalPerms: null,  // deep copy of permissions before editing
+    originalAgent: null,  // deep copy of full agent before editing
+    selectedName: null,   // currently selected agent name
+  };
+
+  /* DOM refs */
+  const modalSettings  = document.getElementById('modal-settings');
+  const btnSettings    = document.getElementById('btn-settings');
+  const btnSettClose   = document.getElementById('btn-settings-close');
+  const btnSettCancel  = document.getElementById('btn-settings-cancel');
+  const btnSettSave    = document.getElementById('btn-settings-save');
+  const btnSettReload  = document.getElementById('btn-settings-reload');
+  const btnSettAddAgent = document.getElementById('btn-settings-add-agent');
+  const btnDeleteAgent = document.getElementById('asf-delete-agent');
+  const asfSelector    = document.getElementById('asf-agent-selector');
+  const asfError       = document.getElementById('asf-error');
+  const asfSuccess     = document.getElementById('asf-success');
+  const asfPermChanged = document.getElementById('asf-perm-changed');
+  const asfModeBadge   = document.getElementById('asf-perm-mode-badge');
+  const asfDirtyDot    = document.getElementById('asf-dirty-dot');
+
+  /* Field refs */
+  const F = {
+    name:        () => document.getElementById('asf-name'),
+    path:        () => document.getElementById('asf-path'),
+    description: () => document.getElementById('asf-description'),
+    todoDir:     () => document.getElementById('asf-todo-dir'),
+    runtime:     () => document.getElementById('asf-runtime'),
+    model:       () => document.getElementById('asf-model'),
+    permMode:    () => document.getElementById('asf-perm-mode'),
+  };
+
+  /** Permission list field ids → [section, key] mapping */
+  const PERM_LISTS = {
+    'asf-dir-allow-read':   ['directories', 'allow_read'],
+    'asf-dir-allow-write':  ['directories', 'allow_write'],
+    'asf-dir-deny':         ['directories', 'deny'],
+    'asf-tools-allow':      ['tools', 'allow'],
+    'asf-tools-deny':       ['tools', 'deny'],
+    'asf-net-allow':        ['network', 'allow_urls'],
+    'asf-net-deny':         ['network', 'deny_urls'],
+    'asf-mcp-allow':        ['mcp', 'allow'],
+    'asf-mcp-deny':         ['mcp', 'deny'],
+  };
+
+  function deepClone(obj) {
+    return JSON.parse(JSON.stringify(obj));
   }
 
+  function emptyPermissions() {
+    return {
+      mode: 'restricted',
+      directories: { allow_read: [], allow_write: [], deny: [] },
+      tools: { allow: ['*'], deny: [] },
+      network: { allow_urls: ['*'], deny_urls: [] },
+      mcp: { allow: [], deny: ['*'] },
+    };
+  }
+
+  /* ── Banner helpers ─────────────────────────────────────────────────────── */
+  function showErr(msg) {
+    if (!asfError) return;
+    asfError.textContent = msg;
+    asfError.classList.remove('hidden');
+    if (asfSuccess) asfSuccess.classList.add('hidden');
+  }
+  function showOk(msg) {
+    if (!asfSuccess) return;
+    asfSuccess.textContent = msg;
+    asfSuccess.classList.remove('hidden');
+    if (asfError) asfError.classList.add('hidden');
+    setTimeout(() => asfSuccess && asfSuccess.classList.add('hidden'), 3500);
+  }
+  function clearBanners() {
+    if (asfError)   asfError.classList.add('hidden');
+    if (asfSuccess) asfSuccess.classList.add('hidden');
+  }
+
+  /* ── Tag list rendering ─────────────────────────────────────────────────── */
+  /** Render a list of strings as tags in a container */
+  function renderTagList(containerId, values, isDeny) {
+    const el = document.getElementById(containerId);
+    if (!el) return;
+    el.innerHTML = '';
+    (values || []).forEach((v, i) => {
+      const isWild = v === '*';
+      const tag = document.createElement('span');
+      tag.className = 'asf-tag' + (isDeny ? ' asf-tag-deny' : (isWild ? ' asf-tag-wild' : ' asf-tag-allow'));
+      tag.title = v;
+      tag.innerHTML = `<span class="asf-tag-text">${escHtml(v)}</span><button type="button" class="asf-tag-rm" data-container="${containerId}" data-idx="${i}" aria-label="Remove ${escHtml(v)}">×</button>`;
+      el.appendChild(tag);
+    });
+  }
+
+  /** Read all tags from a container as an array of strings */
+  function readTagList(containerId) {
+    const el = document.getElementById(containerId);
+    if (!el) return [];
+    return Array.from(el.querySelectorAll('.asf-tag-text')).map(s => s.textContent);
+  }
+
+  /** Add a value to a tag list container */
+  function addTagToList(containerId) {
+    const rowEl = document.querySelector(`[data-add-target="${containerId}"]`);
+    const inputEl = document.querySelector(`input[data-add-target="${containerId}"]`);
+    if (!inputEl) return;
+    const val = inputEl.value.trim();
+    if (!val) return;
+    const current = readTagList(containerId);
+    if (current.includes(val)) { inputEl.value = ''; return; }
+    const isDeny = containerId.includes('-deny');
+    renderTagList(containerId, [...current, val], isDeny);
+    inputEl.value = '';
+    updatePermChangedIndicator();
+  }
+
+  /** Remove a tag by index */
+  function removeTag(containerId, idx) {
+    const current = readTagList(containerId);
+    current.splice(idx, 1);
+    const isDeny = containerId.includes('-deny');
+    renderTagList(containerId, current, isDeny);
+    updatePermChangedIndicator();
+  }
+
+  /* ── Permissions change detection ──────────────────────────────────────── */
+  function getPermissionsFromForm() {
+    const perms = emptyPermissions();
+    perms.mode = F.permMode() ? F.permMode().value : 'restricted';
+    for (const [id, [section, key]] of Object.entries(PERM_LISTS)) {
+      if (!perms[section]) perms[section] = {};
+      perms[section][key] = readTagList(id);
+    }
+    return perms;
+  }
+
+  function permissionsChanged(oldPerms, newPerms) {
+    if (!oldPerms && !newPerms) return false;
+    if (!oldPerms || !newPerms) return true;
+    return JSON.stringify(oldPerms) !== JSON.stringify(newPerms);
+  }
+
+  function updatePermChangedIndicator() {
+    const current = getPermissionsFromForm();
+    const changed = permissionsChanged(ASF.originalPerms, current);
+    if (asfPermChanged)  asfPermChanged.classList.toggle('hidden', !changed);
+    if (btnSettReload) {
+      btnSettReload.classList.toggle('hidden', !changed);
+    }
+    // Update dirty dot — show if any field has changed from the original
+    updateDirtyIndicator();
+  }
+
+  function updateDirtyIndicator() {
+    if (!asfDirtyDot || !ASF.originalAgent) return;
+    const current = collectFormData();
+    const dirty = JSON.stringify(current) !== JSON.stringify(ASF.originalAgent);
+    asfDirtyDot.classList.toggle('hidden', !dirty);
+  }
+
+  function updateModeBadge(mode) {
+    if (!asfModeBadge) return;
+    asfModeBadge.textContent = mode || '';
+    asfModeBadge.className = 'asf-mode-badge asf-mode-' + (mode || 'restricted');
+  }
+
+  /* ── Populate form from agent object ────────────────────────────────────── */
+  function populateForm(agent) {
+    if (!agent) return;
+    const set = (fn, val) => { const el = fn(); if (el) el.value = val || ''; };
+    set(F.name,        agent.name);
+    set(F.path,        agent.path);
+    set(F.description, agent.description);
+    set(F.todoDir,     agent.todo_dir);
+    set(F.runtime,     agent.runtime);
+    set(F.model,       agent.model);
+
+    const perms = agent.permissions || emptyPermissions();
+    set(F.permMode, perms.mode);
+    updateModeBadge(perms.mode);
+
+    for (const [id, [section, key]] of Object.entries(PERM_LISTS)) {
+      const vals = perms[section] ? (perms[section][key] || []) : [];
+      const isDeny = id.includes('-deny');
+      renderTagList(id, vals, isDeny);
+    }
+
+    ASF.originalPerms = deepClone(perms);
+    ASF.originalAgent = deepClone(agent);
+    updatePermChangedIndicator();
+    clearBanners();
+  }
+
+  /* ── Collect form data into agent object ────────────────────────────────── */
+  function collectFormData() {
+    const get = (fn) => { const el = fn(); return el ? el.value.trim() : ''; };
+    const agent = {
+      name:        get(F.name),
+      path:        get(F.path),
+      description: get(F.description) || undefined,
+      todo_dir:    get(F.todoDir)     || undefined,
+      runtime:     get(F.runtime)     || undefined,
+      model:       get(F.model)       || undefined,
+      permissions: getPermissionsFromForm(),
+    };
+    // Strip undefined keys
+    Object.keys(agent).forEach(k => agent[k] === undefined && delete agent[k]);
+    return agent;
+  }
+
+  /* ── Validation ──────────────────────────────────────────────────────────── */
+  function validate(agent) {
+    const errs = [];
+    if (!agent.name) errs.push('Name is required');
+    else if (!/^[a-z0-9_-]+$/.test(agent.name)) errs.push('Name must be lowercase with hyphens/underscores only');
+    if (!agent.path) errs.push('Working path is required');
+    else if (!agent.path.startsWith('/')) errs.push('Working path must start with /');
+    if (agent.todo_dir && !agent.todo_dir.startsWith('/')) errs.push('TODO directory must start with /');
+    return errs;
+  }
+
+  /* ── Populate agent selector dropdown ──────────────────────────────────── */
+  function populateSelector(agents, selectName) {
+    if (!asfSelector) return;
+    asfSelector.innerHTML = '';
+    agents.forEach(a => {
+      const opt = document.createElement('option');
+      opt.value = a.name;
+      opt.textContent = a.name;
+      if (a.name === selectName) opt.selected = true;
+      asfSelector.appendChild(opt);
+    });
+  }
+
+  /* ── Open settings ──────────────────────────────────────────────────────── */
   async function openSettings() {
-    if (!modalSettings || !settingsTA) return;
-    hideSettingsErr();
-    settingsTA.value = 'Loading...';
+    if (!modalSettings) return;
+    clearBanners();
     modalSettings.classList.remove('hidden');
+    if (btnSettSave) { btnSettSave.disabled = true; btnSettSave.textContent = 'Loading…'; }
     try {
-      const data = await apiRequest('GET', '/agents-config');
-      settingsTA.value = JSON.stringify(data, null, 2);
+      ASF.config = await apiRequest('GET', '/agents-config');
+      const agents = ASF.config.agents || [];
+      const firstName = agents.length ? agents[0].name : null;
+      populateSelector(agents, firstName);
+      if (firstName) {
+        ASF.selectedName = firstName;
+        populateForm(agents[0]);
+      }
     } catch (e) {
-      settingsTA.value = '';
-      showSettingsErr('Failed to load: ' + e.message);
+      showErr('Failed to load agents: ' + e.message);
+    } finally {
+      if (btnSettSave) { btnSettSave.disabled = false; btnSettSave.textContent = '💾 Save'; }
     }
   }
 
@@ -4952,33 +5737,162 @@ if (document.readyState !== 'loading') {
     if (modalSettings) modalSettings.classList.add('hidden');
   }
 
+  /* ── Save settings ──────────────────────────────────────────────────────── */
   async function saveSettings() {
-    hideSettingsErr();
-    let parsed;
+    clearBanners();
+    const agent = collectFormData();
+    const errs = validate(agent);
+    if (errs.length) { showErr(errs.join(' • ')); return; }
+
+    if (!ASF.config) return;
+    const idx = ASF.config.agents.findIndex(a => a.name === ASF.selectedName);
+    const newAgents = idx >= 0
+      ? ASF.config.agents.map((a, i) => i === idx ? agent : a)
+      : [...ASF.config.agents, agent];
+    const payload = { agents: newAgents };
+
+    if (btnSettSave) { btnSettSave.disabled = true; btnSettSave.textContent = 'Saving…'; }
     try {
-      parsed = JSON.parse(settingsTA.value);
+      await apiRequest('PUT', '/agents-config', payload);
+      ASF.config = payload;
+      ASF.selectedName = agent.name;
+      ASF.originalPerms = deepClone(agent.permissions);
+      ASF.originalAgent = deepClone(agent);
+      populateSelector(newAgents, agent.name);
+      updatePermChangedIndicator();
+      updateDirtyIndicator();
+      showOk('✓ Agent settings saved');
     } catch (e) {
-      showSettingsErr('Invalid JSON: ' + e.message);
-      return;
-    }
-    try {
-      const result = await apiRequest('PUT', '/agents-config', parsed);
-      closeSettings();
-      // Brief success toast using existing notification pattern if available
-      console.log('Settings saved:', result);
-    } catch (e) {
-      showSettingsErr('Save failed: ' + e.message);
+      showErr('Save failed: ' + e.message);
+    } finally {
+      if (btnSettSave) { btnSettSave.disabled = false; btnSettSave.textContent = '💾 Save'; }
     }
   }
 
-  if (btnSettings)       btnSettings.addEventListener('click', openSettings);
-  if (btnSettingsSave)   btnSettingsSave.addEventListener('click', saveSettings);
-  if (btnSettingsClose)  btnSettingsClose.addEventListener('click', closeSettings);
-  if (btnSettingsCancel) btnSettingsCancel.addEventListener('click', closeSettings);
-  // Close on overlay click
+  /* ── Reload services ────────────────────────────────────────────────────── */
+  async function reloadServices() {
+    if (btnSettReload) { btnSettReload.disabled = true; btnSettReload.textContent = 'Reloading…'; }
+    try {
+      await apiRequest('POST', '/reload-agents');
+      showOk('✓ Agents reloaded in memory');
+    } catch(e) {
+      showOk('⚠ Could not hot-reload — changes saved to disk (restart service to apply)');
+    } finally {
+      if (btnSettReload) { btnSettReload.disabled = false; btnSettReload.textContent = '🔄 Reload Services'; }
+    }
+  }
+
+  /* ── Event delegation for tag lists ────────────────────────────────────── */
   if (modalSettings) {
     modalSettings.addEventListener('click', (e) => {
-      if (e.target === modalSettings) closeSettings();
+      // Close on overlay click
+      if (e.target === modalSettings) { closeSettings(); return; }
+
+      // Remove tag button
+      if (e.target.classList.contains('asf-tag-rm')) {
+        const containerId = e.target.dataset.container;
+        const idx = parseInt(e.target.dataset.idx, 10);
+        removeTag(containerId, idx);
+        return;
+      }
+
+      // Add tag button
+      if (e.target.classList.contains('asf-add-btn')) {
+        addTagToList(e.target.dataset.addTarget);
+        return;
+      }
+    });
+
+    // Enter key in tag inputs
+    modalSettings.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && e.target.classList.contains('asf-tag-input')) {
+        e.preventDefault();
+        addTagToList(e.target.dataset.addTarget);
+      }
+    });
+
+    // Mode badge update
+    const permModeEl = F.permMode();
+    if (permModeEl) {
+      permModeEl.addEventListener('change', () => {
+        updateModeBadge(permModeEl.value);
+        updatePermChangedIndicator();
+      });
+    }
+  }
+
+  // Agent selector change
+  if (asfSelector) {
+    asfSelector.addEventListener('change', () => {
+      const name = asfSelector.value;
+      ASF.selectedName = name;
+      const agent = (ASF.config?.agents || []).find(a => a.name === name);
+      if (agent) populateForm(agent);
+    });
+  }
+
+  if (btnSettings)   btnSettings.addEventListener('click',   openSettings);
+  if (btnSettSave)   btnSettSave.addEventListener('click',   saveSettings);
+  if (btnSettClose)  btnSettClose.addEventListener('click',  closeSettings);
+  if (btnSettCancel) btnSettCancel.addEventListener('click', () => {
+    // Discard: restore original
+    if (ASF.originalAgent && ASF.config) {
+      const agent = (ASF.config.agents || []).find(a => a.name === ASF.selectedName);
+      if (agent) populateForm(agent);
+    }
+  });
+  if (btnSettReload) btnSettReload.addEventListener('click', reloadServices);
+
+  // Dirty detection on basic text fields
+  if (modalSettings) {
+    ['asf-name','asf-path','asf-description','asf-todo-dir','asf-runtime','asf-model'].forEach(id => {
+      const el = document.getElementById(id);
+      if (el) el.addEventListener('input', updateDirtyIndicator);
+    });
+  }
+
+  // Add new agent
+  if (btnSettAddAgent) {
+    btnSettAddAgent.addEventListener('click', () => {
+      if (!ASF.config) return;
+      const newAgent = {
+        name: 'new-agent',
+        path: '/opt/',
+        description: '',
+        permissions: emptyPermissions(),
+      };
+      ASF.config.agents.push(newAgent);
+      populateSelector(ASF.config.agents, 'new-agent');
+      ASF.selectedName = 'new-agent';
+      ASF.originalAgent = null; // it's new
+      populateForm(newAgent);
+      const nameEl = F.name();
+      if (nameEl) { nameEl.focus(); nameEl.select(); }
+    });
+  }
+
+  // Delete agent
+  if (btnDeleteAgent) {
+    btnDeleteAgent.addEventListener('click', async () => {
+      if (!ASF.config || !ASF.selectedName) return;
+      const name = ASF.selectedName;
+      if (!confirm(`Delete agent "${name}"? This cannot be undone.`)) return;
+      const newAgents = ASF.config.agents.filter(a => a.name !== name);
+      const payload = { agents: newAgents };
+      try {
+        await apiRequest('PUT', '/agents-config', payload);
+        ASF.config = payload;
+        if (newAgents.length) {
+          populateSelector(newAgents, newAgents[0].name);
+          ASF.selectedName = newAgents[0].name;
+          populateForm(newAgents[0]);
+        } else {
+          if (asfSelector) asfSelector.innerHTML = '';
+        }
+        showOk(`✓ Agent "${name}" deleted`);
+      } catch(e) {
+        showErr('Delete failed: ' + e.message);
+      }
     });
   }
 
@@ -5094,3 +6008,4 @@ if (document.readyState !== 'loading') {
     });
   }
 })();
+___BEGIN___COMMAND_DONE_MARKER___0
