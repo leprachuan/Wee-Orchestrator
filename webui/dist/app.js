@@ -3208,7 +3208,8 @@ window.selectBgTask = function(taskId) {
 async function loadBgTaskDetail(taskId) {
   const detail = $('bg-detail');
   const body = $('bg-detail-body');
-  show(detail);
+  const closeBtn = $('btn-bg-detail-close');
+  if (closeBtn) closeBtn.style.display = '';
   $('bg-detail-title').textContent = `Task: ${taskId}`;
 
   // Clear any previous logs poller
@@ -3573,7 +3574,10 @@ function closeBgDetail() {
     clearInterval(BG.toolsPoller);
     BG.toolsPoller = null;
   }
-  hide($('bg-detail'));
+  $('bg-detail-title').textContent = 'Task Details';
+  $('bg-detail-body').innerHTML = '<p class="bg-detail-empty">← Select a task to view details</p>';
+  const closeBtn = $('btn-bg-detail-close');
+  if (closeBtn) closeBtn.style.display = 'none';
   BG.selectedTaskId = null;
   BG.activeDetailTab = null;
   renderBgTasks();

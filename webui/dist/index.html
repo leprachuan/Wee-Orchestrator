@@ -300,12 +300,14 @@
         </div>
 
         <!-- Detail panel -->
-        <aside id="bg-detail" class="bg-detail glass-panel hidden">
+        <aside id="bg-detail" class="bg-detail glass-panel">
           <div class="bg-detail-header">
             <h3 id="bg-detail-title">Task Details</h3>
-            <button id="btn-bg-detail-close" class="btn-icon" title="Close">✕</button>
+            <button id="btn-bg-detail-close" class="btn-icon" title="Deselect" style="display:none">✕</button>
           </div>
-          <div id="bg-detail-body" class="bg-detail-body"></div>
+          <div id="bg-detail-body" class="bg-detail-body">
+            <p class="bg-detail-empty">← Select a task to view details</p>
+          </div>
         </aside>
       </div>
     </section>

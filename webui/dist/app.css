@@ -1259,13 +1259,18 @@ html, body {
 }
 
 .bg-tasks-list {
-  flex: 1;
+  width: 280px;
+  flex-shrink: 0;
   overflow-y: auto;
-  padding: 16px;
+  padding: 8px;
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 4px;
+  border-right: 1px solid var(--glass-border);
 }
+.bg-tasks-list::-webkit-scrollbar { width: 4px; }
+.bg-tasks-list::-webkit-scrollbar-track { background: transparent; }
+.bg-tasks-list::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.15); border-radius: 2px; }
 
 .bg-empty {
   color: var(--text-muted);
@@ -1275,19 +1280,19 @@ html, body {
 }
 
 .bg-task-card {
-  background: var(--glass-bg);
-  border: 1px solid var(--glass-border);
-  border-radius: var(--radius);
-  padding: 14px 16px;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  padding: 8px 10px;
   cursor: pointer;
   transition: background 0.15s, border-color 0.15s;
 }
 .bg-task-card:hover {
   background: rgba(255,255,255,0.08);
-  border-color: rgba(255,255,255,0.15);
+  border-color: rgba(255,255,255,0.12);
 }
 .bg-task-card.active {
-  border-color: var(--accent);
+  border-color: rgba(62,207,142,0.3);
   background: rgba(62,207,142,0.08);
 }
 
@@ -1333,9 +1338,8 @@ html, body {
 
 /* Detail panel */
 .bg-detail {
-  width: 420px;
-  min-width: 320px;
-  border-left: 1px solid var(--glass-border);
+  flex: 1;
+  min-width: 0;
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -1356,6 +1360,15 @@ html, body {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.bg-detail-empty {
+  color: var(--text-muted);
+  font-size: 13px;
+  text-align: center;
+  margin-top: 80px;
+  padding: 0 24px;
+  line-height: 1.7;
 }
 
 .bg-detail-body {
@@ -1841,7 +1854,8 @@ html, body {
 /* Responsive: collapse detail on narrow viewports */
 @media (max-width: 700px) {
   .sched-detail { width: 100%; position: absolute; inset: 0; z-index: 20; }
-  .bg-detail { width: 100%; position: absolute; inset: 0; z-index: 20; }
+  .bg-detail { flex: 1; min-width: 0; }
+  .bg-tasks-list { width: 220px; }
 }
 
 /* ============================================
