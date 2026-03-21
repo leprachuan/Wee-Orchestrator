@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# update_orchestrator.sh — Self-updating script for Wee Orchestrator (dev).
+# update_orchestrator.sh — Self-updating script for Wee Orchestrator.
+# Auto-detects whether it's running in dev or prod based on its own location.
 # Designed to run FULLY DETACHED from the parent service so it survives
 # the systemd restart it triggers.
 #
@@ -7,31 +8,53 @@
 
 set -euo pipefail
 
-REPO_DIR="/opt/n8n-copilot-shim-dev"
-LOG="/tmp/wee-update.log"
-SERVICES=(
-    "agent-manager-api-dev.service"
-    "task-scheduler-executor-dev.service"
-    "webex-connector-dev.service"
-    "telegram-bot-listener-dev.service"
-)
+# Auto-detect repo dir from the script's own location
+REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# Detect environment from repo dir name
+if [[ "$REPO_DIR" == *"-dev" ]]; then
+    ENV_NAME="Dev"
+    BRANCH="dev"
+    LOG="/tmp/wee-update.log"
+    SERVICES=(
+        "agent-manager-api-dev.service"
+        "task-scheduler-executor-dev.service"
+        "webex-connector-dev.service"
+        "telegram-bot-listener-dev.service"
+    )
+else
+    ENV_NAME="Prod"
+    BRANCH="main"
+    LOG="/tmp/wee-update-prod.log"
+    SERVICES=(
+        "agent-manager-api.service"
+        "task-scheduler-executor.service"
+        "webex-connector.service"
+        "telegram-bot-listener.service"
+    )
+fi
+
 HEALTH_WAIT=(5 3 3 5)
 
 exec > "$LOG" 2>&1
-echo "=== Wee Orchestrator Dev Update ==="
+echo "=== Wee Orchestrator $ENV_NAME Update ==="
+echo "Repo:    $REPO_DIR"
+echo "Branch:  $BRANCH"
 echo "Started: $(date -Iseconds)"
 echo "PID: $$  PPID: $PPID  SID: $(ps -o sid= -p $$)"
 echo ""
 
 # ------------------------------------------------------------------
 # Helper: send Telegram notification to all allowed users
+# Uses the telegram_config.json from the correct repo
 # ------------------------------------------------------------------
 notify() {
     local msg="$1"
-    python3 - "$msg" <<'PYEOF'
+    local repo="$REPO_DIR"
+    python3 - "$msg" "$repo" <<'PYEOF'
 import sys, json, os
 try:
-    repo = "/opt/n8n-copilot-shim-dev"
+    repo = sys.argv[2]
     sys.path.insert(0, repo)
     from telegram_connector import TelegramConnector
     cfg_path = os.path.join(repo, "telegram_config.json")
@@ -60,24 +83,32 @@ sleep 3
 # Step 1: Git pull
 # ------------------------------------------------------------------
 cd "$REPO_DIR"
-echo "--- Git pull ---"
-git fetch origin dev 2>&1 || true
+echo "--- Git pull ($BRANCH) ---"
+git fetch origin "$BRANCH" 2>&1 || true
 BEFORE=$(git rev-parse --short HEAD)
-if ! git pull origin dev 2>&1; then
+if ! git pull origin "$BRANCH" 2>&1; then
     echo "ERROR: git pull failed"
-    notify "❌ Dev Wee Orchestrator update FAILED — git pull error. Check /tmp/wee-update.log"
+    notify "❌ $ENV_NAME Wee Orchestrator update FAILED — git pull error. Check $LOG"
     exit 1
 fi
 AFTER=$(git rev-parse --short HEAD)
-LATEST=$(git log --oneline -1)
+
+# Build changelog: all commits between BEFORE and AFTER
+if [ "$BEFORE" = "$AFTER" ]; then
+    CHANGELOG="(already up to date — no new commits)"
+else
+    CHANGELOG=$(git log --oneline "${BEFORE}..${AFTER}" 2>/dev/null || echo "(could not read changelog)")
+fi
+
 echo "Before: $BEFORE  After: $AFTER"
-echo "Latest: $LATEST"
+echo "Changelog:"
+echo "$CHANGELOG"
 echo ""
 
 # ------------------------------------------------------------------
 # Step 2: Post-pull setup (install new deps if requirements changed)
 # ------------------------------------------------------------------
-if git diff "$BEFORE".."$AFTER" --name-only | grep -q 'requirements.txt'; then
+if [ "$BEFORE" != "$AFTER" ] && git diff "$BEFORE".."$AFTER" --name-only | grep -q 'requirements.txt'; then
     echo "--- requirements.txt changed — installing ---"
     pip install -r requirements.txt 2>&1 || echo "WARNING: pip install failed"
     echo ""
@@ -125,25 +156,29 @@ for svc in "${SERVICES[@]}"; do
 done
 
 if [ ${#FAILED[@]} -eq 0 ] && $ALL_OK; then
-    notify "✅ Dev Wee Orchestrator updated successfully.
+    notify "✅ $ENV_NAME Wee Orchestrator updated successfully.
 
-Pulled: $LATEST
-Before: $BEFORE → After: $AFTER
+$BEFORE → $AFTER
 
-Services: all ${#SERVICES[@]} active"
+Changes:
+$CHANGELOG
+
+Services: all ${#SERVICES[@]} active ✓"
     echo ""
     echo "=== Update complete (success) ==="
 else
-    notify "⚠️ Dev Wee Orchestrator update completed WITH ISSUES.
+    notify "⚠️ $ENV_NAME Wee Orchestrator update completed WITH ISSUES.
 
-Pulled: $LATEST
-Before: $BEFORE → After: $AFTER
+$BEFORE → $AFTER
+
+Changes:
+$CHANGELOG
 
 Service status:
 $(echo -e "$STATUS_LINES")
 Failed: ${FAILED[*]}
 
-Check: /tmp/wee-update.log"
+Check: $LOG"
     echo ""
     echo "=== Update complete (with failures) ==="
 fi
