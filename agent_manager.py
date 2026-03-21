@@ -4820,10 +4820,11 @@ You can mention an agent in your prompt and it will auto-delegate:
                 if not result.get("success"):
                     return f"❌ {result.get('message', 'Job not found.')}"
                 j = result["result"]
+                cron_line = f"\n• **Cron:** `{j['cron']}`" if j.get("cron") else ""
                 return (
                     f"📋 **Job: {j['name']}**\n\n"
                     f"• **ID:** `{j['id']}`\n"
-                    f"• **Schedule:** `{j['schedule']}`\n"
+                    f"• **Schedule:** `{j['schedule']}`{cron_line}\n"
                     f"• **Next run:** `{j.get('next_run','?')}`\n"
                     f"• **Last run:** `{j.get('last_run','never')}`\n"
                     f"• **Agent:** `{j.get('agent','?')}` / Runtime: `{j.get('runtime','?')}`\n"
@@ -4882,11 +4883,12 @@ You can mention an agent in your prompt and it will auto-delegate:
                 )
                 if result.get("success"):
                     j = result["result"]
+                    cron_line = f"\n• **Cron:** `{j['cron']}`" if j.get("cron") else ""
                     return (
                         f"✅ **Job scheduled!**\n\n"
                         f"• **ID:** `{j['id']}`\n"
                         f"• **Name:** {j['name']}\n"
-                        f"• **Schedule:** `{j['schedule']}`\n"
+                        f"• **Schedule:** `{j['schedule']}`{cron_line}\n"
                         f"• **Next run:** `{j.get('next_run','?')}`\n"
                         f"• **Recurring:** {'Yes 🔁' if j.get('recurring') else 'No 1️⃣'}"
                     )
@@ -7111,6 +7113,27 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             enabled: Optional[bool] = None
             timeout: Optional[int] = None  # Execution timeout in seconds
     
+        class ValidateScheduleRequest(BaseModel):
+            schedule: str
+
+        @app.post("/api/v1/scheduler/validate-schedule")
+        async def validate_schedule(body: ValidateScheduleRequest, request: Request):
+            """Convert natural language schedule to cron format using AI + deterministic fallback."""
+            await _require_scheduler_auth(request)
+            client_ip = request.client.host if request.client else "unknown"
+            if not rate_limiter.check(client_ip, "scheduler_write", max_requests=30, window=60):
+                raise HTTPException(status_code=429, detail="Rate limit exceeded")
+            from scheduler.management import convert_schedule
+            result = convert_schedule(body.schedule.strip(), use_ai=True)
+            return {
+                "success": result.get("cron") is not None or result.get("next_run") is not None,
+                "cron": result.get("cron"),
+                "next_run": result.get("next_run"),
+                "human_readable": result.get("human_readable", ""),
+                "method": result.get("method", "failed"),
+                "original": result.get("original", body.schedule),
+            }
+
         @app.get("/api/v1/scheduler/status")
         async def scheduler_status(request: Request):
             await _require_scheduler_auth(request)

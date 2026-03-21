@@ -47,7 +47,7 @@ try:
 except ImportError:
     _WebEXConnector = None
 
-from scheduler.management import parse_schedule_to_next_run
+from scheduler.management import parse_schedule_to_next_run, is_valid_cron, cron_next_run
 
 
 class TaskSchedulerExecutor:
@@ -453,13 +453,23 @@ class TaskSchedulerExecutor:
             logger.warning(f"Invalid next_run format: {next_run_str}")
             return False
 
-    def _calculate_next_run(self, schedule: str) -> Optional[str]:
-        """Calculate next run time from schedule string."""
-        next_run = parse_schedule_to_next_run(schedule)
-        if next_run:
-            return next_run
+    def _calculate_next_run(self, job: Dict) -> Optional[str]:
+        """Calculate next run time using cron (preferred) or schedule string fallback."""
+        # Prefer cron expression (set during job creation via AI or deterministic conversion)
+        cron_expr = job.get("cron") if isinstance(job, dict) else None
+        if cron_expr and is_valid_cron(cron_expr):
+            next_run = cron_next_run(cron_expr)
+            if next_run:
+                return next_run
 
-        logger.warning(f"Could not parse schedule: {schedule}")
+        # Fallback to schedule string for legacy/one-time jobs
+        schedule = job.get("schedule", "") if isinstance(job, dict) else job
+        if schedule:
+            next_run = parse_schedule_to_next_run(schedule)
+            if next_run:
+                return next_run
+
+        logger.warning(f"Could not calculate next run for job")
         return None
 
     def check_and_execute(self):
@@ -488,7 +498,7 @@ class TaskSchedulerExecutor:
 
             if recurring:
                 # Recurring job - calculate next run
-                next_run = self._calculate_next_run(job.get("schedule", ""))
+                next_run = self._calculate_next_run(job)
                 if next_run:
                     updates["next_run"] = next_run
                 else:

@@ -2458,7 +2458,7 @@ function renderJobDetailView(job) {
       <dl class="sched-dl">
         <dt>ID</dt>       <dd><code>${escHtml(job.id)}</code></dd>
         <dt>Type</dt>     <dd>${job.mode === 'command' ? '⚙️ Command' : '🤖 AI'}</dd>
-        <dt>Schedule</dt> <dd>${escHtml(job.schedule)}</dd>
+        <dt>Schedule</dt> <dd>${escHtml(job.schedule)}${job.cron ? ' \u2192 <code>' + escHtml(job.cron) + '</code>' : ''}</dd>
         ${job.mode !== 'command' ? `
         <dt>Agent</dt>    <dd>${escHtml(job.agent)}</dd>
         <dt>Runtime</dt>  <dd>${runtimeIconHTML(job.runtime)}${escHtml(job.runtime)}</dd>
@@ -2601,8 +2601,10 @@ function buildJobForm(job) {
       </div>
       <div class="form-group">
         <label>Schedule <span class="req">*</span></label>
-        <input class="glass-input" name="schedule" value="${v('schedule')}" placeholder="every day at 9am" required />
-        <p class="form-hint">e.g. "in 5 minutes", "every day at 9am", "every Monday at 8am", "every 6 hours"</p>
+        <input class="glass-input" name="schedule" id="sched-schedule-input" value="${v('schedule')}" placeholder="every day at 9am" required />
+        <p class="form-hint">e.g. "in 5 minutes", "every day at 9am", "every Monday at 8am", "every 6 hours", or cron: "0 9 * * 1-5"</p>
+        <div id="sched-cron-preview" class="sched-cron-preview hidden"></div>
+        ${job?.cron ? '<div class="sched-cron-preview sched-cron-saved"><span class="cron-badge">cron</span> <code>' + escHtml(job.cron) + '</code></div>' : ''}
       </div>
       <div id="sched-ai-fields" class="${isCmd ? 'hidden' : ''}">
         <div class="form-row">
@@ -2756,6 +2758,43 @@ function wireJobForm(container, onSubmit) {
       } else {
         timeoutDisplay.textContent = '';
       }
+    });
+  }
+
+  // Wire schedule validation (AI-powered cron conversion preview)
+  const schedInput = form.querySelector('#sched-schedule-input') || form.querySelector('input[name="schedule"]');
+  const cronPreview = container.querySelector('#sched-cron-preview');
+  let _schedValidateTimer = null;
+  if (schedInput && cronPreview) {
+    schedInput.addEventListener('input', () => {
+      clearTimeout(_schedValidateTimer);
+      const val = schedInput.value.trim();
+      if (!val || val.length < 3) { cronPreview.classList.add('hidden'); return; }
+      _schedValidateTimer = setTimeout(async () => {
+        try {
+          cronPreview.classList.remove('hidden');
+          cronPreview.innerHTML = '<span class="cron-loading">\u23f3 Validating schedule\u2026</span>';
+          const res = await schedulerRequest('POST', '/validate-schedule', { schedule: val });
+          if (res.success && res.cron) {
+            const methodBadge = res.method === 'ai' ? '\ud83e\udd16 AI' : res.method === 'deterministic' ? '\ud83d\udcd0 Parsed' : '\u2713';
+            cronPreview.innerHTML = `<span class="cron-badge">${methodBadge}</span> <code>${escHtml(res.cron)}</code> \u2014 ${escHtml(res.human_readable)}${res.next_run ? ` <small>(next: ${fmtDate(res.next_run)})</small>` : ''}`;
+            cronPreview.classList.remove('hidden', 'cron-error');
+            cronPreview.classList.add('cron-ok');
+          } else if (res.success && res.next_run) {
+            cronPreview.innerHTML = `<span class="cron-badge">\u23f1 One-time</span> runs at <code>${escHtml(res.next_run)}</code>`;
+            cronPreview.classList.remove('hidden', 'cron-error');
+            cronPreview.classList.add('cron-ok');
+          } else {
+            cronPreview.innerHTML = '<span class="cron-badge cron-warn">\u26a0\ufe0f</span> Could not parse schedule \u2014 will try AI conversion on save';
+            cronPreview.classList.remove('hidden', 'cron-ok');
+            cronPreview.classList.add('cron-error');
+          }
+        } catch (e) {
+          cronPreview.innerHTML = '<span class="cron-badge cron-warn">\u26a0\ufe0f</span> Validation unavailable';
+          cronPreview.classList.remove('hidden', 'cron-ok');
+          cronPreview.classList.add('cron-error');
+        }
+      }, 600);
     });
   }
 
