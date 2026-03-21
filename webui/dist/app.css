@@ -447,6 +447,11 @@ html, body {
   box-shadow: 0 0 0 2px rgba(62,207,142,0.22);
 }
 
+.sidebar-flex-spacer {
+  flex: 1;
+  min-height: 0;
+}
+
 .sidebar-footer {
   display: flex;
   align-items: center;
