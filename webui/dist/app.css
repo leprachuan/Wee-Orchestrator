@@ -1373,6 +1373,15 @@ html, body {
   line-height: 1.7;
 }
 
+.sched-detail-empty {
+  color: var(--text-muted);
+  font-size: 13px;
+  text-align: center;
+  margin-top: 80px;
+  padding: 0 24px;
+  line-height: 1.7;
+}
+
 .bg-detail-body {
   flex: 1;
   overflow: hidden;
@@ -1512,6 +1521,7 @@ html, body {
 .sched-body {
   flex: 1;
   display: flex;
+  flex-direction: column;
   overflow: hidden;
   gap: 0;
 }
@@ -1586,32 +1596,14 @@ html, body {
 
 /* ─── Detail Panel ─── */
 .sched-detail {
-  width: 420px;
-  flex-shrink: 0;
+  flex: 1;
   display: flex;
   flex-direction: column;
-  border-left: 1px solid var(--glass-border);
   border-radius: 0;
   overflow: hidden;
 }
 
-.sched-detail-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 14px 16px;
-  border-bottom: 1px solid var(--glass-border);
-  flex-shrink: 0;
-}
-.sched-detail-header h3 {
-  font-size: 15px;
-  font-weight: 600;
-  color: var(--text-primary);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  flex: 1;
-}
+/* sched-detail-header removed — detail has no header bar */
 
 .sched-detail-body {
   flex: 1;
@@ -1857,7 +1849,7 @@ html, body {
 
 /* Responsive: collapse detail on narrow viewports */
 @media (max-width: 700px) {
-  .sched-detail { width: 100%; position: absolute; inset: 0; z-index: 20; }
+  .sched-detail { flex: 1; min-width: 0; }
   .bg-detail { flex: 1; min-width: 0; }
 }
 
@@ -5608,3 +5600,4 @@ html, body {
   font-size: 12px;
   opacity: 0.8;
 }
+___BEGIN___COMMAND_DONE_MARKER___0

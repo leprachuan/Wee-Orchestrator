@@ -2306,7 +2306,6 @@ document.addEventListener('DOMContentLoaded', () => {
   // --- Scheduler UI events ---
   $('btn-sched-refresh').addEventListener('click', () => loadSchedulerJobs(true));
   $('btn-sched-new').addEventListener('click', openNewJobForm);
-  $('btn-sched-detail-close').addEventListener('click', closeSchedDetail);
 
   // --- Background Tasks UI events ---
   $('btn-bg-refresh').addEventListener('click', () => loadBackgroundTasks(true));
@@ -2342,6 +2341,7 @@ function showChatPanel() {
   show($('btn-new-chat'));
   show($('sessions-list'));
   hide($('bg-sidebar-list'));
+  hide($('sched-sidebar-list'));
   show($('request-queue-panel'));
   $('btn-nav-chat').classList.add('active');
   $('btn-nav-scheduler').classList.remove('active');
@@ -2358,6 +2358,7 @@ function showSchedulerPanel() {
   hide($('btn-new-chat'));
   hide($('sessions-list'));
   hide($('bg-sidebar-list'));
+  show($('sched-sidebar-list'));
   hide($('request-queue-panel'));
   $('btn-nav-scheduler').classList.add('active');
   $('btn-nav-chat').classList.remove('active');
@@ -2376,6 +2377,7 @@ function showBackgroundPanel() {
   hide($('btn-new-chat'));
   hide($('sessions-list'));
   show($('bg-sidebar-list'));
+  hide($('sched-sidebar-list'));
   hide($('request-queue-panel'));
   $('btn-nav-background').classList.add('active');
   $('btn-nav-chat').classList.remove('active');
@@ -2411,15 +2413,14 @@ const SCHED = {
 async function loadSchedulerJobs(showToast = false) {
   if (SCHED.isLoadingJobs) return;
   SCHED.isLoadingJobs = true;
-  const list = $('sched-jobs-list');
-  list.innerHTML = '<p class="sched-empty">Loading…</p>';
   try {
     const data = await schedApi('GET', '/jobs');
     SCHED.jobs = data.result || [];
-    renderSchedulerJobs();
+    renderSchedJobsSidebar();
     if (showToast) schedToast('Jobs refreshed', 'success');
   } catch (err) {
-    list.innerHTML = `<p class="sched-empty sched-error">Failed to load jobs: ${escHtml(err.message)}</p>`;
+    const list = $('sched-sidebar-list');
+    if (list) list.innerHTML = '<p class="sched-empty sched-error" style="padding:24px 12px;text-align:center;">Failed to load jobs: ' + escHtml(err.message) + '</p>';
   } finally {
     SCHED.isLoadingJobs = false;
   }
@@ -2446,48 +2447,39 @@ async function loadSchedulerStatus() {
   }
 }
 
-function renderSchedulerJobs() {
-  const list = $('sched-jobs-list');
+function renderSchedJobsSidebar() {
+  const list = $('sched-sidebar-list');
+  if (!list) return;
   if (!SCHED.jobs.length) {
-    list.innerHTML = '<p class="sched-empty">No scheduled jobs. Click <strong>+ New Job</strong> to create one.</p>';
+    list.innerHTML = '<p class="sched-empty" style="padding:24px 12px;text-align:center;color:var(--text-muted);font-size:13px;">No scheduled jobs yet.<br>Click <strong>+ New Job</strong> to create one.</p>';
     return;
   }
 
-  list.innerHTML = '';
-  for (const job of SCHED.jobs) {
-    const card = document.createElement('div');
-    card.className = 'sched-job-card' + (job.id === SCHED.selectedJobId ? ' selected' : '');
-    card.dataset.jobId = job.id;
-
-    const statusClass = job.enabled ? 'status-enabled' : 'status-disabled';
-    const statusLabel = job.enabled ? 'enabled' : 'paused';
+  const icons = { true: '🟢', false: '🟡' };
+  list.innerHTML = SCHED.jobs.map(job => {
+    const icon = icons[String(job.enabled)] || '❓';
+    const active = job.id === SCHED.selectedJobId ? 'active' : '';
     const nextRun = job.next_run ? fmtDate(job.next_run) : '—';
-    const lastRun = job.last_run ? fmtDate(job.last_run) : 'never';
-
-    card.innerHTML = `
-      <div class="sched-job-top">
-        <span class="sched-job-name">${escHtml(job.name)}</span>
-        <span class="sched-job-status ${statusClass}">${statusLabel}</span>
-      </div>
-      <div class="sched-job-meta">
-        <span title="Schedule">⏰ ${escHtml(job.schedule)}</span>
-        <span title="Agent / Runtime">${job.mode === 'command' ? '⚙️ command' : `${runtimeIconHTML(job.runtime)}${escHtml(job.agent)} · ${escHtml(job.runtime)}`}</span>
-      </div>
-      <div class="sched-job-times">
-        <span title="Next run">Next: ${escHtml(nextRun)}</span>
-        <span title="Last run">Last: ${escHtml(lastRun)}</span>
-      </div>
-      <div class="sched-job-actions" style="margin-top:6px;text-align:right">
-        <button class="btn btn-accent btn-xs sched-card-run-btn" title="Run this job immediately">▶ Run Now</button>
-      </div>
-    `;
-
-    card.addEventListener('click', () => openJobDetail(job.id));
-    const cardRunBtn = card.querySelector('.sched-card-run-btn');
-    if (cardRunBtn) cardRunBtn.addEventListener('click', (e) => { e.stopPropagation(); doJobRunNow(job.id, cardRunBtn); });
-    list.appendChild(card);
-  }
+    const name = escHtml(job.name || job.id);
+    const sched = escHtml(job.schedule || '');
+    return `
+      <div class="session-item sched-sidebar-item ${active}" onclick="selectSchedJob('${job.id}')">
+        <div class="session-title">${icon} ${name}</div>
+        <div class="session-preview">${sched} · Next: ${nextRun}</div>
+      </div>`;
+  }).join('');
 }
+
+// Keep backward compat alias
+function renderSchedulerJobs() { renderSchedJobsSidebar(); }
+
+window.selectSchedJob = function(jobId) {
+  const job = SCHED.jobs.find(j => j.id === jobId);
+  if (!job) return;
+  SCHED.selectedJobId = jobId;
+  renderSchedJobsSidebar();
+  openJobDetail(jobId);
+};
 
 function fmtDate(iso) {
   if (!iso) return '—';
@@ -2505,23 +2497,17 @@ function fmtDate(iso) {
 
 function closeSchedDetail() {
   SCHED.selectedJobId = null;
-  hide($('sched-detail'));
-  document.querySelectorAll('.sched-job-card').forEach(c => c.classList.remove('selected'));
+  $('sched-detail-body').innerHTML = '<p class="sched-detail-empty">Select a job from the sidebar to view details</p>';
+  renderSchedJobsSidebar();
 }
 
 async function openJobDetail(jobId) {
   SCHED.selectedJobId = jobId;
-  document.querySelectorAll('.sched-job-card').forEach(c =>
-    c.classList.toggle('selected', c.dataset.jobId === jobId)
-  );
-
   const job = SCHED.jobs.find(j => j.id === jobId);
   if (!job) return;
 
-  $('sched-detail-title').textContent = job.name;
   const body = $('sched-detail-body');
   body.innerHTML = '<p style="color:var(--text-muted);font-size:13px;">Loading…</p>';
-  show($('sched-detail'));
 
   renderJobDetailView(job);
 }
@@ -2611,7 +2597,6 @@ function renderJobEditForm(job, container) {
       await loadSchedulerJobs();
       const updated = SCHED.jobs.find(j => j.id === job.id);
       if (updated) {
-        $('sched-detail-title').textContent = updated.name;
         renderJobDetailView(updated);
       }
     } catch (err) {
@@ -2626,8 +2611,7 @@ function renderJobEditForm(job, container) {
 
 function openNewJobForm() {
   SCHED.selectedJobId = null;
-  document.querySelectorAll('.sched-job-card').forEach(c => c.classList.remove('selected'));
-  $('sched-detail-title').textContent = 'New Scheduled Job';
+  renderSchedJobsSidebar();
   const body = $('sched-detail-body');
   body.innerHTML = buildJobForm(null);
   populateAgentDropdown(body);
@@ -2646,7 +2630,6 @@ function openNewJobForm() {
       schedToast('Create failed: ' + err.message, 'error');
     }
   });
-  show($('sched-detail'));
 }
 
 function fmtTimeout(secs) {
@@ -6025,3 +6008,4 @@ if (document.readyState !== 'loading') {
     });
   }
 })();
+___BEGIN___COMMAND_DONE_MARKER___0
