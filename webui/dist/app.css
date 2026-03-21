@@ -447,10 +447,7 @@ html, body {
   box-shadow: 0 0 0 2px rgba(62,207,142,0.22);
 }
 
-.sidebar-flex-spacer {
-  flex: 1;
-  min-height: 0;
-}
+/* sidebar-flex-spacer removed — lists use flex:1, toolbar uses margin-top:auto */
 
 .sidebar-footer {
   display: flex;
@@ -1265,7 +1262,7 @@ html, body {
 
 /* bg-tasks-list column removed — task list now lives in sidebar as .bg-sidebar-list */
 .bg-sidebar-list {
-  display: none;
+  /* visibility controlled by .hidden class — do NOT set display here */
 }
 .bg-sidebar-item .session-title {
   display: flex;
@@ -4316,6 +4313,7 @@ html, body {
   gap: 6px;
   padding: 8px 12px 4px;
   border-top: 1px solid var(--glass-border);
+  margin-top: auto;
 }
 .sidebar-tool-btn {
   flex: 1;
