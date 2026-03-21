@@ -442,6 +442,7 @@ const COMMANDS = [
   { cmd: '/session',      usage: '/session',                               desc: 'Show session info' },
   { cmd: '/timeout',      usage: '/timeout <seconds>',                     desc: 'Set the command timeout' },
   { cmd: '/render',       usage: '/render <text|markdown>',                desc: 'Set render output type' },
+  { cmd: '/update',       usage: '/update',                                desc: 'Pull latest code and restart dev services (aliases: /upgrade, /pull)' },
 ];
 
 const SUBCOMMANDS = {
