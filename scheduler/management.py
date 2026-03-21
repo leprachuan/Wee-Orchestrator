@@ -339,6 +339,18 @@ class TaskScheduler:
             "message": f"Found {len(records)} results (limit {limit})",
         }
 
+    def save_result(self, job_id: str, job_name: str, success: bool, output: str = "", error: str = "") -> Dict:
+        """Save execution result to job results file (JSONL format)."""
+        result_file = self.results_dir / f"{job_id}.jsonl"
+        timestamp = datetime.utcnow().isoformat() + "Z"
+        result = {"timestamp": timestamp, "job_id": job_id, "job_name": job_name, "success": success, "output": output[:5000] if output else "", "error": error[:5000] if error else ""}
+        try:
+            with open(result_file, "a") as f:
+                f.write(json.dumps(result) + "\n")
+            return {"success": True, "message": f"Result saved for job {job_id}"}
+        except Exception as e:
+            return {"success": False, "message": f"Failed to save result: {e}"}
+
     def doctor(self) -> Dict:
         """Diagnostic tool."""
         issues = []

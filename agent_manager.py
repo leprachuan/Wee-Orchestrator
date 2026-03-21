@@ -6580,11 +6580,29 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             if result.returncode == 0:
                 final_output = output or "Task completed successfully"
                 bg_task_mgr.complete_task(task_id, final_output)
+                # Save to scheduler if scheduled job  
+                if task_id.startswith("sched_"):
+                    try:
+                        job_id = task_id.split("_")[1]
+                        sched = _get_scheduler()
+                        job = sched.get_job(job_id).get("result")
+                        if job:
+                            sched.save_result(job_id, job.get("name", job_id), True, final_output)
+                    except: pass
                 _emit_bg_notification(task_id, prompt, "completed", channel, user_identity,
                                       output_preview=final_output, error=None, notify=notify)
             else:
                 error_msg = f"Task failed with code {result.returncode}: {output}"
                 bg_task_mgr.fail_task(task_id, error_msg)
+                # Save to scheduler if scheduled job
+                if task_id.startswith("sched_"):
+                    try:
+                        job_id = task_id.split("_")[1]
+                        sched = _get_scheduler()
+                        job = sched.get_job(job_id).get("result")
+                        if job:
+                            sched.save_result(job_id, job.get("name", job_id), False, "", error_msg)
+                    except: pass
                 _emit_bg_notification(task_id, prompt, "failed", channel, user_identity,
                                       output_preview=None, error=error_msg, notify=notify)
 
