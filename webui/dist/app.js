@@ -1487,37 +1487,21 @@ async function sendMessageStreaming(query, sessionId) {
             scrollToBottom();
 
           } else if (evt.type === 'tool_call') {
-            // Tool call event — show inline glassmorphism badge
+            // Tool call event from streaming — show inline indicator
             if (streamBubble) {
-              const evtKind = evt.event || 'detected';
-              const toolName = evt.name || 'tool';
-              const toolNameEsc = escHtml(toolName);
-              const icon = getToolIcon(toolName);
-              const containerId = 'stool-container-' + (streamBubble.dataset.uid || (streamBubble.dataset.uid = Date.now()));
-              let container = document.getElementById(containerId);
-              if (!container) {
-                container = document.createElement('div');
-                container.id = containerId;
-                container.className = 'stream-tool-container';
-                streamBubble.parentNode.insertBefore(container, streamBubble);
+              let indicator = streamBubble.querySelector('.stream-tool-indicator');
+              if (!indicator) {
+                indicator = document.createElement('div');
+                indicator.className = 'stream-tool-indicator';
+                streamBubble.parentNode.insertBefore(indicator, streamBubble);
               }
+              const evtKind = evt.event || 'detected';
+              const toolName = escHtml(evt.name || 'tool');
               if (evtKind === 'start' || evtKind === 'detected' || evtKind === 'input_complete') {
-                const pill = document.createElement('div');
-                pill.className = 'stream-tool-indicator stream-tool-running';
-                pill.dataset.toolName = toolName;
-                pill.innerHTML = `<span class="stool-icon">${icon}</span><span class="stool-name">${toolNameEsc}</span><span class="tool-indicator-dot"></span>`;
-                container.appendChild(pill);
+                indicator.innerHTML = `<span class="tool-indicator-dot"></span> Using <strong>${toolName}</strong>…`;
+                indicator.style.display = '';
               } else if (evtKind === 'result') {
-                const running = container.querySelectorAll(`.stream-tool-indicator.stream-tool-running[data-tool-name="${CSS.escape(toolName)}"]`);
-                running.forEach(pill => {
-                  pill.classList.remove('stream-tool-running');
-                  pill.classList.add('stream-tool-done');
-                  pill.innerHTML = `<span class="stool-icon">${icon}</span><span class="stool-name">${toolNameEsc}</span><span class="stool-check">✓</span>`;
-                  setTimeout(() => {
-                    pill.classList.add('stream-tool-fading');
-                    setTimeout(() => { if (pill.parentNode) pill.remove(); if (container && !container.children.length) container.remove(); }, 500);
-                  }, 2000);
-                });
+                indicator.style.display = 'none';
               }
             }
 
@@ -1644,35 +1628,19 @@ async function reconnectToStream(sessionId) {
             } else if (evt.type === 'tool_call') {
               // Tool call event from reconnected stream
               if (streamBubble) {
-                const evtKind = evt.event || 'detected';
-                const toolName = evt.name || 'tool';
-                const toolNameEsc = escHtml(toolName);
-                const icon = getToolIcon(toolName);
-                const containerId = 'stool-container-' + (streamBubble.dataset.uid || (streamBubble.dataset.uid = Date.now()));
-                let container = document.getElementById(containerId);
-                if (!container) {
-                  container = document.createElement('div');
-                  container.id = containerId;
-                  container.className = 'stream-tool-container';
-                  streamBubble.parentNode.insertBefore(container, streamBubble);
+                let indicator = streamBubble.querySelector('.stream-tool-indicator');
+                if (!indicator) {
+                  indicator = document.createElement('div');
+                  indicator.className = 'stream-tool-indicator';
+                  streamBubble.parentNode.insertBefore(indicator, streamBubble);
                 }
+                const evtKind = evt.event || 'detected';
+                const toolName = escHtml(evt.name || 'tool');
                 if (evtKind === 'start' || evtKind === 'detected' || evtKind === 'input_complete') {
-                  const pill = document.createElement('div');
-                  pill.className = 'stream-tool-indicator stream-tool-running';
-                  pill.dataset.toolName = toolName;
-                  pill.innerHTML = `<span class="stool-icon">${icon}</span><span class="stool-name">${toolNameEsc}</span><span class="tool-indicator-dot"></span>`;
-                  container.appendChild(pill);
+                  indicator.innerHTML = `<span class="tool-indicator-dot"></span> Using <strong>${toolName}</strong>…`;
+                  indicator.style.display = '';
                 } else if (evtKind === 'result') {
-                  const running = container.querySelectorAll(`.stream-tool-indicator.stream-tool-running[data-tool-name="${CSS.escape(toolName)}"]`);
-                  running.forEach(pill => {
-                    pill.classList.remove('stream-tool-running');
-                    pill.classList.add('stream-tool-done');
-                    pill.innerHTML = `<span class="stool-icon">${icon}</span><span class="stool-name">${toolNameEsc}</span><span class="stool-check">✓</span>`;
-                    setTimeout(() => {
-                      pill.classList.add('stream-tool-fading');
-                      setTimeout(() => { if (pill.parentNode) pill.remove(); if (container && !container.children.length) container.remove(); }, 500);
-                    }, 2000);
-                  });
+                  indicator.style.display = 'none';
                 }
               }
 
@@ -3265,7 +3233,8 @@ async function loadBgTaskDetail(taskId) {
     body.innerHTML = `
       <div class="bg-detail-tabs">
         <button class="bg-tab active" data-tab="details">Details</button>
-        <button class="bg-tab" data-tab="logs">Output ${toolCallBadge}${t.status === 'running' ? '<span class="bg-live-dot"></span>' : ''}</button>
+        <button class="bg-tab" data-tab="tools">🔧 Tools ${toolCallBadge}${t.status === 'running' ? '<span class="bg-live-dot"></span>' : ''}</button>
+        <button class="bg-tab" data-tab="logs">Logs ${t.status === 'running' ? '<span class="bg-live-dot"></span>' : ''}</button>
       </div>
       <div id="bg-tab-details" class="bg-tab-pane">
         <div class="bg-detail-meta">
@@ -3295,6 +3264,11 @@ async function loadBgTaskDetail(taskId) {
         <div class="bg-detail-prompt">${escHtml(t.prompt || '')}</div>
         ${actionsHtml}
       </div>
+      <div id="bg-tab-tools" class="bg-tab-pane hidden">
+        <div class="bg-tool-calls-panel" id="bg-tools-${taskId}">
+          <p style="color:var(--text-muted);font-size:12px;padding:8px">Loading tool calls…</p>
+        </div>
+      </div>
       <div id="bg-tab-logs" class="bg-tab-pane hidden">
         ${timingHtml}
         <div class="bg-transcript-panel" id="bg-transcript-${taskId}">
@@ -3313,11 +3287,12 @@ async function loadBgTaskDetail(taskId) {
         show(pane);
         BG.activeDetailTab = tab.dataset.tab;
         if (tab.dataset.tab === 'logs') loadBgTaskLogs(taskId, t.status);
+        if (tab.dataset.tab === 'tools') loadBgTaskToolCalls(taskId, t.status);
       });
     });
 
-    // Restore previously active tab, or auto-open output tab
-    const tabToOpen = BG.activeDetailTab || 'logs';
+    // Restore previously active tab, or auto-open logs for running tasks on first open
+    const tabToOpen = BG.activeDetailTab || (t.status === 'running' ? 'logs' : null);
     if (tabToOpen) {
       const targetTab = body.querySelector(`.bg-tab[data-tab="${tabToOpen}"]`);
       if (targetTab) targetTab.click();
@@ -3328,104 +3303,6 @@ async function loadBgTaskDetail(taskId) {
   }
 }
 window.loadBgTaskDetail = loadBgTaskDetail;
-
-// ── Tool icon helpers ─────────────────────────────────────────
-function getToolIcon(name) {
-  const n = (name || '').toLowerCase();
-  if (n.includes('fetch') || n.includes('web') || n.includes('url') || n.includes('http') || n.includes('browse') || n.includes('navigate')) return '🌐';
-  if (n.includes('write') || n.includes('edit') || n.includes('create') || n.includes('patch')) return '✏️';
-  if (n.includes('read') || n.includes('file') || n.includes('view') || n.includes('cat')) return '📄';
-  if (n.includes('bash') || n.includes('shell') || n.includes('exec') || n.includes('run')) return '⚡';
-  if (n.includes('search') || n.includes('grep') || n.includes('find') || n.includes('glob')) return '🔍';
-  if (n.includes('git')) return '🔀';
-  if (n.includes('sql') || n.includes('db') || n.includes('query')) return '🗄️';
-  if (n.includes('screenshot') || n.includes('photo') || n.includes('image')) return '🖼️';
-  return '🔧';
-}
-
-function renderInlineToolCall(tc) {
-  const isError = tc.is_error || tc.status === 'failed';
-  const isDone = tc.status === 'result' || tc.status === 'completed';
-  const statusClass = isError ? 'itc-error' : isDone ? 'itc-done' : 'itc-running';
-  const icon = getToolIcon(tc.name);
-  const name = escHtml(tc.name || 'tool');
-  const timeStr = tc.timestamp ? fmtTime(tc.timestamp) : '';
-
-  let inputPreview = '';
-  if (tc.input) {
-    const inp = typeof tc.input === 'object' ? JSON.stringify(tc.input) : String(tc.input);
-    inputPreview = escHtml(inp.substring(0, 100)) + (inp.length > 100 ? '…' : '');
-  }
-
-  let inputHtml = '';
-  if (tc.input) {
-    const inp = typeof tc.input === 'object' ? JSON.stringify(tc.input, null, 2) : String(tc.input);
-    inputHtml = `<div class="itc-section"><div class="itc-section-label">Input</div><pre class="itc-code">${escHtml(inp.substring(0, 1200))}${inp.length > 1200 ? '\n…truncated' : ''}</pre></div>`;
-  }
-
-  let outputHtml = '';
-  if (tc.output) {
-    const out = typeof tc.output === 'object' ? JSON.stringify(tc.output, null, 2) : String(tc.output);
-    outputHtml = `<div class="itc-section"><div class="itc-section-label">Output</div><pre class="itc-code">${escHtml(out.substring(0, 1500))}${out.length > 1500 ? '\n…truncated' : ''}</pre></div>`;
-  }
-
-  const hasDetails = !!(inputHtml || outputHtml);
-  return `<div class="inline-tool-call ${statusClass}">
-    <div class="itc-header" onclick="this.closest('.inline-tool-call').classList.toggle('itc-expanded')">
-      <span class="itc-icon">${icon}</span>
-      <span class="itc-name">${name}</span>
-      ${inputPreview ? `<span class="itc-preview">${inputPreview}</span>` : ''}
-      ${timeStr ? `<span class="itc-time">${timeStr}</span>` : ''}
-      ${hasDetails ? '<span class="itc-chevron">▶</span>' : ''}
-    </div>
-    ${hasDetails ? `<div class="itc-body">${inputHtml}${outputHtml}</div>` : ''}
-  </div>`;
-}
-
-function renderMergedOutput(lines, toolCalls, error, createdAt, completedAt) {
-  if (!toolCalls.length) {
-    const content = lines.join('\n');
-    return `<pre class="bg-transcript-pre">${escHtml(content)}${error ? `\n\n[error] ${escHtml(String(error))}` : ''}</pre>`;
-  }
-
-  const N = lines.length;
-  const parseTs = s => { if (!s) return null; try { return new Date(s.endsWith('Z') ? s : s + 'Z').getTime(); } catch { return null; } };
-  const startMs = parseTs(createdAt);
-  const endMs = parseTs(completedAt);
-  const durationMs = (startMs && endMs) ? (endMs - startMs) : null;
-
-  const insertions = {};
-  for (const tc of toolCalls) {
-    let pos = N;
-    if (startMs && durationMs && durationMs > 0 && tc.timestamp) {
-      const tcMs = parseTs(tc.timestamp);
-      if (tcMs) {
-        const frac = Math.max(0, Math.min(1, (tcMs - startMs) / durationMs));
-        pos = Math.min(Math.max(0, N - 1), Math.floor(frac * N));
-      }
-    }
-    if (!insertions[pos]) insertions[pos] = [];
-    insertions[pos].push(tc);
-  }
-
-  let html = '';
-  let buf = [];
-  const flush = () => {
-    if (buf.length) {
-      html += `<pre class="bg-transcript-pre bg-transcript-inline">${escHtml(buf.join('\n'))}</pre>`;
-      buf = [];
-    }
-  };
-
-  for (let i = 0; i <= N; i++) {
-    if (insertions[i]) { flush(); for (const tc of insertions[i]) html += renderInlineToolCall(tc); }
-    if (i < N) buf.push(lines[i]);
-  }
-  flush();
-
-  if (error) html += `<pre class="bg-transcript-pre" style="color:#ff6666">[error] ${escHtml(String(error))}</pre>`;
-  return html;
-}
 
 async function loadBgTaskLogs(taskId, status) {
   const panel = $(`bg-transcript-${taskId}`);
@@ -3439,46 +3316,33 @@ async function loadBgTaskLogs(taskId, status) {
 
   async function fetchAndRender() {
     try {
+      // For completed/failed tasks use the full transcript; for running use detail output
       const currentStatus = BG.tasks.find(x => x.task_id === taskId)?.status || status;
       let lines = [];
-      let toolCalls = [];
       let error = null;
-      let createdAt = null;
-      let completedAt = null;
 
       if (currentStatus === 'running' || currentStatus === 'queued') {
-        const [t, tcData] = await Promise.all([
-          bgApi('GET', `/${taskId}`),
-          bgApi('GET', `/${taskId}/tool-calls`).catch(() => ({ tool_calls: [] })),
-        ]);
+        const t = await bgApi('GET', `/${taskId}`);
         lines = t.recent_output || [];
         error = t.error;
-        toolCalls = tcData.tool_calls || [];
-        createdAt = t.created_at;
       } else {
-        const [data, tcData] = await Promise.all([
-          bgApi('GET', `/${taskId}/transcript`),
-          bgApi('GET', `/${taskId}/tool-calls`).catch(() => ({ tool_calls: [] })),
-        ]);
+        const data = await bgApi('GET', `/${taskId}/transcript`);
         if (data.final_response) {
           lines = data.final_response.split('\n');
         } else {
           lines = data.output_lines || [];
           error = data.error;
         }
-        toolCalls = tcData.tool_calls || [];
-        createdAt = data.created_at;
-        completedAt = data.completed_at;
       }
 
-      if (!lines.length && !toolCalls.length && !error) {
+      if (!lines.length && !error) {
         panel.innerHTML = '<p style="color:var(--text-muted);font-size:12px;padding:8px">No output yet…</p>';
         return;
       }
 
       const wasAtBottom = panel.scrollHeight - panel.scrollTop - panel.clientHeight < 40;
-      panel.innerHTML = renderMergedOutput(lines, toolCalls, error, createdAt, completedAt);
-
+      const content = lines.join('\n');
+      panel.innerHTML = `<pre class="bg-transcript-pre">${escHtml(content)}${error ? `\n\n[error] ${error}` : ''}</pre>`;
       if (wasAtBottom || status === 'running') {
         panel.scrollTop = panel.scrollHeight;
       }
