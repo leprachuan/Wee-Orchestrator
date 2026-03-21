@@ -5184,6 +5184,233 @@ html, body {
   margin: 0;
 }
 
+/* ── Tool Call Panel ─────────────────────────────────────── */
+
+.bg-tool-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 9px;
+  font-size: 10px;
+  font-weight: 700;
+  background: rgba(62, 207, 142, 0.2);
+  color: var(--accent, #3ecf8e);
+  margin-left: 6px;
+  vertical-align: middle;
+}
+
+.bg-tools-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 32px 16px;
+  text-align: center;
+  color: var(--text-muted, #6b7280);
+  font-size: 13px;
+  gap: 8px;
+}
+
+.bg-tools-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  font-size: 12px;
+  color: var(--text-muted, #6b7280);
+  border-bottom: 1px solid var(--border-color, #333);
+}
+
+.bg-tools-count {
+  font-weight: 600;
+  color: var(--text-secondary, #b0b8c4);
+}
+
+.bg-tools-runtime {
+  font-size: 11px;
+  text-transform: capitalize;
+}
+
+.bg-tool-calls-panel {
+  flex: 1;
+  overflow-y: auto;
+  min-height: 0;
+  max-height: 420px;
+  padding-bottom: 8px;
+}
+
+.bg-tools-timeline {
+  padding: 8px 12px;
+  position: relative;
+}
+
+/* Timeline connector line */
+.bg-tools-timeline::before {
+  content: '';
+  position: absolute;
+  left: 24px;
+  top: 16px;
+  bottom: 16px;
+  width: 2px;
+  background: var(--border-color, #333);
+  border-radius: 1px;
+}
+
+.bg-tc-item {
+  position: relative;
+  margin-bottom: 4px;
+  border-radius: 8px;
+  transition: background 0.15s;
+}
+
+.bg-tc-item:hover {
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.bg-tc-connector {
+  position: absolute;
+  left: 12px;
+  top: 12px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--tc-color, #888);
+  z-index: 1;
+  box-shadow: 0 0 0 3px var(--bg-primary, #0a0a0f);
+}
+
+.bg-tc-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px 8px 28px;
+  cursor: pointer;
+  font-size: 12px;
+  user-select: none;
+}
+
+.bg-tc-icon {
+  font-size: 12px;
+  flex-shrink: 0;
+}
+
+.bg-tc-name {
+  font-weight: 600;
+  color: var(--text-primary, #e2e8f0);
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.bg-tc-runtime {
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text-muted, #6b7280);
+  text-transform: capitalize;
+}
+
+.bg-tc-time {
+  font-size: 10px;
+  color: var(--text-muted, #6b7280);
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
+.bg-tc-expand {
+  font-size: 10px;
+  color: var(--text-muted, #6b7280);
+  transition: transform 0.2s;
+  flex-shrink: 0;
+}
+
+.bg-tc-item.expanded .bg-tc-expand {
+  transform: rotate(90deg);
+}
+
+.bg-tc-body {
+  display: none;
+  padding: 0 10px 10px 28px;
+}
+
+.bg-tc-item.expanded .bg-tc-body {
+  display: block;
+}
+
+.bg-tc-id {
+  font-size: 10px;
+  color: var(--text-muted, #6b7280);
+  font-family: var(--font-mono);
+  margin-bottom: 6px;
+  opacity: 0.7;
+}
+
+.bg-tc-section {
+  margin-top: 6px;
+}
+
+.bg-tc-section-label {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-muted, #6b7280);
+  margin-bottom: 3px;
+}
+
+.bg-tc-code {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--text-secondary, #b0b8c4);
+  background: rgba(0, 0, 0, 0.25);
+  border: 1px solid var(--border-color, #333);
+  border-radius: 6px;
+  padding: 8px 10px;
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-all;
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+/* Streaming tool indicator (inline in chat) */
+.stream-tool-indicator {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  font-size: 12px;
+  color: var(--text-muted, #6b7280);
+  background: rgba(255, 170, 51, 0.06);
+  border-radius: 6px;
+  margin-bottom: 4px;
+  border: 1px solid rgba(255, 170, 51, 0.15);
+}
+
+.stream-tool-indicator strong {
+  color: var(--accent, #3ecf8e);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.tool-indicator-dot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #ffaa33;
+  animation: tool-dot-pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes tool-dot-pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.4; transform: scale(0.8); }
+}
+
 /* Cron preview for schedule validation */
 .sched-cron-preview {
   margin-top: 6px;

@@ -1486,6 +1486,25 @@ async function sendMessageStreaming(query, sessionId) {
             streamBubble.innerHTML = formatted ? `<p>${formatted}</p>` : '';
             scrollToBottom();
 
+          } else if (evt.type === 'tool_call') {
+            // Tool call event from streaming — show inline indicator
+            if (streamBubble) {
+              let indicator = streamBubble.querySelector('.stream-tool-indicator');
+              if (!indicator) {
+                indicator = document.createElement('div');
+                indicator.className = 'stream-tool-indicator';
+                streamBubble.parentNode.insertBefore(indicator, streamBubble);
+              }
+              const evtKind = evt.event || 'detected';
+              const toolName = escHtml(evt.name || 'tool');
+              if (evtKind === 'start' || evtKind === 'detected' || evtKind === 'input_complete') {
+                indicator.innerHTML = `<span class="tool-indicator-dot"></span> Using <strong>${toolName}</strong>…`;
+                indicator.style.display = '';
+              } else if (evtKind === 'result') {
+                indicator.style.display = 'none';
+              }
+            }
+
           } else if (evt.type === 'done') {
             // Use accumulated streaming text when available (captures all
             // turns in multi-tool responses); fall back to done payload.
@@ -1605,6 +1624,25 @@ async function reconnectToStream(sessionId) {
                 .replace(/\n/g, '<br>');
               streamBubble.innerHTML = formatted ? `<p>${formatted}</p>` : '';
               scrollToBottom();
+
+            } else if (evt.type === 'tool_call') {
+              // Tool call event from reconnected stream
+              if (streamBubble) {
+                let indicator = streamBubble.querySelector('.stream-tool-indicator');
+                if (!indicator) {
+                  indicator = document.createElement('div');
+                  indicator.className = 'stream-tool-indicator';
+                  streamBubble.parentNode.insertBefore(indicator, streamBubble);
+                }
+                const evtKind = evt.event || 'detected';
+                const toolName = escHtml(evt.name || 'tool');
+                if (evtKind === 'start' || evtKind === 'detected' || evtKind === 'input_complete') {
+                  indicator.innerHTML = `<span class="tool-indicator-dot"></span> Using <strong>${toolName}</strong>…`;
+                  indicator.style.display = '';
+                } else if (evtKind === 'result') {
+                  indicator.style.display = 'none';
+                }
+              }
 
             } else if (evt.type === 'done') {
               const finalContent = rawText.trim()
@@ -2987,6 +3025,7 @@ const BG = {
   isLoading: false,
   pollInterval: null,
   logsPoller: null,
+  toolsPoller: null,
   activeDetailTab: null,
 };
 
@@ -3189,9 +3228,12 @@ async function loadBgTaskDetail(taskId) {
       </div>`;
     })();
 
+    const toolCallBadge = t.tool_call_count ? `<span class="bg-tool-badge">${t.tool_call_count}</span>` : '';
+
     body.innerHTML = `
       <div class="bg-detail-tabs">
         <button class="bg-tab active" data-tab="details">Details</button>
+        <button class="bg-tab" data-tab="tools">🔧 Tools ${toolCallBadge}${t.status === 'running' ? '<span class="bg-live-dot"></span>' : ''}</button>
         <button class="bg-tab" data-tab="logs">Logs ${t.status === 'running' ? '<span class="bg-live-dot"></span>' : ''}</button>
       </div>
       <div id="bg-tab-details" class="bg-tab-pane">
@@ -3222,6 +3264,11 @@ async function loadBgTaskDetail(taskId) {
         <div class="bg-detail-prompt">${escHtml(t.prompt || '')}</div>
         ${actionsHtml}
       </div>
+      <div id="bg-tab-tools" class="bg-tab-pane hidden">
+        <div class="bg-tool-calls-panel" id="bg-tools-${taskId}">
+          <p style="color:var(--text-muted);font-size:12px;padding:8px">Loading tool calls…</p>
+        </div>
+      </div>
       <div id="bg-tab-logs" class="bg-tab-pane hidden">
         ${timingHtml}
         <div class="bg-transcript-panel" id="bg-transcript-${taskId}">
@@ -3240,6 +3287,7 @@ async function loadBgTaskDetail(taskId) {
         show(pane);
         BG.activeDetailTab = tab.dataset.tab;
         if (tab.dataset.tab === 'logs') loadBgTaskLogs(taskId, t.status);
+        if (tab.dataset.tab === 'tools') loadBgTaskToolCalls(taskId, t.status);
       });
     });
 
@@ -3323,10 +3371,158 @@ async function loadBgTaskLogs(taskId, status) {
   }
 }
 
+// ── Tool Call Panel ─────────────────────────────────────────
+
+async function loadBgTaskToolCalls(taskId, status) {
+  const panel = $(`bg-tools-${taskId}`);
+  if (!panel) return;
+
+  // Clear any previous tool poller
+  if (BG.toolsPoller) {
+    clearInterval(BG.toolsPoller);
+    BG.toolsPoller = null;
+  }
+
+  async function fetchAndRenderTools() {
+    try {
+      const data = await bgApi('GET', `/${taskId}/tool-calls`);
+      const calls = data.tool_calls || [];
+
+      if (!calls.length) {
+        panel.innerHTML = `<div class="bg-tools-empty">
+          <span style="font-size:24px">🔧</span>
+          <p>No tool calls detected yet.</p>
+          <p style="font-size:11px;color:var(--text-muted)">Tool calls will appear here as the agent works.<br>Best visibility with Claude runtime (stream-json).</p>
+        </div>`;
+        return;
+      }
+
+      const wasAtBottom = panel.scrollHeight - panel.scrollTop - panel.clientHeight < 40;
+
+      panel.innerHTML = `
+        <div class="bg-tools-header">
+          <span class="bg-tools-count">${calls.length} tool call${calls.length !== 1 ? 's' : ''}</span>
+          <span class="bg-tools-runtime">${escHtml(data.status || '')}</span>
+        </div>
+        <div class="bg-tools-timeline">
+          ${calls.map((tc, i) => renderToolCall(tc, i)).join('')}
+        </div>
+      `;
+
+      // Toggle expand/collapse on tool call items
+      panel.querySelectorAll('.bg-tc-header').forEach(hdr => {
+        hdr.addEventListener('click', () => {
+          const item = hdr.closest('.bg-tc-item');
+          item.classList.toggle('expanded');
+        });
+      });
+
+      if (wasAtBottom || status === 'running') {
+        panel.scrollTop = panel.scrollHeight;
+      }
+    } catch (err) {
+      panel.innerHTML = `<p style="color:#ff8888;font-size:12px;padding:8px">Error loading tool calls: ${escHtml(err.message)}</p>`;
+    }
+  }
+
+  await fetchAndRenderTools();
+
+  // Poll for live tool calls while task is running
+  const liveStatus = BG.tasks.find(x => x.task_id === taskId)?.status || status;
+  if (liveStatus === 'running') {
+    BG.toolsPoller = setInterval(async () => {
+      const current = BG.tasks.find(x => x.task_id === taskId)?.status;
+      await fetchAndRenderTools();
+      if (current && current !== 'running' && current !== 'queued') {
+        clearInterval(BG.toolsPoller);
+        BG.toolsPoller = null;
+      }
+    }, 3000);
+  }
+}
+
+function renderToolCall(tc, index) {
+  const statusIcons = {
+    'detected': '🔵',
+    'start': '🟡',
+    'input_complete': '🟠',
+    'result': tc.is_error ? '🔴' : '🟢',
+    'completed': '🟢',
+    'failed': '🔴',
+  };
+  const statusColors = {
+    'detected': 'var(--tc-detected, #5599ff)',
+    'start': 'var(--tc-pending, #ffaa33)',
+    'input_complete': 'var(--tc-running, #ff8833)',
+    'result': tc.is_error ? 'var(--tc-failed, #ff4444)' : 'var(--tc-success, #44cc66)',
+    'completed': 'var(--tc-success, #44cc66)',
+    'failed': 'var(--tc-failed, #ff4444)',
+  };
+  const icon = statusIcons[tc.event || tc.status] || '⚪';
+  const color = statusColors[tc.event || tc.status] || '#888';
+  const name = escHtml(tc.name || 'unknown');
+  const tcId = escHtml(tc.id || '');
+  const timestamp = tc.timestamp || tc.started_at || '';
+  const timeStr = timestamp ? fmtTime(timestamp) : '';
+
+  let inputHtml = '';
+  if (tc.input !== undefined && tc.input !== null && tc.input !== '') {
+    const inputStr = typeof tc.input === 'object' ? JSON.stringify(tc.input, null, 2) : String(tc.input);
+    if (inputStr.length > 0) {
+      inputHtml = `<div class="bg-tc-section">
+        <div class="bg-tc-section-label">Input</div>
+        <pre class="bg-tc-code">${escHtml(inputStr)}</pre>
+      </div>`;
+    }
+  }
+
+  let outputHtml = '';
+  if (tc.output !== undefined && tc.output !== null && tc.output !== '') {
+    const outputStr = typeof tc.output === 'object' ? JSON.stringify(tc.output, null, 2) : String(tc.output);
+    outputHtml = `<div class="bg-tc-section">
+      <div class="bg-tc-section-label">Output</div>
+      <pre class="bg-tc-code">${escHtml(outputStr.substring(0, 2000))}${outputStr.length > 2000 ? '\n…truncated' : ''}</pre>
+    </div>`;
+  }
+
+  const runtimeBadge = tc.runtime ? `<span class="bg-tc-runtime">${escHtml(tc.runtime)}</span>` : '';
+
+  return `
+    <div class="bg-tc-item" style="--tc-color: ${color}">
+      <div class="bg-tc-connector"></div>
+      <div class="bg-tc-header">
+        <span class="bg-tc-icon">${icon}</span>
+        <span class="bg-tc-name">${name}</span>
+        ${runtimeBadge}
+        <span class="bg-tc-time">${timeStr}</span>
+        <span class="bg-tc-expand">▶</span>
+      </div>
+      <div class="bg-tc-body">
+        <div class="bg-tc-id">${tcId}</div>
+        ${inputHtml}
+        ${outputHtml}
+      </div>
+    </div>
+  `;
+}
+
+function fmtTime(isoDate) {
+  if (!isoDate) return '';
+  try {
+    const withTz = /(?:Z|[+-]\d{2}:\d{2})$/.test(isoDate) ? isoDate : `${isoDate}Z`;
+    const d = new Date(withTz);
+    return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+  } catch { return ''; }
+}
+
 function closeBgDetail() {
   if (BG.logsPoller) {
     clearInterval(BG.logsPoller);
     BG.logsPoller = null;
+  }
+  if (BG.toolsPoller) {
+    clearInterval(BG.toolsPoller);
+    BG.toolsPoller = null;
   }
   hide($('bg-detail'));
   BG.selectedTaskId = null;

@@ -251,6 +251,7 @@ class BackgroundTaskManager:
             "started_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()) if status == "running" else None,
             "completed_at": None,
             "output_lines": [],
+            "tool_calls": [],
             "final_response": None,
             "error": None,
             "timeout": timeout,
@@ -331,6 +332,35 @@ class BackgroundTaskManager:
                     # Keep only last MAX_OUTPUT_LINES
                     if len(t["output_lines"]) > self.MAX_OUTPUT_LINES:
                         t["output_lines"] = t["output_lines"][-self.MAX_OUTPUT_LINES:]
+                    break
+            self._save(tasks)
+
+    MAX_TOOL_CALLS = 200
+
+    def append_tool_call(self, task_id: str, tool_call: dict):
+        """Append a new tool call event to the task."""
+        with self._lock:
+            tasks = self._load()
+            for t in tasks:
+                if t["task_id"] == task_id:
+                    if "tool_calls" not in t:
+                        t["tool_calls"] = []
+                    t["tool_calls"].append(tool_call)
+                    if len(t["tool_calls"]) > self.MAX_TOOL_CALLS:
+                        t["tool_calls"] = t["tool_calls"][-self.MAX_TOOL_CALLS:]
+                    break
+            self._save(tasks)
+
+    def update_tool_call(self, task_id: str, call_id: str, **fields):
+        """Update an existing tool call by its id."""
+        with self._lock:
+            tasks = self._load()
+            for t in tasks:
+                if t["task_id"] == task_id:
+                    for tc in t.get("tool_calls", []):
+                        if tc.get("id") == call_id:
+                            tc.update(fields)
+                            break
                     break
             self._save(tasks)
 
@@ -3280,6 +3310,12 @@ User Request:
                         r'|\x1b\][^\x07]*\x07'        # OSC sequences
                         r'|\x1b\([A-Z0-9]'            # charset selection
                     )
+                    # Tool call detection for PTY-based runtimes (Devin, etc.)
+                    _pty_tool_counter = [0]
+                    _pty_tool_pattern = _re.compile(
+                        r'(?:Tool|Calling|Using tool|Running|Executing):\s*(\w[\w.]*)\s*(.*)',
+                        _re.IGNORECASE
+                    )
                     # Incremental decoder avoids garbled output when a
                     # multi-byte UTF-8 character is split across reads.
                     _utf8_decoder = _codecs.getincrementaldecoder("utf-8")("replace")
@@ -3296,6 +3332,25 @@ User Request:
                             text = _ansi_escape.sub("", text)
                             stdout_chunks.append(text)
                             if text.strip():
+                                # Detect tool calls from PTY output
+                                for pty_line in text.split('\n'):
+                                    _m = _pty_tool_pattern.match(pty_line.strip())
+                                    if _m:
+                                        _pty_tool_counter[0] += 1
+                                        _tc_evt = {
+                                            "event": "detected",
+                                            "id": f"tc_{runtime}_{_pty_tool_counter[0]}",
+                                            "name": _m.group(1),
+                                            "input": _m.group(2).strip(),
+                                            "runtime": runtime,
+                                            "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                                        }
+                                        if stream_buffer:
+                                            stream_buffer.push("tool_call", _tc_evt)
+                                        else:
+                                            loop.call_soon_threadsafe(
+                                                queue.put_nowait, ("tool_call", _tc_evt)
+                                            )
                                 if stream_buffer:
                                     stream_buffer.push("chunk", text)
                                 else:
@@ -3315,11 +3370,13 @@ User Request:
                     # ── Pipe streaming path ─────────────────────────────────
                     import json as _json
                     _claude_text_block_count = 0  # track text blocks for separators
+                    _active_tool_calls = {}  # index → {id, name, input_parts}
+                    _tool_call_counter = [0]  # mutable counter for non-Claude runtimes
                     try:
                         for line in process.stdout:
                             stdout_chunks.append(line)
                             if runtime == "claude":
-                                # Parse stream-json output and push text deltas
+                                # Parse stream-json output and push text deltas + tool calls
                                 try:
                                     obj = _json.loads(line.strip())
                                     evt_type = obj.get("type")
@@ -3328,9 +3385,10 @@ User Request:
                                         inner_type = event.get("type", "")
                                         if inner_type == "content_block_start":
                                             cb = event.get("content_block") or {}
-                                            if cb.get("type") == "text":
+                                            cb_type = cb.get("type")
+                                            cb_index = event.get("index", 0)
+                                            if cb_type == "text":
                                                 # Push newline separator between text blocks
-                                                # (e.g. text before tool call vs text after)
                                                 if _claude_text_block_count > 0:
                                                     if stream_buffer:
                                                         stream_buffer.push("chunk", {"text": "\n\n"})
@@ -3340,9 +3398,32 @@ User Request:
                                                             ("chunk", {"text": "\n\n"}),
                                                         )
                                                 _claude_text_block_count += 1
+                                            elif cb_type == "tool_use":
+                                                tool_id = cb.get("id", f"tool_{cb_index}")
+                                                tool_name = cb.get("name", "unknown")
+                                                _active_tool_calls[cb_index] = {
+                                                    "id": tool_id,
+                                                    "name": tool_name,
+                                                    "input_parts": [],
+                                                    "started_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                                                }
+                                                tc_event = {
+                                                    "event": "start",
+                                                    "id": tool_id,
+                                                    "name": tool_name,
+                                                    "index": cb_index,
+                                                }
+                                                if stream_buffer:
+                                                    stream_buffer.push("tool_call", tc_event)
+                                                else:
+                                                    loop.call_soon_threadsafe(
+                                                        queue.put_nowait, ("tool_call", tc_event)
+                                                    )
                                         elif inner_type == "content_block_delta":
                                             delta = event.get("delta") or {}
-                                            if delta.get("type") == "text_delta":
+                                            delta_type = delta.get("type")
+                                            cb_index = event.get("index", 0)
+                                            if delta_type == "text_delta":
                                                 text = delta.get("text", "")
                                                 if text:
                                                     if stream_buffer:
@@ -3352,9 +3433,108 @@ User Request:
                                                             queue.put_nowait,
                                                             ("chunk", {"text": text}),
                                                         )
+                                            elif delta_type == "input_json_delta":
+                                                partial = delta.get("partial_json", "")
+                                                if cb_index in _active_tool_calls:
+                                                    _active_tool_calls[cb_index]["input_parts"].append(partial)
+                                                    tc_event = {
+                                                        "event": "input_delta",
+                                                        "id": _active_tool_calls[cb_index]["id"],
+                                                        "partial_json": partial,
+                                                    }
+                                                    if stream_buffer:
+                                                        stream_buffer.push("tool_call", tc_event)
+                                                    else:
+                                                        loop.call_soon_threadsafe(
+                                                            queue.put_nowait, ("tool_call", tc_event)
+                                                        )
+                                        elif inner_type == "content_block_stop":
+                                            cb_index = event.get("index", 0)
+                                            if cb_index in _active_tool_calls:
+                                                tc_info = _active_tool_calls.pop(cb_index)
+                                                full_input = "".join(tc_info["input_parts"])
+                                                try:
+                                                    parsed_input = _json.loads(full_input) if full_input else {}
+                                                except (ValueError, KeyError):
+                                                    parsed_input = full_input
+                                                tc_event = {
+                                                    "event": "input_complete",
+                                                    "id": tc_info["id"],
+                                                    "name": tc_info["name"],
+                                                    "input": parsed_input,
+                                                    "started_at": tc_info["started_at"],
+                                                }
+                                                if stream_buffer:
+                                                    stream_buffer.push("tool_call", tc_event)
+                                                else:
+                                                    loop.call_soon_threadsafe(
+                                                        queue.put_nowait, ("tool_call", tc_event)
+                                                    )
+                                    elif evt_type == "assistant":
+                                        # Parse tool results from assistant messages
+                                        msg = obj.get("message") or {}
+                                        for block in (msg.get("content") or []):
+                                            if block.get("type") == "tool_result":
+                                                tc_event = {
+                                                    "event": "result",
+                                                    "id": block.get("tool_use_id", ""),
+                                                    "is_error": block.get("is_error", False),
+                                                }
+                                                if stream_buffer:
+                                                    stream_buffer.push("tool_call", tc_event)
+                                                else:
+                                                    loop.call_soon_threadsafe(
+                                                        queue.put_nowait, ("tool_call", tc_event)
+                                                    )
                                 except (ValueError, KeyError, AttributeError):
                                     pass
                             else:
+                                # Non-Claude runtimes: detect tool call patterns from text
+                                _line_str = line if isinstance(line, str) else line.decode("utf-8", errors="replace")
+                                _line_stripped = _line_str.strip()
+                                _tc_detected = None
+
+                                if runtime == "opencode":
+                                    # OpenCode shows tool invocations as "| ToolName ..."
+                                    import re as _re_tc
+                                    _oc_match = _re_tc.match(r'^\|\s+(Glob|Read|Write|Bash|Edit|bash|grep|find|Fetch)\b(.*)', _line_stripped)
+                                    if _oc_match:
+                                        _tc_detected = {"name": _oc_match.group(1), "input": _oc_match.group(2).strip()}
+                                elif runtime == "copilot":
+                                    # Copilot may show tool calls as "Running <tool>..." or function names
+                                    import re as _re_tc
+                                    _cp_match = _re_tc.match(r'^(?:Running|Calling|Using)\s+(\w+)\s*(.*)', _line_stripped)
+                                    if _cp_match:
+                                        _tc_detected = {"name": _cp_match.group(1), "input": _cp_match.group(2).strip()}
+                                elif runtime == "codex":
+                                    # Codex may emit function call patterns
+                                    import re as _re_tc
+                                    _cx_match = _re_tc.match(r'^(?:Calling function|Tool|Executing):\s*(\w+)\s*(.*)', _line_stripped, _re_tc.IGNORECASE)
+                                    if _cx_match:
+                                        _tc_detected = {"name": _cx_match.group(1), "input": _cx_match.group(2).strip()}
+                                elif runtime == "gemini":
+                                    import re as _re_tc
+                                    _gm_match = _re_tc.match(r'^(?:Using tool|Function call|Calling):\s*(\w+)\s*(.*)', _line_stripped, _re_tc.IGNORECASE)
+                                    if _gm_match:
+                                        _tc_detected = {"name": _gm_match.group(1), "input": _gm_match.group(2).strip()}
+
+                                if _tc_detected:
+                                    _tool_call_counter[0] += 1
+                                    tc_event = {
+                                        "event": "detected",
+                                        "id": f"tc_{runtime}_{_tool_call_counter[0]}",
+                                        "name": _tc_detected["name"],
+                                        "input": _tc_detected.get("input", ""),
+                                        "runtime": runtime,
+                                        "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                                    }
+                                    if stream_buffer:
+                                        stream_buffer.push("tool_call", tc_event)
+                                    else:
+                                        loop.call_soon_threadsafe(
+                                            queue.put_nowait, ("tool_call", tc_event)
+                                        )
+
                                 if stream_buffer:
                                     stream_buffer.push("chunk", line)
                                 else:
@@ -5857,6 +6037,8 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                                 else:
                                     # Fallback for non-Claude runtimes
                                     yield f"data: {_json.dumps({'type': 'chunk', 'text': data})}\n\n"
+                            elif kind == "tool_call":
+                                yield f"data: {_json.dumps({'type': 'tool_call', **data})}\n\n"
                             elif kind == "done":
                                 break  # subprocess finished; final result in future
                     except Exception as exc:
@@ -5962,6 +6144,8 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                             yield f"data: {_json.dumps({'type': 'chunk', **data})}\n\n"
                         else:
                             yield f"data: {_json.dumps({'type': 'chunk', 'text': data})}\n\n"
+                    elif kind == "tool_call":
+                        yield f"data: {_json.dumps({'type': 'tool_call', **data})}\n\n"
                     elif kind == "done":
                         # Query already finished — send done event with stored result
                         session_data = session_mgr.get_or_create_session_data(session_id)
@@ -6004,6 +6188,8 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                             yield f"data: {_json.dumps({'type': 'chunk', **data})}\n\n"
                         else:
                             yield f"data: {_json.dumps({'type': 'chunk', 'text': data})}\n\n"
+                    elif kind == "tool_call":
+                        yield f"data: {_json.dumps({'type': 'tool_call', **data})}\n\n"
                     elif kind == "done":
                         break
 
@@ -6532,16 +6718,66 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         """Blocking function that runs a background task in a subprocess.
         Called from a thread pool executor.
 
+        Uses Popen for incremental output capture and real-time tool call
+        parsing.  Output lines are appended to the task as they arrive so
+        the WebUI can poll for live progress.
+
         NOTE: The entire function body is wrapped in a single try/except to
         guarantee that any unexpected exception (e.g. file-lock race on the
         session-map JSON) always transitions the task to 'failed' instead of
         leaving it stuck in 'running' forever.
         """
         import subprocess
+        import json as _json
+        import re as _re
+
+        _tool_call_counter = 0
+
+        def _parse_tool_call_from_line(line_text, rt):
+            """Detect tool call patterns from a single output line."""
+            nonlocal _tool_call_counter
+            stripped = line_text.strip()
+            if not stripped:
+                return None
+
+            tc = None
+            if rt == "copilot":
+                m = _re.match(r'^(?:Running|Calling|Using|Ran)\s+(\w[\w.]*)\s*(.*)', stripped)
+                if m:
+                    tc = {"name": m.group(1), "input": m.group(2).strip()}
+            elif rt == "opencode":
+                m = _re.match(r'^\|\s+(Glob|Read|Write|Bash|Edit|bash|grep|find|Fetch)\b(.*)', stripped)
+                if m:
+                    tc = {"name": m.group(1), "input": m.group(2).strip()}
+            elif rt == "codex":
+                m = _re.match(r'^(?:Calling function|Tool|Executing|Running):\s*(\w[\w.]*)\s*(.*)', stripped, _re.IGNORECASE)
+                if m:
+                    tc = {"name": m.group(1), "input": m.group(2).strip()}
+            elif rt == "gemini":
+                m = _re.match(r'^(?:Using tool|Function call|Calling):\s*(\w[\w.]*)\s*(.*)', stripped, _re.IGNORECASE)
+                if m:
+                    tc = {"name": m.group(1), "input": m.group(2).strip()}
+            elif rt == "claude":
+                # Claude background tasks use copilot binary, but if stream-json is enabled
+                # the JSON parsing path below handles it.  Plain-text fallback:
+                m = _re.match(r'^(?:Tool|Calling|Using tool):\s*(\w[\w.]*)\s*(.*)', stripped, _re.IGNORECASE)
+                if m:
+                    tc = {"name": m.group(1), "input": m.group(2).strip()}
+
+            if tc:
+                _tool_call_counter += 1
+                return {
+                    "id": f"bg_{task_id[:8]}_{_tool_call_counter}",
+                    "name": tc["name"],
+                    "input": tc.get("input", ""),
+                    "status": "detected",
+                    "runtime": rt,
+                    "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                }
+            return None
 
         try:
             # Build full context prompt with agent/runtime/channel metadata
-            # This mirrors what run_copilot() does for interactive sessions.
             context_prompt = session_mgr.build_agent_context_prompt(
                 agent, prompt, session_id,
                 render_type="text",
@@ -6563,26 +6799,66 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 "--allow-all-paths",
             ]
 
-            # Set timeout for subprocess (30s longer than task timeout to allow graceful shutdown)
             proc_timeout = (timeout or 900) + 30
+            env = {**os.environ, "COPILOT_AGENT": agent, "COPILOT_RUNTIME": runtime}
 
-            result = subprocess.run(
+            # Use Popen for incremental output capture
+            process = subprocess.Popen(
                 cmd,
-                capture_output=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
                 text=True,
-                timeout=proc_timeout,
-                env={**os.environ, "COPILOT_AGENT": agent, "COPILOT_RUNTIME": runtime}
+                env=env,
+                bufsize=1,
             )
 
-            # Extract output - combine stdout and stderr for full result
-            output = result.stdout.strip() if result.stdout else ""
-            if result.stderr:
-                output += f"\n[stderr]\n{result.stderr}"
+            bg_task_mgr.update_task(task_id, pid=process.pid)
 
-            if result.returncode == 0:
+            import threading
+            stderr_lines = []
+
+            def _drain_stderr():
+                try:
+                    for err_line in process.stderr:
+                        stderr_lines.append(err_line)
+                except Exception:
+                    pass
+
+            stderr_thread = threading.Thread(target=_drain_stderr, daemon=True)
+            stderr_thread.start()
+
+            stdout_lines = []
+            start_time = time.time()
+
+            for line in process.stdout:
+                stdout_lines.append(line)
+                line_text = line.rstrip('\n\r')
+
+                # Append to output_lines for live log viewing
+                if line_text:
+                    bg_task_mgr.append_output(task_id, line_text)
+
+                # Detect tool calls from output patterns
+                tc = _parse_tool_call_from_line(line_text, runtime)
+                if tc:
+                    bg_task_mgr.append_tool_call(task_id, tc)
+
+                # Check timeout
+                if time.time() - start_time > proc_timeout:
+                    process.kill()
+                    break
+
+            process.stdout.close()
+            stderr_thread.join(timeout=5)
+            process.wait()
+
+            output = "".join(stdout_lines).strip()
+            if stderr_lines:
+                output += "\n[stderr]\n" + "".join(stderr_lines)
+
+            if process.returncode == 0:
                 final_output = output or "Task completed successfully"
                 bg_task_mgr.complete_task(task_id, final_output)
-                # Save to scheduler if scheduled job  
                 if task_id.startswith("sched_"):
                     try:
                         job_id = task_id.split("_")[1]
@@ -6594,9 +6870,8 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 _emit_bg_notification(task_id, prompt, "completed", channel, user_identity,
                                       output_preview=final_output, error=None, notify=notify)
             else:
-                error_msg = f"Task failed with code {result.returncode}: {output}"
+                error_msg = f"Task failed with code {process.returncode}: {output}"
                 bg_task_mgr.fail_task(task_id, error_msg)
-                # Save to scheduler if scheduled job
                 if task_id.startswith("sched_"):
                     try:
                         job_id = task_id.split("_")[1]
@@ -6840,6 +7115,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         if not bg_task_mgr._identity_matches(task, user["channel"], user["identity"]):
             raise HTTPException(status_code=403, detail="Not your task")
         # Return detail with last 50 output lines
+        tool_calls = task.get("tool_calls", [])
         return {
             "task_id": task["task_id"],
             "session_id": task["session_id"],
@@ -6853,6 +7129,8 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             "completed_at": task.get("completed_at"),
             "recent_output": task.get("output_lines", [])[-50:],
             "error": task.get("error"),
+            "tool_call_count": len(tool_calls),
+            "recent_tool_calls": tool_calls[-20:],
         }
 
     @app.get("/api/v1/background-tasks/{task_id}/transcript")
@@ -6897,6 +7175,27 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             "completed_at": task.get("completed_at"),
             "output_lines": task.get("output_lines", []),
             "error": task.get("error"),
+        }
+
+    @app.get("/api/v1/background-tasks/{task_id}/tool-calls")
+    async def get_background_task_tool_calls(task_id: str, request: Request):
+        """Return all tool calls for a background task."""
+        user = await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        task = bg_task_mgr.get_task(task_id)
+        if not task:
+            raise HTTPException(status_code=404, detail="Task not found")
+        if not bg_task_mgr._identity_matches(task, user["channel"], user["identity"]):
+            raise HTTPException(status_code=403, detail="Not your task")
+        return {
+            "task_id": task["task_id"],
+            "status": task["status"],
+            "tool_calls": task.get("tool_calls", []),
+            "tool_call_count": len(task.get("tool_calls", [])),
         }
 
     @app.delete("/api/v1/background-tasks/{task_id}")
