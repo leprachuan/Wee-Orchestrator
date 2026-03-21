@@ -2196,8 +2196,29 @@ class SessionManager:
                 if re.match(r"^Total usage est:|^Total duration", line):
                     in_metadata = True
                     continue
-                if not in_metadata:
-                    result.append(line)
+                if in_metadata:
+                    continue
+                # Strip tool call decoration lines (already captured during streaming)
+                stripped_line = line.strip()
+                if re.match(r'^[●⬤]\s+', stripped_line):
+                    continue
+                if re.match(r'^\$\s+', stripped_line):
+                    continue
+                if re.match(r'^└\s+\d+\s+lines?', stripped_line):
+                    continue
+                if re.match(r'^Breakdown by AI model:', stripped_line):
+                    in_metadata = True
+                    continue
+                if re.match(r'^API time spent:', stripped_line):
+                    in_metadata = True
+                    continue
+                if re.match(r'^Total session time:', stripped_line):
+                    in_metadata = True
+                    continue
+                if re.match(r'^Total code changes:', stripped_line):
+                    in_metadata = True
+                    continue
+                result.append(line)
 
         elif runtime == "opencode":
             skip_banner = True
@@ -3501,11 +3522,38 @@ User Request:
                                     if _oc_match:
                                         _tc_detected = {"name": _oc_match.group(1), "input": _oc_match.group(2).strip()}
                                 elif runtime == "copilot":
-                                    # Copilot may show tool calls as "Running <tool>..." or function names
+                                    # Copilot shows tool calls as "● Description" and shell cmds as "  $ cmd"
                                     import re as _re_tc
-                                    _cp_match = _re_tc.match(r'^(?:Running|Calling|Using)\s+(\w+)\s*(.*)', _line_stripped)
-                                    if _cp_match:
-                                        _tc_detected = {"name": _cp_match.group(1), "input": _cp_match.group(2).strip()}
+                                    # Tool call start: "● <description> [(+N)]"
+                                    _cp_tool_match = _re_tc.match(r'^[●⬤]\s+(.+?)(?:\s+\(\+\d+\))?$', _line_stripped)
+                                    if _cp_tool_match:
+                                        _desc = _cp_tool_match.group(1).strip()
+                                        # Infer tool name from description
+                                        if any(kw in _desc.lower() for kw in ["read", "view", "open"]):
+                                            _tool_name = "read"
+                                        elif any(kw in _desc.lower() for kw in ["create", "write", "save", "edit", "update", "modify"]):
+                                            _tool_name = "write"
+                                        elif any(kw in _desc.lower() for kw in ["delete", "remove", "rm"]):
+                                            _tool_name = "shell"
+                                        elif any(kw in _desc.lower() for kw in ["list", "ls", "find", "search", "glob"]):
+                                            _tool_name = "glob"
+                                        elif any(kw in _desc.lower() for kw in ["run", "exec", "install", "deploy", "build", "test"]):
+                                            _tool_name = "shell"
+                                        elif any(kw in _desc.lower() for kw in ["fetch", "curl", "http", "api", "download"]):
+                                            _tool_name = "web_fetch"
+                                        else:
+                                            _tool_name = "tool"
+                                        _tc_detected = {"name": _tool_name, "input": _desc}
+                                    else:
+                                        # Shell command line: "  $ <command>"
+                                        _cp_cmd_match = _re_tc.match(r'^\$\s+(.+)', _line_stripped)
+                                        if _cp_cmd_match:
+                                            _tc_detected = {"name": "shell", "input": _cp_cmd_match.group(1).strip()}
+                                        # Also catch "Running/Calling/Using" patterns as fallback
+                                        elif not _cp_tool_match:
+                                            _cp_legacy = _re_tc.match(r'^(?:Running|Calling|Using)\s+(\w+)\s*(.*)', _line_stripped)
+                                            if _cp_legacy:
+                                                _tc_detected = {"name": _cp_legacy.group(1), "input": _cp_legacy.group(2).strip()}
                                 elif runtime == "codex":
                                     # Codex may emit function call patterns
                                     import re as _re_tc
@@ -3657,7 +3705,6 @@ User Request:
             context_prompt,
             "--allow-all-tools",
             "--no-color",
-            "--silent",
             "--model",
             model,
         ]
@@ -6742,9 +6789,35 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
 
             tc = None
             if rt == "copilot":
-                m = _re.match(r'^(?:Running|Calling|Using|Ran)\s+(\w[\w.]*)\s*(.*)', stripped)
-                if m:
-                    tc = {"name": m.group(1), "input": m.group(2).strip()}
+                # Copilot shows tool calls as bullet points: "\u25cf <description>"
+                m_tool = _re.match(r'^[\u25cf\u2b24]\s+(.+?)(?:\s+\(\+\d+\))?$', stripped)
+                if m_tool:
+                    _desc = m_tool.group(1).strip()
+                    if any(kw in _desc.lower() for kw in ["read", "view", "open"]):
+                        _tn = "read"
+                    elif any(kw in _desc.lower() for kw in ["create", "write", "save", "edit", "update", "modify"]):
+                        _tn = "write"
+                    elif any(kw in _desc.lower() for kw in ["delete", "remove", "rm"]):
+                        _tn = "shell"
+                    elif any(kw in _desc.lower() for kw in ["list", "ls", "find", "search", "glob"]):
+                        _tn = "glob"
+                    elif any(kw in _desc.lower() for kw in ["run", "exec", "install", "deploy", "build", "test"]):
+                        _tn = "shell"
+                    elif any(kw in _desc.lower() for kw in ["fetch", "curl", "http", "api", "download"]):
+                        _tn = "web_fetch"
+                    else:
+                        _tn = "tool"
+                    tc = {"name": _tn, "input": _desc}
+                else:
+                    # Shell command: "  $ <command>"
+                    m_cmd = _re.match(r'^\$\s+(.+)', stripped)
+                    if m_cmd:
+                        tc = {"name": "shell", "input": m_cmd.group(1).strip()}
+                    else:
+                        # Legacy fallback
+                        m = _re.match(r'^(?:Running|Calling|Using|Ran)\s+(\w[\w.]*)\s*(.*)', stripped)
+                        if m:
+                            tc = {"name": m.group(1), "input": m.group(2).strip()}
             elif rt == "opencode":
                 m = _re.match(r'^\|\s+(Glob|Read|Write|Bash|Edit|bash|grep|find|Fetch)\b(.*)', stripped)
                 if m:
@@ -6792,7 +6865,6 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             cmd = [
                 copilot_bin,
                 "-p", context_prompt,
-                "--silent",
                 "--no-color",
                 "--model", model,
                 "--allow-all-tools",
@@ -6857,7 +6929,10 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 output += "\n[stderr]\n" + "".join(stderr_lines)
 
             if process.returncode == 0:
-                final_output = output or "Task completed successfully"
+                # Strip CLI metadata (tool decoration, stats) from final output
+                final_output = session_mgr.strip_metadata(output, runtime) if output else "Task completed successfully"
+                if not final_output.strip():
+                    final_output = output or "Task completed successfully"
                 bg_task_mgr.complete_task(task_id, final_output)
                 if task_id.startswith("sched_"):
                     try:
