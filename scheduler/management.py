@@ -17,6 +17,21 @@ def parse_schedule_to_next_run(schedule: str) -> Optional[str]:
     schedule = re.sub(r"\s+", " ", schedule.lower().strip())
     now = datetime.utcnow()
 
+    # Handle shorthand like "every minute", "every hour", "every second"
+    shorthand_match = re.fullmatch(r"every (minute|hour|second|day|week)", schedule)
+    if shorthand_match:
+        unit = shorthand_match.group(1)
+        if unit == "second":
+            return (now + timedelta(seconds=1)).isoformat() + "Z"
+        elif unit == "minute":
+            return (now + timedelta(minutes=1)).isoformat() + "Z"
+        elif unit == "hour":
+            return (now + timedelta(hours=1)).isoformat() + "Z"
+        elif unit == "day":
+            return (now + timedelta(days=1)).isoformat() + "Z"
+        elif unit == "week":
+            return (now + timedelta(weeks=1)).isoformat() + "Z"
+
     interval_match = re.fullmatch(r"(in|every) (\d+) ([a-z]+)", schedule)
     if interval_match:
         mode, amount_str, unit = interval_match.groups()
@@ -293,12 +308,19 @@ class TaskScheduler:
         return {"success": False, "message": f"Job '{job_id}' not found"}
 
     def run_job(self, job_id: str) -> Dict:
-        """Mark a job's last_run timestamp and return the job for immediate execution."""
+        """Mark a job's last_run timestamp, recalculate next_run, and return job for immediate execution."""
         jobs = self._load_jobs()
         job = next((j for j in jobs["jobs"] if j["id"] == job_id), None)
         if not job:
             return {"success": False, "message": f"Job '{job_id}' not found"}
         job["last_run"] = datetime.utcnow().isoformat() + "Z"
+        # Recalculate next_run based on the cron/schedule expression
+        schedule = job.get("schedule", "")
+        if schedule and job.get("recurring", True):
+            new_next = parse_schedule_to_next_run(schedule)
+            if new_next:
+                job["next_run"] = new_next
+                self._log(job_id, f"Next run recalculated: {new_next}")
         self._save_jobs(jobs)
         self._log(job_id, "Manual run triggered via API (run-now)")
         return {"success": True, "result": job, "message": f"Job '{job_id}' triggered for immediate execution"}
