@@ -2395,9 +2395,14 @@ function renderSchedulerJobs() {
         <span title="Next run">Next: ${escHtml(nextRun)}</span>
         <span title="Last run">Last: ${escHtml(lastRun)}</span>
       </div>
+      <div class="sched-job-actions" style="margin-top:6px;text-align:right">
+        <button class="btn btn-accent btn-xs sched-card-run-btn" title="Run this job immediately">▶ Run Now</button>
+      </div>
     `;
 
     card.addEventListener('click', () => openJobDetail(job.id));
+    const cardRunBtn = card.querySelector('.sched-card-run-btn');
+    if (cardRunBtn) cardRunBtn.addEventListener('click', (e) => { e.stopPropagation(); doJobRunNow(job.id, cardRunBtn); });
     list.appendChild(card);
   }
 }
@@ -3097,6 +3102,7 @@ async function loadBgTaskDetail(taskId) {
     let actionsHtml = '';
     if (t.status === 'running') {
       actionsHtml = `<div class="bg-detail-actions">
+        <button class="btn btn-ghost btn-sm" onclick="showBgTaskLogs('${t.task_id}')">📋 Live Logs</button>
         <button class="btn btn-danger btn-sm" onclick="killBgTask('${t.task_id}')">🛑 Kill Task</button>
       </div>`;
     } else if (t.status === 'queued') {
@@ -3105,6 +3111,8 @@ async function loadBgTaskDetail(taskId) {
       </div>`;
     } else {
       actionsHtml = `<div class="bg-detail-actions">
+        <button class="btn btn-ghost btn-sm" onclick="showBgTaskLogs('${t.task_id}')">📋 Logs</button>
+        <button class="btn btn-ghost btn-sm" onclick="viewBgTranscript('${t.task_id}')">📄 Transcript</button>
         <button class="btn btn-ghost btn-sm" onclick="deleteBgTask('${t.task_id}')">🗑️ Remove</button>
       </div>`;
     }
@@ -3330,6 +3338,51 @@ window.viewBgTranscript = async function(taskId) {
   } catch (err) {
     body.innerHTML = `<p style="color:#ff8888">Failed: ${escHtml(err.message)}</p>`;
   }
+};
+
+// Live Logs viewer
+let _bgLogsPollerTimer = null;
+
+window.showBgTaskLogs = async function(taskId) {
+  const body = $('bg-detail-body');
+  if (_bgLogsPollerTimer) { clearInterval(_bgLogsPollerTimer); _bgLogsPollerTimer = null; }
+
+  async function renderLogs() {
+    try {
+      const data = await bgApi('GET', '/' + taskId + '/logs');
+      const lines = data.output_lines || [];
+      const status = data.status || 'unknown';
+      const started = data.created_at ? fmtDate(data.created_at) : '--';
+      const finished = data.completed_at ? fmtDate(data.completed_at) : '';
+      const elapsed = data.created_at ? formatElapsed(data.created_at) : '';
+      const sicons = { running: '\u{1F7E2}', completed: '\u2705', failed: '\u274C', queued: '\u23F3' };
+      const icon = sicons[status] || '\u2753';
+      let timing = '<div style="font-size:11px;color:var(--text-muted);margin-bottom:8px">' + icon + ' ' + escHtml(status);
+      if (started) timing += ' &middot; Started: ' + escHtml(started);
+      if (finished) timing += ' &middot; Finished: ' + escHtml(finished);
+      else if (elapsed) timing += ' &middot; Elapsed: ' + escHtml(elapsed);
+      timing += '</div>';
+      const logText = lines.length ? lines.join('\n') : '(no output yet)';
+      const oldDiv = $('bg-logs-output');
+      const atBottom = !oldDiv || (oldDiv.scrollHeight - oldDiv.scrollTop <= oldDiv.clientHeight + 40);
+      const polling = status === 'running' ? '<span style="font-size:11px;color:var(--text-muted)">Auto-updating...</span>' : '';
+      body.innerHTML = '<div style="margin-bottom:12px;display:flex;gap:8px;align-items:center"><button class="btn btn-ghost btn-sm" onclick="loadBgTaskDetail(\'' + taskId + '\')">&#8592; Back</button>' + polling + '</div>'
+        + timing + '<pre id="bg-logs-output" style="background:var(--bg-secondary,#111);border:1px solid var(--border-color,#333);border-radius:6px;padding:12px;font-size:11px;line-height:1.5;max-height:420px;overflow-y:auto;white-space:pre-wrap;word-break:break-all">' + escHtml(logText) + '</pre>';
+      const nd = $('bg-logs-output');
+      if (nd && atBottom) nd.scrollTop = nd.scrollHeight;
+      if (status !== 'running' && _bgLogsPollerTimer) { clearInterval(_bgLogsPollerTimer); _bgLogsPollerTimer = null; }
+    } catch (err) {
+      body.innerHTML = '<div style="margin-bottom:12px"><button class="btn btn-ghost btn-sm" onclick="loadBgTaskDetail(\'' + taskId + '\')">&#8592; Back</button></div><p style="color:#ff8888">Log error: ' + escHtml(err.message) + '</p>';
+      if (_bgLogsPollerTimer) { clearInterval(_bgLogsPollerTimer); _bgLogsPollerTimer = null; }
+    }
+  }
+
+  body.innerHTML = '<p style="color:var(--text-muted);font-size:13px;">Loading logs...</p>';
+  await renderLogs();
+  try {
+    const s = await bgApi('GET', '/' + taskId + '/logs');
+    if (s.status === 'running') _bgLogsPollerTimer = setInterval(renderLogs, 2000);
+  } catch (_) {}
 };
 
 // Toast helper

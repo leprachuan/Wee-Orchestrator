@@ -6856,6 +6856,29 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             "error": task.get("error"),
         }
 
+    @app.get("/api/v1/background-tasks/{task_id}/logs")
+    async def get_background_task_logs(task_id: str, request: Request):
+        """Return all output lines for a background task (for live log streaming)."""
+        user = await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        task = bg_task_mgr.get_task(task_id)
+        if not task:
+            raise HTTPException(status_code=404, detail="Task not found")
+        if not bg_task_mgr._identity_matches(task, user["channel"], user["identity"]):
+            raise HTTPException(status_code=403, detail="Not your task")
+        return {
+            "task_id": task["task_id"],
+            "status": task["status"],
+            "created_at": task["created_at"],
+            "completed_at": task.get("completed_at"),
+            "output_lines": task.get("output_lines", []),
+            "error": task.get("error"),
+        }
+
     @app.delete("/api/v1/background-tasks/{task_id}")
     async def delete_background_task(task_id: str, request: Request):
         user = await authenticate(
