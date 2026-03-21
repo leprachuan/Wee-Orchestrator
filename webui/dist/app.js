@@ -1418,26 +1418,66 @@ async function sendMessage() {
 
 
 /**
- * Refresh inline spinning gear tool icons at the bottom of a streaming bubble.
- * toolsMap: { key: toolName } — one entry per active tool call.
+ * Extract a human-readable summary from a tool call input payload.
  */
-function refreshInlineToolIcons(bubble, toolsMap) {
-  if (!bubble) return;
-  let cont = bubble.querySelector('.stream-inline-tools');
-  const entries = Object.entries(toolsMap);
-  if (!entries.length) {
-    if (cont) cont.remove();
-    return;
-  }
-  const html = entries.map(([, name]) =>
-    '<span class="tool-inline-icon"><span class="tool-gear">\u2699\ufe0f</span> <span class="tool-name">' + escHtml(name) + '</span>\u2026</span>'
-  ).join('');
-  if (cont) {
-    cont.innerHTML = html;
-  } else {
-    bubble.insertAdjacentHTML('beforeend', '<span class="stream-inline-tools">' + html + '</span>');
+function getToolInputSummary(toolName, input) {
+  if (!input) return '';
+  try {
+    const inp = typeof input === 'string' ? JSON.parse(input) : input;
+    if (/^bash$/i.test(toolName)) return (inp.command || inp.cmd || JSON.stringify(inp)).substring(0, 100);
+    if (/read|write|edit|glob|view|create/i.test(toolName)) return (inp.file_path || inp.path || inp.pattern || JSON.stringify(inp)).substring(0, 100);
+    if (/fetch|web/i.test(toolName)) return (inp.url || JSON.stringify(inp)).substring(0, 100);
+    if (/grep/i.test(toolName)) return (inp.pattern || JSON.stringify(inp)).substring(0, 100);
+    return JSON.stringify(inp).substring(0, 100);
+  } catch {
+    return String(input).substring(0, 100);
   }
 }
+
+/**
+ * Insert an interleaved tool-call block row into the messages container.
+ */
+function insertToolCallBlock(toolId, toolName, inputSummary) {
+  const messagesEl = $('messages');
+  if (!messagesEl) return;
+  const row = document.createElement('div');
+  row.className = 'msg-row tool-call-row';
+  row.id = 'tc-' + toolId;
+  row.innerHTML = '<div class="tool-call-block">' +
+    '<span class="tc-spinner spinning">⚙️</span>' +
+    '<span class="tc-name">' + escHtml(toolName) + '</span>' +
+    (inputSummary ? '<span class="tc-input">' + escHtml(inputSummary) + '</span>' : '') +
+    '<span class="tc-status running">running…</span>' +
+    '</div>';
+  messagesEl.appendChild(row);
+  row.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+}
+
+/**
+ * Mark a tool-call block as complete (stop spinner, show checkmark).
+ */
+function completeToolCallBlock(toolId) {
+  const row = document.getElementById('tc-' + toolId);
+  if (!row) return;
+  const spinner = row.querySelector('.tc-spinner');
+  if (spinner) spinner.classList.remove('spinning');
+  const status = row.querySelector('.tc-status');
+  if (status) { status.textContent = '✓'; status.className = 'tc-status done'; }
+}
+
+/**
+ * Stop all remaining active tool call spinners (cleanup on done).
+ */
+function cleanupAllToolSpinners() {
+  document.querySelectorAll('.tc-spinner.spinning').forEach(el => {
+    el.classList.remove('spinning');
+    const status = el.closest('.tool-call-block')?.querySelector('.tc-status');
+    if (status) { status.textContent = '✓'; status.className = 'tc-status done'; }
+  });
+}
+
+/* Legacy stub — kept so any stale references don't throw */
+function refreshInlineToolIcons() {}
 
 /**
  * Detect whether a raw output line looks like a tool call invocation.
@@ -1530,30 +1570,45 @@ async function sendMessageStreaming(query, sessionId) {
               .replace(/\n\n+/g, '</p><p>')  // paragraph breaks
               .replace(/\n/g, '<br>');      // line breaks
             streamBubble.innerHTML = formatted ? `<p>${formatted}</p>` : '';
-            refreshInlineToolIcons(streamBubble, activeStreamTools);
             scrollToBottom();
 
           } else if (evt.type === 'tool_call') {
-            // Tool call — inject inline gear icon at current bubble position
-            if (streamBubble) {
-              const evtKind = evt.event || 'detected';
-              const toolName = evt.name || 'tool';
-              const key = evt.id || toolName;
-              if (evtKind === 'start' || evtKind === 'detected' || evtKind === 'input_complete') {
+            // Tool call — interleaved block in messages thread
+            const evtKind = evt.event || 'detected';
+            const toolName = evt.name || 'Tool';
+            const key = evt.id || toolName;
+            if (evtKind === 'input_complete' || evtKind === 'start') {
+              if (!activeStreamTools[key]) {
                 activeStreamTools[key] = toolName;
-                refreshInlineToolIcons(streamBubble, activeStreamTools);
-              } else if (evtKind === 'result') {
-                delete activeStreamTools[key];
-                const cont = streamBubble.querySelector('.stream-inline-tools');
-                if (cont) {
-                  cont.style.transition = 'opacity 0.3s';
-                  cont.style.opacity = '0';
-                  setTimeout(() => refreshInlineToolIcons(streamBubble, activeStreamTools), 320);
+                insertToolCallBlock(key, toolName, getToolInputSummary(toolName, evt.input));
+              } else if (evtKind === 'input_complete' && evt.input) {
+                // Update input summary if we get it later
+                const row = document.getElementById('tc-' + key);
+                if (row) {
+                  let inp = row.querySelector('.tc-input');
+                  const summary = getToolInputSummary(toolName, evt.input);
+                  if (summary) {
+                    if (!inp) {
+                      inp = document.createElement('span');
+                      inp.className = 'tc-input';
+                      const status = row.querySelector('.tc-status');
+                      status?.parentNode?.insertBefore(inp, status);
+                    }
+                    inp.textContent = summary;
+                  }
                 }
               }
+            } else if (evtKind === 'detected' && !activeStreamTools[key]) {
+              activeStreamTools[key] = toolName;
+              insertToolCallBlock(key, toolName, getToolInputSummary(toolName, evt.input));
+            } else if (evtKind === 'result') {
+              delete activeStreamTools[key];
+              completeToolCallBlock(key);
             }
 
           } else if (evt.type === 'done') {
+            // Stop all remaining tool spinners
+            cleanupAllToolSpinners();
             // Use accumulated streaming text when available (captures all
             // turns in multi-tool responses); fall back to done payload.
             const finalContent = rawText.trim()
@@ -1672,30 +1727,43 @@ async function reconnectToStream(sessionId) {
                 .replace(/\n\n+/g, '</p><p>')
                 .replace(/\n/g, '<br>');
               streamBubble.innerHTML = formatted ? `<p>${formatted}</p>` : '';
-              refreshInlineToolIcons(streamBubble, activeStreamTools);
               scrollToBottom();
 
             } else if (evt.type === 'tool_call') {
-              // Tool call — inject inline gear icon at current bubble position
-              if (streamBubble) {
-                const evtKind = evt.event || 'detected';
-                const toolName = evt.name || 'tool';
-                const key = evt.id || toolName;
-                if (evtKind === 'start' || evtKind === 'detected' || evtKind === 'input_complete') {
+              // Tool call — interleaved block in messages thread
+              const evtKind = evt.event || 'detected';
+              const toolName = evt.name || 'Tool';
+              const key = evt.id || toolName;
+              if (evtKind === 'input_complete' || evtKind === 'start') {
+                if (!activeStreamTools[key]) {
                   activeStreamTools[key] = toolName;
-                  refreshInlineToolIcons(streamBubble, activeStreamTools);
-                } else if (evtKind === 'result') {
-                  delete activeStreamTools[key];
-                  const cont = streamBubble.querySelector('.stream-inline-tools');
-                  if (cont) {
-                    cont.style.transition = 'opacity 0.3s';
-                    cont.style.opacity = '0';
-                    setTimeout(() => refreshInlineToolIcons(streamBubble, activeStreamTools), 320);
+                  insertToolCallBlock(key, toolName, getToolInputSummary(toolName, evt.input));
+                } else if (evtKind === 'input_complete' && evt.input) {
+                  const row = document.getElementById('tc-' + key);
+                  if (row) {
+                    let inp = row.querySelector('.tc-input');
+                    const summary = getToolInputSummary(toolName, evt.input);
+                    if (summary) {
+                      if (!inp) {
+                        inp = document.createElement('span');
+                        inp.className = 'tc-input';
+                        const status = row.querySelector('.tc-status');
+                        status?.parentNode?.insertBefore(inp, status);
+                      }
+                      inp.textContent = summary;
+                    }
                   }
                 }
+              } else if (evtKind === 'detected' && !activeStreamTools[key]) {
+                activeStreamTools[key] = toolName;
+                insertToolCallBlock(key, toolName, getToolInputSummary(toolName, evt.input));
+              } else if (evtKind === 'result') {
+                delete activeStreamTools[key];
+                completeToolCallBlock(key);
               }
 
             } else if (evt.type === 'done') {
+              cleanupAllToolSpinners();
               const finalContent = rawText.trim()
                 ? rawText
                 : (evt.response || '(no response)');

@@ -5485,43 +5485,65 @@ html, body {
   overflow-y: auto;
 }
 
-/* Streaming tool indicator (inline in chat) */
-/* Inline tool call spinning gear icons */
+/* Streaming tool indicator — interleaved tool call blocks */
 @keyframes toolSpin {
   from { transform: rotate(0deg); }
   to { transform: rotate(360deg); }
 }
 
-/* Container appended at end of streaming bubble */
-.stream-inline-tools {
-  display: inline-block;
-  margin-left: 2px;
-}
+/* Legacy: keep for any remaining references (inline in bubble) */
+.stream-inline-tools { display: none; }
+.tool-inline-icon { display: none; }
+.tool-inline-icon .tool-name { display: none; }
+.tool-gear { display: none; }
 
-/* Each active tool call */
-.tool-inline-icon {
-  display: inline-flex;
+/* ─── Interleaved tool call rows ─── */
+.tool-call-row {
+  display: flex;
+  justify-content: flex-start;
+  padding: 2px 16px;
+  margin: 2px 0;
+}
+.tool-call-block {
+  display: flex;
   align-items: center;
-  gap: 3px;
+  gap: 7px;
+  background: rgba(255,255,255,0.04);
+  border: 1px solid rgba(255,255,255,0.08);
+  border-radius: 8px;
+  padding: 5px 12px;
   font-size: 12px;
   color: var(--text-muted, #6b7280);
-  opacity: 1;
-  margin-right: 4px;
-  vertical-align: middle;
+  max-width: 80%;
 }
-
-.tool-inline-icon .tool-name {
+.tc-spinner {
+  font-size: 13px;
+  display: inline-block;
+}
+.tc-spinner.spinning {
+  animation: toolSpin 1.2s linear infinite;
+}
+.tc-name {
+  font-weight: 600;
+  color: var(--text-secondary, #d1d5db);
+  font-size: 12px;
+}
+.tc-input {
   font-family: var(--font-mono, monospace);
   font-size: 11px;
-  color: var(--accent, #3ecf8e);
+  color: var(--text-muted, #6b7280);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 400px;
 }
-
-/* Spinning gear element */
-.tool-gear {
-  display: inline-block;
-  animation: toolSpin 2s linear infinite;
-  line-height: 1;
+.tc-status {
+  font-size: 11px;
+  margin-left: 4px;
+  white-space: nowrap;
 }
+.tc-status.running { color: #f5c542; }
+.tc-status.done { color: #3ecf8e; }
 
 /* Background task log: tool call line marker */
 .bg-tool-line {
