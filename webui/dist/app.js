@@ -207,6 +207,20 @@ function updateSessionMeta(data) {
   modeEl.classList.toggle('yolo', isYolo);
   modeEl.classList.remove('empty');
 
+  // Permissions pill
+  const permEl = $('meta-permissions');
+  if (permEl) {
+    const perms = data?.permissions;
+    const permMode = perms?.mode || 'restricted';
+    const permIcons = { elevated: '⚡', restricted: '🔒', sandboxed: '🏖️' };
+    const permLabels = { elevated: 'Full Access', restricted: 'Restricted', sandboxed: 'Sandboxed' };
+    permEl.textContent = (permIcons[permMode] || '🔒') + ' ' + (permLabels[permMode] || permMode);
+    permEl.dataset.permMode = permMode;
+    permEl.classList.remove('empty');
+    permEl.classList.toggle('perm-elevated', permMode === 'elevated');
+    permEl.classList.toggle('perm-sandboxed', permMode === 'sandboxed');
+  }
+
 
   // Refresh TODOs when agent changes
   if (typeof fetchAndRenderTodos === 'function') {
@@ -356,6 +370,33 @@ const PILL_OPTIONS = {
       { label: '🔒 restricted',     cmd: '/mode restricted' },
     ],
   },
+  'meta-permissions': {
+    label: 'Session Permissions',
+    options: null,
+    dynamicLoad: async () => {
+      try {
+        const data = await apiRequest('GET', '/permissions/templates');
+        return (data.templates || []).map(t => ({
+          label: t.icon + ' ' + t.label,
+          value: t.mode,
+          cmd: null,
+          action: async () => {
+            if (!STATE.currentSessionId) return;
+            try {
+              await apiRequest('PUT', '/sessions/' + STATE.currentSessionId + '/permissions', { mode: t.mode });
+              fetchAndUpdateMeta(STATE.currentSessionId);
+            } catch (e) { console.error('Failed to set permissions:', e); }
+          },
+        }));
+      } catch (e) {
+        return [
+          { label: '⚡ Full Access', value: 'elevated', action: async () => { if (STATE.currentSessionId) { await apiRequest('PUT', '/sessions/' + STATE.currentSessionId + '/permissions', { mode: 'elevated' }); fetchAndUpdateMeta(STATE.currentSessionId); } } },
+          { label: '🔒 Restricted', value: 'restricted', action: async () => { if (STATE.currentSessionId) { await apiRequest('PUT', '/sessions/' + STATE.currentSessionId + '/permissions', { mode: 'restricted' }); fetchAndUpdateMeta(STATE.currentSessionId); } } },
+          { label: '🏖️ Sandboxed', value: 'sandboxed', action: async () => { if (STATE.currentSessionId) { await apiRequest('PUT', '/sessions/' + STATE.currentSessionId + '/permissions', { mode: 'sandboxed' }); fetchAndUpdateMeta(STATE.currentSessionId); } } },
+        ];
+      }
+    },
+  },
 };
 
 let _pillPopover = null;
@@ -375,19 +416,19 @@ function buildPopoverDOM(pillEl, label, options) {
     const item = document.createElement('button');
     item.className = 'pill-popover-item';
     item.innerHTML = opt.label;
-    if (!opt.cmd) { item.disabled = true; item.style.opacity = '0.5'; }
+    if (!opt.cmd && !opt.action) { item.disabled = true; item.style.opacity = '0.5'; }
     item.addEventListener('mousedown', e => {
       e.preventDefault();
-      if (!opt.cmd) return;
+      if (!opt.cmd && !opt.action) return;
       hidePillPopover();
-      sendCommand(opt.cmd);
+      if (opt.action) { opt.action(); } else { sendCommand(opt.cmd); }
     });
     item.addEventListener('click', e => {
       if (!isMobileViewport()) return;
       e.preventDefault();
-      if (!opt.cmd) return;
+      if (!opt.cmd && !opt.action) return;
       hidePillPopover();
-      sendCommand(opt.cmd);
+      if (opt.action) { opt.action(); } else { sendCommand(opt.cmd); }
     });
     popover.appendChild(item);
   });
@@ -2328,7 +2369,7 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 
   // --- Meta pill popovers ---
-  ['meta-agent', 'meta-runtime', 'meta-model', 'meta-mode'].forEach(id => {
+  ['meta-agent', 'meta-runtime', 'meta-model', 'meta-mode', 'meta-permissions'].forEach(id => {
     $(id).addEventListener('click', e => { e.stopPropagation(); showPillPopover($(id), id); });
   });
   document.addEventListener('mousedown', e => {
@@ -5900,6 +5941,75 @@ if (document.readyState !== 'loading') {
         updateModeBadge(permModeEl.value);
         updatePermChangedIndicator();
       });
+    }
+  }
+
+
+  /* ── .env File Editor ──────────────────────────────────────────────────── */
+  const envEditor   = document.getElementById('asf-env-editor');
+  const btnEnvLoad  = document.getElementById('btn-env-load');
+  const btnEnvSave  = document.getElementById('btn-env-save');
+  const btnEnvRestart = document.getElementById('btn-env-restart');
+  const envStatus   = document.getElementById('asf-env-status');
+
+  function showEnvStatus(msg, isError) {
+    if (!envStatus) return;
+    envStatus.textContent = msg;
+    envStatus.className = 'asf-env-status' + (isError ? ' asf-env-error' : ' asf-env-ok');
+    envStatus.classList.remove('hidden');
+    setTimeout(() => envStatus.classList.add('hidden'), 5000);
+  }
+
+  async function loadEnvFile() {
+    if (!envEditor) return;
+    envEditor.value = 'Loading...';
+    try {
+      const data = await apiRequest('GET', '/settings/env');
+      envEditor.value = data.content || '';
+      if (!data.exists) showEnvStatus('No .env file found — a new one will be created on save.', false);
+    } catch (e) {
+      envEditor.value = '';
+      showEnvStatus('Failed to load .env: ' + e.message, true);
+    }
+  }
+
+  async function saveEnvFile() {
+    if (!envEditor) return;
+    try {
+      const data = await apiRequest('PUT', '/settings/env', { content: envEditor.value });
+      showEnvStatus('✓ .env saved. ' + (data.warning || ''), false);
+    } catch (e) {
+      showEnvStatus('Failed to save: ' + e.message, true);
+    }
+  }
+
+  async function restartDevServices() {
+    if (!confirm('Restart all dev services? The API will briefly disconnect.')) return;
+    showEnvStatus('Restarting services...', false);
+    try {
+      const data = await apiRequest('POST', '/settings/restart-services');
+      const summary = Object.entries(data.results || {}).map(([s, r]) => s.replace('.service', '') + ': ' + r).join('\n');
+      showEnvStatus('✓ ' + summary, false);
+    } catch (e) {
+      showEnvStatus('Restart request sent. API may reconnect shortly.', false);
+    }
+  }
+
+  if (btnEnvLoad)    btnEnvLoad.addEventListener('click', loadEnvFile);
+  if (btnEnvSave)    btnEnvSave.addEventListener('click', saveEnvFile);
+  if (btnEnvRestart) btnEnvRestart.addEventListener('click', restartDevServices);
+
+  // Auto-load .env when settings panel opens
+  const _origOpenSettings = typeof openSettings === 'function' ? openSettings : null;
+  if (_origOpenSettings) {
+    // Monkey-patch openSettings to also load .env
+    const _wrappedOpen = async function() {
+      await _origOpenSettings();
+      loadEnvFile();
+    };
+    if (btnSettings) {
+      btnSettings.removeEventListener('click', openSettings);
+      btnSettings.addEventListener('click', _wrappedOpen);
     }
   }
 

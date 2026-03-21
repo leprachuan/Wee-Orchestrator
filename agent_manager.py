@@ -1787,6 +1787,7 @@ class SessionManager:
             "render_type": "markdown",
             "channel": channel,
             "last_activity": time.time(),
+            "permissions": None,  # Inherited from agent config on session create
         }
         
         # Store identity if provided, so we can find sessions by user later
@@ -6167,6 +6168,19 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
 
         if body.agent:
             session_mgr.update_session_field(session_id, "agent", body.agent)
+
+        # Inherit agent default permissions into session
+        effective_agent = body.agent or get_default_agent()
+        if effective_agent and effective_agent in session_mgr.AGENTS:
+            agent_cfg = session_mgr.AGENTS[effective_agent]
+            default_perms = agent_cfg.get("permissions", {
+                "mode": "restricted",
+                "directories": {"allow_read": [], "allow_write": [], "deny": []},
+                "tools": {"allow": ["*"], "deny": []},
+                "network": {"allow_urls": ["*"], "deny_urls": []},
+                "mcp": {"allow": [], "deny": ["*"]},
+            })
+            session_mgr.update_session_field(session_id, "permissions", default_perms)
         if body.model:
             session_mgr.update_session_field(session_id, "model", body.model)
         if body.runtime:
@@ -6610,6 +6624,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             "runtime": data.get("runtime"),
             "model": data.get("model"),
             "yolo_mode": data.get("yolo_mode", "restricted"),
+            "permissions": data.get("permissions"),
         }
 
         # Include running query info so the frontend can reconnect streams
@@ -8813,6 +8828,197 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 "name": sess.get("name"),
             }
         return {"sessions": sessions, "count": len(_canvas_sessions)}
+
+
+
+    # --- Session Permissions API ---
+    @app.get("/api/v1/sessions/{session_id}/permissions")
+    async def get_session_permissions(session_id: str, request: Request):
+        """Return current session permissions (inherited from agent or overridden)."""
+        user = await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        data = session_mgr.load_session_data(session_id)
+        if not data:
+            raise HTTPException(status_code=404, detail="Session not found")
+
+        perms = data.get("permissions")
+        agent_name = data.get("agent", get_default_agent())
+        agent_cfg = session_mgr.AGENTS.get(agent_name, {})
+        agent_default_perms = agent_cfg.get("permissions", {
+            "mode": "restricted",
+            "directories": {"allow_read": [], "allow_write": [], "deny": []},
+            "tools": {"allow": ["*"], "deny": []},
+            "network": {"allow_urls": ["*"], "deny_urls": []},
+            "mcp": {"allow": [], "deny": ["*"]},
+        })
+
+        return {
+            "session_id": session_id,
+            "permissions": perms or agent_default_perms,
+            "agent_default_permissions": agent_default_perms,
+            "is_overridden": perms is not None and perms != agent_default_perms,
+        }
+
+    @app.put("/api/v1/sessions/{session_id}/permissions")
+    async def set_session_permissions(session_id: str, request: Request):
+        """Override session-level permissions."""
+        user = await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        data = session_mgr.load_session_data(session_id)
+        if not data:
+            raise HTTPException(status_code=404, detail="Session not found")
+
+        body = await request.json()
+        valid_modes = ("elevated", "restricted", "sandboxed")
+
+        # Accept either a full permissions object or just a mode string
+        if isinstance(body, dict) and "mode" in body:
+            # If just mode is provided, build full permissions from agent default + new mode
+            new_mode = body["mode"]
+            if new_mode not in valid_modes:
+                raise HTTPException(status_code=400, detail=f"Invalid mode. Must be one of: {valid_modes}")
+
+            # Get current permissions and update mode
+            current_perms = data.get("permissions") or {}
+            if not current_perms:
+                agent_name = data.get("agent", get_default_agent())
+                agent_cfg = session_mgr.AGENTS.get(agent_name, {})
+                current_perms = agent_cfg.get("permissions", {
+                    "mode": "restricted",
+                    "directories": {"allow_read": [], "allow_write": [], "deny": []},
+                    "tools": {"allow": ["*"], "deny": []},
+                    "network": {"allow_urls": ["*"], "deny_urls": []},
+                    "mcp": {"allow": [], "deny": ["*"]},
+                })
+            current_perms["mode"] = new_mode
+            session_mgr.update_session_field(session_id, "permissions", current_perms)
+            return {"updated": True, "permissions": current_perms}
+
+        elif isinstance(body, dict) and "permissions" in body:
+            # Full permissions object provided
+            perms = body["permissions"]
+            if not isinstance(perms, dict) or "mode" not in perms:
+                raise HTTPException(status_code=400, detail="permissions must be an object with at least a 'mode' key")
+            if perms["mode"] not in valid_modes:
+                raise HTTPException(status_code=400, detail=f"Invalid mode. Must be one of: {valid_modes}")
+            session_mgr.update_session_field(session_id, "permissions", perms)
+            return {"updated": True, "permissions": perms}
+
+        else:
+            raise HTTPException(status_code=400, detail="Request body must include 'mode' or 'permissions'")
+
+    @app.get("/api/v1/permissions/templates")
+    async def get_permission_templates(request: Request):
+        """Return available permission templates."""
+        await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        return {
+            "templates": [
+                {
+                    "mode": "elevated",
+                    "label": "Full Access",
+                    "description": "Agent has unrestricted access to all tools, directories, and network",
+                    "icon": "⚡",
+                },
+                {
+                    "mode": "restricted",
+                    "label": "Restricted",
+                    "description": "Agent uses curated tool and directory allowlists only",
+                    "icon": "🔒",
+                },
+                {
+                    "mode": "sandboxed",
+                    "label": "Sandboxed",
+                    "description": "Agent has no external access — fully isolated environment",
+                    "icon": "🏖️",
+                },
+            ]
+        }
+
+
+
+    # --- .env File Editor API ---
+    _env_file_path = Path(SCRIPT_BASE_DIR) / ".env"
+
+    @app.get("/api/v1/settings/env")
+    async def get_env_file(request: Request):
+        """Return .env file contents for editing."""
+        auth = await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        try:
+            content = _env_file_path.read_text() if _env_file_path.exists() else ""
+            return {"content": content, "path": str(_env_file_path), "exists": _env_file_path.exists()}
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Failed to read .env: {e}")
+
+    @app.put("/api/v1/settings/env")
+    async def put_env_file(request: Request):
+        """Save updated .env file contents."""
+        auth = await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        body = await request.json()
+        content = body.get("content", "")
+        if not isinstance(content, str):
+            raise HTTPException(status_code=400, detail="content must be a string")
+
+        try:
+            # Create backup before overwrite
+            if _env_file_path.exists():
+                backup_path = Path(str(_env_file_path) + ".bak")
+                shutil.copy2(_env_file_path, backup_path)
+
+            _env_file_path.write_text(content)
+            return {"saved": True, "path": str(_env_file_path), "warning": "Changes require a service restart to take effect."}
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Failed to save .env: {e}")
+
+    @app.post("/api/v1/settings/restart-services")
+    async def restart_services(request: Request):
+        """Restart dev services (agent-manager-api-dev, etc.)."""
+        auth = await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        import subprocess
+        services = [
+            "agent-manager-api-dev.service",
+            "task-scheduler-executor-dev.service",
+            "webex-connector-dev.service",
+            "telegram-bot-listener-dev.service",
+        ]
+        results = {}
+        for svc in services:
+            try:
+                proc = subprocess.run(
+                    ["systemctl", "restart", svc],
+                    capture_output=True, text=True, timeout=30
+                )
+                results[svc] = "restarted" if proc.returncode == 0 else f"failed: {proc.stderr.strip()}"
+            except Exception as e:
+                results[svc] = f"error: {e}"
+        return {"results": results, "note": "Services are restarting. The API will briefly disconnect."}
 
     # --- Settings & Logs API ──────────────────────────────────────────────────
 

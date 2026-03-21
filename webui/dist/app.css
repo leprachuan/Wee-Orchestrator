@@ -6036,3 +6036,78 @@ html, body {
     -webkit-backdrop-filter: none !important;
   }
 }
+
+
+/* ── Session Permissions Pill ──────────────────────────────────────────────── */
+.meta-permissions {
+  cursor: pointer;
+  font-size: 0.72rem;
+  transition: background 0.2s, color 0.2s;
+}
+.meta-permissions.perm-elevated {
+  background: rgba(255, 165, 0, 0.25);
+  color: #ffb347;
+  border-color: rgba(255, 165, 0, 0.4);
+}
+.meta-permissions.perm-sandboxed {
+  background: rgba(100, 149, 237, 0.25);
+  color: #87CEFA;
+  border-color: rgba(100, 149, 237, 0.4);
+}
+
+/* ── .env Editor ───────────────────────────────────────────────────────────── */
+.asf-env-editor-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.asf-env-toolbar {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.asf-env-textarea {
+  font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+  font-size: 0.8rem;
+  line-height: 1.5;
+  min-height: 200px;
+  resize: vertical;
+  white-space: pre;
+  overflow-x: auto;
+  tab-size: 4;
+  background: rgba(0, 0, 0, 0.3);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 8px;
+  padding: 12px;
+  color: #e0e0e0;
+}
+.asf-env-textarea:focus {
+  border-color: rgba(16, 185, 129, 0.5);
+  outline: none;
+  box-shadow: 0 0 0 2px rgba(16, 185, 129, 0.15);
+}
+.asf-env-status {
+  font-size: 0.78rem;
+  padding: 6px 10px;
+  border-radius: 6px;
+  transition: opacity 0.3s;
+}
+.asf-env-ok {
+  background: rgba(16, 185, 129, 0.15);
+  color: #6ee7b7;
+  border: 1px solid rgba(16, 185, 129, 0.3);
+}
+.asf-env-error {
+  background: rgba(239, 68, 68, 0.15);
+  color: #fca5a5;
+  border: 1px solid rgba(239, 68, 68, 0.3);
+}
+.asf-env-warning {
+  font-size: 0.75rem;
+  color: #fbbf24;
+  opacity: 0.8;
+  margin: 0;
+}
+.asf-btn-restart {
+  margin-left: auto;
+}
