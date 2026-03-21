@@ -26,6 +26,97 @@ import threading
 SCRIPT_BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
+# ---------------------------------------------------------------------------
+# Credential sanitization for UI display
+# ---------------------------------------------------------------------------
+
+# Pre-compiled patterns for sensitive header detection in curl/HTTP commands
+_SENSITIVE_HEADER_RE = re.compile(
+    r"""(-H\s+["'])"""
+    r"""(Authorization|X-API-Key|X-Auth-Token|X-Auth-Secret|"""
+    r"""X-Access-Token|Proxy-Authorization|api-key|api_key"""
+    r"""):\s*[^"']*(["'])""",
+    re.IGNORECASE,
+)
+_SENSITIVE_HEADER_GENERIC_RE = re.compile(
+    r"""(-H\s+["'])([^"']*(?:password|secret|token|key|credential|bearer)[^:]*):\s*[^"']*(["'])""",
+    re.IGNORECASE,
+)
+_BEARER_TOKEN_RE = re.compile(
+    r"""(Bearer\s+)\S+""",
+    re.IGNORECASE,
+)
+_BASIC_AUTH_RE = re.compile(
+    r"""(Basic\s+)\S+""",
+    re.IGNORECASE,
+)
+_COOKIE_HEADER_RE = re.compile(
+    r"""(-H\s+["'])Cookie:\s*[^"']*(["'])""",
+    re.IGNORECASE,
+)
+_CURL_USER_RE = re.compile(
+    r"""(-u\s+)(\S+)""",
+)
+
+
+def _sanitize_command_for_display(text: str) -> str:
+    """Redact sensitive headers and credentials from command strings for UI display.
+
+    Handles curl-style -H headers, Bearer/Basic auth tokens, cookies, and
+    -u user:password patterns.  Only modifies the display string — the actual
+    command executed is never altered.
+    """
+    if not isinstance(text, str) or not text:
+        return text
+    # Named sensitive headers: Authorization, X-API-Key, etc.
+    text = _SENSITIVE_HEADER_RE.sub(
+        lambda m: f'{m.group(1)}{m.group(2)}: [REDACTED]{m.group(3)}', text
+    )
+    # Cookie header
+    text = _COOKIE_HEADER_RE.sub(
+        lambda m: f'{m.group(1)}Cookie: [REDACTED]{m.group(2)}', text
+    )
+    # Generic headers containing password/secret/token/key
+    text = _SENSITIVE_HEADER_GENERIC_RE.sub(
+        lambda m: f'{m.group(1)}{m.group(2)}: [REDACTED]{m.group(3)}', text
+    )
+    # Inline Bearer / Basic tokens (e.g. in JSON or plain text)
+    text = _BEARER_TOKEN_RE.sub(r'\1[REDACTED]', text)
+    text = _BASIC_AUTH_RE.sub(r'\1[REDACTED]', text)
+    # curl -u user:password
+    text = _CURL_USER_RE.sub(r'\1[REDACTED]', text)
+    return text
+
+
+def _sanitize_tool_call_for_display(data: dict) -> dict:
+    """Return a shallow copy of a tool_call event dict with sensitive
+    credentials redacted from the ``input`` field.  Other fields are
+    passed through unchanged."""
+    if not isinstance(data, dict):
+        return data
+    inp = data.get("input")
+    if inp is None:
+        # Also check partial_json for streaming deltas
+        pj = data.get("partial_json")
+        if pj and isinstance(pj, str):
+            sanitized = dict(data)
+            sanitized["partial_json"] = _sanitize_command_for_display(pj)
+            return sanitized
+        return data
+    sanitized = dict(data)
+    if isinstance(inp, str):
+        sanitized["input"] = _sanitize_command_for_display(inp)
+    elif isinstance(inp, dict):
+        # Claude-style structured input — sanitize known fields
+        new_inp = dict(inp)
+        for field in ("command", "input", "code", "content", "url", "body"):
+            if field in new_inp and isinstance(new_inp[field], str):
+                new_inp[field] = _sanitize_command_for_display(new_inp[field])
+        sanitized["input"] = new_inp
+    return sanitized
+
+
+
 class RateLimiter:
     """In-memory per-IP rate limiter with sliding window."""
 
@@ -6309,7 +6400,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                                     # Fallback for non-Claude runtimes
                                     yield f"data: {_json.dumps({'type': 'chunk', 'text': data})}\n\n"
                             elif kind == "tool_call":
-                                yield f"data: {_json.dumps({'type': 'tool_call', **data})}\n\n"
+                                yield f"data: {_json.dumps({'type': 'tool_call', **_sanitize_tool_call_for_display(data)})}\n\n"
                             elif kind == "done":
                                 break  # subprocess finished; final result in future
                     except Exception as exc:
@@ -6416,7 +6507,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                         else:
                             yield f"data: {_json.dumps({'type': 'chunk', 'text': data})}\n\n"
                     elif kind == "tool_call":
-                        yield f"data: {_json.dumps({'type': 'tool_call', **data})}\n\n"
+                        yield f"data: {_json.dumps({'type': 'tool_call', **_sanitize_tool_call_for_display(data)})}\n\n"
                     elif kind == "done":
                         # Query already finished — send done event with stored result
                         session_data = session_mgr.get_or_create_session_data(session_id)
@@ -6460,7 +6551,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                         else:
                             yield f"data: {_json.dumps({'type': 'chunk', 'text': data})}\n\n"
                     elif kind == "tool_call":
-                        yield f"data: {_json.dumps({'type': 'tool_call', **data})}\n\n"
+                        yield f"data: {_json.dumps({'type': 'tool_call', **_sanitize_tool_call_for_display(data)})}\n\n"
                     elif kind == "done":
                         break
 
@@ -7683,7 +7774,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         return {
             "task_id": task["task_id"],
             "status": task["status"],
-            "tool_calls": task.get("tool_calls", []),
+            "tool_calls": [_sanitize_tool_call_for_display(tc) for tc in task.get("tool_calls", [])],
             "tool_call_count": len(task.get("tool_calls", [])),
         }
 
