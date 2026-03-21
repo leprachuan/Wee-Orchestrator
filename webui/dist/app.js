@@ -4916,35 +4916,264 @@ if (document.readyState !== 'loading') {
 
 /* ── Settings & Logs Module ─────────────────────────────────────────────── */
 (function initSettingsAndLogs() {
-  /* --- Settings Modal --- */
-  const btnSettings     = document.getElementById('btn-settings');
-  const modalSettings   = document.getElementById('modal-settings');
-  const settingsTA      = document.getElementById('settings-textarea');
-  const settingsErr     = document.getElementById('settings-error');
-  const btnSettingsSave = document.getElementById('btn-settings-save');
-  const btnSettingsClose = document.getElementById('btn-settings-close');
-  const btnSettingsCancel = document.getElementById('btn-settings-cancel');
+  /* ── Agent Settings Form Panel ─────────────────────────────────────────── */
 
-  function showSettingsErr(msg) {
-    if (!settingsErr) return;
-    settingsErr.textContent = msg;
-    settingsErr.classList.remove('hidden');
-  }
-  function hideSettingsErr() {
-    if (settingsErr) settingsErr.classList.add('hidden');
+  /** State for the settings panel */
+  const ASF = {
+    config: null,         // full { agents: [...] }
+    originalPerms: null,  // deep copy of permissions before editing
+    originalAgent: null,  // deep copy of full agent before editing
+    selectedName: null,   // currently selected agent name
+  };
+
+  /* DOM refs */
+  const modalSettings  = document.getElementById('modal-settings');
+  const btnSettings    = document.getElementById('btn-settings');
+  const btnSettClose   = document.getElementById('btn-settings-close');
+  const btnSettCancel  = document.getElementById('btn-settings-cancel');
+  const btnSettSave    = document.getElementById('btn-settings-save');
+  const btnSettReload  = document.getElementById('btn-settings-reload');
+  const btnSettAddAgent = document.getElementById('btn-settings-add-agent');
+  const btnDeleteAgent = document.getElementById('asf-delete-agent');
+  const asfSelector    = document.getElementById('asf-agent-selector');
+  const asfError       = document.getElementById('asf-error');
+  const asfSuccess     = document.getElementById('asf-success');
+  const asfPermChanged = document.getElementById('asf-perm-changed');
+  const asfModeBadge   = document.getElementById('asf-perm-mode-badge');
+  const asfDirtyDot    = document.getElementById('asf-dirty-dot');
+
+  /* Field refs */
+  const F = {
+    name:        () => document.getElementById('asf-name'),
+    path:        () => document.getElementById('asf-path'),
+    description: () => document.getElementById('asf-description'),
+    todoDir:     () => document.getElementById('asf-todo-dir'),
+    runtime:     () => document.getElementById('asf-runtime'),
+    model:       () => document.getElementById('asf-model'),
+    permMode:    () => document.getElementById('asf-perm-mode'),
+  };
+
+  /** Permission list field ids → [section, key] mapping */
+  const PERM_LISTS = {
+    'asf-dir-allow-read':   ['directories', 'allow_read'],
+    'asf-dir-allow-write':  ['directories', 'allow_write'],
+    'asf-dir-deny':         ['directories', 'deny'],
+    'asf-tools-allow':      ['tools', 'allow'],
+    'asf-tools-deny':       ['tools', 'deny'],
+    'asf-net-allow':        ['network', 'allow_urls'],
+    'asf-net-deny':         ['network', 'deny_urls'],
+    'asf-mcp-allow':        ['mcp', 'allow'],
+    'asf-mcp-deny':         ['mcp', 'deny'],
+  };
+
+  function deepClone(obj) {
+    return JSON.parse(JSON.stringify(obj));
   }
 
+  function emptyPermissions() {
+    return {
+      mode: 'restricted',
+      directories: { allow_read: [], allow_write: [], deny: [] },
+      tools: { allow: ['*'], deny: [] },
+      network: { allow_urls: ['*'], deny_urls: [] },
+      mcp: { allow: [], deny: ['*'] },
+    };
+  }
+
+  /* ── Banner helpers ─────────────────────────────────────────────────────── */
+  function showErr(msg) {
+    if (!asfError) return;
+    asfError.textContent = msg;
+    asfError.classList.remove('hidden');
+    if (asfSuccess) asfSuccess.classList.add('hidden');
+  }
+  function showOk(msg) {
+    if (!asfSuccess) return;
+    asfSuccess.textContent = msg;
+    asfSuccess.classList.remove('hidden');
+    if (asfError) asfError.classList.add('hidden');
+    setTimeout(() => asfSuccess && asfSuccess.classList.add('hidden'), 3500);
+  }
+  function clearBanners() {
+    if (asfError)   asfError.classList.add('hidden');
+    if (asfSuccess) asfSuccess.classList.add('hidden');
+  }
+
+  /* ── Tag list rendering ─────────────────────────────────────────────────── */
+  /** Render a list of strings as tags in a container */
+  function renderTagList(containerId, values, isDeny) {
+    const el = document.getElementById(containerId);
+    if (!el) return;
+    el.innerHTML = '';
+    (values || []).forEach((v, i) => {
+      const isWild = v === '*';
+      const tag = document.createElement('span');
+      tag.className = 'asf-tag' + (isDeny ? ' asf-tag-deny' : (isWild ? ' asf-tag-wild' : ' asf-tag-allow'));
+      tag.title = v;
+      tag.innerHTML = `<span class="asf-tag-text">${escHtml(v)}</span><button type="button" class="asf-tag-rm" data-container="${containerId}" data-idx="${i}" aria-label="Remove ${escHtml(v)}">×</button>`;
+      el.appendChild(tag);
+    });
+  }
+
+  /** Read all tags from a container as an array of strings */
+  function readTagList(containerId) {
+    const el = document.getElementById(containerId);
+    if (!el) return [];
+    return Array.from(el.querySelectorAll('.asf-tag-text')).map(s => s.textContent);
+  }
+
+  /** Add a value to a tag list container */
+  function addTagToList(containerId) {
+    const rowEl = document.querySelector(`[data-add-target="${containerId}"]`);
+    const inputEl = document.querySelector(`input[data-add-target="${containerId}"]`);
+    if (!inputEl) return;
+    const val = inputEl.value.trim();
+    if (!val) return;
+    const current = readTagList(containerId);
+    if (current.includes(val)) { inputEl.value = ''; return; }
+    const isDeny = containerId.includes('-deny');
+    renderTagList(containerId, [...current, val], isDeny);
+    inputEl.value = '';
+    updatePermChangedIndicator();
+  }
+
+  /** Remove a tag by index */
+  function removeTag(containerId, idx) {
+    const current = readTagList(containerId);
+    current.splice(idx, 1);
+    const isDeny = containerId.includes('-deny');
+    renderTagList(containerId, current, isDeny);
+    updatePermChangedIndicator();
+  }
+
+  /* ── Permissions change detection ──────────────────────────────────────── */
+  function getPermissionsFromForm() {
+    const perms = emptyPermissions();
+    perms.mode = F.permMode() ? F.permMode().value : 'restricted';
+    for (const [id, [section, key]] of Object.entries(PERM_LISTS)) {
+      if (!perms[section]) perms[section] = {};
+      perms[section][key] = readTagList(id);
+    }
+    return perms;
+  }
+
+  function permissionsChanged(oldPerms, newPerms) {
+    if (!oldPerms && !newPerms) return false;
+    if (!oldPerms || !newPerms) return true;
+    return JSON.stringify(oldPerms) !== JSON.stringify(newPerms);
+  }
+
+  function updatePermChangedIndicator() {
+    const current = getPermissionsFromForm();
+    const changed = permissionsChanged(ASF.originalPerms, current);
+    if (asfPermChanged)  asfPermChanged.classList.toggle('hidden', !changed);
+    if (btnSettReload) {
+      btnSettReload.classList.toggle('hidden', !changed);
+    }
+    // Update dirty dot — show if any field has changed from the original
+    updateDirtyIndicator();
+  }
+
+  function updateDirtyIndicator() {
+    if (!asfDirtyDot || !ASF.originalAgent) return;
+    const current = collectFormData();
+    const dirty = JSON.stringify(current) !== JSON.stringify(ASF.originalAgent);
+    asfDirtyDot.classList.toggle('hidden', !dirty);
+  }
+
+  function updateModeBadge(mode) {
+    if (!asfModeBadge) return;
+    asfModeBadge.textContent = mode || '';
+    asfModeBadge.className = 'asf-mode-badge asf-mode-' + (mode || 'restricted');
+  }
+
+  /* ── Populate form from agent object ────────────────────────────────────── */
+  function populateForm(agent) {
+    if (!agent) return;
+    const set = (fn, val) => { const el = fn(); if (el) el.value = val || ''; };
+    set(F.name,        agent.name);
+    set(F.path,        agent.path);
+    set(F.description, agent.description);
+    set(F.todoDir,     agent.todo_dir);
+    set(F.runtime,     agent.runtime);
+    set(F.model,       agent.model);
+
+    const perms = agent.permissions || emptyPermissions();
+    set(F.permMode, perms.mode);
+    updateModeBadge(perms.mode);
+
+    for (const [id, [section, key]] of Object.entries(PERM_LISTS)) {
+      const vals = perms[section] ? (perms[section][key] || []) : [];
+      const isDeny = id.includes('-deny');
+      renderTagList(id, vals, isDeny);
+    }
+
+    ASF.originalPerms = deepClone(perms);
+    ASF.originalAgent = deepClone(agent);
+    updatePermChangedIndicator();
+    clearBanners();
+  }
+
+  /* ── Collect form data into agent object ────────────────────────────────── */
+  function collectFormData() {
+    const get = (fn) => { const el = fn(); return el ? el.value.trim() : ''; };
+    const agent = {
+      name:        get(F.name),
+      path:        get(F.path),
+      description: get(F.description) || undefined,
+      todo_dir:    get(F.todoDir)     || undefined,
+      runtime:     get(F.runtime)     || undefined,
+      model:       get(F.model)       || undefined,
+      permissions: getPermissionsFromForm(),
+    };
+    // Strip undefined keys
+    Object.keys(agent).forEach(k => agent[k] === undefined && delete agent[k]);
+    return agent;
+  }
+
+  /* ── Validation ──────────────────────────────────────────────────────────── */
+  function validate(agent) {
+    const errs = [];
+    if (!agent.name) errs.push('Name is required');
+    else if (!/^[a-z0-9_-]+$/.test(agent.name)) errs.push('Name must be lowercase with hyphens/underscores only');
+    if (!agent.path) errs.push('Working path is required');
+    else if (!agent.path.startsWith('/')) errs.push('Working path must start with /');
+    if (agent.todo_dir && !agent.todo_dir.startsWith('/')) errs.push('TODO directory must start with /');
+    return errs;
+  }
+
+  /* ── Populate agent selector dropdown ──────────────────────────────────── */
+  function populateSelector(agents, selectName) {
+    if (!asfSelector) return;
+    asfSelector.innerHTML = '';
+    agents.forEach(a => {
+      const opt = document.createElement('option');
+      opt.value = a.name;
+      opt.textContent = a.name;
+      if (a.name === selectName) opt.selected = true;
+      asfSelector.appendChild(opt);
+    });
+  }
+
+  /* ── Open settings ──────────────────────────────────────────────────────── */
   async function openSettings() {
-    if (!modalSettings || !settingsTA) return;
-    hideSettingsErr();
-    settingsTA.value = 'Loading...';
+    if (!modalSettings) return;
+    clearBanners();
     modalSettings.classList.remove('hidden');
+    if (btnSettSave) { btnSettSave.disabled = true; btnSettSave.textContent = 'Loading…'; }
     try {
-      const data = await apiRequest('GET', '/agents-config');
-      settingsTA.value = JSON.stringify(data, null, 2);
+      ASF.config = await apiRequest('GET', '/agents-config');
+      const agents = ASF.config.agents || [];
+      const firstName = agents.length ? agents[0].name : null;
+      populateSelector(agents, firstName);
+      if (firstName) {
+        ASF.selectedName = firstName;
+        populateForm(agents[0]);
+      }
     } catch (e) {
-      settingsTA.value = '';
-      showSettingsErr('Failed to load: ' + e.message);
+      showErr('Failed to load agents: ' + e.message);
+    } finally {
+      if (btnSettSave) { btnSettSave.disabled = false; btnSettSave.textContent = '💾 Save'; }
     }
   }
 
@@ -4952,33 +5181,162 @@ if (document.readyState !== 'loading') {
     if (modalSettings) modalSettings.classList.add('hidden');
   }
 
+  /* ── Save settings ──────────────────────────────────────────────────────── */
   async function saveSettings() {
-    hideSettingsErr();
-    let parsed;
+    clearBanners();
+    const agent = collectFormData();
+    const errs = validate(agent);
+    if (errs.length) { showErr(errs.join(' • ')); return; }
+
+    if (!ASF.config) return;
+    const idx = ASF.config.agents.findIndex(a => a.name === ASF.selectedName);
+    const newAgents = idx >= 0
+      ? ASF.config.agents.map((a, i) => i === idx ? agent : a)
+      : [...ASF.config.agents, agent];
+    const payload = { agents: newAgents };
+
+    if (btnSettSave) { btnSettSave.disabled = true; btnSettSave.textContent = 'Saving…'; }
     try {
-      parsed = JSON.parse(settingsTA.value);
+      await apiRequest('PUT', '/agents-config', payload);
+      ASF.config = payload;
+      ASF.selectedName = agent.name;
+      ASF.originalPerms = deepClone(agent.permissions);
+      ASF.originalAgent = deepClone(agent);
+      populateSelector(newAgents, agent.name);
+      updatePermChangedIndicator();
+      updateDirtyIndicator();
+      showOk('✓ Agent settings saved');
     } catch (e) {
-      showSettingsErr('Invalid JSON: ' + e.message);
-      return;
-    }
-    try {
-      const result = await apiRequest('PUT', '/agents-config', parsed);
-      closeSettings();
-      // Brief success toast using existing notification pattern if available
-      console.log('Settings saved:', result);
-    } catch (e) {
-      showSettingsErr('Save failed: ' + e.message);
+      showErr('Save failed: ' + e.message);
+    } finally {
+      if (btnSettSave) { btnSettSave.disabled = false; btnSettSave.textContent = '💾 Save'; }
     }
   }
 
-  if (btnSettings)       btnSettings.addEventListener('click', openSettings);
-  if (btnSettingsSave)   btnSettingsSave.addEventListener('click', saveSettings);
-  if (btnSettingsClose)  btnSettingsClose.addEventListener('click', closeSettings);
-  if (btnSettingsCancel) btnSettingsCancel.addEventListener('click', closeSettings);
-  // Close on overlay click
+  /* ── Reload services ────────────────────────────────────────────────────── */
+  async function reloadServices() {
+    if (btnSettReload) { btnSettReload.disabled = true; btnSettReload.textContent = 'Reloading…'; }
+    try {
+      await apiRequest('POST', '/reload-agents');
+      showOk('✓ Agents reloaded in memory');
+    } catch(e) {
+      showOk('⚠ Could not hot-reload — changes saved to disk (restart service to apply)');
+    } finally {
+      if (btnSettReload) { btnSettReload.disabled = false; btnSettReload.textContent = '🔄 Reload Services'; }
+    }
+  }
+
+  /* ── Event delegation for tag lists ────────────────────────────────────── */
   if (modalSettings) {
     modalSettings.addEventListener('click', (e) => {
-      if (e.target === modalSettings) closeSettings();
+      // Close on overlay click
+      if (e.target === modalSettings) { closeSettings(); return; }
+
+      // Remove tag button
+      if (e.target.classList.contains('asf-tag-rm')) {
+        const containerId = e.target.dataset.container;
+        const idx = parseInt(e.target.dataset.idx, 10);
+        removeTag(containerId, idx);
+        return;
+      }
+
+      // Add tag button
+      if (e.target.classList.contains('asf-add-btn')) {
+        addTagToList(e.target.dataset.addTarget);
+        return;
+      }
+    });
+
+    // Enter key in tag inputs
+    modalSettings.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && e.target.classList.contains('asf-tag-input')) {
+        e.preventDefault();
+        addTagToList(e.target.dataset.addTarget);
+      }
+    });
+
+    // Mode badge update
+    const permModeEl = F.permMode();
+    if (permModeEl) {
+      permModeEl.addEventListener('change', () => {
+        updateModeBadge(permModeEl.value);
+        updatePermChangedIndicator();
+      });
+    }
+  }
+
+  // Agent selector change
+  if (asfSelector) {
+    asfSelector.addEventListener('change', () => {
+      const name = asfSelector.value;
+      ASF.selectedName = name;
+      const agent = (ASF.config?.agents || []).find(a => a.name === name);
+      if (agent) populateForm(agent);
+    });
+  }
+
+  if (btnSettings)   btnSettings.addEventListener('click',   openSettings);
+  if (btnSettSave)   btnSettSave.addEventListener('click',   saveSettings);
+  if (btnSettClose)  btnSettClose.addEventListener('click',  closeSettings);
+  if (btnSettCancel) btnSettCancel.addEventListener('click', () => {
+    // Discard: restore original
+    if (ASF.originalAgent && ASF.config) {
+      const agent = (ASF.config.agents || []).find(a => a.name === ASF.selectedName);
+      if (agent) populateForm(agent);
+    }
+  });
+  if (btnSettReload) btnSettReload.addEventListener('click', reloadServices);
+
+  // Dirty detection on basic text fields
+  if (modalSettings) {
+    ['asf-name','asf-path','asf-description','asf-todo-dir','asf-runtime','asf-model'].forEach(id => {
+      const el = document.getElementById(id);
+      if (el) el.addEventListener('input', updateDirtyIndicator);
+    });
+  }
+
+  // Add new agent
+  if (btnSettAddAgent) {
+    btnSettAddAgent.addEventListener('click', () => {
+      if (!ASF.config) return;
+      const newAgent = {
+        name: 'new-agent',
+        path: '/opt/',
+        description: '',
+        permissions: emptyPermissions(),
+      };
+      ASF.config.agents.push(newAgent);
+      populateSelector(ASF.config.agents, 'new-agent');
+      ASF.selectedName = 'new-agent';
+      ASF.originalAgent = null; // it's new
+      populateForm(newAgent);
+      const nameEl = F.name();
+      if (nameEl) { nameEl.focus(); nameEl.select(); }
+    });
+  }
+
+  // Delete agent
+  if (btnDeleteAgent) {
+    btnDeleteAgent.addEventListener('click', async () => {
+      if (!ASF.config || !ASF.selectedName) return;
+      const name = ASF.selectedName;
+      if (!confirm(`Delete agent "${name}"? This cannot be undone.`)) return;
+      const newAgents = ASF.config.agents.filter(a => a.name !== name);
+      const payload = { agents: newAgents };
+      try {
+        await apiRequest('PUT', '/agents-config', payload);
+        ASF.config = payload;
+        if (newAgents.length) {
+          populateSelector(newAgents, newAgents[0].name);
+          ASF.selectedName = newAgents[0].name;
+          populateForm(newAgents[0]);
+        } else {
+          if (asfSelector) asfSelector.innerHTML = '';
+        }
+        showOk(`✓ Agent "${name}" deleted`);
+      } catch(e) {
+        showErr('Delete failed: ' + e.message);
+      }
     });
   }
 

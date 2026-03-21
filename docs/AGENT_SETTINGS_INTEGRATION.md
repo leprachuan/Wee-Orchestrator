@@ -1,6 +1,10 @@
 # Agent Settings Panel – Integration Guide
 
-> How to integrate the `AgentSettingsPanel` component into the Wee-Orchestrator WebUI.
+> Complete implementation of the `AgentSettingsPanel` for Wee-Orchestrator WebUI.
+>
+> **Status:** ✅ Fully functional in dev environment (`/opt/n8n-copilot-shim-dev`).
+> The vanilla JS implementation is live in `webui/dist/`. TypeScript/React source files
+> live in `webui/src/` for future typed builds.
 
 ---
 
@@ -8,16 +12,51 @@
 
 | File | Location | Purpose |
 |------|----------|---------|
-| `agents.ts` | `src/types/agents.ts` | TypeScript interfaces for agent config |
-| `agentConfig.ts` | `src/api/agentConfig.ts` | API client (load, save, validate) |
-| `AgentSettingsPanel.css` | `src/styles/AgentSettingsPanel.css` | Glassmorphism styling |
-| `AgentSettingsPanel.tsx` | `src/components/AgentSettingsPanel.tsx` | Main panel component |
+| `agents.ts` | `webui/src/types/agents.ts` | TypeScript interfaces — exact mirror of agents.json schema |
+| `agentConfig.ts` | `webui/src/api/agentConfig.ts` | API client: loadAgents, saveAgentConfig, validateConfig, detectPermissionsChange |
+| `AgentSettingsPanel.tsx` | `webui/src/components/AgentSettingsPanel.tsx` | React component (reference implementation) |
+| `AgentSettingsPanel.css` | `webui/src/styles/AgentSettingsPanel.css` | Leprachuan Glassmorphism CSS (slide-in panel variant) |
+
+### Live implementation files (already deployed to dev)
+
+| File | Change |
+|------|--------|
+| `webui/dist/index.html` | Settings modal replaced with rich form UI |
+| `webui/dist/app.js` | `initSettingsAndLogs()` settings section rewritten as full form handler |
+| `webui/dist/app.css` | Agent Settings Form Panel CSS appended |
 
 ---
 
-## 2. Integration into App.tsx
+## 2. How It Works (Vanilla JS — Already Live)
 
-Add a settings button to the sidebar/header and wire up the panel:
+The settings panel is wired into the existing WebUI without a build step.
+Click **⚙️ Settings** in the sidebar to open it.
+
+### Features
+
+- **Agent selector** — dropdown to switch between any agent in `agents.json`
+- **Basic Info** — name, working path, description, todo_dir (editable)
+- **Runtime Config** — runtime backend and model overrides
+- **Permissions** — collapsible subsections for directories, tools, network, MCP
+- **Tag list editors** — add/remove entries with Enter key or Add button
+- **Permissions changed indicator** — ⚠ badge + "Reload Services" button appears when permissions differ from saved state
+- **Save** — validates, writes to `PUT /api/v1/agents-config` (auto-creates .bak)
+- **Discard** — closes without saving
+
+### API endpoints used
+
+| Method | Endpoint | Purpose |
+|--------|----------|---------|
+| GET | `/api/v1/agents-config` | Read full agents.json |
+| PUT | `/api/v1/agents-config` | Write agents.json (creates .bak backup) |
+| POST | `/api/v1/reload-services` | Request service reload (gracefully degrades if unavailable) |
+
+---
+
+## 3. React/TypeScript Component (Future Build Integration)
+
+The `AgentSettingsPanel.tsx` component is a full React implementation
+ready to be compiled into a future Vite build.
 
 ```tsx
 // App.tsx
@@ -27,137 +66,83 @@ import { AgentSettingsPanel } from './components/AgentSettingsPanel';
 function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
 
-  // ... existing state and hooks ...
-
   return (
-    <div className="flex h-screen bg-gray-100">
-      {/* Existing sidebar */}
-      <ThreadSidebar ... />
+    <div className="app">
+      {/* Sidebar settings button */}
+      <button onClick={() => setSettingsOpen(true)}>⚙️ Settings</button>
 
-      {/* Main content */}
-      <div className="flex-1 flex flex-col">
-        <header className="bg-white border-b border-gray-200 px-6 py-4">
-          {/* Add settings button */}
-          <button
-            onClick={() => setSettingsOpen(true)}
-            className="text-gray-500 hover:text-gray-700"
-            title="Agent Settings"
-          >
-            ⚙️
-          </button>
-        </header>
-
-        <main className="flex-1 bg-white">
-          <ChatView ... />
-        </main>
-      </div>
-
-      {/* Agent Settings Panel */}
-      <AgentSettingsPanel
-        open={settingsOpen}
-        onClose={() => setSettingsOpen(false)}
-      />
+      {/* Panel renders as centered modal overlay */}
+      {settingsOpen && (
+        <AgentSettingsPanel onClose={() => setSettingsOpen(false)} />
+      )}
     </div>
   );
 }
 ```
 
-### Bottom-left sidebar integration (alternative):
+### Bottom-left sidebar integration
 
 ```tsx
-// Inside ThreadSidebar.tsx, add at the bottom:
-<div className="border-t border-gray-200 p-3">
+// Inside ThreadSidebar.tsx or sidebar component:
+<div className="sidebar-toolbar">
   <button
-    onClick={onOpenSettings}
-    className="flex items-center gap-2 w-full px-3 py-2 rounded-lg
-               text-sm text-gray-600 hover:bg-gray-100 transition-colors"
+    className="btn btn-ghost btn-sm sidebar-tool-btn"
+    onClick={() => setSettingsOpen(true)}
+    title="Agent Settings"
   >
-    ⚙️ Agent Settings
+    ⚙️ Settings
   </button>
 </div>
 ```
 
 ---
 
-## 3. Integration into dist/app.js (Production WebUI)
-
-For the compiled production WebUI, add this to the existing `app.js`:
-
-### 3a. Add the settings button
-
-Find the sidebar render code and add a settings trigger:
-
-```javascript
-// In the sidebar section, add a settings button at the bottom
-const settingsBtn = document.createElement('button');
-settingsBtn.innerHTML = '⚙️ Agent Settings';
-settingsBtn.className = 'sidebar-settings-btn';
-settingsBtn.onclick = () => openAgentSettings();
-sidebar.appendChild(settingsBtn);
-```
-
-### 3b. Load the CSS
-
-Add a `<link>` tag in `index.html`:
-
-```html
-<link rel="stylesheet" href="AgentSettingsPanel.css">
-```
-
-Or inject dynamically in `app.js`:
-
-```javascript
-const link = document.createElement('link');
-link.rel = 'stylesheet';
-link.href = 'AgentSettingsPanel.css';
-document.head.appendChild(link);
-```
-
----
-
 ## 4. Auth Token Access
 
-The panel reads the auth token from two sources (in priority order):
+The vanilla JS panel calls `apiRequest()` which already handles auth
+through the existing WebUI session. No additional token plumbing needed.
 
-1. `window.__WEE_STATE__.token` – shared state from the main app
-2. `sessionStorage.getItem('wee_token')` – fallback
+For the React component, pass an optional `authToken` prop:
 
-Ensure the main app stores the token in at least one of these locations. The production `app.js` already uses `STATE.token`, so you can expose it:
-
-```javascript
-// In app.js, after auth:
-window.__WEE_STATE__ = STATE;
+```tsx
+<AgentSettingsPanel
+  onClose={() => setOpen(false)}
+  authToken={STATE.token}
+/>
 ```
 
 ---
 
 ## 5. Required API Endpoints
 
-The panel uses these endpoints (already in `agent_manager.py`):
+All required endpoints are already in `agent_manager.py`:
 
-| Method | Endpoint | Purpose |
-|--------|----------|---------|
-| GET | `/api/v1/agents-config` | Read full agents.json |
-| PUT | `/api/v1/agents-config` | Write agents.json (creates .bak) |
-| POST | `/api/v1/reload-agents` | Hot-reload agent config (**NEW**) |
+| Method | Endpoint | Status |
+|--------|----------|--------|
+| GET | `/api/v1/agents-config` | ✅ Exists |
+| PUT | `/api/v1/agents-config` | ✅ Exists (creates .bak) |
+| POST | `/api/v1/reload-services` | ⚠ Not yet implemented (degrades gracefully) |
 
-### Adding the reload endpoint
+### Adding the reload endpoint (optional)
 
-Add to `agent_manager.py`:
+Add to `agent_manager.py` to enable the "Reload Services" button:
 
 ```python
-@app.post("/api/v1/reload-agents")
-async def reload_agents_config(request: Request):
-    """Hot-reload agents.json without full service restart."""
-    auth = await _check_auth(request)
-    if not auth.get("authenticated"):
-        raise HTTPException(status_code=401, detail="Not authenticated")
-
+@app.post("/api/v1/reload-services")
+async def reload_services(request: Request):
+    """Hot-reload agents.json and restart connectors if needed."""
+    auth = await authenticate(
+        request,
+        authorization=request.headers.get("authorization"),
+        x_user_identity=request.headers.get("x-user-identity"),
+        x_auth_channel=request.headers.get("x-auth-channel"),
+    )
     try:
-        session_mgr.AGENTS = session_mgr._load_agents_config()
-        agent_count = len(session_mgr.AGENTS)
-        logger.info("Agents reloaded by %s: %d agents", auth.get("identity"), agent_count)
-        return {"status": "reloaded", "agent_count": agent_count}
+        # Reload agent config in memory
+        session_manager.AGENTS = session_manager._load_agents_config()
+        count = len(session_manager.AGENTS)
+        logger.info("Agents reloaded by %s: %d agents", auth.get("identity"), count)
+        return {"status": "reloaded", "agent_count": count}
     except Exception as e:
         logger.error("Agent reload failed: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
@@ -167,10 +152,20 @@ async def reload_agents_config(request: Request):
 
 ## 6. Dependencies
 
-No new npm packages required. The component uses only:
-- React 18 (already installed)
-- Standard CSS (no CSS-in-JS library)
-- Fetch API (browser native)
+No new npm packages required. The vanilla JS implementation uses:
+- Browser Fetch API (native)
+- Standard DOM APIs
+
+The React TypeScript component uses:
+- React 18 (not yet installed in webui — add if building)
+- Standard CSS
+
+To set up React build:
+```bash
+cd /opt/n8n-copilot-shim-dev/webui
+npm install react react-dom @types/react @types/react-dom
+# Then run: npm run build
+```
 
 ---
 
@@ -178,7 +173,7 @@ No new npm packages required. The component uses only:
 
 ### Override design tokens
 
-All colors and dimensions use CSS custom properties. Override in your global CSS:
+All colors use CSS custom properties. Override in `app.css` or global CSS:
 
 ```css
 /* Example: change accent color to blue */
@@ -189,29 +184,18 @@ All colors and dimensions use CSS custom properties. Override in your global CSS
 }
 ```
 
-### Panel width
+### Modal width
 
 ```css
-.asp-panel {
-  width: 560px; /* default: 480px */
+.modal-box-agent {
+  width: min(1000px, 96vw); /* default: min(860px, 94vw) */
 }
 ```
 
-### Panel position (right side instead of left)
+### Tag color overrides
 
 ```css
-.asp-panel {
-  left: auto;
-  right: 0;
-  border-right: none;
-  border-left: 1px solid var(--glass-border);
-  box-shadow: -24px 0 64px rgba(0,0,0,0.6);
-  animation: asp-slideInRight 0.25s ease;
-}
-@keyframes asp-slideInRight {
-  from { transform: translateX(100%); }
-  to { transform: translateX(0); }
-}
+.asf-tag-allow { background: rgba(79,140,255,0.12); color: #4f8cff; }
 ```
 
 ---
@@ -220,96 +204,76 @@ All colors and dimensions use CSS custom properties. Override in your global CSS
 
 ### Functional tests
 
-- [ ] Panel opens when settings button is clicked
+- [ ] Panel opens when ⚙️ Settings button is clicked in sidebar
 - [ ] Panel closes on overlay click and ✕ button
-- [ ] Agent list loads from API on open
-- [ ] Agent selector switches between agents
-- [ ] Basic fields (name, description, path, todo_dir) are editable
-- [ ] Permission mode dropdown works (restricted/elevated/yolo)
-- [ ] Tag array fields: add via Enter key
-- [ ] Tag array fields: add via comma key
-- [ ] Tag array fields: remove via × button
-- [ ] Tag array fields: backspace removes last tag when input empty
-- [ ] Wildcard `*` tags display in gold
-- [ ] Deny tags display in red
-- [ ] Dirty indicator (yellow dot) appears when changes are made
-- [ ] Save button is disabled when no changes
-- [ ] Save validates config before sending
-- [ ] Validation errors display above form
+- [ ] Panel closes on Discard button
+- [ ] Agent selector dropdown loads all agents from agents.json
+- [ ] Agent selector switches between agents (form re-populates)
+- [ ] Name field is pre-filled and editable
+- [ ] Path field is pre-filled and editable
+- [ ] Description textarea is editable
+- [ ] TODO directory field is editable
+- [ ] Runtime selector works
+- [ ] Model input is editable
+- [ ] Permission mode dropdown updates mode badge
+- [ ] Directory allow_read tags render, add (Enter key), remove (×)
+- [ ] Directory allow_write tags work
+- [ ] Directory deny tags render in red, add/remove
+- [ ] Tools allow/deny tags work
+- [ ] Network allow_urls/deny_urls tags work
+- [ ] MCP allow/deny tags work
+- [ ] Wildcard `*` tags render in gold color
+- [ ] "⚠ changed" badge appears when permissions are modified
+- [ ] "🔄 Reload Services" button appears when permissions changed
+- [ ] Save button validates: empty name shows error
+- [ ] Save button validates: path not starting with / shows error
 - [ ] Save sends PUT to /api/v1/agents-config
-- [ ] Success toast appears after save
-- [ ] Error toast appears on save failure
-- [ ] Discard button reverts to last saved state
-- [ ] "Reload Services" button appears when permissions change
-- [ ] Add agent (+) creates new agent with defaults
-- [ ] Delete agent works with confirmation dialog
-- [ ] Cannot delete the last remaining agent
+- [ ] Success message appears after save
+- [ ] Error banner appears if save fails
+- [ ] .bak file created on server after save
 
-### Visual tests
+### Visual tests (Leprachuan Glassmorphism)
 
-- [ ] Glassmorphism backdrop blur works
-- [ ] Dark panel with emerald accents renders correctly
-- [ ] All form elements have proper focus states (emerald glow)
-- [ ] Error states show red border/glow
-- [ ] Responsive: panel fills viewport on mobile (<520px)
-- [ ] Scrollable body with custom scrollbar
-- [ ] Animations: slide-in, fade-in, toast slide-up
-
-### Auth tests
-
-- [ ] Unauthenticated request shows "Unauthorized" error
-- [ ] Token is read from window.__WEE_STATE__.token
-- [ ] Fallback to sessionStorage works
+- [ ] Dark modal with frosted glass background renders
+- [ ] Emerald (#3ecf8e) accents on section titles, tags, inputs
+- [ ] Inputs have emerald glow on focus
+- [ ] Error banner shows in red
+- [ ] Success banner shows in emerald
+- [ ] Mode badges: elevated=gold, restricted=emerald, sandboxed=purple
+- [ ] Collapsible details open/close with ▶ chevron animation
+- [ ] Responsive layout: grid collapses to 1 column on mobile (<600px)
+- [ ] Scrollable body with thin custom scrollbar
 
 ---
 
-## 9. Build & Deploy
+## 9. Deploy to Production
+
+**Do not edit prod directly.** Follow the standard deploy flow:
 
 ```bash
-# From the WebUI source directory
-cd /opt/MyHomeDevops/n8n-webui
-
-# Install deps (if not already)
-npm install
-
-# Dev server
-npm run dev
-
-# Production build
-npm run build
-
-# Copy dist to dev environment
-cp -r dist/* /opt/n8n-copilot-shim-dev/webui/dist/
-
-# Copy dist to prod (when deploying)
-cp -r dist/* /opt/n8n-copilot-shim/webui/dist/
+# Test in dev first
+# Then when ready to deploy:
+# cp -r /opt/n8n-copilot-shim-dev/webui/dist/* /opt/n8n-copilot-shim/webui/dist/
+# systemctl restart agent-manager-api
 ```
 
 ---
 
-## 10. File Structure After Integration
+## 10. File Structure
 
 ```
-n8n-webui/src/
-├── api/
-│   └── agentConfig.ts          ← NEW: Agent config API client
-├── components/
-│   ├── AgentSettingsPanel.tsx   ← NEW: Settings panel component
-│   ├── ChatInput.tsx
-│   ├── ChatView.tsx
-│   ├── MessageBubble.tsx
-│   └── ThreadSidebar.tsx
-├── hooks/
-│   ├── useChat.ts
-│   └── useThreads.ts
-├── services/
-│   └── api.ts
-├── styles/
-│   └── AgentSettingsPanel.css   ← NEW: Glassmorphism styles
-├── types/
-│   ├── agents.ts                ← NEW: Agent config types
-│   └── api.ts
-├── App.tsx                      ← MODIFY: Add settings panel
-├── index.css
-└── main.tsx
+webui/
+├── src/                            ← TypeScript reference implementation
+│   ├── api/
+│   │   └── agentConfig.ts          ← API client: loadAgents, saveAgentConfig, validateConfig
+│   ├── components/
+│   │   └── AgentSettingsPanel.tsx  ← React component
+│   ├── styles/
+│   │   └── AgentSettingsPanel.css  ← Glassmorphism CSS (slide-in panel)
+│   └── types/
+│       └── agents.ts               ← TypeScript interfaces for agents.json
+└── dist/                           ← Live webui (vanilla JS, no build step)
+    ├── index.html                  ← Settings modal HTML (rich form)
+    ├── app.js                      ← initSettingsAndLogs() with full form handler
+    └── app.css                     ← Agent settings CSS appended at end
 ```

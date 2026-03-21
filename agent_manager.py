@@ -7855,6 +7855,29 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         logger.info("agents.json updated by %s", auth.get("identity", "unknown"))
         return {"status": "saved", "agent_count": len(data["agents"])}
 
+    @app.post("/api/v1/reload-agents")
+    async def reload_agents_config(request: Request):
+        """Hot-reload the in-memory agents cache from agents.json on disk."""
+        auth = await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        try:
+            fresh_agents = session_mgr._load_agents_config()
+            session_mgr.AGENTS = fresh_agents
+            count = len(fresh_agents)
+            logger.info(
+                "agents.json hot-reloaded by %s — %d agents",
+                auth.get("identity", "unknown"),
+                count,
+            )
+            return {"status": "reloaded", "message": f"Loaded {count} agent(s) from disk."}
+        except Exception as exc:
+            logger.error("Failed to hot-reload agents.json: %s", exc)
+            raise HTTPException(status_code=500, detail=f"Reload failed: {exc}")
+
     @app.get("/api/v1/logs")
     async def get_logs(
         request: Request,
