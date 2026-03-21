@@ -3090,8 +3090,11 @@ function startBgTaskPolling() {
           const t = BG.tasks.find(x => x.task_id === BG.selectedTaskId);
           if (t) {
             if (t.status !== 'running' && t.status !== 'queued') {
-              // Task finished — do a full re-render now (once)
-              loadBgTaskDetail(BG.selectedTaskId);
+              // Task finished — render detail once, then stop
+              if (!BG.detailRenderedFinal) {
+                BG.detailRenderedFinal = true;
+                loadBgTaskDetail(BG.selectedTaskId);
+              }
             } else {
               // Still running — just tick the elapsed timer; BG.logsPoller handles log updates
               const elapsedEl = document.querySelector('.bg-elapsed-live');
@@ -3202,6 +3205,7 @@ function formatElapsed(isoDate) {
 window.selectBgTask = function(taskId) {
   BG.selectedTaskId = taskId;
   BG.activeDetailTab = null;  // reset tab choice for new task
+  BG.detailRenderedFinal = false;
   renderBgTasks();
   loadBgTaskDetail(taskId);
 };
@@ -3275,69 +3279,77 @@ async function loadBgTaskDetail(taskId) {
     const toolCallBadge = t.tool_call_count ? `<span class="bg-tool-badge">${t.tool_call_count}</span>` : '';
 
     body.innerHTML = `
-      <div class="bg-detail-tabs">
-        <button class="bg-tab active" data-tab="details">Details</button>
-        <button class="bg-tab" data-tab="tools">🔧 Tools ${toolCallBadge}${t.status === 'running' ? '<span class="bg-live-dot"></span>' : ''}</button>
-        <button class="bg-tab" data-tab="logs">Logs ${t.status === 'running' ? '<span class="bg-live-dot"></span>' : ''}</button>
-      </div>
-      <div id="bg-tab-details" class="bg-tab-pane">
-        <div class="bg-detail-meta">
-          <div class="bg-detail-meta-row">
-            <span class="bg-detail-meta-label">Status</span>
-            <span class="bg-card-status ${statusClass}">${icon} ${statusLabel}</span>
-            ${elapsed ? `<span style="font-size:11px;color:var(--text-muted);margin-left:8px">${elapsed}</span>` : ''}
-            ${t.status === 'queued' ? `<span style="font-size:11px;color:var(--text-muted);margin-left:8px">Waiting for a slot to open…</span>` : ''}
+      <div class="bg-detail-split">
+        <div class="bg-detail-left">
+          <div class="bg-detail-tabs">
+            <button class="bg-tab active" data-tab="details">Details</button>
+            <button class="bg-tab" data-tab="tools">🔧 Tools ${toolCallBadge}${t.status === 'running' ? '<span class="bg-live-dot"></span>' : ''}</button>
           </div>
-          <div class="bg-detail-meta-row">
-            <span class="bg-detail-meta-label">Agent</span>
-            <span class="bg-detail-meta-value">${escHtml(t.agent || '?')}</span>
+          <div id="bg-tab-details" class="bg-tab-pane">
+            <div class="bg-detail-meta">
+              <div class="bg-detail-meta-row">
+                <span class="bg-detail-meta-label">Status</span>
+                <span class="bg-card-status ${statusClass}">${icon} ${statusLabel}</span>
+                ${elapsed ? `<span style="font-size:11px;color:var(--text-muted);margin-left:8px">${elapsed}</span>` : ''}
+                ${t.status === 'queued' ? `<span style="font-size:11px;color:var(--text-muted);margin-left:8px">Waiting for a slot to open…</span>` : ''}
+              </div>
+              <div class="bg-detail-meta-row">
+                <span class="bg-detail-meta-label">Agent</span>
+                <span class="bg-detail-meta-value">${escHtml(t.agent || '?')}</span>
+              </div>
+              <div class="bg-detail-meta-row">
+                <span class="bg-detail-meta-label">Runtime</span>
+                <span class="bg-detail-meta-value">${runtimeIconHTML(t.runtime)}${escHtml(t.runtime || '?')} / ${escHtml(t.model || '?')}</span>
+              </div>
+              <div class="bg-detail-meta-row">
+                <span class="bg-detail-meta-label">Started</span>
+                <span class="bg-detail-meta-value">${fmtDate(t.created_at)}</span>
+              </div>
+              ${t.completed_at ? `<div class="bg-detail-meta-row">
+                <span class="bg-detail-meta-label">Finished</span>
+                <span class="bg-detail-meta-value">${fmtDate(t.completed_at)}</span>
+              </div>` : ''}
+            </div>
+            <div class="bg-detail-prompt">${escHtml(t.prompt || '')}</div>
+            ${actionsHtml}
           </div>
-          <div class="bg-detail-meta-row">
-            <span class="bg-detail-meta-label">Runtime</span>
-            <span class="bg-detail-meta-value">${runtimeIconHTML(t.runtime)}${escHtml(t.runtime || '?')} / ${escHtml(t.model || '?')}</span>
+          <div id="bg-tab-tools" class="bg-tab-pane hidden">
+            <div class="bg-tool-calls-panel" id="bg-tools-${taskId}">
+              <p style="color:var(--text-muted);font-size:12px;padding:8px">Loading tool calls…</p>
+            </div>
           </div>
-          <div class="bg-detail-meta-row">
-            <span class="bg-detail-meta-label">Started</span>
-            <span class="bg-detail-meta-value">${fmtDate(t.created_at)}</span>
-          </div>
-          ${t.completed_at ? `<div class="bg-detail-meta-row">
-            <span class="bg-detail-meta-label">Finished</span>
-            <span class="bg-detail-meta-value">${fmtDate(t.completed_at)}</span>
-          </div>` : ''}
         </div>
-        <div class="bg-detail-prompt">${escHtml(t.prompt || '')}</div>
-        ${actionsHtml}
-      </div>
-      <div id="bg-tab-tools" class="bg-tab-pane hidden">
-        <div class="bg-tool-calls-panel" id="bg-tools-${taskId}">
-          <p style="color:var(--text-muted);font-size:12px;padding:8px">Loading tool calls…</p>
-        </div>
-      </div>
-      <div id="bg-tab-logs" class="bg-tab-pane hidden">
-        ${timingHtml}
-        <div class="bg-transcript-panel" id="bg-transcript-${taskId}">
-          <p style="color:var(--text-muted);font-size:12px;padding:8px">Loading logs…</p>
+        <div class="bg-detail-right">
+          <div class="bg-logs-header">
+            <span class="bg-logs-title">Logs ${t.status === 'running' ? '<span class="bg-live-dot"></span>' : ''}</span>
+          </div>
+          ${timingHtml}
+          <div class="bg-transcript-panel" id="bg-transcript-${taskId}">
+            <p style="color:var(--text-muted);font-size:12px;padding:8px">Loading logs…</p>
+          </div>
         </div>
       </div>
     `;
 
-    // Tab switching
+    // Tab switching (Details / Tools only — Logs always visible on right)
     body.querySelectorAll('.bg-tab').forEach(tab => {
       tab.addEventListener('click', () => {
         body.querySelectorAll('.bg-tab').forEach(t2 => t2.classList.remove('active'));
         tab.classList.add('active');
-        body.querySelectorAll('.bg-tab-pane').forEach(p => hide(p));
+        body.querySelectorAll('.bg-detail-left .bg-tab-pane').forEach(p => hide(p));
         const pane = $(`bg-tab-${tab.dataset.tab}`);
         show(pane);
         BG.activeDetailTab = tab.dataset.tab;
-        if (tab.dataset.tab === 'logs') loadBgTaskLogs(taskId, t.status);
         if (tab.dataset.tab === 'tools') loadBgTaskToolCalls(taskId, t.status);
       });
     });
 
-    // Restore previously active tab, or auto-open logs for running tasks on first open
-    const tabToOpen = BG.activeDetailTab || (t.status === 'running' ? 'logs' : null);
-    if (tabToOpen) {
+    // Always load logs immediately (visible on right side)
+    loadBgTaskLogs(taskId, t.status);
+
+    // Restore previously active left tab, or default to details
+    const tabToOpen = BG.activeDetailTab || 'details';
+    if (tabToOpen !== 'logs') {
       const targetTab = body.querySelector(`.bg-tab[data-tab="${tabToOpen}"]`);
       if (targetTab) targetTab.click();
     }
@@ -3352,6 +3364,10 @@ async function loadBgTaskLogs(taskId, status) {
   const panel = $(`bg-transcript-${taskId}`);
   if (!panel) return;
 
+  // If already loaded for a finished task, skip re-fetch (prevents flicker)
+  const currentStatus = BG.tasks.find(x => x.task_id === taskId)?.status || status;
+  if (panel.dataset.loaded === 'true' && currentStatus !== 'running' && currentStatus !== 'queued') return;
+
   // Clear any previous poller
   if (BG.logsPoller) {
     clearInterval(BG.logsPoller);
@@ -3360,10 +3376,10 @@ async function loadBgTaskLogs(taskId, status) {
 
   async function fetchAndRender() {
     try {
-      // For completed/failed tasks use the full transcript; for running use detail output
       const currentStatus = BG.tasks.find(x => x.task_id === taskId)?.status || status;
       let lines = [];
       let error = null;
+      let finalResponse = null;
 
       if (currentStatus === 'running' || currentStatus === 'queued') {
         const t = await bgApi('GET', `/${taskId}`);
@@ -3372,6 +3388,7 @@ async function loadBgTaskLogs(taskId, status) {
       } else {
         const data = await bgApi('GET', `/${taskId}/transcript`);
         if (data.final_response) {
+          finalResponse = data.final_response;
           lines = data.final_response.split('\n');
         } else {
           lines = data.output_lines || [];
@@ -3379,23 +3396,42 @@ async function loadBgTaskLogs(taskId, status) {
         }
       }
 
-      if (!lines.length && !error) {
+      if (!lines.length && !error && !finalResponse) {
         panel.innerHTML = '<p style="color:var(--text-muted);font-size:12px;padding:8px">No output yet…</p>';
         return;
       }
 
       const wasAtBottom = panel.scrollHeight - panel.scrollTop - panel.clientHeight < 40;
-      const isRunning = (BG.tasks.find(x => x.task_id === taskId)?.status || status) === 'running';
-      const renderedLines = lines.map((line, i) => {
-        const esc = escHtml(line);
-        if (!detectToolCallLine(line)) return esc;
-        const isLastLine = i === lines.length - 1 && isRunning;
-        const gearCls = isLastLine ? 'tool-gear bg-tool-spinning' : 'tool-gear';
-        return '<span class="bg-tool-line"><span class="' + gearCls + '">⚙️</span> ' + esc + '</span>';
-      }).join('\n');
-      panel.innerHTML = `<pre class="bg-transcript-pre">${renderedLines}${error ? `\n\n[error] ${error}` : ''}</pre>`;
-      if (wasAtBottom || status === 'running') {
+      const isRunning = currentStatus === 'running';
+
+      // For completed tasks with final_response, render as markdown
+      if (finalResponse && typeof marked !== 'undefined' && !isRunning) {
+        try {
+          const html = marked.parse(finalResponse, { breaks: true, gfm: true });
+          const sanitized = typeof DOMPurify !== 'undefined' ? DOMPurify.sanitize(html) : html;
+          panel.innerHTML = `<div class="bg-log-rendered">${sanitized}</div>`;
+        } catch {
+          panel.innerHTML = `<pre class="bg-transcript-pre">${escHtml(finalResponse)}</pre>`;
+        }
+      } else {
+        // Pre-formatted lines (running tasks or fallback)
+        const renderedLines = lines.map((line, i) => {
+          const esc = escHtml(line);
+          if (!detectToolCallLine(line)) return esc;
+          const isLastLine = i === lines.length - 1 && isRunning;
+          const gearCls = isLastLine ? 'tool-gear bg-tool-spinning' : 'tool-gear';
+          return '<span class="bg-tool-line"><span class="' + gearCls + '">⚙️</span> ' + esc + '</span>';
+        }).join('\n');
+        panel.innerHTML = `<pre class="bg-transcript-pre">${renderedLines}${error ? `\n\n[error] ${error}` : ''}</pre>`;
+      }
+
+      if (wasAtBottom || isRunning) {
         panel.scrollTop = panel.scrollHeight;
+      }
+
+      // Mark as loaded for finished tasks to prevent re-fetching
+      if (currentStatus !== 'running' && currentStatus !== 'queued') {
+        panel.dataset.loaded = 'true';
       }
     } catch { /* ignore transient fetch errors */ }
   }
@@ -3408,7 +3444,6 @@ async function loadBgTaskLogs(taskId, status) {
     BG.logsPoller = setInterval(async () => {
       const current = BG.tasks.find(x => x.task_id === taskId)?.status;
       await fetchAndRender();
-      // Update elapsed timer in details tab
       const elapsedEl = document.querySelector('.bg-elapsed-live');
       if (elapsedEl) {
         const start = elapsedEl.dataset.start;

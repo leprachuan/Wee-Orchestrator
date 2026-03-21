@@ -1375,8 +1375,10 @@ html, body {
 
 .bg-detail-body {
   flex: 1;
-  overflow-y: auto;
-  padding: 18px;
+  overflow: hidden;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
   font-size: 13px;
   color: var(--text-secondary);
   line-height: 1.6;
@@ -5182,11 +5184,10 @@ html, body {
   flex: 1;
   overflow-y: auto;
   background: rgba(6,10,16,0.5);
-  border: 1px solid var(--glass-border);
-  border-radius: var(--radius-sm);
+  border: none;
+  border-radius: 0;
   padding: 10px 12px;
   min-height: 120px;
-  max-height: 340px;
   scroll-behavior: smooth;
 }
 
@@ -5198,6 +5199,105 @@ html, body {
   white-space: pre-wrap;
   word-break: break-word;
   margin: 0;
+}
+
+/* ── Split detail layout ──────────────────────────────────── */
+.bg-detail-split {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  gap: 0;
+}
+.bg-detail-left {
+  width: 340px;
+  flex-shrink: 0;
+  border-right: 1px solid var(--glass-border);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  padding: 18px;
+}
+.bg-detail-left .bg-tab-pane {
+  overflow-y: auto;
+}
+.bg-detail-right {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  padding: 0;
+}
+.bg-logs-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--glass-border);
+  flex-shrink: 0;
+}
+.bg-logs-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+/* ── Rendered markdown logs ──────────────────────────────── */
+.bg-log-rendered {
+  padding: 12px 16px;
+  font-size: 12px;
+  line-height: 1.7;
+  color: var(--text-secondary);
+}
+.bg-log-rendered h1, .bg-log-rendered h2, .bg-log-rendered h3 {
+  color: var(--text-primary);
+  margin: 12px 0 6px;
+}
+.bg-log-rendered h1 { font-size: 18px; }
+.bg-log-rendered h2 { font-size: 15px; }
+.bg-log-rendered h3 { font-size: 13px; }
+.bg-log-rendered code {
+  background: rgba(255,255,255,0.08);
+  padding: 1px 5px;
+  border-radius: 3px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+.bg-log-rendered pre {
+  background: rgba(0,0,0,0.35);
+  border: 1px solid var(--glass-border);
+  border-radius: 6px;
+  padding: 10px 12px;
+  overflow-x: auto;
+  font-size: 11px;
+  line-height: 1.5;
+}
+.bg-log-rendered pre code {
+  background: none;
+  padding: 0;
+}
+.bg-log-rendered p { margin: 4px 0 8px; }
+.bg-log-rendered ul, .bg-log-rendered ol { padding-left: 20px; margin: 4px 0 8px; }
+.bg-log-rendered a { color: var(--accent); text-decoration: underline; }
+.bg-log-rendered blockquote {
+  border-left: 3px solid var(--accent);
+  margin: 4px 0 8px;
+  padding: 4px 12px;
+  color: var(--text-muted);
+}
+.bg-log-rendered table {
+  border-collapse: collapse;
+  font-size: 11px;
+  margin: 8px 0;
+}
+.bg-log-rendered th, .bg-log-rendered td {
+  border: 1px solid var(--glass-border);
+  padding: 4px 8px;
+}
+.bg-log-rendered th {
+  background: rgba(255,255,255,0.05);
+  font-weight: 600;
 }
 
 /* ── Tool Call Panel ─────────────────────────────────────── */
