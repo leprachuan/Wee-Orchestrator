@@ -3356,7 +3356,7 @@ User Request:
                     # Tool call detection for PTY-based runtimes (Devin, etc.)
                     _pty_tool_counter = [0]
                     _pty_tool_pattern = _re.compile(
-                        r'(?:Tool|Calling|Using tool|Running|Executing):\s*(\w[\w.]*)\s*(.*)',
+                        r'(?:\[TOOL_CALL\]|\bCalling\s+tool|\bUsing\s+tool(?:\:|_)|Tool|Running|Executing|USING_TOOL)[\s:_]*(\w[\w\.]*)\s*(.*)',
                         _re.IGNORECASE
                     )
                     # Incremental decoder avoids garbled output when a
