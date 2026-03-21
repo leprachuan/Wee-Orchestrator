@@ -1254,23 +1254,22 @@ html, body {
 .bg-body {
   flex: 1;
   display: flex;
+  flex-direction: column;
   overflow: hidden;
-  gap: 0;
 }
 
-.bg-tasks-list {
-  width: 280px;
-  flex-shrink: 0;
-  overflow-y: auto;
-  padding: 8px;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  border-right: 1px solid var(--glass-border);
+/* bg-tasks-list column removed — task list now lives in sidebar as .bg-sidebar-list */
+.bg-sidebar-list {
+  display: none;
 }
-.bg-tasks-list::-webkit-scrollbar { width: 4px; }
-.bg-tasks-list::-webkit-scrollbar-track { background: transparent; }
-.bg-tasks-list::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.15); border-radius: 2px; }
+.bg-sidebar-item .session-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.bg-sidebar-item .session-preview {
+  font-size: 11px;
+}
 
 .bg-empty {
   color: var(--text-muted);
@@ -1339,6 +1338,7 @@ html, body {
 /* Detail panel */
 .bg-detail {
   flex: 1;
+  width: 100%;
   min-width: 0;
   display: flex;
   flex-direction: column;
@@ -1855,7 +1855,6 @@ html, body {
 @media (max-width: 700px) {
   .sched-detail { width: 100%; position: absolute; inset: 0; z-index: 20; }
   .bg-detail { flex: 1; min-width: 0; }
-  .bg-tasks-list { width: 220px; }
 }
 
 /* ============================================

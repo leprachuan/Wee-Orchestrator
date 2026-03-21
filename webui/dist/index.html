@@ -81,6 +81,7 @@
 
       <button id="btn-new-chat" class="btn btn-primary new-chat-btn">+ New Chat</button>
       <div id="sessions-list" class="sessions-list"></div>
+      <div id="bg-sidebar-list" class="sessions-list bg-sidebar-list" style="display:none"></div>
       <div class="sidebar-toolbar">
         <button id="btn-settings" class="btn btn-ghost btn-sm sidebar-tool-btn" title="Agent Settings">⚙️ Settings</button>
         <button id="btn-logs" class="btn btn-ghost btn-sm sidebar-tool-btn" title="Service Logs">📋 Logs</button>
@@ -294,19 +295,14 @@
       </header>
 
       <div class="bg-body">
-        <!-- Tasks list -->
-        <div id="bg-tasks-list" class="bg-tasks-list">
-          <p class="bg-empty"><img src="/static/icon-192.png" alt="" style="width:48px;height:48px;border-radius:10px;opacity:0.5;display:block;margin:0 auto 8px;"><span>No background tasks</span></p>
-        </div>
-
-        <!-- Detail panel -->
+        <!-- Detail panel (full width — task list is now in the sidebar) -->
         <aside id="bg-detail" class="bg-detail glass-panel">
           <div class="bg-detail-header">
             <h3 id="bg-detail-title">Task Details</h3>
             <button id="btn-bg-detail-close" class="btn-icon" title="Deselect" style="display:none">✕</button>
           </div>
           <div id="bg-detail-body" class="bg-detail-body">
-            <p class="bg-detail-empty">← Select a task to view details</p>
+            <p class="bg-detail-empty">Select a task from the sidebar to view details</p>
           </div>
         </aside>
       </div>

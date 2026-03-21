@@ -2342,6 +2342,7 @@ function showChatPanel() {
   hide($('background-panel'));
   show($('btn-new-chat'));
   show($('sessions-list'));
+  hide($('bg-sidebar-list'));
   show($('request-queue-panel'));
   $('btn-nav-chat').classList.add('active');
   $('btn-nav-scheduler').classList.remove('active');
@@ -2357,6 +2358,7 @@ function showSchedulerPanel() {
   hide($('background-panel'));
   hide($('btn-new-chat'));
   hide($('sessions-list'));
+  hide($('bg-sidebar-list'));
   hide($('request-queue-panel'));
   $('btn-nav-scheduler').classList.add('active');
   $('btn-nav-chat').classList.remove('active');
@@ -2374,6 +2376,7 @@ function showBackgroundPanel() {
   show($('background-panel'));
   hide($('btn-new-chat'));
   hide($('sessions-list'));
+  show($('bg-sidebar-list'));
   hide($('request-queue-panel'));
   $('btn-nav-background').classList.add('active');
   $('btn-nav-chat').classList.remove('active');
@@ -3081,7 +3084,7 @@ function startBgTaskPolling() {
       updateBgBadge();
       // If background panel is visible, refresh the list
       if (!$('background-panel').classList.contains('hidden')) {
-        renderBgTasks();
+        renderBgTasksSidebar();
         // If we have a selected task, do lightweight updates without destroying tab state
         if (BG.selectedTaskId) {
           const t = BG.tasks.find(x => x.task_id === BG.selectedTaskId);
@@ -3121,25 +3124,26 @@ function updateBgBadge() {
 async function loadBackgroundTasks(showToast = false) {
   if (BG.isLoading) return;
   BG.isLoading = true;
-  const list = $('bg-tasks-list');
-  list.innerHTML = '<p class="bg-empty">Loading…</p>';
+  const list = $('bg-sidebar-list');
+  list.innerHTML = '<p class="bg-empty" style="padding:20px;text-align:center;color:var(--text-muted);font-size:13px;">Loading…</p>';
   try {
     const data = await bgApi('GET', '');
     BG.tasks = data.tasks || [];
-    renderBgTasks();
+    renderBgTasksSidebar();
     updateBgBadge();
     if (showToast) bgToast('Tasks refreshed', 'success');
   } catch (err) {
-    list.innerHTML = `<p class="bg-empty" style="color:#ff8888">Failed: ${escHtml(err.message)}</p>`;
+    list.innerHTML = `<p class="bg-empty" style="padding:20px;text-align:center;color:#ff8888;font-size:13px;">Failed: ${escHtml(err.message)}</p>`;
   } finally {
     BG.isLoading = false;
   }
 }
 
-function renderBgTasks() {
-  const list = $('bg-tasks-list');
+function renderBgTasksSidebar() {
+  const list = $('bg-sidebar-list');
+  if (!list) return;
   if (!BG.tasks.length) {
-    list.innerHTML = '<p class="bg-empty">No background tasks yet.<br>Use <code>/background &lt;prompt&gt;</code> in chat to start one.</p>';
+    list.innerHTML = '<p class="bg-empty" style="padding:24px 12px;text-align:center;color:var(--text-muted);font-size:13px;">No background tasks yet.<br>Use <code>/background &lt;prompt&gt;</code> in chat to start one.</p>';
     return;
   }
 
@@ -3149,38 +3153,35 @@ function renderBgTasks() {
     const ao = statusOrder[a.status] ?? 2;
     const bo = statusOrder[b.status] ?? 2;
     if (ao !== bo) return ao - bo;
-    // Within queued: oldest first (ascending) so position 1 is at top
     if (a.status === 'queued') return (a.created_at || '').localeCompare(b.created_at || '');
-    // Within running/completed: newest first
     return (b.created_at || '').localeCompare(a.created_at || '');
   });
 
-  // Build queue position map for queued tasks
   const queuedTasks = sorted.filter(t => t.status === 'queued');
+  const icons = { running: '🟢', completed: '✅', failed: '❌', killed: '🛑', queued: '⏳' };
 
   list.innerHTML = sorted.map(t => {
-    const icons = { running: '🟢', completed: '✅', failed: '❌', killed: '🛑', queued: '⏳' };
     const icon = icons[t.status] || '❓';
-    const statusClass = `bg-status-${t.status}`;
     const active = t.task_id === BG.selectedTaskId ? 'active' : '';
-    const elapsed = t.status === 'running' ? formatElapsed(t.created_at) : '';
+    const elapsed = t.status === 'running' ? ` · ${formatElapsed(t.created_at)}` : '';
     let statusLabel = t.status;
     if (t.status === 'queued') {
       const pos = queuedTasks.findIndex(q => q.task_id === t.task_id) + 1;
       statusLabel = `queued #${pos}`;
     }
+    const prompt = escHtml((t.prompt || '').slice(0, 80));
+    const agentLabel = escHtml(t.agent || '?');
+    const dateStr = fmtDate(t.created_at);
     return `
-      <div class="bg-task-card ${active}" data-task-id="${t.task_id}" onclick="selectBgTask('${t.task_id}')">
-        <div class="bg-card-top">
-          <span class="bg-card-status ${statusClass}">${icon} ${statusLabel}</span>
-          <span class="bg-card-agent">${escHtml(t.agent || '?')} / ${runtimeIconHTML(t.runtime)}${escHtml(t.runtime || '?')}</span>
-        </div>
-        <div class="bg-card-prompt">${escHtml(t.prompt || '')}</div>
-        <div class="bg-card-time">${fmtDate(t.created_at)}${elapsed ? ` · ${elapsed}` : ''}</div>
-      </div>
-    `;
+      <div class="session-item bg-sidebar-item ${active}" onclick="selectBgTask('${t.task_id}')">
+        <div class="session-title">${icon} ${prompt || '(no prompt)'}</div>
+        <div class="session-preview">${agentLabel} · ${statusLabel}${elapsed} · ${dateStr}</div>
+      </div>`;
   }).join('');
 }
+
+// Keep backward compat alias
+function renderBgTasks() { renderBgTasksSidebar(); }
 
 function formatElapsed(isoDate) {
   if (!isoDate) return '';
@@ -3575,7 +3576,7 @@ function closeBgDetail() {
     BG.toolsPoller = null;
   }
   $('bg-detail-title').textContent = 'Task Details';
-  $('bg-detail-body').innerHTML = '<p class="bg-detail-empty">← Select a task to view details</p>';
+  $('bg-detail-body').innerHTML = '<p class="bg-detail-empty">Select a task from the sidebar to view details</p>';
   const closeBtn = $('btn-bg-detail-close');
   if (closeBtn) closeBtn.style.display = 'none';
   BG.selectedTaskId = null;
