@@ -1443,6 +1443,15 @@ function refreshInlineToolIcons(bubble, toolsMap) {
  * Detect whether a raw output line looks like a tool call invocation.
  * Used to add gear markers when rendering background task logs.
  */
+const INTERNAL_LINE_MARKERS = [
+  '___BEGIN___COMMAND_DONE_MARKER___',
+  '___END___COMMAND_DONE_MARKER___',
+  '__COPILOT_DONE__',
+];
+function isInternalMarkerLine(line) {
+  return INTERNAL_LINE_MARKERS.some(m => line.includes(m));
+}
+
 function detectToolCallLine(line) {
   const s = line.trimStart();
   if (/^[●⬤•]\s+/.test(s)) return true;
@@ -3390,7 +3399,8 @@ async function loadBgTaskLogs(taskId, status) {
       // For completed tasks with final_response, render as markdown
       if (finalResponse && typeof marked !== 'undefined' && !isRunning) {
         try {
-          const html = marked.parse(finalResponse, { breaks: true, gfm: true });
+          const cleanResponse = finalResponse.split('\n').filter(l => !isInternalMarkerLine(l)).join('\n');
+          const html = marked.parse(cleanResponse, { breaks: true, gfm: true });
           const sanitized = typeof DOMPurify !== 'undefined' ? DOMPurify.sanitize(html) : html;
           panel.innerHTML = `<div class="bg-log-rendered">${sanitized}</div>`;
         } catch {
@@ -3398,7 +3408,7 @@ async function loadBgTaskLogs(taskId, status) {
         }
       } else {
         // Pre-formatted lines (running tasks or fallback)
-        const renderedLines = lines.map((line, i) => {
+        const renderedLines = lines.filter(l => !isInternalMarkerLine(l)).map((line, i) => {
           const esc = escHtml(line);
           if (!detectToolCallLine(line)) return esc;
           const isLastLine = i === lines.length - 1 && isRunning;
