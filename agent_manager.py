@@ -7167,6 +7167,74 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 raise HTTPException(status_code=404, detail=result.get("message", "Not found"))
             return result
     
+        @app.post("/api/v1/scheduler/jobs/{job_id}/run")
+        async def run_scheduler_job_now(job_id: str, request: Request):
+            user = await _require_scheduler_auth(request)
+            client_ip = request.client.host if request.client else "unknown"
+            if not rate_limiter.check(client_ip, "scheduler_write", max_requests=20, window=60):
+                raise HTTPException(status_code=429, detail="Rate limit exceeded")
+
+            result = _get_scheduler().get_job(job_id)
+            if not result.get("success"):
+                raise HTTPException(status_code=404, detail=result.get("message", "Not found"))
+            job = result["result"]
+
+            # Mark last_run immediately so the scheduler doesn't double-fire
+            _get_scheduler().run_job(job_id)
+
+            # Determine runtime parameters from the job
+            agent = job.get("agent") or get_default_agent()
+            runtime = job.get("runtime") or get_default_runtime()
+            model = job.get("model") or get_default_model()
+            task = job.get("task") or ""
+            timeout = int(job.get("timeout") or 300)
+            mode = job.get("mode", "ai")
+
+            if mode == "command":
+                # Command mode: wrap the shell command as the task text
+                prompt = f"[Scheduled command] {task}"
+            else:
+                prompt = task or f"Run scheduled job: {job.get('name', job_id)}"
+
+            # Use the triggering user's identity/channel for the bg task
+            channel = user.get("channel", "api")
+            identity = user.get("identity", "scheduler")
+
+            task_id = f"sched_{job_id}_{str(uuid4())[:6]}"
+            session_id = str(uuid4())
+
+            bg_task_mgr.create_task(
+                task_id=task_id,
+                session_id=session_id,
+                user_identity=identity,
+                channel=channel,
+                agent=agent,
+                runtime=runtime,
+                model=model,
+                prompt=prompt,
+                status="running",
+                timeout=timeout,
+                notify=job.get("notify", False),
+            )
+
+            loop = asyncio.get_running_loop()
+            loop.run_in_executor(
+                bg_executor,
+                _run_background_task,
+                task_id, session_id, prompt, agent, runtime, model,
+                channel, identity, timeout, job.get("notify", False),
+            )
+
+            return {
+                "success": True,
+                "task_id": task_id,
+                "job_id": job_id,
+                "agent": agent,
+                "runtime": runtime,
+                "status": "running",
+                "message": f"Job '{job.get('name', job_id)}' is now running",
+            }
+
         @app.get("/api/v1/scheduler/jobs/{job_id}/results")
         async def get_scheduler_job_results(job_id: str, request: Request, limit: int = 20):
             await _require_scheduler_auth(request)

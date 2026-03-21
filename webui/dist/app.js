@@ -2472,6 +2472,7 @@ function renderJobDetailView(job) {
         <pre class="sched-task-pre">${escHtml(job.task || '(empty)')}</pre>
       </div>
       <div class="sched-detail-actions">
+        <button class="btn btn-accent btn-sm" id="btn-job-run-now">▶ Run Now</button>
         ${isEnabled
           ? `<button class="btn btn-ghost btn-sm" id="btn-job-pause">⏸ Pause</button>`
           : `<button class="btn btn-primary btn-sm" id="btn-job-resume">▶ Resume</button>`
@@ -2497,10 +2498,12 @@ function renderJobDetailView(job) {
   });
 
   // Action buttons
+  const runNowBtn  = body.querySelector('#btn-job-run-now');
   const pauseBtn   = body.querySelector('#btn-job-pause');
   const resumeBtn  = body.querySelector('#btn-job-resume');
   const deleteBtn  = body.querySelector('#btn-job-delete');
 
+  if (runNowBtn) runNowBtn.addEventListener('click', () => doJobRunNow(job.id, runNowBtn));
   if (pauseBtn)  pauseBtn.addEventListener('click',  () => doJobPause(job.id));
   if (resumeBtn) resumeBtn.addEventListener('click', () => doJobResume(job.id));
   if (deleteBtn) deleteBtn.addEventListener('click', () => doJobDelete(job.id));
@@ -2825,6 +2828,23 @@ function showFormErr(el, msg) {
 // ─── Scheduler: Job Actions ──────────────────────────────────────────────────
 // ═══════════════════════════════════════════════════════════════════════════════
 
+async function doJobRunNow(jobId, btn) {
+  if (btn) { btn.disabled = true; btn.textContent = '⏳ Starting…'; }
+  try {
+    const result = await schedApi('POST', `/jobs/${jobId}/run`);
+    const taskId = result.task_id || '';
+    schedToast(taskId
+      ? `✅ Job started — task ${taskId} running`
+      : '✅ Job triggered successfully', 'success');
+    await loadSchedulerJobs();
+    const updated = SCHED.jobs.find(j => j.id === jobId);
+    if (updated) renderJobDetailView(updated);
+  } catch (err) {
+    schedToast('Run failed: ' + err.message, 'error');
+    if (btn) { btn.disabled = false; btn.textContent = '▶ Run Now'; }
+  }
+}
+
 async function doJobPause(jobId) {
   try {
     await schedApi('POST', `/jobs/${jobId}/pause`);
@@ -2922,6 +2942,7 @@ const BG = {
   selectedTaskId: null,
   isLoading: false,
   pollInterval: null,
+  logsPoller: null,
 };
 
 function startBgTaskPolling() {
@@ -3053,6 +3074,12 @@ async function loadBgTaskDetail(taskId) {
   show(detail);
   $('bg-detail-title').textContent = `Task: ${taskId}`;
 
+  // Clear any previous logs poller
+  if (BG.logsPoller) {
+    clearInterval(BG.logsPoller);
+    BG.logsPoller = null;
+  }
+
   try {
     const t = await bgApi('GET', `/${taskId}`);
     const icons = { running: '🟢', completed: '✅', failed: '❌', killed: '🛑', queued: '⏳' };
@@ -3060,7 +3087,6 @@ async function loadBgTaskDetail(taskId) {
     const statusClass = `bg-status-${t.status}`;
     const elapsed = t.status === 'running' ? formatElapsed(t.created_at) : '';
 
-    // Compute queue position for queued tasks
     let statusLabel = t.status;
     if (t.status === 'queued') {
       const queuedInList = BG.tasks.filter(x => x.status === 'queued').sort((a,b) => (a.created_at||'').localeCompare(b.created_at||''));
@@ -3079,56 +3105,168 @@ async function loadBgTaskDetail(taskId) {
       </div>`;
     } else {
       actionsHtml = `<div class="bg-detail-actions">
-        <button class="btn btn-ghost btn-sm" onclick="viewBgTranscript('${t.task_id}')">📋 Full Transcript</button>
         <button class="btn btn-ghost btn-sm" onclick="deleteBgTask('${t.task_id}')">🗑️ Remove</button>
       </div>`;
     }
 
-    let outputHtml = '';
-    if (t.status === 'completed' && t.final_response) {
-      // For completed tasks, show nothing here — transcript button handles it
-    } else if (t.recent_output && t.recent_output.length > 0) {
-      outputHtml = `<div class="bg-detail-output">${escHtml(t.recent_output.join('\n'))}</div>`;
-    } else if (t.error) {
-      outputHtml = `<div class="bg-detail-output" style="color:#ff8888">${escHtml(t.error)}</div>`;
-    }
+    const timingHtml = (() => {
+      const started = t.created_at ? fmtDate(t.created_at) : '—';
+      const finished = t.completed_at ? fmtDate(t.completed_at) : null;
+      const dur = (t.created_at && t.completed_at)
+        ? (() => {
+            try {
+              const s = new Date(t.created_at).getTime();
+              const e = new Date(t.completed_at).getTime();
+              const sec = Math.round((e - s) / 1000);
+              return sec < 60 ? `${sec}s` : `${Math.floor(sec/60)}m ${sec%60}s`;
+            } catch { return null; }
+          })()
+        : null;
+      return `<div class="bg-transcript-timing">
+        <span>⏱ Started: ${escHtml(started)}</span>
+        ${elapsed ? `<span class="bg-elapsed-live" data-start="${escHtml(t.created_at || '')}">Elapsed: ${elapsed}</span>` : ''}
+        ${finished ? `<span>Finished: ${escHtml(finished)}</span>` : ''}
+        ${dur ? `<span>Duration: ${dur}</span>` : ''}
+      </div>`;
+    })();
 
     body.innerHTML = `
-      <div class="bg-detail-meta">
-        <div class="bg-detail-meta-row">
-          <span class="bg-detail-meta-label">Status</span>
-          <span class="bg-card-status ${statusClass}">${icon} ${statusLabel}</span>
-          ${elapsed ? `<span style="font-size:11px;color:var(--text-muted);margin-left:8px">${elapsed}</span>` : ''}
-          ${t.status === 'queued' ? `<span style="font-size:11px;color:var(--text-muted);margin-left:8px">Waiting for a slot to open…</span>` : ''}
-        </div>
-        <div class="bg-detail-meta-row">
-          <span class="bg-detail-meta-label">Agent</span>
-          <span class="bg-detail-meta-value">${escHtml(t.agent || '?')}</span>
-        </div>
-        <div class="bg-detail-meta-row">
-          <span class="bg-detail-meta-label">Runtime</span>
-          <span class="bg-detail-meta-value">${runtimeIconHTML(t.runtime)}${escHtml(t.runtime || '?')} / ${escHtml(t.model || '?')}</span>
-        </div>
-        <div class="bg-detail-meta-row">
-          <span class="bg-detail-meta-label">Started</span>
-          <span class="bg-detail-meta-value">${fmtDate(t.created_at)}</span>
-        </div>
-        ${t.completed_at ? `<div class="bg-detail-meta-row">
-          <span class="bg-detail-meta-label">Finished</span>
-          <span class="bg-detail-meta-value">${fmtDate(t.completed_at)}</span>
-        </div>` : ''}
+      <div class="bg-detail-tabs">
+        <button class="bg-tab active" data-tab="details">Details</button>
+        <button class="bg-tab" data-tab="logs">Logs ${t.status === 'running' ? '<span class="bg-live-dot"></span>' : ''}</button>
       </div>
-      <div class="bg-detail-prompt">${escHtml(t.prompt || '')}</div>
-      ${outputHtml}
-      ${actionsHtml}
+      <div id="bg-tab-details" class="bg-tab-pane">
+        <div class="bg-detail-meta">
+          <div class="bg-detail-meta-row">
+            <span class="bg-detail-meta-label">Status</span>
+            <span class="bg-card-status ${statusClass}">${icon} ${statusLabel}</span>
+            ${elapsed ? `<span style="font-size:11px;color:var(--text-muted);margin-left:8px">${elapsed}</span>` : ''}
+            ${t.status === 'queued' ? `<span style="font-size:11px;color:var(--text-muted);margin-left:8px">Waiting for a slot to open…</span>` : ''}
+          </div>
+          <div class="bg-detail-meta-row">
+            <span class="bg-detail-meta-label">Agent</span>
+            <span class="bg-detail-meta-value">${escHtml(t.agent || '?')}</span>
+          </div>
+          <div class="bg-detail-meta-row">
+            <span class="bg-detail-meta-label">Runtime</span>
+            <span class="bg-detail-meta-value">${runtimeIconHTML(t.runtime)}${escHtml(t.runtime || '?')} / ${escHtml(t.model || '?')}</span>
+          </div>
+          <div class="bg-detail-meta-row">
+            <span class="bg-detail-meta-label">Started</span>
+            <span class="bg-detail-meta-value">${fmtDate(t.created_at)}</span>
+          </div>
+          ${t.completed_at ? `<div class="bg-detail-meta-row">
+            <span class="bg-detail-meta-label">Finished</span>
+            <span class="bg-detail-meta-value">${fmtDate(t.completed_at)}</span>
+          </div>` : ''}
+        </div>
+        <div class="bg-detail-prompt">${escHtml(t.prompt || '')}</div>
+        ${actionsHtml}
+      </div>
+      <div id="bg-tab-logs" class="bg-tab-pane hidden">
+        ${timingHtml}
+        <div class="bg-transcript-panel" id="bg-transcript-${taskId}">
+          <p style="color:var(--text-muted);font-size:12px;padding:8px">Loading logs…</p>
+        </div>
+      </div>
     `;
+
+    // Tab switching
+    body.querySelectorAll('.bg-tab').forEach(tab => {
+      tab.addEventListener('click', () => {
+        body.querySelectorAll('.bg-tab').forEach(t2 => t2.classList.remove('active'));
+        tab.classList.add('active');
+        body.querySelectorAll('.bg-tab-pane').forEach(p => hide(p));
+        const pane = $(`bg-tab-${tab.dataset.tab}`);
+        show(pane);
+        if (tab.dataset.tab === 'logs') loadBgTaskLogs(taskId, t.status);
+      });
+    });
+
+    // Auto-open logs tab for running tasks
+    if (t.status === 'running') {
+      const logsTab = body.querySelector('.bg-tab[data-tab="logs"]');
+      if (logsTab) logsTab.click();
+    }
+
   } catch (err) {
     body.innerHTML = `<p style="color:#ff8888">Failed to load: ${escHtml(err.message)}</p>`;
   }
 }
 window.loadBgTaskDetail = loadBgTaskDetail;
 
+async function loadBgTaskLogs(taskId, status) {
+  const panel = $(`bg-transcript-${taskId}`);
+  if (!panel) return;
+
+  // Clear any previous poller
+  if (BG.logsPoller) {
+    clearInterval(BG.logsPoller);
+    BG.logsPoller = null;
+  }
+
+  async function fetchAndRender() {
+    try {
+      // For completed/failed tasks use the full transcript; for running use detail output
+      const currentStatus = BG.tasks.find(x => x.task_id === taskId)?.status || status;
+      let lines = [];
+      let error = null;
+
+      if (currentStatus === 'running' || currentStatus === 'queued') {
+        const t = await bgApi('GET', `/${taskId}`);
+        lines = t.recent_output || [];
+        error = t.error;
+      } else {
+        const data = await bgApi('GET', `/${taskId}/transcript`);
+        if (data.final_response) {
+          lines = data.final_response.split('\n');
+        } else {
+          lines = data.output_lines || [];
+          error = data.error;
+        }
+      }
+
+      if (!lines.length && !error) {
+        panel.innerHTML = '<p style="color:var(--text-muted);font-size:12px;padding:8px">No output yet…</p>';
+        return;
+      }
+
+      const wasAtBottom = panel.scrollHeight - panel.scrollTop - panel.clientHeight < 40;
+      const content = lines.join('\n');
+      panel.innerHTML = `<pre class="bg-transcript-pre">${escHtml(content)}${error ? `\n\n[error] ${error}` : ''}</pre>`;
+      if (wasAtBottom || status === 'running') {
+        panel.scrollTop = panel.scrollHeight;
+      }
+    } catch { /* ignore transient fetch errors */ }
+  }
+
+  await fetchAndRender();
+
+  // Poll every 3s for live output while task is running
+  const liveStatus = BG.tasks.find(x => x.task_id === taskId)?.status || status;
+  if (liveStatus === 'running') {
+    BG.logsPoller = setInterval(async () => {
+      const current = BG.tasks.find(x => x.task_id === taskId)?.status;
+      await fetchAndRender();
+      // Update elapsed timer in details tab
+      const elapsedEl = document.querySelector('.bg-elapsed-live');
+      if (elapsedEl) {
+        const start = elapsedEl.dataset.start;
+        if (start) elapsedEl.textContent = `Elapsed: ${formatElapsed(start)}`;
+      }
+      if (current && current !== 'running' && current !== 'queued') {
+        clearInterval(BG.logsPoller);
+        BG.logsPoller = null;
+      }
+    }, 3000);
+  }
+}
+
 function closeBgDetail() {
+  if (BG.logsPoller) {
+    clearInterval(BG.logsPoller);
+    BG.logsPoller = null;
+  }
   hide($('bg-detail'));
   BG.selectedTaskId = null;
   renderBgTasks();

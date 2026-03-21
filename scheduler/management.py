@@ -292,6 +292,17 @@ class TaskScheduler:
             return {"success": True, "message": f"Job '{job_id}' deleted"}
         return {"success": False, "message": f"Job '{job_id}' not found"}
 
+    def run_job(self, job_id: str) -> Dict:
+        """Mark a job's last_run timestamp and return the job for immediate execution."""
+        jobs = self._load_jobs()
+        job = next((j for j in jobs["jobs"] if j["id"] == job_id), None)
+        if not job:
+            return {"success": False, "message": f"Job '{job_id}' not found"}
+        job["last_run"] = datetime.utcnow().isoformat() + "Z"
+        self._save_jobs(jobs)
+        self._log(job_id, "Manual run triggered via API (run-now)")
+        return {"success": True, "result": job, "message": f"Job '{job_id}' triggered for immediate execution"}
+
     def get_logs(self, job_id: str) -> Dict:
         """Get scheduler logs for a job."""
         log_file = self.logs_dir / f"{job_id}.log"
