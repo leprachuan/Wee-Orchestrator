@@ -2335,26 +2335,48 @@ class SessionManager:
                 return error_result
 
         elif runtime == "gemini":
+            # Gemini may output stream-json (structured) or plain text.
+            # For stream-json, extract text from "message" events with role="assistant".
+            import json as _json_strip
+            _has_json = False
+            _text_parts = []
             for line in lines:
-                # Skip Gemini CLI metadata patterns - be very specific to avoid false positives
+                line_stripped = line.strip()
+                if line_stripped.startswith("{"):
+                    try:
+                        obj = _json_strip.loads(line_stripped)
+                        _has_json = True
+                        obj_type = obj.get("type", "")
+                        if obj_type == "message" and obj.get("role") == "assistant":
+                            content = obj.get("content", "")
+                            if content:
+                                _text_parts.append(content)
+                        elif obj_type == "result":
+                            pass  # skip stats
+                        elif obj_type in ("tool_use", "tool_result", "init"):
+                            pass  # skip tool events and init
+                        continue
+                    except (ValueError, KeyError):
+                        pass
+                # Plain text fallback
                 line_lower = line.lower()
-
-                # Skip lines that are clearly debug/startup output
-                # Must match Gemini's specific debug format to avoid filtering user content
                 if any(
                     pattern in line_lower
                     for pattern in [
-                        "[startup]",  # Gemini startup profiler messages
-                        "recording metric for phase:",  # Startup metrics
-                        "loaded cached credentials",  # Authentication logs
+                        "[startup]",
+                        "recording metric for phase:",
+                        "loaded cached credentials",
                         "session:",
                         "model:",
                         "tokens:",
-                        "usage:",  # Standard metadata
+                        "usage:",
                     ]
                 ):
                     continue
                 result.append(line)
+            # If we found JSON, prefer the extracted text parts
+            if _has_json and _text_parts:
+                return "\n".join(_text_parts)
 
         elif runtime == "codex":
             # CODEX output format (when stripped of headers):
@@ -3515,12 +3537,69 @@ User Request:
                                 _line_stripped = _line_str.strip()
                                 _tc_detected = None
 
+                                # Gemini stream-json: parse structured JSON events
+                                if runtime == "gemini" and _line_stripped.startswith("{"):
+                                    try:
+                                        _gobj = _json.loads(_line_stripped)
+                                        _gtype = _gobj.get("type", "")
+                                        if _gtype == "message" and _gobj.get("role") == "assistant":
+                                            _content = _gobj.get("content", "")
+                                            if _content:
+                                                if stream_buffer:
+                                                    stream_buffer.push("chunk", _content)
+                                                else:
+                                                    loop.call_soon_threadsafe(queue.put_nowait, ("chunk", _content))
+                                            continue
+                                        elif _gtype == "tool_use":
+                                            _tool_call_counter[0] += 1
+                                            tc_event = {
+                                                "event": "detected",
+                                                "id": _gobj.get("tool_id", f"tc_gemini_{_tool_call_counter[0]}"),
+                                                "name": _gobj.get("tool_name", "tool"),
+                                                "input": _json.dumps(_gobj.get("parameters", {})),
+                                                "runtime": "gemini",
+                                                "timestamp": _gobj.get("timestamp", time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())),
+                                            }
+                                            if stream_buffer:
+                                                stream_buffer.push("tool_call", tc_event)
+                                            else:
+                                                loop.call_soon_threadsafe(queue.put_nowait, ("tool_call", tc_event))
+                                            continue
+                                        elif _gtype == "tool_result":
+                                            tc_event = {
+                                                "event": "result",
+                                                "id": _gobj.get("tool_id", ""),
+                                                "status": _gobj.get("status", "completed"),
+                                                "output": _gobj.get("output", "")[:500],
+                                            }
+                                            if stream_buffer:
+                                                stream_buffer.push("tool_call", tc_event)
+                                            else:
+                                                loop.call_soon_threadsafe(queue.put_nowait, ("tool_call", tc_event))
+                                            continue
+                                        elif _gtype in ("init", "result"):
+                                            continue  # skip metadata
+                                    except (ValueError, KeyError):
+                                        pass
+
                                 if runtime == "opencode":
-                                    # OpenCode shows tool invocations as "| ToolName ..."
+                                    # OpenCode tool invocation: "| ToolName args..."
                                     import re as _re_tc
-                                    _oc_match = _re_tc.match(r'^\|\s+(Glob|Read|Write|Bash|Edit|bash|grep|find|Fetch)\b(.*)', _line_stripped)
+                                    _oc_match = _re_tc.match(r'^\|\s+(\w+)\b(.*)', _line_stripped)
                                     if _oc_match:
-                                        _tc_detected = {"name": _oc_match.group(1), "input": _oc_match.group(2).strip()}
+                                        _oc_tool = _oc_match.group(1)
+                                        _oc_known = {
+                                            "Glob", "Read", "Write", "Bash", "Edit", "bash", "grep",
+                                            "find", "Fetch", "ListDir", "Search", "TodoRead",
+                                            "TodoWrite", "WebFetch", "Shell", "Patch", "MultiEdit",
+                                            "LS", "Cat", "Sed", "Awk", "Mv", "Cp", "Rm", "Mkdir",
+                                        }
+                                        if _oc_tool in _oc_known or _oc_tool[0].isupper():
+                                            _tc_detected = {"name": _oc_tool, "input": _oc_match.group(2).strip()}
+                                    if not _tc_detected:
+                                        _oc_run = _re_tc.match(r'^(?:Running|Executing|>)\s+(.+)', _line_stripped)
+                                        if _oc_run:
+                                            _tc_detected = {"name": "shell", "input": _oc_run.group(1).strip()}
                                 elif runtime == "copilot":
                                     # Copilot shows tool calls as "● Description" and shell cmds as "  $ cmd"
                                     import re as _re_tc
@@ -3555,16 +3634,43 @@ User Request:
                                             if _cp_legacy:
                                                 _tc_detected = {"name": _cp_legacy.group(1), "input": _cp_legacy.group(2).strip()}
                                 elif runtime == "codex":
-                                    # Codex may emit function call patterns
+                                    # Codex exec tool call patterns
                                     import re as _re_tc
-                                    _cx_match = _re_tc.match(r'^(?:Calling function|Tool|Executing):\s*(\w+)\s*(.*)', _line_stripped, _re_tc.IGNORECASE)
+                                    _cx_match = _re_tc.match(r'^(?:Calling function|Tool|Executing|Running):\s*(\w[\w.]*)\s*(.*)', _line_stripped, _re_tc.IGNORECASE)
                                     if _cx_match:
                                         _tc_detected = {"name": _cx_match.group(1), "input": _cx_match.group(2).strip()}
+                                    if not _tc_detected:
+                                        # Shell command: "$ command" or "> command"
+                                        _cx_cmd = _re_tc.match(r'^[$>]\s+(.+)', _line_stripped)
+                                        if _cx_cmd:
+                                            _tc_detected = {"name": "shell", "input": _cx_cmd.group(1).strip()}
+                                    if not _tc_detected:
+                                        # Function-call syntax: "read_file(path=...)"
+                                        _cx_fn = _re_tc.match(r'^(\w+)\((.+)\)\s*$', _line_stripped)
+                                        if _cx_fn and any(kw in _cx_fn.group(1).lower() for kw in ["read", "write", "shell", "bash", "exec", "search", "list", "create", "edit", "patch", "apply"]):
+                                            _tc_detected = {"name": _cx_fn.group(1), "input": _cx_fn.group(2).strip()}
                                 elif runtime == "gemini":
                                     import re as _re_tc
-                                    _gm_match = _re_tc.match(r'^(?:Using tool|Function call|Calling):\s*(\w+)\s*(.*)', _line_stripped, _re_tc.IGNORECASE)
+                                    # "✦ Calling tool_name(args)" or "Calling tool_name(args)"
+                                    _gm_match = _re_tc.match(r'^[✦*]?\s*(?:Calling|Using tool|Function call|Running)\s+(\w[\w.]*)\s*(.*)', _line_stripped, _re_tc.IGNORECASE)
                                     if _gm_match:
                                         _tc_detected = {"name": _gm_match.group(1), "input": _gm_match.group(2).strip()}
+                                    if not _tc_detected:
+                                        # "⚡ tool_name(args)" or "tool_name(args)"
+                                        _gm_fn = _re_tc.match(r'^[⚡✦*]?\s*(\w+)\((.+)\)\s*$', _line_stripped)
+                                        if _gm_fn and any(kw in _gm_fn.group(1).lower() for kw in [
+                                            "read", "write", "shell", "bash", "exec", "search", "list",
+                                            "create", "edit", "file", "run", "cat", "ls", "find", "grep",
+                                            "save", "update", "delete", "fetch", "curl", "get", "put",
+                                        ]):
+                                            _tc_detected = {"name": _gm_fn.group(1), "input": _gm_fn.group(2).strip()}
+                                    if not _tc_detected:
+                                        # "$ command" or "> command" or "Running command: cmd"
+                                        _gm_cmd = _re_tc.match(r'^(?:[$>]\s+(.+)|Running\s+command:\s*(.+))', _line_stripped, _re_tc.IGNORECASE)
+                                        if _gm_cmd:
+                                            _cmd_text = (_gm_cmd.group(1) or _gm_cmd.group(2) or "").strip()
+                                            if _cmd_text:
+                                                _tc_detected = {"name": "shell", "input": _cmd_text}
 
                                 if _tc_detected:
                                     _tool_call_counter[0] += 1
@@ -3952,6 +4058,10 @@ User Request:
         cmd = ["gemini"]
         if mode == "yolo":
             cmd.append("--yolo")
+        # Use stream-json for structured tool call parsing when streaming
+        stream_info = self._stream_queues.get(n8n_session_id)
+        if stream_info:
+            cmd.extend(["-o", "stream-json"])
         cmd.append(context_prompt)
 
         # Note: Gemini CLI appears to have model handling issues with specified model names
@@ -6819,23 +6929,87 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                         if m:
                             tc = {"name": m.group(1), "input": m.group(2).strip()}
             elif rt == "opencode":
-                m = _re.match(r'^\|\s+(Glob|Read|Write|Bash|Edit|bash|grep|find|Fetch)\b(.*)', stripped)
+                # OpenCode tool invocation lines: "| ToolName args..."
+                # Support the full set of known OpenCode tools
+                m = _re.match(r'^\|\s+(\w+)\b(.*)', stripped)
                 if m:
-                    tc = {"name": m.group(1), "input": m.group(2).strip()}
+                    _oc_tool = m.group(1)
+                    _oc_known = {
+                        "Glob", "Read", "Write", "Bash", "Edit", "bash", "grep",
+                        "find", "Fetch", "ListDir", "Search", "TodoRead",
+                        "TodoWrite", "WebFetch", "Shell", "Patch", "MultiEdit",
+                        "LS", "Cat", "Sed", "Awk", "Mv", "Cp", "Rm", "Mkdir",
+                    }
+                    if _oc_tool in _oc_known or _oc_tool[0].isupper():
+                        tc = {"name": _oc_tool, "input": m.group(2).strip()}
+                # Also detect "Running: <command>" or "Executing: <cmd>"
+                if not tc:
+                    m2 = _re.match(r'^(?:Running|Executing|>)\s+(.+)', stripped)
+                    if m2:
+                        tc = {"name": "shell", "input": m2.group(1).strip()}
             elif rt == "codex":
+                # Codex exec shows tool calls in several formats:
+                # 1. "Calling function: name ..." or "Tool: name ..."
                 m = _re.match(r'^(?:Calling function|Tool|Executing|Running):\s*(\w[\w.]*)\s*(.*)', stripped, _re.IGNORECASE)
                 if m:
                     tc = {"name": m.group(1), "input": m.group(2).strip()}
+                # 2. Shell command execution: lines starting with "$ command" or "> command"
+                if not tc:
+                    m2 = _re.match(r'^[$>]\s+(.+)', stripped)
+                    if m2:
+                        tc = {"name": "shell", "input": m2.group(1).strip()}
+                # 3. "read_file(path=...)" or "write_file(path=...)" function-call syntax
+                if not tc:
+                    m3 = _re.match(r'^(\w+)\((.+)\)\s*$', stripped)
+                    if m3 and any(kw in m3.group(1).lower() for kw in ["read", "write", "shell", "bash", "exec", "search", "list", "create", "edit", "patch", "apply"]):
+                        tc = {"name": m3.group(1), "input": m3.group(2).strip()}
             elif rt == "gemini":
-                m = _re.match(r'^(?:Using tool|Function call|Calling):\s*(\w[\w.]*)\s*(.*)', stripped, _re.IGNORECASE)
+                # Gemini CLI tool call patterns (with --yolo, tools auto-execute):
+                # 1. "✦ Calling tool_name(args)" or "Calling tool_name(args)"
+                m = _re.match(r'^[✦*]?\s*(?:Calling|Using tool|Function call|Running)\s+(\w[\w.]*)\s*(.*)', stripped, _re.IGNORECASE)
                 if m:
                     tc = {"name": m.group(1), "input": m.group(2).strip()}
+                # 2. "⚡ <tool_name>(<args>)" or "tool_name(<args>)"
+                if not tc:
+                    m2 = _re.match(r'^[⚡✦*]?\s*(\w+)\((.+)\)\s*$', stripped)
+                    if m2 and any(kw in m2.group(1).lower() for kw in [
+                        "read", "write", "shell", "bash", "exec", "search", "list",
+                        "create", "edit", "file", "run", "cat", "ls", "find", "grep",
+                        "save", "update", "delete", "fetch", "curl", "get", "put",
+                    ]):
+                        tc = {"name": m2.group(1), "input": m2.group(2).strip()}
+                # 3. Shell-like execution: "$ command" or "> command"
+                if not tc:
+                    m3 = _re.match(r'^[$>]\s+(.+)', stripped)
+                    if m3:
+                        tc = {"name": "shell", "input": m3.group(1).strip()}
+                # 4. "Running command: <cmd>" pattern
+                if not tc:
+                    m4 = _re.match(r'^Running\s+command:\s*(.+)', stripped, _re.IGNORECASE)
+                    if m4:
+                        tc = {"name": "shell", "input": m4.group(1).strip()}
             elif rt == "claude":
-                # Claude background tasks use copilot binary, but if stream-json is enabled
-                # the JSON parsing path below handles it.  Plain-text fallback:
-                m = _re.match(r'^(?:Tool|Calling|Using tool):\s*(\w[\w.]*)\s*(.*)', stripped, _re.IGNORECASE)
-                if m:
-                    tc = {"name": m.group(1), "input": m.group(2).strip()}
+                # Claude background tasks now use claude binary with stream-json.
+                # Try to parse JSON tool_use events first.
+                try:
+                    _obj = _json.loads(stripped)
+                    _evt_type = _obj.get("type")
+                    if _evt_type == "stream_event":
+                        _event = _obj.get("event") or {}
+                        _inner = _event.get("type", "")
+                        if _inner == "content_block_start":
+                            _cb = _event.get("content_block") or {}
+                            if _cb.get("type") == "tool_use":
+                                tc = {"name": _cb.get("name", "tool"), "input": _json.dumps(_cb.get("input", {}))}
+                        elif _inner == "content_block_stop":
+                            pass  # tool result will follow
+                except (ValueError, KeyError, TypeError):
+                    pass
+                # Plain-text fallback for non-JSON output
+                if not tc:
+                    m = _re.match(r'^(?:Tool|Calling|Using tool):\s*(\w[\w.]*)\s*(.*)', stripped, _re.IGNORECASE)
+                    if m:
+                        tc = {"name": m.group(1), "input": m.group(2).strip()}
 
             if tc:
                 _tool_call_counter += 1
@@ -6860,16 +7034,54 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 channel=channel,
             )
 
-            copilot_bin = session_mgr.copilot_bin or "/home/flipkey/.local/bin/copilot"
+            # ── Build runtime-specific command ──────────────────────────
+            # Each runtime CLI has its own binary and argument format.
+            # Previously all background tasks used copilot; now we dispatch
+            # to the correct binary so the chosen runtime actually executes.
+            from shutil import which as _which_bin
 
-            cmd = [
-                copilot_bin,
-                "-p", context_prompt,
-                "--no-color",
-                "--model", model,
-                "--allow-all-tools",
-                "--allow-all-paths",
-            ]
+            if runtime == "gemini":
+                _gemini_bin = _which_bin("gemini") or "gemini"
+                cmd = [_gemini_bin, "--yolo", "-o", "stream-json", "-p", context_prompt]
+                if model:
+                    cmd.extend(["--model", model])
+            elif runtime == "opencode":
+                _oc_bin = str(session_mgr.opencode_bin) if session_mgr.opencode_bin else (_which_bin("opencode") or "opencode")
+                cmd = [_oc_bin, "run", "--model", model, context_prompt]
+            elif runtime == "codex":
+                _codex_bin = _which_bin("codex") or "codex"
+                cmd = [_codex_bin, "exec",
+                       "--dangerously-bypass-approvals-and-sandbox",
+                       "-c", "shell_environment_policy.inherit=all"]
+                if model:
+                    cmd.extend(["-m", model])
+                cmd.append(context_prompt)
+            elif runtime == "claude":
+                _claude_bin = session_mgr.claude_bin or _which_bin("claude") or "claude"
+                cmd = [_claude_bin, "-p", context_prompt,
+                       "--output-format", "stream-json",
+                       "--model", model,
+                       "--dangerously-skip-permissions"]
+            elif runtime == "devin":
+                _devin_bin = session_mgr.devin_bin if hasattr(session_mgr, 'devin_bin') and session_mgr.devin_bin else (_which_bin("devin") or "devin")
+                cmd = [_devin_bin, "-p", "--permission-mode", "dangerous"]
+                if model:
+                    cmd.extend(["--model", model])
+                cmd.extend(["--", context_prompt])
+            else:
+                # Default: copilot runtime
+                copilot_bin = session_mgr.copilot_bin or _which_bin("copilot") or "/home/flipkey/.local/bin/copilot"
+                cmd = [
+                    copilot_bin,
+                    "-p", context_prompt,
+                    "--no-color",
+                    "--model", model,
+                    "--allow-all-tools",
+                    "--allow-all-paths",
+                ]
+
+            # Set agent working directory for all runtimes
+            agent_dir = session_mgr.AGENTS.get(agent, session_mgr.AGENTS.get("orchestrator", {})).get("path", os.getcwd())
 
             proc_timeout = (timeout or 900) + 30
             env = {**os.environ, "COPILOT_AGENT": agent, "COPILOT_RUNTIME": runtime}
@@ -6881,6 +7093,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 stderr=subprocess.PIPE,
                 text=True,
                 env=env,
+                cwd=agent_dir,
                 bufsize=1,
             )
 
@@ -6910,8 +7123,55 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 if line_text:
                     bg_task_mgr.append_output(task_id, line_text)
 
-                # Detect tool calls from output patterns
-                tc = _parse_tool_call_from_line(line_text, runtime)
+                # ── Structured JSON parsing for stream-json runtimes ──
+                # Gemini (stream-json) emits {"type":"tool_use",...} and {"type":"tool_result",...}
+                # Claude (stream-json) emits nested stream_event objects with tool_use blocks
+                tc = None
+                if runtime in ("gemini", "claude") and line_text.strip().startswith("{"):
+                    try:
+                        _obj = _json.loads(line_text.strip())
+                        _otype = _obj.get("type", "")
+
+                        if runtime == "gemini":
+                            if _otype == "tool_use":
+                                _tool_call_counter += 1
+                                tc = {
+                                    "id": f"bg_{task_id[:8]}_{_tool_call_counter}",
+                                    "name": _obj.get("tool_name", "tool"),
+                                    "input": _json.dumps(_obj.get("parameters", {})),
+                                    "status": "running",
+                                    "runtime": runtime,
+                                    "timestamp": _obj.get("timestamp", time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())),
+                                }
+                            elif _otype == "tool_result":
+                                _tool_id = _obj.get("tool_id", "")
+                                bg_task_mgr.update_tool_call(task_id, _tool_id,
+                                    status=_obj.get("status", "completed"),
+                                    output=_obj.get("output", "")[:500])
+
+                        elif runtime == "claude":
+                            if _otype == "stream_event":
+                                _event = _obj.get("event") or {}
+                                _inner = _event.get("type", "")
+                                if _inner == "content_block_start":
+                                    _cb = _event.get("content_block") or {}
+                                    if _cb.get("type") == "tool_use":
+                                        _tool_call_counter += 1
+                                        tc = {
+                                            "id": _cb.get("id", f"bg_{task_id[:8]}_{_tool_call_counter}"),
+                                            "name": _cb.get("name", "tool"),
+                                            "input": _json.dumps(_cb.get("input", {})),
+                                            "status": "running",
+                                            "runtime": runtime,
+                                            "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                                        }
+                    except (ValueError, KeyError, TypeError):
+                        pass
+
+                # Fall back to text-based pattern detection
+                if not tc:
+                    tc = _parse_tool_call_from_line(line_text, runtime)
+
                 if tc:
                     bg_task_mgr.append_tool_call(task_id, tc)
 
