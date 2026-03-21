@@ -5033,12 +5033,18 @@ You can mention an agent in your prompt and it will auto-delegate:
         elif command in ("/update", "/upgrade", "/pull"):
             sub = (argument or "").strip().lower()
 
+            # Detect environment from this file's location
+            _repo_dir = os.path.dirname(os.path.abspath(__file__))
+            _is_dev = _repo_dir.endswith("-dev")
+            _env_label = "dev" if _is_dev else "prod"
+            _log_path = "/tmp/wee-update.log" if _is_dev else "/tmp/wee-update-prod.log"
+            _branch = "dev" if _is_dev else "main"
+
             if sub == "status":
-                log_path = "/tmp/wee-update.log"
                 try:
-                    with open(log_path) as f:
+                    with open(_log_path) as f:
                         tail = f.readlines()[-30:]
-                    return f"📋 **Last update log** (`{log_path}`):\n```\n{''.join(tail)}```"
+                    return f"📋 **Last update log** (`{_log_path}`):\n```\n{''.join(tail)}```"
                 except FileNotFoundError:
                     return "ℹ️ No update log found. No update has been run yet."
                 except Exception as e:
@@ -5046,13 +5052,13 @@ You can mention an agent in your prompt and it will auto-delegate:
 
             if sub == "help":
                 return (
-                    "🔄 **Update Commands**\n\n"
-                    "• `/update` — Pull latest dev code and restart all dev services\n"
-                    "• `/update status` — Show last update log\n"
-                    "• `/update help` — This message\n\n"
-                    "Aliases: `/upgrade`, `/pull`\n\n"
-                    "The update runs fully detached — it survives the service restart.\n"
-                    "You'll get a Telegram notification when it completes."
+                    f"🔄 **Update Commands** ({_env_label})\n\n"
+                    f"• `/update` — Pull latest code from `{_branch}` and restart all {_env_label} services\n"
+                    f"• `/update status` — Show last update log\n"
+                    f"• `/update help` — This message\n\n"
+                    f"Aliases: `/upgrade`, `/pull`\n\n"
+                    f"The update runs fully detached — it survives the service restart.\n"
+                    f"You'll get a Telegram notification when it completes."
                 )
 
             # Launch the detached update process
@@ -5064,9 +5070,9 @@ You can mention an agent in your prompt and it will auto-delegate:
 
             return (
                 f"🔄 **Update started** (PID: `{pid}`)\n\n"
-                f"Pulling latest code and restarting dev services.\n"
+                f"Pulling latest `{_branch}` and restarting {_env_label} services.\n"
                 f"I may go offline briefly — you will receive a Telegram notification when complete.\n\n"
-                f"Log: `/tmp/wee-update.log`\n"
+                f"Log: `{_log_path}`\n"
                 f"Check status later: `/update status`"
             )
 
