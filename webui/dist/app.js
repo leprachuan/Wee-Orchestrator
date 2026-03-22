@@ -201,11 +201,7 @@ function updateSessionMeta(data) {
   const model = data?.model ? data.model.replace(/^claude-/, '').replace(/^gpt-/, '') : null;
   set('meta-model', model);
 
-  const isYolo = data?.yolo_mode === 'on' || data?.yolo_mode === 'yolo';
-  const modeEl = $('meta-mode');
-  modeEl.textContent = isYolo ? '⚡ yolo' : 'restricted';
-  modeEl.classList.toggle('yolo', isYolo);
-  modeEl.classList.remove('empty');
+  // Mode pill mirrors the permissions mode
 
   // Permissions pill
   const permEl = $('meta-permissions');
@@ -363,13 +359,6 @@ const PILL_OPTIONS = {
       }
     },
   },
-  'meta-mode': {
-    label: 'Switch Mode',
-    options: [
-      { label: '⚡ yolo',           cmd: '/mode yolo' },
-      { label: '🔒 restricted',     cmd: '/mode restricted' },
-    ],
-  },
   'meta-permissions': {
     label: 'Session Permissions',
     options: null,
@@ -476,7 +465,7 @@ const COMMANDS = [
   { cmd: '/agent',        usage: '/agent <set|list|current|invoke>',      desc: 'Manage agents — switch, list, or delegate' },
   { cmd: '/model',        usage: '/model <set|list|current>',              desc: 'Change the AI model' },
   { cmd: '/runtime',      usage: '/runtime <set|list|current>',            desc: 'Switch execution runtime' },
-  { cmd: '/mode',         usage: '/mode <yolo|restricted|current|list>',   desc: 'Toggle yolo / restricted permission mode' },
+  { cmd: '/mode',         usage: '/mode <elevated|restricted|sandboxed|current|list>',   desc: 'Switch permission mode (elevated / restricted / sandboxed)' },
   { cmd: '/status',       usage: '/status',                                desc: 'Show current session status' },
   { cmd: '/cancel',       usage: '/cancel',                                desc: 'Cancel a running query' },
   { cmd: '/capabilities', usage: '/capabilities',                          desc: 'List all available capabilities' },
@@ -507,10 +496,11 @@ const SUBCOMMANDS = {
     { sub: 'current',       desc: 'Show the current runtime' },
   ],
   '/mode':    [
-    { sub: 'yolo',        desc: 'Enable auto-approval (no permission prompts)' },
+    { sub: 'elevated',    desc: 'Full access — auto-approve all actions (no prompts)' },
     { sub: 'restricted',  desc: 'Require approval for potentially destructive actions' },
-    { sub: 'current',     desc: 'Show the current mode' },
-    { sub: 'list',        desc: 'List available modes' },
+    { sub: 'sandboxed',   desc: 'Read-only sandbox — no writes, no network, no installs' },
+    { sub: 'current',     desc: 'Show the current permission mode' },
+    { sub: 'list',        desc: 'List available permission modes' },
   ],
 };
 
@@ -2369,7 +2359,7 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 
   // --- Meta pill popovers ---
-  ['meta-agent', 'meta-runtime', 'meta-model', 'meta-mode', 'meta-permissions'].forEach(id => {
+  ['meta-agent', 'meta-runtime', 'meta-model', 'meta-permissions'].forEach(id => {
     $(id).addEventListener('click', e => { e.stopPropagation(); showPillPopover($(id), id); });
   });
   document.addEventListener('mousedown', e => {
@@ -2816,8 +2806,9 @@ function buildJobForm(job) {
           <div class="form-group">
             <label>Mode</label>
             <select class="glass-input glass-select" name="mode">
-              <option value="restricted" ${(job?.mode === 'yolo') ? '' : 'selected'}>restricted (safe)</option>
-              <option value="yolo"       ${job?.mode === 'yolo' ? 'selected' : ''}>yolo (auto-approve)</option>
+              <option value="restricted" ${(job?.mode !== 'elevated' && job?.mode !== 'sandboxed') ? 'selected' : ''}>restricted (safe)</option>
+              <option value="elevated"   ${job?.mode === 'elevated' ? 'selected' : ''}>elevated (full access)</option>
+              <option value="sandboxed"  ${job?.mode === 'sandboxed' ? 'selected' : ''}>sandboxed (read-only)</option>
             </select>
           </div>
         </div>
