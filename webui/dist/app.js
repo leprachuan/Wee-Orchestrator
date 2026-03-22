@@ -201,10 +201,12 @@ function updateSessionMeta(data) {
   const model = data?.model ? data.model.replace(/^claude-/, '').replace(/^gpt-/, '') : null;
   set('meta-model', model);
 
-  const isYolo = data?.yolo_mode === 'on' || data?.yolo_mode === 'yolo';
+  // Mode pill mirrors the permissions mode
   const modeEl = $('meta-mode');
-  modeEl.textContent = isYolo ? '⚡ yolo' : 'restricted';
-  modeEl.classList.toggle('yolo', isYolo);
+  const _pm = data?.permissions?.mode || 'restricted';
+  const _pmIcons = { elevated: '⚡', restricted: '🔒', sandboxed: '🏖️' };
+  modeEl.textContent = (_pmIcons[_pm] || '🔒') + ' ' + _pm;
+  modeEl.dataset.permMode = _pm;
   modeEl.classList.remove('empty');
 
   // Permissions pill
@@ -364,11 +366,31 @@ const PILL_OPTIONS = {
     },
   },
   'meta-mode': {
-    label: 'Switch Mode',
-    options: [
-      { label: '⚡ yolo',           cmd: '/mode yolo' },
-      { label: '🔒 restricted',     cmd: '/mode restricted' },
-    ],
+    label: 'Permission Mode',
+    options: null,
+    dynamicLoad: async () => {
+      try {
+        const data = await apiRequest('GET', '/permissions/templates');
+        return (data.templates || []).map(t => ({
+          label: t.icon + ' ' + t.label,
+          value: t.mode,
+          cmd: null,
+          action: async () => {
+            if (!STATE.currentSessionId) return;
+            try {
+              await apiRequest('PUT', '/sessions/' + STATE.currentSessionId + '/permissions', { mode: t.mode });
+              fetchAndUpdateMeta(STATE.currentSessionId);
+            } catch (e) { console.error('Failed to set permissions:', e); }
+          },
+        }));
+      } catch (e) {
+        return [
+          { label: '⚡ Elevated', value: 'elevated', action: async () => { if (STATE.currentSessionId) { await apiRequest('PUT', '/sessions/' + STATE.currentSessionId + '/permissions', { mode: 'elevated' }); fetchAndUpdateMeta(STATE.currentSessionId); } } },
+          { label: '🔒 Restricted', value: 'restricted', action: async () => { if (STATE.currentSessionId) { await apiRequest('PUT', '/sessions/' + STATE.currentSessionId + '/permissions', { mode: 'restricted' }); fetchAndUpdateMeta(STATE.currentSessionId); } } },
+          { label: '🏖️ Sandboxed', value: 'sandboxed', action: async () => { if (STATE.currentSessionId) { await apiRequest('PUT', '/sessions/' + STATE.currentSessionId + '/permissions', { mode: 'sandboxed' }); fetchAndUpdateMeta(STATE.currentSessionId); } } },
+        ];
+      }
+    },
   },
   'meta-permissions': {
     label: 'Session Permissions',
@@ -476,7 +498,7 @@ const COMMANDS = [
   { cmd: '/agent',        usage: '/agent <set|list|current|invoke>',      desc: 'Manage agents — switch, list, or delegate' },
   { cmd: '/model',        usage: '/model <set|list|current>',              desc: 'Change the AI model' },
   { cmd: '/runtime',      usage: '/runtime <set|list|current>',            desc: 'Switch execution runtime' },
-  { cmd: '/mode',         usage: '/mode <yolo|restricted|current|list>',   desc: 'Toggle yolo / restricted permission mode' },
+  { cmd: '/mode',         usage: '/mode <elevated|restricted|sandboxed|current|list>',   desc: 'Switch permission mode (elevated / restricted / sandboxed)' },
   { cmd: '/status',       usage: '/status',                                desc: 'Show current session status' },
   { cmd: '/cancel',       usage: '/cancel',                                desc: 'Cancel a running query' },
   { cmd: '/capabilities', usage: '/capabilities',                          desc: 'List all available capabilities' },
@@ -507,10 +529,11 @@ const SUBCOMMANDS = {
     { sub: 'current',       desc: 'Show the current runtime' },
   ],
   '/mode':    [
-    { sub: 'yolo',        desc: 'Enable auto-approval (no permission prompts)' },
+    { sub: 'elevated',    desc: 'Full access — auto-approve all actions (no prompts)' },
     { sub: 'restricted',  desc: 'Require approval for potentially destructive actions' },
-    { sub: 'current',     desc: 'Show the current mode' },
-    { sub: 'list',        desc: 'List available modes' },
+    { sub: 'sandboxed',   desc: 'Read-only sandbox — no writes, no network, no installs' },
+    { sub: 'current',     desc: 'Show the current permission mode' },
+    { sub: 'list',        desc: 'List available permission modes' },
   ],
 };
 
@@ -2816,8 +2839,9 @@ function buildJobForm(job) {
           <div class="form-group">
             <label>Mode</label>
             <select class="glass-input glass-select" name="mode">
-              <option value="restricted" ${(job?.mode === 'yolo') ? '' : 'selected'}>restricted (safe)</option>
-              <option value="yolo"       ${job?.mode === 'yolo' ? 'selected' : ''}>yolo (auto-approve)</option>
+              <option value="restricted" ${(job?.mode !== 'elevated' && job?.mode !== 'sandboxed') ? 'selected' : ''}>restricted (safe)</option>
+              <option value="elevated"   ${job?.mode === 'elevated' ? 'selected' : ''}>elevated (full access)</option>
+              <option value="sandboxed"  ${job?.mode === 'sandboxed' ? 'selected' : ''}>sandboxed (read-only)</option>
             </select>
           </div>
         </div>
