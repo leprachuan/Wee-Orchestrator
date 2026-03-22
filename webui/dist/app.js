@@ -202,12 +202,6 @@ function updateSessionMeta(data) {
   set('meta-model', model);
 
   // Mode pill mirrors the permissions mode
-  const modeEl = $('meta-mode');
-  const _pm = data?.permissions?.mode || 'restricted';
-  const _pmIcons = { elevated: '⚡', restricted: '🔒', sandboxed: '🏖️' };
-  modeEl.textContent = (_pmIcons[_pm] || '🔒') + ' ' + _pm;
-  modeEl.dataset.permMode = _pm;
-  modeEl.classList.remove('empty');
 
   // Permissions pill
   const permEl = $('meta-permissions');
@@ -362,33 +356,6 @@ const PILL_OPTIONS = {
         return opts;
       } catch (e) {
         return [{ label: '📋 list models', cmd: '/model list' }];
-      }
-    },
-  },
-  'meta-mode': {
-    label: 'Permission Mode',
-    options: null,
-    dynamicLoad: async () => {
-      try {
-        const data = await apiRequest('GET', '/permissions/templates');
-        return (data.templates || []).map(t => ({
-          label: t.icon + ' ' + t.label,
-          value: t.mode,
-          cmd: null,
-          action: async () => {
-            if (!STATE.currentSessionId) return;
-            try {
-              await apiRequest('PUT', '/sessions/' + STATE.currentSessionId + '/permissions', { mode: t.mode });
-              fetchAndUpdateMeta(STATE.currentSessionId);
-            } catch (e) { console.error('Failed to set permissions:', e); }
-          },
-        }));
-      } catch (e) {
-        return [
-          { label: '⚡ Elevated', value: 'elevated', action: async () => { if (STATE.currentSessionId) { await apiRequest('PUT', '/sessions/' + STATE.currentSessionId + '/permissions', { mode: 'elevated' }); fetchAndUpdateMeta(STATE.currentSessionId); } } },
-          { label: '🔒 Restricted', value: 'restricted', action: async () => { if (STATE.currentSessionId) { await apiRequest('PUT', '/sessions/' + STATE.currentSessionId + '/permissions', { mode: 'restricted' }); fetchAndUpdateMeta(STATE.currentSessionId); } } },
-          { label: '🏖️ Sandboxed', value: 'sandboxed', action: async () => { if (STATE.currentSessionId) { await apiRequest('PUT', '/sessions/' + STATE.currentSessionId + '/permissions', { mode: 'sandboxed' }); fetchAndUpdateMeta(STATE.currentSessionId); } } },
-        ];
       }
     },
   },
@@ -2392,7 +2359,7 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 
   // --- Meta pill popovers ---
-  ['meta-agent', 'meta-runtime', 'meta-model', 'meta-mode', 'meta-permissions'].forEach(id => {
+  ['meta-agent', 'meta-runtime', 'meta-model', 'meta-permissions'].forEach(id => {
     $(id).addEventListener('click', e => { e.stopPropagation(); showPillPopover($(id), id); });
   });
   document.addEventListener('mousedown', e => {

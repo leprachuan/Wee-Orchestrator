@@ -529,12 +529,6 @@ html, body {
 .meta-pill.meta-agent   { color: #f7d978; border-color: rgba(245,197,66,0.28); background: rgba(245,197,66,0.12); }
 .meta-pill.meta-runtime { color: #8df0ba; border-color: rgba(62,207,142,0.26); background: rgba(62,207,142,0.1); }
 .meta-pill.meta-model   { color: #dff6aa; border-color: rgba(210,245,163,0.2); background: rgba(171,209,91,0.12); }
-.meta-pill.meta-mode    { color: var(--text-muted); }
-.meta-pill.meta-mode.yolo {
-  color: var(--gold);
-  border-color: rgba(245,197,66,0.35);
-  background: rgba(245,197,66,0.12);
-}
 .meta-pill.meta-alerts {
   color: #60a5fa;
   border-color: rgba(96,165,250,0.25);
@@ -5818,9 +5812,6 @@ html, body {
   }
 
   /* Hide less important meta pills on narrow screens */
-  .meta-mode {
-    display: none;
-  }
 
   .meta-pill {
     padding: 1px 6px;
