@@ -13,7 +13,7 @@
   <link rel="icon" type="image/png" sizes="192x192" href="/static/icon-192.png" />
   <link rel="apple-touch-icon" href="/static/apple-touch-icon.png" />
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/highlight.js@11.9.0/styles/github-dark.min.css" />
-  <link rel="stylesheet" href="app.css?v=20260307glass" />
+  <link rel="stylesheet" href="app.css?v=20260321mobile4" />
 </head>
 <body>
   <!-- Auth overlay -->
@@ -108,6 +108,7 @@
           <span id="meta-runtime" class="meta-pill meta-runtime" title="Runtime">—</span>
           <span id="meta-model"   class="meta-pill meta-model"   title="Model">—</span>
           <span id="meta-mode"    class="meta-pill meta-mode"    title="Mode">restricted</span>
+          <span id="meta-permissions" class="meta-pill meta-permissions" title="Permissions">🔒 restricted</span>
 <button id="btn-nav-notifications" class="meta-pill meta-alerts" title="Alerts">🔔<span id="notif-badge" class="nav-badge notif-badge-red hidden">0</span></button>
         </div>
       </header>
@@ -550,6 +551,22 @@
 
         </div><!-- /Permissions -->
 
+
+        <!-- .env File Editor -->
+        <div class="asf-section">
+          <div class="asf-section-title">🔧 Environment Configuration (.env)</div>
+          <div class="asf-env-editor-wrap">
+            <div class="asf-env-toolbar">
+              <button id="btn-env-load" class="btn btn-ghost btn-xs">📥 Load</button>
+              <button id="btn-env-save" class="btn btn-primary btn-xs">💾 Save .env</button>
+              <button id="btn-env-restart" class="btn btn-ghost btn-xs asf-btn-restart" title="Restart all dev services">🔄 Restart Services</button>
+            </div>
+            <textarea id="asf-env-editor" class="glass-input asf-env-textarea" rows="12" placeholder="# Loading .env file..." spellcheck="false"></textarea>
+            <div id="asf-env-status" class="asf-env-status hidden"></div>
+            <p class="asf-env-warning">⚠️ Changes to .env require a service restart to take effect.</p>
+          </div>
+        </div>
+
         <!-- Danger Zone -->
         <div class="asf-section asf-danger-section">
           <div class="asf-section-title">⚠️ Danger Zone</div>
@@ -603,6 +620,6 @@
   <script src="https://cdn.jsdelivr.net/npm/highlight.js@11.9.0/lib/languages/bash.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/highlight.js@11.9.0/lib/languages/json.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/highlight.js@11.9.0/lib/languages/yaml.min.js"></script>
-  <script src="app.js?v=20260301tabs" type="module"></script>
+  <script src="app.js?v=20260321mobile4" type="module"></script>
 </body>
 </html>

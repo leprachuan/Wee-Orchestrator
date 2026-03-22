@@ -1910,13 +1910,17 @@ html, body {
     top: 0;
     left: 0;
     right: 0;
-    bottom: 0;
+    bottom: 56px; /* above mobile tab bar */
     width: 100%;
     border-right: none;
     border-bottom: 1px solid var(--glass-border);
-    z-index: 100;
+    z-index: 300;
     transform: translateX(0);
     transition: transform 0.25s ease;
+    /* Fully opaque background to prevent content bleed-through */
+    background: rgb(9, 16, 24);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
   }
 
   .sidebar.collapsed {
@@ -2005,11 +2009,16 @@ html, body {
   .session-preview { font-size: 10px; }
 
   .sidebar-footer {
-    padding: 10px 12px;
+    padding: 10px 12px 6px;
     font-size: 12px;
   }
 
   .sidebar-user { font-size: 11px; }
+
+  /* Sidebar toolbar (Settings/Logs) — visible in sidebar, no overlap with tab bar */
+  .sidebar-toolbar {
+    padding: 6px 12px 8px;
+  }
 
   /* Main panel adjustments — leave bottom space for mobile tab bar */
   .main-panel {
@@ -2024,6 +2033,100 @@ html, body {
 
   .main-panel.hidden {
     display: none !important;
+  }
+
+  /* Background Tasks & Scheduler panels — same positioning as main-panel on mobile */
+  .background-panel {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 56px;
+    z-index: 250;
+    background: rgb(9, 16, 24);
+  }
+
+  .scheduler-panel {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 56px;
+    z-index: 250;
+    background: rgb(9, 16, 24);
+  }
+
+  /* Background Tasks header on mobile */
+  .bg-header {
+    padding: 0 12px;
+    height: var(--header-height);
+    gap: 8px;
+  }
+
+  .bg-title {
+    font-size: 15px;
+  }
+
+  /* Background Tasks detail on mobile */
+  .bg-detail {
+    border-radius: 0;
+  }
+
+  .bg-detail-header {
+    padding: 10px 14px;
+  }
+
+  .bg-detail-header h3 {
+    font-size: 13px;
+  }
+
+  .bg-detail-body {
+    padding: 0;
+    font-size: 12px;
+  }
+
+  .bg-detail-meta-row {
+    flex-wrap: wrap;
+    gap: 4px;
+  }
+
+  .bg-detail-prompt {
+    font-size: 11px;
+    padding: 10px;
+    max-height: 100px;
+  }
+
+  .bg-detail-output {
+    font-size: 10px;
+    padding: 10px;
+    max-height: none;
+    flex: 1;
+    overflow-y: auto;
+    border-radius: var(--radius-sm);
+  }
+
+  /* Scheduler header on mobile */
+  .sched-header {
+    padding: 8px 12px;
+    gap: 6px;
+  }
+
+  .sched-title {
+    font-size: 15px;
+  }
+
+  /* Scheduler detail full-screen overlay on mobile */
+  .sched-detail {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 56px;
+    width: 100%;
+    z-index: 20;
+    border-radius: 0;
+    background: rgb(9, 16, 24);
+    overflow-y: auto;
   }
 
   /* Always show sidebar toggle on mobile */
@@ -3925,10 +4028,14 @@ html, body {
     top: auto;
     right: 0;
     bottom: 56px; /* above mobile tab bar */
-    height: 65vh;
+    height: 70vh;
     border-left: none;
     border-top: 1px solid var(--glass-border);
     box-shadow: 0 -8px 32px rgba(0,0,0,0.4);
+    background: rgb(9, 16, 24);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    z-index: 110;
   }
   .notification-panel.notif-hidden {
     transform: translateY(100%);
@@ -5485,43 +5592,67 @@ html, body {
   overflow-y: auto;
 }
 
-/* Streaming tool indicator (inline in chat) */
-/* Inline tool call spinning gear icons */
+/* Streaming tool indicator — interleaved tool call blocks */
 @keyframes toolSpin {
   from { transform: rotate(0deg); }
   to { transform: rotate(360deg); }
 }
 
-/* Container appended at end of streaming bubble */
-.stream-inline-tools {
-  display: inline-block;
-  margin-left: 2px;
-}
+/* Legacy: keep for any remaining references (inline in bubble) */
+.stream-inline-tools { display: none; }
+.tool-inline-icon { display: none; }
+.tool-inline-icon .tool-name { display: none; }
+.tool-gear { display: none; }
 
-/* Each active tool call */
-.tool-inline-icon {
-  display: inline-flex;
+/* ─── Tool calls rendered inside the streaming bubble ─── */
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+.tc-line {
+  display: flex;
   align-items: center;
-  gap: 3px;
+  gap: 6px;
+  margin: 4px 0;
   font-size: 12px;
   color: var(--text-muted, #6b7280);
-  opacity: 1;
-  margin-right: 4px;
-  vertical-align: middle;
+  padding: 2px 0;
 }
-
-.tool-inline-icon .tool-name {
+.tc-spinner {
+  font-size: 12px;
+  display: inline-block;
+  flex-shrink: 0;
+}
+.tc-spinner.spinning {
+  animation: spin 1.2s linear infinite;
+}
+.tc-name {
+  font-weight: 600;
+  color: var(--text-secondary, #d1d5db);
+  font-size: 12px;
+  flex-shrink: 0;
+}
+.tc-input {
   font-family: var(--font-mono, monospace);
   font-size: 11px;
-  color: var(--accent, #3ecf8e);
-}
-
-/* Spinning gear element */
-.tool-gear {
+  color: var(--text-muted, #6b7280);
+  background: rgba(255,255,255,0.06);
+  padding: 1px 5px;
+  border-radius: 3px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 350px;
   display: inline-block;
-  animation: toolSpin 2s linear infinite;
-  line-height: 1;
 }
+.tc-status {
+  font-size: 11px;
+  flex-shrink: 0;
+}
+.tc-status.running { color: #f5c542; }
+.tc-status.done { color: #3ecf8e; }
+/* Hide old standalone row */
+.tool-call-row { display: none; }
 
 /* Background task log: tool call line marker */
 .bg-tool-line {
@@ -5599,4 +5730,384 @@ html, body {
   padding: 4px 8px;
   font-size: 12px;
   opacity: 0.8;
+}
+/* ============================================
+   MOBILE RESPONSIVE FIXES — 2026-03-21
+   ============================================ */
+
+/* --- Logs panel mobile (768px) --- */
+@media (max-width: 768px) {
+  .logs-panel {
+    bottom: 56px; /* above mobile tab bar */
+    height: calc(100vh - 56px);
+    z-index: 8000;
+    background: rgb(9, 16, 24);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+  }
+
+  .logs-header {
+    padding: 8px 10px;
+    gap: 6px;
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .logs-title {
+    font-size: 0.85rem;
+  }
+
+  .logs-controls {
+    gap: 6px;
+    flex-wrap: wrap;
+  }
+
+  .logs-select {
+    max-width: none;
+    width: 100%;
+    font-size: 0.8rem;
+    padding: 8px 10px;
+    min-height: 36px;
+  }
+
+  .logs-search-input {
+    max-width: none;
+    width: 100%;
+    font-size: 0.8rem;
+    padding: 8px 10px;
+    min-height: 36px;
+  }
+
+  .logs-date-input {
+    max-width: none;
+    width: 100%;
+    font-size: 0.8rem;
+    padding: 6px 10px;
+    min-height: 36px;
+  }
+
+  .logs-live-label {
+    font-size: 0.8rem;
+    padding: 4px 0;
+  }
+
+  .logs-output {
+    padding: 8px 10px;
+    font-size: 0.72rem;
+    line-height: 1.5;
+    white-space: pre-wrap;
+    word-break: break-all;
+    overflow-x: hidden;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .logs-close-btn,
+  .logs-toggle-btn {
+    min-width: 36px;
+    min-height: 36px;
+  }
+}
+
+/* --- Chat header meta pills — better wrapping on mobile --- */
+@media (max-width: 768px) {
+  .session-meta {
+    gap: 3px;
+    flex-wrap: wrap;
+    max-width: calc(100vw - 120px);
+    overflow: hidden;
+  }
+
+  /* Hide less important meta pills on narrow screens */
+  .meta-mode {
+    display: none;
+  }
+
+  .meta-pill {
+    padding: 1px 6px;
+    font-size: 9px;
+    white-space: nowrap;
+  }
+
+  .chat-header-info {
+    min-width: 0;
+    overflow: hidden;
+  }
+
+  .chat-session-id {
+    max-width: 80px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+}
+
+/* --- File viewer on mobile --- */
+@media (max-width: 768px) {
+  .file-viewer-panel {
+    width: 100vw;
+    bottom: 56px;
+    background: rgb(9, 16, 24);
+  }
+
+  .todo-details-panel {
+    width: 100vw;
+    bottom: 56px;
+    background: rgb(9, 16, 24);
+  }
+}
+
+/* --- Landscape mode on mobile --- */
+@media (max-width: 768px) and (max-height: 500px) {
+  .sidebar {
+    bottom: 48px;
+  }
+
+  .main-panel,
+  .background-panel,
+  .scheduler-panel {
+    bottom: 48px;
+  }
+
+  .mobile-tab-bar {
+    height: 48px;
+  }
+}
+
+/* --- 480px (small phones) extra fixes --- */
+@media (max-width: 480px) {
+  /* Background Tasks detail on small screens */
+  .bg-detail-meta-label {
+    font-size: 10px;
+    min-width: 60px;
+  }
+
+  .bg-detail-meta-value {
+    font-size: 12px;
+  }
+
+  .bg-detail-output {
+    font-size: 10px;
+    padding: 8px;
+  }
+
+  .bg-header {
+    padding: 0 8px;
+  }
+
+  .bg-title {
+    font-size: 14px;
+  }
+
+  /* Scheduler on small phones */
+  .sched-header {
+    padding: 6px 8px;
+    gap: 4px;
+  }
+
+  .sched-title {
+    font-size: 14px;
+  }
+
+  .sched-job-card {
+    margin: 4px;
+    padding: 8px;
+  }
+
+  /* Logs on small phones */
+  .logs-output {
+    font-size: 0.68rem;
+    padding: 6px 8px;
+  }
+
+  .logs-header {
+    padding: 6px 8px;
+    gap: 4px;
+  }
+
+  /* Meta pills */
+  .session-meta {
+    max-width: calc(100vw - 100px);
+  }
+
+  .meta-runtime {
+    display: none;
+  }
+}
+
+/* --- Background Task detail tabs on mobile --- */
+@media (max-width: 768px) {
+  .bg-detail-tabs {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    gap: 0;
+    padding: 0 8px;
+  }
+
+  .bg-tab {
+    font-size: 12px;
+    padding: 8px 12px;
+    white-space: nowrap;
+    flex-shrink: 0;
+  }
+
+  /* Ensure bg-detail body scrolls properly */
+  .bg-detail-body {
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+    padding: 10px 12px;
+  }
+
+  /* Background Task detail actions on mobile */
+  .bg-detail-actions {
+    padding: 8px 12px;
+    flex-wrap: wrap;
+    gap: 6px;
+    position: sticky;
+    bottom: 0;
+    background: rgb(9, 16, 24);
+  }
+}
+
+/* --- Canvas panel on mobile --- */
+@media (max-width: 768px) {
+  .canvas-panel {
+    width: 100vw;
+    bottom: 56px;
+    visibility: hidden;
+  }
+
+  .canvas-panel.canvas-open {
+    visibility: visible;
+  }
+
+  .canvas-edge-tab {
+    display: none;
+  }
+}
+
+/* --- Request queue / TODO panel transitions on mobile --- */
+@media (max-width: 768px) {
+  .request-queue-panel.mobile-panel-active {
+    background: rgb(9, 16, 24);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+  }
+}
+/* --- Fix bg-detail-split bleed-through on mobile --- */
+@media (max-width: 768px) {
+  .bg-detail.glass-panel {
+    background: rgb(14, 22, 20) !important;
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+  }
+  .bg-detail-split {
+    flex-direction: column !important;
+  }
+  .bg-detail-left {
+    flex: none !important;
+    width: 100% !important;
+    max-width: 100% !important;
+  }
+  .bg-detail-right {
+    flex: none !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    border-left: none !important;
+    border-top: 1px solid var(--glass-border);
+  }
+}
+
+/* --- Mobile: Force all panels fully opaque, no bleed-through --- */
+@media (max-width: 768px) {
+  .background-panel {
+    overflow: hidden !important;
+  }
+  .background-panel .bg-detail {
+    background: rgb(14, 22, 20) !important;
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+    overflow: hidden !important;
+  }
+  .background-panel .glass-panel,
+  .scheduler-panel .glass-panel {
+    background: rgb(14, 22, 20) !important;
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+  }
+}
+
+
+/* ── Session Permissions Pill ──────────────────────────────────────────────── */
+.meta-permissions {
+  cursor: pointer;
+  font-size: 0.72rem;
+  transition: background 0.2s, color 0.2s;
+}
+.meta-permissions.perm-elevated {
+  background: rgba(255, 165, 0, 0.25);
+  color: #ffb347;
+  border-color: rgba(255, 165, 0, 0.4);
+}
+.meta-permissions.perm-sandboxed {
+  background: rgba(100, 149, 237, 0.25);
+  color: #87CEFA;
+  border-color: rgba(100, 149, 237, 0.4);
+}
+
+/* ── .env Editor ───────────────────────────────────────────────────────────── */
+.asf-env-editor-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.asf-env-toolbar {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.asf-env-textarea {
+  font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+  font-size: 0.8rem;
+  line-height: 1.5;
+  min-height: 200px;
+  resize: vertical;
+  white-space: pre;
+  overflow-x: auto;
+  tab-size: 4;
+  background: rgba(0, 0, 0, 0.3);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 8px;
+  padding: 12px;
+  color: #e0e0e0;
+}
+.asf-env-textarea:focus {
+  border-color: rgba(16, 185, 129, 0.5);
+  outline: none;
+  box-shadow: 0 0 0 2px rgba(16, 185, 129, 0.15);
+}
+.asf-env-status {
+  font-size: 0.78rem;
+  padding: 6px 10px;
+  border-radius: 6px;
+  transition: opacity 0.3s;
+}
+.asf-env-ok {
+  background: rgba(16, 185, 129, 0.15);
+  color: #6ee7b7;
+  border: 1px solid rgba(16, 185, 129, 0.3);
+}
+.asf-env-error {
+  background: rgba(239, 68, 68, 0.15);
+  color: #fca5a5;
+  border: 1px solid rgba(239, 68, 68, 0.3);
+}
+.asf-env-warning {
+  font-size: 0.75rem;
+  color: #fbbf24;
+  opacity: 0.8;
+  margin: 0;
+}
+.asf-btn-restart {
+  margin-left: auto;
 }

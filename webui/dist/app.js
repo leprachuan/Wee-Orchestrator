@@ -207,6 +207,20 @@ function updateSessionMeta(data) {
   modeEl.classList.toggle('yolo', isYolo);
   modeEl.classList.remove('empty');
 
+  // Permissions pill
+  const permEl = $('meta-permissions');
+  if (permEl) {
+    const perms = data?.permissions;
+    const permMode = perms?.mode || 'restricted';
+    const permIcons = { elevated: '⚡', restricted: '🔒', sandboxed: '🏖️' };
+    const permLabels = { elevated: 'Full Access', restricted: 'Restricted', sandboxed: 'Sandboxed' };
+    permEl.textContent = (permIcons[permMode] || '🔒') + ' ' + (permLabels[permMode] || permMode);
+    permEl.dataset.permMode = permMode;
+    permEl.classList.remove('empty');
+    permEl.classList.toggle('perm-elevated', permMode === 'elevated');
+    permEl.classList.toggle('perm-sandboxed', permMode === 'sandboxed');
+  }
+
 
   // Refresh TODOs when agent changes
   if (typeof fetchAndRenderTodos === 'function') {
@@ -356,6 +370,33 @@ const PILL_OPTIONS = {
       { label: '🔒 restricted',     cmd: '/mode restricted' },
     ],
   },
+  'meta-permissions': {
+    label: 'Session Permissions',
+    options: null,
+    dynamicLoad: async () => {
+      try {
+        const data = await apiRequest('GET', '/permissions/templates');
+        return (data.templates || []).map(t => ({
+          label: t.icon + ' ' + t.label,
+          value: t.mode,
+          cmd: null,
+          action: async () => {
+            if (!STATE.currentSessionId) return;
+            try {
+              await apiRequest('PUT', '/sessions/' + STATE.currentSessionId + '/permissions', { mode: t.mode });
+              fetchAndUpdateMeta(STATE.currentSessionId);
+            } catch (e) { console.error('Failed to set permissions:', e); }
+          },
+        }));
+      } catch (e) {
+        return [
+          { label: '⚡ Full Access', value: 'elevated', action: async () => { if (STATE.currentSessionId) { await apiRequest('PUT', '/sessions/' + STATE.currentSessionId + '/permissions', { mode: 'elevated' }); fetchAndUpdateMeta(STATE.currentSessionId); } } },
+          { label: '🔒 Restricted', value: 'restricted', action: async () => { if (STATE.currentSessionId) { await apiRequest('PUT', '/sessions/' + STATE.currentSessionId + '/permissions', { mode: 'restricted' }); fetchAndUpdateMeta(STATE.currentSessionId); } } },
+          { label: '🏖️ Sandboxed', value: 'sandboxed', action: async () => { if (STATE.currentSessionId) { await apiRequest('PUT', '/sessions/' + STATE.currentSessionId + '/permissions', { mode: 'sandboxed' }); fetchAndUpdateMeta(STATE.currentSessionId); } } },
+        ];
+      }
+    },
+  },
 };
 
 let _pillPopover = null;
@@ -375,19 +416,19 @@ function buildPopoverDOM(pillEl, label, options) {
     const item = document.createElement('button');
     item.className = 'pill-popover-item';
     item.innerHTML = opt.label;
-    if (!opt.cmd) { item.disabled = true; item.style.opacity = '0.5'; }
+    if (!opt.cmd && !opt.action) { item.disabled = true; item.style.opacity = '0.5'; }
     item.addEventListener('mousedown', e => {
       e.preventDefault();
-      if (!opt.cmd) return;
+      if (!opt.cmd && !opt.action) return;
       hidePillPopover();
-      sendCommand(opt.cmd);
+      if (opt.action) { opt.action(); } else { sendCommand(opt.cmd); }
     });
     item.addEventListener('click', e => {
       if (!isMobileViewport()) return;
       e.preventDefault();
-      if (!opt.cmd) return;
+      if (!opt.cmd && !opt.action) return;
       hidePillPopover();
-      sendCommand(opt.cmd);
+      if (opt.action) { opt.action(); } else { sendCommand(opt.cmd); }
     });
     popover.appendChild(item);
   });
@@ -1418,26 +1459,64 @@ async function sendMessage() {
 
 
 /**
- * Refresh inline spinning gear tool icons at the bottom of a streaming bubble.
- * toolsMap: { key: toolName } — one entry per active tool call.
+ * Extract a human-readable summary from a tool call input payload.
  */
-function refreshInlineToolIcons(bubble, toolsMap) {
-  if (!bubble) return;
-  let cont = bubble.querySelector('.stream-inline-tools');
-  const entries = Object.entries(toolsMap);
-  if (!entries.length) {
-    if (cont) cont.remove();
-    return;
-  }
-  const html = entries.map(([, name]) =>
-    '<span class="tool-inline-icon"><span class="tool-gear">\u2699\ufe0f</span> <span class="tool-name">' + escHtml(name) + '</span>\u2026</span>'
-  ).join('');
-  if (cont) {
-    cont.innerHTML = html;
-  } else {
-    bubble.insertAdjacentHTML('beforeend', '<span class="stream-inline-tools">' + html + '</span>');
+function getToolInputSummary(toolName, input) {
+  if (!input) return '';
+  try {
+    const inp = typeof input === 'string' ? JSON.parse(input) : input;
+    if (/^bash$/i.test(toolName)) return (inp.command || inp.cmd || JSON.stringify(inp)).substring(0, 100);
+    if (/read|write|edit|glob|view|create/i.test(toolName)) return (inp.file_path || inp.path || inp.pattern || JSON.stringify(inp)).substring(0, 100);
+    if (/fetch|web/i.test(toolName)) return (inp.url || JSON.stringify(inp)).substring(0, 100);
+    if (/grep/i.test(toolName)) return (inp.pattern || JSON.stringify(inp)).substring(0, 100);
+    return JSON.stringify(inp).substring(0, 100);
+  } catch {
+    return String(input).substring(0, 100);
   }
 }
+
+/**
+ * Insert an interleaved tool-call block row into the messages container.
+ */
+function insertToolCallBlock(streamBubble, toolId, toolName, inputSummary) {
+  if (!streamBubble) return;
+  const line = document.createElement('div');
+  line.className = 'tc-line';
+  line.id = 'tc-' + toolId;
+  line.innerHTML =
+    '<span class="tc-spinner spinning">⚙️</span>' +
+    '<span class="tc-name">' + escHtml(toolName) + '</span>' +
+    (inputSummary ? '<code class="tc-input">' + escHtml(inputSummary) + '</code>' : '') +
+    '<span class="tc-status running">running…</span>';
+  streamBubble.appendChild(line);
+  line.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+}
+
+/**
+ * Mark a tool-call block as complete (stop spinner, show checkmark).
+ */
+function completeToolCallBlock(toolId) {
+  const row = document.getElementById('tc-' + toolId);
+  if (!row) return;
+  const spinner = row.querySelector('.tc-spinner');
+  if (spinner) spinner.classList.remove('spinning');
+  const status = row.querySelector('.tc-status');
+  if (status) { status.textContent = '✓'; status.className = 'tc-status done'; }
+}
+
+/**
+ * Stop all remaining active tool call spinners (cleanup on done).
+ */
+function cleanupAllToolSpinners() {
+  document.querySelectorAll('.tc-spinner.spinning').forEach(el => {
+    el.classList.remove('spinning');
+    const status = el.closest('.tool-call-block')?.querySelector('.tc-status');
+    if (status) { status.textContent = '✓'; status.className = 'tc-status done'; }
+  });
+}
+
+/* Legacy stub — kept so any stale references don't throw */
+function refreshInlineToolIcons() {}
 
 /**
  * Detect whether a raw output line looks like a tool call invocation.
@@ -1530,30 +1609,45 @@ async function sendMessageStreaming(query, sessionId) {
               .replace(/\n\n+/g, '</p><p>')  // paragraph breaks
               .replace(/\n/g, '<br>');      // line breaks
             streamBubble.innerHTML = formatted ? `<p>${formatted}</p>` : '';
-            refreshInlineToolIcons(streamBubble, activeStreamTools);
             scrollToBottom();
 
           } else if (evt.type === 'tool_call') {
-            // Tool call — inject inline gear icon at current bubble position
-            if (streamBubble) {
-              const evtKind = evt.event || 'detected';
-              const toolName = evt.name || 'tool';
-              const key = evt.id || toolName;
-              if (evtKind === 'start' || evtKind === 'detected' || evtKind === 'input_complete') {
+            // Tool call — interleaved block in messages thread
+            const evtKind = evt.event || 'detected';
+            const toolName = evt.name || 'Tool';
+            const key = evt.id || toolName;
+            if (evtKind === 'input_complete' || evtKind === 'start') {
+              if (!activeStreamTools[key]) {
                 activeStreamTools[key] = toolName;
-                refreshInlineToolIcons(streamBubble, activeStreamTools);
-              } else if (evtKind === 'result') {
-                delete activeStreamTools[key];
-                const cont = streamBubble.querySelector('.stream-inline-tools');
-                if (cont) {
-                  cont.style.transition = 'opacity 0.3s';
-                  cont.style.opacity = '0';
-                  setTimeout(() => refreshInlineToolIcons(streamBubble, activeStreamTools), 320);
+                insertToolCallBlock(streamBubble, key, toolName, getToolInputSummary(toolName, evt.input));
+              } else if (evtKind === 'input_complete' && evt.input) {
+                // Update input summary if we get it later
+                const row = document.getElementById('tc-' + key);
+                if (row) {
+                  let inp = row.querySelector('.tc-input');
+                  const summary = getToolInputSummary(toolName, evt.input);
+                  if (summary) {
+                    if (!inp) {
+                      inp = document.createElement('span');
+                      inp.className = 'tc-input';
+                      const status = row.querySelector('.tc-status');
+                      status?.parentNode?.insertBefore(inp, status);
+                    }
+                    inp.textContent = summary;
+                  }
                 }
               }
+            } else if (evtKind === 'detected' && !activeStreamTools[key]) {
+              activeStreamTools[key] = toolName;
+              insertToolCallBlock(streamBubble, key, toolName, getToolInputSummary(toolName, evt.input));
+            } else if (evtKind === 'result') {
+              delete activeStreamTools[key];
+              completeToolCallBlock(key);
             }
 
           } else if (evt.type === 'done') {
+            // Stop all remaining tool spinners
+            cleanupAllToolSpinners();
             // Use accumulated streaming text when available (captures all
             // turns in multi-tool responses); fall back to done payload.
             const finalContent = rawText.trim()
@@ -1672,30 +1766,43 @@ async function reconnectToStream(sessionId) {
                 .replace(/\n\n+/g, '</p><p>')
                 .replace(/\n/g, '<br>');
               streamBubble.innerHTML = formatted ? `<p>${formatted}</p>` : '';
-              refreshInlineToolIcons(streamBubble, activeStreamTools);
               scrollToBottom();
 
             } else if (evt.type === 'tool_call') {
-              // Tool call — inject inline gear icon at current bubble position
-              if (streamBubble) {
-                const evtKind = evt.event || 'detected';
-                const toolName = evt.name || 'tool';
-                const key = evt.id || toolName;
-                if (evtKind === 'start' || evtKind === 'detected' || evtKind === 'input_complete') {
+              // Tool call — interleaved block in messages thread
+              const evtKind = evt.event || 'detected';
+              const toolName = evt.name || 'Tool';
+              const key = evt.id || toolName;
+              if (evtKind === 'input_complete' || evtKind === 'start') {
+                if (!activeStreamTools[key]) {
                   activeStreamTools[key] = toolName;
-                  refreshInlineToolIcons(streamBubble, activeStreamTools);
-                } else if (evtKind === 'result') {
-                  delete activeStreamTools[key];
-                  const cont = streamBubble.querySelector('.stream-inline-tools');
-                  if (cont) {
-                    cont.style.transition = 'opacity 0.3s';
-                    cont.style.opacity = '0';
-                    setTimeout(() => refreshInlineToolIcons(streamBubble, activeStreamTools), 320);
+                  insertToolCallBlock(streamBubble, key, toolName, getToolInputSummary(toolName, evt.input));
+                } else if (evtKind === 'input_complete' && evt.input) {
+                  const row = document.getElementById('tc-' + key);
+                  if (row) {
+                    let inp = row.querySelector('.tc-input');
+                    const summary = getToolInputSummary(toolName, evt.input);
+                    if (summary) {
+                      if (!inp) {
+                        inp = document.createElement('span');
+                        inp.className = 'tc-input';
+                        const status = row.querySelector('.tc-status');
+                        status?.parentNode?.insertBefore(inp, status);
+                      }
+                      inp.textContent = summary;
+                    }
                   }
                 }
+              } else if (evtKind === 'detected' && !activeStreamTools[key]) {
+                activeStreamTools[key] = toolName;
+                insertToolCallBlock(streamBubble, key, toolName, getToolInputSummary(toolName, evt.input));
+              } else if (evtKind === 'result') {
+                delete activeStreamTools[key];
+                completeToolCallBlock(key);
               }
 
             } else if (evt.type === 'done') {
+              cleanupAllToolSpinners();
               const finalContent = rawText.trim()
                 ? rawText
                 : (evt.response || '(no response)');
@@ -2262,7 +2369,7 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 
   // --- Meta pill popovers ---
-  ['meta-agent', 'meta-runtime', 'meta-model', 'meta-mode'].forEach(id => {
+  ['meta-agent', 'meta-runtime', 'meta-model', 'meta-mode', 'meta-permissions'].forEach(id => {
     $(id).addEventListener('click', e => { e.stopPropagation(); showPillPopover($(id), id); });
   });
   document.addEventListener('mousedown', e => {
@@ -2376,7 +2483,8 @@ function showSchedulerPanel() {
   hideNotificationPanel();
   loadSchedulerJobs();
   loadSchedulerStatus();
-  if (isMobileViewport()) toggleSidebar(false);
+  // On mobile, keep sidebar open so job list is visible immediately
+  if (isMobileViewport()) toggleSidebar(true);
 }
 
 function showBackgroundPanel() {
@@ -2394,7 +2502,8 @@ function showBackgroundPanel() {
   $('btn-nav-notifications').classList.remove('active');
   hideNotificationPanel();
   loadBackgroundTasks();
-  if (isMobileViewport()) toggleSidebar(false);
+  // On mobile, keep sidebar open so task list is visible immediately
+  if (isMobileViewport()) toggleSidebar(true);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -2488,6 +2597,8 @@ window.selectSchedJob = function(jobId) {
   SCHED.selectedJobId = jobId;
   renderSchedJobsSidebar();
   openJobDetail(jobId);
+  // On mobile, close sidebar to show detail panel
+  if (isMobileViewport()) toggleSidebar(false);
 };
 
 function fmtDate(iso) {
@@ -3199,6 +3310,8 @@ window.selectBgTask = function(taskId) {
   BG.detailRenderedFinal = false;
   renderBgTasks();
   loadBgTaskDetail(taskId);
+  // On mobile, close sidebar to show detail panel
+  if (isMobileViewport()) toggleSidebar(false);
 };
 
 async function loadBgTaskDetail(taskId) {
@@ -5828,6 +5941,75 @@ if (document.readyState !== 'loading') {
         updateModeBadge(permModeEl.value);
         updatePermChangedIndicator();
       });
+    }
+  }
+
+
+  /* ── .env File Editor ──────────────────────────────────────────────────── */
+  const envEditor   = document.getElementById('asf-env-editor');
+  const btnEnvLoad  = document.getElementById('btn-env-load');
+  const btnEnvSave  = document.getElementById('btn-env-save');
+  const btnEnvRestart = document.getElementById('btn-env-restart');
+  const envStatus   = document.getElementById('asf-env-status');
+
+  function showEnvStatus(msg, isError) {
+    if (!envStatus) return;
+    envStatus.textContent = msg;
+    envStatus.className = 'asf-env-status' + (isError ? ' asf-env-error' : ' asf-env-ok');
+    envStatus.classList.remove('hidden');
+    setTimeout(() => envStatus.classList.add('hidden'), 5000);
+  }
+
+  async function loadEnvFile() {
+    if (!envEditor) return;
+    envEditor.value = 'Loading...';
+    try {
+      const data = await apiRequest('GET', '/settings/env');
+      envEditor.value = data.content || '';
+      if (!data.exists) showEnvStatus('No .env file found — a new one will be created on save.', false);
+    } catch (e) {
+      envEditor.value = '';
+      showEnvStatus('Failed to load .env: ' + e.message, true);
+    }
+  }
+
+  async function saveEnvFile() {
+    if (!envEditor) return;
+    try {
+      const data = await apiRequest('PUT', '/settings/env', { content: envEditor.value });
+      showEnvStatus('✓ .env saved. ' + (data.warning || ''), false);
+    } catch (e) {
+      showEnvStatus('Failed to save: ' + e.message, true);
+    }
+  }
+
+  async function restartDevServices() {
+    if (!confirm('Restart all dev services? The API will briefly disconnect.')) return;
+    showEnvStatus('Restarting services...', false);
+    try {
+      const data = await apiRequest('POST', '/settings/restart-services');
+      const summary = Object.entries(data.results || {}).map(([s, r]) => s.replace('.service', '') + ': ' + r).join('\n');
+      showEnvStatus('✓ ' + summary, false);
+    } catch (e) {
+      showEnvStatus('Restart request sent. API may reconnect shortly.', false);
+    }
+  }
+
+  if (btnEnvLoad)    btnEnvLoad.addEventListener('click', loadEnvFile);
+  if (btnEnvSave)    btnEnvSave.addEventListener('click', saveEnvFile);
+  if (btnEnvRestart) btnEnvRestart.addEventListener('click', restartDevServices);
+
+  // Auto-load .env when settings panel opens
+  const _origOpenSettings = typeof openSettings === 'function' ? openSettings : null;
+  if (_origOpenSettings) {
+    // Monkey-patch openSettings to also load .env
+    const _wrappedOpen = async function() {
+      await _origOpenSettings();
+      loadEnvFile();
+    };
+    if (btnSettings) {
+      btnSettings.removeEventListener('click', openSettings);
+      btnSettings.addEventListener('click', _wrappedOpen);
     }
   }
 

@@ -26,6 +26,97 @@ import threading
 SCRIPT_BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
+# ---------------------------------------------------------------------------
+# Credential sanitization for UI display
+# ---------------------------------------------------------------------------
+
+# Pre-compiled patterns for sensitive header detection in curl/HTTP commands
+_SENSITIVE_HEADER_RE = re.compile(
+    r"""(-H\s+["'])"""
+    r"""(Authorization|X-API-Key|X-Auth-Token|X-Auth-Secret|"""
+    r"""X-Access-Token|Proxy-Authorization|api-key|api_key"""
+    r"""):\s*[^"']*(["'])""",
+    re.IGNORECASE,
+)
+_SENSITIVE_HEADER_GENERIC_RE = re.compile(
+    r"""(-H\s+["'])([^"']*(?:password|secret|token|key|credential|bearer)[^:]*):\s*[^"']*(["'])""",
+    re.IGNORECASE,
+)
+_BEARER_TOKEN_RE = re.compile(
+    r"""(Bearer\s+)\S+""",
+    re.IGNORECASE,
+)
+_BASIC_AUTH_RE = re.compile(
+    r"""(Basic\s+)\S+""",
+    re.IGNORECASE,
+)
+_COOKIE_HEADER_RE = re.compile(
+    r"""(-H\s+["'])Cookie:\s*[^"']*(["'])""",
+    re.IGNORECASE,
+)
+_CURL_USER_RE = re.compile(
+    r"""(-u\s+)(\S+)""",
+)
+
+
+def _sanitize_command_for_display(text: str) -> str:
+    """Redact sensitive headers and credentials from command strings for UI display.
+
+    Handles curl-style -H headers, Bearer/Basic auth tokens, cookies, and
+    -u user:password patterns.  Only modifies the display string — the actual
+    command executed is never altered.
+    """
+    if not isinstance(text, str) or not text:
+        return text
+    # Named sensitive headers: Authorization, X-API-Key, etc.
+    text = _SENSITIVE_HEADER_RE.sub(
+        lambda m: f'{m.group(1)}{m.group(2)}: [REDACTED]{m.group(3)}', text
+    )
+    # Cookie header
+    text = _COOKIE_HEADER_RE.sub(
+        lambda m: f'{m.group(1)}Cookie: [REDACTED]{m.group(2)}', text
+    )
+    # Generic headers containing password/secret/token/key
+    text = _SENSITIVE_HEADER_GENERIC_RE.sub(
+        lambda m: f'{m.group(1)}{m.group(2)}: [REDACTED]{m.group(3)}', text
+    )
+    # Inline Bearer / Basic tokens (e.g. in JSON or plain text)
+    text = _BEARER_TOKEN_RE.sub(r'\1[REDACTED]', text)
+    text = _BASIC_AUTH_RE.sub(r'\1[REDACTED]', text)
+    # curl -u user:password
+    text = _CURL_USER_RE.sub(r'\1[REDACTED]', text)
+    return text
+
+
+def _sanitize_tool_call_for_display(data: dict) -> dict:
+    """Return a shallow copy of a tool_call event dict with sensitive
+    credentials redacted from the ``input`` field.  Other fields are
+    passed through unchanged."""
+    if not isinstance(data, dict):
+        return data
+    inp = data.get("input")
+    if inp is None:
+        # Also check partial_json for streaming deltas
+        pj = data.get("partial_json")
+        if pj and isinstance(pj, str):
+            sanitized = dict(data)
+            sanitized["partial_json"] = _sanitize_command_for_display(pj)
+            return sanitized
+        return data
+    sanitized = dict(data)
+    if isinstance(inp, str):
+        sanitized["input"] = _sanitize_command_for_display(inp)
+    elif isinstance(inp, dict):
+        # Claude-style structured input — sanitize known fields
+        new_inp = dict(inp)
+        for field in ("command", "input", "code", "content", "url", "body"):
+            if field in new_inp and isinstance(new_inp[field], str):
+                new_inp[field] = _sanitize_command_for_display(new_inp[field])
+        sanitized["input"] = new_inp
+    return sanitized
+
+
+
 class RateLimiter:
     """In-memory per-IP rate limiter with sliding window."""
 
@@ -1696,6 +1787,7 @@ class SessionManager:
             "render_type": "markdown",
             "channel": channel,
             "last_activity": time.time(),
+            "permissions": None,  # Inherited from agent config on session create
         }
         
         # Store identity if provided, so we can find sessions by user later
@@ -4252,6 +4344,26 @@ User Request:
             )
             context_prompt = context_prompt + yolo_instruction
 
+        # Inject tool-call emission instructions so the orchestrator can track
+        # Devin tool usage.  Devin CLI -p mode suppresses intermediate output,
+        # so we instruct the model to emit lightweight markers we can parse.
+        tool_emission_instruction = (
+            "\n\n[TOOL CALL REPORTING — MANDATORY]\n"
+            "Before EVERY tool invocation, you MUST print a single marker line to stdout "
+            "in EXACTLY this format (no extra spaces, no wrapping):\n"
+            "  [TOOL_CALL] <tool_name> <brief_description>\n"
+            "Examples:\n"
+            "  [TOOL_CALL] exec Running ls -la in /opt\n"
+            "  [TOOL_CALL] read_file Reading /etc/hostname\n"
+            "  [TOOL_CALL] write_file Creating /tmp/test.txt\n"
+            "  [TOOL_CALL] edit_file Editing line 42 of agent_manager.py\n"
+            "  [TOOL_CALL] web_search Searching for Python asyncio docs\n"
+            "  [TOOL_CALL] shell Running git status\n"
+            "This is required for the orchestrator to track your tool usage.  "
+            "Do NOT skip this marker for any tool call."
+        )
+        context_prompt = context_prompt + tool_emission_instruction
+
         # -p is a boolean flag (print/non-interactive mode); prompt goes after --
         # Permission mode: dangerous (auto-approve all) for yolo, auto (read-only) otherwise
         permission_mode = "dangerous" if mode == "yolo" else "auto"
@@ -4276,6 +4388,22 @@ User Request:
         # After each run, capture and persist the most recent devin session UUID
         # so subsequent messages in this n8n session can resume it.
         self._save_devin_session_id(n8n_session_id, devin_bin, agent_dir)
+
+        # Devin CLI -p mode suppresses tool-call output from stdout, so we
+        # extract structured tool calls from Devin's session database and
+        # push them to the streaming queue for the WebUI tool panel.
+        devin_tool_calls = self._extract_devin_tool_calls(n8n_session_id)
+        if devin_tool_calls:
+            stream_info = self._stream_queues.get(n8n_session_id)
+            if stream_info:
+                stream_buffer = stream_info.get("buffer")
+                loop = stream_info.get("loop")
+                queue = stream_info.get("queue")
+                for tc_evt in devin_tool_calls:
+                    if stream_buffer:
+                        stream_buffer.push("tool_call", tc_evt)
+                    elif loop and queue:
+                        loop.call_soon_threadsafe(queue.put_nowait, ("tool_call", tc_evt))
 
         if "Error: Devin command failed" in output:
             return output
@@ -4313,6 +4441,84 @@ User Request:
             print(f"[Session] Stored devin session mapping: {n8n_session_id[:8]}... → {devin_sid[:8]}...", file=sys.stderr)
         except Exception as e:
             print(f"[Session] Warning: could not save devin session ID: {e}", file=sys.stderr)
+
+    def _extract_devin_tool_calls(self, n8n_session_id: str) -> list:
+        """Extract structured tool calls from Devin's session database.
+
+        Devin CLI -p mode suppresses intermediate tool-call output, but stores
+        full tool_calls in its SQLite DB at ~/.local/share/cognition/cli/sessions.db.
+        This method reads the most recent session's message_nodes to extract
+        tool calls that Devin executed.
+
+        Returns a list of dicts: [{"name": str, "input": str, "id": str, ...}]
+        """
+        import sqlite3
+        db_path = Path.home() / ".local" / "share" / "cognition" / "cli" / "sessions.db"
+        if not db_path.exists():
+            return []
+
+        # Get the devin session UUID for this orchestrator session
+        devin_sid = self._get_devin_session_id(n8n_session_id)
+        if not devin_sid:
+            # Fall back to most recent session
+            try:
+                devin_bin = self.devin_bin or "devin"
+                result = subprocess.run(
+                    [devin_bin, "list", "--format", "json"],
+                    capture_output=True, text=True, timeout=10,
+                )
+                sessions = json.loads(result.stdout)
+                if sessions:
+                    devin_sid = sessions[0].get("id")
+            except Exception:
+                pass
+        if not devin_sid:
+            return []
+
+        tool_calls = []
+        try:
+            conn = sqlite3.connect(str(db_path), timeout=5)
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT chat_message FROM message_nodes "
+                "WHERE session_id = ? ORDER BY node_id",
+                (devin_sid,)
+            )
+            for row in cursor.fetchall():
+                try:
+                    msg = json.loads(row["chat_message"])
+                    if msg.get("role") == "assistant" and msg.get("tool_calls"):
+                        for tc in msg["tool_calls"]:
+                            tool_name = tc.get("name", "tool")
+                            args = tc.get("arguments", {})
+                            if isinstance(args, str):
+                                try:
+                                    args = json.loads(args)
+                                except (json.JSONDecodeError, TypeError):
+                                    pass
+                            # Build a human-readable input summary
+                            if isinstance(args, dict):
+                                input_summary = " ".join(f"{v}" for v in args.values())[:200]
+                            else:
+                                input_summary = str(args)[:200]
+                            tool_calls.append({
+                                "id": tc.get("id", f"devin_{len(tool_calls)}"),
+                                "name": tool_name,
+                                "input": input_summary,
+                                "status": "completed",
+                                "runtime": "devin",
+                                "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                            })
+                except (json.JSONDecodeError, KeyError, TypeError):
+                    continue
+            conn.close()
+        except Exception as e:
+            print(f"[devin] Warning: could not extract tool calls from session DB: {e}", file=sys.stderr)
+
+        if tool_calls:
+            print(f"[devin] Extracted {len(tool_calls)} tool calls from session database", file=sys.stderr)
+        return tool_calls
 
     def session_exists(self, session_id: str, runtime: str, n8n_session_id: Optional[str] = None) -> bool:
         """Check if session state exists for runtime"""
@@ -5962,6 +6168,19 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
 
         if body.agent:
             session_mgr.update_session_field(session_id, "agent", body.agent)
+
+        # Inherit agent default permissions into session
+        effective_agent = body.agent or get_default_agent()
+        if effective_agent and effective_agent in session_mgr.AGENTS:
+            agent_cfg = session_mgr.AGENTS[effective_agent]
+            default_perms = agent_cfg.get("permissions", {
+                "mode": "restricted",
+                "directories": {"allow_read": [], "allow_write": [], "deny": []},
+                "tools": {"allow": ["*"], "deny": []},
+                "network": {"allow_urls": ["*"], "deny_urls": []},
+                "mcp": {"allow": [], "deny": ["*"]},
+            })
+            session_mgr.update_session_field(session_id, "permissions", default_perms)
         if body.model:
             session_mgr.update_session_field(session_id, "model", body.model)
         if body.runtime:
@@ -6195,7 +6414,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                                     # Fallback for non-Claude runtimes
                                     yield f"data: {_json.dumps({'type': 'chunk', 'text': data})}\n\n"
                             elif kind == "tool_call":
-                                yield f"data: {_json.dumps({'type': 'tool_call', **data})}\n\n"
+                                yield f"data: {_json.dumps({'type': 'tool_call', **_sanitize_tool_call_for_display(data)})}\n\n"
                             elif kind == "done":
                                 break  # subprocess finished; final result in future
                     except Exception as exc:
@@ -6302,7 +6521,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                         else:
                             yield f"data: {_json.dumps({'type': 'chunk', 'text': data})}\n\n"
                     elif kind == "tool_call":
-                        yield f"data: {_json.dumps({'type': 'tool_call', **data})}\n\n"
+                        yield f"data: {_json.dumps({'type': 'tool_call', **_sanitize_tool_call_for_display(data)})}\n\n"
                     elif kind == "done":
                         # Query already finished — send done event with stored result
                         session_data = session_mgr.get_or_create_session_data(session_id)
@@ -6346,7 +6565,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                         else:
                             yield f"data: {_json.dumps({'type': 'chunk', 'text': data})}\n\n"
                     elif kind == "tool_call":
-                        yield f"data: {_json.dumps({'type': 'tool_call', **data})}\n\n"
+                        yield f"data: {_json.dumps({'type': 'tool_call', **_sanitize_tool_call_for_display(data)})}\n\n"
                     elif kind == "done":
                         break
 
@@ -6405,6 +6624,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             "runtime": data.get("runtime"),
             "model": data.get("model"),
             "yolo_mode": data.get("yolo_mode", "restricted"),
+            "permissions": data.get("permissions"),
         }
 
         # Include running query info so the frontend can reconnect streams
@@ -6988,6 +7208,36 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                     m4 = _re.match(r'^Running\s+command:\s*(.+)', stripped, _re.IGNORECASE)
                     if m4:
                         tc = {"name": "shell", "input": m4.group(1).strip()}
+            elif rt == "devin":
+                # Devin CLI -p mode doesn't emit structured tool events.
+                # We instruct the model to emit [TOOL_CALL] markers, and also
+                # detect common Devin output patterns for tool usage.
+                # 1. Explicit [TOOL_CALL] marker (injected via prompt instruction)
+                m = _re.match(r'^\[TOOL_CALL\]\s+(\w[\w.]*)\s*(.*)', stripped)
+                if m:
+                    tc = {"name": m.group(1), "input": m.group(2).strip()}
+                # 2. "Executing: <command>" or "Running: <command>" patterns
+                if not tc:
+                    m2 = _re.match(r'^(?:Executing|Running|Calling|Using)(?:\s+tool)?[:\s]+(.+)', stripped, _re.IGNORECASE)
+                    if m2:
+                        _desc = m2.group(1).strip()
+                        if any(kw in _desc.lower() for kw in ["read", "cat", "view", "head", "tail"]):
+                            _tn = "read"
+                        elif any(kw in _desc.lower() for kw in ["write", "create", "save", "edit", "modify", "patch"]):
+                            _tn = "write"
+                        elif any(kw in _desc.lower() for kw in ["search", "find", "grep", "glob", "ls", "list"]):
+                            _tn = "search"
+                        elif any(kw in _desc.lower() for kw in ["fetch", "curl", "http", "api", "download", "web"]):
+                            _tn = "web_fetch"
+                        else:
+                            _tn = "shell"
+                        tc = {"name": _tn, "input": _desc}
+                # 3. Shell command: "$ <command>" or "> <command>"
+                if not tc:
+                    m3 = _re.match(r'^[$>]\s+(.+)', stripped)
+                    if m3:
+                        tc = {"name": "shell", "input": m3.group(1).strip()}
+
             elif rt == "claude":
                 # Claude background tasks now use claude binary with stream-json.
                 # Try to parse JSON tool_use events first.
@@ -7187,6 +7437,16 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             output = "".join(stdout_lines).strip()
             if stderr_lines:
                 output += "\n[stderr]\n" + "".join(stderr_lines)
+
+            # For Devin background tasks, extract tool calls from session DB
+            # since Devin -p mode doesn't emit them in stdout.
+            if runtime == "devin" and process.returncode == 0:
+                try:
+                    devin_tool_calls = session_mgr._extract_devin_tool_calls(session_id)
+                    for tc_evt in devin_tool_calls:
+                        bg_task_mgr.append_tool_call(task_id, tc_evt)
+                except Exception as _e:
+                    print(f"[bg-task] Warning: Devin tool extraction failed: {_e}", file=sys.stderr)
 
             if process.returncode == 0:
                 # Strip CLI metadata (tool decoration, stats) from final output
@@ -7529,7 +7789,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         return {
             "task_id": task["task_id"],
             "status": task["status"],
-            "tool_calls": task.get("tool_calls", []),
+            "tool_calls": [_sanitize_tool_call_for_display(tc) for tc in task.get("tool_calls", [])],
             "tool_call_count": len(task.get("tool_calls", [])),
         }
 
@@ -8568,6 +8828,197 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 "name": sess.get("name"),
             }
         return {"sessions": sessions, "count": len(_canvas_sessions)}
+
+
+
+    # --- Session Permissions API ---
+    @app.get("/api/v1/sessions/{session_id}/permissions")
+    async def get_session_permissions(session_id: str, request: Request):
+        """Return current session permissions (inherited from agent or overridden)."""
+        user = await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        data = session_mgr.load_session_data(session_id)
+        if not data:
+            raise HTTPException(status_code=404, detail="Session not found")
+
+        perms = data.get("permissions")
+        agent_name = data.get("agent", get_default_agent())
+        agent_cfg = session_mgr.AGENTS.get(agent_name, {})
+        agent_default_perms = agent_cfg.get("permissions", {
+            "mode": "restricted",
+            "directories": {"allow_read": [], "allow_write": [], "deny": []},
+            "tools": {"allow": ["*"], "deny": []},
+            "network": {"allow_urls": ["*"], "deny_urls": []},
+            "mcp": {"allow": [], "deny": ["*"]},
+        })
+
+        return {
+            "session_id": session_id,
+            "permissions": perms or agent_default_perms,
+            "agent_default_permissions": agent_default_perms,
+            "is_overridden": perms is not None and perms != agent_default_perms,
+        }
+
+    @app.put("/api/v1/sessions/{session_id}/permissions")
+    async def set_session_permissions(session_id: str, request: Request):
+        """Override session-level permissions."""
+        user = await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        data = session_mgr.load_session_data(session_id)
+        if not data:
+            raise HTTPException(status_code=404, detail="Session not found")
+
+        body = await request.json()
+        valid_modes = ("elevated", "restricted", "sandboxed")
+
+        # Accept either a full permissions object or just a mode string
+        if isinstance(body, dict) and "mode" in body:
+            # If just mode is provided, build full permissions from agent default + new mode
+            new_mode = body["mode"]
+            if new_mode not in valid_modes:
+                raise HTTPException(status_code=400, detail=f"Invalid mode. Must be one of: {valid_modes}")
+
+            # Get current permissions and update mode
+            current_perms = data.get("permissions") or {}
+            if not current_perms:
+                agent_name = data.get("agent", get_default_agent())
+                agent_cfg = session_mgr.AGENTS.get(agent_name, {})
+                current_perms = agent_cfg.get("permissions", {
+                    "mode": "restricted",
+                    "directories": {"allow_read": [], "allow_write": [], "deny": []},
+                    "tools": {"allow": ["*"], "deny": []},
+                    "network": {"allow_urls": ["*"], "deny_urls": []},
+                    "mcp": {"allow": [], "deny": ["*"]},
+                })
+            current_perms["mode"] = new_mode
+            session_mgr.update_session_field(session_id, "permissions", current_perms)
+            return {"updated": True, "permissions": current_perms}
+
+        elif isinstance(body, dict) and "permissions" in body:
+            # Full permissions object provided
+            perms = body["permissions"]
+            if not isinstance(perms, dict) or "mode" not in perms:
+                raise HTTPException(status_code=400, detail="permissions must be an object with at least a 'mode' key")
+            if perms["mode"] not in valid_modes:
+                raise HTTPException(status_code=400, detail=f"Invalid mode. Must be one of: {valid_modes}")
+            session_mgr.update_session_field(session_id, "permissions", perms)
+            return {"updated": True, "permissions": perms}
+
+        else:
+            raise HTTPException(status_code=400, detail="Request body must include 'mode' or 'permissions'")
+
+    @app.get("/api/v1/permissions/templates")
+    async def get_permission_templates(request: Request):
+        """Return available permission templates."""
+        await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        return {
+            "templates": [
+                {
+                    "mode": "elevated",
+                    "label": "Full Access",
+                    "description": "Agent has unrestricted access to all tools, directories, and network",
+                    "icon": "⚡",
+                },
+                {
+                    "mode": "restricted",
+                    "label": "Restricted",
+                    "description": "Agent uses curated tool and directory allowlists only",
+                    "icon": "🔒",
+                },
+                {
+                    "mode": "sandboxed",
+                    "label": "Sandboxed",
+                    "description": "Agent has no external access — fully isolated environment",
+                    "icon": "🏖️",
+                },
+            ]
+        }
+
+
+
+    # --- .env File Editor API ---
+    _env_file_path = Path(SCRIPT_BASE_DIR) / ".env"
+
+    @app.get("/api/v1/settings/env")
+    async def get_env_file(request: Request):
+        """Return .env file contents for editing."""
+        auth = await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        try:
+            content = _env_file_path.read_text() if _env_file_path.exists() else ""
+            return {"content": content, "path": str(_env_file_path), "exists": _env_file_path.exists()}
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Failed to read .env: {e}")
+
+    @app.put("/api/v1/settings/env")
+    async def put_env_file(request: Request):
+        """Save updated .env file contents."""
+        auth = await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        body = await request.json()
+        content = body.get("content", "")
+        if not isinstance(content, str):
+            raise HTTPException(status_code=400, detail="content must be a string")
+
+        try:
+            # Create backup before overwrite
+            if _env_file_path.exists():
+                backup_path = Path(str(_env_file_path) + ".bak")
+                shutil.copy2(_env_file_path, backup_path)
+
+            _env_file_path.write_text(content)
+            return {"saved": True, "path": str(_env_file_path), "warning": "Changes require a service restart to take effect."}
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Failed to save .env: {e}")
+
+    @app.post("/api/v1/settings/restart-services")
+    async def restart_services(request: Request):
+        """Restart dev services (agent-manager-api-dev, etc.)."""
+        auth = await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        import subprocess
+        services = [
+            "agent-manager-api-dev.service",
+            "task-scheduler-executor-dev.service",
+            "webex-connector-dev.service",
+            "telegram-bot-listener-dev.service",
+        ]
+        results = {}
+        for svc in services:
+            try:
+                proc = subprocess.run(
+                    ["systemctl", "restart", svc],
+                    capture_output=True, text=True, timeout=30
+                )
+                results[svc] = "restarted" if proc.returncode == 0 else f"failed: {proc.stderr.strip()}"
+            except Exception as e:
+                results[svc] = f"error: {e}"
+        return {"results": results, "note": "Services are restarting. The API will briefly disconnect."}
 
     # --- Settings & Logs API ──────────────────────────────────────────────────
 
