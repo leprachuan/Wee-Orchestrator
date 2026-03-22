@@ -1126,7 +1126,7 @@ class SessionManager:
         self.claude_bin = find_executable("claude")
         self.devin_bin = find_executable("devin")
 
-        # CLI mode setting for claude (yolo or restricted)
+        # CLI mode setting (elevated, restricted, or sandboxed)
         self.mode = None
 
         # Ensure directories exist
@@ -2257,11 +2257,12 @@ class SessionManager:
         """Parse /mode command from prompt. Returns (cleaned_prompt, mode).
         
         Modes:
+        - 'elevated': Full access, auto-approve all operations
         - 'restricted': Keep bounded to agent directory (default)
-        - 'yolo': Allow all paths (--allow-all-paths)
+        - 'sandboxed': Read-only, no external access
         """
         # Check for /mode command at start or after newline
-        mode_pattern = r'(?:^|\n)\s*/mode\s+(restricted|yolo)\s*(?:\n|$)'
+        mode_pattern = r'(?:^|\n)\s*/mode\s+(elevated|restricted|sandboxed)\s*(?:\n|$)'
         match = re.search(mode_pattern, prompt, re.IGNORECASE)
         
         if match:
@@ -2271,6 +2272,21 @@ class SessionManager:
             return cleaned, mode
         
         return prompt, "restricted"  # default to restricted
+
+    def _resolve_permission_mode(self, session_data: dict, prompt_mode: str = "restricted") -> str:
+        """Resolve effective permission mode from session data with backward compatibility.
+        
+        Priority: prompt_mode (if not default) > permissions.mode > yolo_mode (legacy) > 'restricted'
+        """
+        if prompt_mode != "restricted":
+            return prompt_mode
+        perms = session_data.get("permissions", {})
+        if isinstance(perms, dict) and perms.get("mode") in ("elevated", "restricted", "sandboxed"):
+            return perms["mode"]
+        yolo = session_data.get("yolo_mode", "restricted")
+        if yolo == "on":
+            return "elevated"
+        return "restricted"
 
     def strip_metadata(self, text: str, runtime: str) -> str:
         """Remove CLI metadata from output"""
@@ -3851,7 +3867,8 @@ User Request:
 
         Uses --allow-all-tools for MCP tool access. Path access depends on /mode command:
         - /mode restricted: Bounded to agent directory (default)
-        - /mode yolo: Dangerous bypass with --yolo (auto-approve all operations)
+        - /mode elevated: Full access, auto-approve all operations
+        - /mode sandboxed: Read-only, no external access
         """
         if not self.copilot_bin:
             return "Error: Copilot executable not found. Please install copilot or ensure it's in PATH, /opt/homebrew/bin/, /usr/local/bin/, or /usr/bin/"
@@ -3862,11 +3879,8 @@ User Request:
         # Get session data once - reuse for mode and channel
         session_data = self.get_or_create_session_data(n8n_session_id)
         
-        # If mode not specified in prompt, check session setting
-        if mode == "restricted":
-            session_mode = session_data.get("yolo_mode", "restricted")
-            if session_mode == "on":
-                mode = "yolo"
+        # Resolve permission mode from session data (backward compat with yolo_mode)
+        mode = self._resolve_permission_mode(session_data, mode)
 
         agent_dir = self.AGENTS.get(agent, self.AGENTS["orchestrator"])["path"]
         effective_timeout = timeout if timeout is not None else self.command_timeout
@@ -3882,20 +3896,27 @@ User Request:
                 agent, prompt, n8n_session_id, render_type, effective_timeout, "copilot", model, channel
             )
         
-        # Add yolo mode instructions for unrestricted privileged access
-        if mode == "yolo":
-            yolo_instruction = (
-                "\n\n[YOLO MODE ENABLED]\n"
+        # Add elevated mode instructions for unrestricted privileged access
+        if mode == "elevated":
+            elevated_instruction = (
+                "\n\n[ELEVATED MODE ENABLED]\n"
                 "Full permissions granted. ALL commands requiring elevated privileges MUST automatically "
-                "prefix with 'sudo' — no exceptions. This includes:\n"
-                "• Service management: sudo systemctl restart/start/stop/reload/enable/disable <service>\n"
-                "• Network commands: sudo ping, sudo ssh, sudo iptables, sudo ip, etc.\n"
-                "• System administration: sudo journalctl, sudo systemd-*, sudo chmod/chown on system paths\n"
-                "• Any command that would fail due to insufficient permissions\n"
+                "prefix with 'sudo' \u2014 no exceptions. This includes:\n"
+                "\u2022 Service management: sudo systemctl restart/start/stop/reload/enable/disable <service>\n"
+                "\u2022 Network commands: sudo ping, sudo ssh, sudo iptables, sudo ip, etc.\n"
+                "\u2022 System administration: sudo journalctl, sudo systemd-*, sudo chmod/chown on system paths\n"
+                "\u2022 Any command that would fail due to insufficient permissions\n"
                 "Sudo is configured without password prompt (NOPASSWD:ALL). "
-                "Never ask for confirmation — execute privileged commands immediately with sudo."
+                "Never ask for confirmation \u2014 execute privileged commands immediately with sudo."
             )
-            context_prompt = context_prompt + yolo_instruction
+            context_prompt = context_prompt + elevated_instruction
+        elif mode == "sandboxed":
+            sandboxed_instruction = (
+                "\n\n[SANDBOXED MODE ENABLED]\n"
+                "Read-only access only. Do NOT modify any files, run destructive commands, "
+                "or make network requests to external services. Analysis and reporting only."
+            )
+            context_prompt = context_prompt + sandboxed_instruction
 
         cmd = [
             self.copilot_bin,
@@ -3907,8 +3928,8 @@ User Request:
             model,
         ]
 
-        # Add yolo flags if mode is yolo
-        if mode == "yolo":
+        # Add elevated flags for full access
+        if mode == "elevated":
             cmd.insert(4, "--allow-all-paths")
             cmd.append("--yolo")
 
@@ -3916,7 +3937,7 @@ User Request:
             cmd.extend(["--resume", session_id])
             print(f"[Session] Resuming Copilot session: {session_id}", file=sys.stderr)
         else:
-            print(f"[Session] Starting new Copilot session in {mode} mode", file=sys.stderr)
+            print(f"[Session] Starting new Copilot session in {mode} permission mode", file=sys.stderr)
 
         output = self._execute_subprocess_with_tracking(
             cmd, agent_dir, effective_timeout, "copilot", agent, prompt, n8n_session_id
@@ -3938,7 +3959,7 @@ User Request:
 
         OpenCode uses opencode.json for permission configuration.
         Default permissions: edit/write/bash allowed, bounded to agent directory.
-        /mode yolo enables full path access via configuration.
+        /mode elevated enables full path access via configuration.
         """
         # Parse /mode command from prompt
         prompt, mode = self._parse_mode_command(prompt)
@@ -3946,11 +3967,8 @@ User Request:
         # Get session data once - reuse for mode and channel
         session_data = self.get_or_create_session_data(n8n_session_id)
 
-        # If mode not specified in prompt, check session setting
-        if mode == "restricted":
-            session_mode = session_data.get("yolo_mode", "restricted")
-            if session_mode == "on":
-                mode = "yolo"
+        # Resolve permission mode from session data (backward compat with yolo_mode)
+        mode = self._resolve_permission_mode(session_data, mode)
 
         agent_dir = self.AGENTS.get(agent, self.AGENTS["orchestrator"])["path"]
         effective_timeout = timeout if timeout is not None else self.command_timeout
@@ -4000,8 +4018,9 @@ User Request:
     ) -> str:
         """Execute Claude CLI with configurable path access
 
-        Uses --permission-mode restricted by default (bounded to agent directory).
-        /mode yolo uses bypassPermissions for full file/shell access without prompts.
+        Uses --permission-mode default by default (bounded to agent directory).
+        /mode elevated uses bypassPermissions for full file/shell access.
+        /mode sandboxed uses plan mode for read-only analysis.
         """
         if not self.claude_bin:
             return "Error: Claude executable not found. Please install claude or ensure it's in PATH, /opt/homebrew/bin/, /usr/local/bin/, or /usr/bin/"
@@ -4027,8 +4046,13 @@ User Request:
                 agent, prompt, n8n_session_id, render_type, effective_timeout, "claude", model, channel
             )
 
-        # Set permission mode: use bypassPermissions for yolo mode, otherwise default
-        permission_mode = "bypassPermissions" if mode == "yolo" else "default"
+        # Set permission mode based on elevated/restricted/sandboxed
+        if mode == "elevated":
+            permission_mode = "bypassPermissions"
+        elif mode == "sandboxed":
+            permission_mode = "plan"
+        else:
+            permission_mode = "default"
 
         cmd = [
             self.claude_bin,
@@ -4117,8 +4141,8 @@ User Request:
 
         Gemini CLI with configurable access
         Default: bounded to agent directory.
-        /mode yolo enables --yolo flag for auto-approval.
-        - Read/write file operations without confirmation
+        /mode elevated enables --yolo flag for auto-approval.
+        /mode sandboxed enables read-only mode.
 
         """
         # Parse /mode command from prompt
@@ -4127,11 +4151,8 @@ User Request:
         # Get session data once - reuse for mode and channel
         session_data = self.get_or_create_session_data(n8n_session_id)
 
-        # If mode not specified in prompt, check session setting
-        if mode == "restricted":
-            session_mode = session_data.get("yolo_mode", "restricted")
-            if session_mode == "on":
-                mode = "yolo"
+        # Resolve permission mode from session data (backward compat with yolo_mode)
+        mode = self._resolve_permission_mode(session_data, mode)
 
         agent_dir = self.AGENTS.get(agent, self.AGENTS["orchestrator"])["path"]
         effective_timeout = timeout if timeout is not None else self.command_timeout
@@ -4148,7 +4169,7 @@ User Request:
             )
 
         cmd = ["gemini"]
-        if mode == "yolo":
+        if mode == "elevated":
             cmd.append("--yolo")
         # Use stream-json for structured tool call parsing when streaming
         stream_info = self._stream_queues.get(n8n_session_id)
@@ -4204,11 +4225,8 @@ User Request:
         # Get session data once - reuse for mode and channel
         session_data = self.get_or_create_session_data(n8n_session_id)
 
-        # If mode not specified in prompt, check session setting
-        if mode == "restricted":
-            session_mode = session_data.get("yolo_mode", "restricted")
-            if session_mode == "on":
-                mode = "yolo"
+        # Resolve permission mode from session data (backward compat with yolo_mode)
+        mode = self._resolve_permission_mode(session_data, mode)
 
         agent_dir = self.AGENTS.get(agent, self.AGENTS["orchestrator"])["path"]
         effective_timeout = timeout if timeout is not None else self.command_timeout
@@ -4224,29 +4242,36 @@ User Request:
                 agent, prompt, n8n_session_id, render_type, effective_timeout, "codex", model, channel
             )
 
-        # Add yolo mode instructions for unrestricted privileged access (consistent with copilot runtime)
-        if mode == "yolo":
-            yolo_instruction = (
-                "\n\n[YOLO MODE ENABLED]\n"
-                "Full permissions granted. Sandbox is fully bypassed — localhost APIs are accessible. "
-                "ALL commands requiring elevated privileges MUST automatically prefix with 'sudo' — no exceptions. "
+        # Add elevated mode instructions for unrestricted privileged access
+        if mode == "elevated":
+            elevated_instruction = (
+                "\n\n[ELEVATED MODE ENABLED]\n"
+                "Full permissions granted. Sandbox is fully bypassed \u2014 localhost APIs are accessible. "
+                "ALL commands requiring elevated privileges MUST automatically prefix with 'sudo' \u2014 no exceptions. "
                 "This includes:\n"
-                "• Service management: sudo systemctl restart/start/stop/reload/enable/disable <service>\n"
-                "• Network commands: sudo ping, sudo ssh, sudo iptables, sudo ip, etc.\n"
-                "• System administration: sudo journalctl, sudo systemd-*, sudo chmod/chown on system paths\n"
-                "• API calls: curl -sk https://127.0.0.1:8001/... works — localhost is fully accessible\n"
-                "• Any command that would fail due to insufficient permissions\n"
+                "\u2022 Service management: sudo systemctl restart/start/stop/reload/enable/disable <service>\n"
+                "\u2022 Network commands: sudo ping, sudo ssh, sudo iptables, sudo ip, etc.\n"
+                "\u2022 System administration: sudo journalctl, sudo systemd-*, sudo chmod/chown on system paths\n"
+                "\u2022 API calls: curl -sk https://127.0.0.1:8001/... works \u2014 localhost is fully accessible\n"
+                "\u2022 Any command that would fail due to insufficient permissions\n"
                 "Sudo is configured without password prompt (NOPASSWD:ALL). "
-                "Never ask for confirmation — execute privileged commands immediately with sudo."
+                "Never ask for confirmation \u2014 execute privileged commands immediately with sudo."
             )
-            context_prompt = context_prompt + yolo_instruction
+            context_prompt = context_prompt + elevated_instruction
+        elif mode == "sandboxed":
+            sandboxed_instruction = (
+                "\n\n[SANDBOXED MODE ENABLED]\n"
+                "Read-only access only. Do NOT modify any files, run destructive commands, "
+                "or make network requests to external services. Analysis and reporting only."
+            )
+            context_prompt = context_prompt + sandboxed_instruction
 
         if resume and session_id:
             # Resume existing session - flags must come before session_id positional arg
             # codex exec resume supports --dangerously-bypass-approvals-and-sandbox
             cmd = ["codex", "exec", "resume"]
-            if mode == "yolo":
-                # Apply sandbox bypass and environment inheritance for resumed yolo sessions
+            if mode == "elevated":
+                # Apply sandbox bypass and environment inheritance for elevated sessions
                 cmd.append("--dangerously-bypass-approvals-and-sandbox")
                 cmd += ["-c", "shell_environment_policy.inherit=all"]
             if model:
@@ -4256,7 +4281,7 @@ User Request:
         else:
             # Start new session - flags must come BEFORE the prompt positional arg
             cmd = ["codex", "exec"]
-            if mode == "yolo":
+            if mode == "elevated":
                 # Bypass all sandbox restrictions (sudo, DNS, network, filesystem)
                 cmd.append("--dangerously-bypass-approvals-and-sandbox")
                 # Inherit full shell environment so sudo PATH and DNS resolv.conf are available
@@ -4297,11 +4322,8 @@ User Request:
         # Get session data once - reuse for mode and channel
         session_data = self.get_or_create_session_data(n8n_session_id)
 
-        # If mode not specified in prompt, check session setting
-        if mode == "restricted":
-            session_mode = session_data.get("yolo_mode", "restricted")
-            if session_mode == "on":
-                mode = "yolo"
+        # Resolve permission mode from session data (backward compat with yolo_mode)
+        mode = self._resolve_permission_mode(session_data, mode)
 
         agent_dir = self.AGENTS.get(agent, self.AGENTS["orchestrator"])["path"]
         effective_timeout = timeout if timeout is not None else self.command_timeout
@@ -4327,22 +4349,27 @@ User Request:
                 agent, prompt, n8n_session_id, render_type, effective_timeout, "devin", model, channel
             )
 
-        # Add yolo mode instructions for unrestricted privileged access
-        if mode == "yolo":
-            yolo_instruction = (
-                "\n\n[YOLO MODE ENABLED]\n"
-                "Full permissions granted. "
-                "ALL commands requiring elevated privileges MUST automatically prefix with 'sudo' — no exceptions. "
-                "This includes:\n"
-                "• Service management: sudo systemctl restart/start/stop/reload/enable/disable <service>\n"
-                "• Network commands: sudo ping, sudo ssh, sudo iptables, sudo ip, etc.\n"
-                "• System administration: sudo journalctl, sudo systemd-*, sudo chmod/chown on system paths\n"
-                "• API calls: curl -sk https://127.0.0.1:8001/... works — localhost is fully accessible\n"
-                "• Any command that would fail due to insufficient permissions\n"
+        # Add elevated mode instructions for unrestricted privileged access
+        if mode == "elevated":
+            elevated_instruction = (
+                "\n\n[ELEVATED MODE ENABLED]\n"
+                "Full permissions granted. ALL commands requiring elevated privileges MUST automatically "
+                "prefix with 'sudo' \u2014 no exceptions. This includes:\n"
+                "\u2022 Service management: sudo systemctl restart/start/stop/reload/enable/disable <service>\n"
+                "\u2022 Network commands: sudo ping, sudo ssh, sudo iptables, sudo ip, etc.\n"
+                "\u2022 System administration: sudo journalctl, sudo systemd-*, sudo chmod/chown on system paths\n"
+                "\u2022 Any command that would fail due to insufficient permissions\n"
                 "Sudo is configured without password prompt (NOPASSWD:ALL). "
-                "Never ask for confirmation — execute privileged commands immediately with sudo."
+                "Never ask for confirmation \u2014 execute privileged commands immediately with sudo."
             )
-            context_prompt = context_prompt + yolo_instruction
+            context_prompt = context_prompt + elevated_instruction
+        elif mode == "sandboxed":
+            sandboxed_instruction = (
+                "\n\n[SANDBOXED MODE ENABLED]\n"
+                "Read-only access only. Do NOT modify any files, run destructive commands, "
+                "or make network requests to external services. Analysis and reporting only."
+            )
+            context_prompt = context_prompt + sandboxed_instruction
 
         # Inject tool-call emission instructions so the orchestrator can track
         # Devin tool usage.  Devin CLI -p mode suppresses intermediate output,
@@ -4365,8 +4392,8 @@ User Request:
         context_prompt = context_prompt + tool_emission_instruction
 
         # -p is a boolean flag (print/non-interactive mode); prompt goes after --
-        # Permission mode: dangerous (auto-approve all) for yolo, auto (read-only) otherwise
-        permission_mode = "dangerous" if mode == "yolo" else "auto"
+        # Permission mode: dangerous (auto-approve all) for elevated, auto for restricted/sandboxed
+        permission_mode = "dangerous" if mode == "elevated" else "auto"
         cmd = [devin_bin, "-p"]
         if model:
             cmd += ["--model", model]
@@ -4855,8 +4882,9 @@ User Request:
 
 **Mode Management:**
    • /mode current - Show current mode
-   • /mode yolo - Enable auto-approval (no prompts)
-   • /mode restricted - Disable auto-approval (restricted mode)
+   • /mode elevated - Full access, auto-approve (no prompts)
+   • /mode restricted - Bounded access (default)
+   /mode sandboxed - Read-only, no external access
    • /mode list - Show available modes
 
 **Agent Management:**
@@ -4909,7 +4937,7 @@ You can mention an agent in your prompt and it will auto-delegate:
    !pwd
    !echo "Hello World"
    !ls -la
-   /mode yolo
+   /mode elevated
    /runtime set gemini
    /model set "gpt-5.2"
    /agent set "family"
@@ -5270,27 +5298,54 @@ You can mention an agent in your prompt and it will auto-delegate:
                 argument = "current"  # Default to showing current mode
 
             if argument == "current":
-                mode = session_data.get("yolo_mode", "restricted")
-                return f"⚡ **Current Mode:** `{mode}`"
+                _perms = session_data.get("permissions", {})
+                _pm = _perms.get("mode", "restricted") if isinstance(_perms, dict) else "restricted"
+                if _pm not in ("elevated", "restricted", "sandboxed"):
+                    _pm = "elevated" if session_data.get("yolo_mode") == "on" else "restricted"
+                return f"\u26a1 **Current Mode:** `{_pm}`"
 
             elif argument == "list":
                 return (
-                    "📋 **Available Modes:**\n\n"
-                    "• `yolo` - Enable auto-approval (no prompts)\n"
-                    "• `restricted` - Disable auto-approval (restricted prompts)"
+                    "\U0001f4cb **Available Permission Modes:**\n\n"
+                    "\u2022 `elevated` \u26a1 - Full access, auto-approve all operations\n"
+                    "\u2022 `restricted` \U0001f512 - Bounded to agent directory (default)\n"
+                    "\u2022 `sandboxed` \U0001f3d6\ufe0f - Read-only, no external access"
                 )
 
-            elif argument == "yolo":
+            elif argument in ("elevated", "yolo"):
+                _cur_perms = session_data.get("permissions", {})
+                if not isinstance(_cur_perms, dict):
+                    _cur_perms = {}
+                _cur_perms["mode"] = "elevated"
+                self.update_session_field(n8n_session_id, "permissions", _cur_perms)
                 self.update_session_field(n8n_session_id, "yolo_mode", "on")
-                return "✓ YOLO mode enabled - auto-approving actions without prompts"
+                return "\u2713 Elevated mode enabled \u26a1 - auto-approving actions without prompts"
 
             elif argument == "restricted":
+                _cur_perms = session_data.get("permissions", {})
+                if not isinstance(_cur_perms, dict):
+                    _cur_perms = {}
+                _cur_perms["mode"] = "restricted"
+                self.update_session_field(n8n_session_id, "permissions", _cur_perms)
                 self.update_session_field(n8n_session_id, "yolo_mode", "restricted")
-                return "✓ Restricted mode enabled - normal prompts enabled"
+                return "\u2713 Restricted mode enabled \U0001f512 - normal prompts enabled"
+
+            elif argument == "sandboxed":
+                _cur_perms = session_data.get("permissions", {})
+                if not isinstance(_cur_perms, dict):
+                    _cur_perms = {}
+                _cur_perms["mode"] = "sandboxed"
+                self.update_session_field(n8n_session_id, "permissions", _cur_perms)
+                self.update_session_field(n8n_session_id, "yolo_mode", "restricted")
+                return "\u2713 Sandboxed mode enabled \U0001f3d6\ufe0f - read-only, no external access"
 
             else:
                 return (
-                    "Usage: `/mode current` - Show current mode\n       `/mode list` - Show available modes\n       `/mode yolo` - Enable auto-approval mode\n       `/mode restricted` - Disable auto-approval mode"
+                    "Usage: `/mode current` - Show current mode\n"
+                    "       `/mode list` - Show available modes\n"
+                    "       `/mode elevated` - Full access mode\n"
+                    "       `/mode restricted` - Bounded access mode\n"
+                    "       `/mode sandboxed` - Read-only mode"
                 )
 
         elif command == "/schedule":
@@ -5629,8 +5684,14 @@ You can mention an agent in your prompt and it will auto-delegate:
         agent = session_data.get("agent", "orchestrator")
         effective_timeout = self.get_effective_timeout(session_data)
         render_type = self.get_render_type(session_data)
-        # Get mode for Claude runtime
-        mode = "yolo" if session_data.get("yolo_mode") == "on" else "restricted"
+        # Get permission mode from session (backward compat with yolo_mode)
+        _perms = session_data.get("permissions", {})
+        if isinstance(_perms, dict) and _perms.get("mode") in ("elevated", "restricted", "sandboxed"):
+            mode = _perms["mode"]
+        elif session_data.get("yolo_mode") == "on":
+            mode = "elevated"
+        else:
+            mode = "restricted"
 
         # --- Direct Single-Runtime Dispatch (simplified from auto-runtime logic) ---
 
@@ -7053,6 +7114,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         model: Optional[str] = None
         timeout: Optional[int] = None
         notify: Optional[bool] = None
+        permission_mode: Optional[str] = None  # elevated, restricted (default), sandboxed
 
         @field_validator("prompt")
         @classmethod
@@ -7091,7 +7153,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
     def _run_background_task(task_id: str, session_id: str, prompt: str,
                              agent: str, runtime: str, model: str,
                              channel: str, user_identity: str, timeout: int = None,
-                             notify: bool = True):
+                             notify: bool = True, permission_mode: str = "restricted"):
         """Blocking function that runs a background task in a subprocess.
         Called from a thread pool executor.
 
@@ -7292,7 +7354,10 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
 
             if runtime == "gemini":
                 _gemini_bin = _which_bin("gemini") or "gemini"
-                cmd = [_gemini_bin, "--yolo", "-o", "stream-json", "-p", context_prompt]
+                cmd = [_gemini_bin]
+                if permission_mode == "elevated":
+                    cmd.append("--yolo")
+                cmd.extend(["-o", "stream-json", "-p", context_prompt])
                 if model:
                     cmd.extend(["--model", model])
             elif runtime == "opencode":
@@ -7300,21 +7365,24 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 cmd = [_oc_bin, "run", "--model", model, context_prompt]
             elif runtime == "codex":
                 _codex_bin = _which_bin("codex") or "codex"
-                cmd = [_codex_bin, "exec",
-                       "--dangerously-bypass-approvals-and-sandbox",
-                       "-c", "shell_environment_policy.inherit=all"]
+                cmd = [_codex_bin, "exec"]
+                if permission_mode == "elevated":
+                    cmd.extend(["--dangerously-bypass-approvals-and-sandbox",
+                                "-c", "shell_environment_policy.inherit=all"])
                 if model:
                     cmd.extend(["-m", model])
                 cmd.append(context_prompt)
             elif runtime == "claude":
                 _claude_bin = session_mgr.claude_bin or _which_bin("claude") or "claude"
+                _claude_perm = {"elevated": "bypassPermissions", "sandboxed": "plan"}.get(permission_mode, "default")
                 cmd = [_claude_bin, "-p", context_prompt,
                        "--output-format", "stream-json",
                        "--model", model,
-                       "--dangerously-skip-permissions"]
+                       "--permission-mode", _claude_perm]
             elif runtime == "devin":
                 _devin_bin = session_mgr.devin_bin if hasattr(session_mgr, 'devin_bin') and session_mgr.devin_bin else (_which_bin("devin") or "devin")
-                cmd = [_devin_bin, "-p", "--permission-mode", "dangerous"]
+                _devin_perm = "dangerous" if permission_mode == "elevated" else "auto"
+                cmd = [_devin_bin, "-p", "--permission-mode", _devin_perm]
                 if model:
                     cmd.extend(["--model", model])
                 cmd.extend(["--", context_prompt])
@@ -7327,8 +7395,9 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                     "--no-color",
                     "--model", model,
                     "--allow-all-tools",
-                    "--allow-all-paths",
                 ]
+                if permission_mode == "elevated":
+                    cmd.extend(["--allow-all-paths", "--yolo"])
 
             # Set agent working directory for all runtimes
             agent_dir = session_mgr.AGENTS.get(agent, session_mgr.AGENTS.get("orchestrator", {})).get("path", os.getcwd())
@@ -7624,6 +7693,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 "agent": agent,
                 "runtime": runtime,
                 "model": model,
+                "permission_mode": body.permission_mode or "restricted",
                 "status": "queued",
                 "queue_position": queue_pos,
                 "timeout": bg_timeout,
@@ -7644,13 +7714,18 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             notify=notify_pref,
         )
 
+        # Resolve permission mode (default: restricted)
+        perm_mode = body.permission_mode or "restricted"
+        if perm_mode not in ("elevated", "restricted", "sandboxed"):
+            perm_mode = "restricted"
+
         # Run in background thread using shared executor
         loop = asyncio.get_running_loop()
         loop.run_in_executor(
             bg_executor,  # Use shared executor instead of creating new one
             _run_background_task,
             task_id, session_id, body.prompt, agent, runtime, model, channel, identity, bg_timeout,
-            notify_pref
+            notify_pref, perm_mode
         )
 
         return {
@@ -7659,6 +7734,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             "agent": agent,
             "runtime": runtime,
             "model": model,
+            "permission_mode": perm_mode,
             "status": "running",
             "timeout": bg_timeout,
         }
@@ -7826,6 +7902,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                         next_q["channel"], next_q["user_identity"],
                         next_q.get("timeout") or 900,
                         next_q.get("notify", True),
+                        next_q.get("permission_mode", "restricted"),
                     )
             return {"task_id": task_id, "action": "killed"}
         else:
@@ -7993,6 +8070,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             notify: bool = False
             recurring: bool = True
             timeout: Optional[int] = None  # Execution timeout in seconds (default: 300)
+            permission_mode: Optional[str] = None  # elevated, restricted (default), sandboxed
     
         class UpdateJobRequest(BaseModel):
             name: Optional[str] = None
@@ -8006,6 +8084,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             recurring: Optional[bool] = None
             enabled: Optional[bool] = None
             timeout: Optional[int] = None  # Execution timeout in seconds
+            permission_mode: Optional[str] = None  # elevated, restricted (default), sandboxed
     
         class ValidateScheduleRequest(BaseModel):
             schedule: str
@@ -8065,6 +8144,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 recurring=body.recurring,
                 created_by=created_by,
                 timeout=body.timeout,
+                permission_mode=body.permission_mode,
             )
             if not result.get("success"):
                 raise HTTPException(status_code=400, detail=result.get("message", "Failed"))
@@ -8154,6 +8234,11 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             else:
                 prompt = task or f"Run scheduled job: {job.get('name', job_id)}"
 
+            # Resolve permission mode from job config
+            perm_mode = job.get("permission_mode", "restricted")
+            if perm_mode not in ("elevated", "restricted", "sandboxed"):
+                perm_mode = "restricted"
+
             # Use the triggering user's identity/channel for the bg task
             channel = user.get("channel", "api")
             identity = user.get("identity", "scheduler")
@@ -8181,6 +8266,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 _run_background_task,
                 task_id, session_id, prompt, agent, runtime, model,
                 channel, identity, timeout, job.get("notify", False),
+                perm_mode,
             )
 
             return {
@@ -8189,6 +8275,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 "job_id": job_id,
                 "agent": agent,
                 "runtime": runtime,
+                "permission_mode": perm_mode,
                 "status": "running",
                 "message": f"Job '{job.get('name', job_id)}' is now running",
             }
@@ -9374,8 +9461,8 @@ Examples:
     claude_group.add_argument(
         "--mode",
         metavar="MODE",
-        choices=["yolo", "restricted"],
-        help="Set Claude permission mode: yolo (auto-approve) or restricted (ask for permissions)",
+        choices=["elevated", "restricted", "sandboxed"],
+        help="Set permission mode: elevated (auto-approve), restricted (default), or sandboxed (read-only)",
     )
 
     args = parser.parse_args()

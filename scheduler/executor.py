@@ -289,6 +289,8 @@ class TaskSchedulerExecutor:
         # Use repo_root to find agent_manager.py (already set in __init__)
         agent_manager_path = self.repo_root / "agent_manager.py"
 
+        # Resolve permission mode from job
+        perm_mode = job.get("permission_mode", "restricted")
         cmd = [
             "python3",
             agent_manager_path,
@@ -296,9 +298,10 @@ class TaskSchedulerExecutor:
             "--agent", agent,
             "--runtime", runtime,
             "--model", model,
-            task,
-            session_id
         ]
+        if perm_mode in ("elevated", "restricted", "sandboxed"):
+            cmd.extend(["--mode", perm_mode])
+        cmd.extend([task, session_id])
 
         logger.info(f"[AI Mode] Executing job {job_id}: agent={agent}, runtime={runtime}, model={model}, task={task[:60]}...")
         self._log_job(job_id, f"Executing (AI mode): agent={agent}, runtime={runtime}, model={model}, session={session_id}")

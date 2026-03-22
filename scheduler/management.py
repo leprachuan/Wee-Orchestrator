@@ -499,6 +499,7 @@ class TaskScheduler:
         working_dir: str = None,
         created_by: Optional[Dict] = None,
         timeout: int = None,
+        permission_mode: str = None,
         cron: str = None,
     ) -> Dict:
         """Create a scheduled task.
@@ -516,6 +517,7 @@ class TaskScheduler:
             working_dir: Working directory for command mode
             created_by: Optional dict with identity, channel, username
             timeout: Execution timeout in seconds
+            permission_mode: Permission level (elevated/restricted/sandboxed)
             cron: Pre-validated cron expression (skips conversion if provided)
         """
         if agent is None:
@@ -551,6 +553,7 @@ class TaskScheduler:
             "runtime": runtime,
             "model": model,
             "mode": mode or "ai",
+            "permission_mode": permission_mode or "restricted",
             "task": task,
             "schedule": schedule,
             "cron": cron_expr,
