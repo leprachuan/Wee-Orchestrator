@@ -4371,25 +4371,6 @@ User Request:
             )
             context_prompt = context_prompt + sandboxed_instruction
 
-        # Inject tool-call emission instructions so the orchestrator can track
-        # Devin tool usage.  Devin CLI -p mode suppresses intermediate output,
-        # so we instruct the model to emit lightweight markers we can parse.
-        tool_emission_instruction = (
-            "\n\n[TOOL CALL REPORTING — MANDATORY]\n"
-            "Before EVERY tool invocation, you MUST print a single marker line to stdout "
-            "in EXACTLY this format (no extra spaces, no wrapping):\n"
-            "  [TOOL_CALL] <tool_name> <brief_description>\n"
-            "Examples:\n"
-            "  [TOOL_CALL] exec Running ls -la in /opt\n"
-            "  [TOOL_CALL] read_file Reading /etc/hostname\n"
-            "  [TOOL_CALL] write_file Creating /tmp/test.txt\n"
-            "  [TOOL_CALL] edit_file Editing line 42 of agent_manager.py\n"
-            "  [TOOL_CALL] web_search Searching for Python asyncio docs\n"
-            "  [TOOL_CALL] shell Running git status\n"
-            "This is required for the orchestrator to track your tool usage.  "
-            "Do NOT skip this marker for any tool call."
-        )
-        context_prompt = context_prompt + tool_emission_instruction
 
         # -p is a boolean flag (print/non-interactive mode); prompt goes after --
         # Permission mode: dangerous (auto-approve all) for elevated, auto for restricted/sandboxed
@@ -4416,21 +4397,6 @@ User Request:
         # so subsequent messages in this n8n session can resume it.
         self._save_devin_session_id(n8n_session_id, devin_bin, agent_dir)
 
-        # Devin CLI -p mode suppresses tool-call output from stdout, so we
-        # extract structured tool calls from Devin's session database and
-        # push them to the streaming queue for the WebUI tool panel.
-        devin_tool_calls = self._extract_devin_tool_calls(n8n_session_id)
-        if devin_tool_calls:
-            stream_info = self._stream_queues.get(n8n_session_id)
-            if stream_info:
-                stream_buffer = stream_info.get("buffer")
-                loop = stream_info.get("loop")
-                queue = stream_info.get("queue")
-                for tc_evt in devin_tool_calls:
-                    if stream_buffer:
-                        stream_buffer.push("tool_call", tc_evt)
-                    elif loop and queue:
-                        loop.call_soon_threadsafe(queue.put_nowait, ("tool_call", tc_evt))
 
         if "Error: Devin command failed" in output:
             return output
@@ -4468,84 +4434,6 @@ User Request:
             print(f"[Session] Stored devin session mapping: {n8n_session_id[:8]}... → {devin_sid[:8]}...", file=sys.stderr)
         except Exception as e:
             print(f"[Session] Warning: could not save devin session ID: {e}", file=sys.stderr)
-
-    def _extract_devin_tool_calls(self, n8n_session_id: str) -> list:
-        """Extract structured tool calls from Devin's session database.
-
-        Devin CLI -p mode suppresses intermediate tool-call output, but stores
-        full tool_calls in its SQLite DB at ~/.local/share/cognition/cli/sessions.db.
-        This method reads the most recent session's message_nodes to extract
-        tool calls that Devin executed.
-
-        Returns a list of dicts: [{"name": str, "input": str, "id": str, ...}]
-        """
-        import sqlite3
-        db_path = Path.home() / ".local" / "share" / "cognition" / "cli" / "sessions.db"
-        if not db_path.exists():
-            return []
-
-        # Get the devin session UUID for this orchestrator session
-        devin_sid = self._get_devin_session_id(n8n_session_id)
-        if not devin_sid:
-            # Fall back to most recent session
-            try:
-                devin_bin = self.devin_bin or "devin"
-                result = subprocess.run(
-                    [devin_bin, "list", "--format", "json"],
-                    capture_output=True, text=True, timeout=10,
-                )
-                sessions = json.loads(result.stdout)
-                if sessions:
-                    devin_sid = sessions[0].get("id")
-            except Exception:
-                pass
-        if not devin_sid:
-            return []
-
-        tool_calls = []
-        try:
-            conn = sqlite3.connect(str(db_path), timeout=5)
-            conn.row_factory = sqlite3.Row
-            cursor = conn.cursor()
-            cursor.execute(
-                "SELECT chat_message FROM message_nodes "
-                "WHERE session_id = ? ORDER BY node_id",
-                (devin_sid,)
-            )
-            for row in cursor.fetchall():
-                try:
-                    msg = json.loads(row["chat_message"])
-                    if msg.get("role") == "assistant" and msg.get("tool_calls"):
-                        for tc in msg["tool_calls"]:
-                            tool_name = tc.get("name", "tool")
-                            args = tc.get("arguments", {})
-                            if isinstance(args, str):
-                                try:
-                                    args = json.loads(args)
-                                except (json.JSONDecodeError, TypeError):
-                                    pass
-                            # Build a human-readable input summary
-                            if isinstance(args, dict):
-                                input_summary = " ".join(f"{v}" for v in args.values())[:200]
-                            else:
-                                input_summary = str(args)[:200]
-                            tool_calls.append({
-                                "id": tc.get("id", f"devin_{len(tool_calls)}"),
-                                "name": tool_name,
-                                "input": input_summary,
-                                "status": "completed",
-                                "runtime": "devin",
-                                "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-                            })
-                except (json.JSONDecodeError, KeyError, TypeError):
-                    continue
-            conn.close()
-        except Exception as e:
-            print(f"[devin] Warning: could not extract tool calls from session DB: {e}", file=sys.stderr)
-
-        if tool_calls:
-            print(f"[devin] Extracted {len(tool_calls)} tool calls from session database", file=sys.stderr)
-        return tool_calls
 
     def session_exists(self, session_id: str, runtime: str, n8n_session_id: Optional[str] = None) -> bool:
         """Check if session state exists for runtime"""
@@ -7270,35 +7158,6 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                     m4 = _re.match(r'^Running\s+command:\s*(.+)', stripped, _re.IGNORECASE)
                     if m4:
                         tc = {"name": "shell", "input": m4.group(1).strip()}
-            elif rt == "devin":
-                # Devin CLI -p mode doesn't emit structured tool events.
-                # We instruct the model to emit [TOOL_CALL] markers, and also
-                # detect common Devin output patterns for tool usage.
-                # 1. Explicit [TOOL_CALL] marker (injected via prompt instruction)
-                m = _re.match(r'^\[TOOL_CALL\]\s+(\w[\w.]*)\s*(.*)', stripped)
-                if m:
-                    tc = {"name": m.group(1), "input": m.group(2).strip()}
-                # 2. "Executing: <command>" or "Running: <command>" patterns
-                if not tc:
-                    m2 = _re.match(r'^(?:Executing|Running|Calling|Using)(?:\s+tool)?[:\s]+(.+)', stripped, _re.IGNORECASE)
-                    if m2:
-                        _desc = m2.group(1).strip()
-                        if any(kw in _desc.lower() for kw in ["read", "cat", "view", "head", "tail"]):
-                            _tn = "read"
-                        elif any(kw in _desc.lower() for kw in ["write", "create", "save", "edit", "modify", "patch"]):
-                            _tn = "write"
-                        elif any(kw in _desc.lower() for kw in ["search", "find", "grep", "glob", "ls", "list"]):
-                            _tn = "search"
-                        elif any(kw in _desc.lower() for kw in ["fetch", "curl", "http", "api", "download", "web"]):
-                            _tn = "web_fetch"
-                        else:
-                            _tn = "shell"
-                        tc = {"name": _tn, "input": _desc}
-                # 3. Shell command: "$ <command>" or "> <command>"
-                if not tc:
-                    m3 = _re.match(r'^[$>]\s+(.+)', stripped)
-                    if m3:
-                        tc = {"name": "shell", "input": m3.group(1).strip()}
 
             elif rt == "claude":
                 # Claude background tasks now use claude binary with stream-json.
@@ -7507,15 +7366,6 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             if stderr_lines:
                 output += "\n[stderr]\n" + "".join(stderr_lines)
 
-            # For Devin background tasks, extract tool calls from session DB
-            # since Devin -p mode doesn't emit them in stdout.
-            if runtime == "devin" and process.returncode == 0:
-                try:
-                    devin_tool_calls = session_mgr._extract_devin_tool_calls(session_id)
-                    for tc_evt in devin_tool_calls:
-                        bg_task_mgr.append_tool_call(task_id, tc_evt)
-                except Exception as _e:
-                    print(f"[bg-task] Warning: Devin tool extraction failed: {_e}", file=sys.stderr)
 
             if process.returncode == 0:
                 # Strip CLI metadata (tool decoration, stats) from final output
