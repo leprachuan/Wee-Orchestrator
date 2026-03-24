@@ -424,9 +424,11 @@ function buildPopoverDOM(pillEl, label, options) {
   document.body.appendChild(popover);
   _pillPopover = popover;
   const rect = pillEl.getBoundingClientRect();
-  const popH = popover.offsetHeight || 200;
+  const maxPopH = Math.min(window.innerHeight * 0.6, 480);
+  const popH = Math.min(popover.offsetHeight || 200, maxPopH);
   let top = rect.bottom + 6;
   if (top + popH > window.innerHeight - 10) top = rect.top - popH - 6;
+  if (top < 8) top = 8;
   let left = rect.right - popover.offsetWidth;
   if (left < 8) left = 8;
   popover.style.top  = `${top}px`;

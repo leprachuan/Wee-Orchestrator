@@ -1118,20 +1118,26 @@ html, body {
   position: fixed;
   z-index: 200;
   min-width: 175px;
+  max-height: min(60vh, 480px);
   border-radius: var(--radius-sm);
-  overflow: hidden;
+  overflow-x: hidden;
+  overflow-y: auto;
   box-shadow: 0 12px 40px rgba(0,0,0,0.6), inset 0 1px 0 rgba(255,255,255,0.08);
   padding: 4px 0;
   animation: fadeSlide 0.12s ease;
 }
 
 .pill-popover-header {
+  position: sticky;
+  top: 0;
+  z-index: 1;
   font-size: 10px;
   text-transform: uppercase;
   letter-spacing: 0.08em;
   color: var(--text-muted);
   padding: 7px 12px 5px;
   border-bottom: 1px solid var(--glass-border);
+  background: var(--glass-bg, rgba(20,20,30,0.95));
 }
 
 .pill-popover-item {
