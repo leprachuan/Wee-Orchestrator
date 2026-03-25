@@ -1310,36 +1310,34 @@ class WebEXConnector:
 
         try:
             def callback(ch, method, properties, body):
-                """Handle message from queue"""
+                """Handle message from queue - ack immediately to prevent stuck messages"""
+                # ACK immediately upon receipt to prevent stuck/unacked messages in RabbitMQ.
+                # All failures after this point are logged but the message is already removed
+                # from the queue, eliminating infinite retry loops and queue buildup.
+                ch.basic_ack(delivery_tag=method.delivery_tag)
+
                 try:
                     message_data = json.loads(body.decode())
                 except (json.JSONDecodeError, UnicodeDecodeError) as e:
-                    # Malformed message - discard immediately, never requeue
                     print(f"[ERROR] Discarding malformed RabbitMQ message (bad JSON): {e}", file=sys.stderr)
-                    ch.basic_nack(delivery_tag=method.delivery_tag, requeue=False)
+                    print(f"[ERROR] Raw body (first 500 chars): {body[:500]}", file=sys.stderr)
                     return
 
                 try:
                     print(f"[DEBUG] Received WebEX message: {message_data}", file=sys.stderr)
 
-                    # Fix 1: Support configurable payload unwrapping for gateway wrappers
+                    # Support configurable payload unwrapping for gateway wrappers
                     payload_key = self.config.config.get("rabbitmq_payload_key")
                     if payload_key and payload_key in message_data and isinstance(message_data[payload_key], dict):
                         message_data = message_data[payload_key]
                         print(f"[DEBUG] Unwrapped payload from key '{payload_key}'", file=sys.stderr)
 
                     self.handle_message(message_data)
-                    # Ack only after successful processing
-                    ch.basic_ack(delivery_tag=method.delivery_tag)
                 except Exception as e:
                     import traceback
                     tb_str = traceback.format_exc()
-                    print("[ERROR] Unexpected exception in callback (discarding, not requeueing):", file=sys.stderr)
+                    print("[ERROR] Exception processing WebEX message (message already acked, discarding):", file=sys.stderr)
                     print(tb_str, file=sys.stderr)
-                    # Always requeue=False — requeueing causes duplicate processing and infinite failure loops.
-                    # handle_message() handles its own errors internally; if we reach here something
-                    # truly unexpected happened. The message cannot be safely retried.
-                    ch.basic_nack(delivery_tag=method.delivery_tag, requeue=False)
 
             if not self.connect_rabbitmq():
                 print("Failed to connect to RabbitMQ, exiting...", file=sys.stderr)
