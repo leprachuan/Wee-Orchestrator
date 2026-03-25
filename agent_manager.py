@@ -3741,6 +3741,11 @@ User Request:
                                             _cp_legacy = _re_tc.match(r'^(?:Running|Calling|Using)\s+(\w+)\s*(.*)', _line_stripped)
                                             if _cp_legacy:
                                                 _tc_detected = {"name": _cp_legacy.group(1), "input": _cp_legacy.group(2).strip()}
+                                        # Suppress box-drawing context lines (│ cmd, └ N lines, ├ ...)
+                                        # These are tool output annotations that appear after the ● line.
+                                        # Pushing them as chunks destroys the spinning gear block in the UI.
+                                        if not _tc_detected and _re_tc.match(r'^[│├└─]\s', _line_stripped):
+                                            continue
                                 elif runtime == "codex":
                                     # Codex exec tool call patterns
                                     import re as _re_tc
