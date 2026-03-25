@@ -3797,10 +3797,12 @@ User Request:
                                             queue.put_nowait, ("tool_call", tc_event)
                                         )
 
-                                if stream_buffer:
-                                    stream_buffer.push("chunk", line)
                                 else:
-                                    loop.call_soon_threadsafe(queue.put_nowait, ("chunk", line))
+                                    # Only push as text chunk when NOT a tool call line
+                                    if stream_buffer:
+                                        stream_buffer.push("chunk", line)
+                                    else:
+                                        loop.call_soon_threadsafe(queue.put_nowait, ("chunk", line))
                     except Exception:
                         pass
                     finally:
