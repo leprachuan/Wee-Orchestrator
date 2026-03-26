@@ -6,6 +6,10 @@
 #   2. cp agents.example.json config/agents.json
 #   3. docker compose up -d
 #   4. Open https://localhost:8000 in your browser
+#
+# Bot connectors start automatically if credentials are provided:
+#   Telegram: set TELEGRAM_BOT_TOKEN in .env
+#   WebEx:    set WEBEX_BOT_TOKEN + RABBITMQ_PASSWORD in .env
 # =============================================================================
 
 services:
@@ -24,17 +28,30 @@ services:
       # Persistent data (sessions, scheduler jobs, logs)
       - wee-data:/data
 
-      # Config files — mount your customized JSON configs here
-      # Copy from examples and edit with your settings:
+      # --- Required ---
+      # Agent config — copy from example and edit with your settings:
       #   cp agents.example.json config/agents.json
-      #   cp telegram_config.example.json config/telegram_config.json
       - ./config/agents.json:/app/agents.json:ro
+
+      # --- Telegram Bot (optional) ---
+      # Mount if you want to use a config file instead of env vars.
+      # Required keys: token, allowed_users (see telegram_config.example.json)
+      # Alternative: just set TELEGRAM_BOT_TOKEN in .env (no file needed)
       # - ./config/telegram_config.json:/app/telegram_config.json:ro
+
+      # --- WebEx Bot (optional) ---
+      # Mount if you want to use a config file instead of env vars.
+      # Required keys: token, rabbitmq_host, rabbitmq_password, rabbitmq_queue
+      # Alternative: set WEBEX_BOT_TOKEN + RABBITMQ_* in .env (no file needed)
       # - ./config/webex_config.json:/app/webex_config.json:ro
+
+      # --- Skill repositories (optional) ---
       # - ./config/skill_repositories.json:/app/skill_repositories.json:ro
 
-      # SSL certificates (optional — uncomment and set SSL_CERTFILE/SSL_KEYFILE in .env)
+      # --- SSL certificates (optional) ---
+      # Uncomment and set SSL_CERTFILE/SSL_KEYFILE in .env
       # - ./certs:/data/certs:ro
+
     healthcheck:
       test: >
         curl -fsk https://localhost:8000/api/v1/health ||
