@@ -1,0 +1,51 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+ENV/
+
+# Git
+.git/
+.gitignore
+
+# Node
+node_modules/
+webui/node_modules/
+webui/src/
+
+# IDE
+.vscode/
+.idea/
+
+# Config files with secrets (use env vars + volume mounts in Docker)
+.env
+.env.*
+agents.json
+telegram_config.json
+webex_config.json
+opencode.json
+skill_repositories.json
+
+# Certs (mount as volume)
+certs/
+
+# Runtime data
+.task-scheduler/
+
+# Docker files
+Dockerfile
+docker-compose*.yml
+.dockerignore
+
+# Logs
+*.log
+
+# Docs & misc
+*.md
+LICENSE
+
+# Ignore text files except requirements
+*.txt
+!requirements.txt

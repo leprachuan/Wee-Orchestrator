@@ -1,0 +1,49 @@
+# =============================================================================
+# Wee Orchestrator — Docker Compose
+# =============================================================================
+# Quick start:
+#   1. cp .env.example .env     # fill in your values
+#   2. cp agents.example.json config/agents.json
+#   3. docker compose up -d
+#   4. Open https://localhost:8000 in your browser
+# =============================================================================
+
+services:
+  wee-orchestrator:
+    image: ghcr.io/leprachuan/wee-orchestrator:latest
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: wee-orchestrator
+    restart: unless-stopped
+    ports:
+      - "${WEE_PORT:-8000}:8000"
+    env_file:
+      - .env
+    volumes:
+      # Persistent data (sessions, scheduler jobs, logs)
+      - wee-data:/data
+
+      # Config files — mount your customized JSON configs here
+      # Copy from examples and edit with your settings:
+      #   cp agents.example.json config/agents.json
+      #   cp telegram_config.example.json config/telegram_config.json
+      - ./config/agents.json:/app/agents.json:ro
+      # - ./config/telegram_config.json:/app/telegram_config.json:ro
+      # - ./config/webex_config.json:/app/webex_config.json:ro
+      # - ./config/skill_repositories.json:/app/skill_repositories.json:ro
+
+      # SSL certificates (optional — uncomment and set SSL_CERTFILE/SSL_KEYFILE in .env)
+      # - ./certs:/data/certs:ro
+    healthcheck:
+      test: >
+        curl -fsk https://localhost:8000/api/v1/health ||
+        curl -fs  http://localhost:8000/api/v1/health || exit 1
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+volumes:
+  wee-data:
+    driver: local
