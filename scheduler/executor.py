@@ -312,7 +312,8 @@ class TaskSchedulerExecutor:
                 cmd,
                 capture_output=True,
                 text=True,
-                timeout=timeout
+                timeout=timeout,
+                env={**os.environ, "COMMAND_TIMEOUT": str(timeout)}
             )
 
             if result.returncode == 0:
