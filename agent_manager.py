@@ -9016,7 +9016,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         if _agents_json_path.exists():
             shutil.copy2(str(_agents_json_path), str(backup))
         _agents_json_path.write_text(json.dumps(data, indent=2) + "\n")
-        print(f"[API] agents.json updated by {auth.get(\"identity\", \"unknown\")}", file=sys.stderr)
+        print(f"[API] agents.json updated by {auth.get('identity', 'unknown')}", file=sys.stderr)
         return {"status": "saved", "agent_count": len(data["agents"])}
 
     @app.post("/api/v1/reload-agents")
