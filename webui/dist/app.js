@@ -6642,3 +6642,12 @@ if (document.readyState !== 'loading') {
 } else {
   document.addEventListener('DOMContentLoaded', _initSkillsPanel);
 }
+
+// Expose skill panel functions for inline onclick handlers
+window._skillCheckUpdate = _skillCheckUpdate;
+window._skillTriggerUpdate = _skillTriggerUpdate;
+window._showOriginForm = _showOriginForm;
+window._saveOrigin = _saveOrigin;
+window._deleteOrigin = _deleteOrigin;
+window._closeSkillDetail = _closeSkillDetail;
+window._openSkillDetail = _openSkillDetail;
