@@ -161,6 +161,8 @@ def scan_skills() -> List[Dict[str, Any]]:
             continue
 
         for entry in sorted(os.listdir(base_path)):
+            if '.backup.' in entry:
+                continue
             full = os.path.join(base_path, entry)
             if not os.path.isdir(full):
                 continue
@@ -171,6 +173,8 @@ def scan_skills() -> List[Dict[str, Any]]:
             nested_skills_dir = os.path.join(full, "skills")
             if os.path.isdir(nested_skills_dir):
                 for nested_entry in sorted(os.listdir(nested_skills_dir)):
+                    if '.backup.' in nested_entry:
+                        continue
                     nested_full = os.path.join(nested_skills_dir, nested_entry)
                     if os.path.isdir(nested_full) and _is_skill_dir(nested_full):
                         skill = _build_skill_descriptor(
