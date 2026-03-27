@@ -9016,7 +9016,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         if _agents_json_path.exists():
             shutil.copy2(str(_agents_json_path), str(backup))
         _agents_json_path.write_text(json.dumps(data, indent=2) + "\n")
-        logger.info("agents.json updated by %s", auth.get("identity", "unknown"))
+        print(f"[API] agents.json updated by {auth.get(\"identity\", \"unknown\")}", file=sys.stderr)
         return {"status": "saved", "agent_count": len(data["agents"])}
 
     @app.post("/api/v1/reload-agents")
@@ -9032,14 +9032,10 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             fresh_agents = session_mgr._load_agents_config()
             session_mgr.AGENTS = fresh_agents
             count = len(fresh_agents)
-            logger.info(
-                "agents.json hot-reloaded by %s — %d agents",
-                auth.get("identity", "unknown"),
-                count,
-            )
+            print(f"[API] agents.json hot-reloaded by {auth.get('identity', 'unknown')} - {count} agents", file=sys.stderr)
             return {"status": "reloaded", "message": f"Loaded {count} agent(s) from disk."}
         except Exception as exc:
-            logger.error("Failed to hot-reload agents.json: %s", exc)
+            print(f"[API] Failed to hot-reload agents.json: {exc}", file=sys.stderr)
             raise HTTPException(status_code=500, detail=f"Reload failed: {exc}")
 
     @app.get("/api/v1/logs")
