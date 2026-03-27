@@ -6191,3 +6191,454 @@ if (document.readyState !== 'loading') {
     });
   }
 })();
+
+// ─── Skills Manager Panel ────────────────────────────────────────────────────
+// Mirrors the Canvas pushover panel pattern.
+// ═══════════════════════════════════════════════════════════════════════════════
+
+let _skillsPanelOpen = false;
+let _skillsCache = [];           // cached skills list from API
+let _skillsDetailKey = null;     // currently viewed skill key
+
+// ── Panel toggle ─────────────────────────────────────────────────────────────
+
+function toggleSkillsPanel() {
+  if (_skillsPanelOpen) closeSkillsPanel();
+  else openSkillsPanel();
+}
+
+function openSkillsPanel() {
+  const panel = document.getElementById('skills-panel');
+  if (!panel) return;
+  panel.classList.remove('skills-hidden');
+  panel.classList.add('skills-open');
+  _skillsPanelOpen = true;
+  loadSkillsList();
+}
+
+function closeSkillsPanel() {
+  const panel = document.getElementById('skills-panel');
+  if (!panel) return;
+  panel.classList.add('skills-hidden');
+  panel.classList.remove('skills-open');
+  _skillsPanelOpen = false;
+}
+
+// ── Skills list loading ──────────────────────────────────────────────────────
+
+async function loadSkillsList() {
+  const listEl = document.getElementById('skills-list');
+  if (!listEl) return;
+
+  try {
+    const resp = await fetch(`${API_BASE}/skills`, {
+      headers: { 'Authorization': `Bearer ${STATE.token}` }
+    });
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    const data = await resp.json();
+    _skillsCache = data.skills || [];
+    _renderSkillsList();
+  } catch (e) {
+    listEl.innerHTML = `<div class="skills-empty">
+      <div style="font-size:36px;opacity:0.4;">⚠️</div>
+      <div style="font-size:14px;color:var(--danger);margin-top:8px;">Failed to load skills</div>
+      <div style="font-size:12px;color:var(--text-muted);margin-top:4px;">${e.message}</div>
+    </div>`;
+  }
+}
+
+function _renderSkillsList() {
+  const listEl = document.getElementById('skills-list');
+  if (!listEl) return;
+
+  const searchVal = (document.getElementById('skills-search')?.value || '').toLowerCase();
+  const filterOrigin = document.getElementById('skills-filter-origin')?.value || '';
+
+  let filtered = _skillsCache;
+
+  if (searchVal) {
+    filtered = filtered.filter(s =>
+      s.name.toLowerCase().includes(searchVal) ||
+      (s.description || '').toLowerCase().includes(searchVal) ||
+      (s.dir_name || '').toLowerCase().includes(searchVal) ||
+      (s.source_label || '').toLowerCase().includes(searchVal)
+    );
+  }
+
+  if (filterOrigin) {
+    if (filterOrigin === 'unknown') {
+      filtered = filtered.filter(s => !s.origin);
+    } else {
+      filtered = filtered.filter(s => s.origin?.origin_type === filterOrigin);
+    }
+  }
+
+  if (filtered.length === 0) {
+    listEl.innerHTML = `<div class="skills-empty">
+      <div style="font-size:36px;opacity:0.4;">🔍</div>
+      <div style="font-size:14px;color:var(--text-secondary);margin-top:8px;">No skills match</div>
+    </div>`;
+    return;
+  }
+
+  listEl.innerHTML = '';
+  for (const skill of filtered) {
+    const card = document.createElement('div');
+    card.className = 'skill-card';
+    card.addEventListener('click', () => _openSkillDetail(skill.skill_key));
+
+    const originType = skill.origin?.origin_type || 'unknown';
+    const badgeClass = {
+      'git_repo': 'skill-badge-git',
+      'website': 'skill-badge-website',
+      'local': 'skill-badge-local',
+      'unknown': 'skill-badge-unknown',
+    }[originType] || 'skill-badge-unknown';
+
+    const badgeText = {
+      'git_repo': '🔗 Git',
+      'website': '🌐 Web',
+      'local': '📁 Local',
+      'unknown': '❓ No Origin',
+    }[originType] || '❓ Unknown';
+
+    const updateBadge = skill.origin?.update_available
+      ? '<span class="skill-badge skill-badge-update">⬆ Update</span>'
+      : '';
+
+    const runtimes = (skill.runtimes || []).map(r => {
+      const icons = { claude: '🟣', copilot: '🟢', gemini: '🔵' };
+      return icons[r] || '⚪';
+    }).join(' ');
+
+    card.innerHTML = `
+      <div class="skill-card-header">
+        <span class="skill-card-name">${_escHtml(skill.name)}</span>
+        <span class="skill-card-badges">
+          ${updateBadge}
+          <span class="skill-badge ${badgeClass}">${badgeText}</span>
+        </span>
+      </div>
+      ${skill.description ? `<div class="skill-card-desc">${_escHtml(skill.description)}</div>` : ''}
+      <div class="skill-card-meta">
+        <span>📂 ${_escHtml(skill.source_label)}</span>
+        ${skill.version ? `<span>v${_escHtml(skill.version)}</span>` : ''}
+        ${runtimes ? `<span>${runtimes}</span>` : ''}
+      </div>
+    `;
+    listEl.appendChild(card);
+  }
+}
+
+function _escHtml(text) {
+  const d = document.createElement('div');
+  d.textContent = text || '';
+  return d.innerHTML;
+}
+
+// ── Skill detail view ────────────────────────────────────────────────────────
+
+function _openSkillDetail(skillKey) {
+  _skillsDetailKey = skillKey;
+  const skill = _skillsCache.find(s => s.skill_key === skillKey);
+  if (!skill) return;
+
+  const detailEl = document.getElementById('skills-detail');
+  const nameEl = document.getElementById('skills-detail-name');
+  const bodyEl = document.getElementById('skills-detail-body');
+  if (!detailEl || !bodyEl) return;
+
+  nameEl.textContent = skill.name;
+  detailEl.classList.remove('hidden');
+
+  const origin = skill.origin || {};
+  const originType = origin.origin_type || '';
+  const hasOrigin = !!originType;
+
+  let originSection = '';
+  if (hasOrigin) {
+    const urlDisplay = origin.origin_url
+      ? `<a href="${_escHtml(origin.origin_url)}" target="_blank">${_escHtml(origin.origin_url)}</a>`
+      : '<span style="color:var(--text-muted)">—</span>';
+
+    originSection = `
+      <div class="skill-detail-section">
+        <h4>Origin</h4>
+        <div class="skill-detail-row"><span class="label">Type</span><span class="value">${_escHtml(originType)}</span></div>
+        <div class="skill-detail-row"><span class="label">URL</span><span class="value">${urlDisplay}</span></div>
+        <div class="skill-detail-row"><span class="label">Path in Repo</span><span class="value">${_escHtml(origin.origin_path || '—')}</span></div>
+        ${origin.last_checked ? `<div class="skill-detail-row"><span class="label">Last Checked</span><span class="value">${_timeAgo(origin.last_checked)}</span></div>` : ''}
+        ${origin.last_updated ? `<div class="skill-detail-row"><span class="label">Last Updated</span><span class="value">${_timeAgo(origin.last_updated)}</span></div>` : ''}
+        ${origin.notes ? `<div class="skill-detail-row"><span class="label">Notes</span><span class="value">${_escHtml(origin.notes)}</span></div>` : ''}
+        ${origin.update_available ? `<div class="skill-detail-row"><span class="label">Status</span><span class="value skill-status-success">⬆ Update available</span></div>` : ''}
+      </div>
+      <div class="skill-detail-section">
+        <h4>Actions</h4>
+        <div class="skill-origin-actions">
+          <button class="btn-skill-action btn-skill-secondary" onclick="_skillCheckUpdate('${_escHtml(skillKey)}')">🔍 Check for Updates</button>
+          ${originType === 'git_repo' ? `<button class="btn-skill-action btn-skill-update" onclick="_skillTriggerUpdate('${_escHtml(skillKey)}')">⬆ Update Skill</button>` : ''}
+          <button class="btn-skill-action btn-skill-secondary" onclick="_showOriginForm('${_escHtml(skillKey)}')">✏️ Edit Origin</button>
+        </div>
+        <div id="skill-action-status" style="margin-top:10px;font-size:13px;"></div>
+      </div>
+    `;
+  } else {
+    originSection = `
+      <div class="skill-detail-section">
+        <h4>Origin</h4>
+        <div style="color:var(--danger);font-size:13px;margin-bottom:10px;">
+          ⚠️ No origin metadata recorded for this skill. Set the origin below so updates can be tracked.
+        </div>
+        <button class="btn-skill-action btn-skill-primary" onclick="_showOriginForm('${_escHtml(skillKey)}')">📝 Record Origin</button>
+        <div id="skill-action-status" style="margin-top:10px;font-size:13px;"></div>
+      </div>
+    `;
+  }
+
+  bodyEl.innerHTML = `
+    <div class="skill-detail-section">
+      <h4>Details</h4>
+      <div class="skill-detail-row"><span class="label">Name</span><span class="value">${_escHtml(skill.name)}</span></div>
+      <div class="skill-detail-row"><span class="label">Key</span><span class="value" style="font-family:monospace;font-size:12px;">${_escHtml(skill.skill_key)}</span></div>
+      <div class="skill-detail-row"><span class="label">Local Path</span><span class="value" style="font-family:monospace;font-size:11px;">${_escHtml(skill.path)}</span></div>
+      <div class="skill-detail-row"><span class="label">Source</span><span class="value">${_escHtml(skill.source_label)}</span></div>
+      ${skill.version ? `<div class="skill-detail-row"><span class="label">Version</span><span class="value">${_escHtml(skill.version)}</span></div>` : ''}
+      ${skill.author ? `<div class="skill-detail-row"><span class="label">Author</span><span class="value">${_escHtml(skill.author)}</span></div>` : ''}
+      ${skill.category ? `<div class="skill-detail-row"><span class="label">Category</span><span class="value">${_escHtml(skill.category)}</span></div>` : ''}
+      <div class="skill-detail-row"><span class="label">Runtimes</span><span class="value">${(skill.runtimes || []).join(', ') || '—'}</span></div>
+      <div class="skill-detail-row"><span class="label">Has Metadata</span><span class="value">${skill.has_metadata ? '✅' : '❌'}</span></div>
+      <div class="skill-detail-row"><span class="label">Has SKILL.md</span><span class="value">${skill.has_skill_md ? '✅' : '❌'}</span></div>
+      <div class="skill-detail-row"><span class="label">Checksum</span><span class="value" style="font-family:monospace;font-size:11px;">${_escHtml(skill.checksum)}</span></div>
+    </div>
+    ${skill.description ? `<div class="skill-detail-section"><h4>Description</h4><div style="font-size:13px;color:var(--text-secondary);line-height:1.5;">${_escHtml(skill.description)}</div></div>` : ''}
+    ${originSection}
+    <div id="skill-origin-form-container"></div>
+  `;
+}
+
+function _closeSkillDetail() {
+  const detailEl = document.getElementById('skills-detail');
+  if (detailEl) detailEl.classList.add('hidden');
+  _skillsDetailKey = null;
+}
+
+// ── Time formatting ──────────────────────────────────────────────────────────
+
+function _timeAgo(ts) {
+  if (!ts) return '—';
+  const secs = Math.floor(Date.now() / 1000 - ts);
+  if (secs < 60) return 'just now';
+  if (secs < 3600) return `${Math.floor(secs/60)}m ago`;
+  if (secs < 86400) return `${Math.floor(secs/3600)}h ago`;
+  return `${Math.floor(secs/86400)}d ago`;
+}
+
+// ── Origin form ──────────────────────────────────────────────────────────────
+
+function _showOriginForm(skillKey) {
+  const container = document.getElementById('skill-origin-form-container');
+  if (!container) return;
+
+  const skill = _skillsCache.find(s => s.skill_key === skillKey);
+  const origin = skill?.origin || {};
+
+  container.innerHTML = `
+    <div class="skill-detail-section">
+      <h4>${origin.origin_type ? 'Edit' : 'Record'} Origin Metadata</h4>
+      <div class="skill-origin-form">
+        <label>Origin Type</label>
+        <select id="origin-type">
+          <option value="git_repo" ${origin.origin_type === 'git_repo' ? 'selected' : ''}>Git Repository</option>
+          <option value="website" ${origin.origin_type === 'website' ? 'selected' : ''}>Website (e.g. skills.sh)</option>
+          <option value="local" ${origin.origin_type === 'local' ? 'selected' : ''}>Local / Self-authored</option>
+          <option value="unknown" ${origin.origin_type === 'unknown' ? 'selected' : ''}>Unknown</option>
+        </select>
+        <label>Origin URL <span style="color:var(--text-muted);font-weight:400;">(git clone URL or website)</span></label>
+        <input type="text" id="origin-url" value="${_escHtml(origin.origin_url || '')}" placeholder="https://github.com/org/repo.git" />
+        <label>Path in Origin <span style="color:var(--text-muted);font-weight:400;">(folder path within the repo)</span></label>
+        <input type="text" id="origin-path" value="${_escHtml(origin.origin_path || '')}" placeholder="skills/my-skill" />
+        <label>Notes</label>
+        <textarea id="origin-notes" placeholder="e.g. Copied from skills.sh on 2026-03-27, modified locally">${_escHtml(origin.notes || '')}</textarea>
+        <div class="skill-origin-actions">
+          <button class="btn-skill-action btn-skill-primary" onclick="_saveOrigin('${_escHtml(skillKey)}')">💾 Save Origin</button>
+          ${origin.origin_type ? `<button class="btn-skill-action btn-skill-danger" onclick="_deleteOrigin('${_escHtml(skillKey)}')">🗑 Remove Origin</button>` : ''}
+          <button class="btn-skill-action btn-skill-secondary" onclick="document.getElementById('skill-origin-form-container').innerHTML=''">Cancel</button>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+async function _saveOrigin(skillKey) {
+  const originType = document.getElementById('origin-type')?.value || 'unknown';
+  const originUrl = document.getElementById('origin-url')?.value?.trim() || '';
+  const originPath = document.getElementById('origin-path')?.value?.trim() || '';
+  const notes = document.getElementById('origin-notes')?.value?.trim() || '';
+
+  try {
+    const resp = await fetch(`${API_BASE}/skills/${encodeURIComponent(skillKey)}/origin`, {
+      method: 'PUT',
+      headers: {
+        'Authorization': `Bearer ${STATE.token}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ origin_type: originType, origin_url: originUrl, origin_path: originPath, notes }),
+    });
+    if (!resp.ok) {
+      const err = await resp.json().catch(() => ({}));
+      throw new Error(err.detail || `HTTP ${resp.status}`);
+    }
+    _showSkillToast('Origin metadata saved ✅', 'success');
+    await loadSkillsList();
+    _openSkillDetail(skillKey);
+  } catch (e) {
+    _showSkillToast(`Failed to save origin: ${e.message}`, 'error');
+  }
+}
+
+async function _deleteOrigin(skillKey) {
+  if (!confirm('Remove origin metadata for this skill?')) return;
+  try {
+    const resp = await fetch(`${API_BASE}/skills/${encodeURIComponent(skillKey)}/origin`, {
+      method: 'DELETE',
+      headers: { 'Authorization': `Bearer ${STATE.token}` },
+    });
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    _showSkillToast('Origin metadata removed', 'info');
+    await loadSkillsList();
+    _openSkillDetail(skillKey);
+  } catch (e) {
+    _showSkillToast(`Failed: ${e.message}`, 'error');
+  }
+}
+
+// ── Update check ─────────────────────────────────────────────────────────────
+
+async function _skillCheckUpdate(skillKey) {
+  const statusEl = document.getElementById('skill-action-status');
+  if (statusEl) statusEl.innerHTML = '<span class="skill-status-checking">🔍 Checking for updates...</span>';
+
+  try {
+    const resp = await fetch(`${API_BASE}/skills/${encodeURIComponent(skillKey)}/check-update`, {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${STATE.token}` },
+    });
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    const result = await resp.json();
+
+    if (result.error) {
+      if (statusEl) statusEl.innerHTML = `<span class="skill-status-error">❌ ${_escHtml(result.error)}</span>`;
+      return;
+    }
+
+    if (result.available) {
+      const diffList = (result.diff_files || []).slice(0, 8).map(f => `<code>${_escHtml(f)}</code>`).join('<br>');
+      if (statusEl) statusEl.innerHTML = `
+        <span class="skill-status-success">⬆ Updates available!</span>
+        ${diffList ? `<div style="margin-top:6px;font-size:12px;color:var(--text-muted);">${diffList}</div>` : ''}
+      `;
+      _showSkillToast(`Updates available for ${skillKey}`, 'success');
+    } else {
+      if (statusEl) statusEl.innerHTML = `<span style="color:var(--text-muted);">✅ Up to date</span>`;
+    }
+
+    // Refresh the cache
+    await loadSkillsList();
+    // Re-render detail if still viewing this skill
+    if (_skillsDetailKey === skillKey) {
+      _openSkillDetail(skillKey);
+    }
+  } catch (e) {
+    if (statusEl) statusEl.innerHTML = `<span class="skill-status-error">❌ ${_escHtml(e.message)}</span>`;
+  }
+}
+
+// ── Trigger update (via background task) ─────────────────────────────────────
+
+async function _skillTriggerUpdate(skillKey) {
+  if (!confirm(`Update skill "${skillKey}" from its origin? This will run as a background task.`)) return;
+
+  const statusEl = document.getElementById('skill-action-status');
+  if (statusEl) statusEl.innerHTML = '<span class="skill-status-updating">⬆ Dispatching update task...</span>';
+
+  try {
+    const resp = await fetch(`${API_BASE}/skills/${encodeURIComponent(skillKey)}/update`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${STATE.token}`,
+        'X-User-Identity': STATE.identity || '',
+        'X-Auth-Channel': STATE.channel || 'api',
+      },
+    });
+    if (!resp.ok) {
+      const err = await resp.json().catch(() => ({}));
+      throw new Error(err.detail || `HTTP ${resp.status}`);
+    }
+    const result = await resp.json();
+
+    if (result.task_id) {
+      if (statusEl) statusEl.innerHTML = `
+        <span class="skill-status-success">✅ Update task dispatched</span>
+        <div style="font-size:12px;color:var(--text-muted);margin-top:4px;">
+          Task ID: <code>${_escHtml(result.task_id)}</code>
+          — check ⚡ Tasks tab for progress
+        </div>
+      `;
+      _showSkillToast(`Update task started: ${result.task_id}`, 'success');
+    } else if (result.result) {
+      // Synchronous fallback
+      const r = result.result;
+      if (r.success) {
+        if (statusEl) statusEl.innerHTML = `<span class="skill-status-success">✅ ${_escHtml(r.message)}</span>`;
+        _showSkillToast('Skill updated successfully!', 'success');
+        await loadSkillsList();
+        if (_skillsDetailKey === skillKey) _openSkillDetail(skillKey);
+      } else {
+        if (statusEl) statusEl.innerHTML = `<span class="skill-status-error">❌ ${_escHtml(r.message)}</span>`;
+      }
+    }
+  } catch (e) {
+    if (statusEl) statusEl.innerHTML = `<span class="skill-status-error">❌ ${_escHtml(e.message)}</span>`;
+    _showSkillToast(`Update failed: ${e.message}`, 'error');
+  }
+}
+
+// ── Toast notifications ──────────────────────────────────────────────────────
+
+function _showSkillToast(msg, type) {
+  const toast = document.createElement('div');
+  toast.className = `skill-toast skill-toast-${type || 'info'}`;
+  toast.textContent = msg;
+  document.body.appendChild(toast);
+  setTimeout(() => toast.remove(), 4000);
+}
+
+// ── Init ─────────────────────────────────────────────────────────────────────
+
+function _initSkillsPanel() {
+  const edgeTab = document.getElementById('skills-edge-tab');
+  if (edgeTab) edgeTab.addEventListener('click', toggleSkillsPanel);
+
+  const closeBtn = document.getElementById('btn-skills-close');
+  if (closeBtn) closeBtn.addEventListener('click', closeSkillsPanel);
+
+  const refreshBtn = document.getElementById('btn-skills-refresh');
+  if (refreshBtn) refreshBtn.addEventListener('click', () => loadSkillsList());
+
+  const backBtn = document.getElementById('btn-skills-back');
+  if (backBtn) backBtn.addEventListener('click', _closeSkillDetail);
+
+  const searchInput = document.getElementById('skills-search');
+  if (searchInput) searchInput.addEventListener('input', _renderSkillsList);
+
+  const filterSelect = document.getElementById('skills-filter-origin');
+  if (filterSelect) filterSelect.addEventListener('change', _renderSkillsList);
+}
+
+window.toggleSkillsPanel = toggleSkillsPanel;
+
+if (document.readyState !== 'loading') {
+  _initSkillsPanel();
+} else {
+  document.addEventListener('DOMContentLoaded', _initSkillsPanel);
+}

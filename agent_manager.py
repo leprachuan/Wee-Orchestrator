@@ -8773,6 +8773,142 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             }
         return {"sessions": sessions, "count": len(_canvas_sessions)}
 
+    # ── Skills Panel API ──────────────────────────────────────────────────────
+
+    from skill_manager import (
+        scan_skills, get_skill, get_origin, set_origin, delete_origin,
+        check_update, apply_update,
+    )
+
+    @app.get("/api/v1/skills")
+    async def list_skills():
+        """Return all installed skills with origin metadata."""
+        skills = scan_skills()
+        return {"skills": skills, "count": len(skills)}
+
+    @app.get("/api/v1/skills/{skill_key:path}")
+    async def get_skill_detail(skill_key: str):
+        """Return detailed info for a single skill."""
+        skill = get_skill(skill_key)
+        if not skill:
+            raise HTTPException(status_code=404, detail=f"Skill '{skill_key}' not found")
+        return skill
+
+    @app.put("/api/v1/skills/{skill_key:path}/origin")
+    async def update_skill_origin(skill_key: str, request: Request):
+        """Set or update origin metadata for a skill."""
+        body = await request.json()
+        # Validate required fields
+        origin_type = body.get("origin_type", "")
+        if origin_type not in ("git_repo", "website", "local", "unknown"):
+            raise HTTPException(status_code=400, detail="origin_type must be one of: git_repo, website, local, unknown")
+        result = set_origin(skill_key, body)
+        return {"success": True, "origin": result}
+
+    @app.delete("/api/v1/skills/{skill_key:path}/origin")
+    async def remove_skill_origin(skill_key: str):
+        """Remove origin metadata for a skill."""
+        if delete_origin(skill_key):
+            return {"success": True}
+        raise HTTPException(status_code=404, detail="No origin metadata found for this skill")
+
+    @app.post("/api/v1/skills/{skill_key:path}/check-update")
+    async def check_skill_update(skill_key: str):
+        """Check if updates are available for a skill from its origin."""
+        result = check_update(skill_key)
+        return result
+
+    @app.post("/api/v1/skills/{skill_key:path}/update")
+    async def trigger_skill_update(skill_key: str, request: Request):
+        """Dispatch a background task to update a skill from its origin.
+
+        This uses the orchestrator background task system so the update
+        is visible in the WebUI Tasks tab.
+        """
+        user = await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+
+        origin = get_origin(skill_key)
+        if not origin:
+            raise HTTPException(status_code=400, detail="No origin metadata — cannot update")
+
+        origin_type = origin.get("origin_type", "")
+        if origin_type == "website":
+            raise HTTPException(
+                status_code=400,
+                detail=f"Website-sourced skills must be updated manually. Visit: {origin.get('origin_url', '')}",
+            )
+
+        # Build a prompt for the background task agent
+        skill = get_skill(skill_key)
+        skill_name = skill["name"] if skill else skill_key
+        skill_path = skill["path"] if skill else "unknown"
+
+        prompt = (
+            f"Update the skill '{skill_name}' (key: {skill_key}) from its git origin.\n"
+            f"Local path: {skill_path}\n"
+            f"Origin URL: {origin.get('origin_url', '')}\n"
+            f"Origin path in repo: {origin.get('origin_path', '')}\n\n"
+            f"Steps:\n"
+            f"1. Run: python3 -c \"import sys; sys.path.insert(0, '/opt/n8n-copilot-shim-dev'); "
+            f"from skill_manager import apply_update; import json; "
+            f"r = apply_update('{skill_key}'); print(json.dumps(r, indent=2))\"\n"
+            f"2. Report the result — files changed, any errors, and whether a backup was created.\n"
+            f"3. If the update succeeded, confirm the skill is still valid."
+        )
+
+        # Dispatch as background task
+        bg_body = {
+            "prompt": prompt,
+            "agent": "fosterbot",
+            "runtime": "copilot",
+            "model": "claude-haiku-4.5",
+            "timeout": 600,
+        }
+
+        # Use internal background task creation
+        channel = user.get("channel", "api")
+        identity = user.get("identity", "")
+
+        if _bg_task_mgr:
+            task_id = _bg_task_mgr.create_task(
+                prompt=prompt,
+                agent="fosterbot",
+                runtime="copilot",
+                model="claude-haiku-4.5",
+                channel=channel,
+                identity=identity,
+                timeout=600,
+            )
+            # Actually run the update directly in a thread to avoid
+            # needing a full agent session for a simple Python call
+            import threading
+
+            def _run_update():
+                try:
+                    result = apply_update(skill_key)
+                    _bg_task_mgr.complete_task(task_id, json.dumps(result))
+                except Exception as e:
+                    _bg_task_mgr.fail_task(task_id, str(e))
+
+            t = threading.Thread(target=_run_update, daemon=True)
+            t.start()
+
+            return {
+                "success": True,
+                "task_id": task_id,
+                "message": f"Update task dispatched for '{skill_name}'",
+            }
+        else:
+            # Fallback: run synchronously
+            result = apply_update(skill_key)
+            return {"success": result.get("success", False), "result": result}
+
+
 
 
     # --- Session Permissions API ---
