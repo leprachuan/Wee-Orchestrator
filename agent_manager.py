@@ -8874,26 +8874,31 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         channel = user.get("channel", "api")
         identity = user.get("identity", "")
 
-        if _bg_task_mgr:
-            task_id = _bg_task_mgr.create_task(
-                prompt=prompt,
+        if bg_task_mgr:
+            import threading
+            from uuid import uuid4
+
+            task_id = f"skill_update_{str(uuid4())[:8]}"
+            session_id = f"skill_{str(uuid4())[:8]}"
+
+            task_record = bg_task_mgr.create_task(
+                task_id=task_id,
+                session_id=session_id,
+                user_identity=identity,
+                channel=channel,
                 agent="fosterbot",
                 runtime="copilot",
                 model="claude-haiku-4.5",
-                channel=channel,
-                identity=identity,
+                prompt=prompt,
                 timeout=600,
             )
-            # Actually run the update directly in a thread to avoid
-            # needing a full agent session for a simple Python call
-            import threading
 
             def _run_update():
                 try:
                     result = apply_update(skill_key)
-                    _bg_task_mgr.complete_task(task_id, json.dumps(result))
+                    bg_task_mgr.complete_task(task_id, json.dumps(result))
                 except Exception as e:
-                    _bg_task_mgr.fail_task(task_id, str(e))
+                    bg_task_mgr.fail_task(task_id, str(e))
 
             t = threading.Thread(target=_run_update, daemon=True)
             t.start()
