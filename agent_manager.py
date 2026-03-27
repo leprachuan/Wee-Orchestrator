@@ -2120,10 +2120,99 @@ class SessionManager:
         )
         return f"✓ Switched to **{agent}** agent\n\n{agent_info['description']}\n\nLocation: `{agent_info['path']}`"
 
+
+    # ── Always-On Agents @mention routing ─────────────────────────────────
+    _aoa_response = None  # Holds response when @mention routes to AOA
+
+    def _route_to_aoa(self, agent_name: str, prompt: str, original: str) -> Optional[str]:
+        """Check if agent_name exists in AOA config and queue the task.
+        Returns a confirmation string, or None if agent not in AOA."""
+        import sqlite3 as _sqlite3
+        from uuid import uuid4 as _uuid4
+        import time as _time
+
+        AOA_DB = "/opt/n8n-copilot-shim/aoa/tasks.sqlite"
+        if not os.path.exists(AOA_DB):
+            return None
+
+        conn = _sqlite3.connect(AOA_DB, timeout=5)
+        conn.row_factory = _sqlite3.Row
+        row = conn.execute(
+            "SELECT agent_name, enabled FROM agent_config WHERE agent_name = ?",
+            (agent_name,),
+        ).fetchone()
+
+        if not row:
+            conn.close()
+            return None  # not an AOA agent — fall through to normal routing
+
+        if not row["enabled"]:
+            conn.close()
+            return f"⚠️ Agent **@{agent_name}** is currently disabled in Always-On Agents."
+
+        # Determine model from --model flag or default
+        model = "claude-haiku-4.5"
+        if "--model " in original:
+            m = re.search(r'--model\s+(\S+)', original)
+            if m:
+                model = m.group(1)
+                prompt = re.sub(r'\s*--model\s+\S+', '', prompt).strip()
+
+        # Determine priority from --priority flag
+        priority = 0
+        if "--priority " in original:
+            m = re.search(r'--priority\s+(\d+)', original)
+            if m:
+                priority = int(m.group(1))
+                prompt = re.sub(r'\s*--priority\s+\d+', '', prompt).strip()
+
+        # Check for --sync flag
+        sync_mode = "--sync" in original
+        if sync_mode:
+            prompt = re.sub(r'\s*--sync', '', prompt).strip()
+
+        task_id = _uuid4().hex[:12]
+        identity = self._bg_identity or "unknown"
+
+        conn.execute(
+            "INSERT INTO tasks (id, agent, prompt, model, runtime, priority, requester, requester_channel) "
+            "VALUES (?, ?, ?, ?, 'copilot', ?, ?, ?)",
+            (task_id, agent_name, prompt, model, priority, identity, "chat"),
+        )
+        conn.commit()
+
+        if sync_mode:
+            # Poll for completion (up to 5 minutes)
+            deadline = _time.time() + 300
+            while _time.time() < deadline:
+                _time.sleep(3)
+                row = conn.execute(
+                    "SELECT status, output, error FROM tasks WHERE id = ?",
+                    (task_id,),
+                ).fetchone()
+                if row and row["status"] in ("completed", "failed"):
+                    conn.close()
+                    if row["status"] == "completed":
+                        return f"✅ **@{agent_name}** completed:\n\n{(row['output'] or '')[:4000]}"
+                    else:
+                        return f"❌ **@{agent_name}** failed:\n\n{(row['error'] or '')[:2000]}"
+            conn.close()
+            return f"⏱️ **@{agent_name}** task `{task_id}` is still running after 5 minutes. Check status later."
+
+        conn.close()
+        return (
+            f"📋 Task queued for **@{agent_name}**\n"
+            f"• Task ID: `{task_id}`\n"
+            f"• Model: {model}\n"
+            f"• Prompt: {prompt[:100]}{'...' if len(prompt) > 100 else ''}\n\n"
+            f"_The Always-On Agents daemon will process this shortly._"
+        )
+
     def detect_agent_delegation(self, prompt: str) -> Tuple[Optional[str], str]:
         """Detect if user is asking for a specific agent to help with something
 
         Patterns detected:
+        - "@agentname prompt" — routes to Always-On Agents task queue
         - "ask the family agent..."
         - "have the devops agent..."
         - "this is in the family agent"
@@ -2132,6 +2221,23 @@ class SessionManager:
 
         Returns: (agent_name, modified_prompt) or (None, original_prompt)
         """
+        # ── @mention detection → Always-On Agents queue ──────────────────
+        at_match = re.match(r'^@(\w+)\s+(.+)', prompt, re.DOTALL)
+        if at_match:
+            mention_agent = at_match.group(1).lower()
+            mention_prompt = at_match.group(2).strip()
+            try:
+                aoa_result = self._route_to_aoa(mention_agent, mention_prompt, prompt)
+                if aoa_result is not None:
+                    # Return a sentinel that execute() will recognise as
+                    # "already handled — just return this string".
+                    # We use agent=None so the caller skips delegation.
+                    self._aoa_response = aoa_result
+                    return None, prompt  # fall through; execute() checks _aoa_response
+            except Exception as e:
+                print(f"[AOA] @mention routing error: {e}", file=sys.stderr)
+        # ── end @mention detection ────────────────────────────────────────
+
         prompt_lower = prompt.lower()
 
         # List of agent names to detect
@@ -4734,7 +4840,11 @@ User Request:
 
         # If not a slash command, check for implicit agent delegation
         if command is None:
+            self._aoa_response = None  # reset AOA response
             delegated_agent, cleaned_prompt = self.detect_agent_delegation(prompt)
+            # Check if @mention was routed to Always-On Agents queue
+            if self._aoa_response is not None:
+                return self._aoa_response
             if delegated_agent and delegated_agent in self.AGENTS:
                 # User asked for specific agent help - auto-delegate
                 print(
