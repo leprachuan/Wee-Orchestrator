@@ -44,6 +44,7 @@ COPY telegram_connector.py .
 COPY webex_connector.py .
 COPY scheduler/ scheduler/
 COPY webui/ webui/
+COPY static/ static/
 
 # Entrypoint script (conditionally starts bots before API)
 COPY entrypoint.sh /entrypoint.sh
