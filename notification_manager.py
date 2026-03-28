@@ -183,11 +183,34 @@ class NotificationManager:
                 skip_external = True
 
         if not skip_external:
-            print(
-                f"[NotificationManager] Broadcasting to all external channels for task {task_id}"
-            )
-            self._notify_telegram_broadcast(notification)
-            self._notify_webex_broadcast(notification)
+            # Route to the specific originating user when identity is known;
+            # fall back to broadcast only when identity resolved to 'unknown'.
+            chan = notification.get("channel", "")
+            ukey = notification.get("user_key", "")
+            identity_unknown = ukey.endswith("_unknown") or not ukey
+            if chan == "telegram":
+                if not identity_unknown:
+                    print(
+                        f"[NotificationManager] Routing Telegram notification for {task_id} to {ukey}"
+                    )
+                    self._notify_telegram(notification)
+                else:
+                    print(
+                        f"[NotificationManager] Broadcasting Telegram notification for {task_id} (identity unknown)"
+                    )
+                    self._notify_telegram_broadcast(notification)
+            elif chan == "webex":
+                if not identity_unknown:
+                    print(
+                        f"[NotificationManager] Routing WebEx notification for {task_id} to {ukey}"
+                    )
+                    self._notify_webex(notification)
+                else:
+                    print(
+                        f"[NotificationManager] Broadcasting WebEx notification for {task_id} (identity unknown)"
+                    )
+                    self._notify_webex_broadcast(notification)
+            # webui/api/other channels: no external push needed (WebUI polls)
         else:
             print(
                 f"[NotificationManager] Skipping external notification for {task_id} (skip_external=True)"

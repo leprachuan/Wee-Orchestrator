@@ -3259,6 +3259,7 @@ Example skill structure:
         runtime: str = "copilot",
         model: str = "gpt-5-mini",
         channel: str = "webui",
+        bg_identity: Optional[str] = None,
     ) -> str:
         """Build a context-aware prompt that includes agent information, runtime, model, and execution deadline.
 
@@ -3510,7 +3511,7 @@ To add custom skill repositories or manage repository settings:
         # that appear in the WebUI Tasks panel via the orchestrator API.
         _api_port_bg = os.environ.get("API_PORT", "8001")
         _shared_key = os.environ.get("API_SHARED_KEY", "")
-        _user_identity = self._bg_identity or "unknown"
+        _user_identity = bg_identity or self._bg_identity or "unknown"
         _api_scheme = "https" if os.environ.get("SSL_CERTFILE") else "http"
         _curl_insecure = " -k" if _api_scheme == "https" else ""
         bg_task_instruction = ""
@@ -3519,7 +3520,10 @@ To add custom skill repositories or manage repository settings:
 [Background Tasks] Run long USER-INITIATED tasks via the orchestrator API (visible in ⚡ Tasks tab). ONLY use this when the USER explicitly asks to run something in the background. Full docs: {SCRIPT_BASE_DIR}/docs/background-tasks.md
 curl -s{_curl_insecure} -X POST {_api_scheme}://127.0.0.1:{_api_port_bg}/api/v1/background-tasks -H "Content-Type: application/json" -H "Authorization: Bearer shared_{_shared_key}" -H "X-User-Identity: {_user_identity}" -H "X-Auth-Channel: {channel}" -d '{{"prompt": "...", "agent": "{agent}", "timeout": 900}}'
 
-⚠️ CRITICAL ROUTING RULE — Sub-agent delegation MUST NOT use the background-tasks API above. When routing work to another agent (@research-dev, @devops, @family, etc.), ALWAYS use agent_manager.py directly (invisible to user — does NOT create a Tasks panel entry). Using the curl API for delegation is a BUG.
+⚠️ CRITICAL ROUTING RULES:
+1. Sub-agent delegation MUST NOT use the background-tasks API above. When routing work to another agent, ALWAYS use agent_manager.py directly (invisible to user — does NOT create a Tasks panel entry). Using the curl API for delegation is a BUG.
+2. USER-FACING LONG TASKS from Telegram/Webex MUST use the orchestrator background-tasks API (curl above). NEVER use internal agent_manager.py subprocess calls for user-visible tasks — this makes them invisible and breaks notification routing back to the user.
+3. X-User-Identity and X-Auth-Channel in the curl above are pre-filled with the real user identity. DO NOT change or hardcode them — altering them breaks notification routing.
 
 [Sub-Agent Delegation] Route tasks to another agent invisibly:
 python3 {SCRIPT_BASE_DIR}/agent_manager.py --agent <agent_name> --runtime copilot --model claude-haiku-4.5 --config {SCRIPT_BASE_DIR}/agents.json "<task prompt>" {n8n_session_id}
@@ -8614,6 +8618,8 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
 
         try:
             # Build full context prompt with agent/runtime/channel metadata
+            # Pass user_identity explicitly so the system prompt curl command
+            # gets the correct X-User-Identity (avoids telegram_unknown race).
             context_prompt = session_mgr.build_agent_context_prompt(
                 agent,
                 prompt,
@@ -8623,6 +8629,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 runtime=runtime,
                 model=model,
                 channel=channel,
+                bg_identity=user_identity,
             )
 
             # ── Build runtime-specific command ──────────────────────────

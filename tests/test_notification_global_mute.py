@@ -100,10 +100,12 @@ def test_global_mute_in_notification_manager():
         assert mgr.is_muted("_global"), "Global should be muted after set_user_pref"
         print("✓ _global mute stored correctly")
 
-        # Monkeypatch to detect external calls
+        # Monkeypatch to detect external calls (both specific and broadcast)
         telegram_called = []
         webex_called = []
+        mgr._notify_telegram = lambda n: telegram_called.append(n)
         mgr._notify_telegram_broadcast = lambda n: telegram_called.append(n)
+        mgr._notify_webex = lambda n: webex_called.append(n)
         mgr._notify_webex_broadcast = lambda n: webex_called.append(n)
 
         # Create notification for telegram with skip_external=False

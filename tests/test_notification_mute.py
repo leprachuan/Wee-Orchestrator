@@ -157,7 +157,8 @@ class TestCreateNotification:
     def test_not_skip_external_sends_telegram(self):
         mgr = _make_mgr()
         calls = []
-        mgr._notify_telegram_broadcast = lambda n: calls.append("telegram")
+        # user_key telegram_789 is a known identity -> specific routing, not broadcast
+        mgr._notify_telegram = lambda n: calls.append("telegram")
 
         mgr.create_notification(
             task_id="t3",
@@ -172,7 +173,8 @@ class TestCreateNotification:
     def test_not_skip_external_sends_webex(self):
         mgr = _make_mgr()
         calls = []
-        mgr._notify_webex_broadcast = lambda n: calls.append("webex")
+        # user_key webex_user@test.com is known -> specific routing, not broadcast
+        mgr._notify_webex = lambda n: calls.append("webex")
 
         mgr.create_notification(
             task_id="t4",
@@ -206,7 +208,8 @@ class TestCreateNotification:
         """When user is NOT muted, notifications should still go through."""
         mgr = _make_mgr()
         calls = []
-        mgr._notify_webex_broadcast = lambda n: calls.append("webex")
+        # Known webex identity -> specific routing
+        mgr._notify_webex = lambda n: calls.append("webex")
 
         mgr.create_notification(
             task_id="t4c",
@@ -256,7 +259,8 @@ class TestEmitRecheck:
     def test_emit_sent_when_not_muted(self):
         mgr = _make_mgr()
         calls = []
-        mgr._notify_telegram_broadcast = lambda n: calls.append("telegram")
+        # user_key telegram_789012 is known -> specific routing, not broadcast
+        mgr._notify_telegram = lambda n: calls.append("telegram")
 
         self._simulate_emit(mgr, "t6", "telegram", "789012", notify=True)
         assert "telegram" in calls

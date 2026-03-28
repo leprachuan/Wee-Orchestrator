@@ -181,7 +181,8 @@ class TestCreateNotificationMuteChecks:
 
     def test_unmuted_user_receives_telegram(self, mgr):
         calls = []
-        mgr._notify_telegram_broadcast = lambda n: calls.append(n)
+        # user_key telegram_999 is known -> specific routing, not broadcast
+        mgr._notify_telegram = lambda n: calls.append(n)
         mgr.create_notification(
             task_id="t4",
             description="test",
