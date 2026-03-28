@@ -6834,7 +6834,7 @@ function closeAgentsPanel() {
         const settingsBtn = document.querySelector('[data-panel="settings"]') || document.getElementById('btn-settings');
         if (settingsBtn) settingsBtn.click();
         setTimeout(() => {
-          const sel = document.getElementById('asf-agent-select');
+          const sel = document.getElementById('asf-agent-selector');
           if (sel) {
             for (let i = 0; i < sel.options.length; i++) {
               if (sel.options[i].value === agent || sel.options[i].text.indexOf(agent) !== -1) {
