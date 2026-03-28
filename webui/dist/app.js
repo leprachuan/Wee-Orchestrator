@@ -6750,6 +6750,20 @@ function closeAgentsPanel() {
           max_concurrent: aoa.max_concurrent || 1,
         };
       });
+      // Include AoA-only agents (auto-registered from background tasks)
+      const localNames = new Set(localAgents.map(a => a.name));
+      (Array.isArray(aoaAgents) ? aoaAgents : []).forEach(a => {
+        if (!localNames.has(a.agent)) {
+          agents.push({
+            agent: a.agent,
+            runtime: a.runtime || copilot,
+            enabled: a.enabled !== false,
+            running: a.running || 0,
+            pending: a.pending || 0,
+            max_concurrent: a.max_concurrent || 1,
+          });
+        }
+      });
       renderSummary(agents, tasks);
       renderCards(agents, tasks);
       if (statusDot) { statusDot.classList.add('online'); statusDot.classList.remove('offline'); statusDot.title = 'AoA online'; }
@@ -6764,7 +6778,7 @@ function closeAgentsPanel() {
     const total   = tasks.length;
     const running = tasks.filter(t => t.status === 'running').length;
     const pending = tasks.filter(t => t.status === 'pending').length;
-    const done    = tasks.filter(t => t.status === 'completed').length;
+    const done    = tasks.filter(t => t.status === 'completed' || t.status === 'failed').length;
     summaryEl.innerHTML = `
       <div class="aoa-sum-item"><span class="aoa-sum-val">${agents.length}</span><span class="aoa-sum-lbl">Agents</span></div>
       <div class="aoa-sum-item"><span class="aoa-sum-val" style="color:#4ade80">${running}</span><span class="aoa-sum-lbl">Running</span></div>
@@ -6782,7 +6796,7 @@ function closeAgentsPanel() {
       const qOpen = !!_queues[a.agent];
       const dotCls = !a.enabled ? 'dis' : a.running > 0 ? 'on' : 'off';
       const cardCls = 'aoa-card' + (!a.enabled ? ' aoa-disabled' : a.running > 0 ? ' aoa-running' : '');
-      const done = agentTasks.filter(t => t.status === 'completed').length;
+      const done = agentTasks.filter(t => t.status === 'completed' || t.status === 'failed').length;
 
       const card = document.createElement('div');
       card.className = cardCls;

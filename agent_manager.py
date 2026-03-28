@@ -3040,10 +3040,26 @@ Example skill structure:
         agent = delegation_data.get("agent", "orchestrator")
         runtime = delegation_data.get("runtime", "copilot")
 
+        # --- AoA Mirror: register delegation as running task ---
+        deleg_task_id = f"deleg_{session_id[:8]}" if session_id else None
+        if deleg_task_id and delegation_data.get("is_delegation"):
+            try:
+                _aoa_mirror_task(deleg_task_id, agent, prompt[:200], status="running")
+            except Exception as e:
+                print(f"[AoA-Mirror] delegation mirror failed: {e}", file=sys.stderr)
+
         output = self._dispatch_single_runtime(
             runtime, prompt, model, agent, session_id if runtime == "claude" else None,
             False, n8n_session_id, self.command_timeout, "text",
         )
+
+        # --- AoA Mirror: update delegation task status ---
+        if deleg_task_id and delegation_data.get("is_delegation"):
+            try:
+                final_status = "failed" if (not output or output.startswith("Error")) else "completed"
+                _aoa_update_task(deleg_task_id, final_status, output=output[:500] if output else None)
+            except Exception as e:
+                print(f"[AoA-Mirror] delegation update failed: {e}", file=sys.stderr)
 
         return output
 
@@ -4769,9 +4785,29 @@ User Request:
             result = self.execute(prompt, session_id)
             if self._bg_task_mgr:
                 self._bg_task_mgr.complete_task(task_id, result)
+            # Update AoA mirror status
+            try:
+                import urllib.request as _aoa_ur2
+                _aoa_url2 = os.environ.get("AOA_API_URL", "http://127.0.0.1:9877")
+                _aoa_body2 = json.dumps({"status": "completed", "output": (result or "")[:5000]}).encode()
+                _aoa_rq2 = _aoa_ur2.Request(f"{_aoa_url2}/task/{task_id}", data=_aoa_body2, method="PATCH")
+                _aoa_rq2.add_header("Content-Type", "application/json")
+                _aoa_ur2.urlopen(_aoa_rq2, timeout=3)
+            except Exception:
+                pass
         except Exception as exc:
             if self._bg_task_mgr:
                 self._bg_task_mgr.fail_task(task_id, str(exc))
+            # Update AoA mirror status
+            try:
+                import urllib.request as _aoa_ur3
+                _aoa_url3 = os.environ.get("AOA_API_URL", "http://127.0.0.1:9877")
+                _aoa_body3 = json.dumps({"status": "failed", "error": str(exc)[:2000]}).encode()
+                _aoa_rq3 = _aoa_ur3.Request(f"{_aoa_url3}/task/{task_id}", data=_aoa_body3, method="PATCH")
+                _aoa_rq3.add_header("Content-Type", "application/json")
+                _aoa_ur3.urlopen(_aoa_rq3, timeout=3)
+            except Exception:
+                pass
 
     def _dispatch_single_runtime(
         self,
@@ -5675,6 +5711,23 @@ You can mention an agent in your prompt and it will auto-delegate:
                 agent=bg_agent, runtime=bg_runtime, model=bg_model,
                 prompt=bg_prompt,
             )
+            # Mirror task to AoA for visibility in the Agents panel
+            try:
+                import urllib.request as _aoa_ur
+                _aoa_url = os.environ.get("AOA_API_URL", "http://127.0.0.1:9877")
+                _aoa_body = json.dumps({
+                    "id": task_id, "agent": bg_agent, "prompt": bg_prompt,
+                    "runtime": bg_runtime, "model": bg_model,
+                    "status": "running", "source": "background",
+                    "identity": identity, "channel": channel,
+                    "description": bg_prompt[:60],
+                }).encode()
+                _aoa_rq = _aoa_ur.Request(f"{_aoa_url}/task", data=_aoa_body, method="POST")
+                _aoa_rq.add_header("Content-Type", "application/json")
+                _aoa_ur.urlopen(_aoa_rq, timeout=3)
+                print(f"[AoA-Mirror] /background task {task_id} mirrored to AoA", file=sys.stderr)
+            except Exception as _me:
+                print(f"[AoA-Mirror] /background mirror failed: {_me}", file=sys.stderr)
             # Launch in background thread
             import concurrent.futures as _cf
             _cf.ThreadPoolExecutor(max_workers=1).submit(
@@ -6153,6 +6206,63 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         except Exception as e:
             return {"error": str(e)}
 
+    def _aoa_patch(path: str, body: bytes):
+        try:
+            req = _urllib_req.Request(f"{AOA_API_URL}{path}", data=body, method="PATCH")
+            req.add_header("Content-Type", "application/json")
+            with _urllib_req.urlopen(req, timeout=10) as r:
+                return json.loads(r.read())
+        except Exception as e:
+            return {"error": str(e)}
+
+    def _aoa_mirror_task(task_id: str, agent: str, prompt: str,
+                         runtime: str = "copilot", model: str = None,
+                         status: str = "running", channel: str = None,
+                         identity: str = None):
+        """Mirror a background task into the AoA in-memory store for UI visibility.
+        Tasks created with source=background are not executed by AoA workers."""
+        try:
+            body = json.dumps({
+                "id": task_id,
+                "agent": agent,
+                "prompt": prompt,
+                "runtime": runtime,
+                "model": model,
+                "status": status,
+                "source": "background",
+                "identity": identity,
+                "channel": channel,
+                "description": prompt[:60],
+            }).encode()
+            result = _aoa_post("/task", body)
+            if result.get("id"):
+                print(f"[AoA-Mirror] Task {task_id} mirrored to AoA (agent={agent}, status={status})", file=sys.stderr)
+            else:
+                err_msg = result.get("error") if isinstance(result.get("error"), str) else str(result)
+                print(f"[AoA-Mirror] Failed to mirror {task_id}: {err_msg}", file=sys.stderr)
+        except Exception as e:
+            print(f"[AoA-Mirror] Exception mirroring {task_id}: {e}", file=sys.stderr)
+            return {"error": str(e)}
+
+    def _aoa_update_task(task_id: str, status: str, output: str = None, error: str = None):
+        """Update a mirrored task status in the AoA store."""
+        try:
+            body = {"status": status}
+            if output is not None:
+                body["output"] = output[:5000]
+            if error is not None:
+                body["error"] = error[:2000]
+            result = _aoa_patch(f"/task/{task_id}", json.dumps(body).encode())
+            if result.get("id") or result.get("status") == status:
+                print(f"[AoA-Mirror] Task {task_id} updated to {status}", file=sys.stderr)
+            else:
+                err_msg = result.get("error") if isinstance(result.get("error"), str) else str(result)
+                print(f"[AoA-Mirror] Failed to update {task_id}: {err_msg}", file=sys.stderr)
+            return result
+        except Exception as e:
+            print(f"[AoA-Mirror] Exception updating {task_id}: {e}", file=sys.stderr)
+            return {"error": str(e)}
+
     @app.get("/api/v1/aoa/agents")
     async def aoa_get_agents():
         import asyncio
@@ -6193,6 +6303,12 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         body = await request.json()
         payload = json.dumps({"agent": agent_name, **body}).encode()
         return JSONResponse(await asyncio.get_event_loop().run_in_executor(None, lambda: _aoa_post("/agent/config", payload)))
+
+    @app.patch("/api/v1/aoa/task/{task_id}")
+    async def aoa_patch_task(task_id: str, request: Request):
+        import asyncio
+        body = await request.body()
+        return JSONResponse(await asyncio.get_event_loop().run_in_executor(None, lambda: _aoa_patch(f"/task/{task_id}", body)))
 
     # ── End AoA proxy ────────────────────────────────────────────────────────
 
@@ -7611,6 +7727,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 if not final_output.strip():
                     final_output = output or "Task completed successfully"
                 bg_task_mgr.complete_task(task_id, final_output)
+                _aoa_update_task(task_id, "completed", output=final_output)
                 if task_id.startswith("sched_"):
                     try:
                         job_id = task_id.split("_")[1]
@@ -7624,6 +7741,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             else:
                 error_msg = f"Task failed with code {process.returncode}: {output}"
                 bg_task_mgr.fail_task(task_id, error_msg)
+                _aoa_update_task(task_id, "failed", error=error_msg)
                 if task_id.startswith("sched_"):
                     try:
                         job_id = task_id.split("_")[1]
@@ -7638,11 +7756,13 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         except subprocess.TimeoutExpired:
             error_msg = f"Task exceeded timeout of {timeout} seconds"
             bg_task_mgr.fail_task(task_id, error_msg)
+            _aoa_update_task(task_id, "failed", error=error_msg)
             _emit_bg_notification(task_id, prompt, "failed", channel, user_identity,
                                   output_preview=None, error=error_msg, notify=notify)
         except Exception as exc:
             error_msg = str(exc)
             bg_task_mgr.fail_task(task_id, error_msg)
+            _aoa_update_task(task_id, "failed", error=error_msg)
             _emit_bg_notification(task_id, prompt, "failed", channel, user_identity,
                                   output_preview=None, error=error_msg, notify=notify)
         finally:
@@ -7813,6 +7933,8 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             )
             queue_pos = bg_task_mgr.count_queued(channel, identity)
             print(f"[API] Task {task_id} queued (position {queue_pos}, {running}/{BackgroundTaskManager.MAX_TASKS_PER_USER} slots full)")
+            # Mirror queued task to AoA for visibility
+            _aoa_mirror_task(task_id, agent, body.prompt, runtime, model, "pending", channel, identity)
             return {
                 "task_id": task_id,
                 "session_id": session_id,
@@ -7844,6 +7966,9 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         perm_mode = body.permission_mode or "restricted"
         if perm_mode not in ("elevated", "restricted", "sandboxed"):
             perm_mode = "restricted"
+
+        # Mirror task to AoA for visibility in the Agents panel
+        _aoa_mirror_task(task_id, agent, body.prompt, runtime, model, "running", channel, identity)
 
         # Run in background thread using shared executor
         loop = asyncio.get_running_loop()
