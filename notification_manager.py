@@ -16,9 +16,10 @@ import time
 from typing import Optional
 from uuid import uuid4
 
-
 _NOTIF_FILE = os.path.join(os.path.expanduser("~"), ".copilot", "notifications.json")
-_PREFS_FILE = os.path.join(os.path.expanduser("~"), ".copilot", "notification_prefs.json")
+_PREFS_FILE = os.path.join(
+    os.path.expanduser("~"), ".copilot", "notification_prefs.json"
+)
 _MAX_NOTIFICATIONS = 200
 
 
@@ -54,7 +55,7 @@ class NotificationManager:
             return parts[-1]
         for prefix in ("webex_", "webui_", "api_"):
             if identity.startswith(prefix):
-                return identity[len(prefix):]
+                return identity[len(prefix) :]
         return identity
 
     def _load_prefs(self) -> dict:
@@ -121,7 +122,10 @@ class NotificationManager:
 
     def _save(self, notifications: list):
         import tempfile
-        tmp_fd, tmp_path = tempfile.mkstemp(dir=os.path.dirname(self._path), suffix=".tmp")
+
+        tmp_fd, tmp_path = tempfile.mkstemp(
+            dir=os.path.dirname(self._path), suffix=".tmp"
+        )
         try:
             with os.fdopen(tmp_fd, "w") as f:
                 json.dump(notifications, f, indent=2, default=str)
@@ -150,8 +154,8 @@ class NotificationManager:
             "notification_id": notif_id,
             "task_id": task_id,
             "description": description,
-            "status": status,          # "completed" or "failed"
-            "channel": channel,        # "webui", "telegram", "webex", etc.
+            "status": status,  # "completed" or "failed"
+            "channel": channel,  # "webui", "telegram", "webex", etc.
             "user_key": user_key,
             "output_preview": (output_preview or "")[:500] if output_preview else None,
             "error": (error or "")[:500] if error else None,
@@ -179,11 +183,15 @@ class NotificationManager:
                 skip_external = True
 
         if not skip_external:
-            print(f"[NotificationManager] Broadcasting to all external channels for task {task_id}")
+            print(
+                f"[NotificationManager] Broadcasting to all external channels for task {task_id}"
+            )
             self._notify_telegram_broadcast(notification)
             self._notify_webex_broadcast(notification)
         else:
-            print(f"[NotificationManager] Skipping external notification for {task_id} (skip_external=True)")
+            print(
+                f"[NotificationManager] Skipping external notification for {task_id} (skip_external=True)"
+            )
 
         return notification
 
@@ -202,7 +210,10 @@ class NotificationManager:
             notifications = self._load()
             found = False
             for n in notifications:
-                if n["notification_id"] == notification_id and n.get("user_key") == user_key:
+                if (
+                    n["notification_id"] == notification_id
+                    and n.get("user_key") == user_key
+                ):
                     n["read"] = True
                     found = True
                     break
@@ -229,8 +240,12 @@ class NotificationManager:
             notifications = self._load()
             before = len(notifications)
             notifications = [
-                n for n in notifications
-                if not (n["notification_id"] == notification_id and n.get("user_key") == user_key)
+                n
+                for n in notifications
+                if not (
+                    n["notification_id"] == notification_id
+                    and n.get("user_key") == user_key
+                )
             ]
             if len(notifications) < before:
                 self._save(notifications)
@@ -243,7 +258,8 @@ class NotificationManager:
             notifications = self._load()
             before = len(notifications)
             notifications = [
-                n for n in notifications
+                n
+                for n in notifications
                 if not (n.get("user_key") == user_key and n.get("read", False))
             ]
             deleted = before - len(notifications)
@@ -254,10 +270,12 @@ class NotificationManager:
     def _notify_telegram(self, notification: dict):
         """Send completion notification via Telegram to the task's originating user."""
         import sys
+
         try:
             repo_root = os.path.dirname(os.path.abspath(__file__))
             sys.path.insert(0, repo_root)
             from telegram_connector import TelegramConnector
+
             config_path = os.path.join(repo_root, "telegram_config.json")
             if not os.path.exists(config_path):
                 return
@@ -272,15 +290,20 @@ class NotificationManager:
                 connector.send_message(chat_id, msg)
         except Exception as e:
             import sys as _sys
-            print(f"[NotificationManager] Telegram notify failed: {e}", file=_sys.stderr)
+
+            print(
+                f"[NotificationManager] Telegram notify failed: {e}", file=_sys.stderr
+            )
 
     def _notify_telegram_broadcast(self, notification: dict):
         """Send completion notification to ALL configured Telegram users."""
         import sys
+
         try:
             repo_root = os.path.dirname(os.path.abspath(__file__))
             sys.path.insert(0, repo_root)
             from telegram_connector import TelegramConnector
+
             config_path = os.path.join(repo_root, "telegram_config.json")
             if not os.path.exists(config_path):
                 return
@@ -295,18 +318,27 @@ class NotificationManager:
                 try:
                     connector.send_message(chat_id, msg)
                 except Exception as e:
-                    print(f"[NotificationManager] Telegram broadcast to {chat_id} failed: {e}", file=sys.stderr)
+                    print(
+                        f"[NotificationManager] Telegram broadcast to {chat_id} failed: {e}",
+                        file=sys.stderr,
+                    )
         except Exception as e:
             import sys as _sys
-            print(f"[NotificationManager] Telegram broadcast failed: {e}", file=_sys.stderr)
+
+            print(
+                f"[NotificationManager] Telegram broadcast failed: {e}",
+                file=_sys.stderr,
+            )
 
     def _notify_webex(self, notification: dict):
         """Send completion notification via WebEx to the task's originating user."""
         import sys
+
         try:
             repo_root = os.path.dirname(os.path.abspath(__file__))
             sys.path.insert(0, repo_root)
             from webex_connector import WebEXConnector
+
             config_path = os.path.join(repo_root, "webex_config.json")
             if not os.path.exists(config_path):
                 return
@@ -321,15 +353,18 @@ class NotificationManager:
                 connector.send_message(person_id, msg)
         except Exception as e:
             import sys as _sys
+
             print(f"[NotificationManager] WebEx notify failed: {e}", file=_sys.stderr)
 
     def _notify_webex_broadcast(self, notification: dict):
         """Send completion notification to ALL configured WebEx users."""
         import sys
+
         try:
             repo_root = os.path.dirname(os.path.abspath(__file__))
             sys.path.insert(0, repo_root)
             from webex_connector import WebEXConnector
+
             config_path = os.path.join(repo_root, "webex_config.json")
             if not os.path.exists(config_path):
                 return
@@ -344,10 +379,16 @@ class NotificationManager:
                 try:
                     connector.send_message(person_id, msg)
                 except Exception as e:
-                    print(f"[NotificationManager] WebEx broadcast to {person_id} failed: {e}", file=sys.stderr)
+                    print(
+                        f"[NotificationManager] WebEx broadcast to {person_id} failed: {e}",
+                        file=sys.stderr,
+                    )
         except Exception as e:
             import sys as _sys
-            print(f"[NotificationManager] WebEx broadcast failed: {e}", file=_sys.stderr)
+
+            print(
+                f"[NotificationManager] WebEx broadcast failed: {e}", file=_sys.stderr
+            )
 
 
 def _format_notification_message(notification: dict) -> str:

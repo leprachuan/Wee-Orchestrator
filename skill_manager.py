@@ -19,11 +19,11 @@ from typing import Any, Dict, List, Optional
 # ── Configuration ─────────────────────────────────────────────────────────────
 
 SKILL_DIRS: List[Dict[str, Any]] = [
-    {"path": "/opt/foster-skills",   "label": "foster-skills (private)"},
-    {"path": "/opt/skills",          "label": "skills (public)"},
-    {"path": "/opt/.claude/skills",  "label": ".claude/skills"},
-    {"path": "/opt/.github/skills",  "label": ".github/skills"},
-    {"path": "/opt/pot-o-skills",    "label": "pot-o-skills"},
+    {"path": "/opt/foster-skills", "label": "foster-skills (private)"},
+    {"path": "/opt/skills", "label": "skills (public)"},
+    {"path": "/opt/.claude/skills", "label": ".claude/skills"},
+    {"path": "/opt/.github/skills", "label": ".github/skills"},
+    {"path": "/opt/pot-o-skills", "label": "pot-o-skills"},
 ]
 
 ORIGINS_FILE = os.environ.get(
@@ -33,6 +33,7 @@ ORIGINS_FILE = os.environ.get(
 
 
 # ── Origin Metadata Persistence ───────────────────────────────────────────────
+
 
 def _load_origins() -> Dict[str, Any]:
     """Load the central origin metadata store."""
@@ -80,6 +81,7 @@ def delete_origin(skill_key: str) -> bool:
 
 
 # ── Skill Scanning ────────────────────────────────────────────────────────────
+
 
 def _read_skill_metadata(skill_dir: str) -> Dict[str, Any]:
     """Read skill_metadata.json if present."""
@@ -161,7 +163,7 @@ def scan_skills() -> List[Dict[str, Any]]:
             continue
 
         for entry in sorted(os.listdir(base_path)):
-            if '.backup.' in entry:
+            if ".backup." in entry:
                 continue
             full = os.path.join(base_path, entry)
             if not os.path.isdir(full):
@@ -173,12 +175,13 @@ def scan_skills() -> List[Dict[str, Any]]:
             nested_skills_dir = os.path.join(full, "skills")
             if os.path.isdir(nested_skills_dir):
                 for nested_entry in sorted(os.listdir(nested_skills_dir)):
-                    if '.backup.' in nested_entry:
+                    if ".backup." in nested_entry:
                         continue
                     nested_full = os.path.join(nested_skills_dir, nested_entry)
                     if os.path.isdir(nested_full) and _is_skill_dir(nested_full):
                         skill = _build_skill_descriptor(
-                            nested_full, nested_entry,
+                            nested_full,
+                            nested_entry,
                             f"{label}/{entry}",
                             origins,
                         )
@@ -209,8 +212,11 @@ def _build_skill_descriptor(
     category = meta.get("category", meta.get("type", ""))
 
     # Derive a unique key for origin tracking
-    skill_key = f"{os.path.basename(os.path.dirname(skill_dir))}/{name}" \
-        if "skills/" in skill_dir else f"{source_label.split('/')[0].split(' ')[0]}/{name}"
+    skill_key = (
+        f"{os.path.basename(os.path.dirname(skill_dir))}/{name}"
+        if "skills/" in skill_dir
+        else f"{source_label.split('/')[0].split(' ')[0]}/{name}"
+    )
 
     origin = origins.get(skill_key, {})
 
@@ -228,8 +234,19 @@ def _build_skill_descriptor(
         "has_skill_md": os.path.isfile(os.path.join(skill_dir, "SKILL.md")),
         "checksum": _dir_checksum(skill_dir),
         "origin": origin if origin else None,
-        "runtimes": (list(meta["runtimes"].keys()) if isinstance(meta.get("runtimes"), dict) else list(meta.get("runtimes", []))) if meta.get("runtimes") else
-                    [d for d in ("claude", "copilot", "gemini") if os.path.isdir(os.path.join(skill_dir, d))],
+        "runtimes": (
+            (
+                list(meta["runtimes"].keys())
+                if isinstance(meta.get("runtimes"), dict)
+                else list(meta.get("runtimes", []))
+            )
+            if meta.get("runtimes")
+            else [
+                d
+                for d in ("claude", "copilot", "gemini")
+                if os.path.isdir(os.path.join(skill_dir, d))
+            ]
+        ),
     }
 
 
@@ -243,6 +260,7 @@ def get_skill(skill_key: str) -> Optional[Dict[str, Any]]:
 
 # ── Update Checking ───────────────────────────────────────────────────────────
 
+
 def check_update_git(skill_key: str) -> Dict[str, Any]:
     """Check if a git-sourced skill has updates available.
 
@@ -254,7 +272,10 @@ def check_update_git(skill_key: str) -> Dict[str, Any]:
 
     origin_type = origin.get("origin_type", "")
     if origin_type != "git_repo":
-        return {"available": False, "error": f"Origin type '{origin_type}' does not support git update checks"}
+        return {
+            "available": False,
+            "error": f"Origin type '{origin_type}' does not support git update checks",
+        }
 
     origin_url = origin.get("origin_url", "")
     origin_path = origin.get("origin_path", "")
@@ -274,15 +295,25 @@ def check_update_git(skill_key: str) -> Dict[str, Any]:
             repo_dir = os.path.join(tmpdir, "repo")
             result = subprocess.run(
                 ["git", "clone", "--depth=1", "--single-branch", origin_url, repo_dir],
-                capture_output=True, text=True, timeout=60,
+                capture_output=True,
+                text=True,
+                timeout=60,
             )
             if result.returncode != 0:
-                return {"available": False, "error": f"Git clone failed: {result.stderr[:200]}"}
+                return {
+                    "available": False,
+                    "error": f"Git clone failed: {result.stderr[:200]}",
+                }
 
             # Find the skill folder in the cloned repo
-            remote_skill_dir = os.path.join(repo_dir, origin_path) if origin_path else repo_dir
+            remote_skill_dir = (
+                os.path.join(repo_dir, origin_path) if origin_path else repo_dir
+            )
             if not os.path.isdir(remote_skill_dir):
-                return {"available": False, "error": f"Origin path '{origin_path}' not found in repo"}
+                return {
+                    "available": False,
+                    "error": f"Origin path '{origin_path}' not found in repo",
+                }
 
             remote_checksum = _dir_checksum(remote_skill_dir)
 
@@ -295,12 +326,15 @@ def check_update_git(skill_key: str) -> Dict[str, Any]:
                 diff_files = _compare_dirs(local_path, remote_skill_dir)
 
             # Update origin metadata with check results
-            set_origin(skill_key, {
-                "last_checked": time.time(),
-                "update_available": available,
-                "remote_checksum": remote_checksum,
-                "diff_summary": diff_files[:20] if diff_files else [],
-            })
+            set_origin(
+                skill_key,
+                {
+                    "last_checked": time.time(),
+                    "update_available": available,
+                    "remote_checksum": remote_checksum,
+                    "diff_summary": diff_files[:20] if diff_files else [],
+                },
+            )
 
             return {
                 "available": available,
@@ -363,7 +397,10 @@ def apply_update_git(skill_key: str) -> Dict[str, Any]:
 
     origin_type = origin.get("origin_type", "")
     if origin_type != "git_repo":
-        return {"success": False, "message": f"Origin type '{origin_type}' not supported for auto-update"}
+        return {
+            "success": False,
+            "message": f"Origin type '{origin_type}' not supported for auto-update",
+        }
 
     origin_url = origin.get("origin_url", "")
     origin_path = origin.get("origin_path", "")
@@ -381,14 +418,24 @@ def apply_update_git(skill_key: str) -> Dict[str, Any]:
             repo_dir = os.path.join(tmpdir, "repo")
             result = subprocess.run(
                 ["git", "clone", "--depth=1", "--single-branch", origin_url, repo_dir],
-                capture_output=True, text=True, timeout=120,
+                capture_output=True,
+                text=True,
+                timeout=120,
             )
             if result.returncode != 0:
-                return {"success": False, "message": f"Git clone failed: {result.stderr[:300]}"}
+                return {
+                    "success": False,
+                    "message": f"Git clone failed: {result.stderr[:300]}",
+                }
 
-            remote_skill_dir = os.path.join(repo_dir, origin_path) if origin_path else repo_dir
+            remote_skill_dir = (
+                os.path.join(repo_dir, origin_path) if origin_path else repo_dir
+            )
             if not os.path.isdir(remote_skill_dir):
-                return {"success": False, "message": f"Origin path '{origin_path}' not found in repo"}
+                return {
+                    "success": False,
+                    "message": f"Origin path '{origin_path}' not found in repo",
+                }
 
             # Backup local skill
             backup_dir = local_path + f".backup.{int(time.time())}"
@@ -420,12 +467,15 @@ def apply_update_git(skill_key: str) -> Dict[str, Any]:
             # (We use central storage, so no action needed)
 
             # Update origin metadata
-            set_origin(skill_key, {
-                "last_updated": time.time(),
-                "update_available": False,
-                "last_checked": time.time(),
-                "remote_checksum": _dir_checksum(remote_skill_dir),
-            })
+            set_origin(
+                skill_key,
+                {
+                    "last_updated": time.time(),
+                    "update_available": False,
+                    "last_checked": time.time(),
+                    "remote_checksum": _dir_checksum(remote_skill_dir),
+                },
+            )
 
             return {
                 "success": True,
@@ -454,11 +504,15 @@ def check_update_website(skill_key: str) -> Dict[str, Any]:
 
 # ── Unified Dispatch ──────────────────────────────────────────────────────────
 
+
 def check_update(skill_key: str) -> Dict[str, Any]:
     """Check for updates based on origin type."""
     origin = get_origin(skill_key)
     if not origin:
-        return {"available": False, "error": "No origin metadata recorded for this skill"}
+        return {
+            "available": False,
+            "error": "No origin metadata recorded for this skill",
+        }
 
     origin_type = origin.get("origin_type", "unknown")
     if origin_type == "git_repo":
@@ -482,7 +536,7 @@ def apply_update(skill_key: str) -> Dict[str, Any]:
         return {
             "success": False,
             "message": "Website-sourced skills must be updated manually. "
-                       f"Visit: {origin.get('origin_url', 'unknown')}",
+            f"Visit: {origin.get('origin_url', 'unknown')}",
         }
     else:
         return {"success": False, "message": f"Unknown origin type: {origin_type}"}

@@ -25,6 +25,7 @@ logger = logging.getLogger(__name__)
 # Cron helpers
 # ---------------------------------------------------------------------------
 
+
 def is_valid_cron(expression: str) -> bool:
     """Check if a string is a valid cron expression (5 or 6 field)."""
     if croniter is None:
@@ -61,9 +62,18 @@ def cron_human_readable(expression: str) -> str:
     if minute != "*" and hour != "*" and dom == "*" and month == "*" and dow == "*":
         return f"every day at {hour.zfill(2)}:{minute.zfill(2)} UTC"
     if minute != "*" and hour != "*" and dom == "*" and month == "*" and dow != "*":
-        day_names = {"0": "Sun", "1": "Mon", "2": "Tue", "3": "Wed",
-                     "4": "Thu", "5": "Fri", "6": "Sat", "7": "Sun",
-                     "1-5": "weekdays", "0,6": "weekends"}
+        day_names = {
+            "0": "Sun",
+            "1": "Mon",
+            "2": "Tue",
+            "3": "Wed",
+            "4": "Thu",
+            "5": "Fri",
+            "6": "Sat",
+            "7": "Sun",
+            "1-5": "weekdays",
+            "0,6": "weekends",
+        }
         day_label = day_names.get(dow, f"dow={dow}")
         return f"{day_label} at {hour.zfill(2)}:{minute.zfill(2)} UTC"
     if minute.startswith("*/") or hour.startswith("*/"):
@@ -123,10 +133,12 @@ def convert_schedule_with_ai(schedule: str, api_key: str = None) -> Optional[str
         response = client.messages.create(
             model="claude-sonnet-4-20250514",
             max_tokens=50,
-            messages=[{
-                "role": "user",
-                "content": _SCHEDULE_CONVERSION_PROMPT.format(schedule=schedule),
-            }],
+            messages=[
+                {
+                    "role": "user",
+                    "content": _SCHEDULE_CONVERSION_PROMPT.format(schedule=schedule),
+                }
+            ],
         )
         result = response.content[0].text.strip()
         # Clean up: remove backticks, quotes, extra whitespace
@@ -146,13 +158,22 @@ def convert_schedule_with_ai(schedule: str, api_key: str = None) -> Optional[str
 # ---------------------------------------------------------------------------
 
 _DAY_MAP = {
-    "sunday": 0, "sun": 0,
-    "monday": 1, "mon": 1,
-    "tuesday": 2, "tue": 2, "tues": 2,
-    "wednesday": 3, "wed": 3,
-    "thursday": 4, "thu": 4, "thurs": 4,
-    "friday": 5, "fri": 5,
-    "saturday": 6, "sat": 6,
+    "sunday": 0,
+    "sun": 0,
+    "monday": 1,
+    "mon": 1,
+    "tuesday": 2,
+    "tue": 2,
+    "tues": 2,
+    "wednesday": 3,
+    "wed": 3,
+    "thursday": 4,
+    "thu": 4,
+    "thurs": 4,
+    "friday": 5,
+    "fri": 5,
+    "saturday": 6,
+    "sat": 6,
 }
 
 
@@ -193,7 +214,9 @@ def convert_schedule_deterministic(schedule: str) -> Optional[str]:
     s = re.sub(r"\s+", " ", schedule.lower().strip())
 
     # Direct cron passthrough: if it already looks like cron, return it
-    if re.match(r"^[\d\*\/,\-]+\s+[\d\*\/,\-]+\s+[\d\*\/,\-]+\s+[\d\*\/,\-]+\s+[\d\*\/,\-]+$", s):
+    if re.match(
+        r"^[\d\*\/,\-]+\s+[\d\*\/,\-]+\s+[\d\*\/,\-]+\s+[\d\*\/,\-]+\s+[\d\*\/,\-]+$", s
+    ):
         return s
 
     # "every minute"
@@ -269,6 +292,19 @@ def convert_schedule_deterministic(schedule: str) -> Optional[str]:
         if t and 1 <= n <= 28:
             return f"{t[1]} {t[0]} */{n} * *"
 
+    # "every N weeks" / "every N weeks at TIME"
+    m = re.fullmatch(r"every (\d+) weeks?(?:\s+at\s+(.+))?", s)
+    if m:
+        n = int(m.group(1))
+        time_str = m.group(2)
+        t = _parse_time(time_str) if time_str else (0, 0)
+        if t:
+            days = n * 7
+            if days <= 28:
+                return f"{t[1]} {t[0]} */{days} * *"
+            else:
+                return f"{t[1]} {t[0]} 1 */{n} *"
+
     # "1st/15th of every month at TIME"
     m = re.fullmatch(r"(?:the )?(\d{1,2})(?:st|nd|rd|th) of every month at (.+)", s)
     if m:
@@ -284,12 +320,16 @@ def convert_schedule_deterministic(schedule: str) -> Optional[str]:
 # One-time schedule helpers (for "in X minutes" style)
 # ---------------------------------------------------------------------------
 
+
 def parse_one_time_schedule(schedule: str) -> Optional[str]:
     """Parse one-time schedule strings like 'in 5 minutes' to ISO datetime."""
     s = re.sub(r"\s+", " ", schedule.lower().strip())
     now = datetime.utcnow()
 
-    m = re.fullmatch(r"in (\d+) (second|seconds|sec|secs|minute|minutes|min|mins|hour|hours|hr|hrs|day|days)", s)
+    m = re.fullmatch(
+        r"in (\d+) (second|seconds|sec|secs|minute|minutes|min|mins|hour|hours|hr|hrs|day|days)",
+        s,
+    )
     if m:
         amount = int(m.group(1))
         unit = m.group(2).rstrip("s")
@@ -309,6 +349,7 @@ def parse_one_time_schedule(schedule: str) -> Optional[str]:
 # ---------------------------------------------------------------------------
 # Unified conversion: AI → deterministic fallback
 # ---------------------------------------------------------------------------
+
 
 def convert_schedule(schedule: str, use_ai: bool = True) -> Dict:
     """Convert a natural language schedule to cron format.
@@ -380,6 +421,7 @@ def convert_schedule(schedule: str, use_ai: bool = True) -> Dict:
 # Legacy compatibility wrapper
 # ---------------------------------------------------------------------------
 
+
 def parse_schedule_to_next_run(schedule: str) -> Optional[str]:
     """Legacy wrapper: parse schedule string and return ISO datetime for next run.
 
@@ -400,6 +442,7 @@ def parse_schedule_to_next_run(schedule: str) -> Optional[str]:
 # TaskScheduler class
 # ===================================================================
 
+
 class TaskScheduler:
     def __init__(self, config: Optional[Dict] = None):
         repo_root = Path(__file__).resolve().parent.parent
@@ -407,7 +450,9 @@ class TaskScheduler:
 
         self.jobs_file = Path(os.getenv("SCHEDULER_JOBS_FILE", f"{base_dir}/jobs.json"))
         self.logs_dir = Path(os.getenv("SCHEDULER_LOGS_DIR", f"{base_dir}/logs/"))
-        self.results_dir = Path(os.getenv("SCHEDULER_RESULTS_DIR", f"{base_dir}/results/"))
+        self.results_dir = Path(
+            os.getenv("SCHEDULER_RESULTS_DIR", f"{base_dir}/results/")
+        )
         self.max_retries = int(os.getenv("SCHEDULER_RETRY_MAX", 3))
 
         self.jobs_file.parent.mkdir(parents=True, exist_ok=True)
@@ -438,6 +483,7 @@ class TaskScheduler:
     def _save_jobs(self, data: Dict):
         """Save jobs to JSON atomically (write tmp + rename)."""
         import tempfile
+
         tmp_fd, tmp_path = tempfile.mkstemp(
             dir=str(self.jobs_file.parent), suffix=".tmp"
         )
@@ -463,11 +509,17 @@ class TaskScheduler:
                 job["cron"] = result.get("cron")
                 if result.get("cron") and result.get("next_run"):
                     job["next_run"] = result["next_run"]
-                    self._log(job["id"], f"Migrated schedule \"{schedule}\" → cron \"{result['cron']}\" (method: {result['method']})")
+                    self._log(
+                        job["id"],
+                        f"Migrated schedule \"{schedule}\" → cron \"{result['cron']}\" (method: {result['method']})",
+                    )
                 elif result.get("method") == "one_time":
-                    self._log(job["id"], f"One-time schedule \"{schedule}\" kept as-is")
+                    self._log(job["id"], f'One-time schedule "{schedule}" kept as-is')
                 else:
-                    self._log(job["id"], f"Could not convert schedule \"{schedule}\" to cron (method: {result['method']})")
+                    self._log(
+                        job["id"],
+                        f"Could not convert schedule \"{schedule}\" to cron (method: {result['method']})",
+                    )
                 migrated += 1
         if migrated > 0:
             self._save_jobs(jobs)
@@ -572,14 +624,25 @@ class TaskScheduler:
         jobs["jobs"].append(job)
         self._save_jobs(jobs)
         cron_info = f", cron: {cron_expr}" if cron_expr else ""
-        self._log(job_id, f"Scheduled: {name} (next run: {next_run}, recurring: {recurring}, mode: {mode or 'ai'}{cron_info})")
+        self._log(
+            job_id,
+            f"Scheduled: {name} (next run: {next_run}, recurring: {recurring}, mode: {mode or 'ai'}{cron_info})",
+        )
 
-        return {"success": True, "result": job, "message": f"Task '{name}' scheduled for {next_run}"}
+        return {
+            "success": True,
+            "result": job,
+            "message": f"Task '{name}' scheduled for {next_run}",
+        }
 
     def list_jobs(self) -> Dict:
         """List all scheduled jobs."""
         jobs = self._load_jobs()
-        return {"success": True, "result": jobs["jobs"], "message": f"Found {len(jobs['jobs'])} jobs"}
+        return {
+            "success": True,
+            "result": jobs["jobs"],
+            "message": f"Found {len(jobs['jobs'])} jobs",
+        }
 
     def get_job(self, job_id: str) -> Dict:
         """Get a single job by ID."""
@@ -591,12 +654,27 @@ class TaskScheduler:
 
     def update_job(self, job_id: str, updates: Dict) -> Dict:
         """Update fields of an existing job."""
-        allowed = {"name", "schedule", "agent", "runtime", "task", "notify",
-                   "recurring", "enabled", "mode", "model", "working_dir",
-                   "timeout", "cron"}
+        allowed = {
+            "name",
+            "schedule",
+            "agent",
+            "runtime",
+            "task",
+            "notify",
+            "recurring",
+            "enabled",
+            "mode",
+            "model",
+            "working_dir",
+            "timeout",
+            "cron",
+        }
         invalid = set(updates.keys()) - allowed
         if invalid:
-            return {"success": False, "message": f"Unknown fields: {', '.join(invalid)}"}
+            return {
+                "success": False,
+                "message": f"Unknown fields: {', '.join(invalid)}",
+            }
 
         jobs = self._load_jobs()
         for job in jobs["jobs"]:
@@ -615,7 +693,11 @@ class TaskScheduler:
                 job.update(updates)
                 self._save_jobs(jobs)
                 self._log(job_id, f"Updated: {list(updates.keys())}")
-                return {"success": True, "result": job, "message": f"Job '{job_id}' updated"}
+                return {
+                    "success": True,
+                    "result": job,
+                    "message": f"Job '{job_id}' updated",
+                }
 
         return {"success": False, "message": f"Job '{job_id}' not found"}
 
@@ -671,13 +753,21 @@ class TaskScheduler:
                 self._log(job_id, f"Next run recalculated: {new_next}")
         self._save_jobs(jobs)
         self._log(job_id, "Manual run triggered via API (run-now)")
-        return {"success": True, "result": job, "message": f"Job '{job_id}' triggered for immediate execution"}
+        return {
+            "success": True,
+            "result": job,
+            "message": f"Job '{job_id}' triggered for immediate execution",
+        }
 
     def get_logs(self, job_id: str) -> Dict:
         """Get scheduler logs for a job."""
         log_file = self.logs_dir / f"{job_id}.log"
         if log_file.exists():
-            return {"success": True, "result": log_file.read_text(), "message": "Logs retrieved"}
+            return {
+                "success": True,
+                "result": log_file.read_text(),
+                "message": "Logs retrieved",
+            }
         return {"success": False, "message": f"No logs found for job '{job_id}'"}
 
     def get_results(self, job_id: str, limit: int = 20) -> Dict:
@@ -705,11 +795,25 @@ class TaskScheduler:
             "message": f"Found {len(records)} results (limit {limit})",
         }
 
-    def save_result(self, job_id: str, job_name: str, success: bool, output: str = "", error: str = "") -> Dict:
+    def save_result(
+        self,
+        job_id: str,
+        job_name: str,
+        success: bool,
+        output: str = "",
+        error: str = "",
+    ) -> Dict:
         """Save execution result to job results file (JSONL format)."""
         result_file = self.results_dir / f"{job_id}.jsonl"
         timestamp = datetime.utcnow().isoformat() + "Z"
-        result = {"timestamp": timestamp, "job_id": job_id, "job_name": job_name, "success": success, "output": output[:5000] if output else "", "error": error[:5000] if error else ""}
+        result = {
+            "timestamp": timestamp,
+            "job_id": job_id,
+            "job_name": job_name,
+            "success": success,
+            "output": output[:5000] if output else "",
+            "error": error[:5000] if error else "",
+        }
         try:
             with open(result_file, "a") as f:
                 f.write(json.dumps(result) + "\n")
@@ -762,6 +866,7 @@ class TaskScheduler:
         executor_running = False
         try:
             import subprocess
+
             result = subprocess.run(
                 ["systemctl", "is-active", "task-scheduler-executor.service"],
                 capture_output=True,
@@ -780,6 +885,7 @@ class TaskScheduler:
         ai_available = False
         try:
             import anthropic
+
             key = os.environ.get("ANTHROPIC_API_KEY", "")
             ai_available = bool(key)
         except ImportError:

@@ -1,4 +1,5 @@
 """Tests for AuthManager - pairing codes, session tokens, rate limiting."""
+
 import time
 import unittest
 import os
@@ -13,6 +14,7 @@ class TestAuthManager(unittest.TestCase):
 
     def setUp(self):
         from agent_manager import AuthManager
+
         self.auth = AuthManager(
             shared_key="test_shared_key",
             pairing_code_length=6,
@@ -130,6 +132,7 @@ class TestRateLimiter(unittest.TestCase):
 
     def setUp(self):
         from agent_manager import RateLimiter
+
         self.limiter = RateLimiter()
 
     def test_allow_under_limit(self):
@@ -156,7 +159,11 @@ class TestRateLimiter(unittest.TestCase):
 
     def test_expired_entries_dont_count(self):
         self.limiter.records.setdefault("1.2.3.4", {}).setdefault("pairing", [])
-        self.limiter.records["1.2.3.4"]["pairing"] = [time.time() - 1000, time.time() - 1000, time.time() - 1000]
+        self.limiter.records["1.2.3.4"]["pairing"] = [
+            time.time() - 1000,
+            time.time() - 1000,
+            time.time() - 1000,
+        ]
         allowed = self.limiter.check("1.2.3.4", "pairing", max_requests=3, window=900)
         self.assertTrue(allowed)
 

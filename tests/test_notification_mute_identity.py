@@ -40,11 +40,17 @@ class TestNormalizeIdentity:
         assert NotificationManager._normalize_identity("8193231291") == "8193231291"
 
     def test_telegram_simple(self):
-        assert NotificationManager._normalize_identity("telegram_8193231291") == "8193231291"
+        assert (
+            NotificationManager._normalize_identity("telegram_8193231291")
+            == "8193231291"
+        )
 
     def test_telegram_compound(self):
         """Compound telegram_<botid>_<userid> → bare userid."""
-        assert NotificationManager._normalize_identity("telegram_8405010413_8193231291") == "8193231291"
+        assert (
+            NotificationManager._normalize_identity("telegram_8405010413_8193231291")
+            == "8193231291"
+        )
 
     def test_webex_prefix(self):
         assert NotificationManager._normalize_identity("webex_person123") == "person123"
@@ -70,7 +76,9 @@ class TestNormalizeIdentity:
 
     def test_triple_segment_telegram(self):
         """Edge case: extra underscores in Telegram identity."""
-        assert NotificationManager._normalize_identity("telegram_bot_extra_999") == "999"
+        assert (
+            NotificationManager._normalize_identity("telegram_bot_extra_999") == "999"
+        )
 
 
 # ---- Per-identity preference tests with normalization ----
@@ -135,8 +143,12 @@ class TestCreateNotificationMuteChecks:
         mgr._notify_telegram = lambda n: calls.append(n)
         mgr.set_user_pref("_global", "webui", "off")
         mgr.create_notification(
-            task_id="t1", description="test", status="completed",
-            channel="telegram", user_key="telegram_123", skip_external=False,
+            task_id="t1",
+            description="test",
+            status="completed",
+            channel="telegram",
+            user_key="telegram_123",
+            skip_external=False,
         )
         assert len(calls) == 0
 
@@ -145,8 +157,12 @@ class TestCreateNotificationMuteChecks:
         mgr._notify_webex = lambda n: calls.append(n)
         mgr.set_user_pref("_global", "webui", "off")
         mgr.create_notification(
-            task_id="t2", description="test", status="completed",
-            channel="webex", user_key="webex_person1", skip_external=False,
+            task_id="t2",
+            description="test",
+            status="completed",
+            channel="webex",
+            user_key="webex_person1",
+            skip_external=False,
         )
         assert len(calls) == 0
 
@@ -156,17 +172,25 @@ class TestCreateNotificationMuteChecks:
         mgr._notify_telegram = lambda n: calls.append(n)
         mgr.set_user_pref("telegram_8405010413_12345", "telegram", "off")
         mgr.create_notification(
-            task_id="t3", description="test", status="completed",
-            channel="telegram", user_key="12345", skip_external=False,
+            task_id="t3",
+            description="test",
+            status="completed",
+            channel="telegram",
+            user_key="12345",
+            skip_external=False,
         )
         assert len(calls) == 0
 
     def test_unmuted_user_receives_telegram(self, mgr):
         calls = []
-        mgr._notify_telegram = lambda n: calls.append(n)
+        mgr._notify_telegram_broadcast = lambda n: calls.append(n)
         mgr.create_notification(
-            task_id="t4", description="test", status="completed",
-            channel="telegram", user_key="telegram_999", skip_external=False,
+            task_id="t4",
+            description="test",
+            status="completed",
+            channel="telegram",
+            user_key="telegram_999",
+            skip_external=False,
         )
         assert len(calls) == 1
 
@@ -174,8 +198,12 @@ class TestCreateNotificationMuteChecks:
         calls = []
         mgr._notify_telegram = lambda n: calls.append(n)
         mgr.create_notification(
-            task_id="t5", description="test", status="completed",
-            channel="telegram", user_key="telegram_999", skip_external=True,
+            task_id="t5",
+            description="test",
+            status="completed",
+            channel="telegram",
+            user_key="telegram_999",
+            skip_external=True,
         )
         assert len(calls) == 0
 
@@ -184,8 +212,12 @@ class TestCreateNotificationMuteChecks:
         mgr.set_user_pref("_global", "webui", "off")
         mgr._notify_telegram = lambda n: None
         mgr.create_notification(
-            task_id="t6", description="test", status="completed",
-            channel="telegram", user_key="telegram_123", skip_external=False,
+            task_id="t6",
+            description="test",
+            status="completed",
+            channel="telegram",
+            user_key="telegram_123",
+            skip_external=False,
         )
         notifs = mgr.list_notifications("telegram_123")
         assert len(notifs) == 1
@@ -196,7 +228,13 @@ class TestCreateNotificationMuteChecks:
         mgr._notify_telegram = lambda n: calls.append(n)
         mgr.set_user_pref("77777", "webui", "off")
         mgr.create_notification(
-            task_id="t7", description="test", status="completed",
-            channel="telegram", user_key="telegram_77777", skip_external=False,
+            task_id="t7",
+            description="test",
+            status="completed",
+            channel="telegram",
+            user_key="telegram_77777",
+            skip_external=False,
         )
-        assert len(calls) == 0, "Bare-ID mute should block telegram-prefixed user_key delivery"
+        assert (
+            len(calls) == 0
+        ), "Bare-ID mute should block telegram-prefixed user_key delivery"

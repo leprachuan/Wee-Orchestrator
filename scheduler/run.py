@@ -12,7 +12,7 @@ import sys
 import os
 
 # Ensure parent repo is in path for imports
-sys.path.insert(0, '/opt/n8n-copilot-shim-dev')
+sys.path.insert(0, "/opt/n8n-copilot-shim-dev")
 
 from scheduler.executor import TaskSchedulerExecutor
 

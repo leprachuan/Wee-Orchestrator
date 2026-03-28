@@ -1,4 +1,5 @@
 """Tests for FastAPI endpoints."""
+
 import unittest
 import os
 import sys
@@ -14,11 +15,24 @@ class TestAPIEndpoints(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
+        from unittest.mock import patch
         from fastapi.testclient import TestClient
-        from agent_manager import create_api_app
-        cls.app = create_api_app()
+        import agent_manager
+
+        # Mock Telegram identity resolution so pairing tests don't need live bot
+        cls._telegram_patch = patch.object(
+            agent_manager,
+            "_resolve_telegram_identity",
+            side_effect=lambda identity: identity,
+        )
+        cls._telegram_patch.start()
+        cls.app = agent_manager.create_api_app()
         cls.client = TestClient(cls.app)
         cls.shared_header = {"Authorization": "Bearer shared_test_key_123"}
+
+    @classmethod
+    def tearDownClass(cls):
+        cls._telegram_patch.stop()
 
     def test_health_endpoint(self):
         resp = self.client.get("/api/v1/health")
@@ -95,6 +109,7 @@ class TestAPIEndpoints(unittest.TestCase):
         self.assertEqual(resp.status_code, 200)
 
         from agent_manager import _api_auth_manager
+
         codes = {
             k: v
             for k, v in _api_auth_manager.pairing_codes.items()

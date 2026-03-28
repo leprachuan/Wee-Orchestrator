@@ -21,7 +21,6 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from notification_manager import NotificationManager
 
-
 # --- API helpers for integration tests ---
 
 API_BASE = "https://127.0.0.1:8001/api/v1"
@@ -31,12 +30,21 @@ API_TOKEN = "shared_R6R6wReORUV6bouLntScMTowbsh30Rzqa3hzjs3bWgU"
 def api_post(path, data=None, identity="test-mute-user", channel="webui"):
     """POST to the production API."""
     import subprocess
+
     cmd = [
-        "curl", "-sk", "-X", "POST", f"{API_BASE}{path}",
-        "-H", "Content-Type: application/json",
-        "-H", f"Authorization: Bearer {API_TOKEN}",
-        "-H", f"X-User-Identity: {identity}",
-        "-H", f"X-Auth-Channel: {channel}",
+        "curl",
+        "-sk",
+        "-X",
+        "POST",
+        f"{API_BASE}{path}",
+        "-H",
+        "Content-Type: application/json",
+        "-H",
+        f"Authorization: Bearer {API_TOKEN}",
+        "-H",
+        f"X-User-Identity: {identity}",
+        "-H",
+        f"X-Auth-Channel: {channel}",
     ]
     if data is not None:
         cmd.extend(["-d", json.dumps(data)])
@@ -50,11 +58,19 @@ def api_post(path, data=None, identity="test-mute-user", channel="webui"):
 def api_get(path, identity="test-mute-user", channel="webui"):
     """GET from the production API."""
     import subprocess
+
     cmd = [
-        "curl", "-sk", "-X", "GET", f"{API_BASE}{path}",
-        "-H", f"Authorization: Bearer {API_TOKEN}",
-        "-H", f"X-User-Identity: {identity}",
-        "-H", f"X-Auth-Channel: {channel}",
+        "curl",
+        "-sk",
+        "-X",
+        "GET",
+        f"{API_BASE}{path}",
+        "-H",
+        f"Authorization: Bearer {API_TOKEN}",
+        "-H",
+        f"X-User-Identity: {identity}",
+        "-H",
+        f"X-Auth-Channel: {channel}",
     ]
     result = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
     try:
@@ -64,6 +80,7 @@ def api_get(path, identity="test-mute-user", channel="webui"):
 
 
 # ---- Unit Tests (NotificationManager in isolation) ----
+
 
 def test_global_mute_in_notification_manager():
     """NotificationManager respects _global mute in create_notification."""
@@ -86,8 +103,8 @@ def test_global_mute_in_notification_manager():
         # Monkeypatch to detect external calls
         telegram_called = []
         webex_called = []
-        mgr._notify_telegram = lambda n: telegram_called.append(n)
-        mgr._notify_webex = lambda n: webex_called.append(n)
+        mgr._notify_telegram_broadcast = lambda n: telegram_called.append(n)
+        mgr._notify_webex_broadcast = lambda n: webex_called.append(n)
 
         # Create notification for telegram with skip_external=False
         mgr.create_notification(
@@ -98,8 +115,9 @@ def test_global_mute_in_notification_manager():
             user_key="telegram_123456",
             skip_external=False,
         )
-        assert len(telegram_called) == 0, \
-            f"Telegram should NOT be called (global mute), got {len(telegram_called)}"
+        assert (
+            len(telegram_called) == 0
+        ), f"Telegram should NOT be called (global mute), got {len(telegram_called)}"
         print("✓ Telegram suppressed by global mute")
 
         mgr.create_notification(
@@ -110,8 +128,9 @@ def test_global_mute_in_notification_manager():
             user_key="webex_person123",
             skip_external=False,
         )
-        assert len(webex_called) == 0, \
-            f"WebEx should NOT be called (global mute), got {len(webex_called)}"
+        assert (
+            len(webex_called) == 0
+        ), f"WebEx should NOT be called (global mute), got {len(webex_called)}"
         print("✓ WebEx suppressed by global mute")
 
         # Notification still stored for WebUI polling
@@ -131,8 +150,9 @@ def test_global_mute_in_notification_manager():
             user_key="telegram_123456",
             skip_external=False,
         )
-        assert len(telegram_called) == 1, \
-            f"Telegram should be called after un-mute, got {len(telegram_called)}"
+        assert (
+            len(telegram_called) == 1
+        ), f"Telegram should be called after un-mute, got {len(telegram_called)}"
         print("✓ Telegram sent after global un-mute")
 
     print("\n=== Test 1 Passed ✓ ===\n")
@@ -168,8 +188,8 @@ def test_emit_notification_respects_global_mute():
 
         telegram_calls = []
         webex_calls = []
-        nmgr._notify_telegram = lambda n: telegram_calls.append(n)
-        nmgr._notify_webex = lambda n: webex_calls.append(n)
+        nmgr._notify_telegram_broadcast = lambda n: telegram_calls.append(n)
+        nmgr._notify_webex_broadcast = lambda n: webex_calls.append(n)
 
         nmgr.create_notification(
             task_id="bg_test123",
@@ -180,8 +200,9 @@ def test_emit_notification_respects_global_mute():
             skip_external=False,
         )
 
-        assert len(telegram_calls) == 0, \
-            f"Telegram blocked by global mute, got {len(telegram_calls)}"
+        assert (
+            len(telegram_calls) == 0
+        ), f"Telegram blocked by global mute, got {len(telegram_calls)}"
         print("✓ Telegram blocked (global mute)")
 
         all_notifs = nmgr.list_notifications("telegram_8193231291")
@@ -221,6 +242,7 @@ def test_prefs_file_persistence():
 
 # ---- Integration Tests (via production API on port 8000) ----
 
+
 def test_api_notifications_off_sets_global_mute():
     """Sending /notifications off via API sets _global mute in prefs file."""
     print("\n=== Test 5: API /notifications off → global mute ===\n")
@@ -247,8 +269,9 @@ def test_api_notifications_off_sets_global_mute():
     )
     print(f"  /notifications off response: {json.dumps(resp)[:200]}")
     response_text = str(resp)
-    assert "muted" in response_text.lower() or "off" in response_text.lower(), \
-        f"Expected 'muted' or 'off' in response: {resp}"
+    assert (
+        "muted" in response_text.lower() or "off" in response_text.lower()
+    ), f"Expected 'muted' or 'off' in response: {resp}"
     print("✓ API accepted /notifications off")
 
     # Step 3: Verify the prefs file has _global muted
@@ -257,9 +280,14 @@ def test_api_notifications_off_sets_global_mute():
         with open(prefs_path) as f:
             prefs = json.load(f)
         global_entry = prefs.get("_global", {})
-        global_pref = global_entry.get("preference", "all") if isinstance(global_entry, dict) else "all"
-        assert global_pref == "off", \
-            f"Expected _global preference 'off', got '{global_pref}'. Full prefs: {json.dumps(prefs)}"
+        global_pref = (
+            global_entry.get("preference", "all")
+            if isinstance(global_entry, dict)
+            else "all"
+        )
+        assert (
+            global_pref == "off"
+        ), f"Expected _global preference 'off', got '{global_pref}'. Full prefs: {json.dumps(prefs)}"
         print("✓ _global preference is 'off' in notification_prefs.json")
     else:
         raise AssertionError(f"notification_prefs.json not found at {prefs_path}")
@@ -277,9 +305,14 @@ def test_api_notifications_off_sets_global_mute():
     with open(prefs_path) as f:
         prefs = json.load(f)
     global_entry = prefs.get("_global", {})
-    global_pref = global_entry.get("preference", "all") if isinstance(global_entry, dict) else "all"
-    assert global_pref == "all", \
-        f"Expected _global preference 'all' after on, got '{global_pref}'"
+    global_pref = (
+        global_entry.get("preference", "all")
+        if isinstance(global_entry, dict)
+        else "all"
+    )
+    assert (
+        global_pref == "all"
+    ), f"Expected _global preference 'all' after on, got '{global_pref}'"
     print("✓ _global preference is 'all' after re-enabling")
 
     print("\n=== Test 5 Passed ✓ ===\n")
@@ -293,26 +326,33 @@ def test_api_cross_channel_mute_blocks_notification():
     identity = "test-cross-channel"
 
     # Step 1: Create session and mute from WebUI
-    api_post("/sessions/create", data={"session_id": test_sid}, identity=identity, channel="webui")
+    api_post(
+        "/sessions/create",
+        data={"session_id": test_sid},
+        identity=identity,
+        channel="webui",
+    )
     resp = api_post(
         f"/sessions/{test_sid}/execute",
         data={"query": "/notifications off"},
         identity=identity,
         channel="webui",
     )
-    assert "muted" in str(resp).lower() or "off" in str(resp).lower(), \
-        f"Expected muted confirmation: {resp}"
+    assert (
+        "muted" in str(resp).lower() or "off" in str(resp).lower()
+    ), f"Expected muted confirmation: {resp}"
     print("✓ Muted from WebUI")
 
     # Step 2: Verify that NotificationManager would block a Telegram notification
     real_mgr = NotificationManager()
-    assert real_mgr.is_muted("_global"), \
-        f"Expected global mute. Prefs: {json.dumps(real_mgr._load_prefs())}"
+    assert real_mgr.is_muted(
+        "_global"
+    ), f"Expected global mute. Prefs: {json.dumps(real_mgr._load_prefs())}"
     print("✓ _global is muted (covers all channels)")
 
     # Step 3: Simulate Telegram bg task completion
     telegram_calls = []
-    real_mgr._notify_telegram = lambda n: telegram_calls.append(n)
+    real_mgr._notify_telegram_broadcast = lambda n: telegram_calls.append(n)
 
     real_mgr.create_notification(
         task_id="test-cross-bg",
@@ -323,8 +363,9 @@ def test_api_cross_channel_mute_blocks_notification():
         skip_external=False,
     )
 
-    assert len(telegram_calls) == 0, \
-        f"Telegram should be BLOCKED by global mute, got {len(telegram_calls)} calls"
+    assert (
+        len(telegram_calls) == 0
+    ), f"Telegram should be BLOCKED by global mute, got {len(telegram_calls)} calls"
     print("✓ Telegram notification BLOCKED by cross-channel global mute")
 
     # Step 4: Cleanup — re-enable
@@ -336,8 +377,9 @@ def test_api_cross_channel_mute_blocks_notification():
     )
 
     real_mgr2 = NotificationManager()
-    assert not real_mgr2.is_muted("_global"), \
-        "Global mute should be cleared after /notifications on"
+    assert not real_mgr2.is_muted(
+        "_global"
+    ), "Global mute should be cleared after /notifications on"
     print("✓ Global mute cleared after re-enabling")
 
     print("\n=== Test 6 Passed ✓ ===\n")
@@ -365,6 +407,7 @@ if __name__ == "__main__":
             failed += 1
             print(f"\n❌ FAILED: {test_fn.__name__}: {e}\n")
             import traceback
+
             traceback.print_exc()
 
     print(f"\n{'='*50}")

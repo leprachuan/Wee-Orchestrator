@@ -230,7 +230,11 @@ class TestBackgroundTaskManagerQueueIntegration(unittest.TestCase):
     def _submit(self, n: int):
         """Simulate what the API endpoint does: queue if at limit, else run."""
         running = self.mgr.count_running(self.channel, self.identity)
-        status = "queued" if running >= BackgroundTaskManager.MAX_TASKS_PER_USER else "running"
+        status = (
+            "queued"
+            if running >= BackgroundTaskManager.MAX_TASKS_PER_USER
+            else "running"
+        )
         return self.mgr.create_task(
             task_id=_task_id(n),
             session_id=f"sess-{n}",

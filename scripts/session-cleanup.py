@@ -81,7 +81,9 @@ def cleanup_sessions():
 
     # 24-hour stale threshold — sessions idle for less are kept
     current_time = time.time()
-    stale_threshold = int(os.environ.get("SESSION_STALE_THRESHOLD", "86400"))  # 24h default
+    stale_threshold = int(
+        os.environ.get("SESSION_STALE_THRESHOLD", "86400")
+    )  # 24h default
 
     removed_sessions = []
     skipped_referenced = 0
@@ -137,7 +139,9 @@ def cleanup_sessions():
             keys_to_remove = []
             for key in list(session_map.keys()):
                 entry = session_map[key]
-                backend_id = entry.get("session_id") if isinstance(entry, dict) else entry
+                backend_id = (
+                    entry.get("session_id") if isinstance(entry, dict) else entry
+                )
                 if not backend_id:
                     continue
 

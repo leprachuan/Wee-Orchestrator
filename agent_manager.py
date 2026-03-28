@@ -21,7 +21,6 @@ from typing import Optional, Tuple, Dict, List
 import secrets as _secrets
 import threading
 
-
 # Dynamically determine the repo base directory (works regardless of where repo is cloned)
 SCRIPT_BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -70,21 +69,21 @@ def _sanitize_command_for_display(text: str) -> str:
         return text
     # Named sensitive headers: Authorization, X-API-Key, etc.
     text = _SENSITIVE_HEADER_RE.sub(
-        lambda m: f'{m.group(1)}{m.group(2)}: [REDACTED]{m.group(3)}', text
+        lambda m: f"{m.group(1)}{m.group(2)}: [REDACTED]{m.group(3)}", text
     )
     # Cookie header
     text = _COOKIE_HEADER_RE.sub(
-        lambda m: f'{m.group(1)}Cookie: [REDACTED]{m.group(2)}', text
+        lambda m: f"{m.group(1)}Cookie: [REDACTED]{m.group(2)}", text
     )
     # Generic headers containing password/secret/token/key
     text = _SENSITIVE_HEADER_GENERIC_RE.sub(
-        lambda m: f'{m.group(1)}{m.group(2)}: [REDACTED]{m.group(3)}', text
+        lambda m: f"{m.group(1)}{m.group(2)}: [REDACTED]{m.group(3)}", text
     )
     # Inline Bearer / Basic tokens (e.g. in JSON or plain text)
-    text = _BEARER_TOKEN_RE.sub(r'\1[REDACTED]', text)
-    text = _BASIC_AUTH_RE.sub(r'\1[REDACTED]', text)
+    text = _BEARER_TOKEN_RE.sub(r"\1[REDACTED]", text)
+    text = _BASIC_AUTH_RE.sub(r"\1[REDACTED]", text)
     # curl -u user:password
-    text = _CURL_USER_RE.sub(r'\1[REDACTED]', text)
+    text = _CURL_USER_RE.sub(r"\1[REDACTED]", text)
     return text
 
 
@@ -114,7 +113,6 @@ def _sanitize_tool_call_for_display(data: dict) -> dict:
                 new_inp[field] = _sanitize_command_for_display(new_inp[field])
         sanitized["input"] = new_inp
     return sanitized
-
 
 
 class RateLimiter:
@@ -163,7 +161,11 @@ class AuthManager:
         self.pairing_code_ttl = pairing_code_ttl
         self.session_token_ttl = session_token_ttl
         self.session_token_absolute_ttl = session_token_absolute_ttl
-        self.sessions_file = sessions_file or os.path.join(os.path.dirname(os.path.abspath(__file__)), ".task-scheduler", "sessions.json")
+        self.sessions_file = sessions_file or os.path.join(
+            os.path.dirname(os.path.abspath(__file__)),
+            ".task-scheduler",
+            "sessions.json",
+        )
         self.pairing_codes: Dict[str, dict] = {}
         self.session_tokens: Dict[str, dict] = {}
         self._lock = threading.Lock()
@@ -187,10 +189,14 @@ class AuthManager:
                     for token, entry in data.items():
                         created_at = entry.get("created_at", now)
                         absolute_expires_at = entry.get(
-                            "absolute_expires_at", created_at + self.session_token_absolute_ttl
+                            "absolute_expires_at",
+                            created_at + self.session_token_absolute_ttl,
                         )
                         entry["absolute_expires_at"] = absolute_expires_at
-                        if entry.get("expires_at", 0) > now and absolute_expires_at > now:
+                        if (
+                            entry.get("expires_at", 0) > now
+                            and absolute_expires_at > now
+                        ):
                             self.session_tokens[token] = entry
         except Exception:
             pass
@@ -203,7 +209,6 @@ class AuthManager:
                 json.dump(self.session_tokens, f)
         except Exception:
             pass
-
 
     def generate_pairing_code(self, identity: str, channel: str) -> str:
         """Generate a numeric pairing code and store it."""
@@ -322,10 +327,21 @@ class BackgroundTaskManager:
             return identity
         return f"{channel}_{identity}"
 
-    def create_task(self, task_id: str, session_id: str, user_identity: str,
-                    channel: str, agent: str, runtime: str, model: str,
-                    prompt: str, pid: int = 0, status: str = "running",
-                    timeout: int = None, notify: bool = True) -> dict:
+    def create_task(
+        self,
+        task_id: str,
+        session_id: str,
+        user_identity: str,
+        channel: str,
+        agent: str,
+        runtime: str,
+        model: str,
+        prompt: str,
+        pid: int = 0,
+        status: str = "running",
+        timeout: int = None,
+        notify: bool = True,
+    ) -> dict:
         task = {
             "task_id": task_id,
             "session_id": session_id,
@@ -339,7 +355,11 @@ class BackgroundTaskManager:
             "status": status,
             "pid": pid,
             "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-            "started_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()) if status == "running" else None,
+            "started_at": (
+                time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+                if status == "running"
+                else None
+            ),
             "completed_at": None,
             "output_lines": [],
             "tool_calls": [],
@@ -373,7 +393,9 @@ class BackgroundTaskManager:
 
     def list_tasks(self, channel: str, identity: str) -> list:
         with self._lock:
-            return [t for t in self._load() if self._identity_matches(t, channel, identity)]
+            return [
+                t for t in self._load() if self._identity_matches(t, channel, identity)
+            ]
 
     def list_all_tasks(self) -> list:
         """Return all tasks regardless of identity/channel."""
@@ -381,14 +403,20 @@ class BackgroundTaskManager:
             return list(self._load())
 
     def count_running(self, channel: str, identity: str) -> int:
-        return sum(1 for t in self.list_tasks(channel, identity) if t["status"] == "running")
+        return sum(
+            1 for t in self.list_tasks(channel, identity) if t["status"] == "running"
+        )
 
     def count_queued(self, channel: str, identity: str) -> int:
-        return sum(1 for t in self.list_tasks(channel, identity) if t["status"] == "queued")
+        return sum(
+            1 for t in self.list_tasks(channel, identity) if t["status"] == "queued"
+        )
 
     def get_next_queued(self, channel: str, identity: str) -> Optional[dict]:
         """Return the oldest queued task for this user, or None."""
-        queued = [t for t in self.list_tasks(channel, identity) if t["status"] == "queued"]
+        queued = [
+            t for t in self.list_tasks(channel, identity) if t["status"] == "queued"
+        ]
         if not queued:
             return None
         return min(queued, key=lambda t: t.get("created_at", ""))
@@ -419,7 +447,7 @@ class BackgroundTaskManager:
                     t["output_lines"].append(line)
                     # Keep only last MAX_OUTPUT_LINES
                     if len(t["output_lines"]) > self.MAX_OUTPUT_LINES:
-                        t["output_lines"] = t["output_lines"][-self.MAX_OUTPUT_LINES:]
+                        t["output_lines"] = t["output_lines"][-self.MAX_OUTPUT_LINES :]
                     break
             self._save(tasks)
 
@@ -435,7 +463,7 @@ class BackgroundTaskManager:
                         t["tool_calls"] = []
                     t["tool_calls"].append(tool_call)
                     if len(t["tool_calls"]) > self.MAX_TOOL_CALLS:
-                        t["tool_calls"] = t["tool_calls"][-self.MAX_TOOL_CALLS:]
+                        t["tool_calls"] = t["tool_calls"][-self.MAX_TOOL_CALLS :]
                     break
             self._save(tasks)
 
@@ -555,8 +583,8 @@ def find_executable(name: str) -> Optional[str]:
     search_paths = [
         Path.home() / ".local" / "bin" / name,  # User-local installs
         Path("/opt/homebrew/bin") / name,  # Homebrew ARM64 (M1/M2 Macs)
-        Path("/usr/local/bin") / name,      # Homebrew Intel / manual installs
-        Path("/usr/bin") / name,            # Standard system location
+        Path("/usr/local/bin") / name,  # Homebrew Intel / manual installs
+        Path("/usr/bin") / name,  # Standard system location
     ]
 
     for path in search_paths:
@@ -627,21 +655,57 @@ def estimate_background_timeout(prompt: str, default: int = 900) -> int:
 
     # Very long tasks (~30 min)
     very_long_keywords = [
-        "backup", "full scan", "batch process", "process all", "index all",
-        "crawl all", "generate report for all", "migrate all", "import all",
-        "export all", "sync all", "reindex",
+        "backup",
+        "full scan",
+        "batch process",
+        "process all",
+        "index all",
+        "crawl all",
+        "generate report for all",
+        "migrate all",
+        "import all",
+        "export all",
+        "sync all",
+        "reindex",
     ]
     # Long tasks (~20 min)
     long_keywords = [
-        "deploy", "migrate", "migration", "build", "compile", "install",
-        "process", "analyze all", "scan", "crawl", "index", "reprocess",
-        "refactor", "generate report", "summarize all", "bulk",
+        "deploy",
+        "migrate",
+        "migration",
+        "build",
+        "compile",
+        "install",
+        "process",
+        "analyze all",
+        "scan",
+        "crawl",
+        "index",
+        "reprocess",
+        "refactor",
+        "generate report",
+        "summarize all",
+        "bulk",
     ]
     # Quick tasks (~2 min)
     quick_keywords = [
-        "status", "check", "list", "show", "get", "fetch", "ping",
-        "is running", "are running", "what is", "what are", "tell me",
-        "how many", "count", "current", "latest", "recent",
+        "status",
+        "check",
+        "list",
+        "show",
+        "get",
+        "fetch",
+        "ping",
+        "is running",
+        "are running",
+        "what is",
+        "what are",
+        "tell me",
+        "how many",
+        "count",
+        "current",
+        "latest",
+        "recent",
     ]
 
     for kw in very_long_keywords:
@@ -673,7 +737,9 @@ class HistoryManager:
         self._lock = threading.Lock()
         # Read MAX_SESSIONS from environment or use default
         try:
-            HistoryManager.MAX_SESSIONS_PER_USER = int(os.environ.get("MAX_SESSIONS", "100"))
+            HistoryManager.MAX_SESSIONS_PER_USER = int(
+                os.environ.get("MAX_SESSIONS", "100")
+            )
         except (ValueError, TypeError):
             HistoryManager.MAX_SESSIONS_PER_USER = 100
         if not os.path.exists(self._path):
@@ -705,7 +771,9 @@ class HistoryManager:
             sessions = data.get(key, {}).get("sessions", [])
             # Return without messages, sorted newest-first
             result = []
-            for s in sorted(sessions, key=lambda x: x.get("updated_at", 0), reverse=True):
+            for s in sorted(
+                sessions, key=lambda x: x.get("updated_at", 0), reverse=True
+            ):
                 result.append({k: v for k, v in s.items() if k != "messages"})
             return result
 
@@ -729,7 +797,7 @@ class HistoryManager:
             # Prune if at cap
             if len(sessions) >= self.MAX_SESSIONS_PER_USER:
                 sessions.sort(key=lambda x: x.get("updated_at", 0))
-                sessions = sessions[-(self.MAX_SESSIONS_PER_USER - 1):]
+                sessions = sessions[-(self.MAX_SESSIONS_PER_USER - 1) :]
                 user_data["sessions"] = sessions
             now = time.time()
             session = {
@@ -776,13 +844,15 @@ class HistoryManager:
                         s["preview"] = content[:120]
                     # Prune if too many messages
                     if len(messages) > self.MAX_MESSAGES_PER_SESSION:
-                        s["messages"] = messages[-self.MAX_MESSAGES_PER_SESSION:]
+                        s["messages"] = messages[-self.MAX_MESSAGES_PER_SESSION :]
                     s["updated_at"] = time.time()
                     self._save(data)
                     return True
         return False
 
-    def rename_session(self, channel: str, identity: str, session_id: str, title: str) -> bool:
+    def rename_session(
+        self, channel: str, identity: str, session_id: str, title: str
+    ) -> bool:
         """Rename a session. Returns False if not found."""
         with self._lock:
             data = self._load()
@@ -813,8 +883,11 @@ class RuntimeUsageTracker:
     """Queries GitHub Copilot premium request usage from the billing API."""
 
     COPILOT_PLAN_QUOTAS = {
-        "free": 50, "pro": 300, "pro+": 1500,
-        "business": 300, "enterprise": 1000,
+        "free": 50,
+        "pro": 300,
+        "pro+": 1500,
+        "business": 300,
+        "enterprise": 1000,
     }
 
     def __init__(self):
@@ -824,11 +897,13 @@ class RuntimeUsageTracker:
     @staticmethod
     def _month_key() -> str:
         from datetime import datetime, timezone
+
         return datetime.now(timezone.utc).strftime("%Y-%m")
 
     @staticmethod
     def _next_reset() -> str:
         from datetime import datetime, timezone
+
         now = datetime.now(timezone.utc)
         if now.month == 12:
             reset = datetime(now.year + 1, 1, 1, tzinfo=timezone.utc)
@@ -850,7 +925,9 @@ class RuntimeUsageTracker:
                 return {}
             user_raw = subprocess.run(
                 [gh_bin, "api", "/user", "--jq", ".login"],
-                capture_output=True, text=True, timeout=10,
+                capture_output=True,
+                text=True,
+                timeout=10,
             )
             gh_user = user_raw.stdout.strip()
             if not gh_user:
@@ -858,7 +935,9 @@ class RuntimeUsageTracker:
 
             billing_raw = subprocess.run(
                 [gh_bin, "api", f"/users/{gh_user}/settings/billing/usage"],
-                capture_output=True, text=True, timeout=15,
+                capture_output=True,
+                text=True,
+                timeout=15,
             )
             if billing_raw.returncode != 0:
                 return {}
@@ -888,7 +967,9 @@ class RuntimeUsageTracker:
             self._cache[cache_key] = {"ts": now, "data": data}
             return data
         except Exception as exc:
-            print(f"[RuntimeUsage] Copilot billing fetch failed: {exc}", file=sys.stderr)
+            print(
+                f"[RuntimeUsage] Copilot billing fetch failed: {exc}", file=sys.stderr
+            )
             return {}
 
     def _get_copilot_quota(self) -> int:
@@ -947,7 +1028,13 @@ class SessionManager:
             (
                 "sonnet",
                 "Claude Sonnet (Latest)",
-                ["claude-sonnet", "claude-sonnet-4-6", "claude-sonnet-4.6", "claude-sonnet-4.5", "sonnet-4.6"],
+                [
+                    "claude-sonnet",
+                    "claude-sonnet-4-6",
+                    "claude-sonnet-4.6",
+                    "claude-sonnet-4.5",
+                    "sonnet-4.6",
+                ],
             ),
             (
                 "haiku",
@@ -961,10 +1048,18 @@ class SessionManager:
             ),
         ],
         "US Frontier Models (Comparison)": [
-            ("claude-3-5-sonnet-latest", "Claude 3.5 Sonnet (V2)", ["claude-3-5-sonnet-20241022"]),
-            ("claude-3-5-haiku-latest", "Claude 3.5 Haiku", ["claude-3-5-haiku-20241022"]),
+            (
+                "claude-3-5-sonnet-latest",
+                "Claude 3.5 Sonnet (V2)",
+                ["claude-3-5-sonnet-20241022"],
+            ),
+            (
+                "claude-3-5-haiku-latest",
+                "Claude 3.5 Haiku",
+                ["claude-3-5-haiku-20241022"],
+            ),
             ("claude-3-opus-latest", "Claude 3 Opus", ["claude-3-opus-20240229"]),
-        ]
+        ],
     }
 
     OPENCODE_MODELS = {
@@ -976,7 +1071,7 @@ class SessionManager:
         "xAI (US Models)": [
             ("grok-2", "Grok-2", ["grok"]),
             ("grok-2-mini", "Grok-2 Mini", ["grok-mini"]),
-        ]
+        ],
     }
 
     # Gemini models configuration
@@ -1021,7 +1116,7 @@ class SessionManager:
             ("gemini-1.5-pro-latest", "Gemini 1.5 Pro", ["gemini-1.5-pro"]),
             ("gemini-1.5-flash-latest", "Gemini 1.5 Flash", ["gemini-1.5-flash"]),
             ("gemini-2.0-flash-001", "Gemini 2.0 Flash", ["gemini-2.0-flash"]),
-        ]
+        ],
     }
 
     # CODEX models configuration (from copilot CLI --model choices)
@@ -1044,7 +1139,7 @@ class SessionManager:
             ("gpt-4-turbo", "GPT-4 Turbo", ["gpt-4-turbo-latest"]),
             ("o1-preview", "OpenAI o1-preview", ["o1-preview-2024-09-12"]),
             ("o1-mini", "OpenAI o1-mini", ["o1-mini-2024-09-12"]),
-        ]
+        ],
     }
 
     # DEVIN models configuration
@@ -1052,7 +1147,11 @@ class SessionManager:
         "Anthropic Models": [
             ("claude-sonnet-4", "Claude Sonnet 4", ["sonnet-4", "sonnet"]),
             ("claude-sonnet-4.5", "Claude Sonnet 4.5", ["sonnet-4.5"]),
-            ("claude-sonnet-4.5-thinking", "Claude Sonnet 4.5 Thinking", ["sonnet-thinking"]),
+            (
+                "claude-sonnet-4.5-thinking",
+                "Claude Sonnet 4.5 Thinking",
+                ["sonnet-thinking"],
+            ),
             ("claude-sonnet-4.6", "Claude Sonnet 4.6", ["sonnet-4.6"]),
             ("claude-opus-4.5", "Claude Opus 4.5", ["opus-4.5"]),
             ("claude-opus-4.6", "Claude Opus 4.6", ["opus-4.6", "opus"]),
@@ -1085,14 +1184,15 @@ class SessionManager:
         self.session_map_file = self.copilot_home / f"n8n-session-map{_env_suffix}.json"
         self.session_state_dir = self.copilot_home / "session-state"
         self.logs_dir = self.copilot_home / "logs"
-        self.running_queries_file = self.copilot_home / f"running-queries{_env_suffix}.json"
+        self.running_queries_file = (
+            self.copilot_home / f"running-queries{_env_suffix}.json"
+        )
 
         # OpenCode Paths
         self.opencode_home = Path.home() / ".opencode"
         # Resolve OpenCode executable like other runtimes; keep legacy path as fallback.
         self.opencode_bin = Path(
-            find_executable("opencode")
-            or str(self.opencode_home / "bin" / "opencode")
+            find_executable("opencode") or str(self.opencode_home / "bin" / "opencode")
         )
         self.opencode_session_storage = (
             Path.home()
@@ -1158,9 +1258,7 @@ class SessionManager:
 
         # Session idle timeout — sessions inactive longer than this are
         # candidates for cleanup.  Defaults to 30 min; override via env var.
-        self.session_idle_timeout = int(
-            os.environ.get("SESSION_IDLE_TIMEOUT", "1800")
-        )
+        self.session_idle_timeout = int(os.environ.get("SESSION_IDLE_TIMEOUT", "1800"))
 
         # Lock for session map file read-modify-write to prevent TOCTOU races
         self._session_map_lock = threading.Lock()
@@ -1172,12 +1270,10 @@ class SessionManager:
         # Per-session stream buffers for multi-session streaming support.
         # Buffers all chunks so disconnected clients can reconnect and replay.
         # session_id -> _StreamBuffer
-        self._stream_buffers: Dict[str, '_StreamBuffer'] = {}
+        self._stream_buffers: Dict[str, "_StreamBuffer"] = {}
 
         # Last subprocess exit code per n8n_session_id (for debugging/monitoring)
         self._last_exit_codes: Dict[str, int] = {}
-
-
 
     def _load_agents_config(self, config_file: Optional[str] = None) -> Dict:
         """Load agents configuration from JSON file
@@ -1251,33 +1347,36 @@ class SessionManager:
                         config = json.load(f)
                         # Filter to only enabled repositories
                         repositories = [
-                            repo for repo in config.get("repositories", [])
+                            repo
+                            for repo in config.get("repositories", [])
                             if repo.get("enabled", False)
                         ]
                         if repositories:
                             print(
                                 f"[Info] Loaded {len(repositories)} skill repositories from {config_path}",
-                                file=sys.stderr
+                                file=sys.stderr,
                             )
                             return repositories
                 except Exception as e:
                     print(
                         f"[Warning] Failed to load skill repositories from {config_path}: {e}",
-                        file=sys.stderr
+                        file=sys.stderr,
                     )
                     continue
 
         # Return default Anthropic repository if no config found
         print(
             "[Info] No skill_repositories.json found, using default Anthropic repository",
-            file=sys.stderr
+            file=sys.stderr,
         )
-        return [{
-            "name": "Anthropic Official",
-            "url": "https://github.com/anthropics/skills.git",
-            "description": "Official Anthropic skills repository",
-            "enabled": True
-        }]
+        return [
+            {
+                "name": "Anthropic Official",
+                "url": "https://github.com/anthropics/skills.git",
+                "description": "Official Anthropic skills repository",
+                "enabled": True,
+            }
+        ]
 
     def _format_repository_info(self) -> str:
         """Format available skill repositories for display in context."""
@@ -1401,7 +1500,14 @@ class SessionManager:
                 raw_content = match.group(1)
                 models = re.findall(r'"([^"]+)"', raw_content)
                 # Validate: filter out false positives (e.g. --output-format choices: "text", "json")
-                models = [m for m in models if any(kw in m.lower() for kw in ["gpt", "claude", "gemini", "o1", "o3", "o4"])]
+                models = [
+                    m
+                    for m in models
+                    if any(
+                        kw in m.lower()
+                        for kw in ["gpt", "claude", "gemini", "o1", "o3", "o4"]
+                    )
+                ]
 
             # Method 2: Fallback (if regex fails due to layout changes)
             if not models:
@@ -1424,7 +1530,7 @@ class SessionManager:
                     "gpt-5.1",
                     "gpt-5.1-codex-mini",
                     "gpt-5-mini",
-                    "gpt-4.1"
+                    "gpt-4.1",
                 ]
                 found_fallbacks = [m for m in fallback_models if m in result.stdout]
                 if found_fallbacks:
@@ -1492,7 +1598,9 @@ class SessionManager:
         try:
             cmd = [str(self.opencode_bin), "models"]
             # Use configured command timeout (may be set via COMMAND_TIMEOUT)
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=self.command_timeout)
+            result = subprocess.run(
+                cmd, capture_output=True, text=True, timeout=self.command_timeout
+            )
 
             if result.returncode != 0:
                 print(
@@ -1527,7 +1635,8 @@ class SessionManager:
             return models_by_provider
         except subprocess.TimeoutExpired:
             print(
-                f"[Error] opencode models command timed out after {self.command_timeout}s", file=sys.stderr
+                f"[Error] opencode models command timed out after {self.command_timeout}s",
+                file=sys.stderr,
             )
             return self._static_models_to_dict(self.OPENCODE_MODELS)
         except Exception as e:
@@ -1556,7 +1665,7 @@ class SessionManager:
                 for mid, desc, _aliases in entries:
                     if mid == model_id:
                         return desc
-        
+
         # Fall back to static models
         static_map = {
             "claude": self.CLAUDE_MODELS,
@@ -1586,14 +1695,17 @@ class SessionManager:
         if env_models:
             try:
                 import json
+
                 models_dict = json.loads(env_models)
                 # Cache the full model dict with descriptions for lookup later
                 self._env_claude_models = models_dict
                 # Convert to the expected format {category: [model_ids]}
                 return self._static_models_to_dict(models_dict)
             except (json.JSONDecodeError, ValueError) as e:
-                print(f"Warning: Failed to parse CLAUDE_MODELS_JSON: {e}", file=sys.stderr)
-        
+                print(
+                    f"Warning: Failed to parse CLAUDE_MODELS_JSON: {e}", file=sys.stderr
+                )
+
         # Fallback to static configuration
         return self._static_models_to_dict(self.CLAUDE_MODELS)
 
@@ -1609,14 +1721,17 @@ class SessionManager:
         if env_models:
             try:
                 import json
+
                 models_dict = json.loads(env_models)
                 # Cache the full model dict with descriptions for lookup later
                 self._env_gemini_models = models_dict
                 # Convert to the expected format {category: [model_ids]}
                 return self._static_models_to_dict(models_dict)
             except (json.JSONDecodeError, ValueError) as e:
-                print(f"Warning: Failed to parse GEMINI_MODELS_JSON: {e}", file=sys.stderr)
-        
+                print(
+                    f"Warning: Failed to parse GEMINI_MODELS_JSON: {e}", file=sys.stderr
+                )
+
         # Fallback to static configuration
         return self._static_models_to_dict(self.GEMINI_MODELS)
 
@@ -1632,14 +1747,17 @@ class SessionManager:
         if env_models:
             try:
                 import json
+
                 models_dict = json.loads(env_models)
                 # Cache the full model dict with descriptions for lookup later
                 self._env_codex_models = models_dict
                 # Convert to the expected format {category: [model_ids]}
                 return self._static_models_to_dict(models_dict)
             except (json.JSONDecodeError, ValueError) as e:
-                print(f"Warning: Failed to parse CODEX_MODELS_JSON: {e}", file=sys.stderr)
-        
+                print(
+                    f"Warning: Failed to parse CODEX_MODELS_JSON: {e}", file=sys.stderr
+                )
+
         # Fallback to static configuration
         return self._static_models_to_dict(self.CODEX_MODELS)
 
@@ -1671,9 +1789,7 @@ class SessionManager:
                     if model_ids:
                         # Group into a single category for display
                         discovered = {
-                            "Available Models": [
-                                (mid, mid, []) for mid in model_ids
-                            ]
+                            "Available Models": [(mid, mid, []) for mid in model_ids]
                         }
                         print(
                             f"[devin] Auto-discovered {len(model_ids)} models",
@@ -1681,7 +1797,10 @@ class SessionManager:
                         )
                         return self._static_models_to_dict(discovered)
         except Exception as e:
-            print(f"[devin] Model discovery failed, using static list: {e}", file=sys.stderr)
+            print(
+                f"[devin] Model discovery failed, using static list: {e}",
+                file=sys.stderr,
+            )
 
         return self._static_models_to_dict(self.DEVIN_MODELS)
 
@@ -1702,7 +1821,10 @@ class SessionManager:
         }
         fetcher = dispatch.get(runtime)
         if fetcher is None:
-            print(f"[Warning] Unknown runtime for model listing: {runtime}", file=sys.stderr)
+            print(
+                f"[Warning] Unknown runtime for model listing: {runtime}",
+                file=sys.stderr,
+            )
             return {}
         return fetcher()
 
@@ -1743,7 +1865,9 @@ class SessionManager:
                 return numeric_part[-4:] if len(numeric_part) >= 4 else numeric_part
         return session_id[-4:] if len(session_id) >= 4 else session_id
 
-    def get_or_create_session_data(self, n8n_session_id: str, identity: Optional[str] = None) -> Dict:
+    def get_or_create_session_data(
+        self, n8n_session_id: str, identity: Optional[str] = None
+    ) -> Dict:
         """
         Get existing session data or create new default
         Returns dict with keys: session_id, model, agent, runtime, bot_id, channel
@@ -1751,7 +1875,9 @@ class SessionManager:
         with self._session_map_lock:
             return self._get_or_create_session_data_unlocked(n8n_session_id, identity)
 
-    def _get_or_create_session_data_unlocked(self, n8n_session_id: str, identity: Optional[str] = None) -> Dict:
+    def _get_or_create_session_data_unlocked(
+        self, n8n_session_id: str, identity: Optional[str] = None
+    ) -> Dict:
         """Internal: get or create session data (caller must hold _session_map_lock)"""
         session_map = self.load_session_map()
 
@@ -1791,7 +1917,7 @@ class SessionManager:
             "last_activity": time.time(),
             "permissions": None,  # Inherited from agent config on session create
         }
-        
+
         # Store identity if provided, so we can find sessions by user later
         if identity:
             default_data["identity"] = identity
@@ -1801,7 +1927,7 @@ class SessionManager:
             session_map[n8n_session_id] = default_data
             self.save_session_map(session_map)
             return {**default_data, "is_new": True}
-        
+
         data = session_map[n8n_session_id]
         # Normalize old format (string ID or dict without runtime)
         if isinstance(data, str):
@@ -1821,10 +1947,7 @@ class SessionManager:
             # set a model appropriate for that runtime
             runtime = merged.get("runtime", default_runtime)
             if runtime == "claude":
-                if (
-                    not merged.get("model")
-                    or "gpt" in merged.get("model", "").lower()
-                ):
+                if not merged.get("model") or "gpt" in merged.get("model", "").lower():
                     merged["model"] = "haiku"
             elif runtime == "opencode":
                 # For opencode, only force default if model is truly empty.
@@ -1842,18 +1965,18 @@ class SessionManager:
                 # Accept any model that resolves via codex model metadata/aliases.
                 # This avoids clobbering valid models like "gpt-5.4" that do not
                 # include the "codex" substring.
-                if (
-                    not current_model
-                    or not self.get_model_from_name(current_model, "codex")
+                if not current_model or not self.get_model_from_name(
+                    current_model, "codex"
                 ):
                     merged["model"] = "gpt-5.4"
             elif runtime == "devin":
                 current_model = merged.get("model", "")
-                if (
-                    not current_model
-                    or not self.get_model_from_name(current_model, "devin")
+                if not current_model or not self.get_model_from_name(
+                    current_model, "devin"
                 ):
-                    merged["model"] = os.getenv("DEVIN_DEFAULT_MODEL", "claude-sonnet-4")
+                    merged["model"] = os.getenv(
+                        "DEVIN_DEFAULT_MODEL", "claude-sonnet-4"
+                    )
 
             # Validate and fix session_id if corrupted
             session_id = merged.get("session_id", "")
@@ -1952,7 +2075,7 @@ class SessionManager:
         """Get the render type for a session (session-specific or default)"""
         return session_data.get("render_type", "text")
 
-    def validate_telegram_html(self, text: str)  -> Tuple[bool, str]:
+    def validate_telegram_html(self, text: str) -> Tuple[bool, str]:
         """
         Validate that text only uses Telegram-supported HTML tags.
         Returns (is_valid, error_message)
@@ -2122,7 +2245,6 @@ class SessionManager:
         )
         return f"✓ Switched to **{agent}** agent\n\n{agent_info['description']}\n\nLocation: `{agent_info['path']}`"
 
-
     def detect_agent_delegation(self, prompt: str) -> Tuple[Optional[str], str]:
         """Detect if user is asking for a specific agent to help with something
 
@@ -2217,17 +2339,19 @@ class SessionManager:
             "opencode": self.OPENCODE_MODELS,
             "devin": self.DEVIN_MODELS,
         }
-        
+
         # Try env-loaded models first, fall back to static
         models_to_check = env_alias_map.get(runtime) or static_alias_map.get(runtime)
-        
+
         if runtime in static_alias_map and models_to_check:
             for _category, entries in models_to_check.items():
                 for model_id, desc, aliases in entries:
                     aliases_lower = [a.lower() for a in aliases]
-                    if (name_lower == model_id.lower() or 
-                        name_lower == desc.lower() or
-                        name_lower in aliases_lower):
+                    if (
+                        name_lower == model_id.lower()
+                        or name_lower == desc.lower()
+                        or name_lower in aliases_lower
+                    ):
                         return model_id
 
         # Step 2: dynamic CLI discovery for all runtimes.
@@ -2259,33 +2383,39 @@ class SessionManager:
 
     def _parse_mode_command(self, prompt: str) -> tuple[str, str]:
         """Parse /mode command from prompt. Returns (cleaned_prompt, mode).
-        
+
         Modes:
         - 'elevated': Full access, auto-approve all operations
         - 'restricted': Keep bounded to agent directory (default)
         - 'sandboxed': Read-only, no external access
         """
         # Check for /mode command at start or after newline
-        mode_pattern = r'(?:^|\n)\s*/mode\s+(elevated|restricted|sandboxed)\s*(?:\n|$)'
+        mode_pattern = r"(?:^|\n)\s*/mode\s+(elevated|restricted|sandboxed)\s*(?:\n|$)"
         match = re.search(mode_pattern, prompt, re.IGNORECASE)
-        
+
         if match:
             mode = match.group(1).lower()
             # Remove the command from prompt
-            cleaned = re.sub(mode_pattern, '\n', prompt, flags=re.IGNORECASE).strip()
+            cleaned = re.sub(mode_pattern, "\n", prompt, flags=re.IGNORECASE).strip()
             return cleaned, mode
-        
+
         return prompt, "restricted"  # default to restricted
 
-    def _resolve_permission_mode(self, session_data: dict, prompt_mode: str = "restricted") -> str:
+    def _resolve_permission_mode(
+        self, session_data: dict, prompt_mode: str = "restricted"
+    ) -> str:
         """Resolve effective permission mode from session data with backward compatibility.
-        
+
         Priority: prompt_mode (if not default) > permissions.mode > yolo_mode (legacy) > 'restricted'
         """
         if prompt_mode != "restricted":
             return prompt_mode
         perms = session_data.get("permissions", {})
-        if isinstance(perms, dict) and perms.get("mode") in ("elevated", "restricted", "sandboxed"):
+        if isinstance(perms, dict) and perms.get("mode") in (
+            "elevated",
+            "restricted",
+            "sandboxed",
+        ):
             return perms["mode"]
         yolo = session_data.get("yolo_mode", "restricted")
         if yolo == "on":
@@ -2312,22 +2442,22 @@ class SessionManager:
                     continue
                 # Strip tool call decoration lines (already captured during streaming)
                 stripped_line = line.strip()
-                if re.match(r'^[●⬤]\s+', stripped_line):
+                if re.match(r"^[●⬤]\s+", stripped_line):
                     continue
-                if re.match(r'^\$\s+', stripped_line):
+                if re.match(r"^\$\s+", stripped_line):
                     continue
-                if re.match(r'^└\s+\d+\s+lines?', stripped_line):
+                if re.match(r"^└\s+\d+\s+lines?", stripped_line):
                     continue
-                if re.match(r'^Breakdown by AI model:', stripped_line):
+                if re.match(r"^Breakdown by AI model:", stripped_line):
                     in_metadata = True
                     continue
-                if re.match(r'^API time spent:', stripped_line):
+                if re.match(r"^API time spent:", stripped_line):
                     in_metadata = True
                     continue
-                if re.match(r'^Total session time:', stripped_line):
+                if re.match(r"^Total session time:", stripped_line):
                     in_metadata = True
                     continue
-                if re.match(r'^Total code changes:', stripped_line):
+                if re.match(r"^Total code changes:", stripped_line):
                     in_metadata = True
                     continue
                 result.append(line)
@@ -2370,6 +2500,7 @@ class SessionManager:
 
         elif runtime == "claude":
             import json as _json
+
             text_parts = []
             assistant_text = ""
             error_result = None
@@ -2396,7 +2527,11 @@ class SessionManager:
                         err_msg = err_obj.get("message", "") or obj.get("message", "")
                         err_type = err_obj.get("type", "")
                         if err_msg:
-                            error_result = f"API Error: {err_type} - {err_msg}" if err_type else f"API Error: {err_msg}"
+                            error_result = (
+                                f"API Error: {err_type} - {err_msg}"
+                                if err_type
+                                else f"API Error: {err_msg}"
+                            )
                         elif err_type:
                             error_result = f"API Error: {err_type}"
                     # Handle rate_limit_event from Claude CLI (plan/usage cap reached)
@@ -2450,6 +2585,7 @@ class SessionManager:
             # Gemini may output stream-json (structured) or plain text.
             # For stream-json, extract text from "message" events with role="assistant".
             import json as _json_strip
+
             _has_json = False
             _text_parts = []
             for line in lines:
@@ -2615,7 +2751,7 @@ class SessionManager:
         # Try both .github and .claude skill locations
         skill_dirs = [
             agent_path_obj / ".github" / "skills",
-            agent_path_obj / ".claude" / "skills"
+            agent_path_obj / ".claude" / "skills",
         ]
 
         available_skills = []
@@ -2641,18 +2777,28 @@ class SessionManager:
                             description = None
                             for line in frontmatter.split("\n"):
                                 if line.startswith("name:"):
-                                    name = line.replace("name:", "").strip().strip("'\"")
+                                    name = (
+                                        line.replace("name:", "").strip().strip("'\"")
+                                    )
                                 elif line.startswith("description:"):
-                                    description = line.replace("description:", "").strip().strip("'\"")
+                                    description = (
+                                        line.replace("description:", "")
+                                        .strip()
+                                        .strip("'\"")
+                                    )
 
                             if name:
-                                available_skills.append({
-                                    "name": name,
-                                    "description": description or "No description",
-                                    "path": str(skill_file.parent)
-                                })
+                                available_skills.append(
+                                    {
+                                        "name": name,
+                                        "description": description or "No description",
+                                        "path": str(skill_file.parent),
+                                    }
+                                )
                 except Exception as e:
-                    print(f"[WARN] Error loading skill {skill_file}: {e}", file=sys.stderr)
+                    print(
+                        f"[WARN] Error loading skill {skill_file}: {e}", file=sys.stderr
+                    )
 
         if available_skills:
             skills_context = "\n[Agent Skills - Available]\n"
@@ -2744,7 +2890,9 @@ Example skill structure:
             repos_to_search = []
             if repository:
                 # Search specific repository
-                repos_to_search = [r for r in self.skill_repositories if r.get("name") == repository]
+                repos_to_search = [
+                    r for r in self.skill_repositories if r.get("name") == repository
+                ]
                 if not repos_to_search:
                     return f"Error: Repository '{repository}' not found. Available: {', '.join(r.get('name') for r in self.skill_repositories)}"
             else:
@@ -2756,48 +2904,70 @@ Example skill structure:
             for repo in repos_to_search:
                 repo_url = repo.get("url")
                 repo_name = repo.get("name")
-                temp_dir = f"/tmp/skills-discovery-{repo_name.lower().replace(' ', '-')}"
+                temp_dir = (
+                    f"/tmp/skills-discovery-{repo_name.lower().replace(' ', '-')}"
+                )
 
                 try:
                     # Clean up old temp directory
-                    subprocess.run(["rm", "-rf", temp_dir], capture_output=True, timeout=5)
+                    subprocess.run(
+                        ["rm", "-rf", temp_dir], capture_output=True, timeout=5
+                    )
 
                     # Clone the repository (shallow clone for speed)
                     result = subprocess.run(
                         ["git", "clone", "--depth", "1", repo_url, temp_dir],
                         capture_output=True,
                         text=True,
-                        timeout=30
+                        timeout=30,
                     )
 
                     if result.returncode != 0:
-                        print(f"[Warn] Could not access {repo_name} repository", file=sys.stderr)
+                        print(
+                            f"[Warn] Could not access {repo_name} repository",
+                            file=sys.stderr,
+                        )
                         continue
 
                     # List available skills in this repository
                     skills_dir = Path(temp_dir)
 
                     for skill_dir in skills_dir.iterdir():
-                        if skill_dir.is_dir() and not skill_dir.name.startswith('.'):
+                        if skill_dir.is_dir() and not skill_dir.name.startswith("."):
                             readme = skill_dir / "README.md"
                             if readme.exists():
                                 try:
                                     content = readme.read_text()
                                     # Extract first line as description
-                                    lines = content.split('\n')
-                                    desc = next((line.strip('# ').strip() for line in lines if line.strip()), "No description")
+                                    lines = content.split("\n")
+                                    desc = next(
+                                        (
+                                            line.strip("# ").strip()
+                                            for line in lines
+                                            if line.strip()
+                                        ),
+                                        "No description",
+                                    )
 
-                                    if not query or query.lower() in skill_dir.name.lower() or query.lower() in desc.lower():
-                                        all_skills.append({
-                                            "name": skill_dir.name,
-                                            "description": desc[:100],
-                                            "repository": repo_name
-                                        })
+                                    if (
+                                        not query
+                                        or query.lower() in skill_dir.name.lower()
+                                        or query.lower() in desc.lower()
+                                    ):
+                                        all_skills.append(
+                                            {
+                                                "name": skill_dir.name,
+                                                "description": desc[:100],
+                                                "repository": repo_name,
+                                            }
+                                        )
                                 except Exception:
                                     pass
 
                     # Clean up
-                    subprocess.run(["rm", "-rf", temp_dir], capture_output=True, timeout=5)
+                    subprocess.run(
+                        ["rm", "-rf", temp_dir], capture_output=True, timeout=5
+                    )
 
                 except Exception as e:
                     print(f"[Warn] Error searching {repo_name}: {e}", file=sys.stderr)
@@ -2807,21 +2977,32 @@ Example skill structure:
                 return f"No skills found matching '{query}'."
 
             # Format results grouped by repository
-            result_text = f"Available skills {f'(matching \"{query}\")' if query else ''}:\n\n"
+            result_text = (
+                f"Available skills {f'(matching \"{query}\")' if query else ''}:\n\n"
+            )
             current_repo = None
-            for skill in sorted(all_skills, key=lambda x: (x.get("repository"), x.get("name"))):
+            for skill in sorted(
+                all_skills, key=lambda x: (x.get("repository"), x.get("name"))
+            ):
                 if skill.get("repository") != current_repo:
                     current_repo = skill.get("repository")
                     result_text += f"\n**{current_repo}:**\n"
                 result_text += f"  • {skill['name']} - {skill['description']}\n"
 
-            result_text += f"\nTo load any skill, use: /load-skill <skill-name> [repository-name]"
+            result_text += (
+                f"\nTo load any skill, use: /load-skill <skill-name> [repository-name]"
+            )
             return result_text
 
         except Exception as e:
             return f"Error discovering skills: {str(e)}"
 
-    def load_skill(self, skill_name: str, agent: str = "orchestrator", repository: Optional[str] = None) -> str:
+    def load_skill(
+        self,
+        skill_name: str,
+        agent: str = "orchestrator",
+        repository: Optional[str] = None,
+    ) -> str:
         """Load a skill from configured repositories into the agent's .github/skills directory.
 
         Args:
@@ -2853,7 +3034,9 @@ Example skill structure:
             # Determine which repositories to search
             repos_to_search = []
             if repository:
-                repos_to_search = [r for r in self.skill_repositories if r.get("name") == repository]
+                repos_to_search = [
+                    r for r in self.skill_repositories if r.get("name") == repository
+                ]
                 if not repos_to_search:
                     return f"Error: Repository '{repository}' not found. Available: {', '.join(r.get('name') for r in self.skill_repositories)}"
             else:
@@ -2867,32 +3050,44 @@ Example skill structure:
 
                 try:
                     # Clean up old temp directory
-                    subprocess.run(["rm", "-rf", temp_dir], capture_output=True, timeout=5)
+                    subprocess.run(
+                        ["rm", "-rf", temp_dir], capture_output=True, timeout=5
+                    )
 
                     # Clone repository (shallow clone)
                     result = subprocess.run(
                         ["git", "clone", "--depth", "1", repo_url, temp_dir],
                         capture_output=True,
                         text=True,
-                        timeout=30
+                        timeout=30,
                     )
 
                     if result.returncode != 0:
-                        print(f"[Warn] Could not access {repo_name} repository", file=sys.stderr)
+                        print(
+                            f"[Warn] Could not access {repo_name} repository",
+                            file=sys.stderr,
+                        )
                         continue
 
                     # Find the skill
                     source_skill = Path(temp_dir) / skill_name
                     if not source_skill.exists():
-                        print(f"[Info] Skill '{skill_name}' not found in {repo_name}", file=sys.stderr)
-                        subprocess.run(["rm", "-rf", temp_dir], capture_output=True, timeout=5)
+                        print(
+                            f"[Info] Skill '{skill_name}' not found in {repo_name}",
+                            file=sys.stderr,
+                        )
+                        subprocess.run(
+                            ["rm", "-rf", temp_dir], capture_output=True, timeout=5
+                        )
                         continue
 
                     # Copy skill to agent's skills directory
                     shutil.copytree(source_skill, skill_target)
 
                     # Clean up temp directory
-                    subprocess.run(["rm", "-rf", temp_dir], capture_output=True, timeout=5)
+                    subprocess.run(
+                        ["rm", "-rf", temp_dir], capture_output=True, timeout=5
+                    )
 
                     # Verify installation
                     if skill_target.exists():
@@ -2905,11 +3100,15 @@ Example skill structure:
                         return f"Error: Failed to copy skill '{skill_name}' to {agent}."
 
                 except Exception as e:
-                    print(f"[Warn] Error loading from {repo_name}: {e}", file=sys.stderr)
+                    print(
+                        f"[Warn] Error loading from {repo_name}: {e}", file=sys.stderr
+                    )
                     continue
 
             # If we get here, skill wasn't found in any repository
-            return f"Error: Skill '{skill_name}' not found in any configured repository."
+            return (
+                f"Error: Skill '{skill_name}' not found in any configured repository."
+            )
 
         except Exception as e:
             return f"Error loading skill: {str(e)}"
@@ -2924,8 +3123,15 @@ Example skill structure:
         runtime = delegation_data.get("runtime", "copilot")
 
         output = self._dispatch_single_runtime(
-            runtime, prompt, model, agent, session_id if runtime == "claude" else None,
-            False, n8n_session_id, self.command_timeout, "text",
+            runtime,
+            prompt,
+            model,
+            agent,
+            session_id if runtime == "claude" else None,
+            False,
+            n8n_session_id,
+            self.command_timeout,
+            "text",
         )
 
         return output
@@ -2942,7 +3148,7 @@ Example skill structure:
         channel: str = "webui",
     ) -> str:
         """Build a context-aware prompt that includes agent information, runtime, model, and execution deadline.
-        
+
         Args:
             channel: The communication channel (telegram, webex, webui) - determines which platform to send files to
         """
@@ -3051,13 +3257,17 @@ Do NOT use <img> tags (unsupported). Do NOT create files, generate ASCII art, or
             render_instruction += file_handling
 
         # Format render_instruction with channel, script_base_dir, and session_id variables
-        if "{channel" in render_instruction or "{script_base_dir" in render_instruction or "{n8n_session_id" in render_instruction:
+        if (
+            "{channel" in render_instruction
+            or "{script_base_dir" in render_instruction
+            or "{n8n_session_id" in render_instruction
+        ):
             channel_upper = channel.upper()
             render_instruction = render_instruction.format(
                 channel=channel,
                 channel_upper=channel_upper,
                 script_base_dir=SCRIPT_BASE_DIR,
-                n8n_session_id=n8n_session_id
+                n8n_session_id=n8n_session_id,
             )
 
         # Add timeout/deadline information with 15% buffer for overhead
@@ -3213,6 +3423,7 @@ Example: python3 {SCRIPT_BASE_DIR}/agent_manager.py --agent research-dev --runti
         handoff_prefix = ""
         try:
             from session_handoff import SessionHandoff
+
             _handoff = SessionHandoff()
             _session_data = self.load_session_data(n8n_session_id)
             if _session_data:
@@ -3231,10 +3442,15 @@ Example: python3 {SCRIPT_BASE_DIR}/agent_manager.py --agent research-dev --runti
                             file=sys.stderr,
                         )
         except Exception as _handoff_err:
-            print(f"[Handoff] Warning: failed to load handoff context: {_handoff_err}", file=sys.stderr)
+            print(
+                f"[Handoff] Warning: failed to load handoff context: {_handoff_err}",
+                file=sys.stderr,
+            )
 
         # Channel-specific injected context files
-        injection_dir = Path(os.environ.get("INJECTION_DIR", Path(SCRIPT_BASE_DIR) / "injections"))
+        injection_dir = Path(
+            os.environ.get("INJECTION_DIR", Path(SCRIPT_BASE_DIR) / "injections")
+        )
         injection_text = ""
         try:
             injection_file = injection_dir / f"{channel}.md"
@@ -3262,11 +3478,11 @@ User Request:
         """
 
         def __init__(self):
-            self.chunks: list = []       # [(kind, data), ...]
+            self.chunks: list = []  # [(kind, data), ...]
             self.finished: bool = False
             self.done_result: Optional[str] = None
             self.created_at: float = time.time()
-            self._consumers: list = []   # [(queue, loop, start_index)]
+            self._consumers: list = []  # [(queue, loop, start_index)]
             self._lock = threading.Lock()
 
         def push(self, kind, data):
@@ -3311,7 +3527,7 @@ User Request:
             with self._lock:
                 return len(self._consumers) > 0
 
-    def _get_or_create_stream_buffer(self, session_id: str) -> '_StreamBuffer':
+    def _get_or_create_stream_buffer(self, session_id: str) -> "_StreamBuffer":
         """Get existing buffer for session or create a new one."""
         buf = self._stream_buffers.get(session_id)
         if buf is None:
@@ -3349,7 +3565,8 @@ User Request:
         """Remove stream buffers that are finished and older than *max_age* seconds."""
         now = time.time()
         stale = [
-            sid for sid, buf in self._stream_buffers.items()
+            sid
+            for sid, buf in self._stream_buffers.items()
             if buf.finished and (now - buf.created_at) > max_age
         ]
         for sid in stale:
@@ -3394,6 +3611,7 @@ User Request:
         _pty_master = None
         if use_pty and stream_info:
             import pty as _pty_mod
+
             _pty_master, _pty_slave = _pty_mod.openpty()
 
             # Configure PTY for clean streaming:
@@ -3402,13 +3620,14 @@ User Request:
             # 3. Disable echo to prevent input echo artifacts
             try:
                 import termios as _termios_mod, struct as _struct_mod, fcntl as _fcntl_mod
+
                 # Set window size to 120 cols × 40 rows
                 _ws = _struct_mod.pack("HHHH", 40, 120, 0, 0)
                 _fcntl_mod.ioctl(_pty_master, _termios_mod.TIOCSWINSZ, _ws)
                 # Disable output processing and echo on the slave
                 _attrs = _termios_mod.tcgetattr(_pty_slave)
-                _attrs[1] &= ~_termios_mod.OPOST   # no output processing (\n stays \n)
-                _attrs[3] &= ~_termios_mod.ECHO     # no echo
+                _attrs[1] &= ~_termios_mod.OPOST  # no output processing (\n stays \n)
+                _attrs[3] &= ~_termios_mod.ECHO  # no echo
                 _termios_mod.tcsetattr(_pty_slave, _termios_mod.TCSANOW, _attrs)
             except Exception:
                 pass  # non-fatal; streaming still works with defaults
@@ -3450,7 +3669,8 @@ User Request:
                         raw = process.stderr.read()
                         stderr_buf.append(
                             raw.decode("utf-8", errors="replace")
-                            if isinstance(raw, bytes) else raw
+                            if isinstance(raw, bytes)
+                            else raw
                         )
                     except Exception:
                         pass
@@ -3466,16 +3686,17 @@ User Request:
                     # runtimes whose compiled binaries buffer stdout when not
                     # connected to a TTY (e.g. the Rust-based Devin CLI).
                     import codecs as _codecs, re as _re
+
                     _ansi_escape = _re.compile(
-                        r'\x1b\[[0-9;]*[a-zA-Z]'     # CSI sequences
-                        r'|\x1b\][^\x07]*\x07'        # OSC sequences
-                        r'|\x1b\([A-Z0-9]'            # charset selection
+                        r"\x1b\[[0-9;]*[a-zA-Z]"  # CSI sequences
+                        r"|\x1b\][^\x07]*\x07"  # OSC sequences
+                        r"|\x1b\([A-Z0-9]"  # charset selection
                     )
                     # Tool call detection for PTY-based runtimes (Devin, etc.)
                     _pty_tool_counter = [0]
                     _pty_tool_pattern = _re.compile(
-                        r'(?:\[TOOL_CALL\]|\bCalling\s+tool|\bUsing\s+tool(?:\:|_)|Tool|Running|Executing|USING_TOOL)[\s:_]*(\w[\w\.]*)\s*(.*)',
-                        _re.IGNORECASE
+                        r"(?:\[TOOL_CALL\]|\bCalling\s+tool|\bUsing\s+tool(?:\:|_)|Tool|Running|Executing|USING_TOOL)[\s:_]*(\w[\w\.]*)\s*(.*)",
+                        _re.IGNORECASE,
                     )
                     # Incremental decoder avoids garbled output when a
                     # multi-byte UTF-8 character is split across reads.
@@ -3494,7 +3715,7 @@ User Request:
                             stdout_chunks.append(text)
                             if text.strip():
                                 # Detect tool calls from PTY output
-                                for pty_line in text.split('\n'):
+                                for pty_line in text.split("\n"):
                                     _m = _pty_tool_pattern.match(pty_line.strip())
                                     if _m:
                                         _pty_tool_counter[0] += 1
@@ -3504,7 +3725,9 @@ User Request:
                                             "name": _m.group(1),
                                             "input": _m.group(2).strip(),
                                             "runtime": runtime,
-                                            "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                                            "timestamp": time.strftime(
+                                                "%Y-%m-%dT%H:%M:%SZ", time.gmtime()
+                                            ),
                                         }
                                         if stream_buffer:
                                             stream_buffer.push("tool_call", _tc_evt)
@@ -3530,6 +3753,7 @@ User Request:
                 else:
                     # ── Pipe streaming path ─────────────────────────────────
                     import json as _json
+
                     _claude_text_block_count = 0  # track text blocks for separators
                     _active_tool_calls = {}  # index → {id, name, input_parts}
                     _tool_call_counter = [0]  # mutable counter for non-Claude runtimes
@@ -3552,7 +3776,9 @@ User Request:
                                                 # Push newline separator between text blocks
                                                 if _claude_text_block_count > 0:
                                                     if stream_buffer:
-                                                        stream_buffer.push("chunk", {"text": "\n\n"})
+                                                        stream_buffer.push(
+                                                            "chunk", {"text": "\n\n"}
+                                                        )
                                                     else:
                                                         loop.call_soon_threadsafe(
                                                             queue.put_nowait,
@@ -3560,13 +3786,18 @@ User Request:
                                                         )
                                                 _claude_text_block_count += 1
                                             elif cb_type == "tool_use":
-                                                tool_id = cb.get("id", f"tool_{cb_index}")
+                                                tool_id = cb.get(
+                                                    "id", f"tool_{cb_index}"
+                                                )
                                                 tool_name = cb.get("name", "unknown")
                                                 _active_tool_calls[cb_index] = {
                                                     "id": tool_id,
                                                     "name": tool_name,
                                                     "input_parts": [],
-                                                    "started_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                                                    "started_at": time.strftime(
+                                                        "%Y-%m-%dT%H:%M:%SZ",
+                                                        time.gmtime(),
+                                                    ),
                                                 }
                                                 tc_event = {
                                                     "event": "start",
@@ -3575,10 +3806,13 @@ User Request:
                                                     "index": cb_index,
                                                 }
                                                 if stream_buffer:
-                                                    stream_buffer.push("tool_call", tc_event)
+                                                    stream_buffer.push(
+                                                        "tool_call", tc_event
+                                                    )
                                                 else:
                                                     loop.call_soon_threadsafe(
-                                                        queue.put_nowait, ("tool_call", tc_event)
+                                                        queue.put_nowait,
+                                                        ("tool_call", tc_event),
                                                     )
                                         elif inner_type == "content_block_delta":
                                             delta = event.get("delta") or {}
@@ -3588,7 +3822,9 @@ User Request:
                                                 text = delta.get("text", "")
                                                 if text:
                                                     if stream_buffer:
-                                                        stream_buffer.push("chunk", {"text": text})
+                                                        stream_buffer.push(
+                                                            "chunk", {"text": text}
+                                                        )
                                                     else:
                                                         loop.call_soon_threadsafe(
                                                             queue.put_nowait,
@@ -3597,25 +3833,40 @@ User Request:
                                             elif delta_type == "input_json_delta":
                                                 partial = delta.get("partial_json", "")
                                                 if cb_index in _active_tool_calls:
-                                                    _active_tool_calls[cb_index]["input_parts"].append(partial)
+                                                    _active_tool_calls[cb_index][
+                                                        "input_parts"
+                                                    ].append(partial)
                                                     tc_event = {
                                                         "event": "input_delta",
-                                                        "id": _active_tool_calls[cb_index]["id"],
+                                                        "id": _active_tool_calls[
+                                                            cb_index
+                                                        ]["id"],
                                                         "partial_json": partial,
                                                     }
                                                     if stream_buffer:
-                                                        stream_buffer.push("tool_call", tc_event)
+                                                        stream_buffer.push(
+                                                            "tool_call", tc_event
+                                                        )
                                                     else:
                                                         loop.call_soon_threadsafe(
-                                                            queue.put_nowait, ("tool_call", tc_event)
+                                                            queue.put_nowait,
+                                                            ("tool_call", tc_event),
                                                         )
                                         elif inner_type == "content_block_stop":
                                             cb_index = event.get("index", 0)
                                             if cb_index in _active_tool_calls:
-                                                tc_info = _active_tool_calls.pop(cb_index)
-                                                full_input = "".join(tc_info["input_parts"])
+                                                tc_info = _active_tool_calls.pop(
+                                                    cb_index
+                                                )
+                                                full_input = "".join(
+                                                    tc_info["input_parts"]
+                                                )
                                                 try:
-                                                    parsed_input = _json.loads(full_input) if full_input else {}
+                                                    parsed_input = (
+                                                        _json.loads(full_input)
+                                                        if full_input
+                                                        else {}
+                                                    )
                                                 except (ValueError, KeyError):
                                                     parsed_input = full_input
                                                 tc_event = {
@@ -3626,74 +3877,119 @@ User Request:
                                                     "started_at": tc_info["started_at"],
                                                 }
                                                 if stream_buffer:
-                                                    stream_buffer.push("tool_call", tc_event)
+                                                    stream_buffer.push(
+                                                        "tool_call", tc_event
+                                                    )
                                                 else:
                                                     loop.call_soon_threadsafe(
-                                                        queue.put_nowait, ("tool_call", tc_event)
+                                                        queue.put_nowait,
+                                                        ("tool_call", tc_event),
                                                     )
                                     elif evt_type == "assistant":
                                         # Parse tool results from assistant messages
                                         msg = obj.get("message") or {}
-                                        for block in (msg.get("content") or []):
+                                        for block in msg.get("content") or []:
                                             if block.get("type") == "tool_result":
                                                 tc_event = {
                                                     "event": "result",
                                                     "id": block.get("tool_use_id", ""),
-                                                    "is_error": block.get("is_error", False),
+                                                    "is_error": block.get(
+                                                        "is_error", False
+                                                    ),
                                                 }
                                                 if stream_buffer:
-                                                    stream_buffer.push("tool_call", tc_event)
+                                                    stream_buffer.push(
+                                                        "tool_call", tc_event
+                                                    )
                                                 else:
                                                     loop.call_soon_threadsafe(
-                                                        queue.put_nowait, ("tool_call", tc_event)
+                                                        queue.put_nowait,
+                                                        ("tool_call", tc_event),
                                                     )
                                 except (ValueError, KeyError, AttributeError):
                                     pass
                             else:
                                 # Non-Claude runtimes: detect tool call patterns from text
-                                _line_str = line if isinstance(line, str) else line.decode("utf-8", errors="replace")
+                                _line_str = (
+                                    line
+                                    if isinstance(line, str)
+                                    else line.decode("utf-8", errors="replace")
+                                )
                                 _line_stripped = _line_str.strip()
                                 _tc_detected = None
 
                                 # Gemini stream-json: parse structured JSON events
-                                if runtime == "gemini" and _line_stripped.startswith("{"):
+                                if runtime == "gemini" and _line_stripped.startswith(
+                                    "{"
+                                ):
                                     try:
                                         _gobj = _json.loads(_line_stripped)
                                         _gtype = _gobj.get("type", "")
-                                        if _gtype == "message" and _gobj.get("role") == "assistant":
+                                        if (
+                                            _gtype == "message"
+                                            and _gobj.get("role") == "assistant"
+                                        ):
                                             _content = _gobj.get("content", "")
                                             if _content:
                                                 if stream_buffer:
-                                                    stream_buffer.push("chunk", _content)
+                                                    stream_buffer.push(
+                                                        "chunk", _content
+                                                    )
                                                 else:
-                                                    loop.call_soon_threadsafe(queue.put_nowait, ("chunk", _content))
+                                                    loop.call_soon_threadsafe(
+                                                        queue.put_nowait,
+                                                        ("chunk", _content),
+                                                    )
                                             continue
                                         elif _gtype == "tool_use":
                                             _tool_call_counter[0] += 1
                                             tc_event = {
                                                 "event": "detected",
-                                                "id": _gobj.get("tool_id", f"tc_gemini_{_tool_call_counter[0]}"),
+                                                "id": _gobj.get(
+                                                    "tool_id",
+                                                    f"tc_gemini_{_tool_call_counter[0]}",
+                                                ),
                                                 "name": _gobj.get("tool_name", "tool"),
-                                                "input": _json.dumps(_gobj.get("parameters", {})),
+                                                "input": _json.dumps(
+                                                    _gobj.get("parameters", {})
+                                                ),
                                                 "runtime": "gemini",
-                                                "timestamp": _gobj.get("timestamp", time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())),
+                                                "timestamp": _gobj.get(
+                                                    "timestamp",
+                                                    time.strftime(
+                                                        "%Y-%m-%dT%H:%M:%SZ",
+                                                        time.gmtime(),
+                                                    ),
+                                                ),
                                             }
                                             if stream_buffer:
-                                                stream_buffer.push("tool_call", tc_event)
+                                                stream_buffer.push(
+                                                    "tool_call", tc_event
+                                                )
                                             else:
-                                                loop.call_soon_threadsafe(queue.put_nowait, ("tool_call", tc_event))
+                                                loop.call_soon_threadsafe(
+                                                    queue.put_nowait,
+                                                    ("tool_call", tc_event),
+                                                )
                                             continue
                                         elif _gtype == "tool_result":
                                             tc_event = {
                                                 "event": "result",
                                                 "id": _gobj.get("tool_id", ""),
-                                                "status": _gobj.get("status", "completed"),
+                                                "status": _gobj.get(
+                                                    "status", "completed"
+                                                ),
                                                 "output": _gobj.get("output", "")[:500],
                                             }
                                             if stream_buffer:
-                                                stream_buffer.push("tool_call", tc_event)
+                                                stream_buffer.push(
+                                                    "tool_call", tc_event
+                                                )
                                             else:
-                                                loop.call_soon_threadsafe(queue.put_nowait, ("tool_call", tc_event))
+                                                loop.call_soon_threadsafe(
+                                                    queue.put_nowait,
+                                                    ("tool_call", tc_event),
+                                                )
                                             continue
                                         elif _gtype in ("init", "result"):
                                             continue  # skip metadata
@@ -3703,97 +3999,279 @@ User Request:
                                 if runtime == "opencode":
                                     # OpenCode tool invocation: "| ToolName args..."
                                     import re as _re_tc
-                                    _oc_match = _re_tc.match(r'^\|\s+(\w+)\b(.*)', _line_stripped)
+
+                                    _oc_match = _re_tc.match(
+                                        r"^\|\s+(\w+)\b(.*)", _line_stripped
+                                    )
                                     if _oc_match:
                                         _oc_tool = _oc_match.group(1)
                                         _oc_known = {
-                                            "Glob", "Read", "Write", "Bash", "Edit", "bash", "grep",
-                                            "find", "Fetch", "ListDir", "Search", "TodoRead",
-                                            "TodoWrite", "WebFetch", "Shell", "Patch", "MultiEdit",
-                                            "LS", "Cat", "Sed", "Awk", "Mv", "Cp", "Rm", "Mkdir",
+                                            "Glob",
+                                            "Read",
+                                            "Write",
+                                            "Bash",
+                                            "Edit",
+                                            "bash",
+                                            "grep",
+                                            "find",
+                                            "Fetch",
+                                            "ListDir",
+                                            "Search",
+                                            "TodoRead",
+                                            "TodoWrite",
+                                            "WebFetch",
+                                            "Shell",
+                                            "Patch",
+                                            "MultiEdit",
+                                            "LS",
+                                            "Cat",
+                                            "Sed",
+                                            "Awk",
+                                            "Mv",
+                                            "Cp",
+                                            "Rm",
+                                            "Mkdir",
                                         }
-                                        if _oc_tool in _oc_known or _oc_tool[0].isupper():
-                                            _tc_detected = {"name": _oc_tool, "input": _oc_match.group(2).strip()}
+                                        if (
+                                            _oc_tool in _oc_known
+                                            or _oc_tool[0].isupper()
+                                        ):
+                                            _tc_detected = {
+                                                "name": _oc_tool,
+                                                "input": _oc_match.group(2).strip(),
+                                            }
                                     if not _tc_detected:
-                                        _oc_run = _re_tc.match(r'^(?:Running|Executing|>)\s+(.+)', _line_stripped)
+                                        _oc_run = _re_tc.match(
+                                            r"^(?:Running|Executing|>)\s+(.+)",
+                                            _line_stripped,
+                                        )
                                         if _oc_run:
-                                            _tc_detected = {"name": "shell", "input": _oc_run.group(1).strip()}
+                                            _tc_detected = {
+                                                "name": "shell",
+                                                "input": _oc_run.group(1).strip(),
+                                            }
                                 elif runtime == "copilot":
                                     # Copilot shows tool calls as "● Description" and shell cmds as "  $ cmd"
                                     import re as _re_tc
+
                                     # Tool call start: "● <description> [(+N)]"
-                                    _cp_tool_match = _re_tc.match(r'^[●⬤]\s+(.+?)(?:\s+\(\+\d+\))?$', _line_stripped)
+                                    _cp_tool_match = _re_tc.match(
+                                        r"^[●⬤]\s+(.+?)(?:\s+\(\+\d+\))?$",
+                                        _line_stripped,
+                                    )
                                     if _cp_tool_match:
                                         _desc = _cp_tool_match.group(1).strip()
                                         # Infer tool name from description
-                                        if any(kw in _desc.lower() for kw in ["read", "view", "open"]):
+                                        if any(
+                                            kw in _desc.lower()
+                                            for kw in ["read", "view", "open"]
+                                        ):
                                             _tool_name = "read"
-                                        elif any(kw in _desc.lower() for kw in ["create", "write", "save", "edit", "update", "modify"]):
+                                        elif any(
+                                            kw in _desc.lower()
+                                            for kw in [
+                                                "create",
+                                                "write",
+                                                "save",
+                                                "edit",
+                                                "update",
+                                                "modify",
+                                            ]
+                                        ):
                                             _tool_name = "write"
-                                        elif any(kw in _desc.lower() for kw in ["delete", "remove", "rm"]):
+                                        elif any(
+                                            kw in _desc.lower()
+                                            for kw in ["delete", "remove", "rm"]
+                                        ):
                                             _tool_name = "shell"
-                                        elif any(kw in _desc.lower() for kw in ["list", "ls", "find", "search", "glob"]):
+                                        elif any(
+                                            kw in _desc.lower()
+                                            for kw in [
+                                                "list",
+                                                "ls",
+                                                "find",
+                                                "search",
+                                                "glob",
+                                            ]
+                                        ):
                                             _tool_name = "glob"
-                                        elif any(kw in _desc.lower() for kw in ["run", "exec", "install", "deploy", "build", "test"]):
+                                        elif any(
+                                            kw in _desc.lower()
+                                            for kw in [
+                                                "run",
+                                                "exec",
+                                                "install",
+                                                "deploy",
+                                                "build",
+                                                "test",
+                                            ]
+                                        ):
                                             _tool_name = "shell"
-                                        elif any(kw in _desc.lower() for kw in ["fetch", "curl", "http", "api", "download"]):
+                                        elif any(
+                                            kw in _desc.lower()
+                                            for kw in [
+                                                "fetch",
+                                                "curl",
+                                                "http",
+                                                "api",
+                                                "download",
+                                            ]
+                                        ):
                                             _tool_name = "web_fetch"
                                         else:
                                             _tool_name = "tool"
-                                        _tc_detected = {"name": _tool_name, "input": _desc}
+                                        _tc_detected = {
+                                            "name": _tool_name,
+                                            "input": _desc,
+                                        }
                                     else:
                                         # Shell command line: "  $ <command>"
-                                        _cp_cmd_match = _re_tc.match(r'^\$\s+(.+)', _line_stripped)
+                                        _cp_cmd_match = _re_tc.match(
+                                            r"^\$\s+(.+)", _line_stripped
+                                        )
                                         if _cp_cmd_match:
-                                            _tc_detected = {"name": "shell", "input": _cp_cmd_match.group(1).strip()}
+                                            _tc_detected = {
+                                                "name": "shell",
+                                                "input": _cp_cmd_match.group(1).strip(),
+                                            }
                                         # Also catch "Running/Calling/Using" patterns as fallback
                                         elif not _cp_tool_match:
-                                            _cp_legacy = _re_tc.match(r'^(?:Running|Calling|Using)\s+(\w+)\s*(.*)', _line_stripped)
+                                            _cp_legacy = _re_tc.match(
+                                                r"^(?:Running|Calling|Using)\s+(\w+)\s*(.*)",
+                                                _line_stripped,
+                                            )
                                             if _cp_legacy:
-                                                _tc_detected = {"name": _cp_legacy.group(1), "input": _cp_legacy.group(2).strip()}
+                                                _tc_detected = {
+                                                    "name": _cp_legacy.group(1),
+                                                    "input": _cp_legacy.group(
+                                                        2
+                                                    ).strip(),
+                                                }
                                         # Suppress box-drawing context lines (│ cmd, └ N lines, ├ ...)
                                         # These are tool output annotations that appear after the ● line.
                                         # Pushing them as chunks destroys the spinning gear block in the UI.
-                                        if not _tc_detected and _re_tc.match(r'^[│├└─]\s', _line_stripped):
+                                        if not _tc_detected and _re_tc.match(
+                                            r"^[│├└─]\s", _line_stripped
+                                        ):
                                             continue
                                 elif runtime == "codex":
                                     # Codex exec tool call patterns
                                     import re as _re_tc
-                                    _cx_match = _re_tc.match(r'^(?:Calling function|Tool|Executing|Running):\s*(\w[\w.]*)\s*(.*)', _line_stripped, _re_tc.IGNORECASE)
+
+                                    _cx_match = _re_tc.match(
+                                        r"^(?:Calling function|Tool|Executing|Running):\s*(\w[\w.]*)\s*(.*)",
+                                        _line_stripped,
+                                        _re_tc.IGNORECASE,
+                                    )
                                     if _cx_match:
-                                        _tc_detected = {"name": _cx_match.group(1), "input": _cx_match.group(2).strip()}
+                                        _tc_detected = {
+                                            "name": _cx_match.group(1),
+                                            "input": _cx_match.group(2).strip(),
+                                        }
                                     if not _tc_detected:
                                         # Shell command: "$ command" or "> command"
-                                        _cx_cmd = _re_tc.match(r'^[$>]\s+(.+)', _line_stripped)
+                                        _cx_cmd = _re_tc.match(
+                                            r"^[$>]\s+(.+)", _line_stripped
+                                        )
                                         if _cx_cmd:
-                                            _tc_detected = {"name": "shell", "input": _cx_cmd.group(1).strip()}
+                                            _tc_detected = {
+                                                "name": "shell",
+                                                "input": _cx_cmd.group(1).strip(),
+                                            }
                                     if not _tc_detected:
                                         # Function-call syntax: "read_file(path=...)"
-                                        _cx_fn = _re_tc.match(r'^(\w+)\((.+)\)\s*$', _line_stripped)
-                                        if _cx_fn and any(kw in _cx_fn.group(1).lower() for kw in ["read", "write", "shell", "bash", "exec", "search", "list", "create", "edit", "patch", "apply"]):
-                                            _tc_detected = {"name": _cx_fn.group(1), "input": _cx_fn.group(2).strip()}
+                                        _cx_fn = _re_tc.match(
+                                            r"^(\w+)\((.+)\)\s*$", _line_stripped
+                                        )
+                                        if _cx_fn and any(
+                                            kw in _cx_fn.group(1).lower()
+                                            for kw in [
+                                                "read",
+                                                "write",
+                                                "shell",
+                                                "bash",
+                                                "exec",
+                                                "search",
+                                                "list",
+                                                "create",
+                                                "edit",
+                                                "patch",
+                                                "apply",
+                                            ]
+                                        ):
+                                            _tc_detected = {
+                                                "name": _cx_fn.group(1),
+                                                "input": _cx_fn.group(2).strip(),
+                                            }
                                 elif runtime == "gemini":
                                     import re as _re_tc
+
                                     # "✦ Calling tool_name(args)" or "Calling tool_name(args)"
-                                    _gm_match = _re_tc.match(r'^[✦*]?\s*(?:Calling|Using tool|Function call|Running)\s+(\w[\w.]*)\s*(.*)', _line_stripped, _re_tc.IGNORECASE)
+                                    _gm_match = _re_tc.match(
+                                        r"^[✦*]?\s*(?:Calling|Using tool|Function call|Running)\s+(\w[\w.]*)\s*(.*)",
+                                        _line_stripped,
+                                        _re_tc.IGNORECASE,
+                                    )
                                     if _gm_match:
-                                        _tc_detected = {"name": _gm_match.group(1), "input": _gm_match.group(2).strip()}
+                                        _tc_detected = {
+                                            "name": _gm_match.group(1),
+                                            "input": _gm_match.group(2).strip(),
+                                        }
                                     if not _tc_detected:
                                         # "⚡ tool_name(args)" or "tool_name(args)"
-                                        _gm_fn = _re_tc.match(r'^[⚡✦*]?\s*(\w+)\((.+)\)\s*$', _line_stripped)
-                                        if _gm_fn and any(kw in _gm_fn.group(1).lower() for kw in [
-                                            "read", "write", "shell", "bash", "exec", "search", "list",
-                                            "create", "edit", "file", "run", "cat", "ls", "find", "grep",
-                                            "save", "update", "delete", "fetch", "curl", "get", "put",
-                                        ]):
-                                            _tc_detected = {"name": _gm_fn.group(1), "input": _gm_fn.group(2).strip()}
+                                        _gm_fn = _re_tc.match(
+                                            r"^[⚡✦*]?\s*(\w+)\((.+)\)\s*$",
+                                            _line_stripped,
+                                        )
+                                        if _gm_fn and any(
+                                            kw in _gm_fn.group(1).lower()
+                                            for kw in [
+                                                "read",
+                                                "write",
+                                                "shell",
+                                                "bash",
+                                                "exec",
+                                                "search",
+                                                "list",
+                                                "create",
+                                                "edit",
+                                                "file",
+                                                "run",
+                                                "cat",
+                                                "ls",
+                                                "find",
+                                                "grep",
+                                                "save",
+                                                "update",
+                                                "delete",
+                                                "fetch",
+                                                "curl",
+                                                "get",
+                                                "put",
+                                            ]
+                                        ):
+                                            _tc_detected = {
+                                                "name": _gm_fn.group(1),
+                                                "input": _gm_fn.group(2).strip(),
+                                            }
                                     if not _tc_detected:
                                         # "$ command" or "> command" or "Running command: cmd"
-                                        _gm_cmd = _re_tc.match(r'^(?:[$>]\s+(.+)|Running\s+command:\s*(.+))', _line_stripped, _re_tc.IGNORECASE)
+                                        _gm_cmd = _re_tc.match(
+                                            r"^(?:[$>]\s+(.+)|Running\s+command:\s*(.+))",
+                                            _line_stripped,
+                                            _re_tc.IGNORECASE,
+                                        )
                                         if _gm_cmd:
-                                            _cmd_text = (_gm_cmd.group(1) or _gm_cmd.group(2) or "").strip()
+                                            _cmd_text = (
+                                                _gm_cmd.group(1)
+                                                or _gm_cmd.group(2)
+                                                or ""
+                                            ).strip()
                                             if _cmd_text:
-                                                _tc_detected = {"name": "shell", "input": _cmd_text}
+                                                _tc_detected = {
+                                                    "name": "shell",
+                                                    "input": _cmd_text,
+                                                }
 
                                 if _tc_detected:
                                     _tool_call_counter[0] += 1
@@ -3803,7 +4281,9 @@ User Request:
                                         "name": _tc_detected["name"],
                                         "input": _tc_detected.get("input", ""),
                                         "runtime": runtime,
-                                        "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                                        "timestamp": time.strftime(
+                                            "%Y-%m-%dT%H:%M:%SZ", time.gmtime()
+                                        ),
                                     }
                                     if stream_buffer:
                                         stream_buffer.push("tool_call", tc_event)
@@ -3817,7 +4297,9 @@ User Request:
                                     if stream_buffer:
                                         stream_buffer.push("chunk", line)
                                     else:
-                                        loop.call_soon_threadsafe(queue.put_nowait, ("chunk", line))
+                                        loop.call_soon_threadsafe(
+                                            queue.put_nowait, ("chunk", line)
+                                        )
                     except Exception:
                         pass
                     finally:
@@ -3825,11 +4307,15 @@ User Request:
                         stderr_thread.join(timeout=5)
                         process.wait()
 
-                output = "".join(stdout_chunks) + ("".join(stderr_buf) if stderr_buf else "")
+                output = "".join(stdout_chunks) + (
+                    "".join(stderr_buf) if stderr_buf else ""
+                )
                 self.update_query_output(n8n_session_id, output)
                 # Record exit code for debugging subprocess errors.
                 # successful responses that discuss rate-limit topics (false positives).
-                self._last_exit_codes[n8n_session_id] = process.returncode if process.returncode is not None else 0
+                self._last_exit_codes[n8n_session_id] = (
+                    process.returncode if process.returncode is not None else 0
+                )
                 # Signal the SSE generator that the subprocess is finished
                 if stream_buffer:
                     stream_buffer.push("done", output)
@@ -3845,7 +4331,9 @@ User Request:
                     self.update_query_output(n8n_session_id, output)
                     # Record exit code for debugging subprocess errors.
                     # rate-limit detection on successful AI responses.
-                    self._last_exit_codes[n8n_session_id] = process.returncode if process.returncode is not None else 0
+                    self._last_exit_codes[n8n_session_id] = (
+                        process.returncode if process.returncode is not None else 0
+                    )
                     return output
                 except subprocess.TimeoutExpired:
                     process.kill()
@@ -3892,16 +4380,16 @@ User Request:
 
         # Parse /mode command from prompt, fall back to session setting
         prompt, mode = self._parse_mode_command(prompt)
-        
+
         # Get session data once - reuse for mode and channel
         session_data = self.get_or_create_session_data(n8n_session_id)
-        
+
         # Resolve permission mode from session data (backward compat with yolo_mode)
         mode = self._resolve_permission_mode(session_data, mode)
 
         agent_dir = self.AGENTS.get(agent, self.AGENTS["orchestrator"])["path"]
         effective_timeout = timeout if timeout is not None else self.command_timeout
-        
+
         # Get channel for file handling instructions
         channel = session_data.get("channel", "webui")
 
@@ -3910,9 +4398,16 @@ User Request:
             context_prompt = prompt
         else:
             context_prompt = self.build_agent_context_prompt(
-                agent, prompt, n8n_session_id, render_type, effective_timeout, "copilot", model, channel
+                agent,
+                prompt,
+                n8n_session_id,
+                render_type,
+                effective_timeout,
+                "copilot",
+                model,
+                channel,
             )
-        
+
         # Add elevated mode instructions for unrestricted privileged access
         if mode == "elevated":
             elevated_instruction = (
@@ -3954,7 +4449,10 @@ User Request:
             cmd.extend(["--resume", session_id])
             print(f"[Session] Resuming Copilot session: {session_id}", file=sys.stderr)
         else:
-            print(f"[Session] Starting new Copilot session in {mode} permission mode", file=sys.stderr)
+            print(
+                f"[Session] Starting new Copilot session in {mode} permission mode",
+                file=sys.stderr,
+            )
 
         output = self._execute_subprocess_with_tracking(
             cmd, agent_dir, effective_timeout, "copilot", agent, prompt, n8n_session_id
@@ -3989,7 +4487,7 @@ User Request:
 
         agent_dir = self.AGENTS.get(agent, self.AGENTS["orchestrator"])["path"]
         effective_timeout = timeout if timeout is not None else self.command_timeout
-        
+
         # Get channel for file handling instructions
         channel = session_data.get("channel", "webui")
 
@@ -3998,7 +4496,14 @@ User Request:
             context_prompt = prompt
         else:
             context_prompt = self.build_agent_context_prompt(
-                agent, prompt, n8n_session_id, render_type, effective_timeout, "opencode", model, channel
+                agent,
+                prompt,
+                n8n_session_id,
+                render_type,
+                effective_timeout,
+                "opencode",
+                model,
+                channel,
             )
 
         cmd = [str(self.opencode_bin), "run", "--model", model]
@@ -4007,7 +4512,10 @@ User Request:
             cmd.extend(["--session", session_id])
             print(f"[Session] Resuming OpenCode session: {session_id}", file=sys.stderr)
         else:
-            print(f"[Session] Starting new OpenCode session in {mode} mode", file=sys.stderr)
+            print(
+                f"[Session] Starting new OpenCode session in {mode} mode",
+                file=sys.stderr,
+            )
 
         cmd.append(context_prompt)
 
@@ -4050,7 +4558,7 @@ User Request:
 
         agent_dir = self.AGENTS.get(agent, self.AGENTS["orchestrator"])["path"]
         effective_timeout = timeout if timeout is not None else self.command_timeout
-        
+
         # Get channel for file handling instructions
         session_data = self.get_or_create_session_data(n8n_session_id)
         channel = session_data.get("channel", "webui")
@@ -4060,7 +4568,14 @@ User Request:
             context_prompt = prompt
         else:
             context_prompt = self.build_agent_context_prompt(
-                agent, prompt, n8n_session_id, render_type, effective_timeout, "claude", model, channel
+                agent,
+                prompt,
+                n8n_session_id,
+                render_type,
+                effective_timeout,
+                "claude",
+                model,
+                channel,
             )
 
         # Set permission mode based on elevated/restricted/sandboxed
@@ -4090,9 +4605,15 @@ User Request:
             print(f"[Session] Resuming Claude session: {session_id}", file=sys.stderr)
         elif session_id:
             cmd.extend(["--session-id", session_id])
-            print(f"[Session] Starting new Claude session: {session_id} in {mode} mode", file=sys.stderr)
+            print(
+                f"[Session] Starting new Claude session: {session_id} in {mode} mode",
+                file=sys.stderr,
+            )
         else:
-            print(f"[Session] Starting new Claude session (auto-ID) in {mode} mode", file=sys.stderr)
+            print(
+                f"[Session] Starting new Claude session (auto-ID) in {mode} mode",
+                file=sys.stderr,
+            )
 
         output = self._execute_subprocess_with_tracking(
             cmd, agent_dir, effective_timeout, "claude", agent, prompt, n8n_session_id
@@ -4106,6 +4627,7 @@ User Request:
         # startup and a {"type":"result","session_id":"..."} event on completion.
         # Capturing it here is race-free and works for both new and resumed sessions.
         import json as _json
+
         _captured_sid = None
         for _line in output.splitlines():
             _line = _line.strip()
@@ -4117,7 +4639,9 @@ User Request:
                 if _sid and _obj.get("type") in ("system", "result"):
                     _captured_sid = _sid
                     self.update_session_field(n8n_session_id, "session_id", _sid)
-                    print(f"[Session] Captured claude session_id: {_sid}", file=sys.stderr)
+                    print(
+                        f"[Session] Captured claude session_id: {_sid}", file=sys.stderr
+                    )
                     break
             except (ValueError, KeyError):
                 pass
@@ -4173,7 +4697,7 @@ User Request:
 
         agent_dir = self.AGENTS.get(agent, self.AGENTS["orchestrator"])["path"]
         effective_timeout = timeout if timeout is not None else self.command_timeout
-        
+
         # Get channel for file handling instructions
         channel = session_data.get("channel", "webui")
 
@@ -4182,7 +4706,14 @@ User Request:
             context_prompt = prompt
         else:
             context_prompt = self.build_agent_context_prompt(
-                agent, prompt, n8n_session_id, render_type, effective_timeout, "gemini", model, channel
+                agent,
+                prompt,
+                n8n_session_id,
+                render_type,
+                effective_timeout,
+                "gemini",
+                model,
+                channel,
             )
 
         cmd = ["gemini"]
@@ -4205,7 +4736,9 @@ User Request:
             cmd.extend(["--resume", "latest"])
             print(f"[Session] Resuming Gemini session (latest)", file=sys.stderr)
         else:
-            print(f"[Session] Starting new Gemini session in {mode} mode", file=sys.stderr)
+            print(
+                f"[Session] Starting new Gemini session in {mode} mode", file=sys.stderr
+            )
 
         output = self._execute_subprocess_with_tracking(
             cmd, agent_dir, effective_timeout, "gemini", agent, prompt, n8n_session_id
@@ -4247,7 +4780,7 @@ User Request:
 
         agent_dir = self.AGENTS.get(agent, self.AGENTS["orchestrator"])["path"]
         effective_timeout = timeout if timeout is not None else self.command_timeout
-        
+
         # Get channel for file handling instructions
         channel = session_data.get("channel", "webui")
 
@@ -4256,7 +4789,14 @@ User Request:
             context_prompt = prompt
         else:
             context_prompt = self.build_agent_context_prompt(
-                agent, prompt, n8n_session_id, render_type, effective_timeout, "codex", model, channel
+                agent,
+                prompt,
+                n8n_session_id,
+                render_type,
+                effective_timeout,
+                "codex",
+                model,
+                channel,
             )
 
         # Add elevated mode instructions for unrestricted privileged access
@@ -4294,7 +4834,10 @@ User Request:
             if model:
                 cmd += ["-m", model]
             cmd += [session_id, context_prompt]
-            print(f"[Session] Resuming CODEX session: {session_id} with model {model} in {mode} mode", file=sys.stderr)
+            print(
+                f"[Session] Resuming CODEX session: {session_id} with model {model} in {mode} mode",
+                file=sys.stderr,
+            )
         else:
             # Start new session - flags must come BEFORE the prompt positional arg
             cmd = ["codex", "exec"]
@@ -4306,7 +4849,10 @@ User Request:
             if model:
                 cmd += ["-m", model]
             cmd.append(context_prompt)
-            print(f"[Session] Starting new CODEX session with model {model} in {mode} mode", file=sys.stderr)
+            print(
+                f"[Session] Starting new CODEX session with model {model} in {mode} mode",
+                file=sys.stderr,
+            )
 
         output = self._execute_subprocess_with_tracking(
             cmd, agent_dir, effective_timeout, "codex", agent, prompt, n8n_session_id
@@ -4363,7 +4909,14 @@ User Request:
             context_prompt = prompt
         else:
             context_prompt = self.build_agent_context_prompt(
-                agent, prompt, n8n_session_id, render_type, effective_timeout, "devin", model, channel
+                agent,
+                prompt,
+                n8n_session_id,
+                render_type,
+                effective_timeout,
+                "devin",
+                model,
+                channel,
             )
 
         # Add elevated mode instructions for unrestricted privileged access
@@ -4388,7 +4941,6 @@ User Request:
             )
             context_prompt = context_prompt + sandboxed_instruction
 
-
         # -p is a boolean flag (print/non-interactive mode); prompt goes after --
         # Permission mode: dangerous (auto-approve all) for elevated, auto for restricted/sandboxed
         permission_mode = "dangerous" if mode == "elevated" else "auto"
@@ -4399,21 +4951,32 @@ User Request:
 
         if actually_resuming:
             cmd += ["-r", devin_sid]
-            print(f"[Session] Resuming Devin session {devin_sid[:8]}... with model {model} in {mode} mode", file=sys.stderr)
+            print(
+                f"[Session] Resuming Devin session {devin_sid[:8]}... with model {model} in {mode} mode",
+                file=sys.stderr,
+            )
         else:
-            print(f"[Session] Starting new Devin session with model {model} in {mode} mode", file=sys.stderr)
+            print(
+                f"[Session] Starting new Devin session with model {model} in {mode} mode",
+                file=sys.stderr,
+            )
 
         cmd += ["--", context_prompt]
 
         output = self._execute_subprocess_with_tracking(
-            cmd, agent_dir, effective_timeout, "devin", agent, prompt, n8n_session_id,
+            cmd,
+            agent_dir,
+            effective_timeout,
+            "devin",
+            agent,
+            prompt,
+            n8n_session_id,
             use_pty=True,
         )
 
         # After each run, capture and persist the most recent devin session UUID
         # so subsequent messages in this n8n session can resume it.
         self._save_devin_session_id(n8n_session_id, devin_bin, agent_dir)
-
 
         if "Error: Devin command failed" in output:
             return output
@@ -4430,12 +4993,16 @@ User Request:
         except (FileNotFoundError, json.JSONDecodeError):
             return None
 
-    def _save_devin_session_id(self, n8n_session_id: str, devin_bin: str, cwd: Optional[str] = None):
+    def _save_devin_session_id(
+        self, n8n_session_id: str, devin_bin: str, cwd: Optional[str] = None
+    ):
         """Capture the most recently active devin session UUID and store it."""
         try:
             result = subprocess.run(
                 [devin_bin, "list", "--format", "json"],
-                capture_output=True, text=True, timeout=10,
+                capture_output=True,
+                text=True,
+                timeout=10,
                 cwd=cwd,
             )
             sessions = json.loads(result.stdout)
@@ -4448,11 +5015,19 @@ User Request:
             mapping_file = self.devin_session_dir / f"{n8n_session_id}.json"
             with open(mapping_file, "w") as f:
                 json.dump({"devin_session_id": devin_sid}, f)
-            print(f"[Session] Stored devin session mapping: {n8n_session_id[:8]}... → {devin_sid[:8]}...", file=sys.stderr)
+            print(
+                f"[Session] Stored devin session mapping: {n8n_session_id[:8]}... → {devin_sid[:8]}...",
+                file=sys.stderr,
+            )
         except Exception as e:
-            print(f"[Session] Warning: could not save devin session ID: {e}", file=sys.stderr)
+            print(
+                f"[Session] Warning: could not save devin session ID: {e}",
+                file=sys.stderr,
+            )
 
-    def session_exists(self, session_id: str, runtime: str, n8n_session_id: Optional[str] = None) -> bool:
+    def session_exists(
+        self, session_id: str, runtime: str, n8n_session_id: Optional[str] = None
+    ) -> bool:
         """Check if session state exists for runtime"""
         if runtime == "copilot":
             # Modern Copilot stores sessions as directories with events.jsonl inside
@@ -4522,7 +5097,8 @@ User Request:
             if runtime == "copilot":
                 # Modern Copilot: sessions are directories with events.jsonl inside
                 session_dirs = [
-                    d for d in self.session_state_dir.iterdir()
+                    d
+                    for d in self.session_state_dir.iterdir()
                     if d.is_dir() and (d / "events.jsonl").exists()
                 ]
                 if session_dirs:
@@ -4635,10 +5211,12 @@ User Request:
 
     # Background task support
     _bg_task_mgr = None  # Set by create_api_app
-    _bg_identity = None   # Set per-call for slash command context
+    _bg_identity = None  # Set per-call for slash command context
     _notification_mgr = None  # Set by create_api_app
 
-    def _execute_background_task(self, task_id, session_id, prompt, agent, runtime, model, channel, timeout=None):
+    def _execute_background_task(
+        self, task_id, session_id, prompt, agent, runtime, model, channel, timeout=None
+    ):
         """Run a background task in the current thread (called from thread pool)."""
         self.get_or_create_session_data(session_id)
         self.update_session_field(session_id, "agent", agent)
@@ -4656,7 +5234,6 @@ User Request:
         except Exception as exc:
             if self._bg_task_mgr:
                 self._bg_task_mgr.fail_task(task_id, str(exc))
-
 
     def _dispatch_single_runtime(
         self,
@@ -4677,45 +5254,70 @@ User Request:
 
         if runtime == "copilot":
             result = self.run_copilot(
-                prompt, model, agent,
+                prompt,
+                model,
+                agent,
                 session_id if can_resume else None,
-                can_resume, n8n_session_id,
-                effective_timeout, render_type,
+                can_resume,
+                n8n_session_id,
+                effective_timeout,
+                render_type,
             )
         elif runtime == "opencode":
             result = self.run_opencode(
-                prompt, model, agent,
+                prompt,
+                model,
+                agent,
                 session_id if can_resume else None,
-                can_resume, n8n_session_id,
-                effective_timeout, render_type,
+                can_resume,
+                n8n_session_id,
+                effective_timeout,
+                render_type,
             )
         elif runtime == "claude":
             result = self.run_claude(
-                prompt, model, agent,
+                prompt,
+                model,
+                agent,
                 session_id if can_resume else None,
-                can_resume, n8n_session_id,
-                effective_timeout, render_type, mode,
+                can_resume,
+                n8n_session_id,
+                effective_timeout,
+                render_type,
+                mode,
             )
         elif runtime == "gemini":
             result = self.run_gemini(
-                prompt, model, agent,
+                prompt,
+                model,
+                agent,
                 session_id if can_resume else None,
-                can_resume, n8n_session_id,
-                effective_timeout, render_type,
+                can_resume,
+                n8n_session_id,
+                effective_timeout,
+                render_type,
             )
         elif runtime == "codex":
             result = self.run_codex(
-                prompt, model, agent,
+                prompt,
+                model,
+                agent,
                 session_id if can_resume else None,
-                can_resume, n8n_session_id,
-                effective_timeout, render_type,
+                can_resume,
+                n8n_session_id,
+                effective_timeout,
+                render_type,
             )
         elif runtime == "devin":
             result = self.run_devin(
-                prompt, model, agent,
+                prompt,
+                model,
+                agent,
                 session_id if can_resume else None,
-                can_resume, n8n_session_id,
-                effective_timeout, render_type,
+                can_resume,
+                n8n_session_id,
+                effective_timeout,
+                render_type,
             )
         else:
             return f"Error: Unknown runtime '{runtime}'"
@@ -4946,6 +5548,7 @@ You can mention an agent in your prompt and it will auto-delegate:
                 if prev_runtime != new_runtime and prev_session_id:
                     try:
                         from session_handoff import SessionHandoff, _handoff_logger
+
                         handoff = SessionHandoff()
 
                         # Log the reason for handoff (user command: /runtime set)
@@ -4975,6 +5578,7 @@ You can mention an agent in your prompt and it will auto-delegate:
                         )
                         try:
                             from session_handoff import _handoff_logger
+
                             _handoff_logger.error(
                                 f"HANDOFF FAILED: {_handoff_err} | "
                                 f"prev_runtime={prev_runtime} new_runtime={new_runtime}"
@@ -5180,22 +5784,34 @@ You can mention an agent in your prompt and it will auto-delegate:
                 return f"🔔 **Background Notifications:** `{status}`"
 
             elif argument in ["on", "all"]:
-                self.update_session_field(n8n_session_id, "notification_preference", "all")
+                self.update_session_field(
+                    n8n_session_id, "notification_preference", "all"
+                )
                 if self._notification_mgr:
                     # Store under specific identity if available
                     if _notif_identity:
-                        self._notification_mgr.set_user_pref(_notif_identity, _notif_channel, "all")
+                        self._notification_mgr.set_user_pref(
+                            _notif_identity, _notif_channel, "all"
+                        )
                     # Always store global preference so it applies across all channels
-                    self._notification_mgr.set_user_pref("_global", _notif_channel, "all")
+                    self._notification_mgr.set_user_pref(
+                        "_global", _notif_channel, "all"
+                    )
                 return "✓ Background task notifications enabled for Telegram/WebEx."
 
             elif argument in ["off", "mute"]:
-                self.update_session_field(n8n_session_id, "notification_preference", "off")
+                self.update_session_field(
+                    n8n_session_id, "notification_preference", "off"
+                )
                 if self._notification_mgr:
                     if _notif_identity:
-                        self._notification_mgr.set_user_pref(_notif_identity, _notif_channel, "off")
+                        self._notification_mgr.set_user_pref(
+                            _notif_identity, _notif_channel, "off"
+                        )
                     # Always store global preference so it applies across all channels
-                    self._notification_mgr.set_user_pref("_global", _notif_channel, "off")
+                    self._notification_mgr.set_user_pref(
+                        "_global", _notif_channel, "off"
+                    )
                 return "✓ Background task notifications muted for Telegram/WebEx (WebUI only)."
             else:
                 return "Usage: `/notifications [on|off]` to toggle background task notifications."
@@ -5206,9 +5822,17 @@ You can mention an agent in your prompt and it will auto-delegate:
 
             if argument == "current":
                 _perms = session_data.get("permissions", {})
-                _pm = _perms.get("mode", "restricted") if isinstance(_perms, dict) else "restricted"
+                _pm = (
+                    _perms.get("mode", "restricted")
+                    if isinstance(_perms, dict)
+                    else "restricted"
+                )
                 if _pm not in ("elevated", "restricted", "sandboxed"):
-                    _pm = "elevated" if session_data.get("yolo_mode") == "on" else "restricted"
+                    _pm = (
+                        "elevated"
+                        if session_data.get("yolo_mode") == "on"
+                        else "restricted"
+                    )
                 return f"\u26a1 **Current Mode:** `{_pm}`"
 
             elif argument == "list":
@@ -5235,7 +5859,9 @@ You can mention an agent in your prompt and it will auto-delegate:
                 _cur_perms["mode"] = "restricted"
                 self.update_session_field(n8n_session_id, "permissions", _cur_perms)
                 self.update_session_field(n8n_session_id, "yolo_mode", "restricted")
-                return "\u2713 Restricted mode enabled \U0001f512 - normal prompts enabled"
+                return (
+                    "\u2713 Restricted mode enabled \U0001f512 - normal prompts enabled"
+                )
 
             elif argument == "sandboxed":
                 _cur_perms = session_data.get("permissions", {})
@@ -5364,7 +5990,9 @@ You can mention an agent in your prompt and it will auto-delegate:
                 lines = [f"📊 **Results for `{job_id}`** ({len(results)} runs):\n"]
                 for r in results[-5:]:  # last 5 runs
                     status = "✅" if r.get("success") else "❌"
-                    lines.append(f"{status} `{r.get('timestamp','?')}` — {r.get('summary','')[:100]}")
+                    lines.append(
+                        f"{status} `{r.get('timestamp','?')}` — {r.get('summary','')[:100]}"
+                    )
                 return "\n".join(lines)
 
             # /schedule add <name> | <schedule> | <task>
@@ -5439,7 +6067,12 @@ You can mention an agent in your prompt and it will auto-delegate:
                 tasks = self._bg_task_mgr.list_all_tasks()
                 if not tasks:
                     return "⚡ **Background Tasks**\n\nNo background tasks."
-                icons = {"running": "🟢", "completed": "✅", "failed": "❌", "killed": "🛑"}
+                icons = {
+                    "running": "🟢",
+                    "completed": "✅",
+                    "failed": "❌",
+                    "killed": "🛑",
+                }
                 lines = ["⚡ **Background Tasks**\n"]
                 for t in tasks:
                     icon = icons.get(t["status"], "❓")
@@ -5454,12 +6087,19 @@ You can mention an agent in your prompt and it will auto-delegate:
                 task = self._bg_task_mgr.get_task(tid)
                 if not task:
                     return f"❌ Task `{tid}` not found."
-                icons = {"running": "🟢", "completed": "✅", "failed": "❌", "killed": "🛑"}
+                icons = {
+                    "running": "🟢",
+                    "completed": "✅",
+                    "failed": "❌",
+                    "killed": "🛑",
+                }
                 icon = icons.get(task["status"], "❓")
                 elapsed = ""
                 if task["status"] == "running":
                     try:
-                        ct = time.mktime(time.strptime(task["created_at"], "%Y-%m-%dT%H:%M:%SZ"))
+                        ct = time.mktime(
+                            time.strptime(task["created_at"], "%Y-%m-%dT%H:%M:%SZ")
+                        )
                         secs = int(time.time() - ct)
                         elapsed = f"\n**Elapsed:** {secs // 60}m {secs % 60}s"
                     except Exception:
@@ -5511,20 +6151,36 @@ You can mention an agent in your prompt and it will auto-delegate:
             if running >= BackgroundTaskManager.MAX_TASKS_PER_USER:
                 return f"❌ Maximum {BackgroundTaskManager.MAX_TASKS_PER_USER} concurrent background tasks allowed."
 
-            bg_timeout = bg_timeout_override if bg_timeout_override is not None else get_bg_command_timeout()
+            bg_timeout = (
+                bg_timeout_override
+                if bg_timeout_override is not None
+                else get_bg_command_timeout()
+            )
             task_id = f"bg_{str(uuid4())[:8]}"
             bg_session_id = f"bg_{str(uuid4())[:8]}"
             self._bg_task_mgr.create_task(
-                task_id=task_id, session_id=bg_session_id,
-                user_identity=identity, channel=channel,
-                agent=bg_agent, runtime=bg_runtime, model=bg_model,
+                task_id=task_id,
+                session_id=bg_session_id,
+                user_identity=identity,
+                channel=channel,
+                agent=bg_agent,
+                runtime=bg_runtime,
+                model=bg_model,
                 prompt=bg_prompt,
             )
             # Launch in background thread
             import concurrent.futures as _cf
+
             _cf.ThreadPoolExecutor(max_workers=1).submit(
                 self._execute_background_task,
-                task_id, bg_session_id, bg_prompt, bg_agent, bg_runtime, bg_model, channel, bg_timeout,
+                task_id,
+                bg_session_id,
+                bg_prompt,
+                bg_agent,
+                bg_runtime,
+                bg_model,
+                channel,
+                bg_timeout,
             )
 
             return (
@@ -5570,6 +6226,7 @@ You can mention an agent in your prompt and it will auto-delegate:
             # Launch the detached update process
             try:
                 from update_launcher import launch_update
+
                 pid = launch_update()
             except Exception as e:
                 return f"❌ Failed to launch update: {e}"
@@ -5592,7 +6249,11 @@ You can mention an agent in your prompt and it will auto-delegate:
         render_type = self.get_render_type(session_data)
         # Get permission mode from session (backward compat with yolo_mode)
         _perms = session_data.get("permissions", {})
-        if isinstance(_perms, dict) and _perms.get("mode") in ("elevated", "restricted", "sandboxed"):
+        if isinstance(_perms, dict) and _perms.get("mode") in (
+            "elevated",
+            "restricted",
+            "sandboxed",
+        ):
             mode = _perms["mode"]
         elif session_data.get("yolo_mode") == "on":
             mode = "elevated"
@@ -5608,38 +6269,67 @@ You can mention an agent in your prompt and it will auto-delegate:
         elif current_runtime == "devin":
             # Devin handles its own session resumption internally via
             # _get_devin_session_id(); pass n8n_session_id for correct lookup
-            can_resume = self.session_exists(
-                session_id, current_runtime, n8n_session_id=n8n_session_id
-            ) if session_id else self.session_exists(
-                "", current_runtime, n8n_session_id=n8n_session_id
+            can_resume = (
+                self.session_exists(
+                    session_id, current_runtime, n8n_session_id=n8n_session_id
+                )
+                if session_id
+                else self.session_exists(
+                    "", current_runtime, n8n_session_id=n8n_session_id
+                )
             )
         else:
             can_resume = (
-                self.session_exists(session_id, current_runtime) if session_id else False
+                self.session_exists(session_id, current_runtime)
+                if session_id
+                else False
             )
 
         output = self._dispatch_single_runtime(
-            current_runtime, prompt, model, agent, session_id, can_resume,
-            n8n_session_id, effective_timeout, render_type, mode,
+            current_runtime,
+            prompt,
+            model,
+            agent,
+            session_id,
+            can_resume,
+            n8n_session_id,
+            effective_timeout,
+            render_type,
+            mode,
         )
 
         # Handle session ID mapping for runtimes that auto-generate IDs
-        if not can_resume and current_runtime in ("copilot", "opencode", "gemini", "codex"):
+        if not can_resume and current_runtime in (
+            "copilot",
+            "opencode",
+            "gemini",
+            "codex",
+        ):
             new_id = self.get_most_recent_session_id(current_runtime, agent)
             if new_id:
                 self.update_session_field(n8n_session_id, "session_id", new_id)
 
         # Handle opencode session loss
-        if current_runtime == "opencode" and can_resume and (
-            "Resource not found" in output or "NotFoundError" in output
+        if (
+            current_runtime == "opencode"
+            and can_resume
+            and ("Resource not found" in output or "NotFoundError" in output)
         ):
             print(
                 f"[Session] Session {session_id} lost/corrupted. Starting new session.",
                 file=sys.stderr,
             )
             output = self._dispatch_single_runtime(
-                "opencode", prompt, model, agent, None, False,
-                n8n_session_id, effective_timeout, render_type, mode,
+                "opencode",
+                prompt,
+                model,
+                agent,
+                None,
+                False,
+                n8n_session_id,
+                effective_timeout,
+                render_type,
+                mode,
             )
             new_id = self.get_most_recent_session_id("opencode", agent)
             if new_id:
@@ -5696,23 +6386,35 @@ def _send_pairing_code(channel: str, identity: str, code: str) -> None:
             config_path = os.path.join(script_dir, "webex_config.json")
             with open(config_path) as f:
                 cfg = json.load(f)
-            token = cfg.get("bot_token") or cfg.get("token") or os.getenv("WEBEX_BOT_TOKEN", "")
+            token = (
+                cfg.get("bot_token")
+                or cfg.get("token")
+                or os.getenv("WEBEX_BOT_TOKEN", "")
+            )
             msg = f"Your pairing code is: **{code}**\nIt expires in 5 minutes."
             # If identity looks like an email, use toPersonEmail; otherwise treat as roomId
             import re as _re
+
             if _re.match(r"[^@]+@[^@]+\.[^@]+", identity):
                 payload = {"toPersonEmail": identity, "text": msg, "markdown": msg}
             else:
                 payload = {"roomId": identity, "text": msg, "markdown": msg}
             import requests as _req
+
             resp = _req.post(
                 "https://webexapis.com/v1/messages",
-                headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+                headers={
+                    "Authorization": f"Bearer {token}",
+                    "Content-Type": "application/json",
+                },
                 json=payload,
                 timeout=10,
             )
             if resp.status_code != 200:
-                print(f"[API] WebEX send failed ({resp.status_code}): {resp.text[:200]}", file=sys.stderr)
+                print(
+                    f"[API] WebEX send failed ({resp.status_code}): {resp.text[:200]}",
+                    file=sys.stderr,
+                )
     except Exception as exc:  # noqa: BLE001
         print(f"[API] Warning: could not send pairing code via {channel}: {exc}")
 
@@ -5737,6 +6439,7 @@ def _ddg_image_search(query: str, max_results: int = 4) -> list:
     Returns list of {url, thumbnail, title, source} dicts."""
     import re as _re
     import requests as _req
+
     headers = {
         "User-Agent": (
             "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
@@ -5760,8 +6463,13 @@ def _ddg_image_search(query: str, max_results: int = 4) -> list:
         r2 = _req.get(
             "https://duckduckgo.com/i.js",
             params={
-                "q": query, "o": "json", "l": "us-en",
-                "s": "0", "f": ",,,,,", "p": "1", "vqd": vqd,
+                "q": query,
+                "o": "json",
+                "l": "us-en",
+                "s": "0",
+                "f": ",,,,,",
+                "p": "1",
+                "vqd": vqd,
             },
             headers=headers,
             timeout=8,
@@ -5769,12 +6477,14 @@ def _ddg_image_search(query: str, max_results: int = 4) -> list:
         out = []
         for item in r2.json().get("results", [])[:max_results]:
             if item.get("image"):
-                out.append({
-                    "url":       item["image"],
-                    "thumbnail": item.get("thumbnail", item["image"]),
-                    "title":     item.get("title", ""),
-                    "source":    item.get("source", ""),
-                })
+                out.append(
+                    {
+                        "url": item["image"],
+                        "thumbnail": item.get("thumbnail", item["image"]),
+                        "title": item.get("title", ""),
+                        "source": item.get("source", ""),
+                    }
+                )
         return out
     except Exception:
         return []
@@ -5782,7 +6492,8 @@ def _ddg_image_search(query: str, max_results: int = 4) -> list:
 
 def _resolve_telegram_identity(username: str):
     """Reverse-lookup @username in telegram_config.json user_pairings.
-    Returns numeric user_id string, or None if not found (user must message bot first)."""
+    Returns numeric user_id string, or None if not found (user must message bot first).
+    """
     script_dir = os.path.dirname(os.path.abspath(__file__))
     config_path = os.path.join(script_dir, "telegram_config.json")
     try:
@@ -5802,7 +6513,17 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
     import concurrent.futures
     from enum import Enum
 
-    from fastapi import FastAPI, Header, HTTPException, Request, UploadFile, File, WebSocket, WebSocketDisconnect, Query
+    from fastapi import (
+        FastAPI,
+        Header,
+        HTTPException,
+        Request,
+        UploadFile,
+        File,
+        WebSocket,
+        WebSocketDisconnect,
+        Query,
+    )
     from fastapi.responses import JSONResponse, FileResponse, StreamingResponse
     from fastapi.staticfiles import StaticFiles
     from fastapi.middleware.cors import CORSMiddleware
@@ -5816,14 +6537,26 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
     IS_PRODUCTION = APP_ENV != "DEV"
     SHARED_KEY = os.environ.get("API_SHARED_KEY", "")
     if not SHARED_KEY:
-        print("[SECURITY][WARN] API shared key is empty — authentication is effectively disabled. Set API_SHARED_KEY env var.", file=sys.stderr)
+        print(
+            "[SECURITY][WARN] API shared key is empty — authentication is effectively disabled. Set API_SHARED_KEY env var.",
+            file=sys.stderr,
+        )
     PAIRING_CODE_LENGTH = int(os.environ.get("PAIRING_CODE_LENGTH", "6"))
     PAIRING_CODE_TTL = int(os.environ.get("PAIRING_CODE_TTL", "300"))
     SESSION_TOKEN_TTL = int(os.environ.get("SESSION_TOKEN_TTL", "3600"))
-    SESSION_TOKEN_ABSOLUTE_TTL = int(os.environ.get("SESSION_TOKEN_ABSOLUTE_TTL", "86400"))
+    SESSION_TOKEN_ABSOLUTE_TTL = int(
+        os.environ.get("SESSION_TOKEN_ABSOLUTE_TTL", "86400")
+    )
     CONFIG_FILE = os.environ.get("AGENT_CONFIG_FILE")
-    SCHEDULER_JOBS_FILE = os.environ.get("SCHEDULER_JOBS_FILE", os.path.join(os.path.dirname(os.path.abspath(__file__)), ".task-scheduler", "jobs.json"))
-    SCHEDULER_ENABLED = os.environ.get("SCHEDULER_ENABLED", "true").strip().lower() not in ("false", "0", "no")
+    SCHEDULER_JOBS_FILE = os.environ.get(
+        "SCHEDULER_JOBS_FILE",
+        os.path.join(
+            os.path.dirname(os.path.abspath(__file__)), ".task-scheduler", "jobs.json"
+        ),
+    )
+    SCHEDULER_ENABLED = os.environ.get(
+        "SCHEDULER_ENABLED", "true"
+    ).strip().lower() not in ("false", "0", "no")
 
     # ---- shared instances ----
     auth_mgr = AuthManager(
@@ -5832,7 +6565,9 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         pairing_code_ttl=PAIRING_CODE_TTL,
         session_token_ttl=SESSION_TOKEN_TTL,
         session_token_absolute_ttl=SESSION_TOKEN_ABSOLUTE_TTL,
-        sessions_file=os.path.join(os.path.dirname(SCHEDULER_JOBS_FILE), "sessions.json"),
+        sessions_file=os.path.join(
+            os.path.dirname(SCHEDULER_JOBS_FILE), "sessions.json"
+        ),
     )
     _api_auth_manager = auth_mgr
     rate_limiter = RateLimiter()
@@ -5846,19 +6581,23 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
     # Allow up to MAX_TASKS_PER_USER concurrent background tasks
     bg_executor = concurrent.futures.ThreadPoolExecutor(
         max_workers=BackgroundTaskManager.MAX_TASKS_PER_USER,
-        thread_name_prefix="bg_task_"
+        thread_name_prefix="bg_task_",
     )
 
     # Notification manager for background task completion notifications
     try:
         from notification_manager import NotificationManager
+
         notification_mgr = NotificationManager()
     except ImportError:
         notification_mgr = None
-        print("[API] NotificationManager not available — notifications disabled", file=sys.stderr)
+        print(
+            "[API] NotificationManager not available — notifications disabled",
+            file=sys.stderr,
+        )
 
     session_mgr._notification_mgr = notification_mgr
-    
+
     _start_time = time.time()
 
     # ---- Pydantic models ----
@@ -5876,7 +6615,9 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         identity: str
 
     class SessionCreate(BaseModel):
-        session_id: Optional[str] = None  # Optional: if provided, use this session_id instead of generating
+        session_id: Optional[str] = (
+            None  # Optional: if provided, use this session_id instead of generating
+        )
         agent: Optional[str] = None
         model: Optional[str] = None
         runtime: Optional[str] = None
@@ -5903,7 +6644,9 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         x_auth_channel: Optional[str] = Header(None),
     ) -> dict:
         if not authorization or not authorization.startswith("Bearer "):
-            raise HTTPException(status_code=401, detail="Missing or invalid authorization header")
+            raise HTTPException(
+                status_code=401, detail="Missing or invalid authorization header"
+            )
 
         token = authorization[7:]
 
@@ -5913,7 +6656,9 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             # Only trust X-User-Identity from loopback (where our connectors run)
             client_ip = request.client.host if request.client else ""
             is_local = client_ip in ("127.0.0.1", "::1", "localhost")
-            identity = x_user_identity if (is_local and x_user_identity) else "shared_key_user"
+            identity = (
+                x_user_identity if (is_local and x_user_identity) else "shared_key_user"
+            )
             return {
                 "identity": identity,
                 "channel": x_auth_channel or "api",
@@ -5923,7 +6668,9 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         if token.startswith("session_"):
             token_data = auth_mgr.validate_session_token(token)
             if not token_data:
-                raise HTTPException(status_code=401, detail="Invalid or expired session token")
+                raise HTTPException(
+                    status_code=401, detail="Invalid or expired session token"
+                )
             return {
                 "identity": token_data["identity"],
                 "channel": token_data["channel"],
@@ -5958,25 +6705,35 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
     )
 
     # ---- CORS middleware ----
-    cors_origins = [o.strip() for o in os.environ.get("API_CORS_ORIGINS", "").split(",") if o.strip()]
+    cors_origins = [
+        o.strip()
+        for o in os.environ.get("API_CORS_ORIGINS", "").split(",")
+        if o.strip()
+    ]
     if cors_origins:
         app.add_middleware(
             CORSMiddleware,
             allow_origins=cors_origins,
             allow_credentials=True,
             allow_methods=["GET", "POST", "PUT", "DELETE"],
-            allow_headers=["Authorization", "Content-Type", "X-User-Identity", "X-Auth-Channel"],
+            allow_headers=[
+                "Authorization",
+                "Content-Type",
+                "X-User-Identity",
+                "X-Auth-Channel",
+            ],
         )
 
     # ---- generic exception handler ----
     @app.exception_handler(Exception)
     async def _global_exception_handler(request: Request, exc: Exception):
         if IS_PRODUCTION:
-            return JSONResponse(status_code=500, content={"detail": "Internal server error"})
+            return JSONResponse(
+                status_code=500, content={"detail": "Internal server error"}
+            )
         return JSONResponse(status_code=500, content={"detail": str(exc)})
 
     # ---- endpoints ----
-
 
     # ---- endpoints ----
 
@@ -5986,11 +6743,13 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         try:
             agents = []
             for name, info in session_mgr.AGENTS.items():
-                agents.append({
-                    "name": name,
-                    "description": info.get("description", ""),
-                    "path": info.get("path", ""),
-                })
+                agents.append(
+                    {
+                        "name": name,
+                        "description": info.get("description", ""),
+                        "path": info.get("path", ""),
+                    }
+                )
             return {"agents": agents}
         except Exception as e:
             return {"agents": [], "error": str(e)}
@@ -6021,11 +6780,13 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         """Return available agents from agents.json."""
         agents = []
         for name, info in session_mgr.AGENTS.items():
-            agents.append({
-                "name": name,
-                "description": info.get("description", ""),
-                "path": info.get("path", ""),
-            })
+            agents.append(
+                {
+                    "name": name,
+                    "description": info.get("description", ""),
+                    "path": info.get("path", ""),
+                }
+            )
         return {"agents": agents}
 
     @app.get("/api/v1/runtimes")
@@ -6053,15 +6814,24 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         runtime = runtime.lower().strip()
         known_runtimes = {"copilot", "opencode", "claude", "gemini", "codex", "devin"}
         if runtime not in known_runtimes:
-            return {"runtime": runtime, "models": [], "error": f"Unknown runtime: {runtime}"}
+            return {
+                "runtime": runtime,
+                "models": [],
+                "error": f"Unknown runtime: {runtime}",
+            }
 
         try:
             loop = asyncio.get_event_loop()
-            raw = await loop.run_in_executor(None, session_mgr.get_models_for_runtime, runtime)
+            raw = await loop.run_in_executor(
+                None, session_mgr.get_models_for_runtime, runtime
+            )
             models = []
             for _group, model_ids in raw.items():
                 for model_id in model_ids:
-                    label = session_mgr._get_model_description(model_id, runtime) or model_id
+                    label = (
+                        session_mgr._get_model_description(model_id, runtime)
+                        or model_id
+                    )
                     models.append({"id": model_id, "label": label})
             return {"runtime": runtime, "models": models}
         except Exception as e:
@@ -6098,7 +6868,9 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
     async def verify_pairing(body: PairingVerification):
         token = auth_mgr.verify_pairing_code(body.code, body.identity)
         if not token:
-            raise HTTPException(status_code=400, detail="Invalid or expired pairing code")
+            raise HTTPException(
+                status_code=400, detail="Invalid or expired pairing code"
+            )
         token_data = auth_mgr.validate_session_token(token)
         channel = token_data["channel"] if token_data else "unknown"
         username = None
@@ -6144,13 +6916,16 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         effective_agent = body.agent or get_default_agent()
         if effective_agent and effective_agent in session_mgr.AGENTS:
             agent_cfg = session_mgr.AGENTS[effective_agent]
-            default_perms = agent_cfg.get("permissions", {
-                "mode": "restricted",
-                "directories": {"allow_read": [], "allow_write": [], "deny": []},
-                "tools": {"allow": ["*"], "deny": []},
-                "network": {"allow_urls": ["*"], "deny_urls": []},
-                "mcp": {"allow": [], "deny": ["*"]},
-            })
+            default_perms = agent_cfg.get(
+                "permissions",
+                {
+                    "mode": "restricted",
+                    "directories": {"allow_read": [], "allow_write": [], "deny": []},
+                    "tools": {"allow": ["*"], "deny": []},
+                    "network": {"allow_urls": ["*"], "deny_urls": []},
+                    "mcp": {"allow": [], "deny": ["*"]},
+                },
+            )
             session_mgr.update_session_field(session_id, "permissions", default_perms)
         if body.model:
             session_mgr.update_session_field(session_id, "model", body.model)
@@ -6185,7 +6960,9 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 f"attempting recovery (user={user['identity']}, channel={user['channel']})",
                 file=sys.stderr,
             )
-            history_sessions = history_mgr.get_sessions(user["channel"], user["identity"])
+            history_sessions = history_mgr.get_sessions(
+                user["channel"], user["identity"]
+            )
             session_ids_in_history = {s["session_id"] for s in history_sessions}
             if session_id not in session_ids_in_history:
                 print(
@@ -6197,7 +6974,9 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 f"[Session Recovery] Restored session {session_id} from history",
                 file=sys.stderr,
             )
-            existing = session_mgr.get_or_create_session_data(session_id, identity=user["identity"])
+            existing = session_mgr.get_or_create_session_data(
+                session_id, identity=user["identity"]
+            )
             session_mgr.update_session_field(session_id, "channel", user["channel"])
             session_mgr.update_session_field(session_id, "render_type", "markdown")
 
@@ -6229,10 +7008,16 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 pool, session_mgr.execute, body.query, session_id
             )
 
-        history_mgr.append_message(user["channel"], user["identity"], session_id, "user", body.query)
-        history_mgr.append_message(user["channel"], user["identity"], session_id, "assistant", result)
+        history_mgr.append_message(
+            user["channel"], user["identity"], session_id, "user", body.query
+        )
+        history_mgr.append_message(
+            user["channel"], user["identity"], session_id, "assistant", result
+        )
 
-        session_data = session_mgr.get_or_create_session_data(session_id, identity=user["identity"])
+        session_data = session_mgr.get_or_create_session_data(
+            session_id, identity=user["identity"]
+        )
         runtime = session_data.get("runtime", "copilot")
         return {
             "session_id": session_id,
@@ -6283,7 +7068,9 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 f"channel={user['channel']})",
                 file=sys.stderr,
             )
-            history_sessions = history_mgr.get_sessions(user["channel"], user["identity"])
+            history_sessions = history_mgr.get_sessions(
+                user["channel"], user["identity"]
+            )
             session_ids_in_history = {s["session_id"] for s in history_sessions}
             if session_id not in session_ids_in_history:
                 print(
@@ -6297,7 +7084,9 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 f"from chat history — backend will be recreated",
                 file=sys.stderr,
             )
-            existing = session_mgr.get_or_create_session_data(session_id, identity=user["identity"])
+            existing = session_mgr.get_or_create_session_data(
+                session_id, identity=user["identity"]
+            )
             session_mgr.update_session_field(session_id, "channel", user["channel"])
             session_mgr.update_session_field(session_id, "render_type", "markdown")
 
@@ -6350,7 +7139,9 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             # SSE stream).  That freeze prevents ALL requests (including the
             # cancel endpoint) from being processed until execute() finishes.
             pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
-            future = loop.run_in_executor(pool, session_mgr.execute, body.query, session_id)
+            future = loop.run_in_executor(
+                pool, session_mgr.execute, body.query, session_id
+            )
 
             try:
                 if is_command:
@@ -6366,7 +7157,9 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                     try:
                         while True:
                             try:
-                                kind, data = await asyncio.wait_for(queue.get(), timeout=1.0)
+                                kind, data = await asyncio.wait_for(
+                                    queue.get(), timeout=1.0
+                                )
                             except asyncio.TimeoutError:
                                 # Send a keepalive comment every second so the
                                 # connection is not torn down by proxies/browsers
@@ -6406,12 +7199,14 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
 
                 session_data = session_mgr.get_or_create_session_data(session_id)
                 runtime = session_data.get("runtime", "copilot")
-                done_payload = _json.dumps({
-                    "type": "done",
-                    "response": result,
-                    "runtime": runtime,
-                    "model": session_data.get("model"),
-                })
+                done_payload = _json.dumps(
+                    {
+                        "type": "done",
+                        "response": result,
+                        "runtime": runtime,
+                        "model": session_data.get("model"),
+                    }
+                )
                 yield f"data: {done_payload}\n\n"
                 done_delivered = True
             finally:
@@ -6469,7 +7264,11 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         # If there's a query running but no buffer (e.g. non-streaming command),
         # just report it as active so the UI can show a spinner
         if not buf:
-            return {"active": True, "streaming": False, "message": "Query running (non-streaming)"}
+            return {
+                "active": True,
+                "streaming": False,
+                "message": "Query running (non-streaming)",
+            }
 
         loop = asyncio.get_event_loop()
         queue: asyncio.Queue = asyncio.Queue()
@@ -6495,14 +7294,20 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                         yield f"data: {_json.dumps({'type': 'tool_call', **_sanitize_tool_call_for_display(data)})}\n\n"
                     elif kind == "done":
                         # Query already finished — send done event with stored result
-                        session_data = session_mgr.get_or_create_session_data(session_id)
+                        session_data = session_mgr.get_or_create_session_data(
+                            session_id
+                        )
                         runtime = session_data.get("runtime", "copilot")
-                        done_payload = _json.dumps({
-                            "type": "done",
-                            "response": data if isinstance(data, str) else str(data),
-                            "runtime": runtime,
-                            "model": session_data.get("model"),
-                        })
+                        done_payload = _json.dumps(
+                            {
+                                "type": "done",
+                                "response": (
+                                    data if isinstance(data, str) else str(data)
+                                ),
+                                "runtime": runtime,
+                                "model": session_data.get("model"),
+                            }
+                        )
                         yield f"data: {done_payload}\n\n"
                         return
 
@@ -6511,12 +7316,14 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                     session_data = session_mgr.get_or_create_session_data(session_id)
                     runtime = session_data.get("runtime", "copilot")
                     result = buf.done_result if isinstance(buf.done_result, str) else ""
-                    done_payload = _json.dumps({
-                        "type": "done",
-                        "response": result,
-                        "runtime": runtime,
-                        "model": session_data.get("model"),
-                    })
+                    done_payload = _json.dumps(
+                        {
+                            "type": "done",
+                            "response": result,
+                            "runtime": runtime,
+                            "model": session_data.get("model"),
+                        }
+                    )
                     yield f"data: {done_payload}\n\n"
                     return
 
@@ -6544,12 +7351,14 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 session_data = session_mgr.get_or_create_session_data(session_id)
                 runtime = session_data.get("runtime", "copilot")
                 result = buf.done_result if isinstance(buf.done_result, str) else ""
-                done_payload = _json.dumps({
-                    "type": "done",
-                    "response": result,
-                    "runtime": runtime,
-                    "model": session_data.get("model"),
-                })
+                done_payload = _json.dumps(
+                    {
+                        "type": "done",
+                        "response": result,
+                        "runtime": runtime,
+                        "model": session_data.get("model"),
+                    }
+                )
                 yield f"data: {done_payload}\n\n"
             finally:
                 buf.remove_consumer(queue)
@@ -6581,11 +7390,15 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         if not data:
             # Auto-recreate session_map entry for sessions that exist in history
             # but whose session_map entry was lost (restart, map mismatch, etc.)
-            history_sessions = history_mgr.get_sessions(user["channel"], user["identity"])
+            history_sessions = history_mgr.get_sessions(
+                user["channel"], user["identity"]
+            )
             session_ids_in_history = {s["session_id"] for s in history_sessions}
             if session_id not in session_ids_in_history:
                 raise HTTPException(status_code=404, detail="Session not found")
-            data = session_mgr.get_or_create_session_data(session_id, identity=user["identity"])
+            data = session_mgr.get_or_create_session_data(
+                session_id, identity=user["identity"]
+            )
             session_mgr.update_session_field(session_id, "channel", user["channel"])
             session_mgr.update_session_field(session_id, "render_type", "markdown")
 
@@ -6638,9 +7451,15 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         if session_mgr.kill_process(pid):
             session_mgr.clear_running_query(session_id)
             session_mgr._cleanup_stream_buffer(session_id)
-            return {"cancelled": True, "message": f"Cancelled running query (PID: {pid}, Runtime: {runtime})"}
+            return {
+                "cancelled": True,
+                "message": f"Cancelled running query (PID: {pid}, Runtime: {runtime})",
+            }
         else:
-            return {"cancelled": False, "message": f"Failed to cancel query (PID: {pid})"}
+            return {
+                "cancelled": False,
+                "message": f"Failed to cancel query (PID: {pid})",
+            }
 
     # --- Runtime usage endpoint ---
 
@@ -6681,7 +7500,9 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             x_user_identity=request.headers.get("x-user-identity"),
             x_auth_channel=request.headers.get("x-auth-channel"),
         )
-        messages = history_mgr.get_session_messages(user["channel"], user["identity"], session_id)
+        messages = history_mgr.get_session_messages(
+            user["channel"], user["identity"], session_id
+        )
         if messages is None:
             raise HTTPException(status_code=404, detail="Session not found in history")
         total = len(messages)
@@ -6705,7 +7526,9 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             x_user_identity=request.headers.get("x-user-identity"),
             x_auth_channel=request.headers.get("x-auth-channel"),
         )
-        if not history_mgr.delete_session(user["channel"], user["identity"], session_id):
+        if not history_mgr.delete_session(
+            user["channel"], user["identity"], session_id
+        ):
             raise HTTPException(status_code=404, detail="Session not found")
         return {"deleted": True, "session_id": session_id}
 
@@ -6721,14 +7544,18 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         title = body.get("title", "").strip()
         if not title:
             raise HTTPException(status_code=400, detail="Title is required")
-        if not history_mgr.rename_session(user["channel"], user["identity"], session_id, title):
+        if not history_mgr.rename_session(
+            user["channel"], user["identity"], session_id, title
+        ):
             raise HTTPException(status_code=404, detail="Session not found")
         return {"renamed": True, "session_id": session_id, "title": title[:120]}
 
     # --- File upload ---
 
     @app.post("/api/v1/sessions/{session_id}/upload")
-    async def upload_file(session_id: str, request: Request, file: UploadFile = File(...)):
+    async def upload_file(
+        session_id: str, request: Request, file: UploadFile = File(...)
+    ):
         user = await authenticate(
             request,
             authorization=request.headers.get("authorization"),
@@ -6773,23 +7600,74 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
 
     # Allowed base directories for the file viewer (security)
     _FILE_VIEWER_ALLOWED_BASES = [
-        "/opt/", "/tmp/", "/home/",
+        "/opt/",
+        "/tmp/",
+        "/home/",
     ]
     _FILE_VIEWER_MAX_SIZE = 5 * 1024 * 1024  # 5MB text limit
     _FILE_VIEWER_BINARY_EXTS = {
-        ".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".ico", ".bmp",
+        ".png",
+        ".jpg",
+        ".jpeg",
+        ".gif",
+        ".webp",
+        ".svg",
+        ".ico",
+        ".bmp",
         ".pdf",
     }
     _FILE_VIEWER_TEXT_EXTS = {
-        ".md", ".txt", ".py", ".js", ".ts", ".tsx", ".jsx", ".json", ".yaml", ".yml",
-        ".toml", ".cfg", ".ini", ".conf", ".sh", ".bash", ".zsh", ".fish",
-        ".html", ".htm", ".css", ".scss", ".less", ".xml",
-        ".sql", ".graphql", ".gql",
-        ".rs", ".go", ".java", ".kt", ".c", ".cpp", ".h", ".hpp",
-        ".rb", ".php", ".pl", ".lua", ".r", ".swift", ".scala",
-        ".env", ".env.example", ".gitignore", ".dockerignore",
-        ".csv", ".log", ".diff", ".patch",
-        "", # extensionless files (Makefile, Dockerfile, etc.)
+        ".md",
+        ".txt",
+        ".py",
+        ".js",
+        ".ts",
+        ".tsx",
+        ".jsx",
+        ".json",
+        ".yaml",
+        ".yml",
+        ".toml",
+        ".cfg",
+        ".ini",
+        ".conf",
+        ".sh",
+        ".bash",
+        ".zsh",
+        ".fish",
+        ".html",
+        ".htm",
+        ".css",
+        ".scss",
+        ".less",
+        ".xml",
+        ".sql",
+        ".graphql",
+        ".gql",
+        ".rs",
+        ".go",
+        ".java",
+        ".kt",
+        ".c",
+        ".cpp",
+        ".h",
+        ".hpp",
+        ".rb",
+        ".php",
+        ".pl",
+        ".lua",
+        ".r",
+        ".swift",
+        ".scala",
+        ".env",
+        ".env.example",
+        ".gitignore",
+        ".dockerignore",
+        ".csv",
+        ".log",
+        ".diff",
+        ".patch",
+        "",  # extensionless files (Makefile, Dockerfile, etc.)
     }
 
     @app.get("/api/v1/files/view")
@@ -6809,7 +7687,9 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
 
         resolved_str = str(resolved)
         if not any(resolved_str.startswith(b) for b in _FILE_VIEWER_ALLOWED_BASES):
-            raise HTTPException(status_code=403, detail="Path not in allowed directories")
+            raise HTTPException(
+                status_code=403, detail="Path not in allowed directories"
+            )
         if not resolved.exists():
             raise HTTPException(status_code=404, detail="File not found")
         if not resolved.is_file():
@@ -6829,7 +7709,10 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
 
         # Text files → return JSON with content
         if file_size > _FILE_VIEWER_MAX_SIZE:
-            raise HTTPException(status_code=413, detail=f"File too large ({file_size} bytes, max {_FILE_VIEWER_MAX_SIZE})")
+            raise HTTPException(
+                status_code=413,
+                detail=f"File too large ({file_size} bytes, max {_FILE_VIEWER_MAX_SIZE})",
+            )
 
         try:
             content = resolved.read_text(encoding="utf-8", errors="replace")
@@ -6838,13 +7721,31 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
 
         # Determine language hint for syntax highlighting
         lang_map = {
-            ".py": "python", ".js": "javascript", ".ts": "typescript",
-            ".tsx": "typescript", ".jsx": "javascript", ".json": "json",
-            ".yaml": "yaml", ".yml": "yaml", ".sh": "bash", ".bash": "bash",
-            ".html": "html", ".htm": "html", ".css": "css", ".sql": "sql",
-            ".md": "markdown", ".xml": "xml", ".go": "go", ".rs": "rust",
-            ".java": "java", ".rb": "ruby", ".php": "php", ".c": "c",
-            ".cpp": "cpp", ".h": "c", ".hpp": "cpp",
+            ".py": "python",
+            ".js": "javascript",
+            ".ts": "typescript",
+            ".tsx": "typescript",
+            ".jsx": "javascript",
+            ".json": "json",
+            ".yaml": "yaml",
+            ".yml": "yaml",
+            ".sh": "bash",
+            ".bash": "bash",
+            ".html": "html",
+            ".htm": "html",
+            ".css": "css",
+            ".sql": "sql",
+            ".md": "markdown",
+            ".xml": "xml",
+            ".go": "go",
+            ".rs": "rust",
+            ".java": "java",
+            ".rb": "ruby",
+            ".php": "php",
+            ".c": "c",
+            ".cpp": "cpp",
+            ".h": "c",
+            ".hpp": "cpp",
         }
         lang = lang_map.get(ext, "plaintext")
         # Detect extensionless files
@@ -6881,14 +7782,18 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
 
         resolved_str = str(resolved)
         if not any(resolved_str.startswith(b) for b in _FILE_VIEWER_ALLOWED_BASES):
-            raise HTTPException(status_code=403, detail="Path not in allowed directories")
+            raise HTTPException(
+                status_code=403, detail="Path not in allowed directories"
+            )
         if not resolved.exists():
             raise HTTPException(status_code=404, detail="File not found")
         if not resolved.is_file():
             raise HTTPException(status_code=400, detail="Path is a directory")
 
         mime, _ = mimetypes.guess_type(str(resolved))
-        return FileResponse(str(resolved), media_type=mime or "application/octet-stream")
+        return FileResponse(
+            str(resolved), media_type=mime or "application/octet-stream"
+        )
 
     # --- Image search ---
 
@@ -6905,13 +7810,17 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         max_r = min(max(1, max_results), 8)
         loop = asyncio.get_event_loop()
         with concurrent.futures.ThreadPoolExecutor() as pool:
-            results = await loop.run_in_executor(pool, _ddg_image_search, q.strip(), max_r)
+            results = await loop.run_in_executor(
+                pool, _ddg_image_search, q.strip(), max_r
+            )
         return {"query": q, "results": results}
 
     # --- Audio Transcription ---
 
     @app.post("/api/v1/sessions/{session_id}/transcribe")
-    async def transcribe_audio(session_id: str, request: Request, file: UploadFile = File(...)):
+    async def transcribe_audio(
+        session_id: str, request: Request, file: UploadFile = File(...)
+    ):
         """Upload an audio file and get text transcription back."""
         user = await authenticate(
             request,
@@ -6936,13 +7845,16 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
 
         try:
             import audio_transcriber
+
             loop = asyncio.get_event_loop()
             with concurrent.futures.ThreadPoolExecutor() as pool:
                 text, backend = await loop.run_in_executor(
                     pool, audio_transcriber.transcribe, str(dest)
                 )
         except Exception as e:
-            raise HTTPException(status_code=500, detail=f"Transcription failed: {str(e)}")
+            raise HTTPException(
+                status_code=500, detail=f"Transcription failed: {str(e)}"
+            )
 
         if not text:
             raise HTTPException(status_code=422, detail="Could not transcribe audio")
@@ -6964,6 +7876,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             x_auth_channel=request.headers.get("x-auth-channel"),
         )
         import audio_transcriber
+
         return audio_transcriber.get_status()
 
     # --- Scratch Notes (Session-based) ---
@@ -6981,7 +7894,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         session_data = session_map.get(session_id)
         if not session_data:
             raise HTTPException(status_code=404, detail="Session not found")
-        
+
         scratch = session_data.get("scratch", "")
         return {"scratch": scratch, "session_id": session_id}
 
@@ -6996,7 +7909,9 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             return v
 
     @app.post("/api/v1/sessions/{session_id}/scratch")
-    async def save_scratch_notes(session_id: str, request: Request, body: ScratchNotesRequest):
+    async def save_scratch_notes(
+        session_id: str, request: Request, body: ScratchNotesRequest
+    ):
         """Save scratch notes for a session."""
         await authenticate(
             request,
@@ -7008,11 +7923,11 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         session_data = session_map.get(session_id)
         if not session_data:
             raise HTTPException(status_code=404, detail="Session not found")
-        
+
         session_data["scratch"] = body.scratch
         session_map[session_id] = session_data
         session_mgr.save_session_map(session_map)
-        
+
         return {"success": True, "scratch": body.scratch, "session_id": session_id}
 
     # --- Background Tasks ---
@@ -7024,8 +7939,12 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         model: Optional[str] = None
         timeout: Optional[int] = None
         notify: Optional[bool] = None
-        permission_mode: Optional[str] = None  # elevated, restricted (default), sandboxed
-        description: Optional[str] = None  # human-readable task name shown in Agents panel
+        permission_mode: Optional[str] = (
+            None  # elevated, restricted (default), sandboxed
+        )
+        description: Optional[str] = (
+            None  # human-readable task name shown in Agents panel
+        )
 
         @field_validator("prompt")
         @classmethod
@@ -7034,8 +7953,16 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 raise ValueError("Prompt must be 10,000 characters or less")
             return v
 
-    def _emit_bg_notification(task_id: str, prompt: str, status: str, channel: str,
-                               user_identity: str, output_preview=None, error=None, notify: bool = True):
+    def _emit_bg_notification(
+        task_id: str,
+        prompt: str,
+        status: str,
+        channel: str,
+        user_identity: str,
+        output_preview=None,
+        error=None,
+        notify: bool = True,
+    ):
         """Emit a background task completion notification via notification_mgr."""
         if notification_mgr is None:
             return
@@ -7044,7 +7971,9 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             # (user may have muted after the task was created, or muted from
             # a different channel whose identity doesn't match).
             if notify:
-                if notification_mgr.is_muted(user_identity) or notification_mgr.is_muted("_global"):
+                if notification_mgr.is_muted(
+                    user_identity
+                ) or notification_mgr.is_muted("_global"):
                     notify = False
 
             user_key = bg_task_mgr._user_key(channel, user_identity)
@@ -7059,12 +7988,23 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 skip_external=not notify,
             )
         except Exception as exc:
-            print(f"[API] Notification emit failed for {task_id}: {exc}", file=sys.stderr)
+            print(
+                f"[API] Notification emit failed for {task_id}: {exc}", file=sys.stderr
+            )
 
-    def _run_background_task(task_id: str, session_id: str, prompt: str,
-                             agent: str, runtime: str, model: str,
-                             channel: str, user_identity: str, timeout: int = None,
-                             notify: bool = True, permission_mode: str = "restricted"):
+    def _run_background_task(
+        task_id: str,
+        session_id: str,
+        prompt: str,
+        agent: str,
+        runtime: str,
+        model: str,
+        channel: str,
+        user_identity: str,
+        timeout: int = None,
+        notify: bool = True,
+        permission_mode: str = "restricted",
+    ):
         """Blocking function that runs a background task in a subprocess.
         Called from a thread pool executor.
 
@@ -7093,92 +8033,184 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             tc = None
             if rt == "copilot":
                 # Copilot shows tool calls as bullet points: "\u25cf <description>"
-                m_tool = _re.match(r'^[\u25cf\u2b24]\s+(.+?)(?:\s+\(\+\d+\))?$', stripped)
+                m_tool = _re.match(
+                    r"^[\u25cf\u2b24]\s+(.+?)(?:\s+\(\+\d+\))?$", stripped
+                )
                 if m_tool:
                     _desc = m_tool.group(1).strip()
                     if any(kw in _desc.lower() for kw in ["read", "view", "open"]):
                         _tn = "read"
-                    elif any(kw in _desc.lower() for kw in ["create", "write", "save", "edit", "update", "modify"]):
+                    elif any(
+                        kw in _desc.lower()
+                        for kw in [
+                            "create",
+                            "write",
+                            "save",
+                            "edit",
+                            "update",
+                            "modify",
+                        ]
+                    ):
                         _tn = "write"
                     elif any(kw in _desc.lower() for kw in ["delete", "remove", "rm"]):
                         _tn = "shell"
-                    elif any(kw in _desc.lower() for kw in ["list", "ls", "find", "search", "glob"]):
+                    elif any(
+                        kw in _desc.lower()
+                        for kw in ["list", "ls", "find", "search", "glob"]
+                    ):
                         _tn = "glob"
-                    elif any(kw in _desc.lower() for kw in ["run", "exec", "install", "deploy", "build", "test"]):
+                    elif any(
+                        kw in _desc.lower()
+                        for kw in ["run", "exec", "install", "deploy", "build", "test"]
+                    ):
                         _tn = "shell"
-                    elif any(kw in _desc.lower() for kw in ["fetch", "curl", "http", "api", "download"]):
+                    elif any(
+                        kw in _desc.lower()
+                        for kw in ["fetch", "curl", "http", "api", "download"]
+                    ):
                         _tn = "web_fetch"
                     else:
                         _tn = "tool"
                     tc = {"name": _tn, "input": _desc}
                 else:
                     # Shell command: "  $ <command>"
-                    m_cmd = _re.match(r'^\$\s+(.+)', stripped)
+                    m_cmd = _re.match(r"^\$\s+(.+)", stripped)
                     if m_cmd:
                         tc = {"name": "shell", "input": m_cmd.group(1).strip()}
                     else:
                         # Legacy fallback
-                        m = _re.match(r'^(?:Running|Calling|Using|Ran)\s+(\w[\w.]*)\s*(.*)', stripped)
+                        m = _re.match(
+                            r"^(?:Running|Calling|Using|Ran)\s+(\w[\w.]*)\s*(.*)",
+                            stripped,
+                        )
                         if m:
                             tc = {"name": m.group(1), "input": m.group(2).strip()}
             elif rt == "opencode":
                 # OpenCode tool invocation lines: "| ToolName args..."
                 # Support the full set of known OpenCode tools
-                m = _re.match(r'^\|\s+(\w+)\b(.*)', stripped)
+                m = _re.match(r"^\|\s+(\w+)\b(.*)", stripped)
                 if m:
                     _oc_tool = m.group(1)
                     _oc_known = {
-                        "Glob", "Read", "Write", "Bash", "Edit", "bash", "grep",
-                        "find", "Fetch", "ListDir", "Search", "TodoRead",
-                        "TodoWrite", "WebFetch", "Shell", "Patch", "MultiEdit",
-                        "LS", "Cat", "Sed", "Awk", "Mv", "Cp", "Rm", "Mkdir",
+                        "Glob",
+                        "Read",
+                        "Write",
+                        "Bash",
+                        "Edit",
+                        "bash",
+                        "grep",
+                        "find",
+                        "Fetch",
+                        "ListDir",
+                        "Search",
+                        "TodoRead",
+                        "TodoWrite",
+                        "WebFetch",
+                        "Shell",
+                        "Patch",
+                        "MultiEdit",
+                        "LS",
+                        "Cat",
+                        "Sed",
+                        "Awk",
+                        "Mv",
+                        "Cp",
+                        "Rm",
+                        "Mkdir",
                     }
                     if _oc_tool in _oc_known or _oc_tool[0].isupper():
                         tc = {"name": _oc_tool, "input": m.group(2).strip()}
                 # Also detect "Running: <command>" or "Executing: <cmd>"
                 if not tc:
-                    m2 = _re.match(r'^(?:Running|Executing|>)\s+(.+)', stripped)
+                    m2 = _re.match(r"^(?:Running|Executing|>)\s+(.+)", stripped)
                     if m2:
                         tc = {"name": "shell", "input": m2.group(1).strip()}
             elif rt == "codex":
                 # Codex exec shows tool calls in several formats:
                 # 1. "Calling function: name ..." or "Tool: name ..."
-                m = _re.match(r'^(?:Calling function|Tool|Executing|Running):\s*(\w[\w.]*)\s*(.*)', stripped, _re.IGNORECASE)
+                m = _re.match(
+                    r"^(?:Calling function|Tool|Executing|Running):\s*(\w[\w.]*)\s*(.*)",
+                    stripped,
+                    _re.IGNORECASE,
+                )
                 if m:
                     tc = {"name": m.group(1), "input": m.group(2).strip()}
                 # 2. Shell command execution: lines starting with "$ command" or "> command"
                 if not tc:
-                    m2 = _re.match(r'^[$>]\s+(.+)', stripped)
+                    m2 = _re.match(r"^[$>]\s+(.+)", stripped)
                     if m2:
                         tc = {"name": "shell", "input": m2.group(1).strip()}
                 # 3. "read_file(path=...)" or "write_file(path=...)" function-call syntax
                 if not tc:
-                    m3 = _re.match(r'^(\w+)\((.+)\)\s*$', stripped)
-                    if m3 and any(kw in m3.group(1).lower() for kw in ["read", "write", "shell", "bash", "exec", "search", "list", "create", "edit", "patch", "apply"]):
+                    m3 = _re.match(r"^(\w+)\((.+)\)\s*$", stripped)
+                    if m3 and any(
+                        kw in m3.group(1).lower()
+                        for kw in [
+                            "read",
+                            "write",
+                            "shell",
+                            "bash",
+                            "exec",
+                            "search",
+                            "list",
+                            "create",
+                            "edit",
+                            "patch",
+                            "apply",
+                        ]
+                    ):
                         tc = {"name": m3.group(1), "input": m3.group(2).strip()}
             elif rt == "gemini":
                 # Gemini CLI tool call patterns (with --yolo, tools auto-execute):
                 # 1. "✦ Calling tool_name(args)" or "Calling tool_name(args)"
-                m = _re.match(r'^[✦*]?\s*(?:Calling|Using tool|Function call|Running)\s+(\w[\w.]*)\s*(.*)', stripped, _re.IGNORECASE)
+                m = _re.match(
+                    r"^[✦*]?\s*(?:Calling|Using tool|Function call|Running)\s+(\w[\w.]*)\s*(.*)",
+                    stripped,
+                    _re.IGNORECASE,
+                )
                 if m:
                     tc = {"name": m.group(1), "input": m.group(2).strip()}
                 # 2. "⚡ <tool_name>(<args>)" or "tool_name(<args>)"
                 if not tc:
-                    m2 = _re.match(r'^[⚡✦*]?\s*(\w+)\((.+)\)\s*$', stripped)
-                    if m2 and any(kw in m2.group(1).lower() for kw in [
-                        "read", "write", "shell", "bash", "exec", "search", "list",
-                        "create", "edit", "file", "run", "cat", "ls", "find", "grep",
-                        "save", "update", "delete", "fetch", "curl", "get", "put",
-                    ]):
+                    m2 = _re.match(r"^[⚡✦*]?\s*(\w+)\((.+)\)\s*$", stripped)
+                    if m2 and any(
+                        kw in m2.group(1).lower()
+                        for kw in [
+                            "read",
+                            "write",
+                            "shell",
+                            "bash",
+                            "exec",
+                            "search",
+                            "list",
+                            "create",
+                            "edit",
+                            "file",
+                            "run",
+                            "cat",
+                            "ls",
+                            "find",
+                            "grep",
+                            "save",
+                            "update",
+                            "delete",
+                            "fetch",
+                            "curl",
+                            "get",
+                            "put",
+                        ]
+                    ):
                         tc = {"name": m2.group(1), "input": m2.group(2).strip()}
                 # 3. Shell-like execution: "$ command" or "> command"
                 if not tc:
-                    m3 = _re.match(r'^[$>]\s+(.+)', stripped)
+                    m3 = _re.match(r"^[$>]\s+(.+)", stripped)
                     if m3:
                         tc = {"name": "shell", "input": m3.group(1).strip()}
                 # 4. "Running command: <cmd>" pattern
                 if not tc:
-                    m4 = _re.match(r'^Running\s+command:\s*(.+)', stripped, _re.IGNORECASE)
+                    m4 = _re.match(
+                        r"^Running\s+command:\s*(.+)", stripped, _re.IGNORECASE
+                    )
                     if m4:
                         tc = {"name": "shell", "input": m4.group(1).strip()}
 
@@ -7194,14 +8226,21 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                         if _inner == "content_block_start":
                             _cb = _event.get("content_block") or {}
                             if _cb.get("type") == "tool_use":
-                                tc = {"name": _cb.get("name", "tool"), "input": _json.dumps(_cb.get("input", {}))}
+                                tc = {
+                                    "name": _cb.get("name", "tool"),
+                                    "input": _json.dumps(_cb.get("input", {})),
+                                }
                         elif _inner == "content_block_stop":
                             pass  # tool result will follow
                 except (ValueError, KeyError, TypeError):
                     pass
                 # Plain-text fallback for non-JSON output
                 if not tc:
-                    m = _re.match(r'^(?:Tool|Calling|Using tool):\s*(\w[\w.]*)\s*(.*)', stripped, _re.IGNORECASE)
+                    m = _re.match(
+                        r"^(?:Tool|Calling|Using tool):\s*(\w[\w.]*)\s*(.*)",
+                        stripped,
+                        _re.IGNORECASE,
+                    )
                     if m:
                         tc = {"name": m.group(1), "input": m.group(2).strip()}
 
@@ -7220,7 +8259,9 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         try:
             # Build full context prompt with agent/runtime/channel metadata
             context_prompt = session_mgr.build_agent_context_prompt(
-                agent, prompt, session_id,
+                agent,
+                prompt,
+                session_id,
                 render_type="text",
                 timeout=timeout,
                 runtime=runtime,
@@ -7243,26 +8284,49 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 if model:
                     cmd.extend(["--model", model])
             elif runtime == "opencode":
-                _oc_bin = str(session_mgr.opencode_bin) if session_mgr.opencode_bin else (_which_bin("opencode") or "opencode")
+                _oc_bin = (
+                    str(session_mgr.opencode_bin)
+                    if session_mgr.opencode_bin
+                    else (_which_bin("opencode") or "opencode")
+                )
                 cmd = [_oc_bin, "run", "--model", model, context_prompt]
             elif runtime == "codex":
                 _codex_bin = _which_bin("codex") or "codex"
                 cmd = [_codex_bin, "exec"]
                 if permission_mode == "elevated":
-                    cmd.extend(["--dangerously-bypass-approvals-and-sandbox",
-                                "-c", "shell_environment_policy.inherit=all"])
+                    cmd.extend(
+                        [
+                            "--dangerously-bypass-approvals-and-sandbox",
+                            "-c",
+                            "shell_environment_policy.inherit=all",
+                        ]
+                    )
                 if model:
                     cmd.extend(["-m", model])
                 cmd.append(context_prompt)
             elif runtime == "claude":
                 _claude_bin = session_mgr.claude_bin or _which_bin("claude") or "claude"
-                _claude_perm = {"elevated": "bypassPermissions", "sandboxed": "plan"}.get(permission_mode, "default")
-                cmd = [_claude_bin, "-p", context_prompt,
-                       "--output-format", "stream-json",
-                       "--model", model,
-                       "--permission-mode", _claude_perm]
+                _claude_perm = {
+                    "elevated": "bypassPermissions",
+                    "sandboxed": "plan",
+                }.get(permission_mode, "default")
+                cmd = [
+                    _claude_bin,
+                    "-p",
+                    context_prompt,
+                    "--output-format",
+                    "stream-json",
+                    "--model",
+                    model,
+                    "--permission-mode",
+                    _claude_perm,
+                ]
             elif runtime == "devin":
-                _devin_bin = session_mgr.devin_bin if hasattr(session_mgr, 'devin_bin') and session_mgr.devin_bin else (_which_bin("devin") or "devin")
+                _devin_bin = (
+                    session_mgr.devin_bin
+                    if hasattr(session_mgr, "devin_bin") and session_mgr.devin_bin
+                    else (_which_bin("devin") or "devin")
+                )
                 _devin_perm = "dangerous" if permission_mode == "elevated" else "auto"
                 cmd = [_devin_bin, "-p", "--permission-mode", _devin_perm]
                 if model:
@@ -7270,19 +8334,27 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 cmd.extend(["--", context_prompt])
             else:
                 # Default: copilot runtime
-                copilot_bin = session_mgr.copilot_bin or _which_bin("copilot") or "/home/flipkey/.local/bin/copilot"
+                copilot_bin = (
+                    session_mgr.copilot_bin
+                    or _which_bin("copilot")
+                    or "/home/flipkey/.local/bin/copilot"
+                )
                 cmd = [
                     copilot_bin,
-                    "-p", context_prompt,
+                    "-p",
+                    context_prompt,
                     "--no-color",
-                    "--model", model,
+                    "--model",
+                    model,
                     "--allow-all-tools",
                 ]
                 if permission_mode == "elevated":
                     cmd.extend(["--allow-all-paths", "--yolo"])
 
             # Set agent working directory for all runtimes
-            agent_dir = session_mgr.AGENTS.get(agent, session_mgr.AGENTS.get("orchestrator", {})).get("path", os.getcwd())
+            agent_dir = session_mgr.AGENTS.get(
+                agent, session_mgr.AGENTS.get("orchestrator", {})
+            ).get("path", os.getcwd())
 
             proc_timeout = (timeout or 900) + 30
             env = {**os.environ, "COPILOT_AGENT": agent, "COPILOT_RUNTIME": runtime}
@@ -7301,6 +8373,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             bg_task_mgr.update_task(task_id, pid=process.pid)
 
             import threading
+
             stderr_lines = []
 
             def _drain_stderr():
@@ -7318,7 +8391,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
 
             for line in process.stdout:
                 stdout_lines.append(line)
-                line_text = line.rstrip('\n\r')
+                line_text = line.rstrip("\n\r")
 
                 # Append to output_lines for live log viewing
                 if line_text:
@@ -7328,7 +8401,9 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 # Gemini (stream-json) emits {"type":"tool_use",...} and {"type":"tool_result",...}
                 # Claude (stream-json) emits nested stream_event objects with tool_use blocks
                 tc = None
-                if runtime in ("gemini", "claude") and line_text.strip().startswith("{"):
+                if runtime in ("gemini", "claude") and line_text.strip().startswith(
+                    "{"
+                ):
                     try:
                         _obj = _json.loads(line_text.strip())
                         _otype = _obj.get("type", "")
@@ -7342,13 +8417,21 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                                     "input": _json.dumps(_obj.get("parameters", {})),
                                     "status": "running",
                                     "runtime": runtime,
-                                    "timestamp": _obj.get("timestamp", time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())),
+                                    "timestamp": _obj.get(
+                                        "timestamp",
+                                        time.strftime(
+                                            "%Y-%m-%dT%H:%M:%SZ", time.gmtime()
+                                        ),
+                                    ),
                                 }
                             elif _otype == "tool_result":
                                 _tool_id = _obj.get("tool_id", "")
-                                bg_task_mgr.update_tool_call(task_id, _tool_id,
+                                bg_task_mgr.update_tool_call(
+                                    task_id,
+                                    _tool_id,
                                     status=_obj.get("status", "completed"),
-                                    output=_obj.get("output", "")[:500])
+                                    output=_obj.get("output", "")[:500],
+                                )
 
                         elif runtime == "claude":
                             if _otype == "stream_event":
@@ -7359,12 +8442,17 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                                     if _cb.get("type") == "tool_use":
                                         _tool_call_counter += 1
                                         tc = {
-                                            "id": _cb.get("id", f"bg_{task_id[:8]}_{_tool_call_counter}"),
+                                            "id": _cb.get(
+                                                "id",
+                                                f"bg_{task_id[:8]}_{_tool_call_counter}",
+                                            ),
                                             "name": _cb.get("name", "tool"),
                                             "input": _json.dumps(_cb.get("input", {})),
                                             "status": "running",
                                             "runtime": runtime,
-                                            "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                                            "timestamp": time.strftime(
+                                                "%Y-%m-%dT%H:%M:%SZ", time.gmtime()
+                                            ),
                                         }
                     except (ValueError, KeyError, TypeError):
                         pass
@@ -7389,10 +8477,13 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             if stderr_lines:
                 output += "\n[stderr]\n" + "".join(stderr_lines)
 
-
             if process.returncode == 0:
                 # Strip CLI metadata (tool decoration, stats) from final output
-                final_output = session_mgr.strip_metadata(output, runtime) if output else "Task completed successfully"
+                final_output = (
+                    session_mgr.strip_metadata(output, runtime)
+                    if output
+                    else "Task completed successfully"
+                )
                 if not final_output.strip():
                     final_output = output or "Task completed successfully"
                 bg_task_mgr.complete_task(task_id, final_output)
@@ -7402,10 +8493,21 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                         sched = _get_scheduler()
                         job = sched.get_job(job_id).get("result")
                         if job:
-                            sched.save_result(job_id, job.get("name", job_id), True, final_output)
-                    except: pass
-                _emit_bg_notification(task_id, prompt, "completed", channel, user_identity,
-                                      output_preview=final_output, error=None, notify=notify)
+                            sched.save_result(
+                                job_id, job.get("name", job_id), True, final_output
+                            )
+                    except:
+                        pass
+                _emit_bg_notification(
+                    task_id,
+                    prompt,
+                    "completed",
+                    channel,
+                    user_identity,
+                    output_preview=final_output,
+                    error=None,
+                    notify=notify,
+                )
             else:
                 error_msg = f"Task failed with code {process.returncode}: {output}"
                 bg_task_mgr.fail_task(task_id, error_msg)
@@ -7415,21 +8517,48 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                         sched = _get_scheduler()
                         job = sched.get_job(job_id).get("result")
                         if job:
-                            sched.save_result(job_id, job.get("name", job_id), False, "", error_msg)
-                    except: pass
-                _emit_bg_notification(task_id, prompt, "failed", channel, user_identity,
-                                      output_preview=None, error=error_msg, notify=notify)
+                            sched.save_result(
+                                job_id, job.get("name", job_id), False, "", error_msg
+                            )
+                    except:
+                        pass
+                _emit_bg_notification(
+                    task_id,
+                    prompt,
+                    "failed",
+                    channel,
+                    user_identity,
+                    output_preview=None,
+                    error=error_msg,
+                    notify=notify,
+                )
 
         except subprocess.TimeoutExpired:
             error_msg = f"Task exceeded timeout of {timeout} seconds"
             bg_task_mgr.fail_task(task_id, error_msg)
-            _emit_bg_notification(task_id, prompt, "failed", channel, user_identity,
-                                  output_preview=None, error=error_msg, notify=notify)
+            _emit_bg_notification(
+                task_id,
+                prompt,
+                "failed",
+                channel,
+                user_identity,
+                output_preview=None,
+                error=error_msg,
+                notify=notify,
+            )
         except Exception as exc:
             error_msg = str(exc)
             bg_task_mgr.fail_task(task_id, error_msg)
-            _emit_bg_notification(task_id, prompt, "failed", channel, user_identity,
-                                  output_preview=None, error=error_msg, notify=notify)
+            _emit_bg_notification(
+                task_id,
+                prompt,
+                "failed",
+                channel,
+                user_identity,
+                output_preview=None,
+                error=error_msg,
+                notify=notify,
+            )
         finally:
             # Promote next queued task for this user if a slot just opened
             try:
@@ -7440,9 +8569,14 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                     print(f"[BG] Promoting queued task {next_q['task_id']} → running")
                     bg_executor.submit(
                         _run_background_task,
-                        next_q["task_id"], new_sid, next_q["prompt"],
-                        next_q["agent"], next_q["runtime"], next_q["model"],
-                        next_q["channel"], next_q["user_identity"],
+                        next_q["task_id"],
+                        new_sid,
+                        next_q["prompt"],
+                        next_q["agent"],
+                        next_q["runtime"],
+                        next_q["model"],
+                        next_q["channel"],
+                        next_q["user_identity"],
                         next_q.get("timeout") or 900,
                         next_q.get("notify", True),
                     )
@@ -7468,53 +8602,61 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         # to inherit preferences (like notification_preference).
         defaults = {}
         session_map = session_mgr.load_session_map()
-        
+
         # Search session_map for matching n8n_session_ids by identity (highest priority)
         # Then by channel, always respecting notification_preference if set
         matching_sessions_same_channel = []
         matching_sessions_other_channel = []
-        
+
         for n8n_sid, data in session_map.items():
             # Handle legacy string format
             if isinstance(data, str):
                 data = {"session_id": data}
-            
+
             # Check if this session belongs to this user (by identity if stored)
             sid_identity = data.get("identity")
             sid_channel = data.get("channel")
-            
+
             # Match by identity first (most reliable)
             if sid_identity and sid_identity == identity:
                 if sid_channel == channel:
                     matching_sessions_same_channel.append((n8n_sid, data))
                 else:
                     matching_sessions_other_channel.append((n8n_sid, data))
-        
+
         # Use sessions from the same channel first
         for n8n_sid, data in matching_sessions_same_channel:
             if not defaults:
                 defaults = dict(data)
-                print(f"[API] Found matching session '{n8n_sid}' for {channel}/{identity}")
-            
+                print(
+                    f"[API] Found matching session '{n8n_sid}' for {channel}/{identity}"
+                )
+
             # Always check for notification_preference (highest priority)
             pref = data.get("notification_preference")
             if pref:
                 defaults["notification_preference"] = pref
-                print(f"[API] Inherited notification_preference '{pref}' from session '{n8n_sid}'")
-        
+                print(
+                    f"[API] Inherited notification_preference '{pref}' from session '{n8n_sid}'"
+                )
+
         # Fall back to other channels for the same user
         for n8n_sid, data in matching_sessions_other_channel:
             if not defaults:
                 defaults = dict(data)
-                print(f"[API] Found matching cross-channel session '{n8n_sid}' for {identity}")
-            
+                print(
+                    f"[API] Found matching cross-channel session '{n8n_sid}' for {identity}"
+                )
+
             # Always prioritize notification_preference across channels
             pref = data.get("notification_preference")
             if pref:
                 # If "off" is set anywhere, respect it
                 if pref == "off" or not defaults.get("notification_preference"):
                     defaults["notification_preference"] = pref
-                    print(f"[API] Inherited notification_preference '{pref}' from cross-channel session '{n8n_sid}'")
+                    print(
+                        f"[API] Inherited notification_preference '{pref}' from cross-channel session '{n8n_sid}'"
+                    )
 
         agent = body.agent or defaults.get("agent", get_default_agent())
         runtime = body.runtime or defaults.get("runtime", get_default_runtime())
@@ -7524,7 +8666,9 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         session_id = str(uuid4())  # Must be valid UUID format for Copilot CLI
 
         # Use agent-specified timeout or fall back to default (15 min)
-        bg_timeout = body.timeout if body.timeout is not None else get_bg_command_timeout()
+        bg_timeout = (
+            body.timeout if body.timeout is not None else get_bg_command_timeout()
+        )
 
         # Determine notification preference:
         #   body override > global mute > per-identity store > session default > True
@@ -7539,7 +8683,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                     notify_pref = False
             if notify_pref is None:
                 session_pref = defaults.get("notification_preference", "all")
-                notify_pref = (session_pref != "off")
+                notify_pref = session_pref != "off"
 
         # Check concurrent limit — queue instead of rejecting
         running = bg_task_mgr.count_running(channel, identity)
@@ -7559,7 +8703,9 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 notify=notify_pref,
             )
             queue_pos = bg_task_mgr.count_queued(channel, identity)
-            print(f"[API] Task {task_id} queued (position {queue_pos}, {running}/{BackgroundTaskManager.MAX_TASKS_PER_USER} slots full)")
+            print(
+                f"[API] Task {task_id} queued (position {queue_pos}, {running}/{BackgroundTaskManager.MAX_TASKS_PER_USER} slots full)"
+            )
             return {
                 "task_id": task_id,
                 "session_id": session_id,
@@ -7592,14 +8738,22 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         if perm_mode not in ("elevated", "restricted", "sandboxed"):
             perm_mode = "restricted"
 
-
         # Run in background thread using shared executor
         loop = asyncio.get_running_loop()
         loop.run_in_executor(
             bg_executor,  # Use shared executor instead of creating new one
             _run_background_task,
-            task_id, session_id, body.prompt, agent, runtime, model, channel, identity, bg_timeout,
-            notify_pref, perm_mode
+            task_id,
+            session_id,
+            body.prompt,
+            agent,
+            runtime,
+            model,
+            channel,
+            identity,
+            bg_timeout,
+            notify_pref,
+            perm_mode,
         )
 
         return {
@@ -7628,22 +8782,26 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 try:
                     os.kill(t["pid"], 0)
                 except ProcessLookupError:
-                    bg_task_mgr.fail_task(t["task_id"], "Process terminated unexpectedly")
+                    bg_task_mgr.fail_task(
+                        t["task_id"], "Process terminated unexpectedly"
+                    )
                     t["status"] = "failed"
         # Return summary (no full output_lines for list)
         result = []
         for t in tasks:
-            result.append({
-                "task_id": t["task_id"],
-                "agent": t["agent"],
-                "runtime": t["runtime"],
-                "model": t["model"],
-                "prompt": t["prompt"][:200],
-                "status": t["status"],
-                "created_at": t["created_at"],
-                "completed_at": t.get("completed_at"),
-                "error": t.get("error"),
-            })
+            result.append(
+                {
+                    "task_id": t["task_id"],
+                    "agent": t["agent"],
+                    "runtime": t["runtime"],
+                    "model": t["model"],
+                    "prompt": t["prompt"][:200],
+                    "status": t["status"],
+                    "created_at": t["created_at"],
+                    "completed_at": t.get("completed_at"),
+                    "error": t.get("error"),
+                }
+            )
         return {"tasks": result}
 
     @app.get("/api/v1/background-tasks/{task_id}")
@@ -7731,7 +8889,9 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         return {
             "task_id": task["task_id"],
             "status": task["status"],
-            "tool_calls": [_sanitize_tool_call_for_display(tc) for tc in task.get("tool_calls", [])],
+            "tool_calls": [
+                _sanitize_tool_call_for_display(tc) for tc in task.get("tool_calls", [])
+            ],
             "tool_call_count": len(task.get("tool_calls", [])),
         }
 
@@ -7756,14 +8916,21 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 if next_q:
                     new_sid = str(uuid4())
                     bg_task_mgr.promote_queued_task(next_q["task_id"], new_sid)
-                    print(f"[BG] Kill triggered promotion of queued task {next_q['task_id']}")
+                    print(
+                        f"[BG] Kill triggered promotion of queued task {next_q['task_id']}"
+                    )
                     loop = asyncio.get_running_loop()
                     loop.run_in_executor(
                         bg_executor,
                         _run_background_task,
-                        next_q["task_id"], new_sid, next_q["prompt"],
-                        next_q["agent"], next_q["runtime"], next_q["model"],
-                        next_q["channel"], next_q["user_identity"],
+                        next_q["task_id"],
+                        new_sid,
+                        next_q["prompt"],
+                        next_q["agent"],
+                        next_q["runtime"],
+                        next_q["model"],
+                        next_q["channel"],
+                        next_q["user_identity"],
                         next_q.get("timeout") or 900,
                         next_q.get("notify", True),
                         next_q.get("permission_mode", "restricted"),
@@ -7787,7 +8954,9 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         if notification_mgr is None:
             return {"notifications": [], "unread_count": 0}
         user_key = bg_task_mgr._user_key(user["channel"], user["identity"])
-        notifications = notification_mgr.list_notifications(user_key, unread_only=unread_only)
+        notifications = notification_mgr.list_notifications(
+            user_key, unread_only=unread_only
+        )
         unread_count = sum(1 for n in notifications if not n.get("read", False))
         return {"notifications": notifications, "unread_count": unread_count}
 
@@ -7801,7 +8970,9 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             x_auth_channel=request.headers.get("x-auth-channel"),
         )
         if notification_mgr is None:
-            raise HTTPException(status_code=503, detail="Notification manager unavailable")
+            raise HTTPException(
+                status_code=503, detail="Notification manager unavailable"
+            )
         user_key = bg_task_mgr._user_key(user["channel"], user["identity"])
         ok = notification_mgr.mark_read(notification_id, user_key)
         if not ok:
@@ -7818,7 +8989,9 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             x_auth_channel=request.headers.get("x-auth-channel"),
         )
         if notification_mgr is None:
-            raise HTTPException(status_code=503, detail="Notification manager unavailable")
+            raise HTTPException(
+                status_code=503, detail="Notification manager unavailable"
+            )
         user_key = bg_task_mgr._user_key(user["channel"], user["identity"])
         count = notification_mgr.mark_all_read(user_key)
         return {"marked_read": count}
@@ -7833,7 +9006,9 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             x_auth_channel=request.headers.get("x-auth-channel"),
         )
         if notification_mgr is None:
-            raise HTTPException(status_code=503, detail="Notification manager unavailable")
+            raise HTTPException(
+                status_code=503, detail="Notification manager unavailable"
+            )
         user_key = bg_task_mgr._user_key(user["channel"], user["identity"])
         ok = notification_mgr.delete_notification(notification_id, user_key)
         if not ok:
@@ -7850,30 +9025,36 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             x_auth_channel=request.headers.get("x-auth-channel"),
         )
         if notification_mgr is None:
-            raise HTTPException(status_code=503, detail="Notification manager unavailable")
+            raise HTTPException(
+                status_code=503, detail="Notification manager unavailable"
+            )
         user_key = bg_task_mgr._user_key(user["channel"], user["identity"])
         deleted = notification_mgr.delete_all_read(user_key)
         return {"deleted": deleted}
 
     # --- Task Scheduler ---
     if SCHEDULER_ENABLED:
-            # Lazy-load TaskScheduler so the API starts even if the scheduler dirs don't exist yet.
+        # Lazy-load TaskScheduler so the API starts even if the scheduler dirs don't exist yet.
         _task_scheduler = None
-    
+
         def _get_scheduler():
             nonlocal _task_scheduler
             if _task_scheduler is None:
                 try:
                     import sys as _sys
+
                     _sched_path = str(Path(__file__).parent)
                     if _sched_path not in _sys.path:
                         _sys.path.insert(0, _sched_path)
                     from scheduler.management import TaskScheduler
+
                     _task_scheduler = TaskScheduler()
                 except Exception as _e:
-                    raise HTTPException(status_code=503, detail=f"Scheduler unavailable: {_e}")
+                    raise HTTPException(
+                        status_code=503, detail=f"Scheduler unavailable: {_e}"
+                    )
             return _task_scheduler
-    
+
         # ---- Scheduler authorization ----
         # Override with comma-separated env vars to add more users without code changes.
         _sched_allowed_telegram = {
@@ -7887,11 +9068,14 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             if u.strip()
         }
         if not _sched_allowed_telegram and not _sched_allowed_webex:
-            print("[SECURITY][WARN] No scheduler allowlist configured — set SCHEDULER_ALLOWED_TELEGRAM and/or SCHEDULER_ALLOWED_WEBEX env vars", file=sys.stderr)
-    
+            print(
+                "[SECURITY][WARN] No scheduler allowlist configured — set SCHEDULER_ALLOWED_TELEGRAM and/or SCHEDULER_ALLOWED_WEBEX env vars",
+                file=sys.stderr,
+            )
+
         async def _require_scheduler_auth(request: Request) -> dict:
             """Authenticate AND verify the user is allowed to manage scheduled tasks.
-    
+
             Raises HTTP 403 if authenticated but not in the allowlist.
             Returns the user dict on success.
             """
@@ -7901,14 +9085,14 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 x_user_identity=request.headers.get("x-user-identity"),
                 x_auth_channel=request.headers.get("x-auth-channel"),
             )
-    
+
             # Shared-key callers (internal/admin) are always allowed.
             if user.get("auth_type") == "shared_key":
                 return user
-    
+
             channel = user.get("channel", "")
             identity = user.get("identity", "")
-    
+
             if channel == "telegram":
                 # identity is a numeric chat_id; resolve to username for the allowlist check.
                 username = _get_telegram_username(identity) or ""
@@ -7917,12 +9101,12 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             elif channel == "webex":
                 if identity.lower() in _sched_allowed_webex:
                     return user
-    
+
             raise HTTPException(
                 status_code=403,
                 detail="You are not authorized to manage scheduled tasks.",
             )
-    
+
         class ScheduleJobRequest(BaseModel):
             name: str
             schedule: str
@@ -7934,8 +9118,10 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             notify: bool = False
             recurring: bool = True
             timeout: Optional[int] = None  # Execution timeout in seconds (default: 300)
-            permission_mode: Optional[str] = None  # elevated, restricted (default), sandboxed
-    
+            permission_mode: Optional[str] = (
+                None  # elevated, restricted (default), sandboxed
+            )
+
         class UpdateJobRequest(BaseModel):
             name: Optional[str] = None
             schedule: Optional[str] = None
@@ -7948,8 +9134,10 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             recurring: Optional[bool] = None
             enabled: Optional[bool] = None
             timeout: Optional[int] = None  # Execution timeout in seconds
-            permission_mode: Optional[str] = None  # elevated, restricted (default), sandboxed
-    
+            permission_mode: Optional[str] = (
+                None  # elevated, restricted (default), sandboxed
+            )
+
         class ValidateScheduleRequest(BaseModel):
             schedule: str
 
@@ -7958,12 +9146,16 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             """Convert natural language schedule to cron format using AI + deterministic fallback."""
             await _require_scheduler_auth(request)
             client_ip = request.client.host if request.client else "unknown"
-            if not rate_limiter.check(client_ip, "scheduler_write", max_requests=30, window=60):
+            if not rate_limiter.check(
+                client_ip, "scheduler_write", max_requests=30, window=60
+            ):
                 raise HTTPException(status_code=429, detail="Rate limit exceeded")
             from scheduler.management import convert_schedule
+
             result = convert_schedule(body.schedule.strip(), use_ai=True)
             return {
-                "success": result.get("cron") is not None or result.get("next_run") is not None,
+                "success": result.get("cron") is not None
+                or result.get("next_run") is not None,
                 "cron": result.get("cron"),
                 "next_run": result.get("next_run"),
                 "human_readable": result.get("human_readable", ""),
@@ -7975,17 +9167,19 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         async def scheduler_status(request: Request):
             await _require_scheduler_auth(request)
             return _get_scheduler().doctor()
-    
+
         @app.get("/api/v1/scheduler/jobs")
         async def list_scheduler_jobs(request: Request):
             await _require_scheduler_auth(request)
             return _get_scheduler().list_jobs()
-    
+
         @app.post("/api/v1/scheduler/jobs")
         async def create_scheduler_job(body: ScheduleJobRequest, request: Request):
             user = await _require_scheduler_auth(request)
             client_ip = request.client.host if request.client else "unknown"
-            if not rate_limiter.check(client_ip, "scheduler_write", max_requests=20, window=60):
+            if not rate_limiter.check(
+                client_ip, "scheduler_write", max_requests=20, window=60
+            ):
                 raise HTTPException(status_code=429, detail="Rate limit exceeded")
             # Resolve Telegram username for storage so the executor can display it
             username = None
@@ -8011,74 +9205,100 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 permission_mode=body.permission_mode,
             )
             if not result.get("success"):
-                raise HTTPException(status_code=400, detail=result.get("message", "Failed"))
+                raise HTTPException(
+                    status_code=400, detail=result.get("message", "Failed")
+                )
             return result
-    
+
         @app.get("/api/v1/scheduler/jobs/{job_id}")
         async def get_scheduler_job(job_id: str, request: Request):
             await _require_scheduler_auth(request)
             result = _get_scheduler().get_job(job_id)
             if not result.get("success"):
-                raise HTTPException(status_code=404, detail=result.get("message", "Not found"))
+                raise HTTPException(
+                    status_code=404, detail=result.get("message", "Not found")
+                )
             return result
-    
+
         @app.put("/api/v1/scheduler/jobs/{job_id}")
-        async def update_scheduler_job(job_id: str, body: UpdateJobRequest, request: Request):
+        async def update_scheduler_job(
+            job_id: str, body: UpdateJobRequest, request: Request
+        ):
             await _require_scheduler_auth(request)
             client_ip = request.client.host if request.client else "unknown"
-            if not rate_limiter.check(client_ip, "scheduler_write", max_requests=20, window=60):
+            if not rate_limiter.check(
+                client_ip, "scheduler_write", max_requests=20, window=60
+            ):
                 raise HTTPException(status_code=429, detail="Rate limit exceeded")
             updates = {k: v for k, v in body.model_dump().items() if v is not None}
             if not updates:
                 raise HTTPException(status_code=400, detail="No fields to update")
             result = _get_scheduler().update_job(job_id, updates)
             if not result.get("success"):
-                raise HTTPException(status_code=404, detail=result.get("message", "Not found"))
+                raise HTTPException(
+                    status_code=404, detail=result.get("message", "Not found")
+                )
             return result
-    
+
         @app.delete("/api/v1/scheduler/jobs/{job_id}")
         async def delete_scheduler_job(job_id: str, request: Request):
             await _require_scheduler_auth(request)
             client_ip = request.client.host if request.client else "unknown"
-            if not rate_limiter.check(client_ip, "scheduler_write", max_requests=20, window=60):
+            if not rate_limiter.check(
+                client_ip, "scheduler_write", max_requests=20, window=60
+            ):
                 raise HTTPException(status_code=429, detail="Rate limit exceeded")
             result = _get_scheduler().delete_job(job_id)
             if not result.get("success"):
-                raise HTTPException(status_code=404, detail=result.get("message", "Not found"))
+                raise HTTPException(
+                    status_code=404, detail=result.get("message", "Not found")
+                )
             return result
-    
+
         @app.post("/api/v1/scheduler/jobs/{job_id}/pause")
         async def pause_scheduler_job(job_id: str, request: Request):
             await _require_scheduler_auth(request)
             client_ip = request.client.host if request.client else "unknown"
-            if not rate_limiter.check(client_ip, "scheduler_write", max_requests=20, window=60):
+            if not rate_limiter.check(
+                client_ip, "scheduler_write", max_requests=20, window=60
+            ):
                 raise HTTPException(status_code=429, detail="Rate limit exceeded")
             result = _get_scheduler().pause_job(job_id)
             if not result.get("success"):
-                raise HTTPException(status_code=404, detail=result.get("message", "Not found"))
+                raise HTTPException(
+                    status_code=404, detail=result.get("message", "Not found")
+                )
             return result
-    
+
         @app.post("/api/v1/scheduler/jobs/{job_id}/resume")
         async def resume_scheduler_job(job_id: str, request: Request):
             await _require_scheduler_auth(request)
             client_ip = request.client.host if request.client else "unknown"
-            if not rate_limiter.check(client_ip, "scheduler_write", max_requests=20, window=60):
+            if not rate_limiter.check(
+                client_ip, "scheduler_write", max_requests=20, window=60
+            ):
                 raise HTTPException(status_code=429, detail="Rate limit exceeded")
             result = _get_scheduler().resume_job(job_id)
             if not result.get("success"):
-                raise HTTPException(status_code=404, detail=result.get("message", "Not found"))
+                raise HTTPException(
+                    status_code=404, detail=result.get("message", "Not found")
+                )
             return result
-    
+
         @app.post("/api/v1/scheduler/jobs/{job_id}/run")
         async def run_scheduler_job_now(job_id: str, request: Request):
             user = await _require_scheduler_auth(request)
             client_ip = request.client.host if request.client else "unknown"
-            if not rate_limiter.check(client_ip, "scheduler_write", max_requests=20, window=60):
+            if not rate_limiter.check(
+                client_ip, "scheduler_write", max_requests=20, window=60
+            ):
                 raise HTTPException(status_code=429, detail="Rate limit exceeded")
 
             result = _get_scheduler().get_job(job_id)
             if not result.get("success"):
-                raise HTTPException(status_code=404, detail=result.get("message", "Not found"))
+                raise HTTPException(
+                    status_code=404, detail=result.get("message", "Not found")
+                )
             job = result["result"]
 
             # Mark last_run immediately so the scheduler doesn't double-fire
@@ -8128,8 +9348,16 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             loop.run_in_executor(
                 bg_executor,
                 _run_background_task,
-                task_id, session_id, prompt, agent, runtime, model,
-                channel, identity, timeout, job.get("notify", False),
+                task_id,
+                session_id,
+                prompt,
+                agent,
+                runtime,
+                model,
+                channel,
+                identity,
+                timeout,
+                job.get("notify", False),
                 perm_mode,
             )
 
@@ -8145,16 +9373,18 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             }
 
         @app.get("/api/v1/scheduler/jobs/{job_id}/results")
-        async def get_scheduler_job_results(job_id: str, request: Request, limit: int = 20):
+        async def get_scheduler_job_results(
+            job_id: str, request: Request, limit: int = 20
+        ):
             await _require_scheduler_auth(request)
             limit = min(max(1, limit), 100)
             return _get_scheduler().get_results(job_id, limit=limit)
-    
+
         @app.get("/api/v1/scheduler/jobs/{job_id}/logs")
         async def get_scheduler_job_logs(job_id: str, request: Request):
             await _require_scheduler_auth(request)
             return _get_scheduler().get_logs(job_id)
-    
+
     # --- TODO list API ---------------------------------------------------
     def _resolve_todo_dir(agent_name: str | None) -> Path | None:
         """Resolve the TODOs/ folder for a given agent.
@@ -8164,6 +9394,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         the legacy TODOs.md flat file (returned as None to signal legacy mode).
         """
         import json as _json
+
         default_dir = Path("/opt/fosterbot-home/TODOs")
         default_md = Path("/opt/fosterbot-home/TODOs.md")
 
@@ -8218,6 +9449,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         or None if the file cannot be parsed.
         """
         import re as _re
+
         try:
             lines = todo_path.read_text().splitlines()
         except Exception:
@@ -8234,7 +9466,11 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             elif line.startswith("LABELS:"):
                 raw = line[7:].strip()
                 # Parse {LABEL1},{LABEL2} format
-                labels = [l.strip().strip("{}") for l in _re.split(r"[,\s]+", raw) if l.strip().strip("{}")]
+                labels = [
+                    l.strip().strip("{}")
+                    for l in _re.split(r"[,\s]+", raw)
+                    if l.strip().strip("{}")
+                ]
                 detail_start = idx + 1
             else:
                 break  # headers must be contiguous at top of file
@@ -8283,33 +9519,40 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             return []
         todos = []
         import re
+
         current_todo = None
         in_details = False
         details_lines = []
-        
+
         with open(todo_file) as f:
             for line in f:
                 raw_line = line.rstrip("\n")
                 stripped = raw_line.strip()
-                
+
                 # Check for TODO line
                 todo_line = stripped
                 if todo_line.startswith("- "):
                     todo_line = todo_line[2:]
-                
-                if todo_line.startswith("[ ]") or todo_line.startswith("[X]") or todo_line.startswith("[x]"):
+
+                if (
+                    todo_line.startswith("[ ]")
+                    or todo_line.startswith("[X]")
+                    or todo_line.startswith("[x]")
+                ):
                     # Save previous todo with details if exists
                     if current_todo:
                         if details_lines:
-                            current_todo["details"] = '\n'.join(details_lines).strip()
+                            current_todo["details"] = "\n".join(details_lines).strip()
                         todos.append(current_todo)
                         if len(todos) >= limit:
                             current_todo = None
                             break
-                    
+
                     # Only keep active (non-completed) todos for this list
-                    completed = todo_line.startswith("[X]") or todo_line.startswith("[x]")
-                    
+                    completed = todo_line.startswith("[X]") or todo_line.startswith(
+                        "[x]"
+                    )
+
                     if not completed:
                         content = re.sub(r"^\[.\]\s+", "", todo_line)
                         due = None
@@ -8319,11 +9562,19 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                         labels = []
                         label_match = re.search(r"\{([^}]+)\}", content)
                         if label_match:
-                            labels = [l.strip() for l in label_match.group(1).split(",")]
+                            labels = [
+                                l.strip() for l in label_match.group(1).split(",")
+                            ]
                         # Remove due and label markers from description
                         content = re.sub(r"\s*\(due [^)]+\)", "", content)
                         content = re.sub(r"\s*\{[^}]+\}", "", content).strip()
-                        current_todo = {"description": content, "due": due, "labels": labels, "notes": [], "details": ""}
+                        current_todo = {
+                            "description": content,
+                            "due": due,
+                            "labels": labels,
+                            "notes": [],
+                            "details": "",
+                        }
                         in_details = False
                         details_lines = []
                     else:
@@ -8331,24 +9582,29 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                         current_todo = None
                         in_details = False
                         details_lines = []
-                        
+
                 elif current_todo:
                     # Check for Details section (inline bold format: **Details**)
                     if stripped == "**Details**":
                         in_details = True
                         details_lines = []
-                    elif in_details and stripped and not stripped.startswith("## ") and not stripped.startswith("- ["):
+                    elif (
+                        in_details
+                        and stripped
+                        and not stripped.startswith("## ")
+                        and not stripped.startswith("- [")
+                    ):
                         # Collect details until we hit a top-level section (## ) or a todo item
                         details_lines.append(raw_line)
                     elif raw_line.startswith("    ") and not in_details:
                         # This is a note for the current TODO
                         current_todo["notes"].append(raw_line.strip())
-        
+
         if current_todo:
             if details_lines:
-                current_todo["details"] = '\n'.join(details_lines).strip()
+                current_todo["details"] = "\n".join(details_lines).strip()
             todos.append(current_todo)
-            
+
         return todos[:limit]
 
     @app.get("/api/v1/todos")
@@ -8362,7 +9618,12 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         limit = min(max(1, limit), 50)
         todo_path = _resolve_todo_file(agent)
         todos = _parse_todos_from_md(todo_path, limit)
-        return {"todos": todos, "count": len(todos), "agent": agent or "default", "file": str(todo_path)}
+        return {
+            "todos": todos,
+            "count": len(todos),
+            "agent": agent or "default",
+            "file": str(todo_path),
+        }
 
     @app.post("/api/v1/todos/{todo_title}/complete")
     async def complete_todo(request: Request, todo_title: str):
@@ -8390,12 +9651,17 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         # Find the file (exact match or partial)
         match = None
         for entry in active_dir.iterdir():
-            if entry.is_file() and (entry.name == todo_title or todo_title in entry.name):
+            if entry.is_file() and (
+                entry.name == todo_title or todo_title in entry.name
+            ):
                 match = entry
                 break
 
         if not match:
-            return {"success": False, "error": f"TODO '{todo_title}' not found in ACTIVE/"}
+            return {
+                "success": False,
+                "error": f"TODO '{todo_title}' not found in ACTIVE/",
+            }
 
         dest = completed_dir / match.name
         match.rename(dest)
@@ -8410,7 +9676,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             x_user_identity=request.headers.get("x-user-identity"),
             x_auth_channel=request.headers.get("x-auth-channel"),
         )
-        
+
         try:
             body = await request.json()
             details = body.get("details", "")
@@ -8423,11 +9689,16 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 active_dir = todo_path / "ACTIVE"
                 match = None
                 for entry in active_dir.iterdir():
-                    if entry.is_file() and (entry.name == todo_title or todo_title in entry.name):
+                    if entry.is_file() and (
+                        entry.name == todo_title or todo_title in entry.name
+                    ):
                         match = entry
                         break
                 if not match:
-                    return {"success": False, "error": f"TODO '{todo_title}' not found in ACTIVE/"}
+                    return {
+                        "success": False,
+                        "error": f"TODO '{todo_title}' not found in ACTIVE/",
+                    }
 
                 # Preserve existing DUE:/LABELS: header lines
                 existing = match.read_text().splitlines()
@@ -8448,56 +9719,66 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             todo_file = todo_path
             if not todo_file.exists():
                 return {"success": False, "error": "TODO file not found"}
-            
+
             content = todo_file.read_text()
-            lines = content.split('\n')
-            
+            lines = content.split("\n")
+
             updated_lines = []
             i = 0
             while i < len(lines):
                 line = lines[i]
                 updated_lines.append(line)
-                
+
                 stripped = line.strip()
-                if stripped.startswith('- '):
+                if stripped.startswith("- "):
                     stripped = stripped[2:]
-                
-                if (stripped.startswith('[ ]') or stripped.startswith('[X]')) and todo_title in line:
+
+                if (
+                    stripped.startswith("[ ]") or stripped.startswith("[X]")
+                ) and todo_title in line:
                     i += 1
-                    
-                    while i < len(lines) and lines[i].startswith('    '):
+
+                    while i < len(lines) and lines[i].startswith("    "):
                         updated_lines.append(lines[i])
                         i += 1
-                    
-                    if i < len(lines) and (lines[i].strip() == '### Details' or lines[i].strip() == '## Details'):
+
+                    if i < len(lines) and (
+                        lines[i].strip() == "### Details"
+                        or lines[i].strip() == "## Details"
+                    ):
                         i += 1
-                        while i < len(lines) and lines[i] and not lines[i].startswith('#'):
+                        while (
+                            i < len(lines) and lines[i] and not lines[i].startswith("#")
+                        ):
                             i += 1
-                    
+
                     if details and details.strip():
-                        updated_lines.append('')
-                        updated_lines.append('### Details')
-                        updated_lines.append('')
-                        updated_lines.extend(details.split('\n'))
-                    
+                        updated_lines.append("")
+                        updated_lines.append("### Details")
+                        updated_lines.append("")
+                        updated_lines.extend(details.split("\n"))
+
                     continue
-                
+
                 i += 1
-            
-            todo_file.write_text('\n'.join(updated_lines))
+
+            todo_file.write_text("\n".join(updated_lines))
             return {"success": True, "updated": True, "todo": todo_title}
-        
+
         except Exception as e:
             import traceback
+
             traceback.print_exc()
             return {"success": False, "error": str(e)}
-    
+
     # --- Wee Canvas ───────────────────────────────────────────────────────────
     # In-memory canvas session state: session_id → {components, connections, action_watchers, pending_actions, name, created_at, last_activity}
     _canvas_sessions: dict = {}
     _CANVAS_PERSIST_DIR = Path(SCRIPT_BASE_DIR) / ".canvas-sessions"
     _CANVAS_PERSIST_DIR.mkdir(parents=True, exist_ok=True)
-    _CANVAS_SESSION_TIMEOUT = int(os.environ.get("CANVAS_SESSION_TIMEOUT_MINUTES", "30")) * 60
+    _CANVAS_SESSION_TIMEOUT = (
+        int(os.environ.get("CANVAS_SESSION_TIMEOUT_MINUTES", "30")) * 60
+    )
     _canvas_cleanup_started = False
 
     def _get_canvas_session(session_id: str) -> dict:
@@ -8566,7 +9847,10 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 now = time.time()
                 to_expire = []
                 for sid, sess in list(_canvas_sessions.items()):
-                    if not sess["connections"] and (now - sess["last_activity"]) > _CANVAS_SESSION_TIMEOUT:
+                    if (
+                        not sess["connections"]
+                        and (now - sess["last_activity"]) > _CANVAS_SESSION_TIMEOUT
+                    ):
                         to_expire.append(sid)
                 for sid in to_expire:
                     sess = _canvas_sessions.pop(sid, None)
@@ -8591,9 +9875,19 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 if comp.get("id") == node_id:
                     comp.update(changes)
                     return True
-                for key in ("children", "items", "columns", "steps", "rows", "metrics", "fields"):
+                for key in (
+                    "children",
+                    "items",
+                    "columns",
+                    "steps",
+                    "rows",
+                    "metrics",
+                    "fields",
+                ):
                     children = comp.get(key, [])
-                    if isinstance(children, list) and _canvas_apply_update(children, node_id, changes):
+                    if isinstance(children, list) and _canvas_apply_update(
+                        children, node_id, changes
+                    ):
                         return True
         return False
 
@@ -8612,11 +9906,15 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         # Restore current state for new connections
         if sess["components"]:
             try:
-                await websocket.send_text(json.dumps({
-                    "type": "restore",
-                    "components": sess["components"],
-                    "session_id": session,
-                }))
+                await websocket.send_text(
+                    json.dumps(
+                        {
+                            "type": "restore",
+                            "components": sess["components"],
+                            "session_id": session,
+                        }
+                    )
+                )
             except Exception:
                 pass
 
@@ -8633,28 +9931,40 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
 
                 if msg_type == "render":
                     sess["components"] = data.get("components", [])
-                    await _canvas_broadcast(sess, websocket, {
-                        "type": "render",
-                        "components": sess["components"],
-                        "session_id": session,
-                    })
+                    await _canvas_broadcast(
+                        sess,
+                        websocket,
+                        {
+                            "type": "render",
+                            "components": sess["components"],
+                            "session_id": session,
+                        },
+                    )
 
                 elif msg_type == "update":
                     node_id = data.get("node_id")
                     changes = data.get("changes", {})
                     _canvas_apply_update(sess["components"], node_id, changes)
-                    await _canvas_broadcast(sess, websocket, {
-                        "type": "update",
-                        "node_id": node_id,
-                        "changes": changes,
-                    })
+                    await _canvas_broadcast(
+                        sess,
+                        websocket,
+                        {
+                            "type": "update",
+                            "node_id": node_id,
+                            "changes": changes,
+                        },
+                    )
 
                 elif msg_type == "clear":
                     sess["components"] = []
-                    await _canvas_broadcast(sess, websocket, {
-                        "type": "clear",
-                        "session_id": session,
-                    })
+                    await _canvas_broadcast(
+                        sess,
+                        websocket,
+                        {
+                            "type": "clear",
+                            "session_id": session,
+                        },
+                    )
 
                 elif msg_type == "action":
                     sess["pending_actions"].append(data)
@@ -8690,27 +10000,31 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         """Return list of active and closed canvas sessions."""
         result = []
         for sid, sess in _canvas_sessions.items():
-            result.append({
-                "session_id": sid,
-                "name": sess.get("name"),
-                "component_count": len(sess["components"]),
-                "connection_count": len(sess["connections"]),
-                "created_at": sess.get("created_at"),
-                "last_activity": sess.get("last_activity"),
-                "status": "active",
-            })
+            result.append(
+                {
+                    "session_id": sid,
+                    "name": sess.get("name"),
+                    "component_count": len(sess["components"]),
+                    "connection_count": len(sess["connections"]),
+                    "created_at": sess.get("created_at"),
+                    "last_activity": sess.get("last_activity"),
+                    "status": "active",
+                }
+            )
         # Include persisted (closed) sessions from disk
         for data in _canvas_list_persisted():
-            result.append({
-                "session_id": data["session_id"],
-                "name": data.get("name"),
-                "component_count": len(data.get("components", [])),
-                "connection_count": 0,
-                "created_at": data.get("created_at"),
-                "last_activity": data.get("last_activity"),
-                "closed_at": data.get("closed_at"),
-                "status": "closed",
-            })
+            result.append(
+                {
+                    "session_id": data["session_id"],
+                    "name": data.get("name"),
+                    "component_count": len(data.get("components", [])),
+                    "connection_count": 0,
+                    "created_at": data.get("created_at"),
+                    "last_activity": data.get("last_activity"),
+                    "closed_at": data.get("closed_at"),
+                    "status": "closed",
+                }
+            )
         return {"sessions": result}
 
     @app.patch("/api/v1/canvas/sessions/{session_id}/name")
@@ -8737,7 +10051,11 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         data = _canvas_load_from_disk(session_id)
         if not data:
             if session_id in _canvas_sessions:
-                return {"success": True, "session_id": session_id, "status": "already_active"}
+                return {
+                    "success": True,
+                    "session_id": session_id,
+                    "status": "already_active",
+                }
             raise HTTPException(status_code=404, detail="Session not found on disk")
         # Re-create in-memory session
         _canvas_sessions[session_id] = {
@@ -8750,7 +10068,12 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             "last_activity": time.time(),
         }
         _canvas_delete_persisted(session_id)
-        return {"success": True, "session_id": session_id, "name": data.get("name"), "status": "restored"}
+        return {
+            "success": True,
+            "session_id": session_id,
+            "name": data.get("name"),
+            "status": "restored",
+        }
 
     @app.post("/api/v1/canvas/sessions/{session_id}/close")
     async def close_canvas_session(session_id: str):
@@ -8783,8 +10106,13 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
     # ── Skills Panel API ──────────────────────────────────────────────────────
 
     from skill_manager import (
-        scan_skills, get_skill, get_origin, set_origin, delete_origin,
-        check_update, apply_update,
+        scan_skills,
+        get_skill,
+        get_origin,
+        set_origin,
+        delete_origin,
+        check_update,
+        apply_update,
     )
 
     @app.get("/api/v1/skills")
@@ -8798,7 +10126,9 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         """Return detailed info for a single skill."""
         skill = get_skill(skill_key)
         if not skill:
-            raise HTTPException(status_code=404, detail=f"Skill '{skill_key}' not found")
+            raise HTTPException(
+                status_code=404, detail=f"Skill '{skill_key}' not found"
+            )
         return skill
 
     @app.put("/api/v1/skills/{skill_key:path}/origin")
@@ -8814,7 +10144,10 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         # Validate required fields
         origin_type = body.get("origin_type", "")
         if origin_type not in ("git_repo", "website", "local", "unknown"):
-            raise HTTPException(status_code=400, detail="origin_type must be one of: git_repo, website, local, unknown")
+            raise HTTPException(
+                status_code=400,
+                detail="origin_type must be one of: git_repo, website, local, unknown",
+            )
         result = set_origin(skill_key, body)
         return {"success": True, "origin": result}
 
@@ -8829,7 +10162,9 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         )
         if delete_origin(skill_key):
             return {"success": True}
-        raise HTTPException(status_code=404, detail="No origin metadata found for this skill")
+        raise HTTPException(
+            status_code=404, detail="No origin metadata found for this skill"
+        )
 
     @app.post("/api/v1/skills/{skill_key:path}/check-update")
     async def check_skill_update(skill_key: str, request: Request):
@@ -8859,7 +10194,9 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
 
         origin = get_origin(skill_key)
         if not origin:
-            raise HTTPException(status_code=400, detail="No origin metadata — cannot update")
+            raise HTTPException(
+                status_code=400, detail="No origin metadata — cannot update"
+            )
 
         origin_type = origin.get("origin_type", "")
         if origin_type == "website":
@@ -8938,9 +10275,6 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             result = apply_update(skill_key)
             return {"success": result.get("success", False), "result": result}
 
-
-
-
     # --- Session Permissions API ---
     @app.get("/api/v1/sessions/{session_id}/permissions")
     async def get_session_permissions(session_id: str, request: Request):
@@ -8958,13 +10292,16 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         perms = data.get("permissions")
         agent_name = data.get("agent", get_default_agent())
         agent_cfg = session_mgr.AGENTS.get(agent_name, {})
-        agent_default_perms = agent_cfg.get("permissions", {
-            "mode": "restricted",
-            "directories": {"allow_read": [], "allow_write": [], "deny": []},
-            "tools": {"allow": ["*"], "deny": []},
-            "network": {"allow_urls": ["*"], "deny_urls": []},
-            "mcp": {"allow": [], "deny": ["*"]},
-        })
+        agent_default_perms = agent_cfg.get(
+            "permissions",
+            {
+                "mode": "restricted",
+                "directories": {"allow_read": [], "allow_write": [], "deny": []},
+                "tools": {"allow": ["*"], "deny": []},
+                "network": {"allow_urls": ["*"], "deny_urls": []},
+                "mcp": {"allow": [], "deny": ["*"]},
+            },
+        )
 
         return {
             "session_id": session_id,
@@ -8994,20 +10331,30 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             # If just mode is provided, build full permissions from agent default + new mode
             new_mode = body["mode"]
             if new_mode not in valid_modes:
-                raise HTTPException(status_code=400, detail=f"Invalid mode. Must be one of: {valid_modes}")
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Invalid mode. Must be one of: {valid_modes}",
+                )
 
             # Get current permissions and update mode
             current_perms = data.get("permissions") or {}
             if not current_perms:
                 agent_name = data.get("agent", get_default_agent())
                 agent_cfg = session_mgr.AGENTS.get(agent_name, {})
-                current_perms = agent_cfg.get("permissions", {
-                    "mode": "restricted",
-                    "directories": {"allow_read": [], "allow_write": [], "deny": []},
-                    "tools": {"allow": ["*"], "deny": []},
-                    "network": {"allow_urls": ["*"], "deny_urls": []},
-                    "mcp": {"allow": [], "deny": ["*"]},
-                })
+                current_perms = agent_cfg.get(
+                    "permissions",
+                    {
+                        "mode": "restricted",
+                        "directories": {
+                            "allow_read": [],
+                            "allow_write": [],
+                            "deny": [],
+                        },
+                        "tools": {"allow": ["*"], "deny": []},
+                        "network": {"allow_urls": ["*"], "deny_urls": []},
+                        "mcp": {"allow": [], "deny": ["*"]},
+                    },
+                )
             current_perms["mode"] = new_mode
             session_mgr.update_session_field(session_id, "permissions", current_perms)
             return {"updated": True, "permissions": current_perms}
@@ -9016,14 +10363,23 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             # Full permissions object provided
             perms = body["permissions"]
             if not isinstance(perms, dict) or "mode" not in perms:
-                raise HTTPException(status_code=400, detail="permissions must be an object with at least a 'mode' key")
+                raise HTTPException(
+                    status_code=400,
+                    detail="permissions must be an object with at least a 'mode' key",
+                )
             if perms["mode"] not in valid_modes:
-                raise HTTPException(status_code=400, detail=f"Invalid mode. Must be one of: {valid_modes}")
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Invalid mode. Must be one of: {valid_modes}",
+                )
             session_mgr.update_session_field(session_id, "permissions", perms)
             return {"updated": True, "permissions": perms}
 
         else:
-            raise HTTPException(status_code=400, detail="Request body must include 'mode' or 'permissions'")
+            raise HTTPException(
+                status_code=400,
+                detail="Request body must include 'mode' or 'permissions'",
+            )
 
     @app.get("/api/v1/permissions/templates")
     async def get_permission_templates(request: Request):
@@ -9057,8 +10413,6 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             ]
         }
 
-
-
     # --- .env File Editor API ---
     _env_file_path = Path(SCRIPT_BASE_DIR) / ".env"
 
@@ -9073,7 +10427,11 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         )
         try:
             content = _env_file_path.read_text() if _env_file_path.exists() else ""
-            return {"content": content, "path": str(_env_file_path), "exists": _env_file_path.exists()}
+            return {
+                "content": content,
+                "path": str(_env_file_path),
+                "exists": _env_file_path.exists(),
+            }
         except Exception as e:
             raise HTTPException(status_code=500, detail=f"Failed to read .env: {e}")
 
@@ -9098,7 +10456,11 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 shutil.copy2(_env_file_path, backup_path)
 
             _env_file_path.write_text(content)
-            return {"saved": True, "path": str(_env_file_path), "warning": "Changes require a service restart to take effect."}
+            return {
+                "saved": True,
+                "path": str(_env_file_path),
+                "warning": "Changes require a service restart to take effect.",
+            }
         except Exception as e:
             raise HTTPException(status_code=500, detail=f"Failed to save .env: {e}")
 
@@ -9112,6 +10474,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             x_auth_channel=request.headers.get("x-auth-channel"),
         )
         import subprocess
+
         services = [
             "agent-manager-api-dev.service",
             "task-scheduler-executor-dev.service",
@@ -9123,12 +10486,21 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             try:
                 proc = subprocess.run(
                     ["systemctl", "restart", svc],
-                    capture_output=True, text=True, timeout=30
+                    capture_output=True,
+                    text=True,
+                    timeout=30,
                 )
-                results[svc] = "restarted" if proc.returncode == 0 else f"failed: {proc.stderr.strip()}"
+                results[svc] = (
+                    "restarted"
+                    if proc.returncode == 0
+                    else f"failed: {proc.stderr.strip()}"
+                )
             except Exception as e:
                 results[svc] = f"error: {e}"
-        return {"results": results, "note": "Services are restarting. The API will briefly disconnect."}
+        return {
+            "results": results,
+            "note": "Services are restarting. The API will briefly disconnect.",
+        }
 
     # --- Settings & Logs API ──────────────────────────────────────────────────
 
@@ -9151,7 +10523,10 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         except json.JSONDecodeError as exc:
             return JSONResponse(
                 status_code=200,
-                content={"_raw": _agents_json_path.read_text(), "_parse_error": str(exc)},
+                content={
+                    "_raw": _agents_json_path.read_text(),
+                    "_parse_error": str(exc),
+                },
             )
 
     @app.put("/api/v1/agents-config")
@@ -9169,20 +10544,29 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         except json.JSONDecodeError as exc:
             raise HTTPException(status_code=400, detail=f"Invalid JSON: {exc}")
         if not isinstance(data, dict) or "agents" not in data:
-            raise HTTPException(status_code=400, detail="Payload must have an 'agents' key")
+            raise HTTPException(
+                status_code=400, detail="Payload must have an 'agents' key"
+            )
         if not isinstance(data["agents"], list):
             raise HTTPException(status_code=400, detail="'agents' must be an array")
         for idx, ag in enumerate(data["agents"]):
             if not isinstance(ag, dict):
-                raise HTTPException(status_code=400, detail=f"agents[{idx}] must be an object")
+                raise HTTPException(
+                    status_code=400, detail=f"agents[{idx}] must be an object"
+                )
             if "name" not in ag or "path" not in ag:
-                raise HTTPException(status_code=400, detail=f"agents[{idx}] requires 'name' and 'path'")
+                raise HTTPException(
+                    status_code=400, detail=f"agents[{idx}] requires 'name' and 'path'"
+                )
         # Backup existing file
         backup = _agents_json_path.with_suffix(".json.bak")
         if _agents_json_path.exists():
             shutil.copy2(str(_agents_json_path), str(backup))
         _agents_json_path.write_text(json.dumps(data, indent=2) + "\n")
-        print(f"[API] agents.json updated by {auth.get('identity', 'unknown')}", file=sys.stderr)
+        print(
+            f"[API] agents.json updated by {auth.get('identity', 'unknown')}",
+            file=sys.stderr,
+        )
         return {"status": "saved", "agent_count": len(data["agents"])}
 
     @app.post("/api/v1/reload-agents")
@@ -9198,8 +10582,14 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             fresh_agents = session_mgr._load_agents_config()
             session_mgr.AGENTS = fresh_agents
             count = len(fresh_agents)
-            print(f"[API] agents.json hot-reloaded by {auth.get('identity', 'unknown')} - {count} agents", file=sys.stderr)
-            return {"status": "reloaded", "message": f"Loaded {count} agent(s) from disk."}
+            print(
+                f"[API] agents.json hot-reloaded by {auth.get('identity', 'unknown')} - {count} agents",
+                file=sys.stderr,
+            )
+            return {
+                "status": "reloaded",
+                "message": f"Loaded {count} agent(s) from disk.",
+            }
         except Exception as exc:
             print(f"[API] Failed to hot-reload agents.json: {exc}", file=sys.stderr)
             raise HTTPException(status_code=500, detail=f"Reload failed: {exc}")
@@ -9226,8 +10616,20 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             "task-scheduler-executor-dev",
         }
         if service not in allowed_services:
-            raise HTTPException(status_code=400, detail=f"Service not allowed. Choose from: {', '.join(sorted(allowed_services))}")
-        cmd = ["journalctl", "-u", service, "--no-pager", "-n", str(lines), "-o", "short-iso"]
+            raise HTTPException(
+                status_code=400,
+                detail=f"Service not allowed. Choose from: {', '.join(sorted(allowed_services))}",
+            )
+        cmd = [
+            "journalctl",
+            "-u",
+            service,
+            "--no-pager",
+            "-n",
+            str(lines),
+            "-o",
+            "short-iso",
+        ]
         if since:
             cmd += ["--since", since]
         if search:
@@ -9238,7 +10640,10 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 lambda: subprocess.run(cmd, capture_output=True, text=True, timeout=15),
             )
             raw = proc.stdout or ""
-            return {"lines": raw.strip().split("\n") if raw.strip() else [], "service": service}
+            return {
+                "lines": raw.strip().split("\n") if raw.strip() else [],
+                "service": service,
+            }
         except subprocess.TimeoutExpired:
             raise HTTPException(status_code=504, detail="journalctl timed out")
         except Exception as exc:
@@ -9259,7 +10664,9 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 raise HTTPException(status_code=401, detail="Invalid shared key")
         elif token.startswith("session_"):
             if not auth_mgr.validate_session_token(token):
-                raise HTTPException(status_code=401, detail="Invalid or expired session token")
+                raise HTTPException(
+                    status_code=401, detail="Invalid or expired session token"
+                )
         else:
             raise HTTPException(status_code=401, detail="Unrecognized token type")
 
@@ -9274,7 +10681,15 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
 
         async def _event_generator():
             proc = await asyncio.create_subprocess_exec(
-                "journalctl", "-u", service, "-f", "--no-pager", "-o", "short-iso", "-n", "0",
+                "journalctl",
+                "-u",
+                service,
+                "-f",
+                "--no-pager",
+                "-o",
+                "short-iso",
+                "-n",
+                "0",
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.DEVNULL,
             )
@@ -9283,7 +10698,9 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                     if await request.is_disconnected():
                         break
                     try:
-                        line = await asyncio.wait_for(proc.stdout.readline(), timeout=30)
+                        line = await asyncio.wait_for(
+                            proc.stdout.readline(), timeout=30
+                        )
                         if line:
                             text = line.decode("utf-8", errors="replace").rstrip()
                             yield f"data: {json.dumps({'line': text})}\n\n"
@@ -9312,7 +10729,9 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
     # --- Static WebUI — MUST BE LAST ---
     _webui_dist = Path(__file__).parent / "webui" / "dist"
     if _webui_dist.exists():
-        app.mount("/ui", StaticFiles(directory=str(_webui_dist), html=True), name="webui")
+        app.mount(
+            "/ui", StaticFiles(directory=str(_webui_dist), html=True), name="webui"
+        )
 
     _static_dir = Path(__file__).parent / "static"
     if _static_dir.exists():
@@ -9334,7 +10753,9 @@ def start_api_server():
     import uvicorn
 
     app = create_api_app()
-    port = int(os.environ.get("API_PORT", "8001"))  # DEV: default 8001 to avoid collision with prod
+    port = int(
+        os.environ.get("API_PORT", "8001")
+    )  # DEV: default 8001 to avoid collision with prod
     host = os.environ.get("API_HOST", "127.0.0.1")
 
     # SSL support — set SSL_CERTFILE and SSL_KEYFILE env vars to enable HTTPS
@@ -9343,7 +10764,12 @@ def start_api_server():
     ssl_keyfile = os.environ.get("SSL_KEYFILE")
     ssl_kwargs = {}
     proto = "http"
-    if ssl_certfile and ssl_keyfile and os.path.isfile(ssl_certfile) and os.path.isfile(ssl_keyfile):
+    if (
+        ssl_certfile
+        and ssl_keyfile
+        and os.path.isfile(ssl_certfile)
+        and os.path.isfile(ssl_keyfile)
+    ):
         # Only enable HTTPS when not in DEV, unless FORCE_SSL is explicitly set.
         app_env = os.environ.get("APP_ENV", "").upper()
         force_ssl = os.environ.get("FORCE_SSL", "") in ("1", "true", "True", "TRUE")
@@ -9351,13 +10777,17 @@ def start_api_server():
             ssl_kwargs = {"ssl_certfile": ssl_certfile, "ssl_keyfile": ssl_keyfile}
             proto = "https"
         else:
-            print("[API] SSL cert/key found but APP_ENV=DEV — serving HTTP for development. Set FORCE_SSL=1 to force HTTPS.", file=sys.stderr)
+            print(
+                "[API] SSL cert/key found but APP_ENV=DEV — serving HTTP for development. Set FORCE_SSL=1 to force HTTPS.",
+                file=sys.stderr,
+            )
 
     # Support comma-separated hosts (e.g. "127.0.0.1,100.x.x.x" for Tailscale + localhost).
     # When multiple hosts are specified, run each in a background thread and block on the last.
     hosts = [h.strip() for h in host.split(",") if h.strip()]
     if len(hosts) > 1:
         import threading
+
         threads = []
         for h in hosts[:-1]:
             print(f"[API] Listening on {proto}://{h}:{port}", file=sys.stderr)
@@ -9491,7 +10921,9 @@ Examples:
         args.config_file = args.config_file_positional
 
     # Initialize manager
-    manager = SessionManager(args.config_file, app_env=os.environ.get("APP_ENV", "PROD").upper())
+    manager = SessionManager(
+        args.config_file, app_env=os.environ.get("APP_ENV", "PROD").upper()
+    )
 
     # Apply runtime setting first if provided (so list commands use the correct runtime)
     if args.runtime:
@@ -9535,7 +10967,6 @@ Examples:
     # Execute the main prompt
     output = manager.execute(args.prompt, args.session_id)
     print(output)
-
 
 
 if __name__ == "__main__":
