@@ -348,23 +348,6 @@
         </div>
       </div>
     </aside>
-    <!-- Agents slide-over panel (right side, stacked below canvas tab) -->
-    <aside id="agents-panel" class="agents-panel agents-hidden">
-      <div class="agents-edge-tab" id="agents-edge-tab" title="Toggle Agents">🤖</div>
-      <div class="agents-inner">
-        <div class="agents-header">
-          <h2 class="agents-title">🤖 Always-on Agents</h2>
-          <div style="display:flex;gap:6px;align-items:center;">
-            <span id="aoa-status-dot" class="aoa-status-dot" title="AoA service status"></span>
-            <button id="btn-agents-close" class="btn-icon" title="Close agents panel">✕</button>
-          </div>
-        </div>
-        <div id="aoa-summary" class="aoa-summary"></div>
-        <div id="aoa-agent-cards" class="aoa-agent-cards">
-          <div class="aoa-loading">⏳ Loading agents…</div>
-        </div>
-      </div>
-    </aside>
 
     <!-- Mobile bottom tab bar (hidden on desktop via CSS) -->
     <nav id="mobile-tab-bar" class="mobile-tab-bar" role="tablist" aria-label="Panel switcher">
@@ -443,24 +426,6 @@
             <div class="asf-field">
               <label class="asf-label" for="asf-model">Model</label>
               <input id="asf-model" type="text" class="glass-input asf-input asf-mono" placeholder="e.g. claude-sonnet-4.6" autocomplete="off" />
-            </div>
-          </div>
-        </div>
-
-        <!-- Always-on Agent Config -->
-        <div class="asf-section">
-          <div class="asf-section-title">🤖 Always-on Agent (AoA)</div>
-          <div class="asf-grid">
-            <div class="asf-field asf-full">
-              <label class="asf-label" for="asf-aoa-enabled">Always-on</label>
-              <div style="display:flex;align-items:center;gap:10px;margin-top:4px;">
-                <input id="asf-aoa-enabled" type="checkbox" style="width:16px;height:16px;cursor:pointer;" />
-                <label for="asf-aoa-enabled" style="font-size:.8rem;color:var(--text-secondary);cursor:pointer;">Enable persistent agent worker (AoA)</label>
-              </div>
-            </div>
-            <div class="asf-field">
-              <label class="asf-label" for="asf-aoa-concurrency">Max Concurrent Tasks</label>
-              <input id="asf-aoa-concurrency" type="number" min="1" max="20" value="1" class="glass-input asf-input" placeholder="1" />
             </div>
           </div>
         </div>

@@ -1222,7 +1222,6 @@ class SessionManager:
                     agents[name] = {
                         "path": agent.get("path", ""),
                         "description": agent.get("description", ""),
-                        "always_on": agent.get("always_on", False),
                         "max_concurrent": agent.get("max_concurrent", 1),
                         "runtime": agent.get("runtime", "copilot"),
                         "model": agent.get("model", ""),
@@ -2125,125 +2124,10 @@ class SessionManager:
         return f"✓ Switched to **{agent}** agent\n\n{agent_info['description']}\n\nLocation: `{agent_info['path']}`"
 
 
-    # ── Always-On Agents @mention routing ─────────────────────────────────
-    _aoa_response = None  # Holds response when @mention routes to AOA
-
-    def _route_to_aoa(self, agent_name: str, prompt: str, original: str) -> Optional[str]:
-        """Check if agent_name exists in AOA config and queue the task via HTTP API.
-        Returns a confirmation string, or None if agent not in AOA."""
-        import urllib.request as _url_req
-        import urllib.error as _url_err
-        import time as _time
-
-        aoa_url = os.environ.get("AOA_API_URL", "http://127.0.0.1:9877")
-
-        # ── Check whether agent is known & enabled via AoA HTTP API ──
-        try:
-            with _url_req.urlopen(f"{aoa_url}/agents", timeout=5) as resp:
-                agents = json.loads(resp.read())
-            agent_info = next((a for a in agents if a.get("agent") == agent_name), None)
-        except Exception as exc:
-            logger.warning("AoA API unreachable (%s), falling back to normal routing", exc)
-            return None  # API down — fall through so chat still works
-
-        if not agent_info:
-            return None  # not an AOA agent — fall through to normal routing
-
-        if not agent_info.get("enabled", True):
-            return f"⚠️ Agent **@{agent_name}** is currently disabled in Always-On Agents."
-
-        # ── Parse flags from original prompt ──
-        model = "claude-haiku-4.5"
-        if "--model " in original:
-            m = re.search(r'--model\s+(\S+)', original)
-            if m:
-                model = m.group(1)
-                prompt = re.sub(r'\s*--model\s+\S+', '', prompt).strip()
-
-        priority = 0
-        if "--priority " in original:
-            m = re.search(r'--priority\s+(\d+)', original)
-            if m:
-                priority = int(m.group(1))
-                prompt = re.sub(r'\s*--priority\s+\d+', '', prompt).strip()
-
-        sync_mode = "--sync" in original
-        if sync_mode:
-            prompt = re.sub(r'\s*--sync', '', prompt).strip()
-
-        identity = self._bg_identity or "unknown"
-
-        # ── Create task via AoA HTTP API (unified queuing — no direct SQLite) ──
-        payload = json.dumps({
-            "agent": agent_name,
-            "prompt": prompt,
-            "description": prompt[:80],
-            "model": model,
-            "runtime": "copilot",
-            "priority": priority,
-            "identity": identity,
-            "channel": "chat",
-        }).encode()
-
-        try:
-            req = _url_req.Request(f"{aoa_url}/task", data=payload, method="POST")
-            req.add_header("Content-Type", "application/json")
-            with _url_req.urlopen(req, timeout=10) as resp:
-                task = json.loads(resp.read())
-        except _url_err.HTTPError as exc:
-            body = exc.read().decode(errors="replace")
-            return f"⚠️ AoA task creation failed: HTTP {exc.code} — {body[:200]}"
-        except Exception as exc:
-            return f"❌ Failed to create AoA task: {exc}"
-
-        task_id = task.get("id", "unknown")
-
-        # ── Push to Valkey queue for instant daemon pickup ──
-        try:
-            from aoa.task_queue import get_task_queue
-            _tq = get_task_queue()
-            if _tq.available:
-                _tq.push_task(agent_name, task_id, metadata={
-                    "agent": agent_name,
-                    "model": model,
-                    "runtime": "copilot",
-                    "priority": str(priority),
-                    "created_at": str(int(__import__("time").time())),
-                })
-                _tq.notify_new_task(agent_name, task_id)
-        except Exception as _vq_exc:
-            print(f"[Valkey] Queue push failed (non-fatal): {_vq_exc}", file=sys.stderr)
-
-        if sync_mode:
-            # Poll HTTP API for completion (up to 5 minutes)
-            deadline = _time.time() + 300
-            while _time.time() < deadline:
-                _time.sleep(3)
-                try:
-                    with _url_req.urlopen(f"{aoa_url}/task/{task_id}", timeout=5) as resp:
-                        t = json.loads(resp.read())
-                except Exception:
-                    continue
-                if t.get("status") in ("completed", "failed"):
-                    if t["status"] == "completed":
-                        return f"✅ **@{agent_name}** completed:\n\n{(t.get('output') or '')[:4000]}"
-                    else:
-                        return f"❌ **@{agent_name}** failed:\n\n{(t.get('error') or '')[:2000]}"
-            return f"⏱️ **@{agent_name}** task `{task_id}` is still running after 5 minutes. Check status later."
-
-        return (
-            f"📋 Task queued for **@{agent_name}**\n"
-            f"• Task ID: `{task_id}`\n"
-            f"• Model: {model}\n"
-            f"• Prompt: {prompt[:100]}{'...' if len(prompt) > 100 else ''}\n\n"
-            f"_The Always-On Agents daemon will process this shortly._"
-        )
-
     def detect_agent_delegation(self, prompt: str) -> Tuple[Optional[str], str]:
         """Detect if user is asking for a specific agent to help with something
 
         Patterns detected:
-        - "@agentname prompt" — routes to Always-On Agents task queue
         - "ask the family agent..."
         - "have the devops agent..."
         - "this is in the family agent"
@@ -2252,22 +2136,6 @@ class SessionManager:
 
         Returns: (agent_name, modified_prompt) or (None, original_prompt)
         """
-        # ── @mention detection → Always-On Agents queue ──────────────────
-        at_match = re.match(r'^@(\w+)\s+(.+)', prompt, re.DOTALL)
-        if at_match:
-            mention_agent = at_match.group(1).lower()
-            mention_prompt = at_match.group(2).strip()
-            try:
-                aoa_result = self._route_to_aoa(mention_agent, mention_prompt, prompt)
-                if aoa_result is not None:
-                    # Return a sentinel that execute() will recognise as
-                    # "already handled — just return this string".
-                    # We use agent=None so the caller skips delegation.
-                    self._aoa_response = aoa_result
-                    return None, prompt  # fall through; execute() checks _aoa_response
-            except Exception as e:
-                print(f"[AOA] @mention routing error: {e}", file=sys.stderr)
-        # ── end @mention detection ────────────────────────────────────────
 
         prompt_lower = prompt.lower()
 
@@ -3056,26 +2924,10 @@ Example skill structure:
         agent = delegation_data.get("agent", "orchestrator")
         runtime = delegation_data.get("runtime", "copilot")
 
-        # --- AoA Mirror: register delegation as running task ---
-        deleg_task_id = f"deleg_{session_id[:8]}" if session_id else None
-        if deleg_task_id and delegation_data.get("is_delegation"):
-            try:
-                _aoa_mirror_task(deleg_task_id, agent, prompt[:200], status="running")
-            except Exception as e:
-                print(f"[AoA-Mirror] delegation mirror failed: {e}", file=sys.stderr)
-
         output = self._dispatch_single_runtime(
             runtime, prompt, model, agent, session_id if runtime == "claude" else None,
             False, n8n_session_id, self.command_timeout, "text",
         )
-
-        # --- AoA Mirror: update delegation task status ---
-        if deleg_task_id and delegation_data.get("is_delegation"):
-            try:
-                final_status = "failed" if (not output or output.startswith("Error")) else "completed"
-                _aoa_update_task(deleg_task_id, final_status, output=output[:500] if output else None)
-            except Exception as e:
-                print(f"[AoA-Mirror] delegation update failed: {e}", file=sys.stderr)
 
         return output
 
@@ -3102,56 +2954,6 @@ Example skill structure:
         agent_name = agent
         agent_desc = agent_info.get("description", "No description")
         agent_path = agent_info.get("path", "")
-
-        # ── AoA inter-agent delegation context ──
-        # When the current agent is always-on, inject guidance on how to
-        # delegate tasks to other AoA agents with sync vs async semantics.
-        aoa_delegation_context = ""
-        if agent_info.get("always_on", False):
-            other_aoa = [
-                (n, i) for n, i in self.AGENTS.items()
-                if i.get("always_on", False) and n != agent_name
-            ]
-            if other_aoa:
-                agent_lines = "\n".join(
-                    f"  - **@{n}**: {i.get('description', 'No description')[:120]}"
-                    for n, i in other_aoa
-                )
-                aoa_delegation_context = f"""
-
-[AoA Inter-Agent Delegation]
-You are an Always-On Agent. You can delegate tasks to other agents using @mention syntax.
-
-Available agents:
-{agent_lines}
-
-## Delegation Modes
-
-**SYNC** — Use `@agent-name --sync <prompt>` when you NEED the result to continue:
-- Your workflow is BLOCKED until the other agent responds (up to 5 min timeout)
-- Use when you cannot proceed without the answer
-- Examples:
-  - `@wee-qa --sync Review this code change for security issues before I commit`
-  - `@research-dev --sync Find the latest API docs for X — I need this to write the integration`
-
-**ASYNC** — Use `@agent-name <prompt>` (no --sync flag) for fire-and-forget:
-- You continue your work immediately; the other agent works in the background
-- Use when the task is independent and you do not need the response right now
-- Examples:
-  - `@utility-dev Generate a summary report of today's changes`
-  - `@devops-dev Run a health check on staging and log results`
-
-## Decision Criteria
-| Question | If YES → |
-|----------|----------|
-| Will my current task fail or produce wrong results without the response? | **SYNC** |
-| Is the delegated task informational, a side-effect, or a notification? | **ASYNC** |
-| Am I at the END of my task, kicking off follow-up work? | **ASYNC** |
-| Do I need to validate/verify something before declaring done? | **SYNC** |
-| Can I keep working on other steps while waiting? | **ASYNC** |
-
-Rule of thumb: If in doubt, use **ASYNC** — it is non-blocking and the result can be checked later.
-"""
 
         # Load agent skills and workspace context
         skills_context = self.load_agent_skills(agent_path)
@@ -3444,7 +3246,7 @@ Example: python3 {SCRIPT_BASE_DIR}/agent_manager.py --agent research-dev --runti
             injection_text = ""
 
         context = f"""{handoff_prefix}[Session ID: {n8n_session_id}]
-{runtime_instruction}{injection_text}{agent_desc}{aoa_delegation_context}{files_context}{render_instruction}{bg_task_instruction}{canvas_instruction}{timeout_instruction}
+{runtime_instruction}{injection_text}{agent_desc}{files_context}{render_instruction}{bg_task_instruction}{canvas_instruction}{timeout_instruction}
 
 User Request:
 {prompt}"""
@@ -4851,29 +4653,11 @@ User Request:
             result = self.execute(prompt, session_id)
             if self._bg_task_mgr:
                 self._bg_task_mgr.complete_task(task_id, result)
-            # Update AoA mirror status
-            try:
-                import urllib.request as _aoa_ur2
-                _aoa_url2 = os.environ.get("AOA_API_URL", "http://127.0.0.1:9877")
-                _aoa_body2 = json.dumps({"status": "completed", "output": (result or "")[:5000]}).encode()
-                _aoa_rq2 = _aoa_ur2.Request(f"{_aoa_url2}/task/{task_id}", data=_aoa_body2, method="PATCH")
-                _aoa_rq2.add_header("Content-Type", "application/json")
-                _aoa_ur2.urlopen(_aoa_rq2, timeout=3)
-            except Exception:
-                pass
+
         except Exception as exc:
             if self._bg_task_mgr:
                 self._bg_task_mgr.fail_task(task_id, str(exc))
-            # Update AoA mirror status
-            try:
-                import urllib.request as _aoa_ur3
-                _aoa_url3 = os.environ.get("AOA_API_URL", "http://127.0.0.1:9877")
-                _aoa_body3 = json.dumps({"status": "failed", "error": str(exc)[:2000]}).encode()
-                _aoa_rq3 = _aoa_ur3.Request(f"{_aoa_url3}/task/{task_id}", data=_aoa_body3, method="PATCH")
-                _aoa_rq3.add_header("Content-Type", "application/json")
-                _aoa_ur3.urlopen(_aoa_rq3, timeout=3)
-            except Exception:
-                pass
+
 
     def _dispatch_single_runtime(
         self,
@@ -4963,11 +4747,7 @@ User Request:
 
         # If not a slash command, check for implicit agent delegation
         if command is None:
-            self._aoa_response = None  # reset AOA response
             delegated_agent, cleaned_prompt = self.detect_agent_delegation(prompt)
-            # Check if @mention was routed to Always-On Agents queue
-            if self._aoa_response is not None:
-                return self._aoa_response
             if delegated_agent and delegated_agent in self.AGENTS:
                 # User asked for specific agent help - auto-delegate
                 print(
@@ -5730,54 +5510,6 @@ You can mention an agent in your prompt and it will auto-delegate:
             channel = session_data.get("channel", "webui")
             identity = self._bg_identity or "unknown"
 
-            # ── AoA routing: if agent is always-on, route to AoA daemon ──
-            _bg_agent_cfg = self.AGENTS.get(bg_agent, {})
-            if _bg_agent_cfg.get("always_on", False):
-                try:
-                    import urllib.request as _urlreq, json as _json2
-                    aoa_body = _json2.dumps({
-                        "agent": bg_agent,
-                        "prompt": bg_prompt,
-                        "runtime": bg_runtime,
-                        "model": bg_model,
-                        "priority": 5,
-                        "identity": identity,
-                        "channel": channel,
-                    }).encode()
-                    aoa_req = _urlreq.Request(
-                        "http://127.0.0.1:9877/task",
-                        data=aoa_body, method="POST",
-                    )
-                    aoa_req.add_header("Content-Type", "application/json")
-                    with _urlreq.urlopen(aoa_req, timeout=5) as aoa_resp:
-                        aoa_task = _json2.loads(aoa_resp.read())
-                    aoa_tid = aoa_task.get("id", "?")
-                    # Push to Valkey queue for instant pickup
-                    try:
-                        from aoa.task_queue import get_task_queue as _get_tq2
-                        _bgq2 = _get_tq2()
-                        if _bgq2.available and aoa_tid and aoa_tid != "?":
-                            _bgq2.push_task(bg_agent, aoa_tid, metadata={
-                                "agent": bg_agent,
-                                "model": bg_model,
-                                "runtime": bg_runtime,
-                                "priority": "5",
-                            })
-                            _bgq2.notify_new_task(bg_agent, aoa_tid)
-                    except Exception as _bgq2_exc:
-                        print(f"[Valkey] BG queue push failed (non-fatal): {_bgq2_exc}", file=sys.stderr)
-                    print(f"[AoA] /background routed to AoA: agent={bg_agent}, task_id={aoa_tid}", file=sys.stderr)
-                    return (
-                        f"🤖 **AoA task dispatched!**\n\n"
-                        f"• **Task ID:** `{aoa_tid}`\n"
-                        f"• **Agent:** `@{bg_agent}` (Always-on)\n"
-                        f"• **Prompt:** {bg_prompt[:150]}\n\n"
-                        f"View in the 🤖 Agents panel (right sidebar)."
-                    )
-                except Exception as _aoa_err:
-                    print(f"[AoA] /background AoA routing failed for {bg_agent}, falling back: {_aoa_err}", file=sys.stderr)
-                    # Fall through to regular background task
-
             running = self._bg_task_mgr.count_running(channel, identity)
             if running >= BackgroundTaskManager.MAX_TASKS_PER_USER:
                 return f"❌ Maximum {BackgroundTaskManager.MAX_TASKS_PER_USER} concurrent background tasks allowed."
@@ -5791,23 +5523,6 @@ You can mention an agent in your prompt and it will auto-delegate:
                 agent=bg_agent, runtime=bg_runtime, model=bg_model,
                 prompt=bg_prompt,
             )
-            # Mirror task to AoA for visibility in the Agents panel
-            try:
-                import urllib.request as _aoa_ur
-                _aoa_url = os.environ.get("AOA_API_URL", "http://127.0.0.1:9877")
-                _aoa_body = json.dumps({
-                    "id": task_id, "agent": bg_agent, "prompt": bg_prompt,
-                    "runtime": bg_runtime, "model": bg_model,
-                    "status": "running", "source": "background",
-                    "identity": identity, "channel": channel,
-                    "description": bg_prompt[:60],
-                }).encode()
-                _aoa_rq = _aoa_ur.Request(f"{_aoa_url}/task", data=_aoa_body, method="POST")
-                _aoa_rq.add_header("Content-Type", "application/json")
-                _aoa_ur.urlopen(_aoa_rq, timeout=3)
-                print(f"[AoA-Mirror] /background task {task_id} mirrored to AoA", file=sys.stderr)
-            except Exception as _me:
-                print(f"[AoA-Mirror] /background mirror failed: {_me}", file=sys.stderr)
             # Launch in background thread
             import concurrent.futures as _cf
             _cf.ThreadPoolExecutor(max_workers=1).submit(
@@ -6265,132 +5980,8 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
 
     # ---- endpoints ----
 
-    # ── AoA (Always-on Agents) proxy ──────────────────────────────────────────
-    import urllib.request as _urllib_req  # noqa: PLC0415
 
-    AOA_API_URL = os.environ.get("AOA_API_URL", "http://127.0.0.1:9877")
-
-    def _aoa_get(path: str):
-        try:
-            with _urllib_req.urlopen(f"{AOA_API_URL}{path}", timeout=5) as r:
-                return json.loads(r.read())
-        except Exception as e:
-            return {"error": str(e)}
-
-    def _aoa_post(path: str, body: bytes):
-        try:
-            req = _urllib_req.Request(f"{AOA_API_URL}{path}", data=body, method="POST")
-            req.add_header("Content-Type", "application/json")
-            with _urllib_req.urlopen(req, timeout=10) as r:
-                return json.loads(r.read())
-        except Exception as e:
-            return {"error": str(e)}
-
-    def _aoa_patch(path: str, body: bytes):
-        try:
-            req = _urllib_req.Request(f"{AOA_API_URL}{path}", data=body, method="PATCH")
-            req.add_header("Content-Type", "application/json")
-            with _urllib_req.urlopen(req, timeout=10) as r:
-                return json.loads(r.read())
-        except Exception as e:
-            return {"error": str(e)}
-
-    def _aoa_mirror_task(task_id: str, agent: str, prompt: str,
-                         runtime: str = "copilot", model: str = None,
-                         status: str = "running", channel: str = None,
-                         identity: str = None):
-        """Mirror a background task into the AoA in-memory store for UI visibility.
-        Tasks created with source=background are not executed by AoA workers."""
-        try:
-            body = json.dumps({
-                "id": task_id,
-                "agent": agent,
-                "prompt": prompt,
-                "runtime": runtime,
-                "model": model,
-                "status": status,
-                "source": "background",
-                "identity": identity,
-                "channel": channel,
-                "description": prompt[:60],
-            }).encode()
-            result = _aoa_post("/task", body)
-            if result.get("id"):
-                print(f"[AoA-Mirror] Task {task_id} mirrored to AoA (agent={agent}, status={status})", file=sys.stderr)
-            else:
-                err_msg = result.get("error") if isinstance(result.get("error"), str) else str(result)
-                print(f"[AoA-Mirror] Failed to mirror {task_id}: {err_msg}", file=sys.stderr)
-        except Exception as e:
-            print(f"[AoA-Mirror] Exception mirroring {task_id}: {e}", file=sys.stderr)
-            return {"error": str(e)}
-
-    def _aoa_update_task(task_id: str, status: str, output: str = None, error: str = None):
-        """Update a mirrored task status in the AoA store."""
-        try:
-            body = {"status": status}
-            if output is not None:
-                body["output"] = output[:5000]
-            if error is not None:
-                body["error"] = error[:2000]
-            result = _aoa_patch(f"/task/{task_id}", json.dumps(body).encode())
-            if result.get("id") or result.get("status") == status:
-                print(f"[AoA-Mirror] Task {task_id} updated to {status}", file=sys.stderr)
-            else:
-                err_msg = result.get("error") if isinstance(result.get("error"), str) else str(result)
-                print(f"[AoA-Mirror] Failed to update {task_id}: {err_msg}", file=sys.stderr)
-            return result
-        except Exception as e:
-            print(f"[AoA-Mirror] Exception updating {task_id}: {e}", file=sys.stderr)
-            return {"error": str(e)}
-
-    @app.get("/api/v1/aoa/agents")
-    async def aoa_get_agents():
-        import asyncio
-        return JSONResponse(await asyncio.get_event_loop().run_in_executor(None, lambda: _aoa_get("/agents")))
-
-    @app.get("/api/v1/aoa/tasks")
-    async def aoa_get_tasks(limit: int = 100):
-        import asyncio
-        return JSONResponse(await asyncio.get_event_loop().run_in_executor(None, lambda: _aoa_get(f"/tasks?limit={limit}")))
-
-    @app.get("/api/v1/aoa/task/{task_id}")
-    async def aoa_get_task(task_id: str):
-        import asyncio
-        return JSONResponse(await asyncio.get_event_loop().run_in_executor(None, lambda: _aoa_get(f"/task/{task_id}")))
-
-    @app.post("/api/v1/aoa/task")
-    async def aoa_create_task(request: Request):
-        import asyncio
-        body = await request.body()
-        return JSONResponse(await asyncio.get_event_loop().run_in_executor(None, lambda: _aoa_post("/task", body)))
-
-    @app.post("/api/v1/aoa/agent/config")
-    async def aoa_agent_config(request: Request):
-        import asyncio
-        body = await request.body()
-        return JSONResponse(await asyncio.get_event_loop().run_in_executor(None, lambda: _aoa_post("/agent/config", body)))
-
-    @app.get("/api/v1/aoa/status")
-    async def aoa_status():
-        import asyncio
-        data = await asyncio.get_event_loop().run_in_executor(None, lambda: _aoa_get("/status"))
-        status_code = 503 if "error" in data else 200
-        return JSONResponse(content=data, status_code=status_code)
-
-    @app.patch("/api/v1/aoa/agents/{agent_name}")
-    async def aoa_patch_agent(agent_name: str, request: Request):
-        import asyncio
-        body = await request.json()
-        payload = json.dumps({"agent": agent_name, **body}).encode()
-        return JSONResponse(await asyncio.get_event_loop().run_in_executor(None, lambda: _aoa_post("/agent/config", payload)))
-
-    @app.patch("/api/v1/aoa/task/{task_id}")
-    async def aoa_patch_task(task_id: str, request: Request):
-        import asyncio
-        body = await request.body()
-        return JSONResponse(await asyncio.get_event_loop().run_in_executor(None, lambda: _aoa_patch(f"/task/{task_id}", body)))
-
-    # ── End AoA proxy ────────────────────────────────────────────────────────
+    # ---- endpoints ----
 
     @app.get("/api/v1/agents")
     async def get_agents():
@@ -7807,7 +7398,6 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 if not final_output.strip():
                     final_output = output or "Task completed successfully"
                 bg_task_mgr.complete_task(task_id, final_output)
-                _aoa_update_task(task_id, "completed", output=final_output)
                 if task_id.startswith("sched_"):
                     try:
                         job_id = task_id.split("_")[1]
@@ -7821,7 +7411,6 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             else:
                 error_msg = f"Task failed with code {process.returncode}: {output}"
                 bg_task_mgr.fail_task(task_id, error_msg)
-                _aoa_update_task(task_id, "failed", error=error_msg)
                 if task_id.startswith("sched_"):
                     try:
                         job_id = task_id.split("_")[1]
@@ -7836,13 +7425,11 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         except subprocess.TimeoutExpired:
             error_msg = f"Task exceeded timeout of {timeout} seconds"
             bg_task_mgr.fail_task(task_id, error_msg)
-            _aoa_update_task(task_id, "failed", error=error_msg)
             _emit_bg_notification(task_id, prompt, "failed", channel, user_identity,
                                   output_preview=None, error=error_msg, notify=notify)
         except Exception as exc:
             error_msg = str(exc)
             bg_task_mgr.fail_task(task_id, error_msg)
-            _aoa_update_task(task_id, "failed", error=error_msg)
             _emit_bg_notification(task_id, prompt, "failed", channel, user_identity,
                                   output_preview=None, error=error_msg, notify=notify)
         finally:
@@ -7935,44 +7522,6 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         runtime = body.runtime or defaults.get("runtime", get_default_runtime())
         model = body.model or defaults.get("model", get_default_model())
 
-        # ── AoA routing: if agent is always-on, route to AoA daemon ──────
-        agent_cfg = session_mgr.AGENTS.get(agent, {})
-        if agent_cfg.get("always_on", False):
-            try:
-                import urllib.request as _ur
-                aoa_body = json.dumps({
-                    "agent": agent,
-                    "prompt": body.prompt,
-                    "runtime": runtime,
-                    "model": model,
-                    "priority": 5,
-                    "identity": identity,
-                    "channel": channel,
-                }).encode()
-                aoa_req = _ur.Request(
-                    "http://127.0.0.1:9877/task", data=aoa_body, method="POST"
-                )
-                aoa_req.add_header("Content-Type", "application/json")
-                with _ur.urlopen(aoa_req, timeout=5) as _aoa_r2:
-                    aoa_task = json.loads(_aoa_r2.read())
-                aoa_tid = aoa_task.get("id", "?")
-                print(f"[AoA] API: routed to AoA daemon: agent={agent}, task_id={aoa_tid}")
-                return JSONResponse({
-                    "task_id": aoa_tid,
-                    "session_id": aoa_tid,
-                    "agent": agent,
-                    "runtime": runtime,
-                    "model": model,
-                    "permission_mode": "restricted",
-                    "status": "pending",
-                    "aoa": True,
-                    "routed_to": "aoa",
-                    "timeout": body.timeout or 3600,
-                })
-            except Exception as _aoa_err2:
-                print(f"[AoA] API: routing failed for {agent}, falling back: {_aoa_err2}")
-                # Fall through to regular background task
-
         task_id = f"bg_{str(uuid4())[:8]}"
         session_id = str(uuid4())  # Must be valid UUID format for Copilot CLI
 
@@ -8013,8 +7562,6 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             )
             queue_pos = bg_task_mgr.count_queued(channel, identity)
             print(f"[API] Task {task_id} queued (position {queue_pos}, {running}/{BackgroundTaskManager.MAX_TASKS_PER_USER} slots full)")
-            # Mirror queued task to AoA for visibility
-            _aoa_mirror_task(task_id, agent, body.prompt, runtime, model, "pending", channel, identity)
             return {
                 "task_id": task_id,
                 "session_id": session_id,
@@ -8047,8 +7594,6 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         if perm_mode not in ("elevated", "restricted", "sandboxed"):
             perm_mode = "restricted"
 
-        # Mirror task to AoA for visibility in the Agents panel
-        _aoa_mirror_task(task_id, agent, body.prompt, runtime, model, "running", channel, identity)
 
         # Run in background thread using shared executor
         loop = asyncio.get_running_loop()
@@ -9766,22 +9311,6 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
     _static_dir = Path(__file__).parent / "static"
     if _static_dir.exists():
         app.mount("/static", StaticFiles(directory=str(_static_dir)), name="static")
-
-    # ── AoA Queue Stats endpoint ──────────────────────────────────────
-    @app.get("/api/v1/aoa/queue-stats")
-    async def aoa_queue_stats():
-        """Return Valkey queue health and per-agent stats."""
-        try:
-            from aoa.task_queue import get_task_queue
-            tq = get_task_queue()
-            return {
-                "valkey": tq.health_check(),
-                "queues": tq.queue_stats(),
-            }
-        except ImportError:
-            return {"error": "aoa.task_queue module not available"}
-        except Exception as exc:
-            return {"error": str(exc)}
 
     return app
 

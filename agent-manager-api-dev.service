@@ -11,7 +11,6 @@ Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus
 Environment=XDG_RUNTIME_DIR=/run/user/1000
 EnvironmentFile=/opt/n8n-copilot-shim-dev/.env
 Environment="API_PORT=8001"
-Environment="AOA_API_URL=http://127.0.0.1:9877"
 Environment="RABBITMQ_HOST=192.168.0.85"
 Environment="RABBITMQ_PORT=5672"
 Environment="RABBITMQ_USER=admin"
