@@ -6681,7 +6681,7 @@ function toggleAgentsPanel() {
 function openAgentsPanel() {
   const p = document.getElementById('agents-panel');
   if (!p) return;
-  p.classList.remove('agents-panel-hidden');
+  p.classList.remove('agents-hidden');p.classList.add('agents-open');
   _agentsPanelOpen = true;
   refreshAgentsPanel();
   _agentsRefreshTimer = setInterval(refreshAgentsPanel, 3000);
@@ -6689,7 +6689,7 @@ function openAgentsPanel() {
 function closeAgentsPanel() {
   const p = document.getElementById('agents-panel');
   if (!p) return;
-  p.classList.add('agents-panel-hidden');
+  p.classList.remove('agents-open');p.classList.add('agents-hidden');
   _agentsPanelOpen = false;
   clearInterval(_agentsRefreshTimer);
   _agentsRefreshTimer = null;
