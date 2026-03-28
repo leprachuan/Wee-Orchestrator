@@ -414,10 +414,13 @@ class BackgroundTaskManager:
             tasks = [t for t in tasks if t.get("agent") == agent]
         return sum(1 for t in tasks if t["status"] == "queued")
 
-    def get_next_queued(self, channel: str, identity: str, agent: str = None) -> Optional[dict]:
+    def get_next_queued(
+        self, channel: str, identity: str, agent: str = None
+    ) -> Optional[dict]:
         """Return the oldest queued task for this user, optionally filtered by agent."""
         queued = [
-            t for t in self.list_tasks(channel, identity)
+            t
+            for t in self.list_tasks(channel, identity)
             if t["status"] == "queued" and (not agent or t.get("agent") == agent)
         ]
         if not queued:
@@ -1291,7 +1294,9 @@ class SessionManager:
         self.devin_home.mkdir(exist_ok=True)
         self.devin_session_dir.mkdir(exist_ok=True)
 
-        # Load agents from config file
+        # Load agents from config file (also sets _agents_config_path and _agents_json_mtime)
+        self._agents_config_path: Optional[Path] = None
+        self._agents_json_mtime: float = 0.0
         self.AGENTS = self._load_agents_config(config_file)
 
         # Load skill repositories from configuration
@@ -1345,14 +1350,19 @@ class SessionManager:
                 if not config_path.exists():
                     config_path = Path(__file__).parent / "agents.json"
 
+        # Persist the resolved path so the file-watcher can find it later
+        self._agents_config_path = config_path
+
         if not config_path.exists():
             print(
                 f"[Warning] Agents config file not found at {config_path}. Using empty agents.",
                 file=sys.stderr,
             )
+            self._agents_json_mtime = 0.0
             return {}
 
         try:
+            self._agents_json_mtime = config_path.stat().st_mtime
             with open(config_path, "r") as f:
                 config = json.load(f)
                 agents = {}
@@ -1378,6 +1388,63 @@ class SessionManager:
         except Exception as e:
             print(f"[Error] Failed to load agents config: {e}", file=sys.stderr)
             return {}
+
+    def reload_agents_from_disk(self) -> tuple:
+        """Hot-reload agents.json with validation and safe fallback.
+
+        Returns (success: bool, message: str).
+        On failure the in-memory AGENTS dict is left unchanged.
+        """
+        config_path = getattr(self, "_agents_config_path", None)
+        if not config_path or not config_path.exists():
+            return False, f"agents.json not found at {config_path}"
+
+        try:
+            raw = config_path.read_text()
+            data = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            return False, f"Invalid JSON in agents.json: {exc}"
+        except Exception as exc:
+            return False, f"Failed to read agents.json: {exc}"
+
+        # Structural validation
+        if not isinstance(data, dict) or "agents" not in data:
+            return False, "agents.json missing top-level 'agents' key"
+        if not isinstance(data["agents"], list):
+            return False, "'agents' must be an array"
+        for idx, ag in enumerate(data["agents"]):
+            if not isinstance(ag, dict):
+                return False, f"agents[{idx}] is not an object"
+            if "name" not in ag or "path" not in ag:
+                return False, f"agents[{idx}] missing required 'name' or 'path'"
+
+        # Parse into the internal dict keyed by name
+        fresh: Dict[str, dict] = {}
+        for agent in data["agents"]:
+            name = agent.get("name")
+            if not name:
+                continue
+            fresh[name] = {
+                "path": agent.get("path", ""),
+                "description": agent.get("description", ""),
+                "max_concurrent": agent.get("max_concurrent", 1),
+                "runtime": agent.get("runtime", "copilot"),
+                "model": agent.get("model", ""),
+            }
+
+        if not fresh and self.AGENTS:
+            return False, "Refusing to replace non-empty agent config with empty one"
+
+        old_count = len(self.AGENTS)
+        # Atomic swap — Python dict assignment is thread-safe under the GIL
+        self.AGENTS = fresh
+        self._agents_json_mtime = config_path.stat().st_mtime
+        new_count = len(fresh)
+
+        added = set(fresh.keys()) - set(self.AGENTS.keys()) if old_count else set()
+        removed = set()  # computed before swap for accuracy
+        msg = f"Reloaded {new_count} agent(s) from disk (was {old_count})."
+        return True, msg
 
     def _load_skill_repositories(self) -> List[Dict]:
         """Load skill repositories from configuration file.
@@ -6901,9 +6968,41 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 rate_limiter.cleanup()
                 bg_task_mgr.cleanup_old()
 
-        task = asyncio.ensure_future(_periodic_cleanup())
+        async def _agents_file_watcher():
+            """Poll agents.json mtime every 10s and hot-reload on change."""
+            while True:
+                await asyncio.sleep(10)
+                try:
+                    cfg_path = getattr(session_mgr, "_agents_config_path", None)
+                    if not cfg_path or not cfg_path.exists():
+                        continue
+                    current_mtime = cfg_path.stat().st_mtime
+                    last_mtime = getattr(session_mgr, "_agents_json_mtime", 0.0)
+                    if current_mtime != last_mtime:
+                        ok, msg = session_mgr.reload_agents_from_disk()
+                        if ok:
+                            print(
+                                f"[Hot-Reload] agents.json changed on disk — {msg}",
+                                file=sys.stderr,
+                            )
+                        else:
+                            # Update mtime even on failure to avoid log-spam on every poll cycle
+                            session_mgr._agents_json_mtime = current_mtime
+                            print(
+                                f"[Hot-Reload] agents.json changed but reload failed: {msg}",
+                                file=sys.stderr,
+                            )
+                except Exception as exc:
+                    print(
+                        f"[Hot-Reload] Error watching agents.json: {exc}",
+                        file=sys.stderr,
+                    )
+
+        cleanup_task = asyncio.ensure_future(_periodic_cleanup())
+        watcher_task = asyncio.ensure_future(_agents_file_watcher())
         yield
-        task.cancel()
+        cleanup_task.cancel()
+        watcher_task.cancel()
 
     # ---- FastAPI app ----
     app = FastAPI(
@@ -8946,8 +9045,10 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
 
         # Check concurrent limit — queue instead of rejecting
         running = bg_task_mgr.count_running(channel, identity, agent)
-        agent_config = next((a for a in agents_list if a.get("name") == agent), {})
-        max_concurrent = agent_config.get("max_concurrent", BackgroundTaskManager.MAX_TASKS_PER_USER)
+        agent_config = session_mgr.AGENTS.get(agent, {})
+        max_concurrent = agent_config.get(
+            "max_concurrent", BackgroundTaskManager.MAX_TASKS_PER_USER
+        )
         if running >= max_concurrent:
             # Queue the task — it will be promoted when a running task finishes
             task = bg_task_mgr.create_task(
@@ -10828,7 +10929,21 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             f"[API] agents.json updated by {auth.get('identity', 'unknown')}",
             file=sys.stderr,
         )
-        return {"status": "saved", "agent_count": len(data["agents"])}
+        # Auto-reload in-memory agent config after writing to disk
+        ok, msg = session_mgr.reload_agents_from_disk()
+        if ok:
+            print(f"[API] Auto-reloaded agents after save — {msg}", file=sys.stderr)
+        else:
+            print(
+                f"[API] Warning: saved to disk but reload failed: {msg}",
+                file=sys.stderr,
+            )
+        return {
+            "status": "saved",
+            "agent_count": len(data["agents"]),
+            "reloaded": ok,
+            "reload_message": msg,
+        }
 
     @app.post("/api/v1/reload-agents")
     async def reload_agents_config(request: Request):
@@ -10839,21 +10954,20 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             x_user_identity=request.headers.get("x-user-identity"),
             x_auth_channel=request.headers.get("x-auth-channel"),
         )
-        try:
-            fresh_agents = session_mgr._load_agents_config()
-            session_mgr.AGENTS = fresh_agents
-            count = len(fresh_agents)
+        ok, msg = session_mgr.reload_agents_from_disk()
+        if ok:
+            count = len(session_mgr.AGENTS)
             print(
-                f"[API] agents.json hot-reloaded by {auth.get('identity', 'unknown')} - {count} agents",
+                f"[API] agents.json hot-reloaded by {auth.get('identity', 'unknown')} — {count} agents",
                 file=sys.stderr,
             )
-            return {
-                "status": "reloaded",
-                "message": f"Loaded {count} agent(s) from disk.",
-            }
-        except Exception as exc:
-            print(f"[API] Failed to hot-reload agents.json: {exc}", file=sys.stderr)
-            raise HTTPException(status_code=500, detail=f"Reload failed: {exc}")
+            return {"status": "reloaded", "message": msg}
+        else:
+            print(
+                f"[API] Hot-reload failed ({auth.get('identity', 'unknown')}): {msg}",
+                file=sys.stderr,
+            )
+            raise HTTPException(status_code=500, detail=f"Reload failed: {msg}")
 
     @app.get("/api/v1/logs")
     async def get_logs(
