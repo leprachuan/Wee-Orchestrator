@@ -402,20 +402,23 @@ class BackgroundTaskManager:
         with self._lock:
             return list(self._load())
 
-    def count_running(self, channel: str, identity: str) -> int:
-        return sum(
-            1 for t in self.list_tasks(channel, identity) if t["status"] == "running"
-        )
+    def count_running(self, channel: str, identity: str, agent: str = None) -> int:
+        tasks = self.list_tasks(channel, identity)
+        if agent:
+            tasks = [t for t in tasks if t.get("agent") == agent]
+        return sum(1 for t in tasks if t["status"] == "running")
 
-    def count_queued(self, channel: str, identity: str) -> int:
-        return sum(
-            1 for t in self.list_tasks(channel, identity) if t["status"] == "queued"
-        )
+    def count_queued(self, channel: str, identity: str, agent: str = None) -> int:
+        tasks = self.list_tasks(channel, identity)
+        if agent:
+            tasks = [t for t in tasks if t.get("agent") == agent]
+        return sum(1 for t in tasks if t["status"] == "queued")
 
-    def get_next_queued(self, channel: str, identity: str) -> Optional[dict]:
-        """Return the oldest queued task for this user, or None."""
+    def get_next_queued(self, channel: str, identity: str, agent: str = None) -> Optional[dict]:
+        """Return the oldest queued task for this user, optionally filtered by agent."""
         queued = [
-            t for t in self.list_tasks(channel, identity) if t["status"] == "queued"
+            t for t in self.list_tasks(channel, identity)
+            if t["status"] == "queued" and (not agent or t.get("agent") == agent)
         ]
         if not queued:
             return None
@@ -8818,7 +8821,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         finally:
             # Promote next queued task for this user if a slot just opened
             try:
-                next_q = bg_task_mgr.get_next_queued(channel, user_identity)
+                next_q = bg_task_mgr.get_next_queued(channel, user_identity, agent)
                 if next_q:
                     new_sid = str(uuid4())
                     bg_task_mgr.promote_queued_task(next_q["task_id"], new_sid)
@@ -8942,8 +8945,10 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 notify_pref = session_pref != "off"
 
         # Check concurrent limit — queue instead of rejecting
-        running = bg_task_mgr.count_running(channel, identity)
-        if running >= BackgroundTaskManager.MAX_TASKS_PER_USER:
+        running = bg_task_mgr.count_running(channel, identity, agent)
+        agent_config = next((a for a in agents_list if a.get("name") == agent), {})
+        max_concurrent = agent_config.get("max_concurrent", BackgroundTaskManager.MAX_TASKS_PER_USER)
+        if running >= max_concurrent:
             # Queue the task — it will be promoted when a running task finishes
             task = bg_task_mgr.create_task(
                 task_id=task_id,
