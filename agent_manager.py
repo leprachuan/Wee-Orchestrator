@@ -362,11 +362,8 @@ class BackgroundTaskManager:
         return None
 
     def _identity_matches(self, task: dict, channel: str, identity: str) -> bool:
-        """Check if a task belongs to this user, matching across channels.
-        Uses user_identity (raw identity without channel prefix) for cross-channel
-        visibility so tasks created from the webui channel are visible to users
-        authenticated via webex/telegram and vice versa.
-        Falls back to user_key comparison for backward compatibility.
+        """Check if a task belongs to this user (for rate-limiting/queue management only).
+        NOT used for visibility -- all authorized users can see all tasks.
         """
         stored_identity = task.get("user_identity")
         if stored_identity is not None:
@@ -665,6 +662,9 @@ def estimate_background_timeout(prompt: str, default: int = 900) -> int:
 class HistoryManager:
     """Persists per-user chat history in ~/.copilot/chat-history.json."""
 
+    MAX_SESSIONS_PER_USER: int = 100
+    MAX_MESSAGES_PER_SESSION: int = 500
+
     def __init__(self):
         home = os.path.expanduser("~")
         copilot_dir = os.path.join(home, ".copilot")
@@ -673,10 +673,9 @@ class HistoryManager:
         self._lock = threading.Lock()
         # Read MAX_SESSIONS from environment or use default
         try:
-            self.MAX_SESSIONS_PER_USER = int(os.environ.get("MAX_SESSIONS", "100"))
+            HistoryManager.MAX_SESSIONS_PER_USER = int(os.environ.get("MAX_SESSIONS", "100"))
         except (ValueError, TypeError):
-            self.MAX_SESSIONS_PER_USER = 100
-        self.MAX_MESSAGES_PER_SESSION = 500
+            HistoryManager.MAX_SESSIONS_PER_USER = 100
         if not os.path.exists(self._path):
             self._save({})
 
@@ -5437,9 +5436,7 @@ You can mention an agent in your prompt and it will auto-delegate:
             sub_lower = sub.lower()
 
             if sub_lower == "list":
-                channel = session_data.get("channel", "webui")
-                identity = self._bg_identity or "unknown"
-                tasks = self._bg_task_mgr.list_tasks(channel, identity)
+                tasks = self._bg_task_mgr.list_all_tasks()
                 if not tasks:
                     return "⚡ **Background Tasks**\n\nNo background tasks."
                 icons = {"running": "🟢", "completed": "✅", "failed": "❌", "killed": "🛑"}
@@ -6004,6 +6001,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             "status": "ok",
             "uptime_seconds": time.time() - _start_time,
             "version": "1.0.0",
+            "environment": APP_ENV,
             "agents_loaded": len(session_mgr.AGENTS),
             "scheduler_enabled": SCHEDULER_ENABLED,
             "active_sessions": len(session_mgr.load_session_map()),
@@ -7659,8 +7657,6 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         task = bg_task_mgr.get_task(task_id)
         if not task:
             raise HTTPException(status_code=404, detail="Task not found")
-        if not bg_task_mgr._identity_matches(task, user["channel"], user["identity"]):
-            raise HTTPException(status_code=403, detail="Not your task")
         # Return detail with last 50 output lines
         tool_calls = task.get("tool_calls", [])
         return {
@@ -7691,8 +7687,6 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         task = bg_task_mgr.get_task(task_id)
         if not task:
             raise HTTPException(status_code=404, detail="Task not found")
-        if not bg_task_mgr._identity_matches(task, user["channel"], user["identity"]):
-            raise HTTPException(status_code=403, detail="Not your task")
         return {
             "task_id": task["task_id"],
             "status": task["status"],
@@ -7713,8 +7707,6 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         task = bg_task_mgr.get_task(task_id)
         if not task:
             raise HTTPException(status_code=404, detail="Task not found")
-        if not bg_task_mgr._identity_matches(task, user["channel"], user["identity"]):
-            raise HTTPException(status_code=403, detail="Not your task")
         return {
             "task_id": task["task_id"],
             "status": task["status"],
@@ -7736,8 +7728,6 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         task = bg_task_mgr.get_task(task_id)
         if not task:
             raise HTTPException(status_code=404, detail="Task not found")
-        if not bg_task_mgr._identity_matches(task, user["channel"], user["identity"]):
-            raise HTTPException(status_code=403, detail="Not your task")
         return {
             "task_id": task["task_id"],
             "status": task["status"],
@@ -7756,8 +7746,6 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         task = bg_task_mgr.get_task(task_id)
         if not task:
             raise HTTPException(status_code=404, detail="Task not found")
-        if not bg_task_mgr._identity_matches(task, user["channel"], user["identity"]):
-            raise HTTPException(status_code=403, detail="Not your task")
 
         if task["status"] in ("running", "queued"):
             was_running = task["status"] == "running"
@@ -8816,6 +8804,12 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
     @app.put("/api/v1/skills/{skill_key:path}/origin")
     async def update_skill_origin(skill_key: str, request: Request):
         """Set or update origin metadata for a skill."""
+        await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
         body = await request.json()
         # Validate required fields
         origin_type = body.get("origin_type", "")
@@ -8825,15 +8819,27 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         return {"success": True, "origin": result}
 
     @app.delete("/api/v1/skills/{skill_key:path}/origin")
-    async def remove_skill_origin(skill_key: str):
+    async def remove_skill_origin(skill_key: str, request: Request):
         """Remove origin metadata for a skill."""
+        await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
         if delete_origin(skill_key):
             return {"success": True}
         raise HTTPException(status_code=404, detail="No origin metadata found for this skill")
 
     @app.post("/api/v1/skills/{skill_key:path}/check-update")
-    async def check_skill_update(skill_key: str):
+    async def check_skill_update(skill_key: str, request: Request):
         """Check if updates are available for a skill from its origin."""
+        await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
         result = check_update(skill_key)
         return result
 
