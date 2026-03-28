@@ -11101,6 +11101,132 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
         )
 
+
+    # --- Text-to-Speech ───────────────────────────────────────────────────────
+    _tts_cache_dir = Path("/tmp/webui_tts_cache")
+    _tts_cache_dir.mkdir(parents=True, exist_ok=True)
+
+    # TTS character limit — edge-tts handles long texts fine, but we cap at
+    # a reasonable length to avoid abuse and very long synthesis times.
+    _TTS_MAX_CHARS = 10_000
+    _TTS_VOICE = "en-US-AriaNeural"  # default voice
+
+    @app.post("/api/v1/tts")
+    async def text_to_speech(
+        request: Request,
+        authorization: Optional[str] = Header(None),
+        x_user_identity: Optional[str] = Header(None),
+        x_auth_channel: Optional[str] = Header(None),
+    ):
+        """Generate speech audio from text using edge-tts.
+
+        Request body: { "text": "...", "voice": "en-US-AriaNeural" (optional) }
+        Returns: audio/mpeg stream
+        """
+        auth = await authenticate(
+            request,
+            authorization=authorization,
+            x_user_identity=x_user_identity,
+            x_auth_channel=x_auth_channel,
+        )
+
+        try:
+            body = await request.json()
+        except Exception:
+            raise HTTPException(status_code=400, detail="Invalid JSON body")
+
+        text = (body.get("text") or "").strip()
+        if not text:
+            raise HTTPException(status_code=400, detail="Text is required")
+
+        if len(text) > _TTS_MAX_CHARS:
+            text = text[:_TTS_MAX_CHARS]
+
+        voice = body.get("voice") or _TTS_VOICE
+
+        # Strip markdown formatting for cleaner speech
+        clean = text
+        # Remove code blocks
+        clean = re.sub(r"```[\s\S]*?```", " code block omitted ", clean)
+        clean = re.sub(r"`[^`]+`", "", clean)
+        # Remove markdown links — keep link text
+        clean = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", clean)
+        # Remove markdown emphasis markers
+        clean = re.sub(r"[*_]{1,3}", "", clean)
+        # Remove headings markers
+        clean = re.sub(r"^#{1,6}\s*", "", clean, flags=re.MULTILINE)
+        # Remove horizontal rules
+        clean = re.sub(r"^[-*_]{3,}\s*$", "", clean, flags=re.MULTILINE)
+        # Remove HTML tags
+        clean = re.sub(r"<[^>]+>", "", clean)
+        # Collapse whitespace
+        clean = re.sub(r"\n{3,}", "\n\n", clean)
+        clean = clean.strip()
+
+        if not clean:
+            raise HTTPException(
+                status_code=400, detail="Text has no speakable content after cleanup"
+            )
+
+        # Cache key based on text + voice
+        import hashlib
+        cache_key = hashlib.sha256(f"{voice}:{clean}".encode()).hexdigest()
+        cache_path = _tts_cache_dir / f"{cache_key}.mp3"
+
+        if not cache_path.exists():
+            try:
+                import edge_tts
+
+                communicate = edge_tts.Communicate(clean, voice)
+                await communicate.save(str(cache_path))
+            except Exception as exc:
+                # Clean up partial file
+                cache_path.unlink(missing_ok=True)
+                print(
+                    f"[TTS] edge-tts failed for {auth.get('identity', '?')}: {exc}",
+                    file=sys.stderr,
+                )
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"TTS generation failed: {str(exc)[:200]}",
+                )
+
+        return FileResponse(
+            str(cache_path),
+            media_type="audio/mpeg",
+            filename="speech.mp3",
+            headers={"Cache-Control": "public, max-age=3600"},
+        )
+
+    @app.get("/api/v1/tts/voices")
+    async def list_tts_voices(
+        request: Request,
+        authorization: Optional[str] = Header(None),
+        x_user_identity: Optional[str] = Header(None),
+        x_auth_channel: Optional[str] = Header(None),
+    ):
+        """List available TTS voices."""
+        auth = await authenticate(
+            request,
+            authorization=authorization,
+            x_user_identity=x_user_identity,
+            x_auth_channel=x_auth_channel,
+        )
+        try:
+            import edge_tts
+            voices = await edge_tts.list_voices()
+            # Return a simplified list — just English voices by default
+            en_voices = [
+                {"name": v["ShortName"], "gender": v["Gender"], "locale": v["Locale"]}
+                for v in voices
+                if v["Locale"].startswith("en-")
+            ]
+            return {"voices": en_voices, "default": _TTS_VOICE}
+        except Exception as exc:
+            raise HTTPException(
+                status_code=500, detail=f"Failed to list voices: {str(exc)[:200]}"
+            )
+
     # --- AI Media ─────────────────────────────────────────────────────────────
     _ai_media_dir = Path("/tmp/webui_ai_media")
     _ai_media_dir.mkdir(parents=True, exist_ok=True)

@@ -6587,3 +6587,57 @@ html, body {
 
 /* ── Agents Panel (mirrors Canvas/Skills panels) ─────────────────────────── */
 
+
+
+/* ─── Text-to-Speech Button ────────────────────────────────────────────────── */
+.tts-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: none;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text-secondary, #8b95a5);
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+  padding: 0;
+  margin-top: 6px;
+  opacity: 0;
+  transition: opacity 0.2s ease, background 0.2s ease, transform 0.15s ease;
+  float: right;
+  clear: both;
+}
+
+.message-bubble:hover .tts-btn,
+.tts-btn.tts-loading,
+.tts-btn.tts-playing {
+  opacity: 1;
+}
+
+.tts-btn:hover {
+  background: rgba(255, 255, 255, 0.12);
+  transform: scale(1.1);
+}
+
+.tts-btn.tts-loading {
+  animation: tts-pulse 1s ease-in-out infinite;
+  pointer-events: none;
+}
+
+.tts-btn.tts-playing {
+  background: rgba(16, 185, 129, 0.2);
+  color: #10b981;
+}
+
+.tts-btn.tts-playing:hover {
+  background: rgba(239, 68, 68, 0.2);
+  color: #ef4444;
+}
+
+@keyframes tts-pulse {
+  0%, 100% { opacity: 0.5; }
+  50% { opacity: 1; }
+}

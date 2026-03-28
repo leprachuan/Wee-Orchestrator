@@ -101,6 +101,128 @@ async function fetchBlob(url) {
 }
 
 // ─── DOM Helpers ──────────────────────────────────────────────────────────────
+
+// ─── Text-to-Speech ──────────────────────────────────────────────────────────
+const TTS = {
+  currentAudio: null,
+  currentBtn: null,
+
+  /** Extract plain text from a message bubble's innerHTML. */
+  extractText(bubble) {
+    // Clone to avoid modifying the DOM
+    const clone = bubble.cloneNode(true);
+    // Remove code blocks
+    clone.querySelectorAll('pre, code').forEach(el => el.remove());
+    // Remove TTS button itself
+    clone.querySelectorAll('.tts-btn').forEach(el => el.remove());
+    return (clone.textContent || '').trim();
+  },
+
+  /** Stop any currently playing audio. */
+  stop() {
+    if (this.currentAudio) {
+      this.currentAudio.pause();
+      this.currentAudio.src = '';
+      this.currentAudio = null;
+    }
+    if (this.currentBtn) {
+      this.currentBtn.classList.remove('tts-loading', 'tts-playing');
+      this.currentBtn.innerHTML = '🔊';
+      this.currentBtn.title = 'Read aloud';
+      this.currentBtn = null;
+    }
+  },
+
+  /** Generate and play TTS for a bubble. */
+  async play(btn, bubble) {
+    const text = this.extractText(bubble);
+    if (!text) return;
+
+    // If same button is already playing, stop it
+    if (this.currentBtn === btn && this.currentAudio && !this.currentAudio.paused) {
+      this.stop();
+      return;
+    }
+
+    // Stop any other playing audio first
+    this.stop();
+
+    this.currentBtn = btn;
+    btn.classList.add('tts-loading');
+    btn.innerHTML = '⏳';
+    btn.title = 'Generating speech…';
+
+    try {
+      const auth = loadAuth();
+      const token = auth?.token || '';
+      const res = await fetch(`${API_BASE}/api/v1/tts`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`,
+        },
+        body: JSON.stringify({ text }),
+      });
+
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.detail || `HTTP ${res.status}`);
+      }
+
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+
+      const audio = new Audio(url);
+      this.currentAudio = audio;
+
+      audio.addEventListener('ended', () => {
+        URL.revokeObjectURL(url);
+        btn.classList.remove('tts-playing');
+        btn.innerHTML = '🔊';
+        btn.title = 'Read aloud';
+        this.currentAudio = null;
+        this.currentBtn = null;
+      });
+
+      audio.addEventListener('error', () => {
+        URL.revokeObjectURL(url);
+        btn.classList.remove('tts-loading', 'tts-playing');
+        btn.innerHTML = '🔊';
+        btn.title = 'Read aloud';
+        this.currentAudio = null;
+        this.currentBtn = null;
+      });
+
+      btn.classList.remove('tts-loading');
+      btn.classList.add('tts-playing');
+      btn.innerHTML = '⏹';
+      btn.title = 'Stop playback';
+
+      await audio.play();
+    } catch (err) {
+      console.error('[TTS] Error:', err);
+      btn.classList.remove('tts-loading', 'tts-playing');
+      btn.innerHTML = '🔊';
+      btn.title = 'Read aloud';
+      this.currentAudio = null;
+      this.currentBtn = null;
+    }
+  },
+};
+
+/** Create a TTS play button element for an assistant bubble. */
+function createTtsButton(bubble) {
+  const btn = document.createElement('button');
+  btn.className = 'tts-btn';
+  btn.innerHTML = '🔊';
+  btn.title = 'Read aloud';
+  btn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    TTS.play(btn, bubble);
+  });
+  return btn;
+}
+
 const $ = id => document.getElementById(id);
 const show = el => el.classList.remove('hidden');
 const hide = el => el.classList.add('hidden');
@@ -1646,6 +1768,7 @@ async function sendMessageStreaming(query, sessionId) {
             if (streamBubble) {
               streamBubble.classList.remove('streaming');
               applyMarkdownToBubble(streamBubble, finalContent);
+              streamBubble.appendChild(createTtsButton(streamBubble));
               scrollToBottom();
             } else {
               // Command/no-chunk path: render fresh bubble
@@ -1799,6 +1922,7 @@ async function reconnectToStream(sessionId) {
               if (streamBubble) {
                 streamBubble.classList.remove('streaming');
                 applyMarkdownToBubble(streamBubble, finalContent);
+                streamBubble.appendChild(createTtsButton(streamBubble));
                 scrollToBottom();
               } else {
                 await renderMessage('assistant', finalContent, []);
@@ -1970,6 +2094,9 @@ async function loadEarlierMessages() {
         } catch (_) { bubble.textContent = msg.content; }
       }
       if (typeof linkifyFilePaths === 'function') linkifyFilePaths(bubble);
+      if (msg.role === 'assistant') {
+        bubble.appendChild(createTtsButton(bubble));
+      }
       row.appendChild(avatar);
       row.appendChild(bubble);
       container.insertBefore(row, insertRef);
@@ -2040,6 +2167,11 @@ async function renderMessage(role, content, files = []) {
 
   // Make file paths clickable in all messages
   if (typeof linkifyFilePaths === 'function') linkifyFilePaths(bubble);
+
+  // Add TTS play button for assistant messages
+  if (role === 'assistant') {
+    bubble.appendChild(createTtsButton(bubble));
+  }
 }
 
 function renderSystemMessage(text) {
