@@ -1809,6 +1809,9 @@ async function reconnectToStream(sessionId) {
               await fetchAndUpdateMeta(sessionId);
               await loadSessions();
 
+              // Delayed refresh to pick up LLM-generated titles
+              setTimeout(() => loadSessions(), 5000);
+
               // Auto-submit next queued request if any
               if (STATE.requestQueue.length > 0 && !STATE.queuePaused) {
                 processNextQueue();

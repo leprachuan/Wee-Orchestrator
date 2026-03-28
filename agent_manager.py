@@ -839,6 +839,7 @@ class HistoryManager:
                     # Auto-set title from first user message
                     if role == "user" and not s.get("title"):
                         s["title"] = content[:60]
+                        s["title_source"] = "auto"
                     # Auto-set preview from first assistant message
                     if role == "assistant" and not s.get("preview"):
                         s["preview"] = content[:120]
@@ -860,10 +861,51 @@ class HistoryManager:
             for s in data.get(key, {}).get("sessions", []):
                 if s["session_id"] == session_id:
                     s["title"] = title[:120]
+                    s["title_source"] = "user"
                     s["updated_at"] = time.time()
                     self._save(data)
                     return True
         return False
+
+    def update_title_llm(
+        self, channel: str, identity: str, session_id: str, title: str, source: str = "llm"
+    ) -> bool:
+        """Update session title from auto-generation. Won't overwrite user-set titles."""
+        with self._lock:
+            data = self._load()
+            key = self._user_key(channel, identity)
+            for s in data.get(key, {}).get("sessions", []):
+                if s["session_id"] == session_id:
+                    if s.get("title_source") == "user":
+                        return False
+                    s["title"] = title[:120]
+                    s["title_source"] = source
+                    s["title_generated_at"] = time.time()
+                    s["message_count_at_title_gen"] = len(s.get("messages", []))
+                    s["updated_at"] = time.time()
+                    self._save(data)
+                    return True
+        return False
+
+    def get_session_for_title_check(
+        self, channel: str, identity: str, session_id: str
+    ) -> Optional[dict]:
+        """Get session data needed to decide if title generation is needed."""
+        with self._lock:
+            data = self._load()
+            key = self._user_key(channel, identity)
+            for s in data.get(key, {}).get("sessions", []):
+                if s["session_id"] == session_id:
+                    return {
+                        "title": s.get("title", ""),
+                        "title_source": s.get("title_source", "auto"),
+                        "message_count": len(s.get("messages", [])),
+                        "message_count_at_title_gen": s.get(
+                            "message_count_at_title_gen", 0
+                        ),
+                        "messages": s.get("messages", [])[-20:],
+                    }
+        return None
 
     def delete_session(self, channel: str, identity: str, session_id: str) -> bool:
         """Delete a session. Returns False if not found."""
@@ -6601,6 +6643,165 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
 
     _start_time = time.time()
 
+    # ---- LLM Session Title Generation ----
+    QUOTE_CHARS = '"' + "'"
+    import httpx as _httpx
+
+    _TITLE_GEN_OLLAMA_URL = os.environ.get(
+        "TITLE_GEN_OLLAMA_URL", "http://192.168.1.101:11434"
+    )
+    _TITLE_GEN_MODEL = os.environ.get("TITLE_GEN_MODEL", "granite3.3-tuned")
+    _TITLE_REFRESH_INTERVAL = int(os.environ.get("TITLE_REFRESH_INTERVAL", "10"))
+
+    def _smart_heuristic_title(messages: list) -> str:
+        """Generate a reasonable title without an LLM using heuristic extraction."""
+        if not messages:
+            return ""
+        # Find first substantive user message (skip slash commands)
+        user_msg = ""
+        for m in messages:
+            if m.get("role") == "user":
+                text = m.get("content", "").strip()
+                if text and not text.startswith("/"):
+                    user_msg = text
+                    break
+        if not user_msg:
+            return ""
+        # Clean up: remove markdown, code fences, URLs
+        cleaned = re.sub(r"```[\s\S]*?```", "", user_msg)
+        cleaned = re.sub(r"`[^`]+`", "", cleaned)
+        cleaned = re.sub(r"https?://\S+", "", cleaned)
+        cleaned = re.sub(r"\[([^\]]+)\]\([^\)]+\)", r"", cleaned)
+        cleaned = re.sub(r"[#*_~>]", "", cleaned)
+        cleaned = " ".join(cleaned.split())
+        if not cleaned:
+            return user_msg[:60]
+        # If it's a question, keep the question form
+        if "?" in cleaned:
+            q_end = cleaned.index("?") + 1
+            title = cleaned[:q_end]
+        else:
+            title = cleaned
+        # Truncate intelligently at word boundary
+        if len(title) > 60:
+            title = title[:57]
+            last_space = title.rfind(" ")
+            if last_space > 30:
+                title = title[:last_space]
+            title += "..."
+        return title.strip()
+
+    async def _generate_title_via_llm(messages: list) -> Optional[str]:
+        """Generate a concise session title using an LLM.
+
+        Tries Ollama first (free, local), then Anthropic API.
+        Returns None if all providers fail.
+        """
+        context_msgs = messages[:6] if len(messages) <= 6 else messages[:3] + messages[-3:]
+        conversation = "\n".join(
+            f"{'User' if m['role'] == 'user' else 'Assistant'}: "
+            f"{m.get('content', '')[:300]}"
+            for m in context_msgs
+        )
+
+        system_prompt = (
+            "Generate a concise, descriptive title (max 60 chars) for this "
+            "conversation. The title should help a human quickly understand "
+            "the topic. Return ONLY the title text, no quotes, no explanation."
+        )
+
+        # Try Ollama (free, local)
+        try:
+            async with _httpx.AsyncClient(timeout=10.0) as client:
+                resp = await client.post(
+                    f"{_TITLE_GEN_OLLAMA_URL}/api/generate",
+                    json={
+                        "model": _TITLE_GEN_MODEL,
+                        "prompt": (
+                            f"{system_prompt}\n\n"
+                            f"Conversation:\n{conversation}\n\nTitle:"
+                        ),
+                        "stream": False,
+                        "options": {"temperature": 0.3, "num_predict": 30},
+                    },
+                )
+                if resp.status_code == 200:
+                    title = resp.json().get("response", "").strip().strip(QUOTE_CHARS)
+                    if title and 3 <= len(title) <= 120:
+                        return title
+        except Exception:
+            pass
+
+        # Try Anthropic API
+        anthropic_key = os.environ.get("ANTHROPIC_API_KEY")
+        if anthropic_key:
+            try:
+                import anthropic as _anthropic
+
+                client = _anthropic.AsyncAnthropic(api_key=anthropic_key)
+                resp = await client.messages.create(
+                    model="claude-haiku-4.5",
+                    max_tokens=30,
+                    system=system_prompt,
+                    messages=[
+                        {"role": "user", "content": f"Conversation:\n{conversation}"}
+                    ],
+                )
+                title = resp.content[0].text.strip().strip(QUOTE_CHARS)
+                if title and 3 <= len(title) <= 120:
+                    return title
+            except Exception:
+                pass
+
+        return None
+
+    async def _maybe_auto_generate_title(
+        channel: str, identity: str, session_id: str
+    ):
+        """Check if a session needs title generation and do it if so."""
+        try:
+            info = history_mgr.get_session_for_title_check(
+                channel, identity, session_id
+            )
+            if not info:
+                return
+
+            title_source = info["title_source"]
+            msg_count = info["message_count"]
+            msg_at_gen = info["message_count_at_title_gen"]
+
+            if title_source == "user":
+                return
+
+            needs_generation = msg_count >= 2 and title_source == "auto"
+
+            if (
+                not needs_generation
+                and title_source == "llm"
+                and msg_count - msg_at_gen >= _TITLE_REFRESH_INTERVAL
+            ):
+                needs_generation = True
+
+            if not needs_generation:
+                return
+
+            # Try LLM first, fall back to smart heuristic
+            title = await _generate_title_via_llm(info["messages"])
+            source = "llm"
+            if not title:
+                title = _smart_heuristic_title(info["messages"])
+                source = "heuristic"
+
+            if title and title != info.get("title"):
+                history_mgr.update_title_llm(
+                    channel, identity, session_id, title, source=source
+                )
+                logging.info(
+                    f"[TitleGen] {source} title for {session_id[:12]}: {title}"
+                )
+        except Exception as exc:
+            logging.warning(f"[TitleGen] Failed for {session_id[:12]}: {exc}")
+
     # ---- Pydantic models ----
     class ChannelEnum(str, Enum):
         telegram = "telegram"
@@ -7016,6 +7217,13 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             user["channel"], user["identity"], session_id, "assistant", result
         )
 
+        # Fire-and-forget LLM title generation
+        asyncio.create_task(
+            _maybe_auto_generate_title(
+                user["channel"], user["identity"], session_id
+            )
+        )
+
         session_data = session_mgr.get_or_create_session_data(
             session_id, identity=user["identity"]
         )
@@ -7196,6 +7404,13 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 )
                 history_mgr.append_message(
                     user["channel"], user["identity"], session_id, "assistant", result
+                )
+
+                # Fire-and-forget LLM title generation
+                asyncio.create_task(
+                    _maybe_auto_generate_title(
+                        user["channel"], user["identity"], session_id
+                    )
                 )
 
                 session_data = session_mgr.get_or_create_session_data(session_id)
@@ -7550,6 +7765,47 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         ):
             raise HTTPException(status_code=404, detail="Session not found")
         return {"renamed": True, "session_id": session_id, "title": title[:120]}
+
+    @app.post("/api/v1/history/sessions/{session_id}/generate-title")
+    async def generate_session_title(session_id: str, request: Request):
+        """Force (re)generate an LLM title for a session."""
+        user = await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        info = history_mgr.get_session_for_title_check(
+            user["channel"], user["identity"], session_id
+        )
+        if not info:
+            raise HTTPException(status_code=404, detail="Session not found")
+
+        if not info["messages"]:
+            raise HTTPException(
+                status_code=400, detail="Session has no messages"
+            )
+
+        # Try LLM first, then heuristic
+        title = await _generate_title_via_llm(info["messages"])
+        source = "llm"
+        if not title:
+            title = _smart_heuristic_title(info["messages"])
+            source = "heuristic"
+
+        if title:
+            history_mgr.update_title_llm(
+                user["channel"], user["identity"], session_id, title, source=source
+            )
+            return {
+                "session_id": session_id,
+                "title": title,
+                "source": source,
+            }
+
+        raise HTTPException(
+            status_code=500, detail="Could not generate title"
+        )
 
     # --- File upload ---
 
