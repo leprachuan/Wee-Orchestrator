@@ -540,3 +540,59 @@ def apply_update(skill_key: str) -> Dict[str, Any]:
         }
     else:
         return {"success": False, "message": f"Unknown origin type: {origin_type}"}
+
+
+def scan_agent_skills(agent_path: str) -> List[Dict[str, Any]]:
+    """Scan skills from a specific agent's .github/skills/ and .claude/skills/ directories.
+
+    Args:
+        agent_path: The filesystem path of the agent (e.g., /opt/fosterbot-home).
+
+    Returns:
+        List of skill descriptors found under that agent's skills directories.
+    """
+    origins = _load_origins()
+    results = []
+
+    skill_dirs = [
+        {"path": os.path.join(agent_path, ".github", "skills"), "label": f"{os.path.basename(agent_path)}/.github/skills"},
+        {"path": os.path.join(agent_path, ".claude", "skills"), "label": f"{os.path.basename(agent_path)}/.claude/skills"},
+    ]
+
+    for sd in skill_dirs:
+        base = sd["path"]
+        label = sd["label"]
+
+        if not os.path.isdir(base):
+            continue
+
+        for entry in sorted(os.listdir(base)):
+            if ".backup." in entry:
+                continue
+            full = os.path.join(base, entry)
+            if not os.path.isdir(full):
+                continue
+            if entry.startswith(".") or entry == "__pycache__":
+                continue
+
+            # Handle nested skill repos
+            nested_skills_dir = os.path.join(full, "skills")
+            if os.path.isdir(nested_skills_dir):
+                for nested_entry in sorted(os.listdir(nested_skills_dir)):
+                    if ".backup." in nested_entry:
+                        continue
+                    nested_full = os.path.join(nested_skills_dir, nested_entry)
+                    if os.path.isdir(nested_full) and _is_skill_dir(nested_full):
+                        skill = _build_skill_descriptor(
+                            nested_full, nested_entry, f"{label}/{entry}", origins
+                        )
+                        results.append(skill)
+                continue
+
+            if not _is_skill_dir(full):
+                continue
+
+            skill = _build_skill_descriptor(full, entry, label, origins)
+            results.append(skill)
+
+    return results

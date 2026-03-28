@@ -6334,6 +6334,8 @@ if (document.readyState !== 'loading') {
 let _skillsPanelOpen = false;
 let _skillsCache = [];           // cached skills list from API
 let _skillsDetailKey = null;     // currently viewed skill key
+let _skillsAgentFilter = '';     // selected agent name, '' = all
+let _skillsAgentsLoaded = false; // whether the agent dropdown is populated
 
 // ── Panel toggle ─────────────────────────────────────────────────────────────
 
@@ -6348,6 +6350,7 @@ function openSkillsPanel() {
   panel.classList.remove('skills-hidden');
   panel.classList.add('skills-open');
   _skillsPanelOpen = true;
+  _loadSkillsAgentList();
   loadSkillsList();
 }
 
@@ -6366,7 +6369,8 @@ async function loadSkillsList() {
   if (!listEl) return;
 
   try {
-    const resp = await fetch(`${API_BASE}/skills`, {
+    const agentParam = _skillsAgentFilter ? `?agent=${encodeURIComponent(_skillsAgentFilter)}` : '';
+    const resp = await fetch(`${API_BASE}/skills${agentParam}`, {
       headers: { 'Authorization': `Bearer ${STATE.token}` }
     });
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
@@ -6409,9 +6413,13 @@ function _renderSkillsList() {
   }
 
   if (filtered.length === 0) {
+    const agentHint = _skillsAgentFilter
+      ? `<div style="font-size:12px;color:var(--text-muted);margin-top:6px;">Agent <strong>${_escHtml(_skillsAgentFilter)}</strong> has no skills in .github/skills/ or .claude/skills/</div>`
+      : '';
     listEl.innerHTML = `<div class="skills-empty">
       <div style="font-size:36px;opacity:0.4;">🔍</div>
       <div style="font-size:14px;color:var(--text-secondary);margin-top:8px;">No skills match</div>
+      ${agentHint}
     </div>`;
     return;
   }
@@ -6748,6 +6756,37 @@ function _showSkillToast(msg, type) {
   setTimeout(() => toast.remove(), 4000);
 }
 
+// ── Agent selector for skills ────────────────────────────────────────────────
+
+async function _loadSkillsAgentList() {
+  if (_skillsAgentsLoaded) return;
+  const sel = document.getElementById('skills-agent-filter');
+  if (!sel) return;
+
+  try {
+    const resp = await fetch(`${API_BASE}/agents`, {
+      headers: { 'Authorization': `Bearer ${STATE.token}` }
+    });
+    if (!resp.ok) return;
+    const data = await resp.json();
+    const agents = data.agents || [];
+
+    // Keep the first "All Skills" option, clear any previously added
+    while (sel.options.length > 1) sel.remove(1);
+
+    for (const ag of agents.sort((a, b) => a.name.localeCompare(b.name))) {
+      const opt = document.createElement('option');
+      opt.value = ag.name;
+      opt.textContent = ag.name;
+      if (ag.description) opt.title = ag.description;
+      sel.appendChild(opt);
+    }
+    _skillsAgentsLoaded = true;
+  } catch (_) {
+    // Silently fail — dropdown stays with "All Skills" only
+  }
+}
+
 // ── Init ─────────────────────────────────────────────────────────────────────
 
 function _initSkillsPanel() {
@@ -6768,6 +6807,15 @@ function _initSkillsPanel() {
 
   const filterSelect = document.getElementById('skills-filter-origin');
   if (filterSelect) filterSelect.addEventListener('change', _renderSkillsList);
+
+  const agentFilter = document.getElementById('skills-agent-filter');
+  if (agentFilter) {
+    agentFilter.addEventListener('change', () => {
+      _skillsAgentFilter = agentFilter.value;
+      _closeSkillDetail();
+      loadSkillsList();
+    });
+  }
 }
 
 window.toggleSkillsPanel = toggleSkillsPanel;

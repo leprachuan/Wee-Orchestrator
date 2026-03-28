@@ -10479,13 +10479,31 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         delete_origin,
         get_origin,
         get_skill,
+        scan_agent_skills,
         scan_skills,
         set_origin,
     )
 
     @app.get("/api/v1/skills")
-    async def list_skills():
-        """Return all installed skills with origin metadata."""
+    async def list_skills(agent: Optional[str] = None):
+        """Return installed skills, optionally scoped to an agent.
+
+        If ``?agent=name`` is provided, returns only skills found under
+        that agent's ``.github/skills/`` and ``.claude/skills/`` directories.
+        Otherwise returns all globally installed skills.
+        """
+        if agent:
+            agent_info = session_mgr.AGENTS.get(agent)
+            if not agent_info:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"Agent '{agent}' not found",
+                )
+            agent_path = agent_info.get("path", "")
+            if not agent_path:
+                return {"skills": [], "count": 0, "agent": agent}
+            skills = scan_agent_skills(agent_path)
+            return {"skills": skills, "count": len(skills), "agent": agent}
         skills = scan_skills()
         return {"skills": skills, "count": len(skills)}
 
