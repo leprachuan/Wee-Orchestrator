@@ -14,6 +14,7 @@ import secrets as _secrets
 import shutil
 import signal
 import subprocess
+import hashlib
 import sys
 import threading
 import time
@@ -11101,7 +11102,6 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
         )
 
-
     # --- Text-to-Speech ───────────────────────────────────────────────────────
     _tts_cache_dir = Path("/tmp/webui_tts_cache")
     _tts_cache_dir.mkdir(parents=True, exist_ok=True)
@@ -11169,7 +11169,6 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             )
 
         # Cache key based on text + voice
-        import hashlib
         cache_key = hashlib.sha256(f"{voice}:{clean}".encode()).hexdigest()
         cache_path = _tts_cache_dir / f"{cache_key}.mp3"
 
@@ -11182,9 +11181,10 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             except Exception as exc:
                 # Clean up partial file
                 cache_path.unlink(missing_ok=True)
-                print(
-                    f"[TTS] edge-tts failed for {auth.get('identity', '?')}: {exc}",
-                    file=sys.stderr,
+                logging.error(
+                    "[TTS] edge-tts failed for %s: %s",
+                    auth.get("identity", "?"),
+                    exc,
                 )
                 raise HTTPException(
                     status_code=500,
@@ -11206,7 +11206,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         x_auth_channel: Optional[str] = Header(None),
     ):
         """List available TTS voices."""
-        auth = await authenticate(
+        _ = await authenticate(
             request,
             authorization=authorization,
             x_user_identity=x_user_identity,
