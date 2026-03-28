@@ -1441,8 +1441,6 @@ class SessionManager:
         self._agents_json_mtime = config_path.stat().st_mtime
         new_count = len(fresh)
 
-        added = set(fresh.keys()) - set(self.AGENTS.keys()) if old_count else set()
-        removed = set()  # computed before swap for accuracy
         msg = f"Reloaded {new_count} agent(s) from disk (was {old_count})."
         return True, msg
 
