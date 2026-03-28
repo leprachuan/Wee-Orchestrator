@@ -275,7 +275,7 @@ def test_api_notifications_off_sets_global_mute():
     print("✓ API accepted /notifications off")
 
     # Step 3: Verify the prefs file has _global muted
-    prefs_path = os.path.expanduser("~/.copilot/notification_prefs.json")
+    prefs_path = "/home/n8n/.copilot/notification_prefs.json"  # server runs as n8n user
     if os.path.exists(prefs_path):
         with open(prefs_path) as f:
             prefs = json.load(f)
@@ -344,7 +344,7 @@ def test_api_cross_channel_mute_blocks_notification():
     print("✓ Muted from WebUI")
 
     # Step 2: Verify that NotificationManager would block a Telegram notification
-    real_mgr = NotificationManager()
+    real_mgr = NotificationManager(prefs_file="/home/n8n/.copilot/notification_prefs.json")  # server runs as n8n
     assert real_mgr.is_muted(
         "_global"
     ), f"Expected global mute. Prefs: {json.dumps(real_mgr._load_prefs())}"
@@ -376,7 +376,7 @@ def test_api_cross_channel_mute_blocks_notification():
         channel="webui",
     )
 
-    real_mgr2 = NotificationManager()
+    real_mgr2 = NotificationManager(prefs_file="/home/n8n/.copilot/notification_prefs.json")  # server runs as n8n
     assert not real_mgr2.is_muted(
         "_global"
     ), "Global mute should be cleared after /notifications on"
