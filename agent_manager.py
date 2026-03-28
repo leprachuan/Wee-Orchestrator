@@ -5,21 +5,21 @@ Wraps GitHub Copilot CLI and OpenCode CLI
 Manages session ID mapping between N8N chat sessions and AI backend sessions
 """
 
-import sys
-import os
-import json
-import subprocess
-import re
-import signal
-import time
 import argparse
-import shutil
+import json
 import logging
-from pathlib import Path
-from uuid import uuid4
-from typing import Optional, Tuple, Dict, List
+import os
+import re
 import secrets as _secrets
+import shutil
+import signal
+import subprocess
+import sys
 import threading
+import time
+from pathlib import Path
+from typing import Dict, List, Optional, Tuple
+from uuid import uuid4
 
 # Dynamically determine the repo base directory (works regardless of where repo is cloned)
 SCRIPT_BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -1623,10 +1623,9 @@ class SessionManager:
 
                 parts = line.split("/", 1)
                 if len(parts) == 2:
-                    provider, model = parts
+                    provider, _ = parts
                 else:
                     provider = "other"
-                    model = line
 
                 if provider not in models_by_provider:
                     models_by_provider[provider] = []
@@ -2639,7 +2638,6 @@ class SessionManager:
 
             found_codex_marker = False
             response_lines = []
-            skip_next_n_lines = 0
 
             for i, line in enumerate(lines):
                 line_lower = line.lower()
@@ -3014,8 +3012,8 @@ Example skill structure:
             Status message indicating success or failure
         """
         try:
-            import subprocess
             import shutil
+            import subprocess
 
             if agent not in self.AGENTS:
                 return f"Error: Unknown agent '{agent}'. Available agents: {', '.join(self.AGENTS.keys())}"
@@ -3177,7 +3175,6 @@ Example skill structure:
         # Add render type instruction to the context
         render_instruction = ""
         if render_type == "markdown":
-            _api_port = os.environ.get("API_PORT", "8001")
             render_instruction = f"""
 [Output Format: markdown]
 [Image Retrieval — MANDATORY: When the user asks for any image, picture, photo, or logo, you MUST retrieve and display a real image. Never say you cannot retrieve images — use your tools.
@@ -3619,7 +3616,9 @@ User Request:
             # 2. Disable output post-processing (OPOST/ONLCR) to avoid extra \r
             # 3. Disable echo to prevent input echo artifacts
             try:
-                import termios as _termios_mod, struct as _struct_mod, fcntl as _fcntl_mod
+                import fcntl as _fcntl_mod
+                import struct as _struct_mod
+                import termios as _termios_mod
 
                 # Set window size to 120 cols × 40 rows
                 _ws = _struct_mod.pack("HHHH", 40, 120, 0, 0)
@@ -3685,7 +3684,8 @@ User Request:
                     # Read from the PTY master fd for incremental output from
                     # runtimes whose compiled binaries buffer stdout when not
                     # connected to a TTY (e.g. the Rust-based Devin CLI).
-                    import codecs as _codecs, re as _re
+                    import codecs as _codecs
+                    import re as _re
 
                     _ansi_escape = _re.compile(
                         r"\x1b\[[0-9;]*[a-zA-Z]"  # CSI sequences
@@ -6438,6 +6438,7 @@ def _ddg_image_search(query: str, max_results: int = 4) -> list:
     """Fetch image results from DuckDuckGo without an API key.
     Returns list of {url, thumbnail, title, source} dicts."""
     import re as _re
+
     import requests as _req
 
     headers = {
@@ -6511,24 +6512,24 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
     """Factory that builds and returns the FastAPI application."""
     import asyncio
     import concurrent.futures
+    import mimetypes
     from enum import Enum
 
     from fastapi import (
         FastAPI,
+        File,
         Header,
         HTTPException,
+        Query,
         Request,
         UploadFile,
-        File,
         WebSocket,
         WebSocketDisconnect,
-        Query,
     )
-    from fastapi.responses import JSONResponse, FileResponse, StreamingResponse
-    from fastapi.staticfiles import StaticFiles
     from fastapi.middleware.cors import CORSMiddleware
+    from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+    from fastapi.staticfiles import StaticFiles
     from pydantic import BaseModel, field_validator
-    import mimetypes
 
     global _api_auth_manager
 
@@ -8017,9 +8018,9 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         session-map JSON) always transitions the task to 'failed' instead of
         leaving it stuck in 'running' forever.
         """
-        import subprocess
         import json as _json
         import re as _re
+        import subprocess
 
         _tool_call_counter = 0
 
@@ -10106,13 +10107,13 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
     # ── Skills Panel API ──────────────────────────────────────────────────────
 
     from skill_manager import (
-        scan_skills,
-        get_skill,
-        get_origin,
-        set_origin,
-        delete_origin,
-        check_update,
         apply_update,
+        check_update,
+        delete_origin,
+        get_origin,
+        get_skill,
+        scan_skills,
+        set_origin,
     )
 
     @app.get("/api/v1/skills")

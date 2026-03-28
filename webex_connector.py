@@ -5,21 +5,23 @@ Bridges WebEX messages from RabbitMQ queue with the agent_manager.py
 Mirrors Telegram listener architecture but uses RabbitMQ as message source
 """
 
-import sys
-import os
 import json
+import logging
+import mimetypes
+import os
 import re
-import requests
+import ssl
+import sys
 import threading
 import time
-import pika
-import mimetypes
-import ssl
-import logging
-from pathlib import Path
-from urllib.parse import unquote
-from typing import Optional, Dict, List
 from datetime import datetime, timedelta
+from pathlib import Path
+from typing import Dict, List, Optional
+from urllib.parse import unquote
+
+import pika
+import requests
+
 import agent_manager
 import audio_transcriber
 
@@ -585,8 +587,9 @@ class WebEXConnector:
             file_ext = Path(file_path).suffix.lower()
             if file_ext == ".png":
                 try:
-                    from PIL import Image
                     import io
+
+                    from PIL import Image
 
                     img = Image.open(file_path)
                     if img.mode == "RGBA":

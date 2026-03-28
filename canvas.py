@@ -64,8 +64,9 @@ class Canvas:
         asyncio.run(self._async_send(message))
 
     async def _async_send(self, message: dict):
-        import websockets
         import ssl as _ssl
+
+        import websockets
 
         ssl_ctx = None
         if self._ws_url().startswith("wss://"):
@@ -144,8 +145,9 @@ class Canvas:
         return asyncio.run(self._async_wait_for_action(timeout))
 
     async def _async_wait_for_action(self, timeout: int) -> dict:
-        import websockets
         import ssl as _ssl
+
+        import websockets
 
         ws_url = self._ws_url()
         deadline = time.time() + timeout

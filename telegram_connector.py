@@ -5,18 +5,20 @@ Bridges Telegram chat with the agent_manager.py
 Handles user pairing, message routing, and configuration
 """
 
-import sys
-import os
 import json
+import logging
+import mimetypes
+import os
 import re
-import requests
+import sys
 import threading
 import time
-import mimetypes
-import logging
-from pathlib import Path
-from typing import Optional, Dict, List
 from datetime import datetime
+from pathlib import Path
+from typing import Dict, List, Optional
+
+import requests
+
 import agent_manager
 import audio_transcriber
 

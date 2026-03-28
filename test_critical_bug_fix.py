@@ -10,14 +10,14 @@ notifications were bypassing the user's notification_preference setting.
 """
 
 import json
-import sys
 import os
+import sys
 from pathlib import Path
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from agent_manager import SessionManager, BackgroundTaskManager
+from agent_manager import BackgroundTaskManager, SessionManager
 
 
 def test_bug_scenario():

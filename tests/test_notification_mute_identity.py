@@ -9,10 +9,8 @@ Validates that:
 - Global and per-identity mute coexist correctly
 """
 
-import json
 import os
 import sys
-import tempfile
 
 import pytest
 

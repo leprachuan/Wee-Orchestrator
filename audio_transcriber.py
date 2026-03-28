@@ -6,10 +6,10 @@ Used by Telegram, WebEx, and WebUI channels to transcribe voice messages.
 """
 
 import os
-import sys
-import time
 import subprocess
+import sys
 import tempfile
+import time
 from pathlib import Path
 from typing import Optional, Tuple
 

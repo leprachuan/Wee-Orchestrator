@@ -8,10 +8,11 @@ Tests that:
 3. Background tasks respect the mute preference
 """
 
-import requests
 import json
-import time
 import sys
+import time
+
+import requests
 
 # API configuration
 API_URL = "https://localhost:8001"

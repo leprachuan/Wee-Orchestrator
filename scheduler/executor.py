@@ -9,11 +9,11 @@ For each job that's ready to run:
 """
 
 import json
+import logging
 import os
 import subprocess
 import sys
 import time
-import logging
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, Optional
@@ -48,9 +48,9 @@ except ImportError:
     _WebEXConnector = None
 
 from scheduler.management import (
-    parse_schedule_to_next_run,
-    is_valid_cron,
     cron_next_run,
+    is_valid_cron,
+    parse_schedule_to_next_run,
 )
 
 

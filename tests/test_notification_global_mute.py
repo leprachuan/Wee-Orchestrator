@@ -344,7 +344,9 @@ def test_api_cross_channel_mute_blocks_notification():
     print("✓ Muted from WebUI")
 
     # Step 2: Verify that NotificationManager would block a Telegram notification
-    real_mgr = NotificationManager(prefs_file="/home/n8n/.copilot/notification_prefs.json")  # server runs as n8n
+    real_mgr = NotificationManager(
+        prefs_file="/home/n8n/.copilot/notification_prefs.json"
+    )  # server runs as n8n
     assert real_mgr.is_muted(
         "_global"
     ), f"Expected global mute. Prefs: {json.dumps(real_mgr._load_prefs())}"
@@ -376,7 +378,9 @@ def test_api_cross_channel_mute_blocks_notification():
         channel="webui",
     )
 
-    real_mgr2 = NotificationManager(prefs_file="/home/n8n/.copilot/notification_prefs.json")  # server runs as n8n
+    real_mgr2 = NotificationManager(
+        prefs_file="/home/n8n/.copilot/notification_prefs.json"
+    )  # server runs as n8n
     assert not real_mgr2.is_muted(
         "_global"
     ), "Global mute should be cleared after /notifications on"

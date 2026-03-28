@@ -16,22 +16,22 @@ Environment Variables:
   to be installed and available in PATH. Default: disabled (safe for CI/CD)
 """
 
-import unittest
-import tempfile
 import json
 import os
-import sys
 import shutil
 import subprocess
+import sys
+import tempfile
+import unittest
 from io import StringIO
 from pathlib import Path
-from unittest.mock import Mock, patch, MagicMock
+from unittest.mock import MagicMock, Mock, patch
 
 # Add parent directory to path to import agent_manager
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from agent_manager import SessionManager
 import agent_manager
+from agent_manager import SessionManager
 
 # Check if we should run tests that require actual CLI runtimes
 ENABLE_RUNTIME_TESTS = os.environ.get("TEST_WITH_RUNTIMES", "").lower() in (

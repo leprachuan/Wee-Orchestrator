@@ -1,8 +1,8 @@
 """Tests for FastAPI endpoints."""
 
-import unittest
 import os
 import sys
+import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -16,7 +16,9 @@ class TestAPIEndpoints(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         from unittest.mock import patch
+
         from fastapi.testclient import TestClient
+
         import agent_manager
 
         # Mock Telegram identity resolution so pairing tests don't need live bot

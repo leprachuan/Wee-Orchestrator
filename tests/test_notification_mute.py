@@ -12,11 +12,9 @@ Validates that:
 7. BackgroundTaskRequest.notify defaults to None (not True) so prefs are checked
 """
 
-import json
 import os
 import sys
 import tempfile
-import time
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 

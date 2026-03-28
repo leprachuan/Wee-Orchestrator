@@ -8,8 +8,8 @@ Polls jobs.json every second and executes ready jobs.
 Usage: python3 -m scheduler.run
 """
 
-import sys
 import os
+import sys
 
 # Ensure parent repo is in path for imports
 sys.path.insert(0, "/opt/n8n-copilot-shim-dev")

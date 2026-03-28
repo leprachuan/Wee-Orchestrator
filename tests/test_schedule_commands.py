@@ -17,18 +17,17 @@ Tests cover:
 - /help includes schedule commands
 """
 
-import unittest
-import tempfile
 import json
-import os
 import sys
+import tempfile
+import unittest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from agent_manager import SessionManager
 import agent_manager
+from agent_manager import SessionManager
 
 
 def _make_manager(temp_path):
