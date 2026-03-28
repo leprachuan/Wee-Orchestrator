@@ -2198,6 +2198,22 @@ class SessionManager:
 
         task_id = task.get("id", "unknown")
 
+        # ── Push to Valkey queue for instant daemon pickup ──
+        try:
+            from aoa.task_queue import get_task_queue
+            _tq = get_task_queue()
+            if _tq.available:
+                _tq.push_task(agent_name, task_id, metadata={
+                    "agent": agent_name,
+                    "model": model,
+                    "runtime": "copilot",
+                    "priority": str(priority),
+                    "created_at": str(int(__import__("time").time())),
+                })
+                _tq.notify_new_task(agent_name, task_id)
+        except Exception as _vq_exc:
+            print(f"[Valkey] Queue push failed (non-fatal): {_vq_exc}", file=sys.stderr)
+
         if sync_mode:
             # Poll HTTP API for completion (up to 5 minutes)
             deadline = _time.time() + 300
@@ -3087,6 +3103,56 @@ Example skill structure:
         agent_desc = agent_info.get("description", "No description")
         agent_path = agent_info.get("path", "")
 
+        # ── AoA inter-agent delegation context ──
+        # When the current agent is always-on, inject guidance on how to
+        # delegate tasks to other AoA agents with sync vs async semantics.
+        aoa_delegation_context = ""
+        if agent_info.get("always_on", False):
+            other_aoa = [
+                (n, i) for n, i in self.AGENTS.items()
+                if i.get("always_on", False) and n != agent_name
+            ]
+            if other_aoa:
+                agent_lines = "\n".join(
+                    f"  - **@{n}**: {i.get('description', 'No description')[:120]}"
+                    for n, i in other_aoa
+                )
+                aoa_delegation_context = f"""
+
+[AoA Inter-Agent Delegation]
+You are an Always-On Agent. You can delegate tasks to other agents using @mention syntax.
+
+Available agents:
+{agent_lines}
+
+## Delegation Modes
+
+**SYNC** — Use `@agent-name --sync <prompt>` when you NEED the result to continue:
+- Your workflow is BLOCKED until the other agent responds (up to 5 min timeout)
+- Use when you cannot proceed without the answer
+- Examples:
+  - `@wee-qa --sync Review this code change for security issues before I commit`
+  - `@research-dev --sync Find the latest API docs for X — I need this to write the integration`
+
+**ASYNC** — Use `@agent-name <prompt>` (no --sync flag) for fire-and-forget:
+- You continue your work immediately; the other agent works in the background
+- Use when the task is independent and you do not need the response right now
+- Examples:
+  - `@utility-dev Generate a summary report of today's changes`
+  - `@devops-dev Run a health check on staging and log results`
+
+## Decision Criteria
+| Question | If YES → |
+|----------|----------|
+| Will my current task fail or produce wrong results without the response? | **SYNC** |
+| Is the delegated task informational, a side-effect, or a notification? | **ASYNC** |
+| Am I at the END of my task, kicking off follow-up work? | **ASYNC** |
+| Do I need to validate/verify something before declaring done? | **SYNC** |
+| Can I keep working on other steps while waiting? | **ASYNC** |
+
+Rule of thumb: If in doubt, use **ASYNC** — it is non-blocking and the result can be checked later.
+"""
+
         # Load agent skills and workspace context
         skills_context = self.load_agent_skills(agent_path)
 
@@ -3378,7 +3444,7 @@ Example: python3 {SCRIPT_BASE_DIR}/agent_manager.py --agent research-dev --runti
             injection_text = ""
 
         context = f"""{handoff_prefix}[Session ID: {n8n_session_id}]
-{runtime_instruction}{injection_text}{agent_desc}{files_context}{render_instruction}{bg_task_instruction}{canvas_instruction}{timeout_instruction}
+{runtime_instruction}{injection_text}{agent_desc}{aoa_delegation_context}{files_context}{render_instruction}{bg_task_instruction}{canvas_instruction}{timeout_instruction}
 
 User Request:
 {prompt}"""
@@ -5686,6 +5752,20 @@ You can mention an agent in your prompt and it will auto-delegate:
                     with _urlreq.urlopen(aoa_req, timeout=5) as aoa_resp:
                         aoa_task = _json2.loads(aoa_resp.read())
                     aoa_tid = aoa_task.get("id", "?")
+                    # Push to Valkey queue for instant pickup
+                    try:
+                        from aoa.task_queue import get_task_queue as _get_tq2
+                        _bgq2 = _get_tq2()
+                        if _bgq2.available and aoa_tid and aoa_tid != "?":
+                            _bgq2.push_task(bg_agent, aoa_tid, metadata={
+                                "agent": bg_agent,
+                                "model": bg_model,
+                                "runtime": bg_runtime,
+                                "priority": "5",
+                            })
+                            _bgq2.notify_new_task(bg_agent, aoa_tid)
+                    except Exception as _bgq2_exc:
+                        print(f"[Valkey] BG queue push failed (non-fatal): {_bgq2_exc}", file=sys.stderr)
                     print(f"[AoA] /background routed to AoA: agent={bg_agent}, task_id={aoa_tid}", file=sys.stderr)
                     return (
                         f"🤖 **AoA task dispatched!**\n\n"
@@ -9687,6 +9767,22 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
     if _static_dir.exists():
         app.mount("/static", StaticFiles(directory=str(_static_dir)), name="static")
 
+    # ── AoA Queue Stats endpoint ──────────────────────────────────────
+    @app.get("/api/v1/aoa/queue-stats")
+    async def aoa_queue_stats():
+        """Return Valkey queue health and per-agent stats."""
+        try:
+            from aoa.task_queue import get_task_queue
+            tq = get_task_queue()
+            return {
+                "valkey": tq.health_check(),
+                "queues": tq.queue_stats(),
+            }
+        except ImportError:
+            return {"error": "aoa.task_queue module not available"}
+        except Exception as exc:
+            return {"error": str(exc)}
+
     return app
 
 
@@ -9904,6 +10000,7 @@ Examples:
     # Execute the main prompt
     output = manager.execute(args.prompt, args.session_id)
     print(output)
+
 
 
 if __name__ == "__main__":
