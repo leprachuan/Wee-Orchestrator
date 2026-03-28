@@ -868,7 +868,12 @@ class HistoryManager:
         return False
 
     def update_title_llm(
-        self, channel: str, identity: str, session_id: str, title: str, source: str = "llm"
+        self,
+        channel: str,
+        identity: str,
+        session_id: str,
+        title: str,
+        source: str = "llm",
     ) -> bool:
         """Update session title from auto-generation. Won't overwrite user-set titles."""
         with self._lock:
@@ -6697,7 +6702,9 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         Tries Ollama first (free, local), then Anthropic API.
         Returns None if all providers fail.
         """
-        context_msgs = messages[:6] if len(messages) <= 6 else messages[:3] + messages[-3:]
+        context_msgs = (
+            messages[:6] if len(messages) <= 6 else messages[:3] + messages[-3:]
+        )
         conversation = "\n".join(
             f"{'User' if m['role'] == 'user' else 'Assistant'}: "
             f"{m.get('content', '')[:300]}"
@@ -6755,9 +6762,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
 
         return None
 
-    async def _maybe_auto_generate_title(
-        channel: str, identity: str, session_id: str
-    ):
+    async def _maybe_auto_generate_title(channel: str, identity: str, session_id: str):
         """Check if a session needs title generation and do it if so."""
         try:
             info = history_mgr.get_session_for_title_check(
@@ -7219,9 +7224,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
 
         # Fire-and-forget LLM title generation
         asyncio.create_task(
-            _maybe_auto_generate_title(
-                user["channel"], user["identity"], session_id
-            )
+            _maybe_auto_generate_title(user["channel"], user["identity"], session_id)
         )
 
         session_data = session_mgr.get_or_create_session_data(
@@ -7782,9 +7785,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             raise HTTPException(status_code=404, detail="Session not found")
 
         if not info["messages"]:
-            raise HTTPException(
-                status_code=400, detail="Session has no messages"
-            )
+            raise HTTPException(status_code=400, detail="Session has no messages")
 
         # Try LLM first, then heuristic
         title = await _generate_title_via_llm(info["messages"])
@@ -7803,9 +7804,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 "source": source,
             }
 
-        raise HTTPException(
-            status_code=500, detail="Could not generate title"
-        )
+        raise HTTPException(status_code=500, detail="Could not generate title")
 
     # --- File upload ---
 
