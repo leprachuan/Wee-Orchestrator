@@ -1222,10 +1222,6 @@ class SessionManager:
                     agents[name] = {
                         "path": agent.get("path", ""),
                         "description": agent.get("description", ""),
-                        "always_on": agent.get("always_on", False),
-                        "max_concurrent": agent.get("max_concurrent", 1),
-                        "runtime": agent.get("runtime", "copilot"),
-                        "model": agent.get("model", ""),
                     }
                 return agents
         except json.JSONDecodeError as e:
@@ -2128,35 +2124,17 @@ class SessionManager:
         """Detect if user is asking for a specific agent to help with something
 
         Patterns detected:
-        - "@agentname <task>" — AoA @mention routing (primary)
-        - "ask the devops agent..."
+        - "ask the family agent..."
         - "have the devops agent..."
-        - "in the devops agent..."
-        - etc.
+        - "this is in the family agent"
+        - "in the projects agent..."
+        - "from the family agent..."
 
         Returns: (agent_name, modified_prompt) or (None, original_prompt)
         """
         prompt_lower = prompt.lower()
 
-        # ── AoA @mention detection ──────────────────────────────────────────
-        # Matches "@agentname" at start of prompt or after whitespace
-        at_match = re.match(r"^\s*@(\w[\w-]*)\s+(.*)", prompt, re.DOTALL)
-        if at_match:
-            mention_agent = at_match.group(1).lower()
-            mention_prompt = at_match.group(2).strip()
-            # Only route to AoA if the agent is registered
-            try:
-                import urllib.request as _urlreq, json as _json
-                resp = _urlreq.urlopen("http://127.0.0.1:9877/agents", timeout=2)
-                aoa_agents = {a["agent"] for a in _json.loads(resp.read()) if a.get("enabled")}
-                if mention_agent in aoa_agents:
-                    return f"@aoa:{mention_agent}", mention_prompt
-            except Exception:
-                pass
-            # Agent not in AoA — fall through to direct delegation
-            return mention_agent, mention_prompt
-
-        # ── Legacy phrase-based delegation ──────────────────────────────────
+        # List of agent names to detect
         agent_keywords = {
             "family": ["family agent", "family knowledge"],
             "devops": ["devops agent", "devops"],
@@ -2164,6 +2142,7 @@ class SessionManager:
             "orchestrator": ["orchestrator agent", "orchestrator"],
         }
 
+        # Delegation phrases
         delegation_phrases = [
             "ask the",
             "have the",
@@ -2176,27 +2155,22 @@ class SessionManager:
             "search the",
         ]
 
+        # Check if prompt contains delegation request
         for agent_name, keywords in agent_keywords.items():
             for keyword in keywords:
                 if keyword in prompt_lower:
+                    # Check if it's a delegation request
                     for phrase in delegation_phrases:
                         pattern = f"{phrase} {keyword}"
                         if pattern in prompt_lower:
+                            # Extract just the actual question part
+                            # Remove the "ask the family agent" part
                             modified = re.sub(
                                 rf"\b{phrase}\s+{re.escape(keyword)}[,.]?\s*",
                                 "",
                                 prompt,
                                 flags=re.IGNORECASE,
                             )
-                            # If this agent is registered as an AoA (Always-on Agent), route via AoA
-                            try:
-                                import urllib.request as _urlreq, json as _json
-                                resp = _urlreq.urlopen("http://127.0.0.1:9877/agents", timeout=2)
-                                aoa_agents = {a["agent"] for a in _json.loads(resp.read()) if a.get("enabled")}
-                                if agent_name in aoa_agents:
-                                    return f"@aoa:{agent_name}", modified
-                            except Exception:
-                                pass
                             return agent_name, modified
 
         return None, prompt
@@ -4754,49 +4728,7 @@ User Request:
         # If not a slash command, check for implicit agent delegation
         if command is None:
             delegated_agent, cleaned_prompt = self.detect_agent_delegation(prompt)
-            # AoA @mention routing: "@aoa:agentname" prefix means route to AoA system
-            if delegated_agent and delegated_agent.startswith("@aoa:"):
-                aoa_agent = delegated_agent[5:]
-                print(
-                    f"[AoA] Routing @{aoa_agent} mention to Always-on-Agent",
-                    file=sys.stderr,
-                )
-                try:
-                    import urllib.request as _urlreq, json as _json
-                    body = _json.dumps({
-                        "agent": aoa_agent,
-                        "prompt": cleaned_prompt,
-                        "runtime": None,
-                        "model": None,
-                        "priority": 5,
-                    }).encode()
-                    req = _urlreq.Request(
-                        "http://127.0.0.1:9877/task",
-                        data=body,
-                        method="POST",
-                    )
-                    req.add_header("Content-Type", "application/json")
-                    with _urlreq.urlopen(req, timeout=5) as resp:
-                        task = _json.loads(resp.read())
-                    task_id = task.get("id", "?")
-                    # Wait up to 120s for result (synchronous experience)
-                    import time as _time
-                    deadline = _time.time() + 120
-                    while _time.time() < deadline:
-                        _time.sleep(3)
-                        with _urlreq.urlopen(f"http://127.0.0.1:9877/task/{task_id}", timeout=5) as r2:
-                            t = _json.loads(r2.read())
-                        if t.get("status") in ("completed", "failed", "cancelled"):
-                            if t.get("output"):
-                                return t["output"]
-                            elif t.get("error"):
-                                return f"❌ @{aoa_agent} task failed: {t['error']}"
-                            break
-                    else:
-                        return f"⏳ @{aoa_agent} task {task_id[:8]} is still running. Check with: `aoa --checktask {task_id}`"
-                except Exception as e:
-                    return f"❌ Failed to route to @{aoa_agent} via AoA: {e}"
-            elif delegated_agent and delegated_agent in self.AGENTS:
+            if delegated_agent and delegated_agent in self.AGENTS:
                 # User asked for specific agent help - auto-delegate
                 print(
                     f"[Auto-Delegate] Detected request for '{delegated_agent}' agent",
@@ -5557,41 +5489,6 @@ You can mention an agent in your prompt and it will auto-delegate:
 
             channel = session_data.get("channel", "webui")
             identity = self._bg_identity or "unknown"
-
-            # ── AoA routing: if agent is always-on, route to AoA daemon ──
-            _bg_agent_cfg = self.AGENTS.get(bg_agent, {})
-            if _bg_agent_cfg.get("always_on", False):
-                try:
-                    import urllib.request as _urlreq, json as _json
-                    aoa_body = _json.dumps({
-                        "agent": bg_agent,
-                        "prompt": bg_prompt,
-                        "runtime": bg_runtime,
-                        "model": bg_model,
-                        "priority": 5,
-                        "identity": identity,
-                        "channel": channel,
-                    }).encode()
-                    aoa_req = _urlreq.Request(
-                        "http://127.0.0.1:9877/task",
-                        data=aoa_body, method="POST",
-                    )
-                    aoa_req.add_header("Content-Type", "application/json")
-                    with _urlreq.urlopen(aoa_req, timeout=5) as aoa_resp:
-                        aoa_task = _json.loads(aoa_resp.read())
-                    aoa_tid = aoa_task.get("id", "?")
-                    print(f"[AoA] /background routed to AoA: agent={bg_agent}, task_id={aoa_tid}", file=sys.stderr)
-                    return (
-                        f"🤖 **AoA task dispatched!**\n\n"
-                        f"• **Task ID:** `{aoa_tid}`\n"
-                        f"• **Agent:** `@{bg_agent}` (Always-on)\n"
-                        f"• **Prompt:** {bg_prompt[:150]}\n\n"
-                        f"View in the 🤖 Agents panel (right sidebar)."
-                    )
-                except Exception as _aoa_err:
-                    print(f"[AoA] /background AoA routing failed for {bg_agent}, falling back: {_aoa_err}", file=sys.stderr)
-                    # Fall through to regular background task
-
             running = self._bg_task_mgr.count_running(channel, identity)
             if running >= BackgroundTaskManager.MAX_TASKS_PER_USER:
                 return f"❌ Maximum {BackgroundTaskManager.MAX_TASKS_PER_USER} concurrent background tasks allowed."
@@ -7600,47 +7497,6 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         runtime = body.runtime or defaults.get("runtime", get_default_runtime())
         model = body.model or defaults.get("model", get_default_model())
 
-        # ── AoA routing: if agent is always-on, route to AoA daemon ──────
-        agent_cfg = session_mgr.AGENTS.get(agent, {})
-        if agent_cfg.get("always_on", False):
-            try:
-                import urllib.request as _ur
-                aoa_body = json.dumps({
-                    "agent": agent,
-                    "prompt": body.prompt,
-                    "runtime": runtime,
-                    "model": model,
-                    "priority": 5,
-                    "identity": identity,
-                    "channel": channel,
-                }).encode()
-                aoa_req = _ur.Request(
-                    f"{AOA_API}/task", data=aoa_body, method="POST"
-                )
-                aoa_req.add_header("Content-Type", "application/json")
-                with _ur.urlopen(aoa_req, timeout=5) as aoa_resp:
-                    aoa_task = json.loads(aoa_resp.read())
-                aoa_task_id = aoa_task.get("id", "unknown")
-                print(
-                    f"[API] AoA routed: agent={agent}, task_id={aoa_task_id}",
-                    file=sys.stderr,
-                )
-                return {
-                    "task_id": aoa_task_id,
-                    "agent": agent,
-                    "runtime": runtime,
-                    "model": model,
-                    "status": "pending",
-                    "routed_to": "aoa",
-                    "message": f"Task routed to Always-on Agent @{agent}",
-                }
-            except Exception as aoa_err:
-                print(
-                    f"[API] AoA routing failed for {agent}, falling back to background: {aoa_err}",
-                    file=sys.stderr,
-                )
-                # Fall through to regular background task dispatch
-
         task_id = f"bg_{str(uuid4())[:8]}"
         session_id = str(uuid4())  # Must be valid UUID format for Copilot CLI
 
@@ -9178,97 +9034,6 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         except Exception as exc:
             logger.error("Failed to hot-reload agents.json: %s", exc)
             raise HTTPException(status_code=500, detail=f"Reload failed: {exc}")
-
-    # ── AoA (Always-on Agents) proxy endpoints ──────────────────────────────
-    AOA_API = "http://127.0.0.1:9877"
-
-    @app.get("/api/v1/aoa/agents")
-    async def aoa_get_agents(request: Request):
-        """Proxy: list all AoA agents with status."""
-        await authenticate(request,
-            authorization=request.headers.get("authorization"),
-            x_user_identity=request.headers.get("x-user-identity"),
-            x_auth_channel=request.headers.get("x-auth-channel"))
-        import urllib.request as _ur
-        try:
-            with _ur.urlopen(f"{AOA_API}/agents", timeout=3) as r:
-                return JSONResponse(content=json.loads(r.read()))
-        except Exception as e:
-            raise HTTPException(status_code=503, detail=f"AoA unavailable: {e}")
-
-    @app.get("/api/v1/aoa/tasks")
-    async def aoa_get_tasks(request: Request, agent: str = Query(""), limit: int = Query(100)):
-        """Proxy: list AoA task queue (optionally filtered by agent)."""
-        await authenticate(request,
-            authorization=request.headers.get("authorization"),
-            x_user_identity=request.headers.get("x-user-identity"),
-            x_auth_channel=request.headers.get("x-auth-channel"))
-        import urllib.request as _ur
-        qs = f"limit={limit}" + (f"&agent={agent}" if agent else "")
-        try:
-            with _ur.urlopen(f"{AOA_API}/tasks?{qs}", timeout=3) as r:
-                return JSONResponse(content=json.loads(r.read()))
-        except Exception as e:
-            raise HTTPException(status_code=503, detail=f"AoA unavailable: {e}")
-
-    @app.patch("/api/v1/aoa/agents/{agent_name}")
-    async def aoa_update_agent(request: Request, agent_name: str):
-        """Update AoA agent settings (max_concurrent, enabled) and persist to agents.json."""
-        await authenticate(request,
-            authorization=request.headers.get("authorization"),
-            x_user_identity=request.headers.get("x-user-identity"),
-            x_auth_channel=request.headers.get("x-auth-channel"))
-        import urllib.request as _ur
-        body = await request.body()
-        try:
-            updates = json.loads(body)
-        except Exception:
-            raise HTTPException(status_code=400, detail="Invalid JSON")
-        # Update live AoA store
-        try:
-            req = _ur.Request(
-                f"{AOA_API}/agents/{agent_name}",
-                data=json.dumps(updates).encode(),
-                method="PATCH",
-            )
-            req.add_header("Content-Type", "application/json")
-            with _ur.urlopen(req, timeout=3) as r:
-                result = json.loads(r.read())
-        except Exception as e:
-            raise HTTPException(status_code=503, detail=f"AoA unavailable: {e}")
-        # Persist to agents.json
-        try:
-            raw = json.loads(_agents_json_path.read_text())
-            for ag in raw.get("agents", []):
-                if ag["name"] == agent_name:
-                    if "max_concurrent" in updates:
-                        ag["max_concurrent"] = updates["max_concurrent"]
-                    if "always_on" in updates:
-                        ag["always_on"] = updates["always_on"]
-                    break
-            _agents_json_path.write_text(json.dumps(raw, indent=2) + "\n")
-        except Exception as e:
-            logger.warning("Could not persist AoA update to agents.json: %s", e)
-        return result
-
-    @app.post("/api/v1/aoa/tasks")
-    async def aoa_create_task(request: Request):
-        """Create a new AoA task."""
-        await authenticate(request,
-            authorization=request.headers.get("authorization"),
-            x_user_identity=request.headers.get("x-user-identity"),
-            x_auth_channel=request.headers.get("x-auth-channel"))
-        import urllib.request as _ur
-        body = await request.body()
-        try:
-            req = _ur.Request(f"{AOA_API}/task", data=body, method="POST")
-            req.add_header("Content-Type", "application/json")
-            with _ur.urlopen(req, timeout=5) as r:
-                return JSONResponse(content=json.loads(r.read()))
-        except Exception as e:
-            raise HTTPException(status_code=503, detail=f"AoA unavailable: {e}")
-
-
 
     @app.get("/api/v1/logs")
     async def get_logs(
