@@ -6076,6 +6076,63 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
 
     # ---- endpoints ----
 
+    # ── AoA (Always-on Agents) proxy ──────────────────────────────────────────
+    import urllib.request as _urllib_req  # noqa: PLC0415
+
+    AOA_API_URL = os.environ.get("AOA_API_URL", "http://127.0.0.1:9877")
+
+    def _aoa_get(path: str):
+        try:
+            with _urllib_req.urlopen(f"{AOA_API_URL}{path}", timeout=5) as r:
+                return json.loads(r.read())
+        except Exception as e:
+            return {"error": str(e)}
+
+    def _aoa_post(path: str, body: bytes):
+        try:
+            req = _urllib_req.Request(f"{AOA_API_URL}{path}", data=body, method="POST")
+            req.add_header("Content-Type", "application/json")
+            with _urllib_req.urlopen(req, timeout=10) as r:
+                return json.loads(r.read())
+        except Exception as e:
+            return {"error": str(e)}
+
+    @app.get("/api/v1/aoa/agents")
+    async def aoa_get_agents():
+        import asyncio
+        return JSONResponse(await asyncio.get_event_loop().run_in_executor(None, lambda: _aoa_get("/agents")))
+
+    @app.get("/api/v1/aoa/tasks")
+    async def aoa_get_tasks(limit: int = 100):
+        import asyncio
+        return JSONResponse(await asyncio.get_event_loop().run_in_executor(None, lambda: _aoa_get(f"/tasks?limit={limit}")))
+
+    @app.get("/api/v1/aoa/task/{task_id}")
+    async def aoa_get_task(task_id: str):
+        import asyncio
+        return JSONResponse(await asyncio.get_event_loop().run_in_executor(None, lambda: _aoa_get(f"/task/{task_id}")))
+
+    @app.post("/api/v1/aoa/task")
+    async def aoa_create_task(request: Request):
+        import asyncio
+        body = await request.body()
+        return JSONResponse(await asyncio.get_event_loop().run_in_executor(None, lambda: _aoa_post("/task", body)))
+
+    @app.post("/api/v1/aoa/agent/config")
+    async def aoa_agent_config(request: Request):
+        import asyncio
+        body = await request.body()
+        return JSONResponse(await asyncio.get_event_loop().run_in_executor(None, lambda: _aoa_post("/agent/config", body)))
+
+    @app.get("/api/v1/aoa/status")
+    async def aoa_status():
+        import asyncio
+        data = await asyncio.get_event_loop().run_in_executor(None, lambda: _aoa_get("/status"))
+        status_code = 503 if "error" in data else 200
+        return JSONResponse(content=data, status_code=status_code)
+
+    # ── End AoA proxy ────────────────────────────────────────────────────────
+
     @app.get("/api/v1/agents")
     async def get_agents():
         """Return list of configured agents for WebUI."""

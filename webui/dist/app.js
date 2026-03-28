@@ -5767,6 +5767,10 @@ if (document.readyState !== 'loading') {
     set(F.todoDir,     agent.todo_dir);
     set(F.runtime,     agent.runtime);
     set(F.model,       agent.model);
+    const aoaEnabledEl = document.getElementById('asf-aoa-enabled');
+    const aoaConcEl    = document.getElementById('asf-aoa-concurrency');
+    if (aoaEnabledEl) aoaEnabledEl.checked = !!(agent.always_on);
+    if (aoaConcEl)    aoaConcEl.value = agent.max_concurrent || 1;
 
     const perms = agent.permissions || emptyPermissions();
     set(F.permMode, perms.mode);
@@ -5794,6 +5798,8 @@ if (document.readyState !== 'loading') {
       todo_dir:    get(F.todoDir)     || undefined,
       runtime:     get(F.runtime)     || undefined,
       model:       get(F.model)       || undefined,
+      always_on:   !!(document.getElementById('asf-aoa-enabled') && document.getElementById('asf-aoa-enabled').checked),
+      max_concurrent: parseInt((document.getElementById('asf-aoa-concurrency') || {value:'1'}).value) || 1,
       permissions: getPermissionsFromForm(),
     };
     // Strip undefined keys
@@ -5875,7 +5881,18 @@ if (document.readyState !== 'loading') {
       populateSelector(newAgents, agent.name);
       updatePermChangedIndicator();
       updateDirtyIndicator();
-      showOk('✓ Agent settings saved');
+      showOk('\u2713 Agent settings saved');
+      // Sync AoA service
+      const _agentName = agent.name;
+      fetch('/api/v1/aoa/agent/config', {
+        method: 'POST',
+        headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({
+          agent: _agentName,
+          enabled: !!(document.getElementById('asf-aoa-enabled') && document.getElementById('asf-aoa-enabled').checked),
+          max_concurrent: parseInt((document.getElementById('asf-aoa-concurrency') || {value:'1'}).value) || 1
+        })
+      }).catch(() => {});
     } catch (e) {
       showErr('Save failed: ' + e.message);
     } finally {
@@ -6651,3 +6668,98 @@ window._saveOrigin = _saveOrigin;
 window._deleteOrigin = _deleteOrigin;
 window._closeSkillDetail = _closeSkillDetail;
 window._openSkillDetail = _openSkillDetail;
+
+
+// ── Agents Panel ─────────────────────────────────────────────────────────────
+let _agentsPanelOpen = false;
+let _agentsRefreshTimer = null;
+let _agentTasksExpanded = {};
+
+function toggleAgentsPanel() {
+  _agentsPanelOpen ? closeAgentsPanel() : openAgentsPanel();
+}
+function openAgentsPanel() {
+  const p = document.getElementById('agents-panel');
+  if (!p) return;
+  p.classList.remove('agents-panel-hidden');
+  _agentsPanelOpen = true;
+  refreshAgentsPanel();
+  _agentsRefreshTimer = setInterval(refreshAgentsPanel, 3000);
+}
+function closeAgentsPanel() {
+  const p = document.getElementById('agents-panel');
+  if (!p) return;
+  p.classList.add('agents-panel-hidden');
+  _agentsPanelOpen = false;
+  clearInterval(_agentsRefreshTimer);
+  _agentsRefreshTimer = null;
+}
+async function refreshAgentsPanel() {
+  try {
+    const [ar, tr] = await Promise.all([
+      fetch('/api/v1/aoa/agents').then(r => r.ok ? r.json() : []),
+      fetch('/api/v1/aoa/tasks?limit=50').then(r => r.ok ? r.json() : [])
+    ]);
+    renderAgentsPanel(Array.isArray(ar) ? ar : [], Array.isArray(tr) ? tr : []);
+  } catch(e) {
+    const el = document.getElementById('agents-list');
+    if (el) el.innerHTML = '<div class="agents-empty">\u26a0 AoA service unavailable</div>';
+  }
+}
+function _agentTaskAge(ts) {
+  if (!ts) return '';
+  const s = Math.floor(Date.now()/1000 - ts);
+  return s < 60 ? s+'s' : s < 3600 ? Math.floor(s/60)+'m' : Math.floor(s/3600)+'h';
+}
+function renderAgentsPanel(agents, tasks) {
+  const list = document.getElementById('agents-list');
+  if (!list) return;
+  const badge = document.getElementById('agents-status-badge');
+  const active = agents.filter(a => (a.running||0) > 0).length;
+  if (badge) badge.textContent = active > 0 ? `${active} active` : `${agents.length} agents`;
+
+  list.innerHTML = agents.map(a => {
+    const at = tasks.filter(t => t.agent === a.agent);
+    const show = at.filter(t => ['pending','running'].includes(t.status));
+    const done = at.filter(t => ['completed','failed','cancelled'].includes(t.status));
+    const expanded = !!_agentTasksExpanded[a.agent];
+    const shown = expanded ? [...show, ...done] : show;
+    const dotCls = !a.enabled ? 'agent-dot-off' : (a.running||0)>0 ? 'agent-dot-on' : 'agent-dot-idle';
+    const rows = shown.map(t => {
+      const icon = {pending:'\u23f3',running:'\ud83d\udd04',completed:'\u2705',failed:'\u274c',cancelled:'\u23f8'}[t.status]||'\u2753';
+      return `<div class="agent-task-row agent-task-${t.status}">
+        <span class="agent-task-icon">${icon}</span>
+        <span class="agent-task-prompt">${(t.prompt||'').substring(0,80)}</span>
+        <span class="agent-task-age">${_agentTaskAge(t.started_at||t.created_at)}</span>
+      </div>`;
+    }).join('');
+    const expandBtn = at.length > show.length ?
+      `<button class="agent-expand-btn" onclick="_agentTasksExpanded['${a.agent}']=!_agentTasksExpanded['${a.agent}'];refreshAgentsPanel()">${expanded?'\u25b2 less':'\u25bc '+done.length+' completed'}</button>` : '';
+    return `<div class="agent-card${(a.running||0)>0?' agent-card-active':''}${!a.enabled?' agent-card-disabled':''}">
+      <div class="agent-card-header">
+        <div class="agent-dot ${dotCls}"></div>
+        <span class="agent-name">@${a.agent}</span>
+        <span class="agent-runtime">${a.runtime||'copilot'}</span>
+        <div class="agent-metrics"><span title="running">${a.running||0}\ud83d\udd04</span><span title="queued">${a.pending||0}\u23f3</span></div>
+      </div>
+      ${rows || expandBtn ? `<div class="agent-tasks">${rows}${expandBtn}</div>` : ''}
+    </div>`;
+  }).join('') || '<div class="agents-empty">No agents configured</div>';
+}
+
+function _initAgentsPanel() {
+  const et = document.getElementById('agents-edge-tab');
+  if (et) et.addEventListener('click', toggleAgentsPanel);
+  const cb = document.getElementById('btn-agents-close');
+  if (cb) cb.addEventListener('click', closeAgentsPanel);
+}
+
+if (document.readyState !== 'loading') {
+  _initAgentsPanel();
+} else {
+  document.addEventListener('DOMContentLoaded', _initAgentsPanel);
+}
+
+window.toggleAgentsPanel = toggleAgentsPanel;
+window.refreshAgentsPanel = refreshAgentsPanel;
+window.renderAgentsPanel = renderAgentsPanel;
