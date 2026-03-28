@@ -13,7 +13,7 @@ import shutil
 import subprocess
 import tempfile
 import time
-from pathlib import Path
+
 from typing import Any, Dict, List, Optional
 
 # ── Configuration ─────────────────────────────────────────────────────────────
@@ -128,7 +128,10 @@ def _dir_checksum(skill_dir: str) -> str:
 
 
 def _is_skill_dir(path: str) -> bool:
-    """Check if a directory looks like a skill (has SKILL.md or skill_metadata.json or known structure)."""
+    """Check if a directory looks like a skill.
+
+    Recognizes: SKILL.md, skill_metadata.json, or known structure.
+    """
     if os.path.isfile(os.path.join(path, "skill_metadata.json")):
         return True
     if os.path.isfile(os.path.join(path, "SKILL.md")):
