@@ -3311,8 +3311,14 @@ To add custom skill repositories or manage repository settings:
         bg_task_instruction = ""
         if _shared_key:
             bg_task_instruction = f"""
-[Background Tasks] Run long tasks via the orchestrator API (visible in ⚡ Tasks tab). Full docs: {SCRIPT_BASE_DIR}/docs/background-tasks.md
-curl -s{_curl_insecure} -X POST {_api_scheme}://127.0.0.1:{_api_port_bg}/api/v1/background-tasks -H "Content-Type: application/json" -H "Authorization: Bearer shared_{_shared_key}" -H "X-User-Identity: {_user_identity}" -H "X-Auth-Channel: {channel}" -d '{{"prompt": "...", "agent": "{agent}", "timeout": 900}}'"""
+[Background Tasks] Run long USER-INITIATED tasks via the orchestrator API (visible in ⚡ Tasks tab). ONLY use this when the USER explicitly asks to run something in the background. Full docs: {SCRIPT_BASE_DIR}/docs/background-tasks.md
+curl -s{_curl_insecure} -X POST {_api_scheme}://127.0.0.1:{_api_port_bg}/api/v1/background-tasks -H "Content-Type: application/json" -H "Authorization: Bearer shared_{_shared_key}" -H "X-User-Identity: {_user_identity}" -H "X-Auth-Channel: {channel}" -d '{{"prompt": "...", "agent": "{agent}", "timeout": 900}}'
+
+⚠️ CRITICAL ROUTING RULE — Sub-agent delegation MUST NOT use the background-tasks API above. When routing work to another agent (@research-dev, @devops, @family, etc.), ALWAYS use agent_manager.py directly (invisible to user — does NOT create a Tasks panel entry). Using the curl API for delegation is a BUG.
+
+[Sub-Agent Delegation] Route tasks to another agent invisibly:
+python3 {SCRIPT_BASE_DIR}/agent_manager.py --agent <agent_name> --runtime copilot --model claude-haiku-4.5 --config {SCRIPT_BASE_DIR}/agents.json "<task prompt>" {n8n_session_id}
+Example: python3 {SCRIPT_BASE_DIR}/agent_manager.py --agent research-dev --runtime copilot --config {SCRIPT_BASE_DIR}/agents.json "get crude oil pricing stats" {n8n_session_id}"""
 
         # Inject Wee Canvas capability hint
         canvas_instruction = f"""
