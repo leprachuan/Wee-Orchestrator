@@ -6792,6 +6792,7 @@ html, body {
 .aoa-task-item.completed { border-left-color: #4b5563; }
 .aoa-task-item.failed { border-left-color: #ef4444; }
 .aoa-task-prompt { color: var(--text-secondary); margin-bottom: 4px; line-height: 1.4; }
+.aoa-task-title { font-size: 0.78rem; color: #e0e0e0; font-weight: 500; line-height: 1.4; word-break: break-word; margin-bottom: 4px; }
 .aoa-task-meta { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
 .aoa-task-badge {
   padding: 1px 5px; border-radius: 4px;

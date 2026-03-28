@@ -2125,32 +2125,30 @@ class SessionManager:
     _aoa_response = None  # Holds response when @mention routes to AOA
 
     def _route_to_aoa(self, agent_name: str, prompt: str, original: str) -> Optional[str]:
-        """Check if agent_name exists in AOA config and queue the task.
+        """Check if agent_name exists in AOA config and queue the task via HTTP API.
         Returns a confirmation string, or None if agent not in AOA."""
-        import sqlite3 as _sqlite3
-        from uuid import uuid4 as _uuid4
+        import urllib.request as _url_req
+        import urllib.error as _url_err
         import time as _time
 
-        AOA_DB = "/opt/n8n-copilot-shim/aoa/tasks.sqlite"
-        if not os.path.exists(AOA_DB):
-            return None
+        aoa_url = os.environ.get("AOA_API_URL", "http://127.0.0.1:9877")
 
-        conn = _sqlite3.connect(AOA_DB, timeout=5)
-        conn.row_factory = _sqlite3.Row
-        row = conn.execute(
-            "SELECT agent_name, enabled FROM agent_config WHERE agent_name = ?",
-            (agent_name,),
-        ).fetchone()
+        # ── Check whether agent is known & enabled via AoA HTTP API ──
+        try:
+            with _url_req.urlopen(f"{aoa_url}/agents", timeout=5) as resp:
+                agents = json.loads(resp.read())
+            agent_info = next((a for a in agents if a.get("agent") == agent_name), None)
+        except Exception as exc:
+            logger.warning("AoA API unreachable (%s), falling back to normal routing", exc)
+            return None  # API down — fall through so chat still works
 
-        if not row:
-            conn.close()
+        if not agent_info:
             return None  # not an AOA agent — fall through to normal routing
 
-        if not row["enabled"]:
-            conn.close()
+        if not agent_info.get("enabled", True):
             return f"⚠️ Agent **@{agent_name}** is currently disabled in Always-On Agents."
 
-        # Determine model from --model flag or default
+        # ── Parse flags from original prompt ──
         model = "claude-haiku-4.5"
         if "--model " in original:
             m = re.search(r'--model\s+(\S+)', original)
@@ -2158,7 +2156,6 @@ class SessionManager:
                 model = m.group(1)
                 prompt = re.sub(r'\s*--model\s+\S+', '', prompt).strip()
 
-        # Determine priority from --priority flag
         priority = 0
         if "--priority " in original:
             m = re.search(r'--priority\s+(\d+)', original)
@@ -2166,40 +2163,54 @@ class SessionManager:
                 priority = int(m.group(1))
                 prompt = re.sub(r'\s*--priority\s+\d+', '', prompt).strip()
 
-        # Check for --sync flag
         sync_mode = "--sync" in original
         if sync_mode:
-            prompt = re.sub(r'\s*--sync', '', prompt).strip()
+            prompt = re.sub(r'\s*--sync', '', prompt).strip()
 
-        task_id = _uuid4().hex[:12]
         identity = self._bg_identity or "unknown"
 
-        conn.execute(
-            "INSERT INTO tasks (id, agent, prompt, model, runtime, priority, requester, requester_channel) "
-            "VALUES (?, ?, ?, ?, 'copilot', ?, ?, ?)",
-            (task_id, agent_name, prompt, model, priority, identity, "chat"),
-        )
-        conn.commit()
+        # ── Create task via AoA HTTP API (unified queuing — no direct SQLite) ──
+        payload = json.dumps({
+            "agent": agent_name,
+            "prompt": prompt,
+            "description": prompt[:80],
+            "model": model,
+            "runtime": "copilot",
+            "priority": priority,
+            "identity": identity,
+            "channel": "chat",
+        }).encode()
+
+        try:
+            req = _url_req.Request(f"{aoa_url}/task", data=payload, method="POST")
+            req.add_header("Content-Type", "application/json")
+            with _url_req.urlopen(req, timeout=10) as resp:
+                task = json.loads(resp.read())
+        except _url_err.HTTPError as exc:
+            body = exc.read().decode(errors="replace")
+            return f"⚠️ AoA task creation failed: HTTP {exc.code} — {body[:200]}"
+        except Exception as exc:
+            return f"❌ Failed to create AoA task: {exc}"
+
+        task_id = task.get("id", "unknown")
 
         if sync_mode:
-            # Poll for completion (up to 5 minutes)
+            # Poll HTTP API for completion (up to 5 minutes)
             deadline = _time.time() + 300
             while _time.time() < deadline:
                 _time.sleep(3)
-                row = conn.execute(
-                    "SELECT status, output, error FROM tasks WHERE id = ?",
-                    (task_id,),
-                ).fetchone()
-                if row and row["status"] in ("completed", "failed"):
-                    conn.close()
-                    if row["status"] == "completed":
-                        return f"✅ **@{agent_name}** completed:\n\n{(row['output'] or '')[:4000]}"
+                try:
+                    with _url_req.urlopen(f"{aoa_url}/task/{task_id}", timeout=5) as resp:
+                        t = json.loads(resp.read())
+                except Exception:
+                    continue
+                if t.get("status") in ("completed", "failed"):
+                    if t["status"] == "completed":
+                        return f"✅ **@{agent_name}** completed:\n\n{(t.get('output') or '')[:4000]}"
                     else:
-                        return f"❌ **@{agent_name}** failed:\n\n{(row['error'] or '')[:2000]}"
-            conn.close()
+                        return f"❌ **@{agent_name}** failed:\n\n{(t.get('error') or '')[:2000]}"
             return f"⏱️ **@{agent_name}** task `{task_id}` is still running after 5 minutes. Check status later."
 
-        conn.close()
         return (
             f"📋 Task queued for **@{agent_name}**\n"
             f"• Task ID: `{task_id}`\n"
@@ -7184,6 +7195,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         timeout: Optional[int] = None
         notify: Optional[bool] = None
         permission_mode: Optional[str] = None  # elevated, restricted (default), sandboxed
+        description: Optional[str] = None  # human-readable task name shown in Agents panel
 
         @field_validator("prompt")
         @classmethod

@@ -6813,7 +6813,7 @@ function closeAgentsPanel() {
         <div class="aoa-task-list ${qOpen ? 'open' : ''}" data-queue="${a.agent}">
           ${agentTasks.length ? agentTasks.map(t => `
             <div class="aoa-task-item ${t.status}">
-              <div class="aoa-task-prompt">${(t.prompt || '').substring(0, 120)}${(t.prompt || '').length > 120 ? '…' : ''}</div>
+              <div class="aoa-task-title">${(t.description || t.prompt || '').substring(0, 120)}${(t.description || t.prompt || '').length > 120 ? '…' : ''}</div>
               <div class="aoa-task-meta">
                 <span class="aoa-task-badge ${t.status}">${t.status}</span>
                 <span class="aoa-task-age">${t.status === 'pending' ? 'queued ' + ago(t.created_at) : t.status === 'running' ? 'started ' + ago(t.started_at) : 'done ' + ago(t.completed_at)}</span>
