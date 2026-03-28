@@ -6644,7 +6644,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
     _start_time = time.time()
 
     # ---- LLM Session Title Generation ----
-    QUOTE_CHARS = '"' + "'"
+    QUOTE_CHARS = chr(34) + chr(39)  # ASCII double-quote + single-quote
     import httpx as _httpx
 
     _TITLE_GEN_OLLAMA_URL = os.environ.get(
