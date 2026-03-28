@@ -1,5 +1,25 @@
 # Release Notes — Wee-Orchestrator
 
+## Unreleased
+
+### Hot-Reload agents.json Without Service Restarts (F004)
+
+Agents can now be added, removed, or reconfigured in `agents.json` and the change takes effect **immediately** -- no service restart required.
+
+**Backend (`agent_manager.py`):**
+- `reload_agents_from_disk()` -- validates the new config and falls back to the existing list if the file is invalid or missing, preventing any outage
+- Async file-watcher polls `agents.json` mtime every 10 seconds; triggers reload automatically on change
+- `PUT /api/v1/agents/reload` -- on-demand reload endpoint (auth required); useful for CI/CD and scripted deploys
+- Undefined `agents_list` reference in the background-task endpoint fixed as part of this change
+- 20 new tests added; **377 total tests pass**
+
+**QA:** 2-pass review -- Pass 1 found 1 MINOR (dead code at lines 1443-1445); fixed in ef51a32. Pass 2: all checks clean, no issues. **Approved.**
+
+**Commit:** ef51a32
+
+---
+
+
 ## v2.1.0 — 2026-02-22
 
 ### SSE Streaming for Web UI Chat
