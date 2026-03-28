@@ -1222,6 +1222,10 @@ class SessionManager:
                     agents[name] = {
                         "path": agent.get("path", ""),
                         "description": agent.get("description", ""),
+                        "always_on": agent.get("always_on", False),
+                        "max_concurrent": agent.get("max_concurrent", 1),
+                        "runtime": agent.get("runtime", "copilot"),
+                        "model": agent.get("model", ""),
                     }
                 return agents
         except json.JSONDecodeError as e:
@@ -5617,6 +5621,41 @@ You can mention an agent in your prompt and it will auto-delegate:
 
             channel = session_data.get("channel", "webui")
             identity = self._bg_identity or "unknown"
+
+            # ── AoA routing: if agent is always-on, route to AoA daemon ──
+            _bg_agent_cfg = self.AGENTS.get(bg_agent, {})
+            if _bg_agent_cfg.get("always_on", False):
+                try:
+                    import urllib.request as _urlreq, json as _json2
+                    aoa_body = _json2.dumps({
+                        "agent": bg_agent,
+                        "prompt": bg_prompt,
+                        "runtime": bg_runtime,
+                        "model": bg_model,
+                        "priority": 5,
+                        "identity": identity,
+                        "channel": channel,
+                    }).encode()
+                    aoa_req = _urlreq.Request(
+                        "http://127.0.0.1:9877/task",
+                        data=aoa_body, method="POST",
+                    )
+                    aoa_req.add_header("Content-Type", "application/json")
+                    with _urlreq.urlopen(aoa_req, timeout=5) as aoa_resp:
+                        aoa_task = _json2.loads(aoa_resp.read())
+                    aoa_tid = aoa_task.get("id", "?")
+                    print(f"[AoA] /background routed to AoA: agent={bg_agent}, task_id={aoa_tid}", file=sys.stderr)
+                    return (
+                        f"🤖 **AoA task dispatched!**\n\n"
+                        f"• **Task ID:** `{aoa_tid}`\n"
+                        f"• **Agent:** `@{bg_agent}` (Always-on)\n"
+                        f"• **Prompt:** {bg_prompt[:150]}\n\n"
+                        f"View in the 🤖 Agents panel (right sidebar)."
+                    )
+                except Exception as _aoa_err:
+                    print(f"[AoA] /background AoA routing failed for {bg_agent}, falling back: {_aoa_err}", file=sys.stderr)
+                    # Fall through to regular background task
+
             running = self._bg_task_mgr.count_running(channel, identity)
             if running >= BackgroundTaskManager.MAX_TASKS_PER_USER:
                 return f"❌ Maximum {BackgroundTaskManager.MAX_TASKS_PER_USER} concurrent background tasks allowed."
@@ -7690,51 +7729,43 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         runtime = body.runtime or defaults.get("runtime", get_default_runtime())
         model = body.model or defaults.get("model", get_default_model())
 
-        # Build set of locally-defined agent names (these always run locally)
-        try:
-            import json as _ljson
-            with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "agents.json")) as _lf:
-                _ldata = _ljson.load(_lf)
-            _local_agents = {a.get("name","") for a in _ldata.get("agents", [])}
-        except Exception:
-            _local_agents = {get_default_agent()}
-
-        # ── AoA routing: if target agent is AoA-enabled, submit to AoA queue ──────
-        # AoA tasks appear in the Agents panel, NOT in the Tasks panel.
-        try:
-            import asyncio as _asyncio2
-            _aoa_agents_list = await _asyncio2.get_event_loop().run_in_executor(None, lambda: _aoa_get("/agents"))
-            if isinstance(_aoa_agents_list, list):
-                for _aa in _aoa_agents_list:
-                    if _aa.get("agent") == agent and _aa.get("enabled", False) and agent not in _local_agents:
-                        import json as _json2
-                        _aoa_payload = _json2.dumps({
-                            "agent": agent,
-                            "prompt": body.prompt,
-                            "model": model,
-                            "runtime": runtime,
-                            "priority": 0,
-                            "requester": identity,
-                            "requester_channel": channel,
-                        }).encode()
-                        _aoa_resp = await _asyncio2.get_event_loop().run_in_executor(None, lambda: _aoa_post("/task", _aoa_payload))
-                        _aoa_tid = _aoa_resp.get("id") or _aoa_resp.get("task_id", "unknown")
-                        print(f"[AoA] Routed bg-task for agent '{agent}' to AoA queue as {_aoa_tid}")
-                        return JSONResponse({
-                            "task_id": _aoa_tid,
-                            "session_id": _aoa_tid,
-                            "agent": agent,
-                            "runtime": runtime,
-                            "model": model,
-                            "permission_mode": "restricted",
-                            "status": "pending",
-                            "aoa": True,
-                            "timeout": body.timeout or 3600,
-                        })
-                        break
-        except Exception as _aoa_route_err:
-            print(f"[AoA] Routing check failed: {_aoa_route_err} — falling through to background task")
-        # ── end AoA routing ────────────────────────────────────────────────────────
+        # ── AoA routing: if agent is always-on, route to AoA daemon ──────
+        agent_cfg = session_mgr.AGENTS.get(agent, {})
+        if agent_cfg.get("always_on", False):
+            try:
+                import urllib.request as _ur
+                aoa_body = json.dumps({
+                    "agent": agent,
+                    "prompt": body.prompt,
+                    "runtime": runtime,
+                    "model": model,
+                    "priority": 5,
+                    "identity": identity,
+                    "channel": channel,
+                }).encode()
+                aoa_req = _ur.Request(
+                    "http://127.0.0.1:9877/task", data=aoa_body, method="POST"
+                )
+                aoa_req.add_header("Content-Type", "application/json")
+                with _ur.urlopen(aoa_req, timeout=5) as _aoa_r2:
+                    aoa_task = json.loads(_aoa_r2.read())
+                aoa_tid = aoa_task.get("id", "?")
+                print(f"[AoA] API: routed to AoA daemon: agent={agent}, task_id={aoa_tid}")
+                return JSONResponse({
+                    "task_id": aoa_tid,
+                    "session_id": aoa_tid,
+                    "agent": agent,
+                    "runtime": runtime,
+                    "model": model,
+                    "permission_mode": "restricted",
+                    "status": "pending",
+                    "aoa": True,
+                    "routed_to": "aoa",
+                    "timeout": body.timeout or 3600,
+                })
+            except Exception as _aoa_err2:
+                print(f"[AoA] API: routing failed for {agent}, falling back: {_aoa_err2}")
+                # Fall through to regular background task
 
         task_id = f"bg_{str(uuid4())[:8]}"
         session_id = str(uuid4())  # Must be valid UUID format for Copilot CLI
