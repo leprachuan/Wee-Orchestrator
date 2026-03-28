@@ -543,7 +543,7 @@ def apply_update(skill_key: str) -> Dict[str, Any]:
 
 
 def scan_agent_skills(agent_path: str) -> List[Dict[str, Any]]:
-    """Scan skills from a specific agent's .github/skills/ and .claude/skills/ directories.
+    """Scan skills from a specific agent's .github/skills/ and .claude/skills/ dirs.
 
     Args:
         agent_path: The filesystem path of the agent (e.g., /opt/fosterbot-home).
@@ -555,8 +555,14 @@ def scan_agent_skills(agent_path: str) -> List[Dict[str, Any]]:
     results = []
 
     skill_dirs = [
-        {"path": os.path.join(agent_path, ".github", "skills"), "label": f"{os.path.basename(agent_path)}/.github/skills"},
-        {"path": os.path.join(agent_path, ".claude", "skills"), "label": f"{os.path.basename(agent_path)}/.claude/skills"},
+        {
+            "path": os.path.join(agent_path, ".github", "skills"),
+            "label": f"{os.path.basename(agent_path)}/.github/skills",
+        },
+        {
+            "path": os.path.join(agent_path, ".claude", "skills"),
+            "label": f"{os.path.basename(agent_path)}/.claude/skills",
+        },
     ]
 
     for sd in skill_dirs:
