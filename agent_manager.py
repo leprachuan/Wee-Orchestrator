@@ -7678,6 +7678,52 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         runtime = body.runtime or defaults.get("runtime", get_default_runtime())
         model = body.model or defaults.get("model", get_default_model())
 
+        # Build set of locally-defined agent names (these always run locally)
+        try:
+            import json as _ljson
+            with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "agents.json")) as _lf:
+                _ldata = _ljson.load(_lf)
+            _local_agents = {a.get("name","") for a in _ldata.get("agents", [])}
+        except Exception:
+            _local_agents = {get_default_agent()}
+
+        # ── AoA routing: if target agent is AoA-enabled, submit to AoA queue ──────
+        # AoA tasks appear in the Agents panel, NOT in the Tasks panel.
+        try:
+            import asyncio as _asyncio2
+            _aoa_agents_list = await _asyncio2.get_event_loop().run_in_executor(None, lambda: _aoa_get("/agents"))
+            if isinstance(_aoa_agents_list, list):
+                for _aa in _aoa_agents_list:
+                    if _aa.get("agent") == agent and _aa.get("enabled", False) and agent not in _local_agents:
+                        import json as _json2
+                        _aoa_payload = _json2.dumps({
+                            "agent": agent,
+                            "prompt": body.prompt,
+                            "model": model,
+                            "runtime": runtime,
+                            "priority": 0,
+                            "requester": identity,
+                            "requester_channel": channel,
+                        }).encode()
+                        _aoa_resp = await _asyncio2.get_event_loop().run_in_executor(None, lambda: _aoa_post("/task", _aoa_payload))
+                        _aoa_tid = _aoa_resp.get("id") or _aoa_resp.get("task_id", "unknown")
+                        print(f"[AoA] Routed bg-task for agent '{agent}' to AoA queue as {_aoa_tid}")
+                        return JSONResponse({
+                            "task_id": _aoa_tid,
+                            "session_id": _aoa_tid,
+                            "agent": agent,
+                            "runtime": runtime,
+                            "model": model,
+                            "permission_mode": "restricted",
+                            "status": "pending",
+                            "aoa": True,
+                            "timeout": body.timeout or 3600,
+                        })
+                        break
+        except Exception as _aoa_route_err:
+            print(f"[AoA] Routing check failed: {_aoa_route_err} — falling through to background task")
+        # ── end AoA routing ────────────────────────────────────────────────────────
+
         task_id = f"bg_{str(uuid4())[:8]}"
         session_id = str(uuid4())  # Must be valid UUID format for Copilot CLI
 
