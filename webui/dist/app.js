@@ -6792,6 +6792,7 @@ function closeAgentsPanel() {
           <div class="aoa-dot ${dotCls}"></div>
           <span class="aoa-name">@${a.agent}</span>
           <span class="aoa-runtime-tag">${a.runtime || 'copilot'}</span>
+          <button class="aoa-settings-btn" data-agent="${a.agent}" title="Agent Settings">⚙️</button>
         </div>
         <div class="aoa-metrics">
           <div class="aoa-metric"><div class="aoa-metric-val">${a.running || 0}</div><div class="aoa-metric-lbl">Running</div></div>
@@ -6824,6 +6825,28 @@ function closeAgentsPanel() {
 
     // Event delegation for this panel
     cardsCont.onclick = async (e) => {
+      // Settings gear icon click
+      const sBtn = e.target.closest('.aoa-settings-btn');
+      if (sBtn) {
+        e.stopPropagation();
+        const agent = sBtn.dataset.agent;
+        // Open the Settings panel and select this agent
+        const settingsBtn = document.querySelector('[data-panel="settings"]') || document.getElementById('btn-settings');
+        if (settingsBtn) settingsBtn.click();
+        setTimeout(() => {
+          const sel = document.getElementById('asf-agent-select');
+          if (sel) {
+            for (let i = 0; i < sel.options.length; i++) {
+              if (sel.options[i].value === agent || sel.options[i].text.indexOf(agent) !== -1) {
+                sel.value = sel.options[i].value;
+                sel.dispatchEvent(new Event('change'));
+                break;
+              }
+            }
+          }
+        }, 300);
+        return;
+      }
       const qtBtn = e.target.closest('.aoa-queue-toggle');
       if (qtBtn) {
         const agent = qtBtn.dataset.agent;

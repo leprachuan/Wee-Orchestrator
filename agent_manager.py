@@ -1377,7 +1377,7 @@ class SessionManager:
         """Fetch available models from copilot CLI help text"""
         if not self.copilot_bin:
             print("Copilot executable not found in any search paths", file=sys.stderr)
-            return {}
+            return self._copilot_static_fallback()
 
         try:
             # Use --no-color to ensure clean text
@@ -1385,7 +1385,7 @@ class SessionManager:
             result = subprocess.run(cmd, capture_output=True, text=True)
             if result.returncode != 0:
                 print(f"Copilot help command failed: {result.stderr}", file=sys.stderr)
-                return {}
+                return self._copilot_static_fallback()
 
             # Method 1: Robust Regex
             # Look for --model, then content, then (choices: ... )
@@ -1483,7 +1483,7 @@ class SessionManager:
             return categorized
         except Exception as e:
             print(f"Error fetching copilot models: {e}", file=sys.stderr)
-            return {}
+            return self._copilot_static_fallback()
 
     def fetch_opencode_models(self) -> Dict:
         """Fetch available models from opencode CLI, falling back to static list on failure."""

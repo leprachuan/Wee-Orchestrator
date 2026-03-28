@@ -6824,3 +6824,25 @@ html, body {
 .agent-settings-btn:hover {
   opacity: 1;
 }
+
+/* AoA agent card settings button */
+.aoa-settings-btn {
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 13px;
+  padding: 2px 5px;
+  margin-left: auto;
+  opacity: 0.5;
+  transition: opacity 0.2s;
+  line-height: 1;
+  color: inherit;
+}
+.aoa-settings-btn:hover {
+  opacity: 1;
+}
+.aoa-card-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
