@@ -6696,14 +6696,30 @@ function closeAgentsPanel() {
 }
 async function refreshAgentsPanel() {
   try {
-    const [ar, tr] = await Promise.all([
-      fetch('/api/v1/aoa/agents').then(r => r.ok ? r.json() : []),
-      fetch('/api/v1/aoa/tasks?limit=50').then(r => r.ok ? r.json() : [])
+    const [localResp, aoaAgentsResp, tasksResp] = await Promise.all([
+      fetch('/api/v1/agents').then(r => r.ok ? r.json() : {agents:[]}),
+      fetch('/api/v1/aoa/agents').then(r => r.ok ? r.json() : []).catch(() => []),
+      fetch('/api/v1/aoa/tasks?limit=50').then(r => r.ok ? r.json() : []).catch(() => [])
     ]);
-    renderAgentsPanel(Array.isArray(ar) ? ar : [], Array.isArray(tr) ? tr : []);
+    const localAgents = Array.isArray(localResp) ? localResp : (localResp.agents || []);
+    const aoaMap = {};
+    (Array.isArray(aoaAgentsResp) ? aoaAgentsResp : []).forEach(a => { aoaMap[a.agent] = a; });
+    const agents = localAgents.map(a => {
+      const aoa = aoaMap[a.name] || {};
+      return {
+        agent: a.name,
+        runtime: a.runtime || aoa.runtime || 'copilot',
+        model: a.model || aoa.model || '',
+        enabled: aoa.enabled !== false,
+        running: aoa.running || 0,
+        pending: aoa.pending || 0,
+        max_concurrent: aoa.max_concurrent || 1,
+      };
+    });
+    renderAgentsPanel(agents, Array.isArray(tasksResp) ? tasksResp : []);
   } catch(e) {
     const el = document.getElementById('agents-list');
-    if (el) el.innerHTML = '<div class="agents-empty">\u26a0 AoA service unavailable</div>';
+    if (el) el.innerHTML = '<div class="agents-empty">\u26a0 Could not load agents</div>';
   }
 }
 function _agentTaskAge(ts) {
