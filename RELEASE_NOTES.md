@@ -2,6 +2,30 @@
 
 ## Unreleased
 
+### Agent Selector for Skills Panel (F006)
+
+The Skills panel in the WebUI now includes an **agent selector combobox**, allowing users to browse and load skills scoped to a specific agent rather than always defaulting to the active session agent.
+
+**Backend (`skill_manager.py`):**
+- `scan_agent_skills(agent_name)` — scans `.github/skills/` for the specified agent and returns skill metadata
+- Unused `Path` import removed; long docstrings trimmed to satisfy E501 lint rules
+
+**Frontend (`webui/dist/app.js`):**
+- Agent selector combobox added to the Skills panel header
+- Selector is populated from the live agents list at panel open time
+- Skill scan requests dispatch for the selected agent; panel updates without a page reload
+- Combobox confirmed present in accessibility tree (Playwright snapshot)
+
+**Auth:** Skills endpoints enforce the same Bearer-token / shared-key auth as all other protected routes.
+
+**QA:** 2-pass review — Pass 1 flagged F401 (unused `Path` import) and E501 (line too long) in `skill_manager.py`; fixed in dedb86c. Pass 2: zero issues. **Approved.**
+
+**Tests:** 393 total pass (was 377 after F004). All 4 dev services active.
+
+**Commit:** dedb86c
+
+---
+
 ### Hot-Reload agents.json Without Service Restarts (F004)
 
 Agents can now be added, removed, or reconfigured in `agents.json` and the change takes effect **immediately** -- no service restart required.
