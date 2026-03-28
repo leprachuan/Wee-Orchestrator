@@ -353,12 +353,15 @@
       <div class="agents-edge-tab" id="agents-edge-tab" title="Toggle Agents">🤖</div>
       <div class="agents-inner">
         <div class="agents-header">
-          <h2 class="agents-title">🤖 Agents</h2>
-          <span id="agents-status-badge" class="agents-status-badge"></span>
-          <button id="btn-agents-close" class="btn-icon" title="Close">✕</button>
+          <h2 class="agents-title">🤖 Always-on Agents</h2>
+          <div style="display:flex;gap:6px;align-items:center;">
+            <span id="aoa-status-dot" class="aoa-status-dot" title="AoA service status"></span>
+            <button id="btn-agents-close" class="btn-icon" title="Close agents panel">✕</button>
+          </div>
         </div>
-        <div id="agents-list" class="agents-list">
-          <div class="agents-loading">Loading agents…</div>
+        <div id="aoa-summary" class="aoa-summary"></div>
+        <div id="aoa-agent-cards" class="aoa-agent-cards">
+          <div class="aoa-loading">⏳ Loading agents…</div>
         </div>
       </div>
     </aside>

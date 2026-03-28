@@ -6674,6 +6674,7 @@ window._openSkillDetail = _openSkillDetail;
 let _agentsPanelOpen = false;
 let _agentsRefreshTimer = null;
 let _agentTasksExpanded = {};
+window._agentTasksExpanded = _agentTasksExpanded;
 
 function toggleAgentsPanel() {
   _agentsPanelOpen ? closeAgentsPanel() : openAgentsPanel();
@@ -6694,88 +6695,182 @@ function closeAgentsPanel() {
   clearInterval(_agentsRefreshTimer);
   _agentsRefreshTimer = null;
 }
-async function refreshAgentsPanel() {
-  try {
-    const [localResp, aoaAgentsResp, tasksResp] = await Promise.all([
-      fetch('/api/v1/agents').then(r => r.ok ? r.json() : {agents:[]}),
-      fetch('/api/v1/aoa/agents').then(r => r.ok ? r.json() : []).catch(() => []),
-      fetch('/api/v1/aoa/tasks?limit=50').then(r => r.ok ? r.json() : []).catch(() => [])
-    ]);
-    const localAgents = Array.isArray(localResp) ? localResp : (localResp.agents || []);
-    const aoaMap = {};
-    (Array.isArray(aoaAgentsResp) ? aoaAgentsResp : []).forEach(a => { aoaMap[a.agent] = a; });
-    const agents = localAgents.map(a => {
-      const aoa = aoaMap[a.name] || {};
-      return {
-        agent: a.name,
-        runtime: a.runtime || aoa.runtime || 'copilot',
-        model: a.model || aoa.model || '',
-        enabled: aoa.enabled !== false,
-        running: aoa.running || 0,
-        pending: aoa.pending || 0,
-        max_concurrent: aoa.max_concurrent || 1,
-      };
-    });
-    renderAgentsPanel(agents, Array.isArray(tasksResp) ? tasksResp : []);
-  } catch(e) {
-    const el = document.getElementById('agents-list');
-    if (el) el.innerHTML = '<div class="agents-empty">\u26a0 Could not load agents</div>';
+// ── AoA (Always-on Agents) Panel ────────────────────────────────────────────
+(function() {
+  const panel     = document.getElementById('agents-panel');
+  const edgeTab   = document.getElementById('agents-edge-tab');
+  const closeBtn  = document.getElementById('btn-agents-close');
+  const cardsCont = document.getElementById('aoa-agent-cards');
+  const summaryEl = document.getElementById('aoa-summary');
+  const statusDot = document.getElementById('aoa-status-dot');
+  if (!panel) return;
+
+  let _open    = false;
+  let _timer   = null;
+  let _queues  = {}; // agentName -> bool (queue expanded)
+
+  function openPanel()  { panel.classList.remove('agents-hidden'); panel.classList.add('agents-open'); _open = true; startRefresh(); }
+  function closePanel() { panel.classList.add('agents-hidden'); panel.classList.remove('agents-open'); _open = false; stopRefresh(); }
+  function togglePanel(){ _open ? closePanel() : openPanel(); }
+
+  edgeTab?.addEventListener('click', togglePanel);
+  closeBtn?.addEventListener('click', closePanel);
+
+  function startRefresh() { if (!_timer) { loadAoa(); _timer = setInterval(loadAoa, 3000); } }
+  function stopRefresh()  { if (_timer) { clearInterval(_timer); _timer = null; } }
+
+  function ago(ts) {
+    if (!ts) return '—';
+    const d = Date.now() / 1000 - ts;
+    if (d < 60) return Math.floor(d) + 's ago';
+    if (d < 3600) return Math.floor(d / 60) + 'm ago';
+    return Math.floor(d / 3600) + 'h ago';
   }
-}
-function _agentTaskAge(ts) {
-  if (!ts) return '';
-  const s = Math.floor(Date.now()/1000 - ts);
-  return s < 60 ? s+'s' : s < 3600 ? Math.floor(s/60)+'m' : Math.floor(s/3600)+'h';
-}
-function renderAgentsPanel(agents, tasks) {
-  const list = document.getElementById('agents-list');
-  if (!list) return;
-  const badge = document.getElementById('agents-status-badge');
-  const active = agents.filter(a => (a.running||0) > 0).length;
-  if (badge) badge.textContent = active > 0 ? `${active} active` : `${agents.length} agents`;
 
-  list.innerHTML = agents.map(a => {
-    const at = tasks.filter(t => t.agent === a.agent);
-    const show = at.filter(t => ['pending','running'].includes(t.status));
-    const done = at.filter(t => ['completed','failed','cancelled'].includes(t.status));
-    const expanded = !!_agentTasksExpanded[a.agent];
-    const shown = expanded ? [...show, ...done] : show;
-    const dotCls = !a.enabled ? 'agent-dot-off' : (a.running||0)>0 ? 'agent-dot-on' : 'agent-dot-idle';
-    const rows = shown.map(t => {
-      const icon = {pending:'\u23f3',running:'\ud83d\udd04',completed:'\u2705',failed:'\u274c',cancelled:'\u23f8'}[t.status]||'\u2753';
-      return `<div class="agent-task-row agent-task-${t.status}">
-        <span class="agent-task-icon">${icon}</span>
-        <span class="agent-task-prompt">${(t.prompt||'').substring(0,80)}</span>
-        <span class="agent-task-age">${_agentTaskAge(t.started_at||t.created_at)}</span>
-      </div>`;
-    }).join('');
-    const expandBtn = at.length > show.length ?
-      `<button class="agent-expand-btn" onclick="_agentTasksExpanded['${a.agent}']=!_agentTasksExpanded['${a.agent}'];refreshAgentsPanel()">${expanded?'\u25b2 less':'\u25bc '+done.length+' completed'}</button>` : '';
-    return `<div class="agent-card${(a.running||0)>0?' agent-card-active':''}${!a.enabled?' agent-card-disabled':''}">
-      <div class="agent-card-header">
-        <div class="agent-dot ${dotCls}"></div>
-        <span class="agent-name">@${a.agent}</span>
-        <span class="agent-runtime">${a.runtime||'copilot'}</span>
-        <div class="agent-metrics"><span title="running">${a.running||0}\ud83d\udd04</span><span title="queued">${a.pending||0}\u23f3</span></div>
-      </div>
-      ${rows || expandBtn ? `<div class="agent-tasks">${rows}${expandBtn}</div>` : ''}
-    </div>`;
-  }).join('') || '<div class="agents-empty">No agents configured</div>';
-}
+  async function loadAoa() {
+    try {
+      // Use local /api/v1/agents as source of truth for agent list (dev agents.json),
+      // enrich with AoA running/pending counts from /api/v1/aoa/agents
+      const [localResp, aoaAgents, tasks] = await Promise.all([
+        fetch('/api/v1/agents', { headers: AUTH_HEADERS() }).then(r => r.json()),
+        fetch('/api/v1/aoa/agents', { headers: AUTH_HEADERS() }).then(r => r.json()).catch(() => []),
+        fetch('/api/v1/aoa/tasks?limit=200', { headers: AUTH_HEADERS() }).then(r => r.json()).catch(() => []),
+      ]);
+      const localAgents = Array.isArray(localResp) ? localResp : (localResp.agents || []);
+      const aoaMap = {};
+      (Array.isArray(aoaAgents) ? aoaAgents : []).forEach(a => { aoaMap[a.agent] = a; });
+      const agents = localAgents.map(a => {
+        const aoa = aoaMap[a.name] || {};
+        return {
+          agent: a.name,
+          runtime: a.runtime || aoa.runtime || 'copilot',
+          enabled: aoa.enabled !== false,
+          running: aoa.running || 0,
+          pending: aoa.pending || 0,
+          max_concurrent: aoa.max_concurrent || 1,
+        };
+      });
+      renderSummary(agents, tasks);
+      renderCards(agents, tasks);
+      if (statusDot) { statusDot.classList.add('online'); statusDot.classList.remove('offline'); statusDot.title = 'AoA online'; }
+    } catch (e) {
+      if (statusDot) { statusDot.classList.add('offline'); statusDot.classList.remove('online'); statusDot.title = 'AoA offline'; }
+      if (cardsCont) cardsCont.innerHTML = '<div class="aoa-loading">⚠ AoA service unreachable</div>';
+    }
+  }
 
-function _initAgentsPanel() {
-  const et = document.getElementById('agents-edge-tab');
-  if (et) et.addEventListener('click', toggleAgentsPanel);
-  const cb = document.getElementById('btn-agents-close');
-  if (cb) cb.addEventListener('click', closeAgentsPanel);
-}
+  function renderSummary(agents, tasks) {
+    if (!summaryEl) return;
+    const total   = tasks.length;
+    const running = tasks.filter(t => t.status === 'running').length;
+    const pending = tasks.filter(t => t.status === 'pending').length;
+    const done    = tasks.filter(t => t.status === 'completed').length;
+    summaryEl.innerHTML = `
+      <div class="aoa-sum-item"><span class="aoa-sum-val">${agents.length}</span><span class="aoa-sum-lbl">Agents</span></div>
+      <div class="aoa-sum-item"><span class="aoa-sum-val" style="color:#4ade80">${running}</span><span class="aoa-sum-lbl">Running</span></div>
+      <div class="aoa-sum-item"><span class="aoa-sum-val" style="color:#f59e0b">${pending}</span><span class="aoa-sum-lbl">Queued</span></div>
+      <div class="aoa-sum-item"><span class="aoa-sum-val">${done}</span><span class="aoa-sum-lbl">Done</span></div>
+      <div class="aoa-sum-item"><span class="aoa-sum-val">${total}</span><span class="aoa-sum-lbl">Total</span></div>`;
+  }
 
-if (document.readyState !== 'loading') {
-  _initAgentsPanel();
-} else {
-  document.addEventListener('DOMContentLoaded', _initAgentsPanel);
-}
+  function renderCards(agents, tasks) {
+    if (!cardsCont) return;
+    if (!agents.length) { cardsCont.innerHTML = '<div class="aoa-loading">No agents configured</div>'; return; }
+    cardsCont.innerHTML = '';
+    agents.forEach(a => {
+      const agentTasks = tasks.filter(t => t.agent === a.agent).slice(0, 20);
+      const qOpen = !!_queues[a.agent];
+      const dotCls = !a.enabled ? 'dis' : a.running > 0 ? 'on' : 'off';
+      const cardCls = 'aoa-card' + (!a.enabled ? ' aoa-disabled' : a.running > 0 ? ' aoa-running' : '');
+      const done = agentTasks.filter(t => t.status === 'completed').length;
 
-window.toggleAgentsPanel = toggleAgentsPanel;
-window.refreshAgentsPanel = refreshAgentsPanel;
-window.renderAgentsPanel = renderAgentsPanel;
+      const card = document.createElement('div');
+      card.className = cardCls;
+      card.dataset.agent = a.agent;
+      card.innerHTML = `
+        <div class="aoa-card-header">
+          <div class="aoa-dot ${dotCls}"></div>
+          <span class="aoa-name">@${a.agent}</span>
+          <span class="aoa-runtime-tag">${a.runtime || 'copilot'}</span>
+        </div>
+        <div class="aoa-metrics">
+          <div class="aoa-metric"><div class="aoa-metric-val">${a.running || 0}</div><div class="aoa-metric-lbl">Running</div></div>
+          <div class="aoa-metric"><div class="aoa-metric-val">${a.pending || 0}</div><div class="aoa-metric-lbl">Queued</div></div>
+          <div class="aoa-metric"><div class="aoa-metric-val">${done}</div><div class="aoa-metric-lbl">Done</div></div>
+        </div>
+        <div class="aoa-controls">
+          <span class="aoa-ctrl-lbl">Concurrency:</span>
+          <input class="aoa-concurrency" type="number" min="1" max="10" value="${a.max_concurrent || 1}" data-agent="${a.agent}" title="Max concurrent tasks" />
+          <button class="aoa-toggle ${a.enabled ? 'on' : 'off'}" data-agent="${a.agent}" data-enabled="${a.enabled}">
+            ${a.enabled ? '⏸ Pause' : '▶ Enable'}
+          </button>
+        </div>
+        <button class="aoa-queue-toggle ${qOpen ? 'open' : ''}" data-agent="${a.agent}">
+          <span>📋 Task Queue (${agentTasks.length})</span>
+          <span class="aoa-queue-chevron">▼</span>
+        </button>
+        <div class="aoa-task-list ${qOpen ? 'open' : ''}" data-queue="${a.agent}">
+          ${agentTasks.length ? agentTasks.map(t => `
+            <div class="aoa-task-item ${t.status}">
+              <div class="aoa-task-prompt">${(t.prompt || '').substring(0, 120)}${(t.prompt || '').length > 120 ? '…' : ''}</div>
+              <div class="aoa-task-meta">
+                <span class="aoa-task-badge ${t.status}">${t.status}</span>
+                <span class="aoa-task-age">${t.status === 'pending' ? 'queued ' + ago(t.created_at) : t.status === 'running' ? 'started ' + ago(t.started_at) : 'done ' + ago(t.completed_at)}</span>
+              </div>
+            </div>`).join('') : '<div class="aoa-task-empty">No tasks</div>'}
+        </div>`;
+      cardsCont.appendChild(card);
+    });
+
+    // Event delegation for this panel
+    cardsCont.onclick = async (e) => {
+      const qtBtn = e.target.closest('.aoa-queue-toggle');
+      if (qtBtn) {
+        const agent = qtBtn.dataset.agent;
+        _queues[agent] = !_queues[agent];
+        qtBtn.classList.toggle('open');
+        const list = cardsCont.querySelector(`[data-queue="${agent}"]`);
+        if (list) list.classList.toggle('open');
+        return;
+      }
+      const tBtn = e.target.closest('.aoa-toggle');
+      if (tBtn) {
+        const agent   = tBtn.dataset.agent;
+        const enabled = tBtn.dataset.enabled === 'true';
+        await patchAgent(agent, { enabled: !enabled });
+        loadAoa();
+        return;
+      }
+    };
+
+    cardsCont.onchange = async (e) => {
+      const inp = e.target.closest('.aoa-concurrency');
+      if (inp) {
+        const agent = inp.dataset.agent;
+        const val   = parseInt(inp.value, 10);
+        if (val > 0) await patchAgent(agent, { max_concurrent: val });
+      }
+    };
+  }
+
+  async function patchAgent(agent, updates) {
+    try {
+      await fetch(`/api/v1/aoa/agents/${agent}`, {
+        method: 'PATCH',
+        headers: { ...AUTH_HEADERS(), 'Content-Type': 'application/json' },
+        body: JSON.stringify(updates),
+      });
+    } catch (e) { console.warn('AoA patch failed', e); }
+  }
+
+  function AUTH_HEADERS() {
+    const tok = (typeof STATE !== 'undefined' && STATE.token) ? STATE.token : '';
+    const id  = (typeof STATE !== 'undefined' && STATE.identity) ? STATE.identity : '';
+    const ch  = (typeof STATE !== 'undefined' && STATE.channel) ? STATE.channel : 'api';
+    return {
+      ...(tok ? { 'Authorization': `Bearer ${tok}` } : {}),
+      ...(id  ? { 'X-User-Identity': id } : {}),
+      'X-Auth-Channel': ch,
+    };
+  }
+})();

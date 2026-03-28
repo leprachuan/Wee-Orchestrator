@@ -6131,6 +6131,13 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         status_code = 503 if "error" in data else 200
         return JSONResponse(content=data, status_code=status_code)
 
+    @app.patch("/api/v1/aoa/agents/{agent_name}")
+    async def aoa_patch_agent(agent_name: str, request: Request):
+        import asyncio
+        body = await request.json()
+        payload = json.dumps({"agent": agent_name, **body}).encode()
+        return JSONResponse(await asyncio.get_event_loop().run_in_executor(None, lambda: _aoa_post("/agent/config", payload)))
+
     # ── End AoA proxy ────────────────────────────────────────────────────────
 
     @app.get("/api/v1/agents")
