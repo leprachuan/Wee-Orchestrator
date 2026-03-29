@@ -4588,7 +4588,7 @@ User Request:
                         _stderr_buf_bl
                     )
                     # Strip STATUS_UPDATE markers from final output
-                    output = _re_bl.sub(
+                    output = re.sub(
                         r"\[STATUS_UPDATE[:\s]*[^\]]*\]\s*\n?", "", output
                     )
                     self.update_query_output(n8n_session_id, output)
