@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+### Remove Per-User RBAC for Background Task Visibility (F003)
+
+All authorized users can now see **all** background tasks regardless of who created them.
+
+**Backend (`agent_manager.py`):**
+- Removed `_identity_matches` ownership checks from 5 detail/action endpoints: `GET /{task_id}`, `GET /{task_id}/transcript`, `GET /{task_id}/logs`, `GET /{task_id}/tool-calls`, `DELETE /{task_id}`
+- `/background list` slash command switched to `list_all_tasks()` (was per-user)
+- Per-user rate limiting (`MAX_TASKS_PER_USER`, `count_running`, `count_queued`, `get_next_queued`) preserved; only visibility is affected
+- **Bonus fix:** auth enforcement added to 3 previously unprotected skill endpoints (`GET /api/v1/skill-details`, `GET /api/v1/skill-readme`, `POST /api/v1/skill-install`)
+
+**QA:** All 393 tests pass; cross-user task visibility confirmed; auth verified on all endpoints. NITPICK (E501 docstring line 386) noted, not blocking. **Approved.**
+
+**Commit:** 867510a
+
+---
+
 ### Agent Selector for Skills Panel (F006)
 
 The Skills panel in the WebUI now includes an **agent selector combobox**, allowing users to browse and load skills scoped to a specific agent rather than always defaulting to the active session agent.
