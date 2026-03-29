@@ -8933,7 +8933,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 )
                 if _su_bg_match:
                     session_mgr.set_live_status(
-                        n8n_session_id, _su_bg_match.group(1).strip()
+                        session_id, _su_bg_match.group(1).strip()
                     )
 
                 # ── Structured JSON parsing for stream-json runtimes ──
@@ -9025,7 +9025,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 )
                 if not final_output.strip():
                     final_output = output or "Task completed successfully"
-                session_mgr.clear_live_status(n8n_session_id)
+                session_mgr.clear_live_status(session_id)
                 bg_task_mgr.complete_task(task_id, final_output)
                 if task_id.startswith("sched_"):
                     try:
