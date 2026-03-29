@@ -1590,6 +1590,36 @@ class SessionManager:
             print(f"[Error] Failed to kill process {pid}: {e}", file=sys.stderr)
             return False
 
+    def _copilot_static_fallback(self) -> dict:
+        # Static model list used when copilot CLI is unavailable
+        return {
+            "Claude Models": [
+                "claude-sonnet-4.6",
+                "claude-opus-4.6",
+                "claude-haiku-4.5",
+                "claude-sonnet-4.5",
+                "claude-opus-4.6-fast",
+                "claude-opus-4.5",
+                "claude-sonnet-4",
+            ],
+            "GPT Models": [
+                "gpt-5.4",
+                "gpt-5.3-codex",
+                "gpt-5.2-codex",
+                "gpt-5.2",
+                "gpt-5.1-codex-max",
+                "gpt-5.1-codex",
+                "gpt-5.1",
+                "gpt-5.1-codex-mini",
+                "gpt-5-mini",
+                "gpt-4.1",
+            ],
+            "Google Models": [
+                "gemini-3-pro-preview",
+            ],
+        }
+
+
     def fetch_copilot_models(self) -> Dict:
         """Fetch available models from copilot CLI help text"""
         if not self.copilot_bin:
