@@ -2593,10 +2593,9 @@ class SessionManager:
         return "restricted"
 
     def strip_metadata(self, text: str, runtime: str) -> str:
-        # Strip [STATUS_UPDATE: ...] markers (F004 — mobile channel progress)
-        import re as _re_sm
-        text = _re_sm.sub(r"\[STATUS_UPDATE[:\s]*[^\]]*\]\s*\n?", "", text)
         """Remove CLI metadata from output"""
+        # Strip [STATUS_UPDATE: ...] markers (F004 — mobile channel progress)
+        text = re.sub(r"\[STATUS_UPDATE[:\s]*[^\]]*\]\s*\n?", "", text)
         # First, strip thinking tags from the raw output
         text = self.strip_thinking_tags(text)
 
@@ -4498,8 +4497,7 @@ User Request:
                                     _su_match = None
                                     try:
                                         _su_line = line if isinstance(line, str) else line.decode("utf-8", errors="replace")
-                                        import re as _re_su
-                                        _su_match = _re_su.search(
+                                        _su_match = re.search(
                                             r"\[STATUS_UPDATE[:\s]*(.+?)\]", _su_line
                                         )
                                     except Exception:
@@ -4545,10 +4543,9 @@ User Request:
                 # Read stdout line-by-line instead of communicate() so we can
                 # capture [STATUS_UPDATE: ...] markers in real-time for mobile
                 # channel progress updates.
-                import re as _re_bl
                 import threading as _thr_bl
 
-                _status_pattern = _re_bl.compile(
+                _status_pattern = re.compile(
                     r"\[STATUS_UPDATE[:\s]*(.+?)\]"
                 )
                 _stderr_buf_bl: list = []
