@@ -14,8 +14,9 @@ def launch_update() -> int:
 
     Returns the PID of the detached process.
     """
-    script = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                          "update_orchestrator.sh")
+    script = os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), "update_orchestrator.sh"
+    )
     log = "/tmp/wee-update.log"
 
     with open(log, "w") as out:

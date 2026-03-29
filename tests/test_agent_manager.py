@@ -16,22 +16,22 @@ Environment Variables:
   to be installed and available in PATH. Default: disabled (safe for CI/CD)
 """
 
-import unittest
-import tempfile
 import json
 import os
-import sys
 import shutil
 import subprocess
+import sys
+import tempfile
+import unittest
 from io import StringIO
 from pathlib import Path
-from unittest.mock import Mock, patch, MagicMock
+from unittest.mock import MagicMock, Mock, patch
 
 # Add parent directory to path to import agent_manager
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from agent_manager import SessionManager
 import agent_manager
+from agent_manager import SessionManager
 
 # Check if we should run tests that require actual CLI runtimes
 ENABLE_RUNTIME_TESTS = os.environ.get("TEST_WITH_RUNTIMES", "").lower() in (
@@ -244,7 +244,12 @@ class TestSessionPersistence(unittest.TestCase):
         manager = SessionManager(str(self.config_file))
         session_id = "ses_testSessionDiff1234567890"
         session_diff_dir = (
-            self.temp_path / ".local" / "share" / "opencode" / "storage" / "session_diff"
+            self.temp_path
+            / ".local"
+            / "share"
+            / "opencode"
+            / "storage"
+            / "session_diff"
         )
         session_diff_dir.mkdir(parents=True, exist_ok=True)
         (session_diff_dir / f"{session_id}.json").write_text("{}", encoding="utf-8")
@@ -256,7 +261,12 @@ class TestSessionPersistence(unittest.TestCase):
         """Most recent OpenCode session should come from filesystem artifacts."""
         manager = SessionManager(str(self.config_file))
         session_diff_dir = (
-            self.temp_path / ".local" / "share" / "opencode" / "storage" / "session_diff"
+            self.temp_path
+            / ".local"
+            / "share"
+            / "opencode"
+            / "storage"
+            / "session_diff"
         )
         session_diff_dir.mkdir(parents=True, exist_ok=True)
 
@@ -748,8 +758,6 @@ class TestDynamicModelListing(unittest.TestCase):
         self.manager.update_session_field("test_session", "runtime", "copilot")
         result = self.manager.execute("/model list", "test_session")
         self.assertIn("❌", result)
-
-
 
     """Test agent switching functionality"""
 

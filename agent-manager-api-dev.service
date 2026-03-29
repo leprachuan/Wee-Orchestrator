@@ -4,12 +4,17 @@ After=network.target
 
 [Service]
 Type=simple
-User=flipkey
+User=n8n
 WorkingDirectory=/opt/n8n-copilot-shim-dev
-Environment=PATH=/home/flipkey/.local/bin:/home/flipkey/.nvm/versions/node/v22.22.0/bin:/usr/local/bin:/usr/bin:/bin
+Environment=PATH=/home/n8n/.local/bin:/usr/local/bin:/usr/bin:/bin
 Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus
 Environment=XDG_RUNTIME_DIR=/run/user/1000
 EnvironmentFile=/opt/n8n-copilot-shim-dev/.env
+Environment="API_PORT=8001"
+Environment="RABBITMQ_HOST=192.168.0.85"
+Environment="RABBITMQ_PORT=5672"
+Environment="RABBITMQ_USER=admin"
+Environment="RABBITMQ_PASSWORD=nmSrvbiGOMU_b9c2M9ZqAndFjGqDQUBZ"
 ExecStart=/usr/bin/python3 /opt/n8n-copilot-shim-dev/agent_manager.py --api
 Restart=always
 RestartSec=10

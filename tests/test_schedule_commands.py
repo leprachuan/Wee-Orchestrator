@@ -17,18 +17,17 @@ Tests cover:
 - /help includes schedule commands
 """
 
-import unittest
-import tempfile
 import json
-import os
 import sys
+import tempfile
+import unittest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from agent_manager import SessionManager
 import agent_manager
+from agent_manager import SessionManager
 
 
 def _make_manager(temp_path):
@@ -109,13 +108,20 @@ def _mock_scheduler():
 
     sched.get_logs.return_value = {
         "success": True,
-        "result": ["2025-01-01T09:00:00Z Scheduled run started", "2025-01-01T09:00:05Z Completed"],
+        "result": [
+            "2025-01-01T09:00:00Z Scheduled run started",
+            "2025-01-01T09:00:05Z Completed",
+        ],
     }
 
     sched.get_results.return_value = {
         "success": True,
         "result": [
-            {"timestamp": "2025-01-01T09:00:05Z", "success": True, "summary": "Daily summary generated."}
+            {
+                "timestamp": "2025-01-01T09:00:05Z",
+                "success": True,
+                "summary": "Daily summary generated.",
+            }
         ],
     }
 
@@ -161,7 +167,11 @@ class TestScheduleSlashCommands(unittest.TestCase):
         self.mock_sched.list_jobs.assert_called_once()
 
     def test_schedule_list_empty(self):
-        self.mock_sched.list_jobs.return_value = {"success": True, "result": [], "message": "Found 0 jobs"}
+        self.mock_sched.list_jobs.return_value = {
+            "success": True,
+            "result": [],
+            "message": "Found 0 jobs",
+        }
         result = self.manager.execute("/schedule list", self.session)
         self.assertIn("No jobs scheduled", result)
 
@@ -214,7 +224,10 @@ class TestScheduleSlashCommands(unittest.TestCase):
         self.mock_sched.schedule_task.assert_not_called()
 
     def test_schedule_add_failure(self):
-        self.mock_sched.schedule_task.return_value = {"success": False, "message": "Duplicate job ID"}
+        self.mock_sched.schedule_task.return_value = {
+            "success": False,
+            "message": "Duplicate job ID",
+        }
         result = self.manager.execute(
             "/schedule add Daily Report | every day at 9am | generate summary",
             self.session,
@@ -231,7 +244,10 @@ class TestScheduleSlashCommands(unittest.TestCase):
         self.mock_sched.get_job.assert_called_once_with("daily-report")
 
     def test_schedule_info_not_found(self):
-        self.mock_sched.get_job.return_value = {"success": False, "message": "Job not found"}
+        self.mock_sched.get_job.return_value = {
+            "success": False,
+            "message": "Job not found",
+        }
         result = self.manager.execute("/schedule info missing-job", self.session)
         self.assertIn("Job not found", result)
 
@@ -244,7 +260,10 @@ class TestScheduleSlashCommands(unittest.TestCase):
         self.mock_sched.pause_job.assert_called_once_with("daily-report")
 
     def test_schedule_pause_failure(self):
-        self.mock_sched.pause_job.return_value = {"success": False, "message": "Job not found"}
+        self.mock_sched.pause_job.return_value = {
+            "success": False,
+            "message": "Job not found",
+        }
         result = self.manager.execute("/schedule pause bad-id", self.session)
         self.assertIn("Job not found", result)
 
@@ -257,7 +276,10 @@ class TestScheduleSlashCommands(unittest.TestCase):
         self.mock_sched.resume_job.assert_called_once_with("daily-report")
 
     def test_schedule_resume_failure(self):
-        self.mock_sched.resume_job.return_value = {"success": False, "message": "Job not found"}
+        self.mock_sched.resume_job.return_value = {
+            "success": False,
+            "message": "Job not found",
+        }
         result = self.manager.execute("/schedule resume bad-id", self.session)
         self.assertIn("Job not found", result)
 
@@ -276,7 +298,10 @@ class TestScheduleSlashCommands(unittest.TestCase):
         self.mock_sched.delete_job.assert_called_once_with("daily-report")
 
     def test_schedule_delete_failure(self):
-        self.mock_sched.delete_job.return_value = {"success": False, "message": "Job not found"}
+        self.mock_sched.delete_job.return_value = {
+            "success": False,
+            "message": "Job not found",
+        }
         result = self.manager.execute("/schedule delete bad-id", self.session)
         self.assertIn("Job not found", result)
 
@@ -295,7 +320,10 @@ class TestScheduleSlashCommands(unittest.TestCase):
         self.assertIn("No logs", result)
 
     def test_schedule_logs_failure(self):
-        self.mock_sched.get_logs.return_value = {"success": False, "message": "Job not found"}
+        self.mock_sched.get_logs.return_value = {
+            "success": False,
+            "message": "Job not found",
+        }
         result = self.manager.execute("/schedule logs bad-id", self.session)
         self.assertIn("Job not found", result)
 
@@ -314,7 +342,10 @@ class TestScheduleSlashCommands(unittest.TestCase):
         self.assertIn("No results", result)
 
     def test_schedule_results_failure(self):
-        self.mock_sched.get_results.return_value = {"success": False, "message": "Job not found"}
+        self.mock_sched.get_results.return_value = {
+            "success": False,
+            "message": "Job not found",
+        }
         result = self.manager.execute("/schedule results bad-id", self.session)
         self.assertIn("Job not found", result)
 

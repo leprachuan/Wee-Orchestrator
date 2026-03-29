@@ -1,0 +1,37 @@
+# =============================================================================
+# Wee Orchestrator — Docker Compose DEV Override
+# =============================================================================
+# Usage:
+#   docker compose -f docker-compose.yml -f docker-compose.dev.yml up
+#
+# This override:
+#   - Mounts source code for hot-reload (uvicorn --reload)
+#   - Exposes debug port
+#   - Sets APP_ENV=DEV
+# =============================================================================
+
+services:
+  wee-orchestrator:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    # Override entrypoint for reload support
+    entrypoint: ["python3", "-m", "uvicorn"]
+    command:
+      - "agent_manager:create_api_app"
+      - "--factory"
+      - "--host=0.0.0.0"
+      - "--port=8000"
+      - "--reload"
+      - "--reload-dir=/app"
+    environment:
+      - APP_ENV=DEV
+      - PYTHONUNBUFFERED=1
+    volumes:
+      # Mount source code for live editing
+      - ./agent_manager.py:/app/agent_manager.py:ro
+      - ./canvas.py:/app/canvas.py:ro
+      - ./scheduler:/app/scheduler:ro
+      - ./webui:/app/webui:ro
+    ports:
+      - "${WEE_PORT:-8000}:8000"

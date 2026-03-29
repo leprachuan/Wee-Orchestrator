@@ -25,6 +25,7 @@ logger = logging.getLogger(__name__)
 HANDOFF_LOG_DIR = Path(os.path.expanduser("~")) / ".copilot" / "logs"
 HANDOFF_LOG_FILE = HANDOFF_LOG_DIR / "handoff.log"
 
+
 def _setup_handoff_logger():
     """Initialize handoff logger with file handler."""
     HANDOFF_LOG_DIR.mkdir(parents=True, exist_ok=True)
@@ -35,14 +36,14 @@ def _setup_handoff_logger():
     if not handoff_logger.handlers:
         handler = logging.FileHandler(HANDOFF_LOG_FILE)
         formatter = logging.Formatter(
-            "%(asctime)s [%(levelname)s] %(message)s",
-            datefmt="%Y-%m-%d %H:%M:%S"
+            "%(asctime)s [%(levelname)s] %(message)s", datefmt="%Y-%m-%d %H:%M:%S"
         )
         handler.setFormatter(formatter)
         handoff_logger.addHandler(handler)
         handoff_logger.setLevel(logging.INFO)
 
     return handoff_logger
+
 
 _handoff_logger = _setup_handoff_logger()
 
@@ -100,7 +101,7 @@ class SessionHandoff:
             )
             return None
 
-        recent = messages[-self.MAX_TRANSCRIPT_MESSAGES:]
+        recent = messages[-self.MAX_TRANSCRIPT_MESSAGES :]
 
         # Gather session metadata from session map
         runtime, model, started_ts = self._get_session_meta(n8n_session_id)
@@ -164,7 +165,7 @@ class SessionHandoff:
             )
             return None
 
-        recent = messages[-self.MAX_SUMMARY_MESSAGES:]
+        recent = messages[-self.MAX_SUMMARY_MESSAGES :]
         switched_at = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
 
         # Summarise user messages (last 3-5)
@@ -175,12 +176,18 @@ class SessionHandoff:
             if len(m.get("content", "")) > 200:
                 snippet += "…"
             user_summary_lines.append(f"- {snippet}")
-        user_summary = "\n".join(user_summary_lines) if user_summary_lines else "(no user messages found)"
+        user_summary = (
+            "\n".join(user_summary_lines)
+            if user_summary_lines
+            else "(no user messages found)"
+        )
 
         # Extract key file paths/directories mentioned
         all_text = " ".join(m.get("content", "") for m in recent)
         paths = self._extract_paths(all_text)
-        paths_str = "\n".join(f"- {p}" for p in paths[:10]) if paths else "(none detected)"
+        paths_str = (
+            "\n".join(f"- {p}" for p in paths[:10]) if paths else "(none detected)"
+        )
 
         # Last assistant response (first 300 chars)
         last_assistant = next(
@@ -191,7 +198,9 @@ class SessionHandoff:
             raw = last_assistant.get("content") or ""
             last_response = raw[:300] + ("…" if len(raw) > 300 else "")
 
-        transcript_path = str(self._session_state_path(new_session_id) / "transcript.md")
+        transcript_path = str(
+            self._session_state_path(new_session_id) / "transcript.md"
+        )
 
         summary_lines = [
             "## Runtime Handoff Summary",
@@ -366,7 +375,10 @@ class SessionHandoff:
     def _extract_paths(text: str) -> list:
         """Heuristically extract file system paths from text."""
         import re
-        pattern = r'(?<!\w)(/(?:opt|home|usr|var|etc|tmp|root|mnt|srv|run)[^\s\'"`,;)>\]]*)'
+
+        pattern = (
+            r'(?<!\w)(/(?:opt|home|usr|var|etc|tmp|root|mnt|srv|run)[^\s\'"`,;)>\]]*)'
+        )
         found = re.findall(pattern, text)
         # Deduplicate while preserving order
         seen = set()

@@ -9,11 +9,11 @@ For each job that's ready to run:
 """
 
 import json
+import logging
 import os
 import subprocess
 import sys
 import time
-import logging
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, Optional
@@ -26,11 +26,11 @@ _SCHEDULER_BASE.mkdir(parents=True, exist_ok=True)
 # Setup logging
 logging.basicConfig(
     level=logging.INFO,
-    format='[%(asctime)s] %(levelname)s: %(message)s',
+    format="[%(asctime)s] %(levelname)s: %(message)s",
     handlers=[
-        logging.FileHandler(str(_SCHEDULER_BASE / 'executor.log')),
-        logging.StreamHandler()
-    ]
+        logging.FileHandler(str(_SCHEDULER_BASE / "executor.log")),
+        logging.StreamHandler(),
+    ],
 )
 logger = logging.getLogger(__name__)
 
@@ -47,7 +47,11 @@ try:
 except ImportError:
     _WebEXConnector = None
 
-from scheduler.management import parse_schedule_to_next_run, is_valid_cron, cron_next_run
+from scheduler.management import (
+    cron_next_run,
+    is_valid_cron,
+    parse_schedule_to_next_run,
+)
 
 
 class TaskSchedulerExecutor:
@@ -58,17 +62,23 @@ class TaskSchedulerExecutor:
         # Respect env-var overrides so executor + API always use the same paths
         self.repo_root = _REPO_ROOT
         scheduler_base = _SCHEDULER_BASE
-        
-        self.jobs_file = Path(os.getenv("SCHEDULER_JOBS_FILE", str(scheduler_base / "jobs.json")))
-        self.logs_dir = Path(os.getenv("SCHEDULER_LOGS_DIR", str(scheduler_base / "logs/")))
-        self.results_dir = Path(os.getenv("SCHEDULER_RESULTS_DIR", str(scheduler_base / "results/")))
+
+        self.jobs_file = Path(
+            os.getenv("SCHEDULER_JOBS_FILE", str(scheduler_base / "jobs.json"))
+        )
+        self.logs_dir = Path(
+            os.getenv("SCHEDULER_LOGS_DIR", str(scheduler_base / "logs/"))
+        )
+        self.results_dir = Path(
+            os.getenv("SCHEDULER_RESULTS_DIR", str(scheduler_base / "results/"))
+        )
         self.config_file = self.repo_root / "agents.json"
         self.data_dir = scheduler_base
 
         self.jobs_file.parent.mkdir(parents=True, exist_ok=True)
         self.logs_dir.mkdir(parents=True, exist_ok=True)
         self.results_dir.mkdir(parents=True, exist_ok=True)
-        
+
         self._check_stale_checkpoints()
 
     def _load_jobs(self) -> Dict:
@@ -84,6 +94,7 @@ class TaskSchedulerExecutor:
     def _save_jobs(self, data: Dict):
         """Save jobs to JSON atomically (write tmp + rename)."""
         import tempfile
+
         try:
             tmp_fd, tmp_path = tempfile.mkstemp(
                 dir=str(self.jobs_file.parent), suffix=".tmp"
@@ -102,24 +113,28 @@ class TaskSchedulerExecutor:
         """Check for stale checkpoint files on startup (from crashed executions)."""
         if not self.data_dir.exists():
             return
-        for checkpoint_file in self.data_dir.glob('.checkpoint_*.json'):
+        for checkpoint_file in self.data_dir.glob(".checkpoint_*.json"):
             try:
                 checkpoint = json.loads(checkpoint_file.read_text())
-                job_id = checkpoint.get('job_id', 'unknown')
-                started_at = checkpoint.get('started_at', 'unknown')
-                pid = checkpoint.get('pid', 0)
-                logger.warning(f"Found stale checkpoint for job {job_id} (started: {started_at}, pid: {pid})")
+                job_id = checkpoint.get("job_id", "unknown")
+                started_at = checkpoint.get("started_at", "unknown")
+                pid = checkpoint.get("pid", 0)
+                logger.warning(
+                    f"Found stale checkpoint for job {job_id} (started: {started_at}, pid: {pid})"
+                )
                 checkpoint_file.unlink()
             except Exception as e:
-                logger.error(f"Failed to process stale checkpoint {checkpoint_file}: {e}")
+                logger.error(
+                    f"Failed to process stale checkpoint {checkpoint_file}: {e}"
+                )
 
     def _write_checkpoint(self, job_id: str):
         """Write checkpoint file before starting execution."""
-        checkpoint_file = self.data_dir / f'.checkpoint_{job_id}.json'
+        checkpoint_file = self.data_dir / f".checkpoint_{job_id}.json"
         checkpoint = {
-            'job_id': job_id,
-            'started_at': datetime.utcnow().isoformat() + 'Z',
-            'pid': os.getpid()
+            "job_id": job_id,
+            "started_at": datetime.utcnow().isoformat() + "Z",
+            "pid": os.getpid(),
         }
         try:
             checkpoint_file.write_text(json.dumps(checkpoint))
@@ -128,7 +143,7 @@ class TaskSchedulerExecutor:
 
     def _clear_checkpoint(self, job_id: str):
         """Clear checkpoint file after execution completes or fails."""
-        checkpoint_file = self.data_dir / f'.checkpoint_{job_id}.json'
+        checkpoint_file = self.data_dir / f".checkpoint_{job_id}.json"
         try:
             if checkpoint_file.exists():
                 checkpoint_file.unlink()
@@ -145,7 +160,14 @@ class TaskSchedulerExecutor:
         except Exception as e:
             logger.error(f"Failed to log job {job_id}: {e}")
 
-    def _save_result(self, job_id: str, job_name: str, success: bool, output: str = "", error: str = ""):
+    def _save_result(
+        self,
+        job_id: str,
+        job_name: str,
+        success: bool,
+        output: str = "",
+        error: str = "",
+    ):
         """Save full execution result to results database.
 
         Creates a JSON file with complete execution details for auditing and analysis.
@@ -159,7 +181,7 @@ class TaskSchedulerExecutor:
             "job_name": job_name,
             "success": success,
             "output": output[:5000] if output else "",  # Keep first 5000 chars
-            "error": error[:5000] if error else "",     # Keep first 5000 chars
+            "error": error[:5000] if error else "",  # Keep first 5000 chars
         }
 
         try:
@@ -181,7 +203,9 @@ class TaskSchedulerExecutor:
         identity = created_by.get("identity", "")
 
         if not channel or not identity:
-            logger.warning(f"Job {job_id}: no creator channel/identity stored, cannot notify")
+            logger.warning(
+                f"Job {job_id}: no creator channel/identity stored, cannot notify"
+            )
             self._log_job(job_id, "Notification skipped: no created_by info")
             return False
 
@@ -198,8 +222,12 @@ class TaskSchedulerExecutor:
         """Send a Telegram message directly to a specific chat_id (numeric string)."""
         try:
             if not _TelegramConnector:
-                logger.warning("TelegramConnector not available, skipping Telegram notification")
-                self._log_job(job_id, "Telegram notification skipped: connector unavailable")
+                logger.warning(
+                    "TelegramConnector not available, skipping Telegram notification"
+                )
+                self._log_job(
+                    job_id, "Telegram notification skipped: connector unavailable"
+                )
                 return False
 
             script_dir = Path("/opt/n8n-copilot-shim")
@@ -224,8 +252,12 @@ class TaskSchedulerExecutor:
         """Send a WebEx message to a specific user by email."""
         try:
             if not _WebEXConnector:
-                logger.warning("WebEXConnector not available, skipping WebEx notification")
-                self._log_job(job_id, "WebEx notification skipped: connector unavailable")
+                logger.warning(
+                    "WebEXConnector not available, skipping WebEx notification"
+                )
+                self._log_job(
+                    job_id, "WebEx notification skipped: connector unavailable"
+                )
                 return False
 
             script_dir = Path("/opt/n8n-copilot-shim")
@@ -249,16 +281,16 @@ class TaskSchedulerExecutor:
     def _execute_task(self, job: Dict) -> Optional[str]:
         """
         Execute a job in either AI mode (via agent_manager.py) or command mode (direct shell).
-        
+
         Modes:
         - 'ai' (default): Execute via LLM agent through agent_manager.py
         - 'command': Execute as direct shell/python command
-        
+
         Returns the execution result/output, or None if failed.
         """
         job_id = job["id"]
         mode = job.get("mode", "ai")  # Default to AI mode
-        
+
         # Route to appropriate executor
         if mode == "command":
             return self._execute_command_mode(job)
@@ -272,16 +304,18 @@ class TaskSchedulerExecutor:
         runtime = job.get("runtime", os.getenv("SCHEDULER_DEFAULT_RUNTIME", "claude"))
         task = job.get("task", "")
         notify = job.get("notify", False)
-        timeout = int(job.get("timeout") or os.getenv("SCHEDULER_DEFAULT_TIMEOUT", "300"))
+        timeout = int(
+            job.get("timeout") or os.getenv("SCHEDULER_DEFAULT_TIMEOUT", "300")
+        )
 
         # Create session ID
         session_id = f"scheduled-{job_id}-{int(time.time())}"
 
         # Pick a sensible default model per runtime
         _default_models = {
-            "claude":   "sonnet",
-            "copilot":  "gpt-4.1",
-            "gemini":   "gemini-1.5-pro",
+            "claude": "sonnet",
+            "copilot": "gpt-4.1",
+            "gemini": "gemini-1.5-pro",
             "opencode": "gpt-4o",
         }
         model = job.get("model") or _default_models.get(runtime, "sonnet")
@@ -294,17 +328,26 @@ class TaskSchedulerExecutor:
         cmd = [
             "python3",
             agent_manager_path,
-            "--config", str(self.config_file),
-            "--agent", agent,
-            "--runtime", runtime,
-            "--model", model,
+            "--config",
+            str(self.config_file),
+            "--agent",
+            agent,
+            "--runtime",
+            runtime,
+            "--model",
+            model,
         ]
         if perm_mode in ("elevated", "restricted", "sandboxed"):
             cmd.extend(["--mode", perm_mode])
         cmd.extend([task, session_id])
 
-        logger.info(f"[AI Mode] Executing job {job_id}: agent={agent}, runtime={runtime}, model={model}, task={task[:60]}...")
-        self._log_job(job_id, f"Executing (AI mode): agent={agent}, runtime={runtime}, model={model}, session={session_id}")
+        logger.info(
+            f"[AI Mode] Executing job {job_id}: agent={agent}, runtime={runtime}, model={model}, task={task[:60]}..."
+        )
+        self._log_job(
+            job_id,
+            f"Executing (AI mode): agent={agent}, runtime={runtime}, model={model}, session={session_id}",
+        )
 
         self._write_checkpoint(job_id)
         try:
@@ -312,7 +355,8 @@ class TaskSchedulerExecutor:
                 cmd,
                 capture_output=True,
                 text=True,
-                timeout=timeout
+                timeout=timeout,
+                env={**os.environ, "COMMAND_TIMEOUT": str(timeout)},
             )
 
             if result.returncode == 0:
@@ -341,7 +385,12 @@ class TaskSchedulerExecutor:
         except subprocess.TimeoutExpired:
             timeout_mins = timeout / 60
             self._log_job(job_id, f"Execution timed out ({timeout_mins:.1f} minutes)")
-            self._save_result(job_id, job["name"], success=False, error=f"Execution timed out ({timeout_mins:.1f} minutes)")
+            self._save_result(
+                job_id,
+                job["name"],
+                success=False,
+                error=f"Execution timed out ({timeout_mins:.1f} minutes)",
+            )
             logger.error(f"Job {job_id} execution timed out")
 
             if notify:
@@ -372,10 +421,17 @@ class TaskSchedulerExecutor:
         task = job.get("task", "")
         notify = job.get("notify", False)
         working_dir = job.get("working_dir", "/opt")
-        timeout = int(job.get("timeout") or os.getenv("SCHEDULER_DEFAULT_TIMEOUT", "300"))
+        timeout = int(
+            job.get("timeout") or os.getenv("SCHEDULER_DEFAULT_TIMEOUT", "300")
+        )
 
-        logger.info(f"[Command Mode] Executing job {job_id}: working_dir={working_dir}, task={task[:60]}...")
-        self._log_job(job_id, f"Executing (command mode): working_dir={working_dir}, cmd={task[:120]}")
+        logger.info(
+            f"[Command Mode] Executing job {job_id}: working_dir={working_dir}, task={task[:60]}..."
+        )
+        self._log_job(
+            job_id,
+            f"Executing (command mode): working_dir={working_dir}, cmd={task[:120]}",
+        )
 
         self._write_checkpoint(job_id)
         try:
@@ -385,7 +441,7 @@ class TaskSchedulerExecutor:
                 text=True,
                 timeout=timeout,
                 shell=True,
-                cwd=working_dir
+                cwd=working_dir,
             )
 
             if result.returncode == 0:
@@ -400,10 +456,16 @@ class TaskSchedulerExecutor:
 
                 return output
             else:
-                error_msg = result.stderr or result.stdout or f"Command failed with exit code {result.returncode}"
+                error_msg = (
+                    result.stderr
+                    or result.stdout
+                    or f"Command failed with exit code {result.returncode}"
+                )
                 self._log_job(job_id, f"Command failed: {error_msg[:200]}")
                 self._save_result(job_id, job["name"], success=False, error=error_msg)
-                logger.error(f"Job {job_id} (command mode) failed with code {result.returncode}")
+                logger.error(
+                    f"Job {job_id} (command mode) failed with code {result.returncode}"
+                )
 
                 if notify:
                     notification_text = f"❌ Command Failed: {job['name']}\n\nCommand: {task[:100]}\n\nError:\n{error_msg[:500]}"
@@ -414,7 +476,12 @@ class TaskSchedulerExecutor:
         except subprocess.TimeoutExpired:
             timeout_mins = timeout / 60
             self._log_job(job_id, f"Execution timed out ({timeout_mins:.1f} minutes)")
-            self._save_result(job_id, job["name"], success=False, error=f"Execution timed out ({timeout_mins:.1f} minutes)")
+            self._save_result(
+                job_id,
+                job["name"],
+                success=False,
+                error=f"Execution timed out ({timeout_mins:.1f} minutes)",
+            )
             logger.error(f"Job {job_id} execution timed out")
 
             if job.get("notify"):
@@ -449,7 +516,9 @@ class TaskSchedulerExecutor:
             return False
 
         try:
-            next_run = datetime.fromisoformat(next_run_str.replace("Z", "+00:00")).replace(tzinfo=None)
+            next_run = datetime.fromisoformat(
+                next_run_str.replace("Z", "+00:00")
+            ).replace(tzinfo=None)
             now = datetime.utcnow()
             return next_run <= now
         except (ValueError, TypeError):

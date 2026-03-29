@@ -1,0 +1,131 @@
+{
+  "skills/algorithmic-art": {
+    "origin_type": "git_repo",
+    "origin_url": "https://github.com/anthropics/skills.git",
+    "origin_path": "skills/algorithmic-art",
+    "recorded_at": 1711584000,
+    "notes": "Anthropic official skill",
+    "last_checked": 1774654559.4402266,
+    "update_available": false,
+    "remote_checksum": "b9ced010c64c4646",
+    "diff_summary": [],
+    "updated_at": 1774654559.440309,
+    "last_updated": 1774654559.4402263
+  },
+  "skills/mcp-builder": {
+    "origin_type": "git_repo",
+    "origin_url": "https://github.com/anthropics/skills.git",
+    "origin_path": "skills/mcp-builder",
+    "recorded_at": 1711584000,
+    "notes": "Anthropic official skill"
+  },
+  "skills/slack-gif-creator": {
+    "origin_type": "git_repo",
+    "origin_url": "https://github.com/anthropics/skills.git",
+    "origin_path": "skills/slack-gif-creator",
+    "recorded_at": 1711584000,
+    "notes": "Anthropic official skill"
+  },
+  "skills/canvas-design": {
+    "origin_type": "git_repo",
+    "origin_url": "https://github.com/anthropics/skills.git",
+    "origin_path": "skills/canvas-design",
+    "recorded_at": 1711584000,
+    "notes": "Anthropic official skill"
+  },
+  "skills/docx": {
+    "origin_type": "git_repo",
+    "origin_url": "https://github.com/anthropics/skills.git",
+    "origin_path": "skills/docx",
+    "recorded_at": 1711584000,
+    "notes": "Anthropic official skill"
+  },
+  "skills/internal-comms": {
+    "origin_type": "git_repo",
+    "origin_url": "https://github.com/anthropics/skills.git",
+    "origin_path": "skills/internal-comms",
+    "recorded_at": 1711584000,
+    "notes": "Anthropic official skill"
+  },
+  "skills/webapp-testing": {
+    "origin_type": "git_repo",
+    "origin_url": "https://github.com/anthropics/skills.git",
+    "origin_path": "skills/webapp-testing",
+    "recorded_at": 1711584000,
+    "notes": "Anthropic official skill"
+  },
+  "skills/doc-coauthoring": {
+    "origin_type": "git_repo",
+    "origin_url": "https://github.com/anthropics/skills.git",
+    "origin_path": "skills/doc-coauthoring",
+    "recorded_at": 1711584000,
+    "notes": "Anthropic official skill"
+  },
+  "skills/theme-factory": {
+    "origin_type": "git_repo",
+    "origin_url": "https://github.com/anthropics/skills.git",
+    "origin_path": "skills/theme-factory",
+    "recorded_at": 1711584000,
+    "notes": "Anthropic official skill"
+  },
+  "skills/pptx": {
+    "origin_type": "git_repo",
+    "origin_url": "https://github.com/anthropics/skills.git",
+    "origin_path": "skills/pptx",
+    "recorded_at": 1711584000,
+    "notes": "Anthropic official skill"
+  },
+  "skills/brand-guidelines": {
+    "origin_type": "git_repo",
+    "origin_url": "https://github.com/anthropics/skills.git",
+    "origin_path": "skills/brand-guidelines",
+    "recorded_at": 1711584000,
+    "notes": "Anthropic official skill"
+  },
+  "skills/frontend-design": {
+    "origin_type": "git_repo",
+    "origin_url": "https://github.com/anthropics/skills.git",
+    "origin_path": "skills/frontend-design",
+    "recorded_at": 1711584000,
+    "notes": "Anthropic official skill"
+  },
+  "skills/pdf": {
+    "origin_type": "git_repo",
+    "origin_url": "https://github.com/anthropics/skills.git",
+    "origin_path": "skills/pdf",
+    "recorded_at": 1711584000,
+    "notes": "Anthropic official skill"
+  },
+  "skills/xlsx": {
+    "origin_type": "git_repo",
+    "origin_url": "https://github.com/anthropics/skills.git",
+    "origin_path": "skills/xlsx",
+    "recorded_at": 1711584000,
+    "notes": "Anthropic official skill"
+  },
+  "skills/web-artifacts-builder": {
+    "origin_type": "git_repo",
+    "origin_url": "https://github.com/anthropics/skills.git",
+    "origin_path": "skills/web-artifacts-builder",
+    "recorded_at": 1711584000,
+    "notes": "Anthropic official skill"
+  },
+  "skills/skill-creator": {
+    "origin_type": "git_repo",
+    "origin_url": "https://github.com/anthropics/skills.git",
+    "origin_path": "skills/skill-creator",
+    "recorded_at": 1711584000,
+    "notes": "Anthropic official skill"
+  },
+  "foster-skills/todo-management": {
+    "origin_type": "local",
+    "notes": "Authored in-house by fosterbot team",
+    "recorded_at": 1774654014.990999,
+    "updated_at": 1774654014.9909992
+  },
+  "foster-skills/test": {
+    "origin_type": "local",
+    "recorded_at": 1774706123.746648,
+    "updated_at": 1774706123.746648
+  }
+}

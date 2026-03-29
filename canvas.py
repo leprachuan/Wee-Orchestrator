@@ -9,6 +9,7 @@ Usage:
     c.open()                                  # opens canvas panel in WebUI
     action = c.wait_for_action(timeout=60)    # blocks until user clicks
 """
+
 import asyncio
 import json
 import os
@@ -22,6 +23,7 @@ from typing import Optional
 # (e.g. when invoked from prod, the dev .env port must take precedence).
 try:
     from dotenv import load_dotenv
+
     _env_path = Path(__file__).resolve().parent / ".env"
     if _env_path.exists():
         load_dotenv(_env_path, override=True)
@@ -62,8 +64,10 @@ class Canvas:
         asyncio.run(self._async_send(message))
 
     async def _async_send(self, message: dict):
-        import websockets
         import ssl as _ssl
+
+        import websockets
+
         ssl_ctx = None
         if self._ws_url().startswith("wss://"):
             ssl_ctx = _ssl.create_default_context()
@@ -81,7 +85,9 @@ class Canvas:
         """Push a single component to the canvas."""
         self.render([component])
 
-    def push_html(self, html_content: str, height: int = 400, component_id: Optional[str] = None) -> str:
+    def push_html(
+        self, html_content: str, height: int = 400, component_id: Optional[str] = None
+    ) -> str:
         """Push arbitrary HTML/JS into the canvas, rendered in a sandboxed iframe.
 
         Args:
@@ -93,12 +99,16 @@ class Canvas:
             The component_id used.
         """
         cid = component_id or f"html-{uuid.uuid4().hex[:8]}"
-        self.push_component({"id": cid, "type": "html", "content": html_content, "height": height})
+        self.push_component(
+            {"id": cid, "type": "html", "content": html_content, "height": height}
+        )
         return cid
 
     def render(self, components: list):
         """Push a full component tree to the canvas."""
-        self._send({"type": "render", "components": components, "session_id": self.session_id})
+        self._send(
+            {"type": "render", "components": components, "session_id": self.session_id}
+        )
 
     def render_template(self, name: str, data: dict):
         """Render a built-in template. Templates: progress_board, data_dashboard, config_form, plan_view."""
@@ -116,12 +126,17 @@ class Canvas:
     def open(self):
         """Open the canvas viewer in the default browser."""
         import subprocess
+
         url = self.viewer_url()
         try:
-            subprocess.Popen(["xdg-open", url], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            subprocess.Popen(
+                ["xdg-open", url], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+            )
         except FileNotFoundError:
             try:
-                subprocess.Popen(["open", url], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                subprocess.Popen(
+                    ["open", url], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+                )
             except FileNotFoundError:
                 print(f"Open in browser: {url}")
 
@@ -130,8 +145,9 @@ class Canvas:
         return asyncio.run(self._async_wait_for_action(timeout))
 
     async def _async_wait_for_action(self, timeout: int) -> dict:
-        import websockets
         import ssl as _ssl
+
+        import websockets
 
         ws_url = self._ws_url()
         deadline = time.time() + timeout
@@ -143,7 +159,9 @@ class Canvas:
             ssl_ctx.verify_mode = _ssl.CERT_NONE
 
         async with websockets.connect(ws_url, ssl=ssl_ctx) as ws:
-            await ws.send(json.dumps({"type": "subscribe_actions", "session_id": self.session_id}))
+            await ws.send(
+                json.dumps({"type": "subscribe_actions", "session_id": self.session_id})
+            )
 
             while time.time() < deadline:
                 remaining = max(1.0, deadline - time.time())
@@ -162,8 +180,15 @@ class Canvas:
 
 # ── Template builders ────────────────────────────────────────────────────────
 
+
 def _status_icon(status: str) -> str:
-    icons = {"done": "✅", "running": "🔄", "pending": "⏳", "error": "❌", "skip": "⏭️"}
+    icons = {
+        "done": "✅",
+        "running": "🔄",
+        "pending": "⏳",
+        "error": "❌",
+        "skip": "⏭️",
+    }
     return icons.get(status, "•")
 
 
@@ -189,20 +214,37 @@ def _tpl_progress_board(data: dict) -> list:
     for i, step in enumerate(steps):
         status = step.get("status", "pending")
         col_key = status if status in cols else "pending"
-        cols[col_key].append({
-            "type": "card", "id": f"step-{i}",
-            "title": f"{_status_icon(status)} {step['name']}", "status": status,
-        })
+        cols[col_key].append(
+            {
+                "type": "card",
+                "id": f"step-{i}",
+                "title": f"{_status_icon(status)} {step['name']}",
+                "status": status,
+            }
+        )
 
     header = [
-        {"type": "heading", "level": 2, "text": data.get("title", "Task Progress"), "id": "board-title"},
-        {"type": "progress", "label": f"Overall — {done_count}/{len(steps)} steps", "pct": pct, "id": "overall-progress"},
+        {
+            "type": "heading",
+            "level": 2,
+            "text": data.get("title", "Task Progress"),
+            "id": "board-title",
+        },
+        {
+            "type": "progress",
+            "label": f"Overall — {done_count}/{len(steps)} steps",
+            "pct": pct,
+            "id": "overall-progress",
+        },
     ]
     if data.get("elapsed"):
-        header.append({"type": "text", "text": f"⏱ Elapsed: {data['elapsed']}", "muted": True})
+        header.append(
+            {"type": "text", "text": f"⏱ Elapsed: {data['elapsed']}", "muted": True}
+        )
 
     board = {
-        "type": "board", "id": "task-board",
+        "type": "board",
+        "id": "task-board",
         "columns": [
             {"id": "col-done", "title": "✅ Done", "items": cols["done"]},
             {"id": "col-running", "title": "🔄 Running", "items": cols["running"]},
@@ -213,60 +255,112 @@ def _tpl_progress_board(data: dict) -> list:
 
 
 def _tpl_data_dashboard(data: dict) -> list:
-    components: list = [{"type": "heading", "level": 2, "text": data.get("title", "Dashboard")}]
+    components: list = [
+        {"type": "heading", "level": 2, "text": data.get("title", "Dashboard")}
+    ]
     metrics = data.get("metrics", [])
     if metrics:
-        components.append({
-            "type": "row", "id": "metrics-row",
-            "children": [
-                {"type": "metric", "id": f"metric-{i}", "label": m["label"], "value": m["value"], "trend": m.get("trend")}
-                for i, m in enumerate(metrics)
-            ],
-        })
+        components.append(
+            {
+                "type": "row",
+                "id": "metrics-row",
+                "children": [
+                    {
+                        "type": "metric",
+                        "id": f"metric-{i}",
+                        "label": m["label"],
+                        "value": m["value"],
+                        "trend": m.get("trend"),
+                    }
+                    for i, m in enumerate(metrics)
+                ],
+            }
+        )
     chart = data.get("chart")
     if chart:
-        components.append({
-            "type": "chart_line", "id": "dashboard-chart",
-            "label": chart.get("label", "Chart"), "labels": chart.get("labels", []),
-            "datasets": chart.get("datasets", []), "vertical_lines": chart.get("vertical_lines", []),
-        })
+        components.append(
+            {
+                "type": "chart_line",
+                "id": "dashboard-chart",
+                "label": chart.get("label", "Chart"),
+                "labels": chart.get("labels", []),
+                "datasets": chart.get("datasets", []),
+                "vertical_lines": chart.get("vertical_lines", []),
+            }
+        )
     table = data.get("table")
     if table:
-        components.append({
-            "type": "table", "id": "dashboard-table",
-            "headers": table.get("headers", []), "rows": table.get("rows", []),
-        })
+        components.append(
+            {
+                "type": "table",
+                "id": "dashboard-table",
+                "headers": table.get("headers", []),
+                "rows": table.get("rows", []),
+            }
+        )
     return components
 
 
 def _tpl_config_form(data: dict) -> list:
     return [
         {"type": "heading", "level": 2, "text": data.get("title", "Configuration")},
-        *([{"type": "text", "text": data["description"]}] if data.get("description") else []),
+        *(
+            [{"type": "text", "text": data["description"]}]
+            if data.get("description")
+            else []
+        ),
         {
-            "type": "form", "id": "config-form",
+            "type": "form",
+            "id": "config-form",
             "fields": data.get("fields", []),
             "actions": [
-                {"type": "button", "label": data.get("cancel_label", "Cancel"), "action_id": "cancel", "variant": "ghost"},
-                {"type": "button", "label": data.get("submit_label", "Submit"), "action_id": "submit", "variant": "primary"},
+                {
+                    "type": "button",
+                    "label": data.get("cancel_label", "Cancel"),
+                    "action_id": "cancel",
+                    "variant": "ghost",
+                },
+                {
+                    "type": "button",
+                    "label": data.get("submit_label", "Submit"),
+                    "action_id": "submit",
+                    "variant": "primary",
+                },
             ],
         },
     ]
 
 
 def _tpl_plan_view(data: dict) -> list:
-    components: list = [{"type": "heading", "level": 2, "text": data.get("title", "Plan Review")}]
+    components: list = [
+        {"type": "heading", "level": 2, "text": data.get("title", "Plan Review")}
+    ]
     if data.get("description"):
         components.append({"type": "text", "text": data["description"]})
-    components.append({
-        "type": "flowchart", "id": "plan-diagram",
-        "content": data.get("mermaid", "flowchart TD\n  A[No diagram provided]"),
-    })
-    components.append({
-        "type": "row",
-        "children": [
-            {"type": "button", "label": data.get("cancel_label", "Cancel"), "action_id": "cancel", "variant": "danger"},
-            {"type": "button", "label": data.get("approve_label", "Approve & Execute"), "action_id": "approve", "variant": "primary"},
-        ],
-    })
+    components.append(
+        {
+            "type": "flowchart",
+            "id": "plan-diagram",
+            "content": data.get("mermaid", "flowchart TD\n  A[No diagram provided]"),
+        }
+    )
+    components.append(
+        {
+            "type": "row",
+            "children": [
+                {
+                    "type": "button",
+                    "label": data.get("cancel_label", "Cancel"),
+                    "action_id": "cancel",
+                    "variant": "danger",
+                },
+                {
+                    "type": "button",
+                    "label": data.get("approve_label", "Approve & Execute"),
+                    "action_id": "approve",
+                    "variant": "primary",
+                },
+            ],
+        }
+    )
     return components

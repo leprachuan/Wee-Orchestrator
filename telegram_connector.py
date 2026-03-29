@@ -5,18 +5,20 @@ Bridges Telegram chat with the agent_manager.py
 Handles user pairing, message routing, and configuration
 """
 
-import sys
-import os
 import json
+import logging
+import mimetypes
+import os
 import re
-import requests
+import sys
 import threading
 import time
-import mimetypes
-import logging
-from pathlib import Path
-from typing import Optional, Dict, List
 from datetime import datetime
+from pathlib import Path
+from typing import Dict, List, Optional
+
+import requests
+
 import agent_manager
 import audio_transcriber
 
@@ -26,8 +28,14 @@ logger = logging.getLogger(__name__)
 # sentinel file /opt/n8n-copilot-shim/PROD_DISABLED. When present, any process
 # started from the production path will exit immediately.
 _prod_disable_path = Path("/opt/n8n-copilot-shim/PROD_DISABLED")
-if os.path.abspath(__file__).startswith("/opt/n8n-copilot-shim/") and _prod_disable_path.exists():
-    print("Production Telegram connector disabled via PROD_DISABLED sentinel.", file=sys.stderr)
+if (
+    os.path.abspath(__file__).startswith("/opt/n8n-copilot-shim/")
+    and _prod_disable_path.exists()
+):
+    print(
+        "Production Telegram connector disabled via PROD_DISABLED sentinel.",
+        file=sys.stderr,
+    )
     sys.exit(0)
 
 
@@ -58,8 +66,8 @@ class TelegramConfig:
             "enable_auto_pair": False,  # Auto-pair new users
             "default_agent": os.environ.get("COPILOT_DEFAULT_AGENT", "orchestrator"),
             "default_model": os.environ.get("COPILOT_DEFAULT_MODEL", "gpt-5-mini"),
-            "pinned_users": {},       # Maps user_id (str) to {"agent": "name"} - locks user to that agent
-            "yolo_allowed_users": [], # User IDs permitted to enable /mode yolo; empty = all allowed
+            "pinned_users": {},  # Maps user_id (str) to {"agent": "name"} - locks user to that agent
+            "yolo_allowed_users": [],  # User IDs permitted to enable /mode yolo; empty = all allowed
         }
 
     def save(self):
@@ -157,7 +165,7 @@ class TelegramConnector:
             config_file: Path to configuration file
         """
         self.config = TelegramConfig(config_file)
-        
+
         # Prefer config file token over env var (env var may be stale in systemd)
         config_token = self.config.config.get("token", "")
         self.token = config_token if config_token else token
@@ -194,12 +202,16 @@ class TelegramConnector:
         self.running = False
 
         if not self.config.config.get("allowed_users"):
-            print("⚠️  WARNING: allowed_users is empty — ALL Telegram users can interact with this bot!", file=sys.stderr)
-    
+            print(
+                "⚠️  WARNING: allowed_users is empty — ALL Telegram users can interact with this bot!",
+                file=sys.stderr,
+            )
+
     def get_session_manager(self, session_id: str):
         """Get or create SessionManager for session_id"""
         if session_id not in self.session_managers:
             from agent_manager import SessionManager
+
             mgr = SessionManager()
             # Backwards compatibility: ensure older SessionManager implementations
             # that expose load_session_map still satisfy callers expecting
@@ -216,7 +228,10 @@ class TelegramConnector:
         """Remove cached SessionManager so next call gets a fresh one"""
         if session_id in self.session_managers:
             del self.session_managers[session_id]
-            print(f"[DEBUG] Evicted cached SessionManager for: {session_id}", file=sys.stderr)
+            print(
+                f"[DEBUG] Evicted cached SessionManager for: {session_id}",
+                file=sys.stderr,
+            )
 
     def _enforce_pinned_session(self, user_id: int, session_id: str):
         """For pinned users, push pinned agent/runtime/model into the SessionManager.
@@ -235,7 +250,9 @@ class TelegramConnector:
         if pinned_model:
             session_mgr.update_session_field(session_id, "model", pinned_model)
 
-    def _execute_via_api(self, query: str, session_id: str, user_identity: str, channel: str) -> str:
+    def _execute_via_api(
+        self, query: str, session_id: str, user_identity: str, channel: str
+    ) -> str:
         """Execute query via API using shared key authentication."""
         try:
             headers = {
@@ -258,18 +275,30 @@ class TelegramConnector:
                 f"{self.api_url_copilot}/api/v1/sessions/{session_id}/execute",
                 headers=headers,
                 json={"query": query},
-                timeout=self.config.get_user_timeout(int(user_identity.replace("telegram_", ""))) if "telegram_" in str(user_identity) else 600,
+                timeout=(
+                    self.config.get_user_timeout(
+                        int(user_identity.replace("telegram_", ""))
+                    )
+                    if "telegram_" in str(user_identity)
+                    else 600
+                ),
             )
 
             if resp.status_code == 200:
                 return resp.json().get("response", "No response from API")
             else:
-                print(f"[WARN] API request failed ({resp.status_code}): {resp.text}", file=sys.stderr)
+                print(
+                    f"[WARN] API request failed ({resp.status_code}): {resp.text}",
+                    file=sys.stderr,
+                )
                 # Fallback to direct mode
                 session_mgr = self.get_session_manager(session_id)
                 return session_mgr.execute(query, session_id)
         except Exception as e:
-            print(f"[WARN] API request exception: {e}, falling back to direct mode", file=sys.stderr)
+            print(
+                f"[WARN] API request exception: {e}, falling back to direct mode",
+                file=sys.stderr,
+            )
             session_mgr = self.get_session_manager(session_id)
             return session_mgr.execute(query, session_id)
 
@@ -294,62 +323,83 @@ class TelegramConnector:
 
     def sanitize_telegram_html(self, text: str) -> str:
         """Sanitize HTML to only contain Telegram-supported tags.
-        Telegram supports: b, strong, i, em, u, ins, s, strike, del, a, code, pre, blockquote, tg-spoiler"""
+        Telegram supports: b, strong, i, em, u, ins, s, strike, del, a, code, pre, blockquote, tg-spoiler
+        """
         # Supported Telegram tags (opening and closing)
-        supported_tags = {'b', 'strong', 'i', 'em', 'u', 'ins', 's', 'strike', 'del',
-                          'a', 'code', 'pre', 'blockquote', 'tg-spoiler', 'tg-emoji'}
-        
+        supported_tags = {
+            "b",
+            "strong",
+            "i",
+            "em",
+            "u",
+            "ins",
+            "s",
+            "strike",
+            "del",
+            "a",
+            "code",
+            "pre",
+            "blockquote",
+            "tg-spoiler",
+            "tg-emoji",
+        }
+
         # Replace <br> with newline before processing
-        text = re.sub(r'<br\s*/?>', '\n', text, flags=re.IGNORECASE)
-        
+        text = re.sub(r"<br\s*/?>", "\n", text, flags=re.IGNORECASE)
+
         # Replace <pre><code class="..."> with just <pre>
-        text = re.sub(r'<pre>\s*<code[^>]*>', '<pre>', text)
-        text = re.sub(r'</code>\s*</pre>', '</pre>', text)
-        
+        text = re.sub(r"<pre>\s*<code[^>]*>", "<pre>", text)
+        text = re.sub(r"</code>\s*</pre>", "</pre>", text)
+
         # Remove attributes from all tags except <a> (which needs href) and <blockquote> (expandable)
         def clean_tag(match):
             full = match.group(0)
             # Closing tags
-            if full.startswith('</'):
-                tag_name = re.match(r'</(\w[\w-]*)', full)
+            if full.startswith("</"):
+                tag_name = re.match(r"</(\w[\w-]*)", full)
                 if tag_name and tag_name.group(1).lower() in supported_tags:
-                    return f'</{tag_name.group(1)}>'
-                return ''  # Remove unsupported closing tag
+                    return f"</{tag_name.group(1)}>"
+                return ""  # Remove unsupported closing tag
             # Opening tags
-            tag_match = re.match(r'<(\w[\w-]*)([\s>])', full)
+            tag_match = re.match(r"<(\w[\w-]*)([\s>])", full)
             if not tag_match:
                 # Self-closing or malformed - remove
-                return ''
+                return ""
             tag_name = tag_match.group(1).lower()
             if tag_name not in supported_tags:
-                return ''  # Remove unsupported tag
-            if tag_name == 'a':
+                return ""  # Remove unsupported tag
+            if tag_name == "a":
                 # Keep href attribute
                 href = re.search(r'href=["\']([^"\']*)["\']', full, re.IGNORECASE)
                 if href:
                     return f'<a href="{href.group(1)}">'
-                return ''  # <a> without href is useless
-            if tag_name == 'blockquote':
-                if 'expandable' in full:
-                    return '<blockquote expandable>'
-                return '<blockquote>'
+                return ""  # <a> without href is useless
+            if tag_name == "blockquote":
+                if "expandable" in full:
+                    return "<blockquote expandable>"
+                return "<blockquote>"
             # All other supported tags - strip attributes
-            return f'<{tag_name}>'
-        
-        text = re.sub(r'</?[\w][\w-]*(?:\s[^>]*)?\s*/?>', clean_tag, text)
-        
+            return f"<{tag_name}>"
+
+        text = re.sub(r"</?[\w][\w-]*(?:\s[^>]*)?\s*/?>", clean_tag, text)
+
         # Escape stray < and > that aren't part of valid tags
         # First protect valid tags, then escape strays, then restore
         import html as html_mod
-        parts = re.split(r'(</?(?:' + '|'.join(supported_tags) + r')(?:\s[^>]*)?>)', text)
+
+        parts = re.split(
+            r"(</?(?:" + "|".join(supported_tags) + r")(?:\s[^>]*)?>)", text
+        )
         result = []
         for i, part in enumerate(parts):
             if i % 2 == 0:
                 # Not a tag - escape any remaining < >
-                part = part.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+                part = (
+                    part.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+                )
             result.append(part)
-        text = ''.join(result)
-        
+        text = "".join(result)
+
         return text
 
     def send_message(self, chat_id: int, text: str) -> Optional[int]:
@@ -357,41 +407,73 @@ class TelegramConnector:
         try:
             sanitized = self.sanitize_telegram_html(text)
             max_len = 4096
-            chunks = [sanitized[i:i + max_len] for i in range(0, len(sanitized), max_len)] if sanitized else ["No response"]
-            
+            chunks = (
+                [sanitized[i : i + max_len] for i in range(0, len(sanitized), max_len)]
+                if sanitized
+                else ["No response"]
+            )
+
             last_msg_id = None
             for chunk in chunks:
                 # Log outbound attempt (short snippet)
-                print(f"[DEBUG OUTBOUND] send_message -> chat_id={chat_id} text_snippet={repr(chunk[:200])}", file=sys.stderr)
+                print(
+                    f"[DEBUG OUTBOUND] send_message -> chat_id={chat_id} text_snippet={repr(chunk[:200])}",
+                    file=sys.stderr,
+                )
                 resp = requests.post(
                     f"{self.api_url}/sendMessage",
                     json={"chat_id": chat_id, "text": chunk, "parse_mode": "HTML"},
                     timeout=10,
                 )
-                print(f"[DEBUG OUTBOUND] send_message HTTP {resp.status_code} for chat_id={chat_id}", file=sys.stderr)
+                print(
+                    f"[DEBUG OUTBOUND] send_message HTTP {resp.status_code} for chat_id={chat_id}",
+                    file=sys.stderr,
+                )
                 if resp.status_code != 200:
-                    print(f"[WARN] HTML send failed ({resp.status_code}): {resp.text[:200]}", file=sys.stderr)
+                    print(
+                        f"[WARN] HTML send failed ({resp.status_code}): {resp.text[:200]}",
+                        file=sys.stderr,
+                    )
                     # Fallback to plain text
-                    plain = re.sub(r'<[^>]+>', '', chunk)
-                    plain = plain.replace('&amp;', '&').replace('&lt;', '<').replace('&gt;', '>')
-                    print(f"[DEBUG OUTBOUND] send_message falling back to plain text for chat_id={chat_id}", file=sys.stderr)
+                    plain = re.sub(r"<[^>]+>", "", chunk)
+                    plain = (
+                        plain.replace("&amp;", "&")
+                        .replace("&lt;", "<")
+                        .replace("&gt;", ">")
+                    )
+                    print(
+                        f"[DEBUG OUTBOUND] send_message falling back to plain text for chat_id={chat_id}",
+                        file=sys.stderr,
+                    )
                     resp = requests.post(
                         f"{self.api_url}/sendMessage",
                         json={"chat_id": chat_id, "text": plain},
                         timeout=10,
                     )
-                    print(f"[DEBUG OUTBOUND] send_message fallback HTTP {resp.status_code} for chat_id={chat_id}", file=sys.stderr)
+                    print(
+                        f"[DEBUG OUTBOUND] send_message fallback HTTP {resp.status_code} for chat_id={chat_id}",
+                        file=sys.stderr,
+                    )
                     if resp.status_code != 200:
-                        print(f"[ERROR] Plain text also failed ({resp.status_code}): {resp.text[:200]}", file=sys.stderr)
-                
+                        print(
+                            f"[ERROR] Plain text also failed ({resp.status_code}): {resp.text[:200]}",
+                            file=sys.stderr,
+                        )
+
                 if resp.status_code == 200:
                     try:
                         result = resp.json()
                         if result.get("ok"):
                             last_msg_id = result["result"]["message_id"]
-                            print(f"[DEBUG OUTBOUND] send_message succeeded message_id={last_msg_id} for chat_id={chat_id}", file=sys.stderr)
+                            print(
+                                f"[DEBUG OUTBOUND] send_message succeeded message_id={last_msg_id} for chat_id={chat_id}",
+                                file=sys.stderr,
+                            )
                     except Exception as e:
-                        print(f"[WARN] send_message response JSON parse error: {e}", file=sys.stderr)
+                        print(
+                            f"[WARN] send_message response JSON parse error: {e}",
+                            file=sys.stderr,
+                        )
             return last_msg_id
         except Exception as e:
             print(f"Error sending message: {e}", file=sys.stderr)
@@ -402,30 +484,58 @@ class TelegramConnector:
         try:
             sanitized = self.sanitize_telegram_html(text)
             max_len = 4096
-            chunks = [sanitized[i:i + max_len] for i in range(0, len(sanitized), max_len)] if sanitized else ["No response"]
-            
+            chunks = (
+                [sanitized[i : i + max_len] for i in range(0, len(sanitized), max_len)]
+                if sanitized
+                else ["No response"]
+            )
+
             # Log edit attempt
-            print(f"[DEBUG OUTBOUND] edit_message -> chat_id={chat_id} message_id={message_id} text_snippet={repr(chunks[0][:200])}", file=sys.stderr)
+            print(
+                f"[DEBUG OUTBOUND] edit_message -> chat_id={chat_id} message_id={message_id} text_snippet={repr(chunks[0][:200])}",
+                file=sys.stderr,
+            )
             resp = requests.post(
                 f"{self.api_url}/editMessageText",
-                json={"chat_id": chat_id, "message_id": message_id, "text": chunks[0], "parse_mode": "HTML"},
+                json={
+                    "chat_id": chat_id,
+                    "message_id": message_id,
+                    "text": chunks[0],
+                    "parse_mode": "HTML",
+                },
                 timeout=10,
             )
-            print(f"[DEBUG OUTBOUND] edit_message HTTP {resp.status_code} for chat_id={chat_id} message_id={message_id}", file=sys.stderr)
+            print(
+                f"[DEBUG OUTBOUND] edit_message HTTP {resp.status_code} for chat_id={chat_id} message_id={message_id}",
+                file=sys.stderr,
+            )
             if resp.status_code != 200:
                 # Fallback to plain text
-                plain = re.sub(r'<[^>]+>', '', chunks[0])
-                plain = plain.replace('&amp;', '&').replace('&lt;', '<').replace('&gt;', '>')
-                print(f"[DEBUG OUTBOUND] edit_message falling back to plain text for chat_id={chat_id} message_id={message_id}", file=sys.stderr)
+                plain = re.sub(r"<[^>]+>", "", chunks[0])
+                plain = (
+                    plain.replace("&amp;", "&")
+                    .replace("&lt;", "<")
+                    .replace("&gt;", ">")
+                )
+                print(
+                    f"[DEBUG OUTBOUND] edit_message falling back to plain text for chat_id={chat_id} message_id={message_id}",
+                    file=sys.stderr,
+                )
                 resp = requests.post(
                     f"{self.api_url}/editMessageText",
                     json={"chat_id": chat_id, "message_id": message_id, "text": plain},
                     timeout=10,
                 )
-                print(f"[DEBUG OUTBOUND] edit_message fallback HTTP {resp.status_code} for chat_id={chat_id} message_id={message_id}", file=sys.stderr)
+                print(
+                    f"[DEBUG OUTBOUND] edit_message fallback HTTP {resp.status_code} for chat_id={chat_id} message_id={message_id}",
+                    file=sys.stderr,
+                )
                 if resp.status_code != 200:
-                    print(f"[WARN] Edit failed ({resp.status_code}): {resp.text[:200]}", file=sys.stderr)
-            
+                    print(
+                        f"[WARN] Edit failed ({resp.status_code}): {resp.text[:200]}",
+                        file=sys.stderr,
+                    )
+
             for chunk in chunks[1:]:
                 self.send_message(chat_id, chunk)
         except Exception as e:
@@ -440,7 +550,10 @@ class TelegramConnector:
                 json={"chat_id": chat_id, "action": "typing"},
                 timeout=5,
             )
-            print(f"[DEBUG OUTBOUND] send_typing HTTP {resp.status_code} for chat_id={chat_id}", file=sys.stderr)
+            print(
+                f"[DEBUG OUTBOUND] send_typing HTTP {resp.status_code} for chat_id={chat_id}",
+                file=sys.stderr,
+            )
         except Exception as e:
             print(f"Error sending typing indicator: {e}", file=sys.stderr)
 
@@ -454,7 +567,10 @@ class TelegramConnector:
             )
             if resp.status_code == 200 and resp.json().get("ok"):
                 return True
-            print(f"[DEBUG] unpinAllChatMessages status: {resp.status_code}", file=sys.stderr)
+            print(
+                f"[DEBUG] unpinAllChatMessages status: {resp.status_code}",
+                file=sys.stderr,
+            )
             return False
         except Exception as e:
             print(f"Error unpinning all messages: {e}", file=sys.stderr)
@@ -470,7 +586,10 @@ class TelegramConnector:
             )
             if resp.status_code == 200 and resp.json().get("ok"):
                 return True
-            print(f"[WARN] Failed to pin message ({resp.status_code}): {resp.text[:200]}", file=sys.stderr)
+            print(
+                f"[WARN] Failed to pin message ({resp.status_code}): {resp.text[:200]}",
+                file=sys.stderr,
+            )
             return False
         except Exception as e:
             print(f"Error pinning message: {e}", file=sys.stderr)
@@ -508,7 +627,10 @@ class TelegramConnector:
                     break
 
             if not is_safe:
-                print(f"[WARN] File outside allowed directories: {file_path}", file=sys.stderr)
+                print(
+                    f"[WARN] File outside allowed directories: {file_path}",
+                    file=sys.stderr,
+                )
                 return False
 
             # Check file size (50MB limit)
@@ -521,11 +643,18 @@ class TelegramConnector:
             print(f"[WARN] Error validating file path: {e}", file=sys.stderr)
             return False
 
-    def send_photo(self, chat_id: int, photo_source: str, caption: str = "") -> Optional[int]:
+    def send_photo(
+        self, chat_id: int, photo_source: str, caption: str = ""
+    ) -> Optional[int]:
         """Send a photo to Telegram chat via URL or local file upload. Returns message_id."""
         try:
-            is_local = not photo_source.startswith(('http://', 'https://')) and os.path.isfile(photo_source)
-            print(f"[DEBUG] Attempting sendPhoto {'(local file)' if is_local else '(URL)'}: {photo_source}", file=sys.stderr)
+            is_local = not photo_source.startswith(
+                ("http://", "https://")
+            ) and os.path.isfile(photo_source)
+            print(
+                f"[DEBUG] Attempting sendPhoto {'(local file)' if is_local else '(URL)'}: {photo_source}",
+                file=sys.stderr,
+            )
 
             if is_local:
                 # Local file: multipart upload
@@ -537,8 +666,8 @@ class TelegramConnector:
                     sanitized_caption = self.sanitize_telegram_html(caption.strip())
                     data["caption"] = sanitized_caption[:1024]
                     data["parse_mode"] = "HTML"
-                with open(photo_source, 'rb') as f:
-                    files = {'photo': (Path(photo_source).name, f, mime_type)}
+                with open(photo_source, "rb") as f:
+                    files = {"photo": (Path(photo_source).name, f, mime_type)}
                     resp = requests.post(
                         f"{self.api_url}/sendPhoto",
                         data=data,
@@ -551,12 +680,18 @@ class TelegramConnector:
                         resp = requests.post(
                             f"{self.api_url}/sendPhoto",
                             data=data,
-                            files={'photo': (Path(photo_source).name, f, mime_type)},
+                            files={"photo": (Path(photo_source).name, f, mime_type)},
                             timeout=30,
                         )
                     if resp.status_code != 200:
-                        print(f"[WARN] sendPhoto (local) failed ({resp.status_code}): {resp.text[:200]}", file=sys.stderr)
-                        self.send_message(chat_id, f"⚠️ Failed to send image: {Path(photo_source).name}")
+                        print(
+                            f"[WARN] sendPhoto (local) failed ({resp.status_code}): {resp.text[:200]}",
+                            file=sys.stderr,
+                        )
+                        self.send_message(
+                            chat_id,
+                            f"⚠️ Failed to send image: {Path(photo_source).name}",
+                        )
                         return None
                 result = resp.json()
                 if result.get("ok"):
@@ -576,10 +711,17 @@ class TelegramConnector:
                 if resp.status_code != 200:
                     if caption:
                         data.pop("parse_mode", None)
-                        resp = requests.post(f"{self.api_url}/sendPhoto", json=data, timeout=30)
+                        resp = requests.post(
+                            f"{self.api_url}/sendPhoto", json=data, timeout=30
+                        )
                     if resp.status_code != 200:
-                        print(f"[WARN] sendPhoto failed ({resp.status_code}): {resp.text[:200]}", file=sys.stderr)
-                        self.send_message(chat_id, f'<a href="{photo_source}">📷 Image link</a>')
+                        print(
+                            f"[WARN] sendPhoto failed ({resp.status_code}): {resp.text[:200]}",
+                            file=sys.stderr,
+                        )
+                        self.send_message(
+                            chat_id, f'<a href="{photo_source}">📷 Image link</a>'
+                        )
                         return None
                 result = resp.json()
                 if result.get("ok"):
@@ -589,15 +731,22 @@ class TelegramConnector:
             self.send_message(chat_id, f'<a href="{photo_url}">📷 Image link</a>')
         return None
 
-    def send_document(self, chat_id: int, file_path: str, caption: str = "", filename: str = None) -> Optional[int]:
+    def send_document(
+        self, chat_id: int, file_path: str, caption: str = "", filename: str = None
+    ) -> Optional[int]:
         """Send a document to Telegram chat via multipart upload. Returns message_id."""
         try:
             # Security validation
             if not self._is_safe_file_path(file_path):
-                self.send_message(chat_id, f"⚠️ Cannot send file: {file_path} (security check failed)")
+                self.send_message(
+                    chat_id, f"⚠️ Cannot send file: {file_path} (security check failed)"
+                )
                 return None
 
-            print(f"[DEBUG] Attempting sendDocument with file: {file_path}", file=sys.stderr)
+            print(
+                f"[DEBUG] Attempting sendDocument with file: {file_path}",
+                file=sys.stderr,
+            )
 
             # Detect MIME type
             mime_type, _ = mimetypes.guess_type(file_path)
@@ -605,39 +754,48 @@ class TelegramConnector:
                 mime_type = "application/octet-stream"
 
             # Upload file via multipart
-            with open(file_path, 'rb') as f:
-                files = {
-                    'document': (filename or Path(file_path).name, f, mime_type)
-                }
-                data = {'chat_id': chat_id}
+            with open(file_path, "rb") as f:
+                files = {"document": (filename or Path(file_path).name, f, mime_type)}
+                data = {"chat_id": chat_id}
 
                 if caption:
                     # Sanitize caption (same as images)
                     sanitized_caption = self.sanitize_telegram_html(caption.strip())
-                    data['caption'] = sanitized_caption[:1024]  # Telegram limit
-                    data['parse_mode'] = 'HTML'
+                    data["caption"] = sanitized_caption[:1024]  # Telegram limit
+                    data["parse_mode"] = "HTML"
 
                 resp = requests.post(
                     f"{self.api_url}/sendDocument",
                     data=data,
                     files=files,
-                    timeout=60  # Longer timeout for file uploads
+                    timeout=60,  # Longer timeout for file uploads
                 )
 
                 if resp.status_code != 200:
                     # Retry without HTML parse_mode if caption failed
                     if caption:
-                        data.pop('parse_mode', None)
+                        data.pop("parse_mode", None)
                         resp = requests.post(
                             f"{self.api_url}/sendDocument",
                             data=data,
-                            files={'document': (filename or Path(file_path).name, open(file_path, 'rb'), mime_type)},
-                            timeout=60
+                            files={
+                                "document": (
+                                    filename or Path(file_path).name,
+                                    open(file_path, "rb"),
+                                    mime_type,
+                                )
+                            },
+                            timeout=60,
                         )
 
                     if resp.status_code != 200:
-                        print(f"[WARN] sendDocument failed ({resp.status_code}): {resp.text[:200]}", file=sys.stderr)
-                        self.send_message(chat_id, f"⚠️ Failed to send file: {Path(file_path).name}")
+                        print(
+                            f"[WARN] sendDocument failed ({resp.status_code}): {resp.text[:200]}",
+                            file=sys.stderr,
+                        )
+                        self.send_message(
+                            chat_id, f"⚠️ Failed to send file: {Path(file_path).name}"
+                        )
                         return None
 
                 result = resp.json()
@@ -650,17 +808,17 @@ class TelegramConnector:
 
     def _resolve_image_path(self, url: str) -> str:
         """Resolve /ai-media/ paths to local filesystem paths and strip ANSI codes.
-        
+
         Handles LLM-mangled session IDs by fuzzy-matching directory names.
         """
-        url = re.sub(r'\x1b\[[0-9;]*m', '', url)
+        url = re.sub(r"\x1b\[[0-9;]*m", "", url)
         if url.startswith("/ai-media/"):
             resolved = url.replace("/ai-media/", "/tmp/webui_ai_media/", 1)
             if os.path.exists(resolved):
                 return resolved
             # Fuzzy directory match for mangled session IDs
             base_dir = "/tmp/webui_ai_media"
-            parts = resolved[len(base_dir) + 1:].split("/", 1)
+            parts = resolved[len(base_dir) + 1 :].split("/", 1)
             if len(parts) == 2:
                 session_dir_name, filename = parts
                 try:
@@ -674,11 +832,19 @@ class TelegramConnector:
                             if os.path.isfile(candidate_path):
                                 candidates.append(candidate_path)
                     if len(candidates) == 1:
-                        print(f"[DEBUG] Fuzzy-matched image path: {resolved} -> {candidates[0]}", file=sys.stderr, flush=True)
+                        print(
+                            f"[DEBUG] Fuzzy-matched image path: {resolved} -> {candidates[0]}",
+                            file=sys.stderr,
+                            flush=True,
+                        )
                         return candidates[0]
                     elif len(candidates) > 1:
                         best = max(candidates, key=os.path.getmtime)
-                        print(f"[DEBUG] Fuzzy-matched image path (newest of {len(candidates)}): {resolved} -> {best}", file=sys.stderr, flush=True)
+                        print(
+                            f"[DEBUG] Fuzzy-matched image path (newest of {len(candidates)}): {resolved} -> {best}",
+                            file=sys.stderr,
+                            flush=True,
+                        )
                         return best
                 except OSError as e:
                     logger.debug(f"Failed to check file modification time: {e}")
@@ -702,11 +868,11 @@ class TelegramConnector:
         image_extensions = r'\.(jpg|jpeg|png|gif|webp|bmp|svg)(\?[^\s"<>]*)?'
 
         # Match markdown images: ![alt text](url)
-        md_img_pattern = r'!\[([^\]]*)\]\(([^)]+)\)'
+        md_img_pattern = r"!\[([^\]]*)\]\(([^)]+)\)"
         # Match <img> tags
         img_tag_pattern = r'<img\s+[^>]*src=["\']([^"\']+)["\'][^>]*/?\s*>'
         # Match bare image URLs
-        bare_url_pattern = r'(https?://[^\s"<>]+' + image_extensions + r')'
+        bare_url_pattern = r'(https?://[^\s"<>]+' + image_extensions + r")"
 
         image_data = []  # List of (url, caption) tuples
         remaining = text
@@ -748,7 +914,7 @@ class TelegramConnector:
             - remaining_text: Text with all file references removed
         """
         # Match [FILE:path] or [FILE:path:caption]
-        file_pattern = r'\[FILE:([^\]:]+)(?::([^\]]*))?\]'
+        file_pattern = r"\[FILE:([^\]:]+)(?::([^\]]*))?\]"
 
         file_data = []  # List of (path, caption) tuples
         remaining = text
@@ -767,9 +933,14 @@ class TelegramConnector:
 
         return file_data, remaining
 
-    def send_response(self, chat_id: int, text: str, status_msg_id: Optional[int] = None):
+    def send_response(
+        self, chat_id: int, text: str, status_msg_id: Optional[int] = None
+    ):
         """Send response, detecting image URLs and file paths."""
-        print(f"[DEBUG OUTBOUND] send_response -> chat_id={chat_id} text_snippet={repr(text[:200])} status_msg_id={status_msg_id}", file=sys.stderr)
+        print(
+            f"[DEBUG OUTBOUND] send_response -> chat_id={chat_id} text_snippet={repr(text[:200])} status_msg_id={status_msg_id}",
+            file=sys.stderr,
+        )
         # Extract images first, then files from remaining text
         image_data, text_after_images = self.extract_image_urls(text)
         file_data, remaining_text = self.extract_file_paths(text_after_images)
@@ -777,11 +948,17 @@ class TelegramConnector:
         # Handle text portion
         if remaining_text.strip():
             if status_msg_id:
-                print(f"[DEBUG OUTBOUND] send_response editing status message {status_msg_id} for chat_id={chat_id}", file=sys.stderr)
+                print(
+                    f"[DEBUG OUTBOUND] send_response editing status message {status_msg_id} for chat_id={chat_id}",
+                    file=sys.stderr,
+                )
                 self.edit_message(chat_id, status_msg_id, remaining_text)
                 status_msg_id = None
             else:
-                print(f"[DEBUG OUTBOUND] send_response sending text to chat_id={chat_id}", file=sys.stderr)
+                print(
+                    f"[DEBUG OUTBOUND] send_response sending text to chat_id={chat_id}",
+                    file=sys.stderr,
+                )
                 self.send_message(chat_id, remaining_text)
         elif status_msg_id and (image_data or file_data):
             # No text, just media - delete status message
@@ -791,24 +968,41 @@ class TelegramConnector:
                     json={"chat_id": chat_id, "message_id": status_msg_id},
                     timeout=5,
                 )
-                print(f"[DEBUG OUTBOUND] deleteMessage HTTP {resp.status_code} for chat_id={chat_id} message_id={status_msg_id}", file=sys.stderr)
+                print(
+                    f"[DEBUG OUTBOUND] deleteMessage HTTP {resp.status_code} for chat_id={chat_id} message_id={status_msg_id}",
+                    file=sys.stderr,
+                )
             except Exception as e:
                 print(f"[WARN] deleteMessage failed: {e}", file=sys.stderr)
             status_msg_id = None
         elif status_msg_id:
             # No text, no media - edit status message with default text
-            print(f"[DEBUG OUTBOUND] send_response editing status message {status_msg_id} to checkmark for chat_id={chat_id}", file=sys.stderr)
+            print(
+                f"[DEBUG OUTBOUND] send_response editing status message {status_msg_id} to checkmark for chat_id={chat_id}",
+                file=sys.stderr,
+            )
             self.edit_message(chat_id, status_msg_id, "✓")
 
         # Send images
         for url, caption in image_data:
-            print(f"[DEBUG OUTBOUND] send_response sending photo URL={url} caption={repr(caption[:100])} to chat_id={chat_id}", file=sys.stderr, flush=True)
+            print(
+                f"[DEBUG OUTBOUND] send_response sending photo URL={url} caption={repr(caption[:100])} to chat_id={chat_id}",
+                file=sys.stderr,
+                flush=True,
+            )
             result = self.send_photo(chat_id, url, caption)
-            print(f"[DEBUG OUTBOUND] send_photo returned: {result}", file=sys.stderr, flush=True)
+            print(
+                f"[DEBUG OUTBOUND] send_photo returned: {result}",
+                file=sys.stderr,
+                flush=True,
+            )
 
         # Send files
         for file_path, caption in file_data:
-            print(f"[DEBUG OUTBOUND] send_response sending document path={file_path} caption={repr(caption[:100])} to chat_id={chat_id}", file=sys.stderr)
+            print(
+                f"[DEBUG OUTBOUND] send_response sending document path={file_path} caption={repr(caption[:100])} to chat_id={chat_id}",
+                file=sys.stderr,
+            )
             self.send_document(chat_id, file_path, caption)
 
     def download_file(self, file_id: str, user_id: int) -> Optional[str]:
@@ -816,35 +1010,34 @@ class TelegramConnector:
         try:
             # Get file info
             file_response = requests.get(
-                f"{self.api_url}/getFile",
-                params={"file_id": file_id},
-                timeout=10
+                f"{self.api_url}/getFile", params={"file_id": file_id}, timeout=10
             )
             file_info = file_response.json()
             if not file_info.get("ok"):
                 return None
-            
+
             file_path = file_info["result"]["file_path"]
-            
+
             # Create downloads directory in repo
             downloads_dir = Path("/opt/n8n-copilot-shim-dev/telegram_downloads")
             downloads_dir.mkdir(exist_ok=True)
-            
+
             # Download file
             file_url = f"https://api.telegram.org/file/bot{self.token}/{file_path}"
             file_response = requests.get(file_url, timeout=30)
-            
+
             if file_response.status_code == 200:
                 # Save file with user_id prefix
                 file_name = Path(file_path).name
                 local_path = downloads_dir / f"{user_id}_{file_name}"
                 with open(local_path, "wb") as f:
                     f.write(file_response.content)
-                
+
                 # Make world readable
                 import os
+
                 os.chmod(local_path, 0o644)
-                
+
                 return str(local_path)
         except Exception as e:
             print(f"Error downloading file: {e}", file=sys.stderr)
@@ -868,19 +1061,22 @@ class TelegramConnector:
             # Ignore messages from bots (including this bot) to avoid handling bot-sent updates which can cause duplicate responses
             if message.get("from", {}).get("is_bot"):
                 return
-            
+
             # Handle files with optional caption
             file_path = None
             text = message.get("text", "") or message.get("caption", "")
-            
+
             # Check for document or photo
             if "document" in message:
                 document = message["document"]
                 user_id = message["from"]["id"]
                 chat_id = message["chat"]["id"]
-                
+
                 file_path = self.download_file(document["file_id"], user_id)
-                print(f"[DEBUG] Document detected, file_path: {file_path}", file=sys.stderr)
+                print(
+                    f"[DEBUG] Document detected, file_path: {file_path}",
+                    file=sys.stderr,
+                )
                 if file_path:
                     if not text:
                         text = f"Please analyze this file: {file_path}"
@@ -894,10 +1090,12 @@ class TelegramConnector:
                 photos = message["photo"]
                 user_id = message["from"]["id"]
                 chat_id = message["chat"]["id"]
-                
+
                 largest_photo = photos[-1]  # Last is highest quality
                 file_path = self.download_file(largest_photo["file_id"], user_id)
-                print(f"[DEBUG] Photo detected, file_path: {file_path}", file=sys.stderr)
+                print(
+                    f"[DEBUG] Photo detected, file_path: {file_path}", file=sys.stderr
+                )
                 if file_path:
                     if not text:
                         text = f"Please analyze this image: {file_path}"
@@ -910,7 +1108,7 @@ class TelegramConnector:
                 # Voice messages, audio files, and video notes → transcribe
                 user_id = message["from"]["id"]
                 chat_id = message["chat"]["id"]
-                
+
                 if "voice" in message:
                     file_id = message["voice"]["file_id"]
                     duration = message["voice"].get("duration", 0)
@@ -923,10 +1121,13 @@ class TelegramConnector:
                     file_id = message["video_note"]["file_id"]
                     duration = message["video_note"].get("duration", 0)
                     media_type = "video note"
-                
-                print(f"[DEBUG] {media_type} detected ({duration}s), downloading...", file=sys.stderr)
+
+                print(
+                    f"[DEBUG] {media_type} detected ({duration}s), downloading...",
+                    file=sys.stderr,
+                )
                 audio_path = self.download_file(file_id, user_id)
-                
+
                 if audio_path:
                     # Transcribe the audio
                     transcribed, backend = audio_transcriber.transcribe(audio_path)
@@ -936,9 +1137,15 @@ class TelegramConnector:
                             text = f"{text}\n\n[Voice transcription ({backend})]: {transcribed}"
                         else:
                             text = transcribed
-                        print(f"[DEBUG] Transcribed {media_type} via {backend}: {text[:100]}...", file=sys.stderr)
+                        print(
+                            f"[DEBUG] Transcribed {media_type} via {backend}: {text[:100]}...",
+                            file=sys.stderr,
+                        )
                     else:
-                        self.send_message(chat_id, f"⚠️ Could not transcribe {media_type}. Please send as text instead.")
+                        self.send_message(
+                            chat_id,
+                            f"⚠️ Could not transcribe {media_type}. Please send as text instead.",
+                        )
                         return
                 else:
                     self.send_message(chat_id, f"Failed to download {media_type}")
@@ -954,9 +1161,7 @@ class TelegramConnector:
 
             # Check if user is allowed
             if not self.config.is_user_allowed(user_id):
-                self.send_message(
-                    chat_id, "❌ You are not authorized to use this bot."
-                )
+                self.send_message(chat_id, "❌ You are not authorized to use this bot.")
                 return
 
             # Get or create user session
@@ -992,7 +1197,6 @@ class TelegramConnector:
             # Push pinned agent/runtime/model into SessionManager before every message
             self._enforce_pinned_session(user_id, session_id)
 
-
             # Show typing indicator
             self.send_typing(chat_id)
 
@@ -1001,7 +1205,9 @@ class TelegramConnector:
                 # Check for timeout command
                 if cmd_lower.startswith("/timeout"):
                     parts = text.split()
-                    if len(parts) == 1 or (len(parts) > 1 and parts[1].lower() == "current"):
+                    if len(parts) == 1 or (
+                        len(parts) > 1 and parts[1].lower() == "current"
+                    ):
                         # Get current timeout
                         current = self.config.get_user_timeout(user_id)
                         response = f"Current timeout: {current} seconds"
@@ -1015,43 +1221,61 @@ class TelegramConnector:
                                 if new_timeout < 30:
                                     response = "Timeout must be at least 30 seconds"
                                 elif new_timeout > 3600:
-                                    response = "Timeout must be at most 3600 seconds (1 hour)"
+                                    response = (
+                                        "Timeout must be at most 3600 seconds (1 hour)"
+                                    )
                                 else:
                                     self.config.set_user_timeout(user_id, new_timeout)
-                                    response = f"✅ Timeout set to {new_timeout} seconds"
+                                    response = (
+                                        f"✅ Timeout set to {new_timeout} seconds"
+                                    )
                             except ValueError:
-                                response = "Invalid timeout. Use: /timeout set <seconds>"
+                                response = (
+                                    "Invalid timeout. Use: /timeout set <seconds>"
+                                )
                     else:
                         response = "Invalid timeout command. Use: /timeout current or /timeout set <seconds>"
                     self.send_message(chat_id, response)
                 # Block pinned users from changing their agent
-                elif cmd_lower.startswith("/agent set") and self.config.is_user_pinned(user_id):
+                elif cmd_lower.startswith("/agent set") and self.config.is_user_pinned(
+                    user_id
+                ):
                     pinned_agent = self.config.get_pinned_agent(user_id)
                     self.send_message(
                         chat_id,
                         f"❌ Your agent is pinned to **{pinned_agent}** by an administrator. You cannot change agents.",
                     )
                 # Block pinned users from changing their runtime (if a runtime is pinned)
-                elif cmd_lower.startswith("/runtime set") and self.config.get_pinned_runtime(user_id):
+                elif cmd_lower.startswith(
+                    "/runtime set"
+                ) and self.config.get_pinned_runtime(user_id):
                     pinned_runtime = self.config.get_pinned_runtime(user_id)
                     self.send_message(
                         chat_id,
                         f"❌ Your runtime is pinned to **{pinned_runtime}** by an administrator. You cannot change runtimes.",
                     )
                 # Block pinned users from changing their model (if a model is pinned)
-                elif cmd_lower.startswith("/model set") and self.config.get_pinned_model(user_id):
+                elif cmd_lower.startswith(
+                    "/model set"
+                ) and self.config.get_pinned_model(user_id):
                     pinned_model = self.config.get_pinned_model(user_id)
                     self.send_message(
                         chat_id,
                         f"❌ Your model is pinned to **{pinned_model}** by an administrator. You cannot change models.",
                     )
                 # Block unauthorized users from enabling yolo mode
-                elif cmd_lower.startswith("/mode yolo") and not self.config.is_yolo_allowed(user_id):
-                    self.send_message(chat_id, "❌ You are not authorized to enable YOLO mode.")
+                elif cmd_lower.startswith(
+                    "/mode yolo"
+                ) and not self.config.is_yolo_allowed(user_id):
+                    self.send_message(
+                        chat_id, "❌ You are not authorized to enable YOLO mode."
+                    )
                 else:
                     # Regular slash commands - get user timeout
                     timeout = self.config.get_user_timeout(user_id)
-                    response = self._execute_command(text, session_id, timeout, user_identity=str(user_id))
+                    response = self._execute_command(
+                        text, session_id, timeout, user_identity=str(user_id)
+                    )
                     msg_id = self.send_message(chat_id, response)
 
                     # Pin agent set messages so user always knows which agent they're talking to
@@ -1060,23 +1284,32 @@ class TelegramConnector:
                         self.pin_message(chat_id, msg_id)
 
                     # Evict cached SessionManager on session-affecting commands
-                    if cmd_lower.startswith("/session reset") or cmd_lower.startswith("/runtime set"):
+                    if cmd_lower.startswith("/session reset") or cmd_lower.startswith(
+                        "/runtime set"
+                    ):
                         self._evict_session_manager(session_id)
             else:
                 # Check for bash command (!)
                 if text.startswith("!"):
                     # Bash commands - get user timeout
                     timeout = self.config.get_user_timeout(user_id)
-                    response = self._execute_command(text, session_id, timeout, user_identity=str(user_id))
+                    response = self._execute_command(
+                        text, session_id, timeout, user_identity=str(user_id)
+                    )
                     self.send_message(chat_id, response)
                 else:
                     # Route regular messages to agent_manager with status updates
                     timeout = self.config.get_user_timeout(user_id)
                     response, status_msg_id = self._query_agent_with_status(
-                        text, session_info["agent"], session_info["model"], user_id, chat_id, timeout
+                        text,
+                        session_info["agent"],
+                        session_info["model"],
+                        user_id,
+                        chat_id,
+                        timeout,
                     )
                     self.send_response(chat_id, response, status_msg_id)
-            
+
             # Cleanup temp files after query
             self.cleanup_files(user_id)
 
@@ -1088,8 +1321,13 @@ class TelegramConnector:
         """Handle Telegram commands - DEPRECATED: Commands now pass to agent_manager"""
         pass  # Commands are now routed to agent_manager
 
-    def _execute_command(self, command: str, session_id: str, timeout: int = 300,
-                         user_identity: str = None) -> str:
+    def _execute_command(
+        self,
+        command: str,
+        session_id: str,
+        timeout: int = 300,
+        user_identity: str = None,
+    ) -> str:
         """Execute slash command via agent_manager.execute() with timeout support"""
         # Container for result and thread control
         result_container = {"response": None, "done": False}
@@ -1099,44 +1337,55 @@ class TelegramConnector:
             """Run command in background thread"""
             try:
                 if self.use_api:
-                    result_container["response"] = self._execute_via_api(command, session_id, effective_identity, "telegram")
+                    result_container["response"] = self._execute_via_api(
+                        command, session_id, effective_identity, "telegram"
+                    )
                 else:
                     session_mgr = self.get_session_manager(session_id)
-                    result_container["response"] = session_mgr.execute(command, session_id)
+                    result_container["response"] = session_mgr.execute(
+                        command, session_id
+                    )
                 result_container["done"] = True
             except Exception as e:
                 import traceback
+
                 tb_str = traceback.format_exc()
                 print(f"Error in _execute_command: {tb_str}", file=sys.stderr)
                 result_container["response"] = f"Error: {str(e)[:150]}"
                 result_container["done"] = True
-        
+
         # Start command in background
         cmd_thread = threading.Thread(target=run_command, daemon=True)
         cmd_thread.start()
-        
+
         # Wait for result with timeout
         elapsed = 0
         while not result_container["done"] and elapsed < timeout:
             time.sleep(1)
             elapsed += 1
-        
+
         # Wait for thread to complete
         cmd_thread.join(timeout=5)
-        
+
         return result_container["response"] or "Error: Command timed out"
 
     def _query_agent_with_status(
-        self, query: str, agent: str, model: str, user_id: int, chat_id: int, timeout: int = 300
+        self,
+        query: str,
+        agent: str,
+        model: str,
+        user_id: int,
+        chat_id: int,
+        timeout: int = 300,
     ) -> tuple:
         """Query agent with status updates at 30s intervals.
-        
+
         Returns (response_text, status_msg_id) where status_msg_id is the
         message to edit with the final response, or None if no status was sent.
         """
         # Container for result and thread control
         result_container = {"response": None, "done": False}
-        
+
         # Status messages
         status_msgs = [
             "Still working on it...",
@@ -1145,18 +1394,20 @@ class TelegramConnector:
             "Almost there, still working...",
             "Continuing to work on this...",
         ]
-        
+
         def run_query():
             """Run query in background thread"""
             # Log what's being sent
             print(f"[DEBUG] Query to agent: {query[:200]}", file=sys.stderr)
-            result_container["response"] = self._query_agent(query, agent, model, user_id, timeout)
+            result_container["response"] = self._query_agent(
+                query, agent, model, user_id, timeout
+            )
             result_container["done"] = True
-        
+
         # Start query in background
         query_thread = threading.Thread(target=run_query, daemon=True)
         query_thread.start()
-        
+
         # Wait for result with status updates
         elapsed = 0
         status_idx = 0
@@ -1165,7 +1416,7 @@ class TelegramConnector:
             # Re-send typing every 5 seconds to keep indicator alive
             if elapsed % 5 == 0:
                 self.send_typing(chat_id)
-            
+
             if elapsed == 30:
                 # First status at 30s - send new message
                 status_msg_id = self.send_message(chat_id, status_msgs[0])
@@ -1180,13 +1431,13 @@ class TelegramConnector:
                     status_msg_id = self.send_message(chat_id, msg)
                 self.send_typing(chat_id)
                 status_idx += 1
-            
+
             time.sleep(1)
             elapsed += 1
-        
+
         # Wait for thread to complete (with timeout)
         query_thread.join(timeout=5)
-        
+
         return (result_container["response"] or "Error: Query timed out", status_msg_id)
 
     def _query_agent(
@@ -1199,22 +1450,28 @@ class TelegramConnector:
                 session_id = f"telegram_{self.bot_id}_{user_id}"
             else:
                 session_id = f"telegram_{user_id}"
-            
+
             # Use persistent session manager
             session_mgr = self.get_session_manager(session_id)
-            
+
             # Debug: log session info
-            print(f"[DEBUG] Using persistent session_mgr for: {session_id}", file=sys.stderr)
-            
+            print(
+                f"[DEBUG] Using persistent session_mgr for: {session_id}",
+                file=sys.stderr,
+            )
+
             # Use execute() which routes to the correct runtime automatically
             if self.use_api:
-                result = self._execute_via_api(query, session_id, str(user_id), "telegram")
+                result = self._execute_via_api(
+                    query, session_id, str(user_id), "telegram"
+                )
             else:
                 result = session_mgr.execute(query, session_id)
 
             return result if result else "No response from agent"
         except Exception as e:
             import traceback
+
             tb_str = traceback.format_exc()
             print(f"Error in _query_agent: {tb_str}", file=sys.stderr)
             return f"Error: {str(e)[:150]}"
@@ -1250,7 +1507,9 @@ def main():
     """Main entry point for Telegram connector"""
     import argparse
 
-    parser = argparse.ArgumentParser(description="Telegram connector for N8N Copilot Shim")
+    parser = argparse.ArgumentParser(
+        description="Telegram connector for N8N Copilot Shim"
+    )
     parser.add_argument(
         "--token",
         default=os.environ.get("TELEGRAM_BOT_TOKEN", ""),
@@ -1300,7 +1559,9 @@ def main():
 
     # Start connector
     if not args.token:
-        print("Error: Telegram bot token required (--token or TELEGRAM_BOT_TOKEN env var)")
+        print(
+            "Error: Telegram bot token required (--token or TELEGRAM_BOT_TOKEN env var)"
+        )
         sys.exit(1)
 
     connector = TelegramConnector(args.token, args.config)

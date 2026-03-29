@@ -8,10 +8,11 @@ Tests that:
 3. Background tasks respect the mute preference
 """
 
-import requests
 import json
-import time
 import sys
+import time
+
+import requests
 
 # API configuration
 API_URL = "https://localhost:8001"
@@ -20,13 +21,14 @@ HEADERS = {
     "Content-Type": "application/json",
     "Authorization": f"Bearer {AUTH_TOKEN}",
     "X-User-Identity": "test-user-mute",
-    "X-Auth-Channel": "webex"
+    "X-Auth-Channel": "webex",
 }
+
 
 def test_notifications_endpoint():
     """Test /notifications command via API."""
     print("\n=== Testing /notifications Command Integration ===\n")
-    
+
     try:
         # Test 1: Run a command to initialize session and test /notifications
         print("--- Test 1: Initialize Session ---")
@@ -34,7 +36,7 @@ def test_notifications_endpoint():
             f"{API_URL}/api/v1/chat",
             json={"prompt": "Hello, testing mute feature"},
             headers=HEADERS,
-            verify=False
+            verify=False,
         )
         print(f"Response status: {response.status_code}")
         if response.status_code == 200:
@@ -45,33 +47,35 @@ def test_notifications_endpoint():
         else:
             print(f"✗ Error: {response.text}")
             return False
-        
+
         # Test 2: Send /notifications current command
         print("\n--- Test 2: Get Current Notification Status ---")
         response = requests.post(
             f"{API_URL}/api/v1/chat",
             json={"prompt": "/notifications current"},
             headers=HEADERS,
-            verify=False
+            verify=False,
         )
         print(f"Response status: {response.status_code}")
         if response.status_code == 200:
             result = response.json()
             output = result.get("output", "")
             print(f"Response: {output}")
-            assert "Background Notifications" in output, "Should show notification status"
+            assert (
+                "Background Notifications" in output
+            ), "Should show notification status"
             print("✓ /notifications current works")
         else:
             print(f"✗ Error: {response.text}")
             return False
-        
+
         # Test 3: Turn off notifications
         print("\n--- Test 3: Disable Notifications ---")
         response = requests.post(
             f"{API_URL}/api/v1/chat",
             json={"prompt": "/notifications off"},
             headers=HEADERS,
-            verify=False
+            verify=False,
         )
         print(f"Response status: {response.status_code}")
         if response.status_code == 200:
@@ -83,14 +87,14 @@ def test_notifications_endpoint():
         else:
             print(f"✗ Error: {response.text}")
             return False
-        
+
         # Test 4: Verify mute is active
         print("\n--- Test 4: Verify Mute Status ---")
         response = requests.post(
             f"{API_URL}/api/v1/chat",
             json={"prompt": "/notifications current"},
             headers=HEADERS,
-            verify=False
+            verify=False,
         )
         print(f"Response status: {response.status_code}")
         if response.status_code == 200:
@@ -102,14 +106,14 @@ def test_notifications_endpoint():
         else:
             print(f"✗ Error: {response.text}")
             return False
-        
+
         # Test 5: Turn on notifications
         print("\n--- Test 5: Enable Notifications ---")
         response = requests.post(
             f"{API_URL}/api/v1/chat",
             json={"prompt": "/notifications on"},
             headers=HEADERS,
-            verify=False
+            verify=False,
         )
         print(f"Response status: {response.status_code}")
         if response.status_code == 200:
@@ -121,14 +125,14 @@ def test_notifications_endpoint():
         else:
             print(f"✗ Error: {response.text}")
             return False
-        
+
         # Test 6: Test 'mute' alias
         print("\n--- Test 6: Test 'mute' Alias ---")
         response = requests.post(
             f"{API_URL}/api/v1/chat",
             json={"prompt": "/notifications mute"},
             headers=HEADERS,
-            verify=False
+            verify=False,
         )
         print(f"Response status: {response.status_code}")
         if response.status_code == 200:
@@ -140,10 +144,10 @@ def test_notifications_endpoint():
         else:
             print(f"✗ Error: {response.text}")
             return False
-        
+
         print("\n=== All Integration Tests Passed ✓ ===\n")
         return True
-        
+
     except requests.exceptions.ConnectionError:
         print("✗ Cannot connect to API server at {API_URL}")
         print("  Make sure the API is running: python3 agent_manager.py")
@@ -151,8 +155,10 @@ def test_notifications_endpoint():
     except Exception as e:
         print(f"✗ Test failed with error: {e}")
         import traceback
+
         traceback.print_exc()
         return False
+
 
 if __name__ == "__main__":
     success = test_notifications_endpoint()

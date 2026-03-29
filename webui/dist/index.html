@@ -613,12 +613,50 @@
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/dompurify@3/dist/purify.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/highlight.js@11.9.0/lib/core.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/highlight.js@11.9.0/lib/languages/javascript.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/highlight.js@11.9.0/lib/languages/python.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/highlight.js@11.9.0/lib/languages/bash.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/highlight.js@11.9.0/lib/languages/json.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/highlight.js@11.9.0/lib/languages/yaml.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/highlight.js@11.9.0/highlight.min.js"></script>
   <script src="app.js?v=20260321mobile4" type="module"></script>
+
+    <!-- Skills slide-over panel (right side, below canvas) -->
+    <aside id="skills-panel" class="skills-panel skills-hidden">
+      <div class="skills-edge-tab" id="skills-edge-tab" title="Toggle Skills">🧩</div>
+      <div class="skills-inner">
+        <div class="skills-header">
+          <h2 class="skills-title">🧩 Skills Manager</h2>
+          <div class="skills-header-actions">
+            <button id="btn-skills-refresh" class="btn-icon" title="Refresh skills list">🔄</button>
+            <button id="btn-skills-close" class="btn-icon" title="Close skills panel">✕</button>
+          </div>
+        </div>
+        <div class="skills-toolbar">
+          <select id="skills-agent-filter" class="skills-filter-select" title="Filter skills by agent">
+            <option value="">🌐 All Skills</option>
+          </select>
+          <input type="text" id="skills-search" class="skills-search-input" placeholder="Search skills..." />
+          <select id="skills-filter-origin" class="skills-filter-select">
+            <option value="">All Origins</option>
+            <option value="git_repo">Git Repo</option>
+            <option value="website">Website</option>
+            <option value="local">Local</option>
+            <option value="unknown">No Origin</option>
+          </select>
+        </div>
+        <div id="skills-list" class="skills-list">
+          <div id="skills-loading" class="skills-empty">
+            <div style="font-size:36px;opacity:0.4;">🧩</div>
+            <div style="font-size:14px;color:var(--text-secondary);margin-top:8px;">Loading skills...</div>
+          </div>
+        </div>
+
+        <!-- Skill detail / origin editor overlay -->
+        <div id="skills-detail" class="skills-detail hidden">
+          <div class="skills-detail-header">
+            <button id="btn-skills-back" class="btn-icon" title="Back to list">←</button>
+            <h3 id="skills-detail-name" class="skills-detail-title"></h3>
+          </div>
+          <div id="skills-detail-body" class="skills-detail-body"></div>
+        </div>
+      </div>
+    </aside>
+
 </body>
 </html>

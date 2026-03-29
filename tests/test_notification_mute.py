@@ -12,20 +12,18 @@ Validates that:
 7. BackgroundTaskRequest.notify defaults to None (not True) so prefs are checked
 """
 
-import json
 import os
 import sys
 import tempfile
-import time
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from notification_manager import NotificationManager
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _tmp_path(suffix=".json"):
     fd, path = tempfile.mkstemp(suffix=suffix)
@@ -44,6 +42,7 @@ def _make_mgr():
 # ---------------------------------------------------------------------------
 # 1. Per-identity preference store
 # ---------------------------------------------------------------------------
+
 
 class TestPerIdentityPrefs:
 
@@ -120,13 +119,17 @@ class TestPerIdentityPrefs:
 # 2. create_notification respects skip_external
 # ---------------------------------------------------------------------------
 
+
 class TestCreateNotification:
 
     def test_notification_always_stored_for_webui(self):
         mgr = _make_mgr()
         mgr.create_notification(
-            task_id="t1", description="test", status="completed",
-            channel="telegram", user_key="telegram_123",
+            task_id="t1",
+            description="test",
+            status="completed",
+            channel="telegram",
+            user_key="telegram_123",
             skip_external=True,
         )
         notifs = mgr.list_notifications("telegram_123")
@@ -140,20 +143,29 @@ class TestCreateNotification:
         mgr._notify_webex = lambda n: calls.append("webex")
 
         mgr.create_notification(
-            task_id="t2", description="test", status="completed",
-            channel="telegram", user_key="telegram_456",
+            task_id="t2",
+            description="test",
+            status="completed",
+            channel="telegram",
+            user_key="telegram_456",
             skip_external=True,
         )
-        assert calls == [], f"External notification sent despite skip_external=True: {calls}"
+        assert (
+            calls == []
+        ), f"External notification sent despite skip_external=True: {calls}"
 
     def test_not_skip_external_sends_telegram(self):
         mgr = _make_mgr()
         calls = []
+        # user_key telegram_789 is a known identity -> specific routing, not broadcast
         mgr._notify_telegram = lambda n: calls.append("telegram")
 
         mgr.create_notification(
-            task_id="t3", description="test", status="completed",
-            channel="telegram", user_key="telegram_789",
+            task_id="t3",
+            description="test",
+            status="completed",
+            channel="telegram",
+            user_key="telegram_789",
             skip_external=False,
         )
         assert "telegram" in calls
@@ -161,11 +173,15 @@ class TestCreateNotification:
     def test_not_skip_external_sends_webex(self):
         mgr = _make_mgr()
         calls = []
+        # user_key webex_user@test.com is known -> specific routing, not broadcast
         mgr._notify_webex = lambda n: calls.append("webex")
 
         mgr.create_notification(
-            task_id="t4", description="test", status="completed",
-            channel="webex", user_key="webex_user@test.com",
+            task_id="t4",
+            description="test",
+            status="completed",
+            channel="webex",
+            user_key="webex_user@test.com",
             skip_external=False,
         )
         assert "webex" in calls
@@ -179,8 +195,11 @@ class TestCreateNotification:
 
         mgr.set_user_pref("user@test.com", "webex", "off")
         mgr.create_notification(
-            task_id="t4b", description="test", status="completed",
-            channel="webex", user_key="webex_user@test.com",
+            task_id="t4b",
+            description="test",
+            status="completed",
+            channel="webex",
+            user_key="webex_user@test.com",
             skip_external=False,
         )
         assert calls == [], f"External notification leaked despite user mute: {calls}"
@@ -189,11 +208,15 @@ class TestCreateNotification:
         """When user is NOT muted, notifications should still go through."""
         mgr = _make_mgr()
         calls = []
+        # Known webex identity -> specific routing
         mgr._notify_webex = lambda n: calls.append("webex")
 
         mgr.create_notification(
-            task_id="t4c", description="test", status="completed",
-            channel="webex", user_key="webex_other@test.com",
+            task_id="t4c",
+            description="test",
+            status="completed",
+            channel="webex",
+            user_key="webex_other@test.com",
             skip_external=False,
         )
         assert "webex" in calls
@@ -202,6 +225,7 @@ class TestCreateNotification:
 # ---------------------------------------------------------------------------
 # 3. Simulate _emit_bg_notification re-check
 # ---------------------------------------------------------------------------
+
 
 class TestEmitRecheck:
     """Simulate the fixed _emit_bg_notification logic."""
@@ -235,6 +259,7 @@ class TestEmitRecheck:
     def test_emit_sent_when_not_muted(self):
         mgr = _make_mgr()
         calls = []
+        # user_key telegram_789012 is known -> specific routing, not broadcast
         mgr._notify_telegram = lambda n: calls.append("telegram")
 
         self._simulate_emit(mgr, "t6", "telegram", "789012", notify=True)
@@ -253,6 +278,7 @@ class TestEmitRecheck:
 # 4. Simulate background task creation mute check
 # ---------------------------------------------------------------------------
 
+
 class TestBgTaskCreationMute:
     """Simulate the fixed create_background_task logic."""
 
@@ -264,7 +290,7 @@ class TestBgTaskCreationMute:
             if notification_mgr and notification_mgr.is_muted(identity):
                 notify_pref = False
             if notify_pref is None:
-                notify_pref = (session_pref != "off")
+                notify_pref = session_pref != "off"
         return notify_pref
 
     def test_body_override_true_ignores_mute(self):
@@ -302,14 +328,18 @@ class TestBgTaskCreationMute:
         mgr = _make_mgr()
         mgr.set_user_pref("muted_user", "webex", "off")
         result = self._determine_notify(mgr, None, "muted_user", "all")
-        assert result is False, "Mute preference was not respected when body.notify is None"
+        assert (
+            result is False
+        ), "Mute preference was not respected when body.notify is None"
 
     def test_identity_mismatch_resolved_via_normalization(self):
         """Simulates the flipkey@cisco.com vs webex_flipkey@cisco.com mismatch.
         Preference set via one format should be found via the other."""
         mgr = _make_mgr()
         mgr.set_user_pref("flipkey@cisco.com", "webex", "off")
-        assert self._determine_notify(mgr, None, "webex_flipkey@cisco.com", "all") is False
+        assert (
+            self._determine_notify(mgr, None, "webex_flipkey@cisco.com", "all") is False
+        )
         # And vice versa
         mgr2 = _make_mgr()
         mgr2.set_user_pref("webex_flipkey@cisco.com", "webex", "off")
@@ -320,11 +350,15 @@ class TestBgTaskCreationMute:
 # 5. Identity normalization unit tests
 # ---------------------------------------------------------------------------
 
+
 class TestIdentityNormalization:
     """Test _normalize_identity static method directly."""
 
     def test_strips_webex_prefix(self):
-        assert NotificationManager._normalize_identity("webex_foo@bar.com") == "foo@bar.com"
+        assert (
+            NotificationManager._normalize_identity("webex_foo@bar.com")
+            == "foo@bar.com"
+        )
 
     def test_strips_telegram_prefix(self):
         assert NotificationManager._normalize_identity("telegram_12345") == "12345"
@@ -345,7 +379,10 @@ class TestIdentityNormalization:
         assert NotificationManager._normalize_identity(None) is None
 
     def test_email_without_prefix_unchanged(self):
-        assert NotificationManager._normalize_identity("user@example.com") == "user@example.com"
+        assert (
+            NotificationManager._normalize_identity("user@example.com")
+            == "user@example.com"
+        )
 
     def test_webex_person_id_unchanged(self):
         """Base64 WebEx person IDs don't start with known prefixes."""
@@ -359,4 +396,5 @@ class TestIdentityNormalization:
 
 if __name__ == "__main__":
     import pytest
+
     sys.exit(pytest.main([__file__, "-v"]))

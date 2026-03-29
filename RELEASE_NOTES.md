@@ -1,5 +1,65 @@
 # Release Notes — Wee-Orchestrator
 
+## Unreleased
+
+### Remove Per-User RBAC for Background Task Visibility (F003)
+
+All authorized users can now see **all** background tasks regardless of who created them.
+
+**Backend (`agent_manager.py`):**
+- Removed `_identity_matches` ownership checks from 5 detail/action endpoints: `GET /{task_id}`, `GET /{task_id}/transcript`, `GET /{task_id}/logs`, `GET /{task_id}/tool-calls`, `DELETE /{task_id}`
+- `/background list` slash command switched to `list_all_tasks()` (was per-user)
+- Per-user rate limiting (`MAX_TASKS_PER_USER`, `count_running`, `count_queued`, `get_next_queued`) preserved; only visibility is affected
+- **Bonus fix:** auth enforcement added to 3 previously unprotected skill endpoints (`GET /api/v1/skill-details`, `GET /api/v1/skill-readme`, `POST /api/v1/skill-install`)
+
+**QA:** All 393 tests pass; cross-user task visibility confirmed; auth verified on all endpoints. NITPICK (E501 docstring line 386) noted, not blocking. **Approved.**
+
+**Commit:** 867510a
+
+---
+
+### Agent Selector for Skills Panel (F006)
+
+The Skills panel in the WebUI now includes an **agent selector combobox**, allowing users to browse and load skills scoped to a specific agent rather than always defaulting to the active session agent.
+
+**Backend (`skill_manager.py`):**
+- `scan_agent_skills(agent_name)` — scans `.github/skills/` for the specified agent and returns skill metadata
+- Unused `Path` import removed; long docstrings trimmed to satisfy E501 lint rules
+
+**Frontend (`webui/dist/app.js`):**
+- Agent selector combobox added to the Skills panel header
+- Selector is populated from the live agents list at panel open time
+- Skill scan requests dispatch for the selected agent; panel updates without a page reload
+- Combobox confirmed present in accessibility tree (Playwright snapshot)
+
+**Auth:** Skills endpoints enforce the same Bearer-token / shared-key auth as all other protected routes.
+
+**QA:** 2-pass review — Pass 1 flagged F401 (unused `Path` import) and E501 (line too long) in `skill_manager.py`; fixed in dedb86c. Pass 2: zero issues. **Approved.**
+
+**Tests:** 393 total pass (was 377 after F004). All 4 dev services active.
+
+**Commit:** dedb86c
+
+---
+
+### Hot-Reload agents.json Without Service Restarts (F004)
+
+Agents can now be added, removed, or reconfigured in `agents.json` and the change takes effect **immediately** -- no service restart required.
+
+**Backend (`agent_manager.py`):**
+- `reload_agents_from_disk()` -- validates the new config and falls back to the existing list if the file is invalid or missing, preventing any outage
+- Async file-watcher polls `agents.json` mtime every 10 seconds; triggers reload automatically on change
+- `PUT /api/v1/agents/reload` -- on-demand reload endpoint (auth required); useful for CI/CD and scripted deploys
+- Undefined `agents_list` reference in the background-task endpoint fixed as part of this change
+- 20 new tests added; **377 total tests pass**
+
+**QA:** 2-pass review -- Pass 1 found 1 MINOR (dead code at lines 1443-1445); fixed in ef51a32. Pass 2: all checks clean, no issues. **Approved.**
+
+**Commit:** ef51a32
+
+---
+
+
 ## v2.1.0 — 2026-02-22
 
 ### SSE Streaming for Web UI Chat

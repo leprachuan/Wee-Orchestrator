@@ -2,6 +2,12 @@
 
 Use the orchestrator API to run long-running work in the background. Background tasks appear in the ⚡ Tasks tab of the WebUI and can be monitored or cancelled by the user.
 
+## Visibility
+
+All background tasks are visible to any authorized user. There is no per-user or per-agent ownership filtering on task views. Any user with a valid API key or session token can list, view details, read transcripts/logs/tool-calls, and cancel any background task.
+
+Authentication is still required — unauthenticated requests are rejected.
+
 ## When to use
 - Any task that will take more than ~30 seconds
 - Work that should not block the current conversation

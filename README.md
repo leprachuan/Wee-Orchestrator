@@ -53,7 +53,7 @@ Wee-Orchestrator is a unified AI agent platform that lets you chat with **any AI
 
 - **🔀 5 AI Runtimes** — GitHub Copilot CLI, Claude Code, OpenCode, Google Gemini, OpenAI Codex
 - **💬 3 Channels** — Telegram bot, WebEx bot (via RabbitMQ), glassmorphism Web UI with SSE streaming
-- **🤖 Multi-Agent** — Define specialized agents in `agents.json`, switch with `/agent`
+- **🤖 Multi-Agent** — Define specialized agents in `agents.json`, switch with `/agent`; **hot-reload** on change (no restart needed)
 - **🔄 Live Model Switching** — Change models mid-conversation with `/model`
 - **📅 Task Scheduler** — Schedule recurring AI jobs with natural language (`every day at 9am`)
 - **📁 File & Image Support** — Upload, download, and inline images across all channels
