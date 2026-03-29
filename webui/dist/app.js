@@ -155,7 +155,7 @@ const TTS = {
     try {
       const auth = loadAuth();
       const token = auth?.token || '';
-      const res = await fetch(`${API_BASE}/api/v1/tts`, {
+      const res = await fetch(`${API_BASE}/tts`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
