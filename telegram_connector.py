@@ -1369,6 +1369,27 @@ class TelegramConnector:
 
         return result_container["response"] or "Error: Command timed out"
 
+    def _poll_live_status(self, session_id: str) -> Optional[str]:
+        """Poll the live-status endpoint for real-time LLM progress (F004).
+
+        Returns the latest status text, or None if no live status is available.
+        """
+        try:
+            headers = {
+                "Authorization": f"Bearer shared_{self.api_shared_key}",
+            }
+            resp = requests.get(
+                f"{self.api_url_copilot}/api/v1/sessions/{session_id}/live-status",
+                headers=headers,
+                timeout=3,
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                return data.get("status")
+        except Exception:
+            pass
+        return None
+
     def _query_agent_with_status(
         self,
         query: str,
@@ -1378,7 +1399,10 @@ class TelegramConnector:
         chat_id: int,
         timeout: int = 300,
     ) -> tuple:
-        """Query agent with status updates at 30s intervals.
+        """Query agent with live status updates at 30s intervals.
+
+        Polls the live-status API endpoint for LLM-generated progress updates
+        (F004). Falls back to static messages if no live status is available.
 
         Returns (response_text, status_msg_id) where status_msg_id is the
         message to edit with the final response, or None if no status was sent.
@@ -1386,7 +1410,13 @@ class TelegramConnector:
         # Container for result and thread control
         result_container = {"response": None, "done": False}
 
-        # Status messages
+        # Determine session ID for live-status polling
+        if self.bot_id:
+            _poll_session_id = f"telegram_{self.bot_id}_{user_id}"
+        else:
+            _poll_session_id = f"telegram_{user_id}"
+
+        # Fallback static status messages (used when no live status from LLM)
         status_msgs = [
             "Still working on it...",
             "Sorry it's taking so long, still working on it...",
@@ -1397,7 +1427,6 @@ class TelegramConnector:
 
         def run_query():
             """Run query in background thread"""
-            # Log what's being sent
             print(f"[DEBUG] Query to agent: {query[:200]}", file=sys.stderr)
             result_container["response"] = self._query_agent(
                 query, agent, model, user_id, timeout
@@ -1411,26 +1440,34 @@ class TelegramConnector:
         # Wait for result with status updates
         elapsed = 0
         status_idx = 0
-        status_msg_id = None  # Track the status message to edit it
+        status_msg_id = None
+        _last_live_status = None  # Track last live status to avoid redundant edits
         while not result_container["done"] and elapsed < timeout:
             # Re-send typing every 5 seconds to keep indicator alive
             if elapsed % 5 == 0:
                 self.send_typing(chat_id)
 
-            if elapsed == 30:
-                # First status at 30s - send new message
-                status_msg_id = self.send_message(chat_id, status_msgs[0])
-                self.send_typing(chat_id)
-                status_idx = 1
-            elif elapsed > 30 and (elapsed - 30) % 30 == 0:
-                # Edit existing status message
-                msg = status_msgs[status_idx % len(status_msgs)]
-                if status_msg_id:
-                    self.edit_message(chat_id, status_msg_id, msg)
+            if elapsed >= 30 and (elapsed - 30) % 10 == 0:
+                # Poll live-status endpoint for LLM-generated progress
+                live_status = self._poll_live_status(_poll_session_id)
+
+                if live_status and live_status != _last_live_status:
+                    # Use LLM-generated status update
+                    msg = f"⚙️ {live_status}"
+                    _last_live_status = live_status
+                elif elapsed == 30 or (elapsed > 30 and (elapsed - 30) % 30 == 0):
+                    # Fall back to static message on 30s boundaries
+                    msg = status_msgs[status_idx % len(status_msgs)]
+                    status_idx += 1
                 else:
-                    status_msg_id = self.send_message(chat_id, msg)
-                self.send_typing(chat_id)
-                status_idx += 1
+                    msg = None
+
+                if msg:
+                    if status_msg_id:
+                        self.edit_message(chat_id, status_msg_id, msg)
+                    else:
+                        status_msg_id = self.send_message(chat_id, msg)
+                    self.send_typing(chat_id)
 
             time.sleep(1)
             elapsed += 1

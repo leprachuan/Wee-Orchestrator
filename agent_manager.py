@@ -1331,6 +1331,31 @@ class SessionManager:
         # Last subprocess exit code per n8n_session_id (for debugging/monitoring)
         self._last_exit_codes: Dict[str, int] = {}
 
+        # Per-session live status for mobile channel progress updates (F004).
+        # Maps n8n_session_id -> {"text": str, "updated_at": float}
+        self._live_status: Dict[str, Dict] = {}
+        self._live_status_lock = threading.Lock()
+
+    # ── Live status helpers for mobile channel progress (F004) ──────────
+
+    def set_live_status(self, n8n_session_id: str, text: str) -> None:
+        """Store a live status update for a session (thread-safe)."""
+        with self._live_status_lock:
+            self._live_status[n8n_session_id] = {
+                "text": text,
+                "updated_at": time.time(),
+            }
+
+    def get_live_status(self, n8n_session_id: str) -> Optional[Dict]:
+        """Return the latest live status for a session, or None."""
+        with self._live_status_lock:
+            return self._live_status.get(n8n_session_id)
+
+    def clear_live_status(self, n8n_session_id: str) -> None:
+        """Remove live status for a session (call when execution finishes)."""
+        with self._live_status_lock:
+            self._live_status.pop(n8n_session_id, None)
+
     def _load_agents_config(self, config_file: Optional[str] = None) -> Dict:
         """Load agents configuration from JSON file
 
@@ -2568,6 +2593,9 @@ class SessionManager:
         return "restricted"
 
     def strip_metadata(self, text: str, runtime: str) -> str:
+        # Strip [STATUS_UPDATE: ...] markers (F004 — mobile channel progress)
+        import re as _re_sm
+        text = _re_sm.sub(r"\[STATUS_UPDATE[:\s]*[^\]]*\]\s*\n?", "", text)
         """Remove CLI metadata from output"""
         # First, strip thinking tags from the raw output
         text = self.strip_thinking_tags(text)
@@ -3594,6 +3622,29 @@ Example: python3 {SCRIPT_BASE_DIR}/agent_manager.py --agent research-dev --runti
                 file=sys.stderr,
             )
 
+        # Mobile channel context: instruct LLM to emit periodic status updates
+        mobile_channel_instruction = ""
+        if channel in ("telegram", "webex"):
+            mobile_channel_instruction = f"""
+[Mobile Channel: {channel}]
+You are communicating through {channel} (a mobile messaging app). Your responses are delivered
+via message editing in {channel}. During long-running operations (installing packages, running
+tests, scanning networks, deploying services, or any task taking more than ~15 seconds),
+periodically output a status line in this exact format:
+
+[STATUS_UPDATE: Brief description of current step]
+
+Examples:
+[STATUS_UPDATE: Installing Python dependencies...]
+[STATUS_UPDATE: Running 357 unit tests...]
+[STATUS_UPDATE: Scanning subnet 192.168.1.0/24...]
+[STATUS_UPDATE: Deploying service to dev host...]
+
+These lines are intercepted and shown to the user as live progress indicators in {channel},
+replacing the generic "Still working on it..." placeholder. Emit one every ~30 seconds during
+long tasks. Your final answer must NOT contain these markers — they are stripped automatically.
+Do NOT emit status updates for quick operations (< 15 seconds)."""
+
         # Channel-specific injected context files
         injection_dir = Path(
             os.environ.get("INJECTION_DIR", Path(SCRIPT_BASE_DIR) / "injections")
@@ -3608,7 +3659,7 @@ Example: python3 {SCRIPT_BASE_DIR}/agent_manager.py --agent research-dev --runti
             injection_text = ""
 
         context = f"""{handoff_prefix}[Session ID: {n8n_session_id}]
-{runtime_instruction}{injection_text}{agent_desc}{files_context}{render_instruction}{bg_task_instruction}{canvas_instruction}{timeout_instruction}
+{runtime_instruction}{injection_text}{mobile_channel_instruction}{agent_desc}{files_context}{render_instruction}{bg_task_instruction}{canvas_instruction}{timeout_instruction}
 
 User Request:
 {prompt}"""
@@ -4443,16 +4494,32 @@ User Request:
                                         )
 
                                 else:
-                                    # Only push as text chunk when NOT a tool call line
-                                    if stream_buffer:
-                                        stream_buffer.push("chunk", line)
-                                    else:
-                                        loop.call_soon_threadsafe(
-                                            queue.put_nowait, ("chunk", line)
+                                    # Detect [STATUS_UPDATE: ...] markers (F004)
+                                    _su_match = None
+                                    try:
+                                        _su_line = line if isinstance(line, str) else line.decode("utf-8", errors="replace")
+                                        import re as _re_su
+                                        _su_match = _re_su.search(
+                                            r"\[STATUS_UPDATE[:\s]*(.+?)\]", _su_line
                                         )
+                                    except Exception:
+                                        pass
+                                    if _su_match:
+                                        self.set_live_status(
+                                            n8n_session_id, _su_match.group(1).strip()
+                                        )
+                                    else:
+                                        # Only push as text chunk when NOT a tool call/status line
+                                        if stream_buffer:
+                                            stream_buffer.push("chunk", line)
+                                        else:
+                                            loop.call_soon_threadsafe(
+                                                queue.put_nowait, ("chunk", line)
+                                            )
                     except Exception:
                         pass
                     finally:
+                        self.clear_live_status(n8n_session_id)
                         process.stdout.close()
                         stderr_thread.join(timeout=5)
                         process.wait()
@@ -4474,23 +4541,68 @@ User Request:
                 return output
 
             else:
-                # ── Original blocking path ───────────────────────────────────
+                # ── Blocking path with live status capture (F004) ────────────
+                # Read stdout line-by-line instead of communicate() so we can
+                # capture [STATUS_UPDATE: ...] markers in real-time for mobile
+                # channel progress updates.
+                import re as _re_bl
+                import threading as _thr_bl
+
+                _status_pattern = _re_bl.compile(
+                    r"\[STATUS_UPDATE[:\s]*(.+?)\]"
+                )
+                _stderr_buf_bl: list = []
+
+                def _drain_stderr_bl():
+                    try:
+                        for _err_ln in process.stderr:
+                            _stderr_buf_bl.append(_err_ln)
+                    except Exception:
+                        pass
+
+                _stderr_t = _thr_bl.Thread(
+                    target=_drain_stderr_bl, daemon=True
+                )
+                _stderr_t.start()
+
+                _stdout_lines_bl: list = []
                 try:
-                    stdout, stderr = process.communicate(timeout=timeout)
-                    output = stdout + (stderr if stderr else "")
+                    for _line_bl in process.stdout:
+                        _stdout_lines_bl.append(_line_bl)
+                        _su_m = _status_pattern.search(_line_bl)
+                        if _su_m:
+                            self.set_live_status(
+                                n8n_session_id, _su_m.group(1).strip()
+                            )
+
+                    # Wait for process to fully exit
+                    try:
+                        process.wait(timeout=timeout)
+                    except subprocess.TimeoutExpired:
+                        process.kill()
+                        process.wait()
+                        self.clear_live_status(n8n_session_id)
+                        timeout_min = timeout / 60
+                        return f"Error: Command timed out (exceeded {timeout}s / {timeout_min:.1f}min)"
+                    finally:
+                        _stderr_t.join(timeout=5)
+
+                    output = "".join(_stdout_lines_bl) + "".join(
+                        _stderr_buf_bl
+                    )
+                    # Strip STATUS_UPDATE markers from final output
+                    output = _re_bl.sub(
+                        r"\[STATUS_UPDATE[:\s]*[^\]]*\]\s*\n?", "", output
+                    )
                     self.update_query_output(n8n_session_id, output)
-                    # Record exit code for debugging subprocess errors.
-                    # rate-limit detection on successful AI responses.
                     self._last_exit_codes[n8n_session_id] = (
-                        process.returncode if process.returncode is not None else 0
+                        process.returncode
+                        if process.returncode is not None
+                        else 0
                     )
                     return output
-                except subprocess.TimeoutExpired:
-                    process.kill()
-                    process.wait()
-                    timeout_min = timeout / 60
-                    return f"Error: Command timed out (exceeded {timeout}s / {timeout_min:.1f}min)"
                 finally:
+                    self.clear_live_status(n8n_session_id)
                     self.clear_running_query(n8n_session_id)
 
         except Exception as e:
@@ -7777,6 +7889,33 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
 
         return result
 
+    @app.get("/api/v1/sessions/{session_id}/live-status")
+    async def get_live_status(session_id: str, request: Request):
+        """Return the latest live status update for a running session (F004).
+
+        Mobile channel connectors poll this endpoint to replace static
+        "Still working on it..." messages with real LLM progress updates.
+        Requires only bearer token auth (no user identity needed).
+        """
+        auth_header = request.headers.get("authorization", "")
+        if not auth_header.startswith("Bearer "):
+            raise HTTPException(status_code=401, detail="Missing auth")
+        token = auth_header[7:]
+        # Accept shared key (used by connectors) or session token
+        if token.startswith("shared_"):
+            if not auth_mgr.validate_shared_key(token):
+                raise HTTPException(status_code=401, detail="Invalid auth")
+        elif not auth_mgr.validate_token(token):
+            raise HTTPException(status_code=401, detail="Invalid auth")
+
+        status = session_mgr.get_live_status(session_id)
+        if status:
+            return {
+                "status": status["text"],
+                "updated_at": status["updated_at"],
+            }
+        return {"status": None, "updated_at": None}
+
     @app.post("/api/v1/sessions/{session_id}/cancel")
     async def cancel_session(session_id: str, request: Request):
         """Cancel a running query for a session.
@@ -8791,6 +8930,15 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 if line_text:
                     bg_task_mgr.append_output(task_id, line_text)
 
+                # Capture [STATUS_UPDATE: ...] markers for mobile channel progress (F004)
+                _su_bg_match = _re.search(
+                    r"\[STATUS_UPDATE[:\s]*(.+?)\]", line_text
+                )
+                if _su_bg_match:
+                    session_mgr.set_live_status(
+                        n8n_session_id, _su_bg_match.group(1).strip()
+                    )
+
                 # ── Structured JSON parsing for stream-json runtimes ──
                 # Gemini (stream-json) emits {"type":"tool_use",...} and {"type":"tool_result",...}
                 # Claude (stream-json) emits nested stream_event objects with tool_use blocks
@@ -8880,6 +9028,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 )
                 if not final_output.strip():
                     final_output = output or "Task completed successfully"
+                session_mgr.clear_live_status(n8n_session_id)
                 bg_task_mgr.complete_task(task_id, final_output)
                 if task_id.startswith("sched_"):
                     try:
