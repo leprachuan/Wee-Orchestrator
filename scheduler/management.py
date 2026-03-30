@@ -12,6 +12,10 @@ import re
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
+try:
+    from zoneinfo import ZoneInfo
+except ImportError:
+    ZoneInfo = None  # Python < 3.9
 
 try:
     from croniter import croniter
@@ -19,6 +23,40 @@ except ImportError:
     croniter = None
 
 logger = logging.getLogger(__name__)
+
+
+def _get_local_tz_name() -> str:
+    """Return IANA timezone name from env, /etc/localtime, /etc/timezone, or UTC."""
+    tz_env = os.environ.get("TZ", "").strip()
+    if tz_env:
+        return tz_env
+    try:
+        link = os.readlink("/etc/localtime")
+        idx = link.find("zoneinfo/")
+        if idx >= 0:
+            return link[idx + len("zoneinfo/"):]
+    except OSError:
+        pass
+    try:
+        with open("/etc/timezone") as fh:
+            name = fh.read().strip()
+        if name and name not in ("Etc/UTC", "UTC"):
+            return name
+    except OSError:
+        pass
+    return "UTC"
+
+
+def _get_local_tz():
+    """Return DST-aware tzinfo for the server local timezone."""
+    tz_name = _get_local_tz_name()
+    if ZoneInfo is not None:
+        try:
+            return ZoneInfo(tz_name)
+        except Exception:
+            pass
+    # Fallback: current fixed-offset (no future DST awareness)
+    return datetime.now().astimezone().tzinfo
 
 
 # ---------------------------------------------------------------------------
@@ -37,14 +75,30 @@ def is_valid_cron(expression: str) -> bool:
         return False
 
 
-def cron_next_run(expression: str) -> Optional[str]:
-    """Get next run time from a cron expression as ISO string."""
+def cron_next_run(expression: str, _base_local = None) -> Optional[str]:
+    """Get next run time from a cron expression as UTC ISO string.
+
+    Cron expressions are interpreted in the server local timezone so that
+    "30 7 * * 1-5" means 7:30 AM local time, not 7:30 UTC.
+    The returned ISO string is always UTC (Z suffix) for consistent storage.
+    DST is handled automatically via the IANA timezone database.
+    """
     if croniter is None:
         return None
     try:
-        cron = croniter(expression, datetime.utcnow())
-        next_dt = cron.get_next(datetime)
-        return next_dt.isoformat() + "Z"
+        if _base_local is not None:
+            local_tz = _base_local.tzinfo
+            now_local = _base_local
+        else:
+            local_tz = _get_local_tz()
+            now_local = datetime.now(local_tz)
+        now_naive = now_local.replace(tzinfo=None)
+        cron = croniter(expression, now_naive)
+        next_naive = cron.get_next(datetime)
+        # Reattach local tz and convert to UTC for storage
+        next_local = next_naive.replace(tzinfo=local_tz)
+        next_utc = next_local.astimezone(timezone.utc)
+        return next_utc.strftime("%Y-%m-%dT%H:%M:%SZ")
     except (ValueError, KeyError, TypeError):
         return None
 
