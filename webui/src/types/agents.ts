@@ -73,6 +73,8 @@ export interface Agent {
   runtime?: string;
   /** Default AI model identifier */
   model?: string;
+  /** Maximum concurrent background tasks for this agent (>= 1) */
+  max_concurrent?: number;
   /** Permission configuration for this agent */
   permissions?: AgentPermissions;
 }

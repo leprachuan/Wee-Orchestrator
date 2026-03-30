@@ -6,6 +6,7 @@ Manages session ID mapping between N8N chat sessions and AI backend sessions
 """
 
 import argparse
+import hashlib
 import json
 import logging
 import os
@@ -14,7 +15,6 @@ import secrets as _secrets
 import shutil
 import signal
 import subprocess
-import hashlib
 import sys
 import threading
 import time
@@ -1693,7 +1693,6 @@ class SessionManager:
             ],
         }
 
-
     def fetch_copilot_models(self) -> Dict:
         """Fetch available models from copilot CLI help text"""
         if not self.copilot_bin:
@@ -2049,16 +2048,27 @@ class SessionManager:
             model_ids = []
             for line in output.splitlines():
                 line = line.strip()
-                if not line or line.startswith("#") or "Available" in line or "Loading" in line:
+                if (
+                    not line
+                    or line.startswith("#")
+                    or "Available" in line
+                    or "Loading" in line
+                ):
                     continue
                 # Handle "model-id - Display Name" or bare "model-id"
-                model_id = line.split(" - ")[0].strip() if " - " in line else line.split(",")[0].strip()
-                if model_id and not model_id.startswith("-") and re.match(r"^[a-zA-Z0-9][a-zA-Z0-9._-]*$", model_id):
+                model_id = (
+                    line.split(" - ")[0].strip()
+                    if " - " in line
+                    else line.split(",")[0].strip()
+                )
+                if (
+                    model_id
+                    and not model_id.startswith("-")
+                    and re.match(r"^[a-zA-Z0-9][a-zA-Z0-9._-]*$", model_id)
+                ):
                     model_ids.append(model_id)
             if model_ids:
-                discovered = {
-                    "Available Models": [(mid, mid, []) for mid in model_ids]
-                }
+                discovered = {"Available Models": [(mid, mid, []) for mid in model_ids]}
                 print(
                     f"[cursor] Auto-discovered {len(model_ids)} models",
                     file=sys.stderr,
@@ -2254,9 +2264,7 @@ class SessionManager:
                 if not current_model or not self.get_model_from_name(
                     current_model, "cursor"
                 ):
-                    merged["model"] = os.getenv(
-                        "CURSOR_DEFAULT_MODEL", "auto"
-                    )
+                    merged["model"] = os.getenv("CURSOR_DEFAULT_MODEL", "auto")
 
             # Validate and fix session_id if corrupted
             session_id = merged.get("session_id", "")
@@ -4620,7 +4628,11 @@ User Request:
                                     # Detect [STATUS_UPDATE: ...] markers (F004)
                                     _su_match = None
                                     try:
-                                        _su_line = line if isinstance(line, str) else line.decode("utf-8", errors="replace")
+                                        _su_line = (
+                                            line
+                                            if isinstance(line, str)
+                                            else line.decode("utf-8", errors="replace")
+                                        )
                                         _su_match = re.search(
                                             r"\[STATUS_UPDATE[:\s]*(.+?)\]", _su_line
                                         )
@@ -4669,9 +4681,7 @@ User Request:
                 # channel progress updates.
                 import threading as _thr_bl
 
-                _status_pattern = re.compile(
-                    r"\[STATUS_UPDATE[:\s]*(.+?)\]"
-                )
+                _status_pattern = re.compile(r"\[STATUS_UPDATE[:\s]*(.+?)\]")
                 _stderr_buf_bl: list = []
 
                 def _drain_stderr_bl():
@@ -4681,9 +4691,7 @@ User Request:
                     except Exception:
                         pass
 
-                _stderr_t = _thr_bl.Thread(
-                    target=_drain_stderr_bl, daemon=True
-                )
+                _stderr_t = _thr_bl.Thread(target=_drain_stderr_bl, daemon=True)
                 _stderr_t.start()
 
                 _stdout_lines_bl: list = []
@@ -4692,9 +4700,7 @@ User Request:
                         _stdout_lines_bl.append(_line_bl)
                         _su_m = _status_pattern.search(_line_bl)
                         if _su_m:
-                            self.set_live_status(
-                                n8n_session_id, _su_m.group(1).strip()
-                            )
+                            self.set_live_status(n8n_session_id, _su_m.group(1).strip())
 
                     # Wait for process to fully exit
                     try:
@@ -4708,18 +4714,12 @@ User Request:
                     finally:
                         _stderr_t.join(timeout=5)
 
-                    output = "".join(_stdout_lines_bl) + "".join(
-                        _stderr_buf_bl
-                    )
+                    output = "".join(_stdout_lines_bl) + "".join(_stderr_buf_bl)
                     # Strip STATUS_UPDATE markers from final output
-                    output = re.sub(
-                        r"\[STATUS_UPDATE[:\s]*[^\]]*\]\s*\n?", "", output
-                    )
+                    output = re.sub(r"\[STATUS_UPDATE[:\s]*[^\]]*\]\s*\n?", "", output)
                     self.update_query_output(n8n_session_id, output)
                     self._last_exit_codes[n8n_session_id] = (
-                        process.returncode
-                        if process.returncode is not None
-                        else 0
+                        process.returncode if process.returncode is not None else 0
                     )
                     return output
                 finally:
@@ -5498,7 +5498,9 @@ User Request:
             self.cursor_session_dir.mkdir(parents=True, exist_ok=True)
             mapping_file = self.cursor_session_dir / f"{n8n_session_id}.json"
             with open(mapping_file, "w") as f:
-                json.dump({"cursor_session_active": True, "n8n_session_id": n8n_session_id}, f)
+                json.dump(
+                    {"cursor_session_active": True, "n8n_session_id": n8n_session_id}, f
+                )
             print(
                 f"[Session] Stored cursor session mapping: {n8n_session_id[:8]}...",
                 file=sys.stderr,
@@ -6092,7 +6094,8 @@ You can mention an agent in your prompt and it will auto-delegate:
                 # there is prior history to hand off
                 if prev_runtime != new_runtime and prev_session_id:
                     try:
-                        from session_handoff import SessionHandoff, _handoff_logger
+                        from session_handoff import (SessionHandoff,
+                                                     _handoff_logger)
 
                         handoff = SessionHandoff()
 
@@ -7073,17 +7076,8 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
     import mimetypes
     from enum import Enum
 
-    from fastapi import (
-        FastAPI,
-        File,
-        Header,
-        HTTPException,
-        Query,
-        Request,
-        UploadFile,
-        WebSocket,
-        WebSocketDisconnect,
-    )
+    from fastapi import (FastAPI, File, Header, HTTPException, Query, Request,
+                         UploadFile, WebSocket, WebSocketDisconnect)
     from fastapi.middleware.cors import CORSMiddleware
     from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
     from fastapi.staticfiles import StaticFiles
@@ -7563,7 +7557,15 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         not expose a model-listing command.
         """
         runtime = runtime.lower().strip()
-        known_runtimes = {"copilot", "opencode", "claude", "gemini", "codex", "devin", "cursor"}
+        known_runtimes = {
+            "copilot",
+            "opencode",
+            "claude",
+            "gemini",
+            "codex",
+            "devin",
+            "cursor",
+        }
         if runtime not in known_runtimes:
             return {
                 "runtime": runtime,
@@ -9241,9 +9243,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                     bg_task_mgr.append_output(task_id, line_text)
 
                 # Capture [STATUS_UPDATE: ...] markers for mobile channel progress (F004)
-                _su_bg_match = _re.search(
-                    r"\[STATUS_UPDATE[:\s]*(.+?)\]", line_text
-                )
+                _su_bg_match = _re.search(r"\[STATUS_UPDATE[:\s]*(.+?)\]", line_text)
                 if _su_bg_match:
                     session_mgr.set_live_status(
                         session_id, _su_bg_match.group(1).strip()
@@ -10962,17 +10962,9 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
 
     # ── Skills Panel API ──────────────────────────────────────────────────────
 
-    from skill_manager import (
-        apply_update,
-        check_update,
-        delete_origin,
-        delete_skill,
-        get_origin,
-        get_skill,
-        scan_agent_skills,
-        scan_skills,
-        set_origin,
-    )
+    from skill_manager import (apply_update, check_update, delete_origin,
+                               delete_skill, get_origin, get_skill,
+                               scan_agent_skills, scan_skills, set_origin)
 
     @app.get("/api/v1/skills")
     async def list_skills(agent: Optional[str] = None):
@@ -11448,6 +11440,13 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 raise HTTPException(
                     status_code=400, detail=f"agents[{idx}] requires 'name' and 'path'"
                 )
+            mc = ag.get("max_concurrent")
+            if mc is not None:
+                if not isinstance(mc, int) or isinstance(mc, bool) or mc < 1:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"agents[{idx}].max_concurrent must be an integer >= 1",
+                    )
         # Backup existing file
         backup = _agents_json_path.with_suffix(".json.bak")
         if _agents_json_path.exists():
@@ -11736,6 +11735,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         )
         try:
             import edge_tts
+
             voices = await edge_tts.list_voices()
             # Return a simplified list — just English voices by default
             en_voices = [

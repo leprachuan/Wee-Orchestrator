@@ -5755,6 +5755,7 @@ if (document.readyState !== 'loading') {
     todoDir:     () => document.getElementById('asf-todo-dir'),
     runtime:     () => document.getElementById('asf-runtime'),
     model:       () => document.getElementById('asf-model'),
+    maxConcurrent: () => document.getElementById('asf-max-concurrent'),
     permMode:    () => document.getElementById('asf-perm-mode'),
   };
 
@@ -5902,6 +5903,8 @@ if (document.readyState !== 'loading') {
     set(F.todoDir,     agent.todo_dir);
     set(F.runtime,     agent.runtime);
     set(F.model,       agent.model);
+    const mcEl = F.maxConcurrent();
+    if (mcEl) mcEl.value = agent.max_concurrent != null ? String(agent.max_concurrent) : '1';
 
     const perms = agent.permissions || emptyPermissions();
     set(F.permMode, perms.mode);
@@ -5929,6 +5932,12 @@ if (document.readyState !== 'loading') {
       todo_dir:    get(F.todoDir)     || undefined,
       runtime:     get(F.runtime)     || undefined,
       model:       get(F.model)       || undefined,
+      max_concurrent: (() => {
+        const el = F.maxConcurrent();
+        if (!el || el.value.trim() === '') return undefined;
+        const v = parseInt(el.value, 10);
+        return isNaN(v) ? undefined : v;
+      })(),
       permissions: getPermissionsFromForm(),
     };
     // Strip undefined keys
@@ -5944,6 +5953,11 @@ if (document.readyState !== 'loading') {
     if (!agent.path) errs.push('Working path is required');
     else if (!agent.path.startsWith('/')) errs.push('Working path must start with /');
     if (agent.todo_dir && !agent.todo_dir.startsWith('/')) errs.push('TODO directory must start with /');
+    if (agent.max_concurrent !== undefined && agent.max_concurrent !== null) {
+      if (!Number.isInteger(agent.max_concurrent) || agent.max_concurrent < 1) {
+        errs.push('Max concurrent must be an integer ≥ 1');
+      }
+    }
     return errs;
   }
 
@@ -6163,7 +6177,7 @@ if (document.readyState !== 'loading') {
 
   // Dirty detection on basic text fields
   if (modalSettings) {
-    ['asf-name','asf-path','asf-description','asf-todo-dir','asf-runtime','asf-model'].forEach(id => {
+    ['asf-name','asf-path','asf-description','asf-todo-dir','asf-runtime','asf-model','asf-max-concurrent'].forEach(id => {
       const el = document.getElementById(id);
       if (el) el.addEventListener('input', updateDirtyIndicator);
     });

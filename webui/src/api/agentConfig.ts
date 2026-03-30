@@ -100,6 +100,12 @@ export function validateConfig(agent: Partial<Agent>): ValidationResult {
     errors.push({ field: 'todo_dir', message: 'TODO directory must be an absolute path' });
   }
 
+  if (agent.max_concurrent !== undefined && agent.max_concurrent !== null) {
+    if (typeof agent.max_concurrent !== 'number' || !Number.isInteger(agent.max_concurrent) || agent.max_concurrent < 1) {
+      errors.push({ field: 'max_concurrent', message: 'Max concurrent must be an integer >= 1' });
+    }
+  }
+
   if (agent.permissions) {
     const validModes = ['elevated', 'restricted', 'sandboxed'];
     if (!validModes.includes(agent.permissions.mode)) {
