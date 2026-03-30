@@ -1228,6 +1228,46 @@ class SessionManager:
         ],
     }
 
+    CURSOR_MODELS = {
+        "Composer Models": [
+            ("auto", "Auto (Recommended)", ["auto-select"]),
+            ("composer-2-fast", "Composer 2 Fast", ["comp-2-fast"]),
+            ("composer-2", "Composer 2", ["comp-2"]),
+            ("composer-1.5", "Composer 1.5", ["comp-1.5"]),
+        ],
+        "GPT Models": [
+            ("gpt-5.3-codex", "GPT-5.3 Codex", ["codex-5.3"]),
+            ("gpt-5.3-codex-fast", "GPT-5.3 Codex Fast", []),
+            ("gpt-5.3-codex-high", "GPT-5.3 Codex High", []),
+            ("gpt-5.2", "GPT-5.2", []),
+            ("gpt-5.2-codex", "GPT-5.2 Codex", ["codex-5.2"]),
+            ("gpt-5.2-codex-fast", "GPT-5.2 Codex Fast", []),
+            ("gpt-5.2-codex-high", "GPT-5.2 Codex High", []),
+            ("gpt-5.1", "GPT-5.1", []),
+            ("gpt-5.1-codex-max-low", "GPT-5.1 Codex Max Low", []),
+            ("gpt-5.4-mini-medium", "GPT-5.4 Mini Medium", ["gpt-mini"]),
+            ("gpt-5.4-nano-medium", "GPT-5.4 Nano Medium", ["gpt-nano"]),
+            ("gpt-5-mini", "GPT-5 Mini", []),
+        ],
+        "Claude Models": [
+            ("claude-4.5-sonnet", "Claude 4.5 Sonnet", ["sonnet-4.5"]),
+            ("claude-4.5-sonnet-thinking", "Claude 4.5 Sonnet Thinking", []),
+            ("claude-4-sonnet", "Claude 4 Sonnet", ["sonnet-4"]),
+            ("claude-4-sonnet-1m", "Claude 4 Sonnet 1M", []),
+            ("claude-4-sonnet-thinking", "Claude 4 Sonnet Thinking", []),
+            ("claude-4-sonnet-1m-thinking", "Claude 4 Sonnet 1M Thinking", []),
+        ],
+        "Google Models": [
+            ("gemini-3.1-pro", "Gemini 3.1 Pro", ["gemini-pro"]),
+            ("gemini-3-flash", "Gemini 3 Flash", ["gemini-flash"]),
+        ],
+        "Other Models": [
+            ("grok-4-20", "Grok 4-20", ["grok"]),
+            ("grok-4-20-thinking", "Grok 4-20 Thinking", []),
+            ("kimi-k2.5", "Kimi K2.5", ["kimi"]),
+        ],
+    }
+
     def __init__(self, config_file: Optional[str] = None, app_env: str = "PROD"):
         # Copilot Paths
         self.copilot_home = Path.home() / ".copilot"
@@ -1278,6 +1318,11 @@ class SessionManager:
         self.copilot_bin = find_executable("copilot")
         self.claude_bin = find_executable("claude")
         self.devin_bin = find_executable("devin")
+        self.cursor_bin = find_executable("agent")
+
+        # Cursor Paths
+        self.cursor_home = Path.home() / ".cursor-agent"
+        self.cursor_session_dir = self.cursor_home / "sessions"
 
         # CLI mode setting (elevated, restricted, or sandboxed)
         self.mode = None
@@ -1294,6 +1339,8 @@ class SessionManager:
         self.codex_session_dir.mkdir(exist_ok=True)
         self.devin_home.mkdir(exist_ok=True)
         self.devin_session_dir.mkdir(exist_ok=True)
+        self.cursor_home.mkdir(exist_ok=True)
+        self.cursor_session_dir.mkdir(exist_ok=True)
 
         # Load agents from config file (also sets _agents_config_path and _agents_json_mtime)
         self._agents_config_path: Optional[Path] = None
@@ -1308,6 +1355,7 @@ class SessionManager:
         self._env_gemini_models = None
         self._env_codex_models = None
         self._env_devin_models = None
+        self._env_cursor_models = None
 
         # Load command timeout from environment
         self.command_timeout = get_command_timeout()
@@ -1831,6 +1879,7 @@ class SessionManager:
             "gemini": self._env_gemini_models,
             "codex": self._env_codex_models,
             "devin": self._env_devin_models,
+            "cursor": self._env_cursor_models,
         }
         env_models = env_models_map.get(runtime)
         if env_models:
@@ -1846,6 +1895,7 @@ class SessionManager:
             "codex": self.CODEX_MODELS,
             "opencode": self.OPENCODE_MODELS,
             "devin": self.DEVIN_MODELS,
+            "cursor": self.CURSOR_MODELS,
         }
         models_dict = static_map.get(runtime)
         if not models_dict:
@@ -1977,6 +2027,52 @@ class SessionManager:
 
         return self._static_models_to_dict(self.DEVIN_MODELS)
 
+    def fetch_cursor_models(self) -> Dict:
+        """Return available Cursor models by querying the agent CLI directly.
+
+        Runs `agent --list-models` which outputs model IDs one per line
+        (format: "model-id - Display Name" or just "model-id").
+        Falls back to static CURSOR_MODELS if the CLI is unavailable.
+        """
+        try:
+            cursor_bin = getattr(self, "cursor_bin", None) or "agent"
+            result = subprocess.run(
+                [cursor_bin, "--list-models"],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            output = (result.stdout or "") + (result.stderr or "")
+            # Strip ANSI escape sequences from entire output before parsing
+            output = re.sub(r"\[[0-9;]*[a-zA-Z]", "", output)
+            output = re.sub(r"\][^]*", "", output)
+            model_ids = []
+            for line in output.splitlines():
+                line = line.strip()
+                if not line or line.startswith("#") or "Available" in line or "Loading" in line:
+                    continue
+                # Handle "model-id - Display Name" or bare "model-id"
+                model_id = line.split(" - ")[0].strip() if " - " in line else line.split(",")[0].strip()
+                if model_id and not model_id.startswith("-") and re.match(r"^[a-zA-Z0-9][a-zA-Z0-9._-]*$", model_id):
+                    model_ids.append(model_id)
+            if model_ids:
+                discovered = {
+                    "Available Models": [(mid, mid, []) for mid in model_ids]
+                }
+                print(
+                    f"[cursor] Auto-discovered {len(model_ids)} models",
+                    file=sys.stderr,
+                )
+                self._env_cursor_models = discovered
+                return self._static_models_to_dict(discovered)
+        except Exception as e:
+            print(
+                f"[cursor] Model discovery failed, using static list: {e}",
+                file=sys.stderr,
+            )
+
+        return self._static_models_to_dict(self.CURSOR_MODELS)
+
     def get_models_for_runtime(self, runtime: str) -> Dict:
         """Fetch available models for a runtime, using CLI discovery where possible.
 
@@ -1991,6 +2087,7 @@ class SessionManager:
             "gemini": self.fetch_gemini_models,
             "codex": self.fetch_codex_models,
             "devin": self.fetch_devin_models,
+            "cursor": self.fetch_cursor_models,
         }
         fetcher = dispatch.get(runtime)
         if fetcher is None:
@@ -2068,6 +2165,8 @@ class SessionManager:
             default_model = "gpt-5.4"
         elif default_runtime == "devin":
             default_model = os.getenv("DEVIN_DEFAULT_MODEL", "claude-sonnet-4")
+        elif default_runtime == "cursor":
+            default_model = os.getenv("CURSOR_DEFAULT_MODEL", "auto")
 
         # Extract bot identifier from session ID (last 4 chars of numeric part)
         bot_id = self._extract_bot_identifier(n8n_session_id)
@@ -2150,10 +2249,18 @@ class SessionManager:
                     merged["model"] = os.getenv(
                         "DEVIN_DEFAULT_MODEL", "claude-sonnet-4"
                     )
+            elif runtime == "cursor":
+                current_model = merged.get("model", "")
+                if not current_model or not self.get_model_from_name(
+                    current_model, "cursor"
+                ):
+                    merged["model"] = os.getenv(
+                        "CURSOR_DEFAULT_MODEL", "auto"
+                    )
 
             # Validate and fix session_id if corrupted
             session_id = merged.get("session_id", "")
-            if runtime in ["claude", "gemini", "codex", "copilot", "devin"]:
+            if runtime in ["claude", "gemini", "codex", "copilot", "devin", "cursor"]:
                 if not session_id or not (len(session_id) == 36 and "-" in session_id):
                     merged["session_id"] = str(uuid4())
             elif runtime == "opencode":
@@ -2495,7 +2602,7 @@ class SessionManager:
         name_lower = name.lower().strip("\"'")
 
         # Ensure env models are loaded/cached by triggering fetch for this runtime
-        if runtime in ("claude", "gemini", "codex", "devin"):
+        if runtime in ("claude", "gemini", "codex", "devin", "cursor"):
             self.get_models_for_runtime(runtime)
 
         # Step 1: check env-loaded or static alias tables for all runtimes that have them.
@@ -2504,6 +2611,7 @@ class SessionManager:
             "gemini": self._env_gemini_models,
             "codex": self._env_codex_models,
             "devin": self._env_devin_models,
+            "cursor": self._env_cursor_models,
         }
         static_alias_map = {
             "claude": self.CLAUDE_MODELS,
@@ -2511,6 +2619,7 @@ class SessionManager:
             "codex": self.CODEX_MODELS,
             "opencode": self.OPENCODE_MODELS,
             "devin": self.DEVIN_MODELS,
+            "cursor": self.CURSOR_MODELS,
         }
 
         # Try env-loaded models first, fall back to static
@@ -2851,6 +2960,18 @@ class SessionManager:
                 if not line.strip() and not result:
                     continue
                 result.append(line)
+
+        elif runtime == "cursor":
+            # Cursor agent CLI outputs the response directly to stdout.
+            # Strip ANSI codes, leading blanks, and any status lines.
+            for line in lines:
+                clean_line = re.sub(r"\x1b\[[0-9;]*m", "", line)
+                if not clean_line.strip() and not result:
+                    continue
+                # Skip cursor-specific status/progress lines
+                if re.match(r"^(Thinking|Working|\[cursor\])", clean_line.strip()):
+                    continue
+                result.append(clean_line)
 
         # Remove trailing empty lines
         while result and not result[-1].strip():
@@ -5245,6 +5366,149 @@ User Request:
 
         return self.strip_metadata(output, "devin")
 
+    def run_cursor(
+        self,
+        prompt: str,
+        model: str,
+        agent: str,
+        session_id: Optional[str],
+        resume: bool,
+        n8n_session_id: str,
+        timeout: Optional[int] = None,
+        render_type: str = "text",
+    ) -> str:
+        """Execute Cursor agent CLI in non-interactive mode.
+
+        Uses --trust to bypass workspace prompts and --yolo to auto-approve
+        all commands in elevated mode.
+        """
+        # Parse /mode command from prompt
+        prompt, mode = self._parse_mode_command(prompt)
+
+        # Get session data once - reuse for mode and channel
+        session_data = self.get_or_create_session_data(n8n_session_id)
+
+        # Resolve permission mode from session data
+        mode = self._resolve_permission_mode(session_data, mode)
+
+        agent_dir = self.AGENTS.get(agent, self.AGENTS["orchestrator"])["path"]
+        effective_timeout = timeout if timeout is not None else self.command_timeout
+
+        # Get channel for file handling instructions
+        channel = session_data.get("channel", "api")
+
+        # Build context prompt with agent identity
+        context_prompt = self.build_agent_context_prompt(
+            prompt, agent, channel, n8n_session_id
+        )
+
+        # Add elevated mode instructions for unrestricted privileged access
+        if mode == "elevated":
+            elevated_instruction = (
+                "\n\n[ELEVATED MODE ENABLED]\n"
+                "Full permissions granted. ALL commands requiring elevated privileges MUST automatically "
+                "prefix with 'sudo' \u2014 no exceptions. This includes:\n"
+                "\u2022 Service management: sudo systemctl restart/start/stop/reload/enable/disable <service>\n"
+                "\u2022 Package management: sudo apt install/remove, sudo pip install (system-wide)\n"
+                "\u2022 Docker: sudo docker build/run/compose/stop/rm\n"
+                "\u2022 File permissions: sudo chmod, sudo chown, sudo mkdir on protected paths\n"
+                "\u2022 Network: sudo ufw, sudo iptables, sudo ip, etc.\n"
+                "\u2022 System administration: sudo journalctl, sudo systemd-*, sudo chmod/chown on system paths\n"
+                "\u2022 Any command that would fail due to insufficient permissions\n"
+                "Sudo is configured without password prompt (NOPASSWD:ALL). "
+                "Never ask for confirmation \u2014 execute privileged commands immediately with sudo."
+            )
+            context_prompt = context_prompt + elevated_instruction
+        elif mode == "sandboxed":
+            sandboxed_instruction = (
+                "\n\n[SANDBOXED MODE ENABLED]\n"
+                "You are running in SANDBOXED mode. You MUST NOT:\n"
+                "\u2022 Write, create, delete, or modify any files\n"
+                "\u2022 Execute destructive shell commands (rm, mv to overwrite, truncate, etc.)\n"
+                "\u2022 Install or remove any packages\n"
+                "\u2022 Start, stop, or restart any services\n"
+                "\u2022 Make network requests to external services (no curl, wget, fetch to outside hosts)\n"
+                "\u2022 Modify system configuration\n"
+                "You CAN: read files, search code, run analysis commands, run destructive commands, "
+                "or make network requests to external services. Analysis and reporting only."
+            )
+            context_prompt = context_prompt + sandboxed_instruction
+
+        cursor_bin = self.cursor_bin or "agent"
+
+        # -p is headless/print mode; --trust bypasses workspace prompts
+        # --yolo auto-approves all tool calls (elevated mode)
+        cmd = [cursor_bin, "-p", "--trust"]
+        if mode == "elevated":
+            cmd.append("--yolo")
+        if model:
+            cmd += ["--model", model]
+        cmd += ["--workspace", agent_dir]
+
+        # Check for existing cursor session to resume
+        cursor_chat_id = self._get_cursor_session_id(n8n_session_id)
+        actually_resuming = resume and cursor_chat_id is not None
+
+        if actually_resuming:
+            cmd += ["--continue"]
+            print(
+                f"[Session] Resuming Cursor session for {n8n_session_id[:8]}... with model {model} in {mode} mode",
+                file=sys.stderr,
+            )
+        else:
+            print(
+                f"[Session] Starting new Cursor session with model {model} in {mode} mode",
+                file=sys.stderr,
+            )
+
+        cmd += ["--", context_prompt]
+
+        output = self._execute_subprocess_with_tracking(
+            cmd,
+            agent_dir,
+            effective_timeout,
+            "cursor",
+            agent,
+            prompt,
+            n8n_session_id,
+            use_pty=True,
+        )
+
+        # After each run, persist session state for future resumption
+        self._save_cursor_session_id(n8n_session_id)
+
+        if "Error: Cursor command failed" in output:
+            return output
+
+        return self.strip_metadata(output, "cursor")
+
+    def _get_cursor_session_id(self, n8n_session_id: str) -> Optional[str]:
+        """Return the stored cursor session flag for this n8n session, or None."""
+        mapping_file = self.cursor_session_dir / f"{n8n_session_id}.json"
+        try:
+            with open(mapping_file) as f:
+                data = json.load(f)
+                return data.get("cursor_session_active")
+        except (FileNotFoundError, json.JSONDecodeError):
+            return None
+
+    def _save_cursor_session_id(self, n8n_session_id: str):
+        """Mark that a cursor session exists for this n8n session."""
+        try:
+            self.cursor_session_dir.mkdir(parents=True, exist_ok=True)
+            mapping_file = self.cursor_session_dir / f"{n8n_session_id}.json"
+            with open(mapping_file, "w") as f:
+                json.dump({"cursor_session_active": True, "n8n_session_id": n8n_session_id}, f)
+            print(
+                f"[Session] Stored cursor session mapping: {n8n_session_id[:8]}...",
+                file=sys.stderr,
+            )
+        except Exception as e:
+            print(
+                f"[Session] Warning: could not save cursor session ID: {e}",
+                file=sys.stderr,
+            )
+
     def _get_devin_session_id(self, n8n_session_id: str) -> Optional[str]:
         """Return the stored devin session UUID for this n8n session, or None."""
         mapping_file = self.devin_session_dir / f"{n8n_session_id}.json"
@@ -5349,6 +5613,10 @@ User Request:
             # Devin session mappings are keyed by n8n_session_id, not backend session_id
             key = n8n_session_id if n8n_session_id else session_id
             return (self.devin_session_dir / f"{key}.json").exists()
+        elif runtime == "cursor":
+            # Cursor session mappings are keyed by n8n_session_id
+            key = n8n_session_id if n8n_session_id else session_id
+            return (self.cursor_session_dir / f"{key}.json").exists()
         return False
 
     def get_most_recent_session_id(
@@ -5451,6 +5719,9 @@ User Request:
                 return None
             elif runtime == "devin":
                 # Devin CLI does not persist local session files
+                return None
+            elif runtime == "cursor":
+                # Cursor agent CLI does not persist local session files
                 return None
         except Exception as e:
             print(f"Error getting recent session ID: {e}", file=sys.stderr)
@@ -5581,6 +5852,17 @@ User Request:
                 effective_timeout,
                 render_type,
             )
+        elif runtime == "cursor":
+            result = self.run_cursor(
+                prompt,
+                model,
+                agent,
+                session_id if can_resume else None,
+                can_resume,
+                n8n_session_id,
+                effective_timeout,
+                render_type,
+            )
         else:
             return f"Error: Unknown runtime '{runtime}'"
 
@@ -5643,7 +5925,7 @@ User Request:
 
 **Runtime Management:**
    • /runtime list - Show available runtimes
-   • /runtime set (auto|copilot|opencode|claude|gemini|codex|devin) - Switch runtime
+   • /runtime set (auto|copilot|opencode|claude|gemini|codex|devin|cursor) - Switch runtime
    • /runtime current - Show current runtime
 
 **Model Management:**
@@ -5795,8 +6077,9 @@ You can mention an agent in your prompt and it will auto-delegate:
                     "gemini",
                     "codex",
                     "devin",
+                    "cursor",
                 ]:
-                    return f"Unknown runtime: '{new_runtime}'. Use 'copilot', 'opencode', 'claude', 'gemini', 'codex', or 'devin'."
+                    return f"Unknown runtime: '{new_runtime}'. Use 'copilot', 'opencode', 'claude', 'gemini', 'codex', 'devin', or 'cursor'."
 
                 # Capture previous session state before any updates
                 prev_runtime = current_runtime
@@ -5868,6 +6151,8 @@ You can mention an agent in your prompt and it will auto-delegate:
                     default_model = "gpt-5.4"
                 elif new_runtime == "devin":
                     default_model = os.getenv("DEVIN_DEFAULT_MODEL", "claude-sonnet-4")
+                elif new_runtime == "cursor":
+                    default_model = os.getenv("CURSOR_DEFAULT_MODEL", "auto")
 
                 self.update_session_field(n8n_session_id, "model", default_model)
                 return f"✓ Switched runtime to **{new_runtime}**. Model set to `{default_model}`. Session reset."
@@ -6531,6 +6816,17 @@ You can mention an agent in your prompt and it will auto-delegate:
         elif current_runtime == "devin":
             # Devin handles its own session resumption internally via
             # _get_devin_session_id(); pass n8n_session_id for correct lookup
+            can_resume = (
+                self.session_exists(
+                    session_id, current_runtime, n8n_session_id=n8n_session_id
+                )
+                if session_id
+                else self.session_exists(
+                    "", current_runtime, n8n_session_id=n8n_session_id
+                )
+            )
+        elif current_runtime == "cursor":
+            # Cursor handles session resumption via --continue flag
             can_resume = (
                 self.session_exists(
                     session_id, current_runtime, n8n_session_id=n8n_session_id
@@ -7254,6 +7550,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             {"id": "gemini", "label": "gemini"},
             {"id": "codex", "label": "codex"},
             {"id": "devin", "label": "devin"},
+            {"id": "cursor", "label": "cursor"},
         ]
         return {"runtimes": runtimes}
 
@@ -7266,7 +7563,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         not expose a model-listing command.
         """
         runtime = runtime.lower().strip()
-        known_runtimes = {"copilot", "opencode", "claude", "gemini", "codex", "devin"}
+        known_runtimes = {"copilot", "opencode", "claude", "gemini", "codex", "devin", "cursor"}
         if runtime not in known_runtimes:
             return {
                 "runtime": runtime,
@@ -8864,6 +9161,19 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 cmd = [_devin_bin, "-p", "--permission-mode", _devin_perm]
                 if model:
                     cmd.extend(["--model", model])
+                cmd.extend(["--", context_prompt])
+            elif runtime == "cursor":
+                _cursor_bin = (
+                    session_mgr.cursor_bin
+                    if hasattr(session_mgr, "cursor_bin") and session_mgr.cursor_bin
+                    else (_which_bin("agent") or "agent")
+                )
+                cmd = [_cursor_bin, "-p", "--trust"]
+                if permission_mode == "elevated":
+                    cmd.append("--yolo")
+                if model:
+                    cmd.extend(["--model", model])
+                cmd.extend(["--workspace", agent_dir])
                 cmd.extend(["--", context_prompt])
             else:
                 # Default: copilot runtime
@@ -11614,8 +11924,8 @@ Examples:
     runtime_group.add_argument(
         "--runtime",
         metavar="NAME",
-        choices=["copilot", "opencode", "claude", "gemini", "codex", "devin"],
-        help="Set the runtime to use (choices: copilot, opencode, claude, gemini, codex, devin)",
+        choices=["copilot", "opencode", "claude", "gemini", "codex", "devin", "cursor"],
+        help="Set the runtime to use (choices: copilot, opencode, claude, gemini, codex, devin, cursor)",
     )
     runtime_group.add_argument(
         "--list-runtimes",
