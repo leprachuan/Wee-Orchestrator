@@ -12,7 +12,6 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
 
 # Ensure the project root is on sys.path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -60,9 +59,7 @@ class TestMaxConcurrentLoadConfig(unittest.TestCase):
 
     def test_explicit_max_concurrent(self):
         """Agent with explicit max_concurrent=5 is parsed correctly."""
-        agents = self._load(
-            [{"name": "a", "path": "/opt/a", "max_concurrent": 5}]
-        )
+        agents = self._load([{"name": "a", "path": "/opt/a", "max_concurrent": 5}])
         self.assertEqual(agents["a"]["max_concurrent"], 5)
 
     def test_max_concurrent_preserved_across_agents(self):
@@ -142,7 +139,8 @@ class TestMaxConcurrentAPIValidation(unittest.TestCase):
         self.assertIn("max_concurrent", err)
 
     def test_bool_max_concurrent_rejected(self):
-        """max_concurrent=True is rejected (bool is not valid even though bool subclasses int)."""
+        """max_concurrent=True is rejected (bool is not valid
+        even though bool subclasses int)."""
         err = self._validate_payload([_minimal_agent(max_concurrent=True)])
         self.assertIsNotNone(err)
         self.assertIn("max_concurrent", err)
