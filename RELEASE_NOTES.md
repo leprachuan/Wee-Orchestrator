@@ -2,6 +2,29 @@
 
 ## Unreleased
 
+### Expose max_concurrent in Agent Settings Panel (F009)
+
+The agent settings panel in the WebUI now exposes a **max_concurrent** input field, giving administrators direct control over per-agent concurrency limits without manual `agents.json` edits.
+
+**Frontend (`webui/dist/app.js`):**
+- Numeric input field added to the agent settings panel for `max_concurrent`
+- Field pre-populated with the current agent value on panel open
+- Value submitted as part of the agent update payload
+
+**Backend (`agent_manager.py`):**
+- `max_concurrent` validated on `PUT /api/v1/agents/{name}` — rejects booleans, zero, negatives, floats, and non-integer strings with a descriptive `400` response
+- Valid positive integers accepted and persisted to `agents.json`
+
+**QA (wee-qa — APPROVE):**
+- 12 new tests added; **429 total tests pass** (0 regressions)
+- Validation edge cases confirmed: `bool` → 400, `0` → 400, `-1` → 400, `"abc"` → 400, `1.5` → 400, valid `int` → 200
+- HTML input field presence verified via Playwright accessibility snapshot
+- All 4 dev services active; no security issues, no BLOCKERs, no MAJORs
+
+**Commit:** 6277c86
+
+---
+
 ### Remove Per-User RBAC for Background Task Visibility (F003)
 
 All authorized users can now see **all** background tasks regardless of who created them.
