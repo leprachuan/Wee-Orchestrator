@@ -6985,10 +6985,10 @@ def _send_pairing_code(channel: str, identity: str, code: str) -> bool:
                     return True
                 except Exception as _exc:
                     last_exc = _exc
-                    import sys as _sys; print(f"[API] Telegram send attempt {attempt}/3 failed: {_exc}", file=_sys.stderr)
+                    print(f"[API] Telegram send attempt {attempt}/3 failed: {_exc}", file=sys.stderr)
                     if attempt < 3:
-                        import time as _time; _time.sleep(2)
-            import sys as _sys2; print(f"[API] All 3 Telegram send attempts failed: {last_exc}", file=_sys2.stderr)
+                        time.sleep(2)
+            print(f"[API] All 3 Telegram send attempts failed: {last_exc}", file=sys.stderr)
             return False
         elif channel == "webex":
             config_path = os.path.join(script_dir, "webex_config.json")
@@ -7023,6 +7023,8 @@ def _send_pairing_code(channel: str, identity: str, code: str) -> bool:
                     f"[API] WebEX send failed ({resp.status_code}): {resp.text[:200]}",
                     file=sys.stderr,
                 )
+                return False
+            return True
     except Exception as exc:  # noqa: BLE001
         print(f"[API] Warning: could not send pairing code via {channel}: {exc}")
 
@@ -7670,7 +7672,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         if not delivered:
             raise HTTPException(
                 status_code=503,
-                detail="Pairing code generated but failed to deliver via Telegram. Please try again.",
+                detail=f"Pairing code generated but failed to deliver via {body.channel.value}. Please try again.",
             )
         return {
             "message": f"Pairing code sent via {body.channel.value}",

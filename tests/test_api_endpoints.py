@@ -28,6 +28,12 @@ class TestAPIEndpoints(unittest.TestCase):
             side_effect=lambda identity: identity,
         )
         cls._telegram_patch.start()
+        cls._send_pairing_patch = patch.object(
+            agent_manager,
+            '_send_pairing_code',
+            return_value=True,
+        )
+        cls._send_pairing_patch.start()
         cls.app = agent_manager.create_api_app()
         cls.client = TestClient(cls.app)
         cls.shared_header = {"Authorization": "Bearer shared_test_key_123"}
@@ -35,6 +41,7 @@ class TestAPIEndpoints(unittest.TestCase):
     @classmethod
     def tearDownClass(cls):
         cls._telegram_patch.stop()
+        cls._send_pairing_patch.stop()
 
     def test_health_endpoint(self):
         resp = self.client.get("/api/v1/health")
