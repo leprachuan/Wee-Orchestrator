@@ -1629,6 +1629,7 @@ class SessionManager:
             ],
             "GPT Models": [
                 "gpt-5.4",
+                "gpt-5.4-mini",
                 "gpt-5.3-codex",
                 "gpt-5.2-codex",
                 "gpt-5.2",
@@ -1693,6 +1694,7 @@ class SessionManager:
                     "claude-sonnet-4",
                     "gemini-3-pro-preview",
                     "gpt-5.4",
+                    "gpt-5.4-mini",
                     "gpt-5.3-codex",
                     "gpt-5.2-codex",
                     "gpt-5.2",
@@ -1729,6 +1731,7 @@ class SessionManager:
                     ],
                     "GPT Models": [
                         "gpt-5.4",
+                        "gpt-5.4-mini",
                         "gpt-5.3-codex",
                         "gpt-5.2-codex",
                         "gpt-5.2",
