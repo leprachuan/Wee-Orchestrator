@@ -11116,7 +11116,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         # Dispatch as background task
         bg_body = {
             "prompt": prompt,
-            "agent": "fosterbot",
+            "agent": "orchestrator",
             "runtime": "copilot",
             "model": "claude-haiku-4.5",
             "timeout": 600,
@@ -11138,7 +11138,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 session_id=session_id,
                 user_identity=identity,
                 channel=channel,
-                agent="fosterbot",
+                agent="orchestrator",
                 runtime="copilot",
                 model="claude-haiku-4.5",
                 prompt=prompt,
