@@ -6094,8 +6094,7 @@ You can mention an agent in your prompt and it will auto-delegate:
                 # there is prior history to hand off
                 if prev_runtime != new_runtime and prev_session_id:
                     try:
-                        from session_handoff import (SessionHandoff,
-                                                     _handoff_logger)
+                        from session_handoff import SessionHandoff, _handoff_logger
 
                         handoff = SessionHandoff()
 
@@ -6278,7 +6277,11 @@ You can mention an agent in your prompt and it will auto-delegate:
                     session_map[n8n_session_id] = new_data
                     self.save_session_map(session_map)
                 parts = ["\u2713 Session reset. Next message starts fresh."]
-                if preserved.get("model") or preserved.get("runtime") or preserved.get("agent"):
+                if (
+                    preserved.get("model")
+                    or preserved.get("runtime")
+                    or preserved.get("agent")
+                ):
                     kept = []
                     if "model" in preserved:
                         kept.append("model=`" + preserved["model"] + "`")
@@ -7109,8 +7112,17 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
     import mimetypes
     from enum import Enum
 
-    from fastapi import (FastAPI, File, Header, HTTPException, Query, Request,
-                         UploadFile, WebSocket, WebSocketDisconnect)
+    from fastapi import (
+        FastAPI,
+        File,
+        Header,
+        HTTPException,
+        Query,
+        Request,
+        UploadFile,
+        WebSocket,
+        WebSocketDisconnect,
+    )
     from fastapi.middleware.cors import CORSMiddleware
     from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
     from fastapi.staticfiles import StaticFiles
@@ -10995,9 +11007,17 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
 
     # ── Skills Panel API ──────────────────────────────────────────────────────
 
-    from skill_manager import (apply_update, check_update, delete_origin,
-                               delete_skill, get_origin, get_skill,
-                               scan_agent_skills, scan_skills, set_origin)
+    from skill_manager import (
+        apply_update,
+        check_update,
+        delete_origin,
+        delete_skill,
+        get_origin,
+        get_skill,
+        scan_agent_skills,
+        scan_skills,
+        set_origin,
+    )
 
     @app.get("/api/v1/skills")
     async def list_skills(agent: Optional[str] = None):
