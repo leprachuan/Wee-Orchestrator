@@ -10656,6 +10656,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         apply_update,
         check_update,
         delete_origin,
+        delete_skill,
         get_origin,
         get_skill,
         scan_agent_skills,
@@ -10730,6 +10731,20 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         raise HTTPException(
             status_code=404, detail="No origin metadata found for this skill"
         )
+
+    @app.delete("/api/v1/skills/{skill_key:path}")
+    async def remove_skill(skill_key: str, request: Request):
+        """Delete a skill from disk (symlink or directory)."""
+        await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        result = delete_skill(skill_key)
+        if not result["success"]:
+            raise HTTPException(status_code=404, detail=result["message"])
+        return result
 
     @app.post("/api/v1/skills/{skill_key:path}/check-update")
     async def check_skill_update(skill_key: str, request: Request):

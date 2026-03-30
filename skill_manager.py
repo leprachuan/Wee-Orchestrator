@@ -261,6 +261,43 @@ def get_skill(skill_key: str) -> Optional[Dict[str, Any]]:
     return None
 
 
+def delete_skill(skill_key: str) -> Dict[str, Any]:
+    """Delete a skill from disk.
+
+    If the skill path is a symlink, only the symlink is removed.
+    If it is a real directory, the entire directory tree is deleted.
+    Also removes any associated origin metadata.
+
+    Returns:
+        Dict with "success" bool, "message" str, and "was_symlink" bool.
+    """
+    skill = get_skill(skill_key)
+    if not skill:
+        return {"success": False, "message": f"Skill '{skill_key}' not found"}
+
+    skill_path = skill["path"]
+    if not os.path.exists(skill_path) and not os.path.islink(skill_path):
+        return {"success": False, "message": f"Skill path does not exist: {skill_path}"}
+
+    was_symlink = os.path.islink(skill_path)
+    try:
+        if was_symlink:
+            os.unlink(skill_path)
+        else:
+            shutil.rmtree(skill_path)
+    except OSError as exc:
+        return {"success": False, "message": f"Failed to delete: {exc}"}
+
+    # Clean up origin metadata if present
+    delete_origin(skill_key)
+
+    return {
+        "success": True,
+        "message": f"Skill '{skill_key}' deleted ({'symlink removed' if was_symlink else 'directory removed'})",
+        "was_symlink": was_symlink,
+    }
+
+
 # ── Update Checking ───────────────────────────────────────────────────────────
 
 

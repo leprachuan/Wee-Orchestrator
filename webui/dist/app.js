@@ -6556,6 +6556,11 @@ function _openSkillDetail(skillKey) {
     ${skill.description ? `<div class="skill-detail-section"><h4>Description</h4><div style="font-size:13px;color:var(--text-secondary);line-height:1.5;">${_escHtml(skill.description)}</div></div>` : ''}
     ${originSection}
     <div id="skill-origin-form-container"></div>
+    <div class="skill-detail-section skill-danger-zone">
+      <h4 style="color:var(--danger, #e74c3c);">⚠️ Danger Zone</h4>
+      <p style="font-size:12px;color:var(--text-muted);margin:4px 0 10px;">Permanently remove this skill from disk. This cannot be undone.</p>
+      <button class="btn-skill-action btn-skill-danger" onclick="_deleteSkill('${_escHtml(skill.skill_key)}')">🗑 Delete Skill</button>
+    </div>
   `;
 }
 
@@ -6652,6 +6657,28 @@ async function _deleteOrigin(skillKey) {
     _openSkillDetail(skillKey);
   } catch (e) {
     _showSkillToast(`Failed: ${e.message}`, 'error');
+  }
+}
+
+async function _deleteSkill(skillKey) {
+  const skill = _skillsCache.find(s => s.skill_key === skillKey);
+  const displayName = skill ? skill.name : skillKey;
+  if (!confirm(`Permanently delete skill "${displayName}"?\n\nThis will remove the skill from disk. This action cannot be undone.`)) return;
+  try {
+    const resp = await fetch(`${API_BASE}/skills/${encodeURIComponent(skillKey)}`, {
+      method: 'DELETE',
+      headers: { 'Authorization': `Bearer ${STATE.token}` },
+    });
+    if (!resp.ok) {
+      const err = await resp.json().catch(() => ({}));
+      throw new Error(err.detail || `HTTP ${resp.status}`);
+    }
+    const data = await resp.json();
+    _showSkillToast(data.message || 'Skill deleted', 'success');
+    _closeSkillDetail();
+    await loadSkillsList();
+  } catch (e) {
+    _showSkillToast(`Failed to delete skill: ${e.message}`, 'error');
   }
 }
 
