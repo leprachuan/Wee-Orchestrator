@@ -291,9 +291,10 @@ def delete_skill(skill_key: str) -> Dict[str, Any]:
     # Clean up origin metadata if present
     delete_origin(skill_key)
 
+    action = "symlink removed" if was_symlink else "directory removed"
     return {
         "success": True,
-        "message": f"Skill '{skill_key}' deleted ({'symlink removed' if was_symlink else 'directory removed'})",
+        "message": f"Skill '{skill_key}' deleted ({action})",
         "was_symlink": was_symlink,
     }
 
