@@ -12,12 +12,12 @@ import pytest
 
 from skill_manager import delete_skill
 
-# ── Fixtures ──────────────────────────────────────────────────────────────────
+# ── Fixtures ──────────────────────────────────────────────────────────────
 
 
 @pytest.fixture
 def temp_skill_dir(tmp_path):
-    """Create a temporary skill directory with a SKILL.md so it's recognized."""
+    """Create a temp skill directory with a SKILL.md so it's recognized."""
     skill_dir = tmp_path / "test-skill"
     skill_dir.mkdir()
     (skill_dir / "SKILL.md").write_text(
@@ -90,7 +90,7 @@ class TestDeleteSkillUnit:
         assert "not found" in result["message"]
 
     def test_delete_missing_path(self, tmp_path):
-        """delete_skill handles case where skill exists in scan but path is gone."""
+        """Handle case where skill exists in scan but path on disk is gone."""
         ghost_path = str(tmp_path / "ghost-skill")
         fake_skill = {
             "skill_key": "test/ghost-skill",
@@ -112,7 +112,9 @@ class TestDeleteSkillUnit:
         }
         with (
             patch("skill_manager.get_skill", return_value=fake_skill),
-            patch("skill_manager.delete_origin", return_value=True) as mock_del,
+            patch(
+                "skill_manager.delete_origin", return_value=True
+            ) as mock_del,
         ):
             result = delete_skill("test/test-skill")
 
@@ -128,16 +130,13 @@ class TestDeleteSkillUnit:
         }
         with (
             patch("skill_manager.get_skill", return_value=fake_skill),
-            patch("shutil.rmtree", side_effect=OSError("Permission denied")),
             patch("skill_manager.shutil") as mock_shutil,
         ):
             mock_shutil.rmtree.side_effect = OSError("Permission denied")
-            # Need to also patch os.path.islink and os.path.exists
             with (
                 patch("skill_manager.os.path.islink", return_value=False),
                 patch("skill_manager.os.path.exists", return_value=True),
             ):
-                # Re-import to get the patched version
                 from skill_manager import delete_skill as ds
 
                 result = ds("test/test-skill")
@@ -146,17 +145,17 @@ class TestDeleteSkillUnit:
         assert "Permission denied" in result["message"]
 
 
-# ── API endpoint tests ────────────────────────────────────────────────────────
+# ── API endpoint tests ────────────────────────────────────────────────────
 
 
 class TestDeleteSkillAPI:
-    """Test the DELETE /api/v1/skills/{skill_key} endpoint via FastAPI TestClient."""
+    """Test DELETE /api/v1/skills/{skill_key} endpoint via FastAPI."""
 
     @pytest.fixture(autouse=True)
     def setup_client(self):
         """Set up TestClient if httpx is available."""
         try:
-            import httpx  # noqa: F401
+            from httpx import AsyncClient  # noqa: F401
         except ImportError:
             pytest.skip("httpx not available")
 
@@ -179,13 +178,10 @@ class TestDeleteSkillAPI:
         try:
             import httpx
 
+            token = "shared_R6R6wReORUV6bouLntScMTowbsh30Rzqa3hzjs3bWgU"
             resp = httpx.delete(
                 "https://127.0.0.1:8001/api/v1/skills/nonexistent/fakeskill",
-                headers={
-                    "Authorization": (
-                        "Bearer shared_R6R6wReORUV6bouLntScMTowbsh30Rzqa3hzjs3bWgU"
-                    )
-                },
+                headers={"Authorization": f"Bearer {token}"},
                 verify=False,
                 timeout=10,
             )
