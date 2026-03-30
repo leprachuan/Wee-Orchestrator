@@ -10,6 +10,7 @@ Supports:
 Prefers existing keyring-vault skill when available. File backend encrypts
 secrets with a Fernet key stored in the user's keyring.
 """
+
 import argparse
 import json
 import os
@@ -21,6 +22,7 @@ _keyring_vault_module = None
 try:
     sys.path.insert(0, "/opt/foster-skills/keyring-vault/copilot")
     import keyring_vault as _kr
+
     _keyring_vault_module = _kr
 except Exception:
     _keyring_vault_module = None
@@ -39,7 +41,8 @@ class KeyringBackend:
                 self._keyring = keyring
             except Exception:
                 raise RuntimeError(
-                    "No keyring backend available: install libsecret-tools or python-keyring"
+                    "No keyring backend available: "
+                    "install libsecret-tools or python-keyring"
                 )
         else:
             self._use_keyring = False
@@ -57,9 +60,7 @@ class KeyringBackend:
             action = "updated" if existed else "created"
             return {"status": "success", "action": action, "name": name}
         else:
-            self._vault.store(
-                "secret-tool", name, value, label=f"secret-tool {name}"
-            )
+            self._vault.store("secret-tool", name, value, label=f"secret-tool {name}")
             action = "updated" if existed else "created"
             return {"status": "success", "action": action, "name": name}
 
@@ -252,9 +253,7 @@ def _resolve_value(args) -> str:
         value = sys.stdin.readline().rstrip("\n")
         if not value:
             print(
-                json.dumps(
-                    {"status": "error", "message": "No value received on stdin"}
-                )
+                json.dumps({"status": "error", "message": "No value received on stdin"})
             )
             sys.exit(1)
         return value

@@ -20,7 +20,7 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "secret_tool"))
-import secret_tool
+import secret_tool  # noqa: E402
 
 
 class FakeKeyring:
@@ -196,7 +196,6 @@ class TestFileBackendUX(unittest.TestCase):
 
         self.fake_kr = FakeKeyring()
         # Pre-seed a Fernet key in the fake keyring
-        from unittest.mock import PropertyMock
 
         try:
             from cryptography.fernet import Fernet
@@ -328,7 +327,7 @@ class TestMainFunction(unittest.TestCase):
         be = self._mock_backend()
         be.exists.return_value = False
         mock_cls.return_value = be
-        with patch("sys.stdout", new_callable=io.StringIO) as out:
+        with patch("sys.stdout", new_callable=io.StringIO) as _:
             rc = secret_tool.main(
                 ["set", "--name", "k", "--value", "v", "--no-clobber"]
             )
@@ -338,7 +337,7 @@ class TestMainFunction(unittest.TestCase):
     def test_add_works_same_as_set(self, mock_cls):
         be = self._mock_backend()
         mock_cls.return_value = be
-        with patch("sys.stdout", new_callable=io.StringIO) as out:
+        with patch("sys.stdout", new_callable=io.StringIO) as _:
             rc = secret_tool.main(["add", "--name", "k", "--value", "v"])
         self.assertEqual(rc, 0)
         be.set.assert_called_once_with("k", "v")
@@ -361,7 +360,7 @@ class TestMainFunction(unittest.TestCase):
             "credential": None,
         }
         mock_cls.return_value = be
-        with patch("sys.stdout", new_callable=io.StringIO) as out:
+        with patch("sys.stdout", new_callable=io.StringIO) as _:
             rc = secret_tool.main(["get", "--name", "missing"])
         self.assertEqual(rc, 1)
 
@@ -371,7 +370,7 @@ class TestMainFunction(unittest.TestCase):
         mock_cls.return_value = be
         with (
             patch("sys.stdin", io.StringIO("stdin_secret\n")),
-            patch("sys.stdout", new_callable=io.StringIO) as out,
+            patch("sys.stdout", new_callable=io.StringIO) as _,
         ):
             rc = secret_tool.main(["set", "--name", "k", "--value-stdin"])
         self.assertEqual(rc, 0)
