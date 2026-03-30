@@ -6963,8 +6963,8 @@ def _check_command_result(result: str, error_keywords: List[str]) -> None:
 _api_auth_manager: Optional["AuthManager"] = None
 
 
-def _send_pairing_code(channel: str, identity: str, code: str) -> None:
-    """Best-effort delivery of a pairing code via the appropriate connector."""
+def _send_pairing_code(channel: str, identity: str, code: str) -> bool:
+    """Deliver a pairing code. Returns True on success, False on failure."""
     script_dir = os.path.dirname(os.path.abspath(__file__))
     try:
         if channel == "telegram":
@@ -6975,10 +6975,21 @@ def _send_pairing_code(channel: str, identity: str, code: str) -> None:
                 cfg = json.load(f)
             token = cfg.get("token") or os.getenv("TELEGRAM_BOT_TOKEN", "")
             connector = TelegramConnector(token, config_file=config_path)
-            connector.send_message(
-                int(identity),
-                f"Your pairing code is: {code}\nIt expires in 5 minutes.",
-            )
+            last_exc = None
+            for attempt in range(1, 4):
+                try:
+                    connector.send_message(
+                        int(identity),
+                        f"Your pairing code is: {code}\nIt expires in 5 minutes.",
+                    )
+                    return True
+                except Exception as _exc:
+                    last_exc = _exc
+                    import sys as _sys; print(f"[API] Telegram send attempt {attempt}/3 failed: {_exc}", file=_sys.stderr)
+                    if attempt < 3:
+                        import time as _time; _time.sleep(2)
+            import sys as _sys2; print(f"[API] All 3 Telegram send attempts failed: {last_exc}", file=_sys2.stderr)
+            return False
         elif channel == "webex":
             config_path = os.path.join(script_dir, "webex_config.json")
             with open(config_path) as f:
@@ -7655,7 +7666,12 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             identity = resolved
 
         code = auth_mgr.generate_pairing_code(identity, body.channel.value)
-        _send_pairing_code(body.channel.value, identity, code)
+        delivered = _send_pairing_code(body.channel.value, identity, code)
+        if not delivered:
+            raise HTTPException(
+                status_code=503,
+                detail="Pairing code generated but failed to deliver via Telegram. Please try again.",
+            )
         return {
             "message": f"Pairing code sent via {body.channel.value}",
             "expires_in": PAIRING_CODE_TTL,
