@@ -122,14 +122,10 @@ class TestKeyringBackendUX(unittest.TestCase):
 
     def setUp(self):
         self.fake_kr = FakeKeyring()
-        patcher = patch.object(
-            secret_tool, "_keyring_vault_module", None
-        )
+        patcher = patch.object(secret_tool, "_keyring_vault_module", None)
         patcher.start()
         self.addCleanup(patcher.stop)
-        self.backend = secret_tool.KeyringBackend.__new__(
-            secret_tool.KeyringBackend
-        )
+        self.backend = secret_tool.KeyringBackend.__new__(secret_tool.KeyringBackend)
         self.backend._use_keyring = True
         self.backend._keyring = self.fake_kr
 
