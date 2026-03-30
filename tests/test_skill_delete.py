@@ -112,9 +112,7 @@ class TestDeleteSkillUnit:
         }
         with (
             patch("skill_manager.get_skill", return_value=fake_skill),
-            patch(
-                "skill_manager.delete_origin", return_value=True
-            ) as mock_del,
+            patch("skill_manager.delete_origin", return_value=True) as mock_del,
         ):
             result = delete_skill("test/test-skill")
 
