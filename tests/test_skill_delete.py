@@ -6,20 +6,11 @@ Covers:
 - DELETE /api/v1/skills/{skill_key} API endpoint
 """
 
-import json
-import os
-import shutil
-import sys
-import tempfile
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
-# Ensure project root is on sys.path
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
-from skill_manager import delete_skill, get_skill
-
+from skill_manager import delete_skill
 
 # ── Fixtures ──────────────────────────────────────────────────────────────────
 
@@ -58,8 +49,10 @@ class TestDeleteSkillUnit:
             "path": str(temp_skill_dir),
             "name": "test-skill",
         }
-        with patch("skill_manager.get_skill", return_value=fake_skill), \
-             patch("skill_manager.delete_origin", return_value=True):
+        with (
+            patch("skill_manager.get_skill", return_value=fake_skill),
+            patch("skill_manager.delete_origin", return_value=True),
+        ):
             result = delete_skill("test/test-skill")
 
         assert result["success"] is True
@@ -74,8 +67,10 @@ class TestDeleteSkillUnit:
             "path": str(temp_symlink_skill),
             "name": "link-skill",
         }
-        with patch("skill_manager.get_skill", return_value=fake_skill), \
-             patch("skill_manager.delete_origin", return_value=True):
+        with (
+            patch("skill_manager.get_skill", return_value=fake_skill),
+            patch("skill_manager.delete_origin", return_value=True),
+        ):
             result = delete_skill("test/link-skill")
 
         assert result["success"] is True
@@ -115,8 +110,10 @@ class TestDeleteSkillUnit:
             "path": str(temp_skill_dir),
             "name": "test-skill",
         }
-        with patch("skill_manager.get_skill", return_value=fake_skill), \
-             patch("skill_manager.delete_origin", return_value=True) as mock_del:
+        with (
+            patch("skill_manager.get_skill", return_value=fake_skill),
+            patch("skill_manager.delete_origin", return_value=True) as mock_del,
+        ):
             result = delete_skill("test/test-skill")
 
         assert result["success"] is True
@@ -129,15 +126,20 @@ class TestDeleteSkillUnit:
             "path": str(temp_skill_dir),
             "name": "test-skill",
         }
-        with patch("skill_manager.get_skill", return_value=fake_skill), \
-             patch("shutil.rmtree", side_effect=OSError("Permission denied")), \
-             patch("skill_manager.shutil") as mock_shutil:
+        with (
+            patch("skill_manager.get_skill", return_value=fake_skill),
+            patch("shutil.rmtree", side_effect=OSError("Permission denied")),
+            patch("skill_manager.shutil") as mock_shutil,
+        ):
             mock_shutil.rmtree.side_effect = OSError("Permission denied")
             # Need to also patch os.path.islink and os.path.exists
-            with patch("skill_manager.os.path.islink", return_value=False), \
-                 patch("skill_manager.os.path.exists", return_value=True):
+            with (
+                patch("skill_manager.os.path.islink", return_value=False),
+                patch("skill_manager.os.path.exists", return_value=True),
+            ):
                 # Re-import to get the patched version
                 from skill_manager import delete_skill as ds
+
                 result = ds("test/test-skill")
 
         assert result["success"] is False
@@ -154,7 +156,7 @@ class TestDeleteSkillAPI:
     def setup_client(self):
         """Set up TestClient if httpx is available."""
         try:
-            from httpx import AsyncClient
+            import httpx  # noqa: F401
         except ImportError:
             pytest.skip("httpx not available")
 
@@ -180,7 +182,9 @@ class TestDeleteSkillAPI:
             resp = httpx.delete(
                 "https://127.0.0.1:8001/api/v1/skills/nonexistent/fakeskill",
                 headers={
-                    "Authorization": "Bearer shared_R6R6wReORUV6bouLntScMTowbsh30Rzqa3hzjs3bWgU"
+                    "Authorization": (
+                        "Bearer shared_R6R6wReORUV6bouLntScMTowbsh30Rzqa3hzjs3bWgU"
+                    )
                 },
                 verify=False,
                 timeout=10,
