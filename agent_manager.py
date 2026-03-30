@@ -5949,7 +5949,7 @@ User Request:
    • /agent invoke "agent_name" "prompt" - Delegate to sub-agent
 
 **Session:**
-   • /session reset - Reset current session
+   • /session reset - Reset session (preserves model, runtime, agent)
    • /timeout or /timeout current - Show current timeout
    • /timeout set [seconds] - Set timeout (30-3600 seconds / 1 hour max)
    • /render or /render current - Show current render type
@@ -6251,10 +6251,43 @@ You can mention an agent in your prompt and it will auto-delegate:
             if argument == "reset":
                 with self._session_map_lock:
                     session_map = self.load_session_map()
-                    if n8n_session_id in session_map:
-                        del session_map[n8n_session_id]
-                        self.save_session_map(session_map)
-                return "✓ Session reset. Next message starts fresh."
+                    old_data = session_map.get(n8n_session_id)
+                    # Preserve user-selected config across reset
+                    preserved = {}
+                    if isinstance(old_data, dict):
+                        for key in (
+                            "model",
+                            "runtime",
+                            "agent",
+                            "timeout",
+                            "render_type",
+                            "channel",
+                            "bot_id",
+                            "identity",
+                            "permissions",
+                            "yolo_mode",
+                        ):
+                            if key in old_data and old_data[key] is not None:
+                                preserved[key] = old_data[key]
+                    # Build fresh session with new backend session ID
+                    new_data = {
+                        "session_id": str(uuid4()),
+                        "last_activity": time.time(),
+                    }
+                    new_data.update(preserved)
+                    session_map[n8n_session_id] = new_data
+                    self.save_session_map(session_map)
+                parts = ["\u2713 Session reset. Next message starts fresh."]
+                if preserved.get("model") or preserved.get("runtime") or preserved.get("agent"):
+                    kept = []
+                    if "model" in preserved:
+                        kept.append("model=`" + preserved["model"] + "`")
+                    if "runtime" in preserved:
+                        kept.append("runtime=`" + preserved["runtime"] + "`")
+                    if "agent" in preserved:
+                        kept.append("agent=`" + preserved["agent"] + "`")
+                    parts.append("Preserved: " + ", ".join(kept) + ".")
+                return " ".join(parts)
 
         elif command == "/timeout":
             if not argument:
