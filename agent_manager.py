@@ -7814,8 +7814,9 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             else:
                 # Fallback: use the name as-is if lookup fails
                 session_mgr.update_session_field(session_id, "model", body.model)
-        if body.agent:
-            session_mgr.update_session_field(session_id, "agent", body.agent)
+        # NOTE: body.agent is intentionally NOT persisted to the session here.
+        # Agent changes must go through /agent set (slash command) or session
+        # creation — not silently via every API call.  See F015.
 
         session_mgr._bg_identity = user["identity"]
         loop = asyncio.get_event_loop()
@@ -7929,8 +7930,9 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             else:
                 # Fallback: use the name as-is if lookup fails
                 session_mgr.update_session_field(session_id, "model", body.model)
-        if body.agent:
-            session_mgr.update_session_field(session_id, "agent", body.agent)
+        # NOTE: body.agent is intentionally NOT persisted to the session here.
+        # Agent changes must go through /agent set (slash command) or session
+        # creation — not silently via every API call.  See F015.
 
         session_mgr._bg_identity = user["identity"]
         loop = asyncio.get_event_loop()
