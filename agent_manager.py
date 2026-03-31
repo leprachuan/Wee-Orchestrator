@@ -10794,20 +10794,49 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
 
                 # Rename file if label changed
                 result_name = match.name
-                if new_label and new_label.strip() and new_label.strip() != match.name:
-                    resolved = (active_dir / new_label.strip()).resolve()
-                    if not str(resolved).startswith(str(active_dir.resolve())):
-                        raise HTTPException(
-                            400, "Invalid label: path traversal not allowed"
-                        )
-                    new_path = resolved
-                    if new_path.exists():
+                if new_label and new_label.strip():
+                    clean = new_label.strip()
+                    # Reject path traversal and dangerous chars
+                    if (
+                        "/" in clean
+                        or "\\" in clean
+                        or "\0" in clean
+                        or ".." in clean
+                        or "\n" in clean
+                        or "\r" in clean
+                    ):
                         return {
                             "success": False,
-                            "error": f"A TODO named {new_label.strip()!r} already exists",
+                            "error": (
+                                "Invalid label: must not"
+                                " contain path separators,"
+                                " traversal sequences,"
+                                " or control characters"
+                            ),
                         }
-                    match.rename(new_path)
-                    result_name = new_label.strip()
+                    new_path = active_dir / clean
+                    # Belt-and-suspenders: verify resolved
+                    # path is inside active_dir
+                    resolved = new_path.resolve()
+                    parent = active_dir.resolve()
+                    if not resolved.is_relative_to(parent):
+                        return {
+                            "success": False,
+                            "error": "Invalid label:"
+                            " path traversal detected",
+                        }
+                    if clean == match.name:
+                        pass  # no rename needed
+                    elif new_path.exists():
+                        lbl = clean
+                        return {
+                            "success": False,
+                            "error": f"A TODO named"
+                            f" {lbl!r} already exists",
+                        }
+                    else:
+                        match.rename(new_path)
+                    result_name = clean
 
                 return {
                     "success": True,
