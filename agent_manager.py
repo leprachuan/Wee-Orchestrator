@@ -564,6 +564,46 @@ class BackgroundTaskManager:
             if len(kept) < len(tasks):
                 self._save(kept)
 
+    # -- Steering --------------------------------------------------------
+    STEERING_DIR = os.path.join(
+        os.environ.get("SCRIPT_BASE_DIR", os.path.dirname(os.path.abspath(__file__))),
+        ".task-scheduler",
+        "steering",
+    )
+
+    def get_steering_path(self, task_id: str) -> str:
+        return os.path.join(self.STEERING_DIR, f"{task_id}.md")
+
+    def write_steering(self, task_id: str, instruction: str) -> str:
+        os.makedirs(self.STEERING_DIR, exist_ok=True)
+        path = self.get_steering_path(task_id)
+        ts = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        entry = f"\n### {ts}\n{instruction}\n"
+        if not os.path.exists(path):
+            entry = f"## Steering Instructions\n{entry}"
+        with open(path, "a") as f:
+            f.write(entry)
+        return path
+
+    def read_steering(self, task_id: str):
+        path = self.get_steering_path(task_id)
+        if not os.path.exists(path):
+            return None
+        try:
+            with open(path, "r") as f:
+                content = f.read().strip()
+            return content if content else None
+        except OSError:
+            return None
+
+    def cleanup_steering(self, task_id: str) -> None:
+        path = self.get_steering_path(task_id)
+        try:
+            if os.path.exists(path):
+                os.remove(path)
+        except OSError:
+            pass
+
 
 # Executable resolution
 def find_executable(name: str) -> Optional[str]:
@@ -3617,6 +3657,7 @@ These commands allow you to control the agent's behavior and are processed by th
 - /background list - List your background tasks
 - /background status <task_id> - Check background task status
 - /background kill <task_id> - Kill a running background task
+- /background steer <task_id> <instruction> - Send steering to a running task
 - /update - Pull latest code from dev branch and restart all dev services (aliases: /upgrade, /pull)
 
 [Skills Discovery & Management]
@@ -6642,7 +6683,8 @@ You can mention an agent in your prompt and it will auto-delegate:
                     "• `/background timeout=600 <prompt>` — Override timeout (seconds)\n"
                     "• `/background list` — List your background tasks\n"
                     "• `/background status <task_id>` — Check task status\n"
-                    "• `/background kill <task_id>` — Kill a running task\n\n"
+                    "• `/background kill <task_id>` — Kill a running task\n"
+                    "• `/background steer <task_id> <instruction>` — Steer a running task\n\n"
                     "Background tasks run in separate sessions and don't block your chat.\n"
                     "Monitor them in the ⚡ Tasks tab in the sidebar."
                 )
@@ -6696,6 +6738,22 @@ You can mention an agent in your prompt and it will auto-delegate:
                     f"**Agent:** `{task['agent']}` | Runtime: `{task['runtime']}` | Model: `{task['model']}`\n"
                     f"**Prompt:** {task['prompt'][:200]}"
                     f"{elapsed}"
+                )
+
+            if sub_lower.startswith("steer "):
+                parts = sub[6:].strip().split(None, 1)
+                if len(parts) < 2:
+                    return "Usage: `/background steer <task_id> <instruction>`"
+                tid, instruction = parts
+                task = self._bg_task_mgr.get_task(tid)
+                if not task:
+                    return f"Task `{tid}` not found."
+                if task["status"] != "running":
+                    return f"Task `{tid}` is {task['status']}, not running."
+                self._bg_task_mgr.write_steering(tid, instruction)
+                return (
+                    f"\U0001f3af **Steering sent to `{tid}`**\n\n"
+                    f"Instruction: {instruction[:200]}"
                 )
 
             if sub_lower.startswith("kill "):
@@ -9166,6 +9224,18 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 bg_identity=user_identity,
             )
 
+
+            # -- Inject steering check instruction ----------------------------
+            steering_path = bg_task_mgr.get_steering_path(task_id)
+            context_prompt += (
+                f"\n\n[STEERING] You are background task `{task_id}`. Periodically "
+                f"(every 3-5 tool calls), check the file `{steering_path}` for new "
+                f"instructions from the user. If the file exists and has content, read "
+                f"it, incorporate the guidance into your current work, then continue. "
+                f"New instructions are appended with timestamps -- only act on ones you "
+                f"have not seen yet. This is how the user steers your work in real time."
+            )
+
             # ── Build runtime-specific command ──────────────────────────
             # Each runtime CLI has its own binary and argument format.
             # Previously all background tasks used copilot; now we dispatch
@@ -9478,6 +9548,9 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 notify=notify,
             )
         finally:
+            # Clean up steering file for completed task
+            bg_task_mgr.cleanup_steering(task_id)
+
             # Promote next queued task for this user if a slot just opened
             try:
                 next_q = bg_task_mgr.get_next_queued(channel, user_identity, agent)
@@ -9861,6 +9934,64 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         else:
             bg_task_mgr.delete_task(task_id)
             return {"task_id": task_id, "action": "deleted"}
+
+
+    # --- Background Task Steering ---
+
+    class SteerRequest(BaseModel):
+        instruction: str
+
+        @field_validator("instruction")
+        @classmethod
+        def validate_instruction(cls, v):
+            if not v or not v.strip():
+                raise ValueError("Instruction must not be empty")
+            if len(v) > 5000:
+                raise ValueError("Instruction must be 5,000 characters or less")
+            return v.strip()
+
+    @app.post("/api/v1/background-tasks/{task_id}/steer")
+    async def steer_background_task(task_id: str, body: SteerRequest, request: Request):
+        user = await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        task = bg_task_mgr.get_task(task_id)
+        if not task:
+            raise HTTPException(status_code=404, detail="Task not found")
+        if task["status"] != "running":
+            raise HTTPException(
+                status_code=409,
+                detail=f"Task is {task['status']}, not running -- cannot steer",
+            )
+        path = bg_task_mgr.write_steering(task_id, body.instruction)
+        print(f"[STEER] Steering written for task {task_id}: {body.instruction[:80]}")
+        return {
+            "task_id": task_id,
+            "status": "steering_written",
+            "steering_file": path,
+            "instruction_preview": body.instruction[:200],
+        }
+
+    @app.get("/api/v1/background-tasks/{task_id}/steering")
+    async def get_steering(task_id: str, request: Request):
+        await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        task = bg_task_mgr.get_task(task_id)
+        if not task:
+            raise HTTPException(status_code=404, detail="Task not found")
+        content = bg_task_mgr.read_steering(task_id)
+        return {
+            "task_id": task_id,
+            "has_steering": content is not None,
+            "content": content,
+        }
 
     # --- Notifications ---
 
