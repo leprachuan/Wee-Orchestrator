@@ -10722,7 +10722,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
 
     @app.patch("/api/v1/todos/{todo_title}")
     async def update_todo_details(request: Request, todo_title: str):
-        """Update a TODO's details (markdown content)."""
+        """Update a TODO's label, due date, and/or details."""
         await authenticate(
             request,
             authorization=request.headers.get("authorization"),
@@ -10732,7 +10732,9 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
 
         try:
             body = await request.json()
-            details = body.get("details", "")
+            details = body.get("details")
+            new_label = body.get("label")
+            new_due = body.get("due_date")
             agent = body.get("agent")
 
             todo_path = _resolve_todo_file(agent)
@@ -10753,20 +10755,58 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                         "error": f"TODO '{todo_title}' not found in ACTIVE/",
                     }
 
-                # Preserve existing DUE:/LABELS: header lines
+                # Parse existing file content
                 existing = match.read_text().splitlines()
                 header_lines = []
+                body_lines = []
+                in_body = False
                 for line in existing:
-                    if line.startswith("DUE:") or line.startswith("LABELS:"):
+                    if not in_body and (
+                        line.startswith("DUE:") or line.startswith("LABELS:")
+                    ):
                         header_lines.append(line)
                     else:
-                        break
+                        in_body = True
+                        body_lines.append(line)
+
+                # Update DUE: header if new_due provided
+                if new_due is not None:
+                    header_lines = [
+                        h for h in header_lines if not h.startswith("DUE:")
+                    ]
+                    if new_due.strip():
+                        header_lines.insert(0, f"DUE: {new_due.strip()}")
+
+                # Update details body if provided
+                if details is not None:
+                    body_lines = (
+                        ["", details.strip()] if details.strip() else []
+                    )
 
                 new_content = "\n".join(header_lines)
-                if details and details.strip():
-                    new_content += "\n\n" + details.strip()
+                if body_lines:
+                    stripped_body = "\n".join(body_lines).strip()
+                    if stripped_body:
+                        new_content += "\n\n" + stripped_body
                 match.write_text(new_content + "\n")
-                return {"success": True, "updated": True, "todo": match.name}
+
+                # Rename file if label changed
+                result_name = match.name
+                if new_label and new_label.strip() and new_label.strip() != match.name:
+                    new_path = active_dir / new_label.strip()
+                    if new_path.exists():
+                        return {
+                            "success": False,
+                            "error": f"A TODO named '{new_label.strip()}' already exists",
+                        }
+                    match.rename(new_path)
+                    result_name = new_label.strip()
+
+                return {
+                    "success": True,
+                    "updated": True,
+                    "todo": result_name,
+                }
 
             # --- Legacy flat-file structure ---
             todo_file = todo_path

@@ -2954,6 +2954,131 @@ html, body {
   color: var(--text-primary);
   line-height: 1.4;
   word-break: break-word;
+  flex: 1;
+  min-width: 0;
+}
+
+/* Inline editing styles for TODO items */
+.todo-item-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.todo-edit-pencil {
+  opacity: 0;
+  font-size: 11px;
+  cursor: pointer;
+  color: var(--accent, #3ecf8e);
+  transition: opacity 0.15s;
+  flex-shrink: 0;
+  padding: 2px;
+}
+.todo-item:hover .todo-edit-pencil {
+  opacity: 0.6;
+}
+.todo-edit-pencil:hover {
+  opacity: 1 !important;
+}
+.todo-inline-input {
+  width: 100%;
+  background: rgba(255,255,255,0.08);
+  border: 1px solid var(--accent, #3ecf8e);
+  border-radius: 4px;
+  color: var(--text-primary, #fff);
+  font-size: 12px;
+  padding: 3px 6px;
+  outline: none;
+  font-family: inherit;
+}
+.todo-inline-input:focus {
+  box-shadow: 0 0 0 2px rgba(62,207,142,0.25);
+}
+.todo-inline-date {
+  background: rgba(255,255,255,0.08);
+  border: 1px solid var(--accent, #3ecf8e);
+  border-radius: 4px;
+  color: var(--text-primary, #fff);
+  font-size: 11px;
+  padding: 2px 6px;
+  outline: none;
+  font-family: inherit;
+  max-width: 180px;
+  color-scheme: dark;
+}
+.todo-inline-date:focus {
+  box-shadow: 0 0 0 2px rgba(62,207,142,0.25);
+}
+.todo-add-due {
+  font-size: 11px;
+  opacity: 0;
+  cursor: pointer;
+  color: var(--text-secondary, #aaa);
+  transition: opacity 0.15s;
+  padding: 1px 4px;
+  border-radius: 4px;
+}
+.todo-item:hover .todo-add-due {
+  opacity: 0.7;
+}
+.todo-add-due:hover {
+  opacity: 1 !important;
+  background: rgba(255,255,255,0.06);
+}
+.todo-due {
+  cursor: pointer;
+}
+.todo-due:hover {
+  text-decoration: underline;
+  text-decoration-style: dotted;
+}
+.todo-due-clear {
+  background: none;
+  border: none;
+  color: var(--text-secondary, #aaa);
+  cursor: pointer;
+  font-size: 12px;
+  padding: 0 4px;
+  margin-left: 4px;
+  opacity: 0.7;
+}
+.todo-due-clear:hover {
+  opacity: 1;
+  color: #e55;
+}
+
+/* Detail panel title editing */
+.td-title-editable {
+  cursor: pointer;
+  transition: border-color 0.15s;
+  border-bottom: 1px dashed transparent;
+  padding-bottom: 1px;
+}
+.td-title-editable:hover {
+  border-bottom-color: var(--accent, #3ecf8e);
+}
+.td-title-input {
+  width: 100%;
+  background: rgba(255,255,255,0.08);
+  border: 1px solid var(--accent, #3ecf8e);
+  border-radius: 4px;
+  color: var(--text-primary, #fff);
+  font-size: 14px;
+  font-weight: 600;
+  padding: 4px 8px;
+  outline: none;
+  font-family: inherit;
+}
+.td-title-input:focus {
+  box-shadow: 0 0 0 2px rgba(62,207,142,0.25);
+}
+.td-add-due {
+  cursor: pointer;
+  font-size: 12px;
+  opacity: 0.6;
+  transition: opacity 0.15s;
+}
+.td-add-due:hover {
+  opacity: 1;
 }
 .todo-item-meta {
   display: flex;

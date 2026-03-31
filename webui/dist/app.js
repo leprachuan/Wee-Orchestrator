@@ -1258,14 +1258,22 @@ async function fetchAndRenderTodos() {
       const detailsB64 = btoa(unescape(encodeURIComponent(t.details || '')));
       const metaB64 = btoa(JSON.stringify({ due: t.due || '', labels: t.labels || [] }));
 
+      const dueDateVal = t.due || '';
       return `
       <div class="todo-item todo-item-clickable"
            data-todo-title="${safeTitle}"
            data-todo-details="${detailsB64}"
            data-todo-meta="${metaB64}"
+           data-todo-due="${escHtml(dueDateVal)}"
            onclick="openTodoDetailsPanel(this)">
-        <div class="todo-item-desc">${safeTitle}</div>
-        <div class="todo-item-meta">${dueBadge}${labels}${detailsIcon}</div>
+        <div class="todo-item-row">
+          <div class="todo-item-desc" ondblclick="todoInlineEditLabel(event, this)">${safeTitle}</div>
+          <span class="todo-edit-pencil" onclick="event.stopPropagation(); todoInlineEditLabel(event, this.previousElementSibling)" title="Edit title">✎</span>
+        </div>
+        <div class="todo-item-meta">
+          ${t.due ? `<span class="todo-due${overdueClass}" onclick="event.stopPropagation(); todoInlineEditDue(event, this)" title="Click to edit due date">${isOverdue ? '⚠️' : '📅'} ${t.due}</span>` : `<span class="todo-add-due" onclick="event.stopPropagation(); todoInlineEditDue(event, this)" title="Add due date">+ 📅</span>`}
+          ${labels}${detailsIcon}
+        </div>
         ${hasNotes ? `<div class="todo-item-notes">${t.notes.map(n => `<div>${escHtml(n)}</div>`).join('')}</div>` : ''}
       </div>`;
     }).join('');
@@ -1282,6 +1290,285 @@ function startTodoRefresh() {
 
 function stopTodoRefresh() {
   if (_todoRefreshTimer) { clearInterval(_todoRefreshTimer); _todoRefreshTimer = null; }
+}
+
+// ─── Inline TODO Editing ─────────────────────────────────────────────────────
+
+function todoInlineEditLabel(event, descEl) {
+  event.stopPropagation();
+  if (descEl.querySelector('input')) return; // already editing
+
+  const todoItem = descEl.closest('.todo-item');
+  const oldTitle = todoItem.dataset.todoTitle;
+  const text = descEl.textContent.trim();
+
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.value = text;
+  input.className = 'todo-inline-input';
+  input.onclick = (e) => e.stopPropagation();
+
+  const save = async () => {
+    const newLabel = input.value.trim();
+    if (!newLabel || newLabel === text) {
+      descEl.textContent = text;
+      return;
+    }
+    descEl.textContent = newLabel + ' …';
+    try {
+      await apiRequest('PATCH', `/todos/${encodeURIComponent(oldTitle)}`, { label: newLabel });
+      fetchAndRenderTodos();
+    } catch (e) {
+      descEl.textContent = text;
+      console.error('Failed to update label:', e);
+    }
+  };
+
+  input.addEventListener('blur', save);
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); input.blur(); }
+    if (e.key === 'Escape') { descEl.textContent = text; }
+  });
+
+  descEl.textContent = '';
+  descEl.appendChild(input);
+  input.focus();
+  input.select();
+}
+
+function todoInlineEditDue(event, dueEl) {
+  event.stopPropagation();
+  if (dueEl.querySelector('input')) return;
+
+  const todoItem = dueEl.closest('.todo-item');
+  const todoTitle = todoItem.dataset.todoTitle;
+  const oldDue = todoItem.dataset.todoDue || '';
+
+  // Parse existing due date to datetime-local format
+  let dtVal = '';
+  if (oldDue) {
+    const parts = oldDue.trim().split(' ');
+    const datePart = parts[0];
+    const timePart = parts[1] || '00:00';
+    if (datePart.includes('-')) {
+      dtVal = datePart + 'T' + timePart.substring(0, 5);
+    } else if (datePart.includes('/')) {
+      const dp = datePart.split('/');
+      dtVal = `${dp[2]}-${dp[0].padStart(2,'0')}-${dp[1].padStart(2,'0')}T${timePart.substring(0,5)}`;
+    }
+  }
+
+  const input = document.createElement('input');
+  input.type = 'datetime-local';
+  input.value = dtVal;
+  input.className = 'todo-inline-date';
+  input.onclick = (e) => e.stopPropagation();
+
+  const origHTML = dueEl.innerHTML;
+
+  const save = async () => {
+    const newVal = input.value;
+    if (!newVal && !oldDue) {
+      dueEl.innerHTML = origHTML;
+      return;
+    }
+    // Format as YYYY-MM-DD HH:MM
+    let formattedDue = '';
+    if (newVal) {
+      const dt = new Date(newVal);
+      const y = dt.getFullYear();
+      const m = String(dt.getMonth()+1).padStart(2,'0');
+      const d = String(dt.getDate()).padStart(2,'0');
+      const hh = String(dt.getHours()).padStart(2,'0');
+      const mm = String(dt.getMinutes()).padStart(2,'0');
+      formattedDue = `${y}-${m}-${d} ${hh}:${mm}`;
+    }
+    dueEl.innerHTML = '⏳ Saving...';
+    try {
+      await apiRequest('PATCH', `/todos/${encodeURIComponent(todoTitle)}`, { due_date: formattedDue });
+      fetchAndRenderTodos();
+    } catch (e) {
+      dueEl.innerHTML = origHTML;
+      console.error('Failed to update due date:', e);
+    }
+  };
+
+  input.addEventListener('blur', save);
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); input.blur(); }
+    if (e.key === 'Escape') { dueEl.innerHTML = origHTML; }
+  });
+
+  // Clear button for removing due date
+  const clearBtn = document.createElement('button');
+  clearBtn.textContent = '✕';
+  clearBtn.className = 'todo-due-clear';
+  clearBtn.title = 'Remove due date';
+  clearBtn.onclick = async (e) => {
+    e.stopPropagation();
+    dueEl.innerHTML = '⏳ Removing...';
+    try {
+      await apiRequest('PATCH', `/todos/${encodeURIComponent(todoTitle)}`, { due_date: '' });
+      fetchAndRenderTodos();
+    } catch (err) {
+      dueEl.innerHTML = origHTML;
+      console.error('Failed to remove due date:', err);
+    }
+  };
+
+  dueEl.innerHTML = '';
+  dueEl.appendChild(input);
+  if (oldDue) dueEl.appendChild(clearBtn);
+  input.focus();
+}
+
+// ─── Detail Panel Inline Editing ─────────────────────────────────────────────
+
+function initTodoDetailEditing() {
+  const titleEl = document.getElementById('td-title');
+  if (!titleEl || titleEl.dataset.editBound) return;
+  titleEl.dataset.editBound = 'true';
+
+  titleEl.classList.add('td-title-editable');
+  titleEl.title = 'Click to edit title';
+
+  titleEl.addEventListener('click', () => {
+    if (titleEl.querySelector('input')) return;
+    const oldTitle = _currentTodoTitle;
+    const text = titleEl.textContent.trim();
+
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.value = text;
+    input.className = 'td-title-input';
+
+    const save = async () => {
+      const newLabel = input.value.trim();
+      if (!newLabel || newLabel === text) {
+        titleEl.textContent = text;
+        return;
+      }
+      titleEl.textContent = newLabel;
+      _currentTodoTitle = newLabel;
+      try {
+        await apiRequest('PATCH', `/todos/${encodeURIComponent(oldTitle)}`, { label: newLabel });
+        fetchAndRenderTodos();
+      } catch (e) {
+        titleEl.textContent = text;
+        _currentTodoTitle = oldTitle;
+        console.error('Failed to update title:', e);
+      }
+    };
+
+    input.addEventListener('blur', save);
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') { e.preventDefault(); input.blur(); }
+      if (e.key === 'Escape') { titleEl.textContent = text; }
+    });
+
+    titleEl.textContent = '';
+    titleEl.appendChild(input);
+    input.focus();
+    input.select();
+  });
+
+  // Due date editing in meta bar
+  const metaEl = document.getElementById('td-meta');
+  if (metaEl && !metaEl.dataset.dueEditBound) {
+    metaEl.dataset.dueEditBound = 'true';
+    metaEl.addEventListener('click', (e) => {
+      const dueBadge = e.target.closest('.todo-due, .td-add-due');
+      if (!dueBadge) return;
+      todoDetailEditDue(dueBadge);
+    });
+  }
+}
+
+function todoDetailEditDue(dueEl) {
+  if (dueEl.querySelector('input')) return;
+  const oldDue = _currentTodoDue || '';
+  const todoTitle = _currentTodoTitle;
+
+  let dtVal = '';
+  if (oldDue) {
+    const parts = oldDue.trim().split(' ');
+    const datePart = parts[0];
+    const timePart = parts[1] || '00:00';
+    if (datePart.includes('-')) {
+      dtVal = datePart + 'T' + timePart.substring(0, 5);
+    } else if (datePart.includes('/')) {
+      const dp = datePart.split('/');
+      dtVal = `${dp[2]}-${dp[0].padStart(2,'0')}-${dp[1].padStart(2,'0')}T${timePart.substring(0,5)}`;
+    }
+  }
+
+  const input = document.createElement('input');
+  input.type = 'datetime-local';
+  input.value = dtVal;
+  input.className = 'todo-inline-date';
+  const origHTML = dueEl.innerHTML;
+
+  const save = async () => {
+    const newVal = input.value;
+    if (!newVal && !oldDue) { dueEl.innerHTML = origHTML; return; }
+    let formattedDue = '';
+    if (newVal) {
+      const dt = new Date(newVal);
+      const y = dt.getFullYear();
+      const m = String(dt.getMonth()+1).padStart(2,'0');
+      const d = String(dt.getDate()).padStart(2,'0');
+      const hh = String(dt.getHours()).padStart(2,'0');
+      const mm = String(dt.getMinutes()).padStart(2,'0');
+      formattedDue = `${y}-${m}-${d} ${hh}:${mm}`;
+    }
+    dueEl.innerHTML = '⏳';
+    try {
+      await apiRequest('PATCH', `/todos/${encodeURIComponent(todoTitle)}`, { due_date: formattedDue });
+      _currentTodoDue = formattedDue;
+      // Re-render meta bar
+      const metaEl = document.getElementById('td-meta');
+      if (metaEl) renderTodoDetailMeta(metaEl);
+      fetchAndRenderTodos();
+    } catch (e) {
+      dueEl.innerHTML = origHTML;
+      console.error('Failed to update due date:', e);
+    }
+  };
+
+  input.addEventListener('blur', save);
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); input.blur(); }
+    if (e.key === 'Escape') { dueEl.innerHTML = origHTML; }
+  });
+
+  dueEl.innerHTML = '';
+  dueEl.appendChild(input);
+  input.focus();
+}
+
+function renderTodoDetailMeta(metaEl) {
+  const parts = [];
+  if (_currentTodoDue) {
+    const now = new Date();
+    const dateParts = _currentTodoDue.split(' ');
+    const dp0 = dateParts[0];
+    let dueDate;
+    if (dp0.includes('-')) {
+      dueDate = new Date(_currentTodoDue.replace(' ', 'T'));
+    } else {
+      const dp = dp0.split('/');
+      dueDate = new Date(`${dp[2]}-${dp[0].padStart(2,'0')}-${dp[1].padStart(2,'0')}T${dateParts[1] || '00:00'}`);
+    }
+    const isOverdue = dueDate < now;
+    parts.push(`<span class="td-meta-item"><span class="todo-due${isOverdue ? ' overdue' : ''}" title="Click to edit due date" style="cursor:pointer">${isOverdue ? '⚠️' : '📅'} ${escHtml(_currentTodoDue)}</span></span>`);
+  } else {
+    parts.push(`<span class="td-meta-item"><span class="td-add-due" title="Add due date" style="cursor:pointer;opacity:0.6">+ 📅 Add due date</span></span>`);
+  }
+  _currentTodoLabels.forEach(l => {
+    parts.push(`<span class="td-meta-item"><span class="todo-label">${escHtml(l)}</span></span>`);
+  });
+  metaEl.innerHTML = parts.join('');
+  metaEl.style.display = '';
 }
 
 // ─── Todo Details Panel ────────────────────────────────────────────────────────
@@ -1326,30 +1613,12 @@ function openTodoDetailsPanel(el) {
   titleEl.textContent = title;
   editorEl.value = _currentTodoDetails;
 
-  // Populate meta bar with due date and labels
+  // Populate meta bar with due date and labels (editable)
   if (metaEl) {
-    const parts = [];
-    if (_currentTodoDue) {
-      const now = new Date();
-      const dateParts = _currentTodoDue.split(' ');
-      const dp0 = dateParts[0];
-      const tp = dateParts[1] || '00:00:00';
-      let d;
-      if (dp0.includes('-')) {
-        d = new Date(`${dp0}T${tp}`);
-      } else {
-        const dp = dp0.split('/');
-        d = new Date(`${dp[2]}-${(dp[0]||'01').padStart(2,'0')}-${(dp[1]||'01').padStart(2,'0')}T${tp}`);
-      }
-      const isOverdue = d < now;
-      parts.push(`<span class="td-meta-item"><span class="todo-due${isOverdue ? ' overdue' : ''}">${isOverdue ? '⚠️' : '📅'} ${_currentTodoDue}</span></span>`);
-    }
-    _currentTodoLabels.forEach(l => {
-      parts.push(`<span class="td-meta-item"><span class="todo-label">${escHtml(l)}</span></span>`);
-    });
-    metaEl.innerHTML = parts.join('');
-    metaEl.style.display = parts.length ? '' : 'none';
+    renderTodoDetailMeta(metaEl);
+    initTodoDetailEditing();
   }
+
 
   // Render markdown using marked if available, else fallback
   const html = markdownToHtml(_currentTodoDetails);
