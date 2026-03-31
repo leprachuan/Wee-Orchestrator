@@ -25,6 +25,8 @@ from uuid import uuid4
 # Dynamically determine the repo base directory (works regardless of where repo is cloned)
 SCRIPT_BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
+logger = logging.getLogger(__name__)
+
 
 # ---------------------------------------------------------------------------
 # Credential sanitization for UI display
@@ -9967,7 +9969,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 detail=f"Task is {task['status']}, not running -- cannot steer",
             )
         path = bg_task_mgr.write_steering(task_id, body.instruction)
-        logging.info("[STEER] Steering written for task %s: %s", task_id, body.instruction[:80])
+        logger.info("[STEER] Steering written for task %s: %s", task_id, body.instruction[:80])
         return {
             "task_id": task_id,
             "status": "steering_written",
