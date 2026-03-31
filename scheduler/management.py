@@ -75,14 +75,19 @@ def is_valid_cron(expression: str) -> bool:
         return False
 
 
-def cron_next_run(expression: str, _base_local = None) -> Optional[str]:
+def cron_next_run(expression: str, _base_local: Optional[datetime] = None) -> Optional[str]:
     """Get next run time from a cron expression as UTC ISO string.
 
     Cron expressions are interpreted in the server local timezone so that
     "30 7 * * 1-5" means 7:30 AM local time, not 7:30 UTC.
     The returned ISO string is always UTC (Z suffix) for consistent storage.
     DST is handled automatically via the IANA timezone database.
+
+    Args:
+        expression: 5-field cron expression.
+        _base_local: Optional tz-aware datetime to use as "now" (for testing).
     """
+    # _base_local must carry tzinfo; that tzinfo becomes the local timezone.
     if croniter is None:
         return None
     try:

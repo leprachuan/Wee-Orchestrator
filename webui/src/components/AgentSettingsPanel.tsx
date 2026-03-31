@@ -346,6 +346,22 @@ export function AgentSettingsPanel({ onClose }: AgentSettingsPanelProps) {
                       onChange={e => setField('model', e.target.value || undefined)}
                     />
                   </div>
+                  <div className="form-group">
+                    <label htmlFor="asp-max-concurrent">Max Concurrent Tasks</label>
+                    <input
+                      id="asp-max-concurrent"
+                      type="number"
+                      className="glass-input"
+                      min={1}
+                      step={1}
+                      placeholder="1"
+                      value={draft.max_concurrent ?? 1}
+                      onChange={e => {
+                        const v = parseInt(e.target.value, 10);
+                        setField('max_concurrent', Number.isNaN(v) ? undefined : v);
+                      }}
+                    />
+                  </div>
                 </div>
               </section>
 

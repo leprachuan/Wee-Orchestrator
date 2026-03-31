@@ -381,17 +381,110 @@ class TestSlashCommands(unittest.TestCase):
         self.assertIn("Unknown agent", result)
 
     def test_session_reset_command(self):
-        """Test /session reset command"""
+        """Test /session reset creates fresh session preserving config"""
         # Create a session first
-        self.manager.get_or_create_session_data("test_session_reset")
+        old_session = self.manager.get_or_create_session_data("test_session_reset")
+        old_session_id = old_session["session_id"]
 
         # Reset it
         result = self.manager.execute("/session reset", "test_session_reset")
         self.assertIn("reset", result.lower())
 
-        # Verify it was reset (next call should create new with is_new=True)
+        # Verify backend session_id changed (fresh conversation)
         new_session = self.manager.get_or_create_session_data("test_session_reset")
-        self.assertTrue(new_session["is_new"])
+        self.assertNotEqual(new_session["session_id"], old_session_id)
+
+    def test_session_reset_preserves_model(self):
+        """Test /session reset preserves user-selected model"""
+        sid = "test_session_reset_model"
+        self.manager.get_or_create_session_data(sid)
+        self.manager.update_session_field(sid, "model", "claude-opus-4")
+
+        self.manager.execute("/session reset", sid)
+
+        session = self.manager.get_or_create_session_data(sid)
+        self.assertEqual(session["model"], "claude-opus-4")
+
+    def test_session_reset_preserves_runtime(self):
+        """Test /session reset preserves user-selected runtime"""
+        sid = "test_session_reset_runtime"
+        self.manager.get_or_create_session_data(sid)
+        self.manager.update_session_field(sid, "runtime", "claude")
+
+        self.manager.execute("/session reset", sid)
+
+        session = self.manager.get_or_create_session_data(sid)
+        self.assertEqual(session["runtime"], "claude")
+
+    def test_session_reset_preserves_agent(self):
+        """Test /session reset preserves user-selected agent"""
+        sid = "test_session_reset_agent"
+        self.manager.get_or_create_session_data(sid)
+        self.manager.update_session_field(sid, "agent", "devops")
+
+        self.manager.execute("/session reset", sid)
+
+        session = self.manager.get_or_create_session_data(sid)
+        self.assertEqual(session["agent"], "devops")
+
+    def test_session_reset_preserves_timeout(self):
+        """Test /session reset preserves user-selected timeout"""
+        sid = "test_session_reset_timeout"
+        self.manager.get_or_create_session_data(sid)
+        self.manager.update_session_field(sid, "timeout", 600)
+
+        self.manager.execute("/session reset", sid)
+
+        session = self.manager.get_or_create_session_data(sid)
+        self.assertEqual(session["timeout"], 600)
+
+    def test_session_reset_preserves_render_type(self):
+        """Test /session reset preserves user-selected render type"""
+        sid = "test_session_reset_render"
+        self.manager.get_or_create_session_data(sid)
+        self.manager.update_session_field(sid, "render_type", "html")
+
+        self.manager.execute("/session reset", sid)
+
+        session = self.manager.get_or_create_session_data(sid)
+        self.assertEqual(session["render_type"], "html")
+
+    def test_session_reset_clears_backend_session(self):
+        """Test /session reset generates a new backend session_id"""
+        sid = "test_session_reset_new_backend"
+        old_session = self.manager.get_or_create_session_data(sid)
+        old_backend_id = old_session["session_id"]
+
+        self.manager.execute("/session reset", sid)
+
+        session = self.manager.get_or_create_session_data(sid)
+        self.assertNotEqual(session["session_id"], old_backend_id)
+        # Verify it looks like a UUID
+        self.assertEqual(len(session["session_id"]), 36)
+        self.assertIn("-", session["session_id"])
+
+    def test_session_reset_response_shows_preserved(self):
+        """Test /session reset response mentions preserved settings"""
+        sid = "test_session_reset_response"
+        self.manager.get_or_create_session_data(sid)
+        self.manager.update_session_field(sid, "model", "claude-opus-4")
+        self.manager.update_session_field(sid, "runtime", "claude")
+        self.manager.update_session_field(sid, "agent", "devops")
+
+        result = self.manager.execute("/session reset", sid)
+        self.assertIn("Preserved", result)
+        self.assertIn("claude-opus-4", result)
+        self.assertIn("claude", result)
+        self.assertIn("devops", result)
+
+    def test_session_reset_nonexistent_session(self):
+        """Test /session reset on a session that doesn't exist yet"""
+        sid = "test_session_reset_nonexistent"
+        result = self.manager.execute("/session reset", sid)
+        self.assertIn("reset", result.lower())
+        # Should still create a valid session
+        session = self.manager.get_or_create_session_data(sid)
+        self.assertIn("session_id", session)
 
     def test_bash_command_pwd(self):
         """Test bash command execution with !pwd"""

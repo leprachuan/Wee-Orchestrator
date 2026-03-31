@@ -423,7 +423,7 @@ class TelegramConnector:
                 resp = requests.post(
                     f"{self.api_url}/sendMessage",
                     json={"chat_id": chat_id, "text": chunk, "parse_mode": "HTML"},
-                    timeout=10,
+                    timeout=30,
                 )
                 print(
                     f"[DEBUG OUTBOUND] send_message HTTP {resp.status_code} for chat_id={chat_id}",
@@ -448,7 +448,7 @@ class TelegramConnector:
                     resp = requests.post(
                         f"{self.api_url}/sendMessage",
                         json={"chat_id": chat_id, "text": plain},
-                        timeout=10,
+                        timeout=30,
                     )
                     print(
                         f"[DEBUG OUTBOUND] send_message fallback HTTP {resp.status_code} for chat_id={chat_id}",

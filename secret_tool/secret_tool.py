@@ -1,0 +1,323 @@
+#!/usr/bin/env python3
+"""
+Lightweight secret-tool wrapper for wee-dev
+Supports:
+  secret-tool set --name <name> --value <value> [--no-clobber] [--backend keyring|file]
+  secret-tool set --name <name> --value-stdin   [--no-clobber] [--backend keyring|file]
+  secret-tool add ...   (alias for set)
+  secret-tool get --name <name> [--backend keyring|file]
+
+Prefers existing keyring-vault skill when available. File backend encrypts
+secrets with a Fernet key stored in the user's keyring.
+"""
+
+import argparse
+import json
+import os
+import sys
+from pathlib import Path
+
+# Try importing existing keyring-vault helper
+_keyring_vault_module = None
+try:
+    sys.path.insert(0, "/opt/foster-skills/keyring-vault/copilot")
+    import keyring_vault as _kr
+
+    _keyring_vault_module = _kr
+except Exception:
+    _keyring_vault_module = None
+
+
+class KeyringBackend:
+    """Backend that uses the repository's keyring_vault (secret-tool) if available."""
+
+    def __init__(self):
+        if _keyring_vault_module is None:
+            # Try python-keyring as fallback
+            try:
+                import keyring
+
+                self._use_keyring = True
+                self._keyring = keyring
+            except Exception:
+                raise RuntimeError(
+                    "No keyring backend available: "
+                    "install libsecret-tools or python-keyring"
+                )
+        else:
+            self._use_keyring = False
+            self._vault = _keyring_vault_module.KeyringVault()
+
+    def exists(self, name: str) -> bool:
+        """Check if a secret exists without returning its value."""
+        result = self.get(name)
+        return result.get("status") == "success"
+
+    def set(self, name: str, value: str) -> dict:
+        existed = self.exists(name)
+        if self._use_keyring:
+            self._keyring.set_password("secret-tool", name, value)
+            action = "updated" if existed else "created"
+            return {"status": "success", "action": action, "name": name}
+        else:
+            self._vault.store("secret-tool", name, value, label=f"secret-tool {name}")
+            action = "updated" if existed else "created"
+            return {"status": "success", "action": action, "name": name}
+
+    # Keep add() as an internal alias for set()
+    def add(self, name: str, value: str) -> dict:
+        return self.set(name, value)
+
+    def get(self, name: str) -> dict:
+        if self._use_keyring:
+            val = self._keyring.get_password("secret-tool", name)
+            if val is None:
+                return {"status": "failure", "message": "not found", "credential": None}
+            return {"status": "success", "credential": val}
+        else:
+            return self._vault.retrieve("secret-tool", name)
+
+    def list(self) -> dict:
+        return {
+            "status": "error",
+            "message": (
+                "The keyring backend does not support listing secret names. "
+                "Use --backend file to enable listing."
+            ),
+        }
+
+    def delete(self, name: str) -> dict:
+        if not self.exists(name):
+            return {
+                "status": "error",
+                "message": f"Secret '{name}' not found",
+            }
+        if self._use_keyring:
+            self._keyring.delete_password("secret-tool", name)
+        else:
+            self._vault.delete("secret-tool", name)
+        return {"status": "success", "action": "deleted", "name": name}
+
+
+class FileBackend:
+    """File backend storing an encrypted JSON using Fernet. The symmetric key
+    is stored in system keyring under service 'secret-tool-file-key'."""
+
+    def __init__(self, storage_path: str | None = None):
+        self.storage_path = Path(
+            storage_path
+            or Path.home() / ".local" / "share" / "secret_tool" / "secrets.json.enc"
+        )
+        self.storage_path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            import keyring
+            from cryptography.fernet import Fernet
+
+            self._keyring = keyring
+            self._Fernet = Fernet
+        except Exception as e:
+            raise RuntimeError(
+                "File backend requires 'keyring' and 'cryptography' packages: " + str(e)
+            )
+
+    def _get_or_create_key(self) -> bytes:
+        key = self._keyring.get_password("secret-tool-file-key", os.getlogin())
+        if key:
+            return key.encode()
+        k = self._Fernet.generate_key()
+        self._keyring.set_password("secret-tool-file-key", os.getlogin(), k.decode())
+        return k
+
+    def _load_store(self, fernet: object) -> dict:
+        if not self.storage_path.exists():
+            return {}
+        data = self.storage_path.read_bytes()
+        try:
+            dec = fernet.decrypt(data)
+            return json.loads(dec.decode())
+        except Exception:
+            return {}
+
+    def _save_store(self, fernet: object, store: dict) -> None:
+        data = json.dumps(store, indent=2).encode()
+        enc = fernet.encrypt(data)
+        self.storage_path.write_bytes(enc)
+
+    def exists(self, name: str) -> bool:
+        """Check if a secret exists without returning its value."""
+        key = self._get_or_create_key()
+        f = self._Fernet(key)
+        store = self._load_store(f)
+        return name in store
+
+    def set(self, name: str, value: str) -> dict:
+        key = self._get_or_create_key()
+        f = self._Fernet(key)
+        store = self._load_store(f)
+        existed = name in store
+        store[name] = value
+        self._save_store(f, store)
+        action = "updated" if existed else "created"
+        return {"status": "success", "action": action, "name": name}
+
+    # Keep add() as an internal alias for set()
+    def add(self, name: str, value: str) -> dict:
+        return self.set(name, value)
+
+    def get(self, name: str) -> dict:
+        key = self._get_or_create_key()
+        f = self._Fernet(key)
+        store = self._load_store(f)
+        if name not in store:
+            return {"status": "failure", "message": "not found", "credential": None}
+        return {"status": "success", "credential": store[name]}
+
+    def list(self) -> dict:
+        key = self._get_or_create_key()
+        f = self._Fernet(key)
+        store = self._load_store(f)
+        return {"status": "success", "names": sorted(store.keys())}
+
+    def delete(self, name: str) -> dict:
+        key = self._get_or_create_key()
+        f = self._Fernet(key)
+        store = self._load_store(f)
+        if name not in store:
+            return {
+                "status": "error",
+                "message": f"Secret '{name}' not found",
+            }
+        del store[name]
+        self._save_store(f, store)
+        return {"status": "success", "action": "deleted", "name": name}
+
+
+def _build_set_parser(subparser, name: str, help_text: str):
+    """Build a 'set' or 'add' subcommand parser with shared arguments."""
+    p = subparser.add_parser(name, help=help_text)
+    p.add_argument("--name", required=True, help="Secret name")
+    value_group = p.add_mutually_exclusive_group(required=True)
+    value_group.add_argument(
+        "--value", help="Secret value (caution: visible in shell history)"
+    )
+    value_group.add_argument(
+        "--value-stdin",
+        action="store_true",
+        default=False,
+        help="Read secret value from stdin (safer — avoids shell history)",
+    )
+    p.add_argument(
+        "--no-clobber",
+        action="store_true",
+        default=False,
+        help="Fail if the secret already exists instead of overwriting",
+    )
+    p.add_argument("--backend", choices=["keyring", "file"], default="keyring")
+    return p
+
+
+def parse_args(argv=None):
+    parser = argparse.ArgumentParser(
+        prog="secret-tool",
+        description="Secret storage helper (wee-dev)",
+    )
+    sub = parser.add_subparsers(dest="cmd")
+
+    _build_set_parser(sub, "set", "Store a secret (create or update)")
+    _build_set_parser(sub, "add", "Alias for 'set' — store a secret")
+
+    p_get = sub.add_parser("get", help="Retrieve a secret")
+    p_get.add_argument("--name", required=True, help="Secret name")
+    p_get.add_argument("--backend", choices=["keyring", "file"], default="keyring")
+
+    p_list = sub.add_parser("list", help="List stored secret names (no values)")
+    p_list.add_argument("--backend", choices=["keyring", "file"], default="keyring")
+    p_list.add_argument(
+        "--json",
+        action="store_true",
+        default=False,
+        dest="json_output",
+        help="Output names as a JSON array",
+    )
+
+    p_del = sub.add_parser("delete", help="Delete a secret")
+    p_del.add_argument("--name", required=True, help="Secret name to delete")
+    p_del.add_argument("--backend", choices=["keyring", "file"], default="keyring")
+
+    return parser.parse_args(argv)
+
+
+def _resolve_value(args) -> str:
+    """Return the secret value from --value or --value-stdin."""
+    if getattr(args, "value_stdin", False):
+        value = sys.stdin.readline().rstrip("\n")
+        if not value:
+            print(
+                json.dumps({"status": "error", "message": "No value received on stdin"})
+            )
+            sys.exit(1)
+        return value
+    return args.value
+
+
+def main(argv=None):
+    args = parse_args(argv)
+    if args.cmd is None:
+        print(
+            "Usage: secret-tool {set|add|get|list|delete} --name NAME "
+            "[--value VALUE | --value-stdin] [--backend keyring|file]"
+        )
+        return 2
+
+    backend = None
+    try:
+        if args.backend == "keyring":
+            backend = KeyringBackend()
+        else:
+            backend = FileBackend()
+    except Exception as e:
+        print(json.dumps({"status": "error", "message": str(e)}))
+        return 1
+
+    if args.cmd in ("set", "add"):
+        value = _resolve_value(args)
+        if args.no_clobber and backend.exists(args.name):
+            msg = (
+                f"Secret '{args.name}' already exists "
+                f"(omit --no-clobber to overwrite)"
+            )
+            print(json.dumps({"status": "error", "message": msg}))
+            return 1
+        res = backend.set(args.name, value)
+        # Never include the secret value in output
+        print(json.dumps({k: v for k, v in res.items() if k != "credential"}))
+        return 0 if res.get("status") == "success" else 1
+    elif args.cmd == "get":
+        res = backend.get(args.name)
+        if res.get("status") == "success":
+            # Raw value to stdout for shell capture
+            print(res.get("credential"))
+            return 0
+        else:
+            print(json.dumps(res))
+            return 1
+    elif args.cmd == "list":
+        res = backend.list()
+        if res.get("status") != "success":
+            print(json.dumps(res))
+            return 1
+        names = res.get("names", [])
+        if getattr(args, "json_output", False):
+            print(json.dumps(names))
+        else:
+            for n in names:
+                print(n)
+        return 0
+    elif args.cmd == "delete":
+        res = backend.delete(args.name)
+        print(json.dumps(res))
+        return 0 if res.get("status") == "success" else 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

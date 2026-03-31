@@ -2,6 +2,28 @@
 
 ## Unreleased
 
+### Add secret-tool add/get CLI (F006)
+
+The `secret_tool` CLI now supports **`add`** (alias for `set`) and **`get`** sub-commands,
+giving agents and scripts a consistent, secure interface for reading and writing secrets.
+
+**Backend (`secret_tool/secret_tool.py`):**
+- `add` sub-command added as an exact alias for `set` (upsert semantics)
+- `get --name <NAME>` retrieves the raw secret value to stdout (exit 0 on success, exit 1 with JSON error if not found)
+- `--value-stdin` flag reads secret from stdin to avoid shell history exposure
+- `--no-clobber` flag rejects writes if the secret already exists (exit 1)
+- Backend selection: `keyring` (default) or `file` (encrypted Fernet store)
+
+**QA (wee-qa — APPROVE):**
+- 12/12 new tests pass; **478 total tests pass** (0 regressions)
+- flake8 CLEAN; black PASS; unused imports removed; docstrings wrapped to <=88 chars
+
+**Docs:** `docs/secret-tool.md` updated with full CLI UX spec
+
+**Commit:** 541de01
+
+---
+
 ### Expose max_concurrent in Agent Settings Panel (F009)
 
 The agent settings panel in the WebUI now exposes a **max_concurrent** input field, giving administrators direct control over per-agent concurrency limits without manual `agents.json` edits.
