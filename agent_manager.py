@@ -10795,11 +10795,16 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 # Rename file if label changed
                 result_name = match.name
                 if new_label and new_label.strip() and new_label.strip() != match.name:
-                    new_path = active_dir / new_label.strip()
+                    resolved = (active_dir / new_label.strip()).resolve()
+                    if not str(resolved).startswith(str(active_dir.resolve())):
+                        raise HTTPException(
+                            400, "Invalid label: path traversal not allowed"
+                        )
+                    new_path = resolved
                     if new_path.exists():
                         return {
                             "success": False,
-                            "error": f"A TODO named '{new_label.strip()}' already exists",
+                            "error": f"A TODO named {new_label.strip()!r} already exists",
                         }
                     match.rename(new_path)
                     result_name = new_label.strip()
