@@ -311,6 +311,8 @@ class BackgroundTaskManager:
         env_suffix = "-dev" if api_port == "8001" else ""
         self._path = os.path.join(copilot_dir, f"background-tasks{env_suffix}.json")
         self._lock = threading.Lock()
+        self._bg_events = {}  # {origin_session_id: [event_dicts]}
+        self._bg_events_lock = threading.Lock()
 
     def _load(self) -> list:
         try:
@@ -344,6 +346,7 @@ class BackgroundTaskManager:
         status: str = "running",
         timeout: int = None,
         notify: bool = True,
+        origin_session_id: str = None,
     ) -> dict:
         task = {
             "task_id": task_id,
@@ -370,6 +373,7 @@ class BackgroundTaskManager:
             "error": None,
             "timeout": timeout,
             "notify": notify,
+            "origin_session_id": origin_session_id,
         }
         with self._lock:
             tasks = self._load()
@@ -438,6 +442,20 @@ class BackgroundTaskManager:
             session_id=session_id,
             started_at=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         )
+
+    def push_bg_event(self, origin_session_id, event):
+        """Push an in-thread completion event."""
+        if not origin_session_id:
+            return
+        with self._bg_events_lock:
+            self._bg_events.setdefault(
+                origin_session_id, []
+            ).append(event)
+
+    def pop_bg_events(self, session_id):
+        """Return and clear pending bg-task events."""
+        with self._bg_events_lock:
+            return self._bg_events.pop(session_id, [])
 
     def update_task(self, task_id: str, **fields):
         with self._lock:
@@ -5808,10 +5826,50 @@ User Request:
             result = self.execute(prompt, session_id)
             if self._bg_task_mgr:
                 self._bg_task_mgr.complete_task(task_id, result)
+                task_rec = self._bg_task_mgr.get_task(task_id)
+                o_sid = (
+                    task_rec.get("origin_session_id")
+                    if task_rec
+                    else None
+                )
+                if o_sid:
+                    self._bg_task_mgr.push_bg_event(
+                        o_sid,
+                        {
+                            "task_id": task_id,
+                            "summary": prompt[:80],
+                            "status": "completed",
+                            "agent": agent,
+                            "timestamp": time.strftime(
+                                "%Y-%m-%dT%H:%M:%SZ",
+                                time.gmtime(),
+                            ),
+                        },
+                    )
 
         except Exception as exc:
             if self._bg_task_mgr:
                 self._bg_task_mgr.fail_task(task_id, str(exc))
+                task_rec = self._bg_task_mgr.get_task(task_id)
+                o_sid = (
+                    task_rec.get("origin_session_id")
+                    if task_rec
+                    else None
+                )
+                if o_sid:
+                    self._bg_task_mgr.push_bg_event(
+                        o_sid,
+                        {
+                            "task_id": task_id,
+                            "summary": prompt[:80],
+                            "status": "failed",
+                            "agent": agent,
+                            "timestamp": time.strftime(
+                                "%Y-%m-%dT%H:%M:%SZ",
+                                time.gmtime(),
+                            ),
+                        },
+                    )
 
     def _dispatch_single_runtime(
         self,
@@ -6813,6 +6871,7 @@ You can mention an agent in your prompt and it will auto-delegate:
                 runtime=bg_runtime,
                 model=bg_model,
                 prompt=bg_prompt,
+                origin_session_id=n8n_session_id,
             )
             # Launch in background thread
             import concurrent.futures as _cf
@@ -7565,6 +7624,9 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         redoc_url="/api/v1/redoc" if not IS_PRODUCTION else None,
         lifespan=_lifespan,
     )
+
+    # Expose managers on app.state for testing
+    app.state.bg_task_mgr = bg_task_mgr
 
     # ---- CORS middleware ----
     cors_origins = [
@@ -8899,6 +8961,9 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         description: Optional[str] = (
             None  # human-readable task name shown in Agents panel
         )
+        origin_session_id: Optional[str] = (
+            None  # chat session that initiated this task
+        )
 
         @field_validator("prompt")
         @classmethod
@@ -8941,6 +9006,29 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 error=error,
                 skip_external=not notify,
             )
+            # Push in-thread event to originating session
+            task = bg_task_mgr.get_task(task_id)
+            origin_sid = (
+                task.get("origin_session_id") if task else None
+            )
+            if origin_sid:
+                bg_task_mgr.push_bg_event(
+                    origin_sid,
+                    {
+                        "task_id": task_id,
+                        "summary": prompt[:80],
+                        "status": status,
+                        "agent": (
+                            task.get("agent", "")
+                            if task
+                            else ""
+                        ),
+                        "timestamp": time.strftime(
+                            "%Y-%m-%dT%H:%M:%SZ",
+                            time.gmtime(),
+                        ),
+                    },
+                )
         except Exception as exc:
             print(
                 f"[API] Notification emit failed for {task_id}: {exc}", file=sys.stderr
@@ -9698,6 +9786,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 status="queued",
                 timeout=bg_timeout,
                 notify=notify_pref,
+                origin_session_id=body.origin_session_id,
             )
             queue_pos = bg_task_mgr.count_queued(channel, identity)
             print(
@@ -9728,6 +9817,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             status="running",
             timeout=bg_timeout,
             notify=notify_pref,
+            origin_session_id=body.origin_session_id,
         )
 
         # Resolve permission mode (default: restricted)
@@ -9763,6 +9853,24 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             "status": "running",
             "timeout": bg_timeout,
         }
+
+    @app.get("/api/v1/sessions/{session_id}/bg-events")
+    async def get_session_bg_events(
+        session_id: str, request: Request
+    ):
+        """Return and clear pending BG task completion events."""
+        await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get(
+                "x-user-identity"
+            ),
+            x_auth_channel=request.headers.get(
+                "x-auth-channel"
+            ),
+        )
+        events = bg_task_mgr.pop_bg_events(session_id)
+        return {"events": events}
 
     @app.get("/api/v1/background-tasks")
     async def list_background_tasks(request: Request):

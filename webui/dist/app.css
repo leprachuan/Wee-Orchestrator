@@ -6773,3 +6773,36 @@ html, body {
   0%, 100% { opacity: 0.5; }
   50% { opacity: 1; }
 }
+
+/* ── F017: In-thread BG task completion banner ── */
+.bg-task-banner {
+  text-align: center;
+  font-size: 13px;
+  padding: 8px 16px;
+  margin: 8px auto;
+  max-width: 85%;
+  border-radius: 8px;
+  line-height: 1.5;
+}
+.bg-task-banner.bg-task-ok {
+  color: #3ecf8e;
+  background: rgba(62, 207, 142, 0.08);
+  border: 1px solid rgba(62, 207, 142, 0.2);
+}
+.bg-task-banner.bg-task-fail {
+  color: #e53935;
+  background: rgba(229, 57, 53, 0.08);
+  border: 1px solid rgba(229, 57, 53, 0.2);
+}
+.bg-task-banner-id {
+  font-family: var(--font-mono, monospace);
+  font-weight: 600;
+  font-size: 12px;
+}
+.bg-task-banner-agent {
+  opacity: 0.7;
+}
+.bg-task-banner-summary {
+  opacity: 0.85;
+  font-style: italic;
+}

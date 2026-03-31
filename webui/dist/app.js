@@ -267,6 +267,8 @@ function showAppView() {
   }
   // Start notification polling (always, if notifications are supported)
   startNotificationPolling();
+  // Start in-thread bg-events polling (F017)
+  startBgEventPolling();
 }
 
 function updateSidebarIdentity() {
@@ -2456,6 +2458,41 @@ function renderSystemMessage(text) {
   scrollToBottom();
 }
 
+function renderBgTaskBanner(event) {
+  const container = $('messages');
+  if (!container) return;
+  const ok = event.status === 'completed';
+  const icon = ok ? '✅' : '❌';
+  const label = ok ? 'completed' : 'failed';
+  const summary = (event.summary || '').slice(0, 60);
+  const agent = event.agent ? ` · ${event.agent}` : '';
+  const banner = document.createElement('div');
+  banner.className = `bg-task-banner ${ok ? 'bg-task-ok' : 'bg-task-fail'}`;
+  banner.innerHTML = `${icon} <span class="bg-task-banner-id">${escHtml(event.task_id)}</span> ${label}${agent ? ` <span class="bg-task-banner-agent">${escHtml(agent)}</span>` : ''} — <span class="bg-task-banner-summary">${escHtml(summary)}</span>`;
+  container.appendChild(banner);
+  scrollToBottom();
+}
+
+let _bgEventPollInterval = null;
+function startBgEventPolling() {
+  if (_bgEventPollInterval) return;
+  _bgEventPollInterval = setInterval(pollBgEvents, 8000);
+}
+
+async function pollBgEvents() {
+  const sid = STATE.currentSessionId;
+  if (!sid) return;
+  try {
+    const data = await apiRequest('GET', `/sessions/${sid}/bg-events`);
+    if (!data || !data.events || !data.events.length) return;
+    for (const ev of data.events) {
+      if (BG.shownBgBanners.has(ev.task_id)) continue;
+      BG.shownBgBanners.add(ev.task_id);
+      renderBgTaskBanner(ev);
+    }
+  } catch (_) { /* ignore polling errors */ }
+}
+
 function scrollToBottom() {
   const c = $('messages');
   c.scrollTop = c.scrollHeight;
@@ -3567,6 +3604,7 @@ async function bgApi(method, path, body = null) {
 
 const BG = {
   tasks: [],
+  shownBgBanners: new Set(),
   selectedTaskId: null,
   isLoading: false,
   pollInterval: null,
