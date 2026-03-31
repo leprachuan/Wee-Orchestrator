@@ -1679,8 +1679,17 @@ class WebEXConnector:
                     )
                     print(tb_str, file=sys.stderr)
 
-            if not self.connect_rabbitmq():
-                print("Failed to connect to RabbitMQ, exiting...", file=sys.stderr)
+            retry_delay = 30
+            max_delay = 300
+            while self.running and not self.connect_rabbitmq():
+                print(
+                    f"Failed to connect to RabbitMQ, retrying in {retry_delay}s...",
+                    file=sys.stderr,
+                )
+                import time
+                time.sleep(retry_delay)
+                retry_delay = min(retry_delay * 2, max_delay)
+            if not self.running:
                 return
 
             # Start background cleanup task (removes files older than 5 minutes)
