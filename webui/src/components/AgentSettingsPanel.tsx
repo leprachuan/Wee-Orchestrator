@@ -330,7 +330,7 @@ export function AgentSettingsPanel({ onClose }: AgentSettingsPanelProps) {
                       onChange={e => setField('runtime', e.target.value || undefined)}
                     >
                       <option value="">Default</option>
-                      {['copilot', 'claude', 'gemini', 'opencode', 'codex'].map(r => (
+                      {['copilot', 'claude', 'gemini', 'opencode', 'codex', 'cursor'].map(r => (
                         <option key={r} value={r}>{r}</option>
                       ))}
                     </select>

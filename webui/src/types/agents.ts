@@ -69,7 +69,7 @@ export interface Agent {
   path: string;
   /** Directory where TODO files are stored */
   todo_dir?: string;
-  /** Default runtime backend (copilot | claude | gemini | opencode | codex) */
+  /** Default runtime backend (copilot | claude | gemini | opencode | codex | cursor) */
   runtime?: string;
   /** Default AI model identifier */
   model?: string;
