@@ -585,7 +585,7 @@ class BackgroundTaskManager:
             f.write(entry)
         return path
 
-    def read_steering(self, task_id: str):
+    def read_steering(self, task_id: str) -> Optional[str]:
         path = self.get_steering_path(task_id)
         if not os.path.exists(path):
             return None
@@ -9967,7 +9967,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 detail=f"Task is {task['status']}, not running -- cannot steer",
             )
         path = bg_task_mgr.write_steering(task_id, body.instruction)
-        print(f"[STEER] Steering written for task {task_id}: {body.instruction[:80]}")
+        logging.info("[STEER] Steering written for task %s: %s", task_id, body.instruction[:80])
         return {
             "task_id": task_id,
             "status": "steering_written",
