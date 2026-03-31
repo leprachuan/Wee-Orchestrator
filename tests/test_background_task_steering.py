@@ -10,6 +10,7 @@ Tests for background task steering feature (fc79f69):
 """
 
 import os
+import shutil
 import sys
 import tempfile
 import threading
@@ -41,7 +42,6 @@ class TestBackgroundTaskManagerSteering(unittest.TestCase):
         self.mgr = _make_mgr(self.tmp.name, self.steering_tmpdir)
 
     def tearDown(self):
-        import shutil
         os.unlink(self.tmp.name)
         shutil.rmtree(self.steering_tmpdir, ignore_errors=True)
 
@@ -128,7 +128,6 @@ class TestSteerAPIEndpoints(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        import shutil
         from fastapi.testclient import TestClient
 
         import agent_manager
@@ -173,7 +172,6 @@ class TestSteerAPIEndpoints(unittest.TestCase):
 
     @classmethod
     def tearDownClass(cls):
-        import shutil
         cls._telegram_patch.stop()
         cls._send_pairing_patch.stop()
         os.unlink(cls._tmp.name)
@@ -266,18 +264,17 @@ class TestSteerAPIEndpoints(unittest.TestCase):
 
 # ── Bot command tests ──────────────────────────────────────────────────────────
 
+
 class TestSteerBotCommand(unittest.TestCase):
     """Tests for /background steer <task_id> <instruction> bot command handler."""
 
     def setUp(self):
-        import shutil
         self.tmp = tempfile.NamedTemporaryFile(suffix=".json", delete=False)
         self.tmp.close()
         self.steering_tmpdir = tempfile.mkdtemp()
         self.mgr = _make_mgr(self.tmp.name, self.steering_tmpdir)
 
     def tearDown(self):
-        import shutil
         os.unlink(self.tmp.name)
         shutil.rmtree(self.steering_tmpdir, ignore_errors=True)
 
