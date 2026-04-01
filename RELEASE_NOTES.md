@@ -2,6 +2,48 @@
 
 ## Unreleased
 
+### Slash Command Registry (F020)
+
+A new **slash command registry** enables pure-server commands that bypass the LLM entirely, reducing latency and token cost while ensuring sensitive data never touches the AI model.
+
+**Architecture (`agent_manager.py`):**
+- `_slash_command_registry` — dict-based registry with command metadata and handler functions
+- `_init_slash_commands()` — initializes all registry-based commands at startup
+- `_register_slash(command, handler, description)` — adds new commands to the registry
+- `get_slash_commands()` — discovery endpoint for listing all available commands and their descriptions
+- Registry dispatch happens **before the LLM** in `execute()`, significantly reducing response latency
+- Legacy commands (if/elif chain) retained as fallback with `handler=None` entries for documentation
+
+**New `/secret` Command:**
+- `POST /secret set <name>` — creates/updates a secret; value read from stdin (never exposed in args or LLM)
+- `GET /secret get <name>` — retrieves secret value to stdout
+- `GET /secret list` — lists all secret names (values redacted)
+- `DELETE /secret delete <name>` — removes a secret
+- Integrates directly with `secret_tool.py` for consistent backend storage
+- **Security:** Secrets never touch the LLM context or message history
+
+**Testing:**
+- 22 new tests in `tests/test_f020_slash_registry.py`:
+  - Registry initialization and command metadata validation
+  - Handler registration and dispatch flow
+  - `/secret` sub-commands (set, get, delete, list)
+  - Stdin-based secret input without shell history exposure
+  - Registry integration with `execute()` pre-LLM dispatch
+  - API endpoint coverage (slash command discovery)
+- **All 602 total tests pass** (9 skipped); 0 regressions
+- `py_compile` PASS; W293 whitespace warnings pre-existing
+
+**QA (wee-qa — APPROVE):**
+- All 22 F020 tests pass, **602 total tests pass** (9 skipped)
+- Security validated: `/secret` name regex `^[A-Za-z0-9._-]+$` enforced; values via stdin only
+- Pre-LLM dispatch confirmed; handler routing verified
+- All 4 dev services active and responsive
+- No BLOCKER or MAJOR issues; W293 warnings pre-existing (not introduced by F020)
+
+**Commit:** 47b261d
+
+---
+
 ### Quick-Add TODO Button in WebUI (F018)
 
 The TODO panel in the Web UI now includes a **quick-add button (+)** that reveals an inline form for rapidly creating new TODOs without leaving the interface.

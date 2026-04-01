@@ -62,6 +62,7 @@ Wee-Orchestrator is a unified AI agent platform that lets you chat with **any AI
 - **📜 Session History** — Full conversation persistence with search and resume
 - **⚡ Background Tasks** — Delegate long-running work to background agents
 - **🔌 Extensible Skills** — Plugin architecture for adding capabilities (Cisco Meraki, Home Assistant, etc.)
+- **⚙️ Slash Command Registry** — Pure-server commands that bypass the LLM for reduced latency; built-in `/secret` command for secure credential management
 
 ---
 
@@ -814,6 +815,29 @@ Interact with the agent manager using slash commands:
 ```
 
 **Query Tracking**: When a query is executing, the agent manager tracks its process ID (PID), runtime, agent, and output. Use `/status` to check if a query is running and see recent output, or `/cancel` to terminate a long-running query.
+
+#### Secrets Management
+```
+/secret set <name>         # Create/update a secret (value read from stdin)
+/secret get <name>         # Retrieve a secret value
+/secret list               # List all secret names (values redacted)
+/secret delete <name>      # Remove a secret
+```
+
+**Features:**
+- Secrets stored securely via `secret_tool.py` (never exposed in shell history or LLM context)
+- Name validation: alphanumeric, dots, hyphens, underscores only (`^[A-Za-z0-9._-]+$`)
+- stdin-based input prevents secrets from appearing in command history
+- Pre-LLM dispatch — secrets never touch the AI model
+- Supported on all channels (Telegram, WebEx, Web UI)
+
+**Examples:**
+```bash
+echo "my-db-password" | /secret set db_password
+/secret get db_password    # Returns: my-db-password
+/secret list               # Returns: db_password, api_key, github_token
+/secret delete db_password
+```
 
 ### N8N Integration
 
