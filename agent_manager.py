@@ -1444,6 +1444,12 @@ class SessionManager:
         self._live_status: Dict[str, Dict] = {}
         self._live_status_lock = threading.Lock()
 
+        # Slash command registry (F020): maps command -> {handler, description}
+        # Commands with a handler callable bypass the LLM entirely.
+        # Commands with handler=None are handled by the legacy if/elif chain.
+        self._slash_command_registry: Dict[str, dict] = {}
+        self._init_slash_commands()
+
     # ── Live status helpers for mobile channel progress (F004) ──────────
 
     def set_live_status(self, n8n_session_id: str, text: str) -> None:
@@ -1463,6 +1469,193 @@ class SessionManager:
         """Remove live status for a session (call when execution finishes)."""
         with self._live_status_lock:
             self._live_status.pop(n8n_session_id, None)
+
+    # ── Slash command registry (F020) ───────────────────────────────────
+
+    def _register_slash(self, command: str, handler, description: str):
+        """Register a slash command in the registry."""
+        self._slash_command_registry[command] = {
+            "handler": handler,
+            "description": description,
+        }
+
+    def _init_slash_commands(self):
+        """Initialize the slash command registry.
+
+        New pure-server commands should be registered here with a handler.
+        Legacy commands (handled by the if/elif chain in execute()) are
+        registered with handler=None for documentation/discovery.
+        """
+        # -- Pure-server commands (registry-based handlers) --
+        self._register_slash(
+            "/secret",
+            self._slash_secret,
+            "Manage secrets (set/delete/list) — values never touch the LLM",
+        )
+
+        # -- Legacy commands (handled by if/elif in execute()) --
+        legacy_commands = [
+            ("/help", "Show available commands"),
+            ("/status", "Check status of running query"),
+            ("/cancel", "Cancel running query"),
+            ("/capabilities", "Show orchestrator capabilities"),
+            ("/runtime", "Manage runtime (list/set/current)"),
+            ("/model", "Manage model (list/set/current)"),
+            ("/agent", "Manage agent (list/set/current/invoke)"),
+            ("/session", "Session management (reset)"),
+            ("/timeout", "Manage query timeout"),
+            ("/render", "Manage render type"),
+            ("/mode", "Manage permission mode"),
+            ("/notifications", "Toggle background task notifications"),
+            ("/schedule", "Manage scheduled tasks"),
+            ("/background", "Manage background tasks"),
+            ("/update", "Pull latest code and restart services"),
+            ("/upgrade", "Alias for /update"),
+            ("/pull", "Alias for /update"),
+        ]
+        for cmd, desc in legacy_commands:
+            self._register_slash(cmd, None, desc)
+
+    def get_slash_commands(self) -> Dict[str, str]:
+        """Return a dict of all registered slash commands and descriptions."""
+        return {
+            cmd: entry["description"]
+            for cmd, entry in self._slash_command_registry.items()
+        }
+
+    def _slash_secret(self, argument, session_data, n8n_session_id):
+        """Handle /secret slash command. Values never touch the LLM."""
+        if not argument:
+            return (
+                "\U0001f510 **Secret Commands**\n\n"
+                "\u2022 `/secret list` \u2014 List stored secret names\n"
+                "\u2022 `/secret set <name> <value>` \u2014 Store a secret\n"
+                "\u2022 `/secret delete <name>` \u2014 Delete a secret\n\n"
+                "Values are stored securely and never sent to the LLM."
+            )
+
+        sub = argument.strip()
+        sub_lower = sub.lower()
+        secret_tool = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)),
+            "secret_tool",
+            "secret_tool.py",
+        )
+
+        if sub_lower == "list":
+            return self._slash_secret_list(secret_tool)
+        elif sub_lower.startswith("set "):
+            return self._slash_secret_set(sub[4:].strip(), secret_tool)
+        elif sub_lower.startswith("delete "):
+            return self._slash_secret_delete(sub[7:].strip(), secret_tool)
+        else:
+            return (
+                "\U0001f510 **Secret Commands**\n\n"
+                "\u2022 `/secret list` \u2014 List stored secret names\n"
+                "\u2022 `/secret set <name> <value>` \u2014 Store a secret\n"
+                "\u2022 `/secret delete <name>` \u2014 Delete a secret"
+            )
+
+    def _slash_secret_list(self, secret_tool: str) -> str:
+        """List stored secret names via secret_tool.py."""
+        try:
+            proc = subprocess.run(
+                [sys.executable, secret_tool, "list", "--backend", "file"],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            if proc.returncode != 0:
+                detail = proc.stdout.strip() or proc.stderr.strip()
+                return f"\u274c {detail or 'Failed to list secrets'}"
+            output = proc.stdout.strip()
+            if not output:
+                return "\U0001f510 **Secrets:** (none)"
+            try:
+                data = json.loads(output)
+                names = (
+                    data if isinstance(data, list) else data.get("names", [])
+                )
+            except json.JSONDecodeError:
+                names = [
+                    ln.strip() for ln in output.splitlines() if ln.strip()
+                ]
+            if not names:
+                return "\U0001f510 **Secrets:** (none)"
+            lines = ["\U0001f510 **Stored Secrets:**\n"]
+            for n in sorted(names):
+                lines.append(f"\u2022 `{n}`")
+            return "\n".join(lines)
+        except Exception as e:
+            return f"\u274c Error listing secrets: {e}"
+
+    def _slash_secret_set(self, args: str, secret_tool: str) -> str:
+        """Store a secret via secret_tool.py. Value never touches the LLM."""
+        parts = args.split(None, 1)
+        if len(parts) < 2:
+            return "Usage: `/secret set <name> <value>`"
+        name, value = parts
+        if not re.match(r"^[A-Za-z0-9._-]+$", name):
+            return (
+                "\u274c Invalid name. "
+                "Use letters, digits, hyphens, underscores, dots only."
+            )
+        try:
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    secret_tool,
+                    "set",
+                    "--name",
+                    name,
+                    "--value-stdin",
+                    "--backend",
+                    "file",
+                ],
+                input=f"{value}\n",
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            if proc.returncode != 0:
+                detail = proc.stdout.strip() or proc.stderr.strip()
+                return f"\u274c {detail or 'Failed to store secret'}"
+            result = json.loads(proc.stdout)
+            action = result.get("action", "stored")
+            return f"\u2713 Secret `{name}` {action}."
+        except Exception as e:
+            return f"\u274c Error storing secret: {e}"
+
+    def _slash_secret_delete(self, name: str, secret_tool: str) -> str:
+        """Delete a secret via secret_tool.py."""
+        if not name:
+            return "Usage: `/secret delete <name>`"
+        if not re.match(r"^[A-Za-z0-9._-]+$", name):
+            return (
+                "\u274c Invalid name. "
+                "Use letters, digits, hyphens, underscores, dots only."
+            )
+        try:
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    secret_tool,
+                    "delete",
+                    "--name",
+                    name,
+                    "--backend",
+                    "file",
+                ],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            if proc.returncode != 0:
+                detail = proc.stdout.strip() or proc.stderr.strip()
+                return f"\u274c {detail or 'Secret not found'}"
+            return f"\u2713 Secret `{name}` deleted."
+        except Exception as e:
+            return f"\u274c Error deleting secret: {e}"
 
     def _load_agents_config(self, config_file: Optional[str] = None) -> Dict:
         """Load agents configuration from JSON file
@@ -3661,6 +3854,9 @@ These commands allow you to control the agent's behavior and are processed by th
 - /status - Check running tasks status
 - /cancel - Cancel the current running task
 - /help - Show available commands and agent capabilities
+- /secret list - List stored secret names (bypasses LLM)
+- /secret set <name> <value> - Store a secret (value never sent to LLM)
+- /secret delete <name> - Delete a secret (bypasses LLM)
 - /discover-skills [query] - Discover available skills from configured repositories (optional search term)
 - /load-skill <name> [repo] - Load a skill into this agent's .github/skills directory (optional repository name)
 - /schedule list - List all scheduled jobs
@@ -6016,6 +6212,14 @@ User Request:
 
         # --- Slash Commands ---
 
+        # F020: Check registry for pure-server handlers first.
+        # Commands with a handler bypass the LLM entirely.
+        if command and command in self._slash_command_registry:
+            entry = self._slash_command_registry[command]
+            if entry.get("handler"):
+                return entry["handler"](argument, session_data, n8n_session_id)
+
+        # Legacy slash command handlers (gradually migrate to registry above)
         if command == "/help":
             return """🆘 **Available Commands**
 
@@ -6077,6 +6281,11 @@ User Request:
    • /background list - List your background tasks
    • /background status <task_id> - Check task status
    • /background kill <task_id> - Kill a running task
+
+**Secrets:**
+   • /secret list - List stored secret names
+   • /secret set <name> <value> - Store a secret (value never sent to LLM)
+   • /secret delete <name> - Delete a secret
 
 **System:**
    • /update - Pull latest dev code and restart all dev services
