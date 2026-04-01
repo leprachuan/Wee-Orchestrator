@@ -2730,7 +2730,6 @@ document.addEventListener('DOMContentLoaded', () => {
   $('btn-nav-chat').addEventListener('click', showChatPanel);
   $('btn-nav-background').addEventListener('click', showBackgroundPanel);
   $('btn-nav-scheduler').addEventListener('click', showSchedulerPanel);
-  $('btn-nav-secrets').addEventListener('click', showSecretsPanel);
   $('btn-nav-notifications').addEventListener('click', toggleNotificationPanel);
 
   // Notification settings/actions

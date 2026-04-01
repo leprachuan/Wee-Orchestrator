@@ -218,5 +218,21 @@ class TestSecretsAPI(unittest.TestCase):
             self.assertNotIn("credential", data)
 
 
+
+    def test_delete_secret_rejects_invalid_name(self):
+        """DELETE /api/v1/secrets/{name} rejects names with invalid characters.
+        Names containing slashes are not included because URL routing handles
+        those at the path level before the handler is reached.
+        """
+        for bad_name in ["bad name", "bad;name", "bad@name", "bad!name", "bad$name"]:
+            with self.subTest(name=bad_name):
+                import urllib.parse
+                encoded = urllib.parse.quote(bad_name, safe="")
+                resp = self.client.delete(
+                    f"/api/v1/secrets/{encoded}",
+                    headers=self.auth_header,
+                )
+                self.assertEqual(resp.status_code, 400, f"Expected 400 for name={bad_name!r}")
+
 if __name__ == "__main__":
     unittest.main()
