@@ -1284,6 +1284,77 @@ async function fetchAndRenderTodos() {
   }
 }
 
+// ─── F018: Quick-Add TODO ─────────────────────────────────────────────────────
+
+function toggleTodoQuickAdd() {
+  const form = $('todo-quick-add');
+  if (!form) return;
+  const visible = form.style.display !== 'none';
+  if (visible) {
+    closeTodoQuickAdd();
+  } else {
+    form.style.display = '';
+    const titleInput = $('todo-qa-title');
+    if (titleInput) { titleInput.value = ''; titleInput.focus(); }
+    const dueInput = $('todo-qa-due');
+    if (dueInput) dueInput.value = '';
+    const labelsInput = $('todo-qa-labels');
+    if (labelsInput) labelsInput.value = '';
+  }
+}
+
+function closeTodoQuickAdd() {
+  const form = $('todo-quick-add');
+  if (form) form.style.display = 'none';
+}
+
+async function submitTodoQuickAdd() {
+  const titleInput = $('todo-qa-title');
+  const dueInput = $('todo-qa-due');
+  const labelsInput = $('todo-qa-labels');
+  const saveBtn = $('btn-todo-qa-save');
+
+  const title = (titleInput ? titleInput.value : '').trim();
+  if (!title) {
+    if (titleInput) { titleInput.classList.add('todo-qa-input-error'); setTimeout(() => titleInput.classList.remove('todo-qa-input-error'), 600); }
+    return;
+  }
+
+  // Parse due date
+  let due_date = '';
+  if (dueInput && dueInput.value) {
+    const d = new Date(dueInput.value);
+    if (!isNaN(d.getTime())) {
+      const pad = n => String(n).padStart(2, '0');
+      due_date = `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+    }
+  }
+
+  // Parse labels
+  let labels = [];
+  if (labelsInput && labelsInput.value.trim()) {
+    labels = labelsInput.value.split(',').map(l => l.trim()).filter(Boolean);
+  }
+
+  // Disable button while saving
+  if (saveBtn) { saveBtn.disabled = true; saveBtn.textContent = '...'; }
+
+  try {
+    const res = await apiRequest('POST', '/todos', { title, due_date, labels });
+    if (res && res.success) {
+      closeTodoQuickAdd();
+      fetchAndRenderTodos();
+    } else {
+      const msg = (res && res.error) || 'Failed to create TODO';
+      if (titleInput) { titleInput.setCustomValidity(msg); titleInput.reportValidity(); setTimeout(() => titleInput.setCustomValidity(''), 2000); }
+    }
+  } catch (err) {
+    console.error('Quick-add TODO failed:', err);
+  } finally {
+    if (saveBtn) { saveBtn.disabled = false; saveBtn.textContent = 'Add'; }
+  }
+}
+
 function startTodoRefresh() {
   fetchAndRenderTodos();
   if (_todoRefreshTimer) clearInterval(_todoRefreshTimer);
@@ -2717,6 +2788,16 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   // --- TODO panel ---
+  // F018: Quick-add TODO button and form
+  const btnAddTodo = $('btn-add-todo');
+  if (btnAddTodo) btnAddTodo.addEventListener('click', toggleTodoQuickAdd);
+  const btnTodoQaSave = $('btn-todo-qa-save');
+  if (btnTodoQaSave) btnTodoQaSave.addEventListener('click', submitTodoQuickAdd);
+  const btnTodoQaCancel = $('btn-todo-qa-cancel');
+  if (btnTodoQaCancel) btnTodoQaCancel.addEventListener('click', closeTodoQuickAdd);
+  const todoQaTitle = $('todo-qa-title');
+  if (todoQaTitle) todoQaTitle.addEventListener('keydown', (e) => { if (e.key === 'Enter') submitTodoQuickAdd(); if (e.key === 'Escape') closeTodoQuickAdd(); });
+
   const btnRefreshTodos = $('btn-refresh-todos');
   if (btnRefreshTodos) btnRefreshTodos.addEventListener('click', fetchAndRenderTodos);
 

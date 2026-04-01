@@ -6806,3 +6806,115 @@ html, body {
   opacity: 0.85;
   font-style: italic;
 }
+
+/* ─── F018: Quick-Add TODO ─────────────────────────────────────────────────── */
+.todo-add-btn {
+  background: none;
+  border: 1px solid transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 13px;
+  padding: 1px 5px;
+  border-radius: 4px;
+  transition: color 0.15s, background 0.15s, border-color 0.15s;
+  margin-left: auto;
+  line-height: 1;
+}
+.todo-add-btn:hover {
+  color: var(--accent);
+  background: rgba(62,207,142,0.10);
+  border-color: rgba(62,207,142,0.25);
+}
+.todo-quick-add {
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--glass-border);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  animation: todoQaSlide 0.18s ease-out;
+}
+@keyframes todoQaSlide {
+  from { opacity: 0; transform: translateY(-6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.todo-qa-input {
+  width: 100%;
+  padding: 6px 8px;
+  font-size: 12px;
+  background: rgba(0,0,0,0.3);
+  border: 1px solid var(--glass-border);
+  border-radius: 4px;
+  color: var(--text-primary);
+  outline: none;
+  box-sizing: border-box;
+}
+.todo-qa-input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px rgba(62,207,142,0.15);
+}
+.todo-qa-row {
+  display: flex;
+  gap: 6px;
+}
+.todo-qa-due,
+.todo-qa-labels {
+  flex: 1;
+  padding: 4px 6px;
+  font-size: 11px;
+  background: rgba(0,0,0,0.25);
+  border: 1px solid var(--glass-border);
+  border-radius: 4px;
+  color: var(--text-secondary);
+  outline: none;
+  box-sizing: border-box;
+}
+.todo-qa-due:focus,
+.todo-qa-labels:focus {
+  border-color: var(--accent);
+}
+.todo-qa-actions {
+  display: flex;
+  gap: 6px;
+  justify-content: flex-end;
+}
+.todo-qa-save-btn {
+  padding: 4px 14px;
+  font-size: 11px;
+  font-weight: 600;
+  background: var(--accent);
+  color: #000;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: opacity 0.15s;
+}
+.todo-qa-save-btn:hover {
+  opacity: 0.85;
+}
+.todo-qa-save-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+.todo-qa-cancel-btn {
+  padding: 4px 10px;
+  font-size: 11px;
+  background: none;
+  border: 1px solid var(--glass-border);
+  border-radius: 4px;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: color 0.15s;
+}
+.todo-qa-cancel-btn:hover {
+  color: var(--text-primary);
+  border-color: var(--text-muted);
+}
+.todo-qa-input-error {
+  border-color: #e74c3c !important;
+  animation: todoQaShake 0.3s ease-in-out;
+}
+@keyframes todoQaShake {
+  0%, 100% { transform: translateX(0); }
+  25% { transform: translateX(-4px); }
+  75% { transform: translateX(4px); }
+}

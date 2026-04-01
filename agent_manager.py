@@ -10788,6 +10788,94 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             "file": str(todo_path),
         }
 
+    @app.post("/api/v1/todos")
+    async def create_todo(request: Request):
+        """Create a new TODO in the ACTIVE/ folder."""
+        await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        try:
+            body = await request.json()
+        except Exception:
+            return {"success": False, "error": "Invalid JSON body"}
+
+        title = (body.get("title") or "").strip()
+        due_date = (body.get("due_date") or "").strip()
+        labels = body.get("labels") or []
+        details = (body.get("details") or "").strip()
+        agent = body.get("agent")
+
+        if not title:
+            return {"success": False, "error": "Title is required"}
+
+        # Reject path traversal and dangerous chars
+        if (
+            "/" in title
+            or "\\" in title
+            or "\0" in title
+            or ".." in title
+            or "\n" in title
+            or "\r" in title
+        ):
+            return {
+                "success": False,
+                "error": (
+                    "Invalid title: must not contain"
+                    " path separators, traversal"
+                    " sequences, or control characters"
+                ),
+            }
+
+        todo_path = _resolve_todo_file(agent)
+        if not todo_path.is_dir():
+            return {
+                "success": False,
+                "error": "Folder-based TODO dir not found",
+            }
+
+        active_dir = todo_path / "ACTIVE"
+        active_dir.mkdir(parents=True, exist_ok=True)
+
+        target = active_dir / title
+        # Belt-and-suspenders path traversal check
+        resolved = target.resolve()
+        parent = active_dir.resolve()
+        if not resolved.is_relative_to(parent):
+            return {
+                "success": False,
+                "error": "Invalid title: path traversal",
+            }
+
+        if target.exists():
+            return {
+                "success": False,
+                "error": f"TODO {title!r} already exists",
+            }
+
+        # Build file content with headers
+        lines = []
+        if due_date:
+            lines.append(f"DUE: {due_date}")
+        if labels:
+            fmt = ",".join(f"{{{lb}}}" for lb in labels)
+            lines.append(f"LABELS: {fmt}")
+        if details:
+            if lines:
+                lines.append("")
+            lines.append(details)
+
+        file_content = "\n".join(lines) + "\n" if lines else ""
+        target.write_text(file_content)
+
+        return {
+            "success": True,
+            "todo": title,
+            "file": str(target),
+        }
+
     @app.post("/api/v1/todos/{todo_title}/complete")
     async def complete_todo(request: Request, todo_title: str):
         """Mark a TODO as complete by moving it from ACTIVE/ to COMPLETED/."""
