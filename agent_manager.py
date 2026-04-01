@@ -25,6 +25,8 @@ from uuid import uuid4
 # Dynamically determine the repo base directory (works regardless of where repo is cloned)
 SCRIPT_BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
+logger = logging.getLogger(__name__)
+
 
 # ---------------------------------------------------------------------------
 # Credential sanitization for UI display
@@ -309,6 +311,8 @@ class BackgroundTaskManager:
         env_suffix = "-dev" if api_port == "8001" else ""
         self._path = os.path.join(copilot_dir, f"background-tasks{env_suffix}.json")
         self._lock = threading.Lock()
+        self._bg_events = {}  # {origin_session_id: [event_dicts]}
+        self._bg_events_lock = threading.Lock()
 
     def _load(self) -> list:
         try:
@@ -342,6 +346,7 @@ class BackgroundTaskManager:
         status: str = "running",
         timeout: int = None,
         notify: bool = True,
+        origin_session_id: str = None,
     ) -> dict:
         task = {
             "task_id": task_id,
@@ -368,6 +373,7 @@ class BackgroundTaskManager:
             "error": None,
             "timeout": timeout,
             "notify": notify,
+            "origin_session_id": origin_session_id,
         }
         with self._lock:
             tasks = self._load()
@@ -436,6 +442,20 @@ class BackgroundTaskManager:
             session_id=session_id,
             started_at=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         )
+
+    def push_bg_event(self, origin_session_id, event):
+        """Push an in-thread completion event."""
+        if not origin_session_id:
+            return
+        with self._bg_events_lock:
+            self._bg_events.setdefault(
+                origin_session_id, []
+            ).append(event)
+
+    def pop_bg_events(self, session_id):
+        """Return and clear pending bg-task events."""
+        with self._bg_events_lock:
+            return self._bg_events.pop(session_id, [])
 
     def update_task(self, task_id: str, **fields):
         with self._lock:
@@ -563,6 +583,46 @@ class BackgroundTaskManager:
                     kept.append(t)
             if len(kept) < len(tasks):
                 self._save(kept)
+
+    # -- Steering --------------------------------------------------------
+    STEERING_DIR = os.path.join(
+        os.environ.get("SCRIPT_BASE_DIR", os.path.dirname(os.path.abspath(__file__))),
+        ".task-scheduler",
+        "steering",
+    )
+
+    def get_steering_path(self, task_id: str) -> str:
+        return os.path.join(self.STEERING_DIR, f"{task_id}.md")
+
+    def write_steering(self, task_id: str, instruction: str) -> str:
+        os.makedirs(self.STEERING_DIR, exist_ok=True)
+        path = self.get_steering_path(task_id)
+        ts = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        entry = f"\n### {ts}\n{instruction}\n"
+        if not os.path.exists(path):
+            entry = f"## Steering Instructions\n{entry}"
+        with open(path, "a") as f:
+            f.write(entry)
+        return path
+
+    def read_steering(self, task_id: str) -> Optional[str]:
+        path = self.get_steering_path(task_id)
+        if not os.path.exists(path):
+            return None
+        try:
+            with open(path, "r") as f:
+                content = f.read().strip()
+            return content if content else None
+        except OSError:
+            return None
+
+    def cleanup_steering(self, task_id: str) -> None:
+        path = self.get_steering_path(task_id)
+        try:
+            if os.path.exists(path):
+                os.remove(path)
+        except OSError:
+            pass
 
 
 # Executable resolution
@@ -1384,6 +1444,12 @@ class SessionManager:
         self._live_status: Dict[str, Dict] = {}
         self._live_status_lock = threading.Lock()
 
+        # Slash command registry (F020): maps command -> {handler, description}
+        # Commands with a handler callable bypass the LLM entirely.
+        # Commands with handler=None are handled by the legacy if/elif chain.
+        self._slash_command_registry: Dict[str, dict] = {}
+        self._init_slash_commands()
+
     # ── Live status helpers for mobile channel progress (F004) ──────────
 
     def set_live_status(self, n8n_session_id: str, text: str) -> None:
@@ -1403,6 +1469,193 @@ class SessionManager:
         """Remove live status for a session (call when execution finishes)."""
         with self._live_status_lock:
             self._live_status.pop(n8n_session_id, None)
+
+    # ── Slash command registry (F020) ───────────────────────────────────
+
+    def _register_slash(self, command: str, handler, description: str):
+        """Register a slash command in the registry."""
+        self._slash_command_registry[command] = {
+            "handler": handler,
+            "description": description,
+        }
+
+    def _init_slash_commands(self):
+        """Initialize the slash command registry.
+
+        New pure-server commands should be registered here with a handler.
+        Legacy commands (handled by the if/elif chain in execute()) are
+        registered with handler=None for documentation/discovery.
+        """
+        # -- Pure-server commands (registry-based handlers) --
+        self._register_slash(
+            "/secret",
+            self._slash_secret,
+            "Manage secrets (set/delete/list) — values never touch the LLM",
+        )
+
+        # -- Legacy commands (handled by if/elif in execute()) --
+        legacy_commands = [
+            ("/help", "Show available commands"),
+            ("/status", "Check status of running query"),
+            ("/cancel", "Cancel running query"),
+            ("/capabilities", "Show orchestrator capabilities"),
+            ("/runtime", "Manage runtime (list/set/current)"),
+            ("/model", "Manage model (list/set/current)"),
+            ("/agent", "Manage agent (list/set/current/invoke)"),
+            ("/session", "Session management (reset)"),
+            ("/timeout", "Manage query timeout"),
+            ("/render", "Manage render type"),
+            ("/mode", "Manage permission mode"),
+            ("/notifications", "Toggle background task notifications"),
+            ("/schedule", "Manage scheduled tasks"),
+            ("/background", "Manage background tasks"),
+            ("/update", "Pull latest code and restart services"),
+            ("/upgrade", "Alias for /update"),
+            ("/pull", "Alias for /update"),
+        ]
+        for cmd, desc in legacy_commands:
+            self._register_slash(cmd, None, desc)
+
+    def get_slash_commands(self) -> Dict[str, str]:
+        """Return a dict of all registered slash commands and descriptions."""
+        return {
+            cmd: entry["description"]
+            for cmd, entry in self._slash_command_registry.items()
+        }
+
+    def _slash_secret(self, argument, session_data, n8n_session_id):
+        """Handle /secret slash command. Values never touch the LLM."""
+        if not argument:
+            return (
+                "\U0001f510 **Secret Commands**\n\n"
+                "\u2022 `/secret list` \u2014 List stored secret names\n"
+                "\u2022 `/secret set <name> <value>` \u2014 Store a secret\n"
+                "\u2022 `/secret delete <name>` \u2014 Delete a secret\n\n"
+                "Values are stored securely and never sent to the LLM."
+            )
+
+        sub = argument.strip()
+        sub_lower = sub.lower()
+        secret_tool = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)),
+            "secret_tool",
+            "secret_tool.py",
+        )
+
+        if sub_lower == "list":
+            return self._slash_secret_list(secret_tool)
+        elif sub_lower.startswith("set "):
+            return self._slash_secret_set(sub[4:].strip(), secret_tool)
+        elif sub_lower.startswith("delete "):
+            return self._slash_secret_delete(sub[7:].strip(), secret_tool)
+        else:
+            return (
+                "\U0001f510 **Secret Commands**\n\n"
+                "\u2022 `/secret list` \u2014 List stored secret names\n"
+                "\u2022 `/secret set <name> <value>` \u2014 Store a secret\n"
+                "\u2022 `/secret delete <name>` \u2014 Delete a secret"
+            )
+
+    def _slash_secret_list(self, secret_tool: str) -> str:
+        """List stored secret names via secret_tool.py."""
+        try:
+            proc = subprocess.run(
+                [sys.executable, secret_tool, "list", "--backend", "file"],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            if proc.returncode != 0:
+                detail = proc.stdout.strip() or proc.stderr.strip()
+                return f"\u274c {detail or 'Failed to list secrets'}"
+            output = proc.stdout.strip()
+            if not output:
+                return "\U0001f510 **Secrets:** (none)"
+            try:
+                data = json.loads(output)
+                names = (
+                    data if isinstance(data, list) else data.get("names", [])
+                )
+            except json.JSONDecodeError:
+                names = [
+                    ln.strip() for ln in output.splitlines() if ln.strip()
+                ]
+            if not names:
+                return "\U0001f510 **Secrets:** (none)"
+            lines = ["\U0001f510 **Stored Secrets:**\n"]
+            for n in sorted(names):
+                lines.append(f"\u2022 `{n}`")
+            return "\n".join(lines)
+        except Exception as e:
+            return f"\u274c Error listing secrets: {e}"
+
+    def _slash_secret_set(self, args: str, secret_tool: str) -> str:
+        """Store a secret via secret_tool.py. Value never touches the LLM."""
+        parts = args.split(None, 1)
+        if len(parts) < 2:
+            return "Usage: `/secret set <name> <value>`"
+        name, value = parts
+        if not re.match(r"^[A-Za-z0-9._-]+$", name):
+            return (
+                "\u274c Invalid name. "
+                "Use letters, digits, hyphens, underscores, dots only."
+            )
+        try:
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    secret_tool,
+                    "set",
+                    "--name",
+                    name,
+                    "--value-stdin",
+                    "--backend",
+                    "file",
+                ],
+                input=f"{value}\n",
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            if proc.returncode != 0:
+                detail = proc.stdout.strip() or proc.stderr.strip()
+                return f"\u274c {detail or 'Failed to store secret'}"
+            result = json.loads(proc.stdout)
+            action = result.get("action", "stored")
+            return f"\u2713 Secret `{name}` {action}."
+        except Exception as e:
+            return f"\u274c Error storing secret: {e}"
+
+    def _slash_secret_delete(self, name: str, secret_tool: str) -> str:
+        """Delete a secret via secret_tool.py."""
+        if not name:
+            return "Usage: `/secret delete <name>`"
+        if not re.match(r"^[A-Za-z0-9._-]+$", name):
+            return (
+                "\u274c Invalid name. "
+                "Use letters, digits, hyphens, underscores, dots only."
+            )
+        try:
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    secret_tool,
+                    "delete",
+                    "--name",
+                    name,
+                    "--backend",
+                    "file",
+                ],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            if proc.returncode != 0:
+                detail = proc.stdout.strip() or proc.stderr.strip()
+                return f"\u274c {detail or 'Secret not found'}"
+            return f"\u2713 Secret `{name}` deleted."
+        except Exception as e:
+            return f"\u274c Error deleting secret: {e}"
 
     def _load_agents_config(self, config_file: Optional[str] = None) -> Dict:
         """Load agents configuration from JSON file
@@ -3601,6 +3854,9 @@ These commands allow you to control the agent's behavior and are processed by th
 - /status - Check running tasks status
 - /cancel - Cancel the current running task
 - /help - Show available commands and agent capabilities
+- /secret list - List stored secret names (bypasses LLM)
+- /secret set <name> <value> - Store a secret (value never sent to LLM)
+- /secret delete <name> - Delete a secret (bypasses LLM)
 - /discover-skills [query] - Discover available skills from configured repositories (optional search term)
 - /load-skill <name> [repo] - Load a skill into this agent's .github/skills directory (optional repository name)
 - /schedule list - List all scheduled jobs
@@ -3617,6 +3873,7 @@ These commands allow you to control the agent's behavior and are processed by th
 - /background list - List your background tasks
 - /background status <task_id> - Check background task status
 - /background kill <task_id> - Kill a running background task
+- /background steer <task_id> <instruction> - Send steering to a running task
 - /update - Pull latest code from dev branch and restart all dev services (aliases: /upgrade, /pull)
 
 [Skills Discovery & Management]
@@ -5765,10 +6022,50 @@ User Request:
             result = self.execute(prompt, session_id)
             if self._bg_task_mgr:
                 self._bg_task_mgr.complete_task(task_id, result)
+                task_rec = self._bg_task_mgr.get_task(task_id)
+                o_sid = (
+                    task_rec.get("origin_session_id")
+                    if task_rec
+                    else None
+                )
+                if o_sid:
+                    self._bg_task_mgr.push_bg_event(
+                        o_sid,
+                        {
+                            "task_id": task_id,
+                            "summary": prompt[:80],
+                            "status": "completed",
+                            "agent": agent,
+                            "timestamp": time.strftime(
+                                "%Y-%m-%dT%H:%M:%SZ",
+                                time.gmtime(),
+                            ),
+                        },
+                    )
 
         except Exception as exc:
             if self._bg_task_mgr:
                 self._bg_task_mgr.fail_task(task_id, str(exc))
+                task_rec = self._bg_task_mgr.get_task(task_id)
+                o_sid = (
+                    task_rec.get("origin_session_id")
+                    if task_rec
+                    else None
+                )
+                if o_sid:
+                    self._bg_task_mgr.push_bg_event(
+                        o_sid,
+                        {
+                            "task_id": task_id,
+                            "summary": prompt[:80],
+                            "status": "failed",
+                            "agent": agent,
+                            "timestamp": time.strftime(
+                                "%Y-%m-%dT%H:%M:%SZ",
+                                time.gmtime(),
+                            ),
+                        },
+                    )
 
     def _dispatch_single_runtime(
         self,
@@ -5915,6 +6212,14 @@ User Request:
 
         # --- Slash Commands ---
 
+        # F020: Check registry for pure-server handlers first.
+        # Commands with a handler bypass the LLM entirely.
+        if command and command in self._slash_command_registry:
+            entry = self._slash_command_registry[command]
+            if entry.get("handler"):
+                return entry["handler"](argument, session_data, n8n_session_id)
+
+        # Legacy slash command handlers (gradually migrate to registry above)
         if command == "/help":
             return """🆘 **Available Commands**
 
@@ -5976,6 +6281,11 @@ User Request:
    • /background list - List your background tasks
    • /background status <task_id> - Check task status
    • /background kill <task_id> - Kill a running task
+
+**Secrets:**
+   • /secret list - List stored secret names
+   • /secret set <name> <value> - Store a secret (value never sent to LLM)
+   • /secret delete <name> - Delete a secret
 
 **System:**
    • /update - Pull latest dev code and restart all dev services
@@ -6067,7 +6377,7 @@ You can mention an agent in your prompt and it will auto-delegate:
             if not argument:
                 return "Usage: /runtime [list|set|current]"
             if argument == "list":
-                return "🤖 **Available Runtimes**\n\n• `copilot` (GitHub Copilot)\n• `opencode` (OpenCode CLI)\n• `claude` (Claude Code CLI)\n• `gemini` (Google Gemini CLI)\n• `codex` (Codex CLI)\n• `devin` (Devin CLI)"
+                return "🤖 **Available Runtimes**\n\n• `copilot` (GitHub Copilot)\n• `opencode` (OpenCode CLI)\n• `claude` (Claude Code CLI)\n• `gemini` (Google Gemini CLI)\n• `codex` (Codex CLI)\n• `devin` (Devin CLI)\n• `cursor` (Cursor Agent CLI)"
             elif argument == "current":
                 return f"🤖 **Current Runtime:** `{current_runtime}`"
             elif argument.startswith("set "):
@@ -6642,7 +6952,8 @@ You can mention an agent in your prompt and it will auto-delegate:
                     "• `/background timeout=600 <prompt>` — Override timeout (seconds)\n"
                     "• `/background list` — List your background tasks\n"
                     "• `/background status <task_id>` — Check task status\n"
-                    "• `/background kill <task_id>` — Kill a running task\n\n"
+                    "• `/background kill <task_id>` — Kill a running task\n"
+                    "• `/background steer <task_id> <instruction>` — Steer a running task\n\n"
                     "Background tasks run in separate sessions and don't block your chat.\n"
                     "Monitor them in the ⚡ Tasks tab in the sidebar."
                 )
@@ -6696,6 +7007,22 @@ You can mention an agent in your prompt and it will auto-delegate:
                     f"**Agent:** `{task['agent']}` | Runtime: `{task['runtime']}` | Model: `{task['model']}`\n"
                     f"**Prompt:** {task['prompt'][:200]}"
                     f"{elapsed}"
+                )
+
+            if sub_lower.startswith("steer "):
+                parts = sub[6:].strip().split(None, 1)
+                if len(parts) < 2:
+                    return "Usage: `/background steer <task_id> <instruction>`"
+                tid, instruction = parts
+                task = self._bg_task_mgr.get_task(tid)
+                if not task:
+                    return f"Task `{tid}` not found."
+                if task["status"] != "running":
+                    return f"Task `{tid}` is {task['status']}, not running."
+                self._bg_task_mgr.write_steering(tid, instruction)
+                return (
+                    f"\U0001f3af **Steering sent to `{tid}`**\n\n"
+                    f"Instruction: {instruction[:200]}"
                 )
 
             if sub_lower.startswith("kill "):
@@ -6753,6 +7080,7 @@ You can mention an agent in your prompt and it will auto-delegate:
                 runtime=bg_runtime,
                 model=bg_model,
                 prompt=bg_prompt,
+                origin_session_id=n8n_session_id,
             )
             # Launch in background thread
             import concurrent.futures as _cf
@@ -7506,6 +7834,9 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         lifespan=_lifespan,
     )
 
+    # Expose managers on app.state for testing
+    app.state.bg_task_mgr = bg_task_mgr
+
     # ---- CORS middleware ----
     cors_origins = [
         o.strip()
@@ -7814,8 +8145,9 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             else:
                 # Fallback: use the name as-is if lookup fails
                 session_mgr.update_session_field(session_id, "model", body.model)
-        if body.agent:
-            session_mgr.update_session_field(session_id, "agent", body.agent)
+        # NOTE: body.agent is intentionally NOT persisted to the session here.
+        # Agent changes must go through /agent set (slash command) or session
+        # creation — not silently via every API call.  See F015.
 
         session_mgr._bg_identity = user["identity"]
         loop = asyncio.get_event_loop()
@@ -7929,8 +8261,9 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             else:
                 # Fallback: use the name as-is if lookup fails
                 session_mgr.update_session_field(session_id, "model", body.model)
-        if body.agent:
-            session_mgr.update_session_field(session_id, "agent", body.agent)
+        # NOTE: body.agent is intentionally NOT persisted to the session here.
+        # Agent changes must go through /agent set (slash command) or session
+        # creation — not silently via every API call.  See F015.
 
         session_mgr._bg_identity = user["identity"]
         loop = asyncio.get_event_loop()
@@ -8837,6 +9170,9 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         description: Optional[str] = (
             None  # human-readable task name shown in Agents panel
         )
+        origin_session_id: Optional[str] = (
+            None  # chat session that initiated this task
+        )
 
         @field_validator("prompt")
         @classmethod
@@ -8879,6 +9215,29 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 error=error,
                 skip_external=not notify,
             )
+            # Push in-thread event to originating session
+            task = bg_task_mgr.get_task(task_id)
+            origin_sid = (
+                task.get("origin_session_id") if task else None
+            )
+            if origin_sid:
+                bg_task_mgr.push_bg_event(
+                    origin_sid,
+                    {
+                        "task_id": task_id,
+                        "summary": prompt[:80],
+                        "status": status,
+                        "agent": (
+                            task.get("agent", "")
+                            if task
+                            else ""
+                        ),
+                        "timestamp": time.strftime(
+                            "%Y-%m-%dT%H:%M:%SZ",
+                            time.gmtime(),
+                        ),
+                    },
+                )
         except Exception as exc:
             print(
                 f"[API] Notification emit failed for {task_id}: {exc}", file=sys.stderr
@@ -9162,6 +9521,18 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 model=model,
                 channel=channel,
                 bg_identity=user_identity,
+            )
+
+
+            # -- Inject steering check instruction ----------------------------
+            steering_path = bg_task_mgr.get_steering_path(task_id)
+            context_prompt += (
+                f"\n\n[STEERING] You are background task `{task_id}`. Periodically "
+                f"(every 3-5 tool calls), check the file `{steering_path}` for new "
+                f"instructions from the user. If the file exists and has content, read "
+                f"it, incorporate the guidance into your current work, then continue. "
+                f"New instructions are appended with timestamps -- only act on ones you "
+                f"have not seen yet. This is how the user steers your work in real time."
             )
 
             # ── Build runtime-specific command ──────────────────────────
@@ -9476,6 +9847,9 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 notify=notify,
             )
         finally:
+            # Clean up steering file for completed task
+            bg_task_mgr.cleanup_steering(task_id)
+
             # Promote next queued task for this user if a slot just opened
             try:
                 next_q = bg_task_mgr.get_next_queued(channel, user_identity, agent)
@@ -9621,6 +9995,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 status="queued",
                 timeout=bg_timeout,
                 notify=notify_pref,
+                origin_session_id=body.origin_session_id,
             )
             queue_pos = bg_task_mgr.count_queued(channel, identity)
             print(
@@ -9651,6 +10026,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             status="running",
             timeout=bg_timeout,
             notify=notify_pref,
+            origin_session_id=body.origin_session_id,
         )
 
         # Resolve permission mode (default: restricted)
@@ -9686,6 +10062,24 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             "status": "running",
             "timeout": bg_timeout,
         }
+
+    @app.get("/api/v1/sessions/{session_id}/bg-events")
+    async def get_session_bg_events(
+        session_id: str, request: Request
+    ):
+        """Return and clear pending BG task completion events."""
+        await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get(
+                "x-user-identity"
+            ),
+            x_auth_channel=request.headers.get(
+                "x-auth-channel"
+            ),
+        )
+        events = bg_task_mgr.pop_bg_events(session_id)
+        return {"events": events}
 
     @app.get("/api/v1/background-tasks")
     async def list_background_tasks(request: Request):
@@ -9859,6 +10253,64 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         else:
             bg_task_mgr.delete_task(task_id)
             return {"task_id": task_id, "action": "deleted"}
+
+
+    # --- Background Task Steering ---
+
+    class SteerRequest(BaseModel):
+        instruction: str
+
+        @field_validator("instruction")
+        @classmethod
+        def validate_instruction(cls, v):
+            if not v or not v.strip():
+                raise ValueError("Instruction must not be empty")
+            if len(v) > 5000:
+                raise ValueError("Instruction must be 5,000 characters or less")
+            return v.strip()
+
+    @app.post("/api/v1/background-tasks/{task_id}/steer")
+    async def steer_background_task(task_id: str, body: SteerRequest, request: Request):
+        user = await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        task = bg_task_mgr.get_task(task_id)
+        if not task:
+            raise HTTPException(status_code=404, detail="Task not found")
+        if task["status"] != "running":
+            raise HTTPException(
+                status_code=409,
+                detail=f"Task is {task['status']}, not running -- cannot steer",
+            )
+        path = bg_task_mgr.write_steering(task_id, body.instruction)
+        logger.info("[STEER] Steering written for task %s: %s", task_id, body.instruction[:80])
+        return {
+            "task_id": task_id,
+            "status": "steering_written",
+            "steering_file": path,
+            "instruction_preview": body.instruction[:200],
+        }
+
+    @app.get("/api/v1/background-tasks/{task_id}/steering")
+    async def get_steering(task_id: str, request: Request):
+        await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        task = bg_task_mgr.get_task(task_id)
+        if not task:
+            raise HTTPException(status_code=404, detail="Task not found")
+        content = bg_task_mgr.read_steering(task_id)
+        return {
+            "task_id": task_id,
+            "has_steering": content is not None,
+            "content": content,
+        }
 
     # --- Notifications ---
 
@@ -10410,7 +10862,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             "details": details,
         }
 
-    def _parse_todos_from_dir(todo_dir: Path, limit: int = 10) -> list:
+    def _parse_todos_from_dir(todo_dir: Path, limit: int = 100) -> list:
         """Read TODOs from the folder-based structure (ACTIVE/ subfolder)."""
         active_dir = todo_dir / "ACTIVE"
         if not active_dir.is_dir():
@@ -10425,7 +10877,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                         break
         return todos
 
-    def _parse_todos_from_md(todo_file: Path, limit: int = 10) -> list:
+    def _parse_todos_from_md(todo_file: Path, limit: int = 100) -> list:
         """Parse active TODOs from the markdown file, return up to `limit`.
 
         Supports both the legacy flat TODOs.md format and the new folder-based
@@ -10528,14 +10980,14 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         return todos[:limit]
 
     @app.get("/api/v1/todos")
-    async def get_todos(request: Request, agent: str = None, limit: int = 10):
+    async def get_todos(request: Request, agent: str = None, limit: int = 100):
         await authenticate(
             request,
             authorization=request.headers.get("authorization"),
             x_user_identity=request.headers.get("x-user-identity"),
             x_auth_channel=request.headers.get("x-auth-channel"),
         )
-        limit = min(max(1, limit), 50)
+        limit = min(max(1, limit), 200)
         todo_path = _resolve_todo_file(agent)
         todos = _parse_todos_from_md(todo_path, limit)
         return {
@@ -10543,6 +10995,94 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             "count": len(todos),
             "agent": agent or "default",
             "file": str(todo_path),
+        }
+
+    @app.post("/api/v1/todos")
+    async def create_todo(request: Request):
+        """Create a new TODO in the ACTIVE/ folder."""
+        await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        try:
+            body = await request.json()
+        except Exception:
+            return {"success": False, "error": "Invalid JSON body"}
+
+        title = (body.get("title") or "").strip()
+        due_date = (body.get("due_date") or "").strip()
+        labels = body.get("labels") or []
+        details = (body.get("details") or "").strip()
+        agent = body.get("agent")
+
+        if not title:
+            return {"success": False, "error": "Title is required"}
+
+        # Reject path traversal and dangerous chars
+        if (
+            "/" in title
+            or "\\" in title
+            or "\0" in title
+            or ".." in title
+            or "\n" in title
+            or "\r" in title
+        ):
+            return {
+                "success": False,
+                "error": (
+                    "Invalid title: must not contain"
+                    " path separators, traversal"
+                    " sequences, or control characters"
+                ),
+            }
+
+        todo_path = _resolve_todo_file(agent)
+        if not todo_path.is_dir():
+            return {
+                "success": False,
+                "error": "Folder-based TODO dir not found",
+            }
+
+        active_dir = todo_path / "ACTIVE"
+        active_dir.mkdir(parents=True, exist_ok=True)
+
+        target = active_dir / title
+        # Belt-and-suspenders path traversal check
+        resolved = target.resolve()
+        parent = active_dir.resolve()
+        if not resolved.is_relative_to(parent):
+            return {
+                "success": False,
+                "error": "Invalid title: path traversal",
+            }
+
+        if target.exists():
+            return {
+                "success": False,
+                "error": f"TODO {title!r} already exists",
+            }
+
+        # Build file content with headers
+        lines = []
+        if due_date:
+            lines.append(f"DUE: {due_date}")
+        if labels:
+            fmt = ",".join(f"{{{lb}}}" for lb in labels)
+            lines.append(f"LABELS: {fmt}")
+        if details:
+            if lines:
+                lines.append("")
+            lines.append(details)
+
+        file_content = "\n".join(lines) + "\n" if lines else ""
+        target.write_text(file_content)
+
+        return {
+            "success": True,
+            "todo": title,
+            "file": str(target),
         }
 
     @app.post("/api/v1/todos/{todo_title}/complete")
@@ -10589,7 +11129,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
 
     @app.patch("/api/v1/todos/{todo_title}")
     async def update_todo_details(request: Request, todo_title: str):
-        """Update a TODO's details (markdown content)."""
+        """Update a TODO's label, due date, and/or details."""
         await authenticate(
             request,
             authorization=request.headers.get("authorization"),
@@ -10599,7 +11139,9 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
 
         try:
             body = await request.json()
-            details = body.get("details", "")
+            details = body.get("details")
+            new_label = body.get("label")
+            new_due = body.get("due_date")
             agent = body.get("agent")
 
             todo_path = _resolve_todo_file(agent)
@@ -10620,20 +11162,92 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                         "error": f"TODO '{todo_title}' not found in ACTIVE/",
                     }
 
-                # Preserve existing DUE:/LABELS: header lines
+                # Parse existing file content
                 existing = match.read_text().splitlines()
                 header_lines = []
+                body_lines = []
+                in_body = False
                 for line in existing:
-                    if line.startswith("DUE:") or line.startswith("LABELS:"):
+                    if not in_body and (
+                        line.startswith("DUE:") or line.startswith("LABELS:")
+                    ):
                         header_lines.append(line)
                     else:
-                        break
+                        in_body = True
+                        body_lines.append(line)
+
+                # Update DUE: header if new_due provided
+                if new_due is not None:
+                    header_lines = [
+                        h for h in header_lines if not h.startswith("DUE:")
+                    ]
+                    if new_due.strip():
+                        header_lines.insert(0, f"DUE: {new_due.strip()}")
+
+                # Update details body if provided
+                if details is not None:
+                    body_lines = (
+                        ["", details.strip()] if details.strip() else []
+                    )
 
                 new_content = "\n".join(header_lines)
-                if details and details.strip():
-                    new_content += "\n\n" + details.strip()
+                if body_lines:
+                    stripped_body = "\n".join(body_lines).strip()
+                    if stripped_body:
+                        new_content += "\n\n" + stripped_body
                 match.write_text(new_content + "\n")
-                return {"success": True, "updated": True, "todo": match.name}
+
+                # Rename file if label changed
+                result_name = match.name
+                if new_label and new_label.strip():
+                    clean = new_label.strip()
+                    # Reject path traversal and dangerous chars
+                    if (
+                        "/" in clean
+                        or "\\" in clean
+                        or "\0" in clean
+                        or ".." in clean
+                        or "\n" in clean
+                        or "\r" in clean
+                    ):
+                        return {
+                            "success": False,
+                            "error": (
+                                "Invalid label: must not"
+                                " contain path separators,"
+                                " traversal sequences,"
+                                " or control characters"
+                            ),
+                        }
+                    new_path = active_dir / clean
+                    # Belt-and-suspenders: verify resolved
+                    # path is inside active_dir
+                    resolved = new_path.resolve()
+                    parent = active_dir.resolve()
+                    if not resolved.is_relative_to(parent):
+                        return {
+                            "success": False,
+                            "error": "Invalid label:"
+                            " path traversal detected",
+                        }
+                    if clean == match.name:
+                        pass  # no rename needed
+                    elif new_path.exists():
+                        lbl = clean
+                        return {
+                            "success": False,
+                            "error": f"A TODO named"
+                            f" {lbl!r} already exists",
+                        }
+                    else:
+                        match.rename(new_path)
+                    result_name = clean
+
+                return {
+                    "success": True,
+                    "updated": True,
+                    "todo": result_name,
+                }
 
             # --- Legacy flat-file structure ---
             todo_file = todo_path
@@ -11227,6 +11841,148 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             # Fallback: run synchronously
             result = apply_update(skill_key)
             return {"success": result.get("success", False), "result": result}
+
+    # ═══════════════════════════════════════════════════════════════════════════
+    # ─── Secrets Manager API (F019) ──────────────────────────────────────────
+    # ═══════════════════════════════════════════════════════════════════════════
+
+    _SECRET_TOOL_PATH = os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), "secret_tool", "secret_tool.py"
+    )
+
+    @app.get("/api/v1/secrets")
+    async def list_secrets(request: Request):
+        """Return stored secret names (never values). Authenticated."""
+        await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                sys.executable, _SECRET_TOOL_PATH, "list", "--backend", "file",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, stderr = await proc.communicate()
+            if proc.returncode != 0:
+                detail = stdout.decode().strip() or stderr.decode().strip() or "secret-tool list failed"
+                try:
+                    err = json.loads(detail)
+                    detail = err.get("message", detail)
+                except Exception:
+                    pass
+                raise HTTPException(status_code=500, detail=detail)
+            output = stdout.decode().strip()
+            if not output:
+                names = []
+            else:
+                try:
+                    data = json.loads(output)
+                    names = data if isinstance(data, list) else data.get("names", [])
+                except json.JSONDecodeError:
+                    names = [ln.strip() for ln in output.splitlines() if ln.strip()]
+            return {"secrets": names, "count": len(names)}
+        except HTTPException:
+            raise
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
+
+    @app.post("/api/v1/secrets")
+    async def store_secret(request: Request):
+        """Store a secret (name + value). Authenticated. Never returns the value."""
+        await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        body = await request.json()
+        name = (body.get("name") or "").strip()
+        value = body.get("value", "")
+        if not name:
+            raise HTTPException(status_code=400, detail="Secret name is required")
+        if not value:
+            raise HTTPException(status_code=400, detail="Secret value is required")
+        # Validate name: alphanumeric, hyphens, underscores, dots only
+
+        if not re.match(r'^[A-Za-z0-9._-]+$', name):
+            raise HTTPException(
+                status_code=400,
+                detail="Secret name may only contain letters, digits, hyphens, underscores, and dots",
+            )
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                sys.executable, _SECRET_TOOL_PATH, "set",
+                "--name", name, "--value-stdin", "--backend", "file",
+                stdin=asyncio.subprocess.PIPE,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, stderr = await proc.communicate(input=f"{value}\n".encode())
+            if proc.returncode != 0:
+                detail = stdout.decode().strip() or stderr.decode().strip() or "secret-tool set failed"
+                try:
+                    err = json.loads(detail)
+                    detail = err.get("message", detail)
+                except Exception:
+                    pass
+                raise HTTPException(status_code=500, detail=detail)
+            result = json.loads(stdout.decode())
+            # Never return the value
+            return {
+                "status": result.get("status", "success"),
+                "action": result.get("action", "created"),
+                "name": name,
+            }
+        except HTTPException:
+            raise
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
+
+    @app.delete("/api/v1/secrets/{name}")
+    async def delete_secret(name: str, request: Request):
+        """Delete a secret by name. Authenticated."""
+        await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        if not re.match(r"^[A-Za-z0-9._-]+$", name):
+            raise HTTPException(
+                status_code=400,
+                detail="Secret name may only contain letters, digits, hyphens, underscores, and dots",
+            )
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                sys.executable, _SECRET_TOOL_PATH, "delete",
+                "--name", name, "--backend", "file",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, stderr = await proc.communicate()
+            output = stdout.decode().strip()
+            if proc.returncode != 0:
+                detail = output or stderr.decode().strip() or "secret-tool delete failed"
+                try:
+                    err = json.loads(detail)
+                    detail = err.get("message", detail)
+                except Exception:
+                    pass
+                raise HTTPException(status_code=404, detail=detail)
+            result = json.loads(output)
+            return {
+                "status": result.get("status", "success"),
+                "action": result.get("action", "deleted"),
+                "name": name,
+            }
+        except HTTPException:
+            raise
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
+
 
     # --- Session Permissions API ---
     @app.get("/api/v1/sessions/{session_id}/permissions")

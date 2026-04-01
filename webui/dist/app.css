@@ -2036,6 +2036,231 @@ html, body {
   }
 
   /* Background Tasks & Scheduler panels — same positioning as main-panel on mobile */
+
+/* ═══════════════════════════════════════════════════════════════════════════════
+   ─── Secrets Manager Panel (F019) ───────────────────────────────────────────
+   ═══════════════════════════════════════════════════════════════════════════════ */
+
+.secrets-panel {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  position: relative;
+}
+
+.secrets-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 20px;
+  height: var(--header-height);
+  border-radius: 0;
+  flex-shrink: 0;
+  gap: 12px;
+}
+
+.secrets-header-left {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.secrets-title {
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.secrets-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.secrets-body {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+  padding: 20px;
+  gap: 20px;
+}
+
+/* ─── Store form ─── */
+.secrets-form {
+  padding: 20px;
+  border-radius: var(--radius-md);
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.secrets-form-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin: 0;
+}
+
+.secrets-form-row {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.secrets-label {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.secrets-input {
+  background: rgba(255,255,255,0.04);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-sm);
+  padding: 8px 12px;
+  font-size: 14px;
+  font-family: var(--font-mono, 'SF Mono', 'Fira Code', 'Cascadia Code', monospace);
+  color: var(--text-primary);
+  outline: none;
+  transition: border-color 0.15s;
+}
+
+.secrets-input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px rgba(var(--accent-rgb, 99,102,241), 0.15);
+}
+
+.secrets-input::placeholder {
+  color: var(--text-muted);
+}
+
+.secrets-value-wrap {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.secrets-input-value {
+  flex: 1;
+}
+
+.secrets-vis-btn {
+  padding: 6px 8px;
+  font-size: 14px;
+  line-height: 1;
+  flex-shrink: 0;
+}
+
+.secrets-form-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.secrets-feedback {
+  font-size: 13px;
+  padding: 8px 12px;
+  border-radius: var(--radius-sm);
+  margin-top: 4px;
+}
+
+.secrets-feedback--success {
+  background: rgba(34, 197, 94, 0.1);
+  color: #22c55e;
+  border: 1px solid rgba(34, 197, 94, 0.2);
+}
+
+.secrets-feedback--error {
+  background: rgba(239, 68, 68, 0.1);
+  color: #ef4444;
+  border: 1px solid rgba(239, 68, 68, 0.2);
+}
+
+/* ─── Secrets list ─── */
+.secrets-list-wrap {
+  padding: 20px;
+  border-radius: var(--radius-md);
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 200px;
+}
+
+.secrets-list-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin: 0 0 12px 0;
+}
+
+.secrets-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.secrets-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  background: rgba(255,255,255,0.03);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-sm);
+  transition: background 0.15s, border-color 0.15s;
+}
+
+.secrets-item:hover {
+  background: rgba(255,255,255,0.06);
+  border-color: rgba(255,255,255,0.12);
+}
+
+.secrets-item-name {
+  font-family: var(--font-mono, 'SF Mono', 'Fira Code', 'Cascadia Code', monospace);
+  font-size: 13px;
+  color: var(--text-primary);
+  word-break: break-all;
+}
+
+.secrets-delete-btn {
+  color: var(--text-muted);
+  padding: 2px 6px;
+  font-size: 13px;
+  border-radius: var(--radius-sm);
+  transition: color 0.15s, background 0.15s;
+}
+
+.secrets-delete-btn:hover {
+  color: var(--danger, #ef4444);
+  background: rgba(239, 68, 68, 0.1);
+}
+
+.secrets-empty {
+  color: var(--text-muted);
+  font-size: 13px;
+  text-align: center;
+  padding: 30px 20px;
+}
+
+.secrets-error {
+  color: var(--danger, #ef4444);
+}
+
+/* ─── Mobile ─── */
+@media (max-width: 768px) {
+  .secrets-body {
+    padding: 12px;
+    gap: 12px;
+  }
+  .secrets-form, .secrets-list-wrap {
+    padding: 14px;
+  }
+}
+
   .background-panel {
     position: fixed;
     top: 0;
@@ -2954,6 +3179,131 @@ html, body {
   color: var(--text-primary);
   line-height: 1.4;
   word-break: break-word;
+  flex: 1;
+  min-width: 0;
+}
+
+/* Inline editing styles for TODO items */
+.todo-item-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.todo-edit-pencil {
+  opacity: 0;
+  font-size: 11px;
+  cursor: pointer;
+  color: var(--accent, #3ecf8e);
+  transition: opacity 0.15s;
+  flex-shrink: 0;
+  padding: 2px;
+}
+.todo-item:hover .todo-edit-pencil {
+  opacity: 0.6;
+}
+.todo-edit-pencil:hover {
+  opacity: 1 !important;
+}
+.todo-inline-input {
+  width: 100%;
+  background: rgba(255,255,255,0.08);
+  border: 1px solid var(--accent, #3ecf8e);
+  border-radius: 4px;
+  color: var(--text-primary, #fff);
+  font-size: 12px;
+  padding: 3px 6px;
+  outline: none;
+  font-family: inherit;
+}
+.todo-inline-input:focus {
+  box-shadow: 0 0 0 2px rgba(62,207,142,0.25);
+}
+.todo-inline-date {
+  background: rgba(255,255,255,0.08);
+  border: 1px solid var(--accent, #3ecf8e);
+  border-radius: 4px;
+  color: var(--text-primary, #fff);
+  font-size: 11px;
+  padding: 2px 6px;
+  outline: none;
+  font-family: inherit;
+  max-width: 180px;
+  color-scheme: dark;
+}
+.todo-inline-date:focus {
+  box-shadow: 0 0 0 2px rgba(62,207,142,0.25);
+}
+.todo-add-due {
+  font-size: 11px;
+  opacity: 0;
+  cursor: pointer;
+  color: var(--text-secondary, #aaa);
+  transition: opacity 0.15s;
+  padding: 1px 4px;
+  border-radius: 4px;
+}
+.todo-item:hover .todo-add-due {
+  opacity: 0.7;
+}
+.todo-add-due:hover {
+  opacity: 1 !important;
+  background: rgba(255,255,255,0.06);
+}
+.todo-due {
+  cursor: pointer;
+}
+.todo-due:hover {
+  text-decoration: underline;
+  text-decoration-style: dotted;
+}
+.todo-due-clear {
+  background: none;
+  border: none;
+  color: var(--text-secondary, #aaa);
+  cursor: pointer;
+  font-size: 12px;
+  padding: 0 4px;
+  margin-left: 4px;
+  opacity: 0.7;
+}
+.todo-due-clear:hover {
+  opacity: 1;
+  color: #e55;
+}
+
+/* Detail panel title editing */
+.td-title-editable {
+  cursor: pointer;
+  transition: border-color 0.15s;
+  border-bottom: 1px dashed transparent;
+  padding-bottom: 1px;
+}
+.td-title-editable:hover {
+  border-bottom-color: var(--accent, #3ecf8e);
+}
+.td-title-input {
+  width: 100%;
+  background: rgba(255,255,255,0.08);
+  border: 1px solid var(--accent, #3ecf8e);
+  border-radius: 4px;
+  color: var(--text-primary, #fff);
+  font-size: 14px;
+  font-weight: 600;
+  padding: 4px 8px;
+  outline: none;
+  font-family: inherit;
+}
+.td-title-input:focus {
+  box-shadow: 0 0 0 2px rgba(62,207,142,0.25);
+}
+.td-add-due {
+  cursor: pointer;
+  font-size: 12px;
+  opacity: 0.6;
+  transition: opacity 0.15s;
+}
+.td-add-due:hover {
+  opacity: 1;
 }
 .todo-item-meta {
   display: flex;
@@ -6647,4 +6997,149 @@ html, body {
 @keyframes tts-pulse {
   0%, 100% { opacity: 0.5; }
   50% { opacity: 1; }
+}
+
+/* ── F017: In-thread BG task completion banner ── */
+.bg-task-banner {
+  text-align: center;
+  font-size: 13px;
+  padding: 8px 16px;
+  margin: 8px auto;
+  max-width: 85%;
+  border-radius: 8px;
+  line-height: 1.5;
+}
+.bg-task-banner.bg-task-ok {
+  color: #3ecf8e;
+  background: rgba(62, 207, 142, 0.08);
+  border: 1px solid rgba(62, 207, 142, 0.2);
+}
+.bg-task-banner.bg-task-fail {
+  color: #e53935;
+  background: rgba(229, 57, 53, 0.08);
+  border: 1px solid rgba(229, 57, 53, 0.2);
+}
+.bg-task-banner-id {
+  font-family: var(--font-mono, monospace);
+  font-weight: 600;
+  font-size: 12px;
+}
+.bg-task-banner-agent {
+  opacity: 0.7;
+}
+.bg-task-banner-summary {
+  opacity: 0.85;
+  font-style: italic;
+}
+
+/* ─── F018: Quick-Add TODO ─────────────────────────────────────────────────── */
+.todo-add-btn {
+  background: none;
+  border: 1px solid transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 13px;
+  padding: 1px 5px;
+  border-radius: 4px;
+  transition: color 0.15s, background 0.15s, border-color 0.15s;
+  margin-left: auto;
+  line-height: 1;
+}
+.todo-add-btn:hover {
+  color: var(--accent);
+  background: rgba(62,207,142,0.10);
+  border-color: rgba(62,207,142,0.25);
+}
+.todo-quick-add {
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--glass-border);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  animation: todoQaSlide 0.18s ease-out;
+}
+@keyframes todoQaSlide {
+  from { opacity: 0; transform: translateY(-6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.todo-qa-input {
+  width: 100%;
+  padding: 6px 8px;
+  font-size: 12px;
+  background: rgba(0,0,0,0.3);
+  border: 1px solid var(--glass-border);
+  border-radius: 4px;
+  color: var(--text-primary);
+  outline: none;
+  box-sizing: border-box;
+}
+.todo-qa-input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px rgba(62,207,142,0.15);
+}
+.todo-qa-row {
+  display: flex;
+  gap: 6px;
+}
+.todo-qa-due,
+.todo-qa-labels {
+  flex: 1;
+  padding: 4px 6px;
+  font-size: 11px;
+  background: rgba(0,0,0,0.25);
+  border: 1px solid var(--glass-border);
+  border-radius: 4px;
+  color: var(--text-secondary);
+  outline: none;
+  box-sizing: border-box;
+}
+.todo-qa-due:focus,
+.todo-qa-labels:focus {
+  border-color: var(--accent);
+}
+.todo-qa-actions {
+  display: flex;
+  gap: 6px;
+  justify-content: flex-end;
+}
+.todo-qa-save-btn {
+  padding: 4px 14px;
+  font-size: 11px;
+  font-weight: 600;
+  background: var(--accent);
+  color: #000;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: opacity 0.15s;
+}
+.todo-qa-save-btn:hover {
+  opacity: 0.85;
+}
+.todo-qa-save-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+.todo-qa-cancel-btn {
+  padding: 4px 10px;
+  font-size: 11px;
+  background: none;
+  border: 1px solid var(--glass-border);
+  border-radius: 4px;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: color 0.15s;
+}
+.todo-qa-cancel-btn:hover {
+  color: var(--text-primary);
+  border-color: var(--text-muted);
+}
+.todo-qa-input-error {
+  border-color: #e74c3c !important;
+  animation: todoQaShake 0.3s ease-in-out;
+}
+@keyframes todoQaShake {
+  0%, 100% { transform: translateX(0); }
+  25% { transform: translateX(-4px); }
+  75% { transform: translateX(4px); }
 }

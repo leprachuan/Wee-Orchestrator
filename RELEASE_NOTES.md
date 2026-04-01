@@ -2,6 +2,97 @@
 
 ## Unreleased
 
+### Slash Command Registry (F020)
+
+A new **slash command registry** enables pure-server commands that bypass the LLM entirely, reducing latency and token cost while ensuring sensitive data never touches the AI model.
+
+**Architecture (`agent_manager.py`):**
+- `_slash_command_registry` — dict-based registry with command metadata and handler functions
+- `_init_slash_commands()` — initializes all registry-based commands at startup
+- `_register_slash(command, handler, description)` — adds new commands to the registry
+- `get_slash_commands()` — discovery endpoint for listing all available commands and their descriptions
+- Registry dispatch happens **before the LLM** in `execute()`, significantly reducing response latency
+- Legacy commands (if/elif chain) retained as fallback with `handler=None` entries for documentation
+
+**New `/secret` Command:**
+- `POST /secret set <name>` — creates/updates a secret; value read from stdin (never exposed in args or LLM)
+- `GET /secret get <name>` — retrieves secret value to stdout
+- `GET /secret list` — lists all secret names (values redacted)
+- `DELETE /secret delete <name>` — removes a secret
+- Integrates directly with `secret_tool.py` for consistent backend storage
+- **Security:** Secrets never touch the LLM context or message history
+
+**Testing:**
+- 22 new tests in `tests/test_f020_slash_registry.py`:
+  - Registry initialization and command metadata validation
+  - Handler registration and dispatch flow
+  - `/secret` sub-commands (set, get, delete, list)
+  - Stdin-based secret input without shell history exposure
+  - Registry integration with `execute()` pre-LLM dispatch
+  - API endpoint coverage (slash command discovery)
+- **All 602 total tests pass** (9 skipped); 0 regressions
+- `py_compile` PASS; W293 whitespace warnings pre-existing
+
+**QA (wee-qa — APPROVE):**
+- All 22 F020 tests pass, **602 total tests pass** (9 skipped)
+- Security validated: `/secret` name regex `^[A-Za-z0-9._-]+$` enforced; values via stdin only
+- Pre-LLM dispatch confirmed; handler routing verified
+- All 4 dev services active and responsive
+- No BLOCKER or MAJOR issues; W293 warnings pre-existing (not introduced by F020)
+
+**Commit:** 47b261d
+
+---
+
+### Quick-Add TODO Button in WebUI (F018)
+
+The TODO panel in the Web UI now includes a **quick-add button (+)** that reveals an inline form for rapidly creating new TODOs without leaving the interface.
+
+**Backend (`agent_manager.py`):**
+- `POST /api/v1/todos` endpoint creates TODO files in ACTIVE directory:
+  - `title` (required, string) — the TODO task name
+  - `due_date` (optional, ISO 8601 date) — due date for the TODO
+  - `labels` (optional, comma-separated string) — labels/tags
+  - `details` (optional, string) — extended description or notes
+- Path traversal protection: rejects `/`, `\`, `..`, control characters with `Path.resolve()` and `is_relative_to()` belt-and-suspenders checks
+- Duplicate title detection returns `409 Conflict` if TODO exists
+- Authentication required: returns `401` without valid Bearer token
+
+**Frontend (`webui/dist/app.js`):**
+- Quick-add button (+) in TODO panel header opens slide-in form
+- Form includes: title input (auto-focused), optional date picker, optional labels
+- Enter submits, Escape cancels; form auto-collapses on success
+- New TODO appears in panel immediately; error messages displayed on failure
+
+**Styles (`webui/dist/app.css`):**
+- Glassmorphism styling: frosted glass, emerald/leprechaun accent borders
+- Slide-in animation (0.3s ease-out) when form revealed
+- Auto-focus on title input for rapid data entry
+
+**Testing:**
+- 14 new tests in `tests/test_todo_quick_add.py`:
+  - Valid TODO creation with all field combinations
+  - Path traversal attack rejection (`/`, `\`, `..`, control chars)
+  - Duplicate title detection (409 Conflict)
+  - Missing title validation (400 Bad Request)
+  - Missing authentication (401 Unauthorized)
+  - Successful file creation in ACTIVE directory
+- **All 560 total tests pass** (0 regressions)
+- `py_compile` PASS; `flake8` CLEAN; all 4 dev services active
+
+**QA (wee-qa — APPROVE):**
+- All 14 F018 tests pass, **560 total tests pass** (0 failures)
+- Path traversal verified: rejects `/`, `\`, `..` patterns
+- Duplicate detection confirmed with clear error message
+- Auth enforcement verified: 401 without token, 200 with valid token
+- WebUI form rendering confirmed in accessibility snapshot
+- Keyboard shortcuts (Enter/Escape) functional
+- No BLOCKERs, MAJORs, or security issues found
+
+**Commit:** 2c78ee0
+
+---
+
 ### Add secret-tool add/get CLI (F006)
 
 The `secret_tool` CLI now supports **`add`** (alias for `set`) and **`get`** sub-commands,

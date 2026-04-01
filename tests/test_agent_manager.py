@@ -347,6 +347,18 @@ class TestSlashCommands(unittest.TestCase):
         self.assertIn("opencode", result)
         self.assertIn("claude", result)
 
+    def test_runtime_list_includes_cursor(self):
+        """Test that /runtime list includes cursor runtime (F014)"""
+        result = self.manager.execute("/runtime list", "test_session")
+        self.assertIn("cursor", result.lower())
+
+    def test_runtime_set_cursor(self):
+        """Test switching to cursor runtime (F014)"""
+        result = self.manager.execute("/runtime set cursor", "test_session")
+        self.assertIn("cursor", result.lower())
+        session_data = self.manager.get_or_create_session_data("test_session")
+        self.assertEqual(session_data["runtime"], "cursor")
+
     def test_runtime_current_command(self):
         """Test /runtime current command"""
         result = self.manager.execute("/runtime current", "test_session")

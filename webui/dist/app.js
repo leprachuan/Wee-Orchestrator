@@ -267,6 +267,8 @@ function showAppView() {
   }
   // Start notification polling (always, if notifications are supported)
   startNotificationPolling();
+  // Start in-thread bg-events polling (F017)
+  startBgEventPolling();
 }
 
 function updateSidebarIdentity() {
@@ -287,6 +289,7 @@ const RUNTIME_ICONS = {
   opencode: '/ui/assets/runtime-icons/opencode.svg',
   codex:    '/ui/assets/runtime-icons/openai.svg',
   devin:    '/ui/assets/runtime-icons/devin.svg',
+  cursor:   '/ui/assets/runtime-icons/cursor.svg',
 };
 
 function runtimeIconHTML(runtime, size = 14) {
@@ -461,6 +464,7 @@ const PILL_OPTIONS = {
       { label: `${runtimeIconHTML('opencode')}opencode`,     cmd: '/runtime set opencode' },
       { label: `${runtimeIconHTML('codex')}codex`,           cmd: '/runtime set codex' },
       { label: `${runtimeIconHTML('devin')}devin`,           cmd: '/runtime set devin' },
+      { label: `${runtimeIconHTML('cursor')}cursor`,         cmd: '/runtime set cursor' },
     ],
   },
   'meta-model': {
@@ -1191,7 +1195,7 @@ async function fetchAndRenderTodos() {
   const agentParam = agent && agent !== '—' ? `&agent=${encodeURIComponent(agent)}` : '';
 
   try {
-    const data = await apiRequest('GET', `/todos?limit=10${agentParam}`);
+    const data = await apiRequest('GET', `/todos?limit=100${agentParam}`);
     const todos = data.todos || [];
     
     // Sort todos by due date in ascending order (earliest first)
@@ -1256,19 +1260,98 @@ async function fetchAndRenderTodos() {
       const detailsB64 = btoa(unescape(encodeURIComponent(t.details || '')));
       const metaB64 = btoa(JSON.stringify({ due: t.due || '', labels: t.labels || [] }));
 
+      const dueDateVal = t.due || '';
       return `
       <div class="todo-item todo-item-clickable"
            data-todo-title="${safeTitle}"
            data-todo-details="${detailsB64}"
            data-todo-meta="${metaB64}"
+           data-todo-due="${escHtml(dueDateVal)}"
            onclick="openTodoDetailsPanel(this)">
-        <div class="todo-item-desc">${safeTitle}</div>
-        <div class="todo-item-meta">${dueBadge}${labels}${detailsIcon}</div>
+        <div class="todo-item-row">
+          <div class="todo-item-desc" ondblclick="todoInlineEditLabel(event, this)">${safeTitle}</div>
+          <span class="todo-edit-pencil" onclick="event.stopPropagation(); todoInlineEditLabel(event, this.previousElementSibling)" title="Edit title">✎</span>
+        </div>
+        <div class="todo-item-meta">
+          ${t.due ? `<span class="todo-due${overdueClass}" onclick="event.stopPropagation(); todoInlineEditDue(event, this)" title="Click to edit due date">${isOverdue ? '⚠️' : '📅'} ${t.due}</span>` : `<span class="todo-add-due" onclick="event.stopPropagation(); todoInlineEditDue(event, this)" title="Add due date">+ 📅</span>`}
+          ${labels}${detailsIcon}
+        </div>
         ${hasNotes ? `<div class="todo-item-notes">${t.notes.map(n => `<div>${escHtml(n)}</div>`).join('')}</div>` : ''}
       </div>`;
     }).join('');
   } catch (e) {
     list.innerHTML = '<p class="todo-empty"><img src="/static/icon-192.png" alt="" style="width:48px;height:48px;border-radius:10px;opacity:0.5;display:block;margin:0 auto 8px;">Could not load TODOs</p>';
+  }
+}
+
+// ─── F018: Quick-Add TODO ─────────────────────────────────────────────────────
+
+function toggleTodoQuickAdd() {
+  const form = $('todo-quick-add');
+  if (!form) return;
+  const visible = form.style.display !== 'none';
+  if (visible) {
+    closeTodoQuickAdd();
+  } else {
+    form.style.display = '';
+    const titleInput = $('todo-qa-title');
+    if (titleInput) { titleInput.value = ''; titleInput.focus(); }
+    const dueInput = $('todo-qa-due');
+    if (dueInput) dueInput.value = '';
+    const labelsInput = $('todo-qa-labels');
+    if (labelsInput) labelsInput.value = '';
+  }
+}
+
+function closeTodoQuickAdd() {
+  const form = $('todo-quick-add');
+  if (form) form.style.display = 'none';
+}
+
+async function submitTodoQuickAdd() {
+  const titleInput = $('todo-qa-title');
+  const dueInput = $('todo-qa-due');
+  const labelsInput = $('todo-qa-labels');
+  const saveBtn = $('btn-todo-qa-save');
+
+  const title = (titleInput ? titleInput.value : '').trim();
+  if (!title) {
+    if (titleInput) { titleInput.classList.add('todo-qa-input-error'); setTimeout(() => titleInput.classList.remove('todo-qa-input-error'), 600); }
+    return;
+  }
+
+  // Parse due date
+  let due_date = '';
+  if (dueInput && dueInput.value) {
+    const d = new Date(dueInput.value);
+    if (!isNaN(d.getTime())) {
+      const pad = n => String(n).padStart(2, '0');
+      due_date = `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+    }
+  }
+
+  // Parse labels
+  let labels = [];
+  if (labelsInput && labelsInput.value.trim()) {
+    labels = labelsInput.value.split(',').map(l => l.trim()).filter(Boolean);
+  }
+
+  // Disable button while saving
+  if (saveBtn) { saveBtn.disabled = true; saveBtn.textContent = '...'; }
+
+  try {
+    const res = await apiRequest('POST', '/todos', { title, due_date, labels });
+    if (res && res.success) {
+      closeTodoQuickAdd();
+      fetchAndRenderTodos();
+    } else {
+      const msg = (res && res.error) || 'Failed to create TODO';
+      if (titleInput) { titleInput.setCustomValidity(msg); titleInput.reportValidity(); setTimeout(() => titleInput.setCustomValidity(''), 2000); }
+    }
+  } catch (err) {
+    console.error('Quick-add TODO failed:', err);
+  } finally {
+    if (saveBtn) { saveBtn.disabled = false; saveBtn.textContent = 'Add'; }
   }
 }
 
@@ -1280,6 +1363,285 @@ function startTodoRefresh() {
 
 function stopTodoRefresh() {
   if (_todoRefreshTimer) { clearInterval(_todoRefreshTimer); _todoRefreshTimer = null; }
+}
+
+// ─── Inline TODO Editing ─────────────────────────────────────────────────────
+
+function todoInlineEditLabel(event, descEl) {
+  event.stopPropagation();
+  if (descEl.querySelector('input')) return; // already editing
+
+  const todoItem = descEl.closest('.todo-item');
+  const oldTitle = todoItem.dataset.todoTitle;
+  const text = descEl.textContent.trim();
+
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.value = text;
+  input.className = 'todo-inline-input';
+  input.onclick = (e) => e.stopPropagation();
+
+  const save = async () => {
+    const newLabel = input.value.trim();
+    if (!newLabel || newLabel === text) {
+      descEl.textContent = text;
+      return;
+    }
+    descEl.textContent = newLabel + ' …';
+    try {
+      await apiRequest('PATCH', `/todos/${encodeURIComponent(oldTitle)}`, { label: newLabel });
+      fetchAndRenderTodos();
+    } catch (e) {
+      descEl.textContent = text;
+      console.error('Failed to update label:', e);
+    }
+  };
+
+  input.addEventListener('blur', save);
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); input.blur(); }
+    if (e.key === 'Escape') { descEl.textContent = text; }
+  });
+
+  descEl.textContent = '';
+  descEl.appendChild(input);
+  input.focus();
+  input.select();
+}
+
+function todoInlineEditDue(event, dueEl) {
+  event.stopPropagation();
+  if (dueEl.querySelector('input')) return;
+
+  const todoItem = dueEl.closest('.todo-item');
+  const todoTitle = todoItem.dataset.todoTitle;
+  const oldDue = todoItem.dataset.todoDue || '';
+
+  // Parse existing due date to datetime-local format
+  let dtVal = '';
+  if (oldDue) {
+    const parts = oldDue.trim().split(' ');
+    const datePart = parts[0];
+    const timePart = parts[1] || '00:00';
+    if (datePart.includes('-')) {
+      dtVal = datePart + 'T' + timePart.substring(0, 5);
+    } else if (datePart.includes('/')) {
+      const dp = datePart.split('/');
+      dtVal = `${dp[2]}-${dp[0].padStart(2,'0')}-${dp[1].padStart(2,'0')}T${timePart.substring(0,5)}`;
+    }
+  }
+
+  const input = document.createElement('input');
+  input.type = 'datetime-local';
+  input.value = dtVal;
+  input.className = 'todo-inline-date';
+  input.onclick = (e) => e.stopPropagation();
+
+  const origHTML = dueEl.innerHTML;
+
+  const save = async () => {
+    const newVal = input.value;
+    if (!newVal && !oldDue) {
+      dueEl.innerHTML = origHTML;
+      return;
+    }
+    // Format as YYYY-MM-DD HH:MM
+    let formattedDue = '';
+    if (newVal) {
+      const dt = new Date(newVal);
+      const y = dt.getFullYear();
+      const m = String(dt.getMonth()+1).padStart(2,'0');
+      const d = String(dt.getDate()).padStart(2,'0');
+      const hh = String(dt.getHours()).padStart(2,'0');
+      const mm = String(dt.getMinutes()).padStart(2,'0');
+      formattedDue = `${y}-${m}-${d} ${hh}:${mm}`;
+    }
+    dueEl.innerHTML = '⏳ Saving...';
+    try {
+      await apiRequest('PATCH', `/todos/${encodeURIComponent(todoTitle)}`, { due_date: formattedDue });
+      fetchAndRenderTodos();
+    } catch (e) {
+      dueEl.innerHTML = origHTML;
+      console.error('Failed to update due date:', e);
+    }
+  };
+
+  input.addEventListener('blur', save);
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); input.blur(); }
+    if (e.key === 'Escape') { dueEl.innerHTML = origHTML; }
+  });
+
+  // Clear button for removing due date
+  const clearBtn = document.createElement('button');
+  clearBtn.textContent = '✕';
+  clearBtn.className = 'todo-due-clear';
+  clearBtn.title = 'Remove due date';
+  clearBtn.onclick = async (e) => {
+    e.stopPropagation();
+    dueEl.innerHTML = '⏳ Removing...';
+    try {
+      await apiRequest('PATCH', `/todos/${encodeURIComponent(todoTitle)}`, { due_date: '' });
+      fetchAndRenderTodos();
+    } catch (err) {
+      dueEl.innerHTML = origHTML;
+      console.error('Failed to remove due date:', err);
+    }
+  };
+
+  dueEl.innerHTML = '';
+  dueEl.appendChild(input);
+  if (oldDue) dueEl.appendChild(clearBtn);
+  input.focus();
+}
+
+// ─── Detail Panel Inline Editing ─────────────────────────────────────────────
+
+function initTodoDetailEditing() {
+  const titleEl = document.getElementById('td-title');
+  if (!titleEl || titleEl.dataset.editBound) return;
+  titleEl.dataset.editBound = 'true';
+
+  titleEl.classList.add('td-title-editable');
+  titleEl.title = 'Click to edit title';
+
+  titleEl.addEventListener('click', () => {
+    if (titleEl.querySelector('input')) return;
+    const oldTitle = _currentTodoTitle;
+    const text = titleEl.textContent.trim();
+
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.value = text;
+    input.className = 'td-title-input';
+
+    const save = async () => {
+      const newLabel = input.value.trim();
+      if (!newLabel || newLabel === text) {
+        titleEl.textContent = text;
+        return;
+      }
+      titleEl.textContent = newLabel;
+      _currentTodoTitle = newLabel;
+      try {
+        await apiRequest('PATCH', `/todos/${encodeURIComponent(oldTitle)}`, { label: newLabel });
+        fetchAndRenderTodos();
+      } catch (e) {
+        titleEl.textContent = text;
+        _currentTodoTitle = oldTitle;
+        console.error('Failed to update title:', e);
+      }
+    };
+
+    input.addEventListener('blur', save);
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') { e.preventDefault(); input.blur(); }
+      if (e.key === 'Escape') { titleEl.textContent = text; }
+    });
+
+    titleEl.textContent = '';
+    titleEl.appendChild(input);
+    input.focus();
+    input.select();
+  });
+
+  // Due date editing in meta bar
+  const metaEl = document.getElementById('td-meta');
+  if (metaEl && !metaEl.dataset.dueEditBound) {
+    metaEl.dataset.dueEditBound = 'true';
+    metaEl.addEventListener('click', (e) => {
+      const dueBadge = e.target.closest('.todo-due, .td-add-due');
+      if (!dueBadge) return;
+      todoDetailEditDue(dueBadge);
+    });
+  }
+}
+
+function todoDetailEditDue(dueEl) {
+  if (dueEl.querySelector('input')) return;
+  const oldDue = _currentTodoDue || '';
+  const todoTitle = _currentTodoTitle;
+
+  let dtVal = '';
+  if (oldDue) {
+    const parts = oldDue.trim().split(' ');
+    const datePart = parts[0];
+    const timePart = parts[1] || '00:00';
+    if (datePart.includes('-')) {
+      dtVal = datePart + 'T' + timePart.substring(0, 5);
+    } else if (datePart.includes('/')) {
+      const dp = datePart.split('/');
+      dtVal = `${dp[2]}-${dp[0].padStart(2,'0')}-${dp[1].padStart(2,'0')}T${timePart.substring(0,5)}`;
+    }
+  }
+
+  const input = document.createElement('input');
+  input.type = 'datetime-local';
+  input.value = dtVal;
+  input.className = 'todo-inline-date';
+  const origHTML = dueEl.innerHTML;
+
+  const save = async () => {
+    const newVal = input.value;
+    if (!newVal && !oldDue) { dueEl.innerHTML = origHTML; return; }
+    let formattedDue = '';
+    if (newVal) {
+      const dt = new Date(newVal);
+      const y = dt.getFullYear();
+      const m = String(dt.getMonth()+1).padStart(2,'0');
+      const d = String(dt.getDate()).padStart(2,'0');
+      const hh = String(dt.getHours()).padStart(2,'0');
+      const mm = String(dt.getMinutes()).padStart(2,'0');
+      formattedDue = `${y}-${m}-${d} ${hh}:${mm}`;
+    }
+    dueEl.innerHTML = '⏳';
+    try {
+      await apiRequest('PATCH', `/todos/${encodeURIComponent(todoTitle)}`, { due_date: formattedDue });
+      _currentTodoDue = formattedDue;
+      // Re-render meta bar
+      const metaEl = document.getElementById('td-meta');
+      if (metaEl) renderTodoDetailMeta(metaEl);
+      fetchAndRenderTodos();
+    } catch (e) {
+      dueEl.innerHTML = origHTML;
+      console.error('Failed to update due date:', e);
+    }
+  };
+
+  input.addEventListener('blur', save);
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); input.blur(); }
+    if (e.key === 'Escape') { dueEl.innerHTML = origHTML; }
+  });
+
+  dueEl.innerHTML = '';
+  dueEl.appendChild(input);
+  input.focus();
+}
+
+function renderTodoDetailMeta(metaEl) {
+  const parts = [];
+  if (_currentTodoDue) {
+    const now = new Date();
+    const dateParts = _currentTodoDue.split(' ');
+    const dp0 = dateParts[0];
+    let dueDate;
+    if (dp0.includes('-')) {
+      dueDate = new Date(_currentTodoDue.replace(' ', 'T'));
+    } else {
+      const dp = dp0.split('/');
+      dueDate = new Date(`${dp[2]}-${dp[0].padStart(2,'0')}-${dp[1].padStart(2,'0')}T${dateParts[1] || '00:00'}`);
+    }
+    const isOverdue = dueDate < now;
+    parts.push(`<span class="td-meta-item"><span class="todo-due${isOverdue ? ' overdue' : ''}" title="Click to edit due date" style="cursor:pointer">${isOverdue ? '⚠️' : '📅'} ${escHtml(_currentTodoDue)}</span></span>`);
+  } else {
+    parts.push(`<span class="td-meta-item"><span class="td-add-due" title="Add due date" style="cursor:pointer;opacity:0.6">+ 📅 Add due date</span></span>`);
+  }
+  _currentTodoLabels.forEach(l => {
+    parts.push(`<span class="td-meta-item"><span class="todo-label">${escHtml(l)}</span></span>`);
+  });
+  metaEl.innerHTML = parts.join('');
+  metaEl.style.display = '';
 }
 
 // ─── Todo Details Panel ────────────────────────────────────────────────────────
@@ -1324,30 +1686,12 @@ function openTodoDetailsPanel(el) {
   titleEl.textContent = title;
   editorEl.value = _currentTodoDetails;
 
-  // Populate meta bar with due date and labels
+  // Populate meta bar with due date and labels (editable)
   if (metaEl) {
-    const parts = [];
-    if (_currentTodoDue) {
-      const now = new Date();
-      const dateParts = _currentTodoDue.split(' ');
-      const dp0 = dateParts[0];
-      const tp = dateParts[1] || '00:00:00';
-      let d;
-      if (dp0.includes('-')) {
-        d = new Date(`${dp0}T${tp}`);
-      } else {
-        const dp = dp0.split('/');
-        d = new Date(`${dp[2]}-${(dp[0]||'01').padStart(2,'0')}-${(dp[1]||'01').padStart(2,'0')}T${tp}`);
-      }
-      const isOverdue = d < now;
-      parts.push(`<span class="td-meta-item"><span class="todo-due${isOverdue ? ' overdue' : ''}">${isOverdue ? '⚠️' : '📅'} ${_currentTodoDue}</span></span>`);
-    }
-    _currentTodoLabels.forEach(l => {
-      parts.push(`<span class="td-meta-item"><span class="todo-label">${escHtml(l)}</span></span>`);
-    });
-    metaEl.innerHTML = parts.join('');
-    metaEl.style.display = parts.length ? '' : 'none';
+    renderTodoDetailMeta(metaEl);
+    initTodoDetailEditing();
   }
+
 
   // Render markdown using marked if available, else fallback
   const html = markdownToHtml(_currentTodoDetails);
@@ -2185,6 +2529,41 @@ function renderSystemMessage(text) {
   scrollToBottom();
 }
 
+function renderBgTaskBanner(event) {
+  const container = $('messages');
+  if (!container) return;
+  const ok = event.status === 'completed';
+  const icon = ok ? '✅' : '❌';
+  const label = ok ? 'completed' : 'failed';
+  const summary = (event.summary || '').slice(0, 60);
+  const agent = event.agent ? ` · ${event.agent}` : '';
+  const banner = document.createElement('div');
+  banner.className = `bg-task-banner ${ok ? 'bg-task-ok' : 'bg-task-fail'}`;
+  banner.innerHTML = `${icon} <span class="bg-task-banner-id">${escHtml(event.task_id)}</span> ${label}${agent ? ` <span class="bg-task-banner-agent">${escHtml(agent)}</span>` : ''} — <span class="bg-task-banner-summary">${escHtml(summary)}</span>`;
+  container.appendChild(banner);
+  scrollToBottom();
+}
+
+let _bgEventPollInterval = null;
+function startBgEventPolling() {
+  if (_bgEventPollInterval) return;
+  _bgEventPollInterval = setInterval(pollBgEvents, 8000);
+}
+
+async function pollBgEvents() {
+  const sid = STATE.currentSessionId;
+  if (!sid) return;
+  try {
+    const data = await apiRequest('GET', `/sessions/${sid}/bg-events`);
+    if (!data || !data.events || !data.events.length) return;
+    for (const ev of data.events) {
+      if (BG.shownBgBanners.has(ev.task_id)) continue;
+      BG.shownBgBanners.add(ev.task_id);
+      renderBgTaskBanner(ev);
+    }
+  } catch (_) { /* ignore polling errors */ }
+}
+
 function scrollToBottom() {
   const c = $('messages');
   c.scrollTop = c.scrollHeight;
@@ -2370,6 +2749,24 @@ document.addEventListener('DOMContentLoaded', () => {
     const bar = $('notif-settings-bar');
     bar.classList.toggle('hidden');
   });
+
+  // --- Secrets panel listeners (F019) ---
+  if ($('btn-nav-secrets')) $('btn-nav-secrets').addEventListener('click', showSecretsPanel);
+  if ($('btn-secrets-open-sidebar')) $('btn-secrets-open-sidebar').addEventListener('click', () => toggleSidebar(true));
+  $('btn-secrets-refresh').addEventListener('click', loadSecrets);
+  $('btn-secrets-save').addEventListener('click', saveSecret);
+  $('btn-secrets-clear').addEventListener('click', () => {
+    $('secret-name-input').value = '';
+    $('secret-value-input').value = '';
+    hide($('secrets-form-feedback'));
+  });
+  $('btn-secrets-toggle-vis').addEventListener('click', () => {
+    const inp = $('secret-value-input');
+    inp.type = inp.type === 'password' ? 'text' : 'password';
+  });
+  $('secret-name-input').addEventListener('keydown', e => { if (e.key === 'Enter') $('secret-value-input').focus(); });
+  $('secret-value-input').addEventListener('keydown', e => { if (e.key === 'Enter') saveSecret(); });
+
   const notifToggle = $('notif-enabled-toggle');
   notifToggle.checked = isNotificationsEnabled();
   notifToggle.addEventListener('change', () => {
@@ -2409,6 +2806,16 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   // --- TODO panel ---
+  // F018: Quick-add TODO button and form
+  const btnAddTodo = $('btn-add-todo');
+  if (btnAddTodo) btnAddTodo.addEventListener('click', toggleTodoQuickAdd);
+  const btnTodoQaSave = $('btn-todo-qa-save');
+  if (btnTodoQaSave) btnTodoQaSave.addEventListener('click', submitTodoQuickAdd);
+  const btnTodoQaCancel = $('btn-todo-qa-cancel');
+  if (btnTodoQaCancel) btnTodoQaCancel.addEventListener('click', closeTodoQuickAdd);
+  const todoQaTitle = $('todo-qa-title');
+  if (todoQaTitle) todoQaTitle.addEventListener('keydown', (e) => { if (e.key === 'Enter') submitTodoQuickAdd(); if (e.key === 'Escape') closeTodoQuickAdd(); });
+
   const btnRefreshTodos = $('btn-refresh-todos');
   if (btnRefreshTodos) btnRefreshTodos.addEventListener('click', fetchAndRenderTodos);
 
@@ -2579,6 +2986,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
 function showChatPanel() {
   show($('chat-panel'));
+  hide($('secrets-panel'));
   hide($('scheduler-panel'));
   hide($('background-panel'));
   show($('btn-new-chat'));
@@ -2590,11 +2998,13 @@ function showChatPanel() {
   $('btn-nav-scheduler').classList.remove('active');
   $('btn-nav-background').classList.remove('active');
   $('btn-nav-notifications').classList.remove('active');
+  $('btn-nav-secrets').classList.remove('active');
   hideNotificationPanel();
   if (isMobileViewport()) toggleSidebar(false);
 }
 
 function showSchedulerPanel() {
+  hide($('secrets-panel'));
   hide($('chat-panel'));
   show($('scheduler-panel'));
   hide($('background-panel'));
@@ -2607,6 +3017,7 @@ function showSchedulerPanel() {
   $('btn-nav-chat').classList.remove('active');
   $('btn-nav-background').classList.remove('active');
   $('btn-nav-notifications').classList.remove('active');
+  $('btn-nav-secrets').classList.remove('active');
   hideNotificationPanel();
   loadSchedulerJobs();
   loadSchedulerStatus();
@@ -2615,6 +3026,7 @@ function showSchedulerPanel() {
 }
 
 function showBackgroundPanel() {
+  hide($('secrets-panel'));
   hide($('chat-panel'));
   hide($('scheduler-panel'));
   show($('background-panel'));
@@ -2627,10 +3039,113 @@ function showBackgroundPanel() {
   $('btn-nav-chat').classList.remove('active');
   $('btn-nav-scheduler').classList.remove('active');
   $('btn-nav-notifications').classList.remove('active');
+  $('btn-nav-secrets').classList.remove('active');
   hideNotificationPanel();
   loadBackgroundTasks();
   // On mobile, keep sidebar open so task list is visible immediately
   if (isMobileViewport()) toggleSidebar(true);
+}
+
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// ─── Secrets Manager Panel (F019) ────────────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════════════════════
+
+function showSecretsPanel() {
+  hide($('chat-panel'));
+  hide($('scheduler-panel'));
+  hide($('background-panel'));
+  show($('secrets-panel'));
+  hide($('btn-new-chat'));
+  hide($('sessions-list'));
+  hide($('bg-sidebar-list'));
+  hide($('sched-sidebar-list'));
+  hide($('request-queue-panel'));
+  $('btn-nav-secrets').classList.add('active');
+  $('btn-nav-chat').classList.remove('active');
+  $('btn-nav-background').classList.remove('active');
+  $('btn-nav-scheduler').classList.remove('active');
+  $('btn-nav-notifications').classList.remove('active');
+  hideNotificationPanel();
+  loadSecrets();
+  if (isMobileViewport()) toggleSidebar(false);
+}
+
+async function loadSecrets() {
+  const listEl = $('secrets-list');
+  if (!listEl) return;
+  listEl.innerHTML = '<p class="secrets-empty">Loading\u2026</p>';
+  try {
+    const data = await apiRequest('GET', '/secrets');
+    const names = data.secrets || [];
+    if (names.length === 0) {
+      listEl.innerHTML = '<p class="secrets-empty">No secrets stored yet.</p>';
+      return;
+    }
+    listEl.innerHTML = names.map(name => `
+      <div class="secrets-item">
+        <span class="secrets-item-name">${escapeHtml(name)}</span>
+        <button class="btn btn-ghost btn-xs secrets-delete-btn" data-name="${escapeHtml(name)}" title="Delete secret">\u2715</button>
+      </div>
+    `).join('');
+    listEl.querySelectorAll('.secrets-delete-btn').forEach(btn => {
+      btn.addEventListener('click', () => deleteSecret(btn.dataset.name));
+    });
+  } catch (err) {
+    listEl.innerHTML = `<p class="secrets-empty secrets-error">\u26a0 ${escapeHtml(err.message)}</p>`;
+  }
+}
+
+async function saveSecret() {
+  const nameEl = $('secret-name-input');
+  const valueEl = $('secret-value-input');
+  const fb = $('secrets-form-feedback');
+  const name = (nameEl.value || '').trim();
+  const value = valueEl.value || '';
+  if (!name) { showSecretsFeedback('Name is required', 'error'); nameEl.focus(); return; }
+  if (!value) { showSecretsFeedback('Value is required', 'error'); valueEl.focus(); return; }
+  if (!/^[A-Za-z0-9._-]+$/.test(name)) {
+    showSecretsFeedback('Name may only contain letters, digits, hyphens, underscores, dots', 'error');
+    nameEl.focus();
+    return;
+  }
+  try {
+    const result = await apiRequest('POST', '/secrets', { name, value });
+    const action = result.action === 'updated' ? 'Updated' : 'Created';
+    showSecretsFeedback(`\u2705 ${action} secret "${name}"`, 'success');
+    nameEl.value = '';
+    valueEl.value = '';
+    loadSecrets();
+  } catch (err) {
+    showSecretsFeedback(`\u274c ${err.message}`, 'error');
+  }
+}
+
+async function deleteSecret(name) {
+  if (!confirm(`Delete secret "${name}"? This cannot be undone.`)) return;
+  try {
+    await apiRequest('DELETE', `/secrets/${encodeURIComponent(name)}`);
+    showSecretsFeedback(`\u2705 Deleted "${name}"`, 'success');
+    loadSecrets();
+  } catch (err) {
+    showSecretsFeedback(`\u274c ${err.message}`, 'error');
+  }
+}
+
+function showSecretsFeedback(msg, type) {
+  const fb = $('secrets-form-feedback');
+  if (!fb) return;
+  fb.textContent = msg;
+  fb.className = 'secrets-feedback secrets-feedback--' + type;
+  show(fb);
+  clearTimeout(fb._timer);
+  fb._timer = setTimeout(() => hide(fb), 5000);
+}
+
+function escapeHtml(str) {
+  const div = document.createElement('div');
+  div.textContent = str;
+  return div.innerHTML;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -3296,6 +3811,7 @@ async function bgApi(method, path, body = null) {
 
 const BG = {
   tasks: [],
+  shownBgBanners: new Set(),
   selectedTaskId: null,
   isLoading: false,
   pollInterval: null,

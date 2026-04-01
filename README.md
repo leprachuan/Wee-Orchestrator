@@ -63,6 +63,7 @@ Wee-Orchestrator is a unified AI agent platform that lets you chat with **any AI
 - **⚡ Background Tasks** — Delegate long-running work to background agents with in-thread status updates
 - **🔔 In-Thread Notifications** — Real-time task lifecycle updates (queued → running → complete) in your conversation
 - **🔌 Extensible Skills** — Plugin architecture for adding capabilities (Cisco Meraki, Home Assistant, etc.)
+- **⚙️ Slash Command Registry** — Pure-server commands that bypass the LLM for reduced latency; built-in `/secret` command for secure credential management
 
 ---
 
@@ -816,6 +817,29 @@ Interact with the agent manager using slash commands:
 
 **Query Tracking**: When a query is executing, the agent manager tracks its process ID (PID), runtime, agent, and output. Use `/status` to check if a query is running and see recent output, or `/cancel` to terminate a long-running query.
 
+#### Secrets Management
+```
+/secret set <name>         # Create/update a secret (value read from stdin)
+/secret get <name>         # Retrieve a secret value
+/secret list               # List all secret names (values redacted)
+/secret delete <name>      # Remove a secret
+```
+
+**Features:**
+- Secrets stored securely via `secret_tool.py` (never exposed in shell history or LLM context)
+- Name validation: alphanumeric, dots, hyphens, underscores only (`^[A-Za-z0-9._-]+$`)
+- stdin-based input prevents secrets from appearing in command history
+- Pre-LLM dispatch — secrets never touch the AI model
+- Supported on all channels (Telegram, WebEx, Web UI)
+
+**Examples:**
+```bash
+echo "my-db-password" | /secret set db_password
+/secret get db_password    # Returns: my-db-password
+/secret list               # Returns: db_password, api_key, github_token
+/secret delete db_password
+```
+
 ### N8N Integration
 
 Use in an N8N workflow:
@@ -1151,10 +1175,54 @@ The built-in task scheduler (`task_scheduler.py`) runs AI jobs on a schedule wit
 | `GET` | `/api/v1/scheduler/jobs/{id}/results` | Retrieve execution results |
 | `GET` | `/api/v1/scheduler/jobs/{id}/logs` | Retrieve execution logs |
 
+### TODO Management
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `POST` | `/api/v1/todos` | Create a new TODO with optional due_date, labels, details |
+
+**POST /api/v1/todos** — Create a new TODO
+
+Request body:
+```json
+{
+  "title": "Complete user auth flow",
+  "due_date": "2026-04-15",
+  "labels": "backend,security",
+  "details": "Implement JWT tokens and refresh logic"
+}
+```
+
+Response (201 Created):
+```json
+{
+  "id": "To1a2b3",
+  "title": "Complete user auth flow",
+  "due_date": "2026-04-15",
+  "labels": "backend,security",
+  "details": "Implement JWT tokens and refresh logic",
+  "created_at": "2026-04-01T00:26:27Z"
+}
+```
+
+Errors:
+- `400 Bad Request` — Missing required `title` field or invalid JSON
+- `401 Unauthorized` — Missing or invalid Bearer token
+- `409 Conflict` — TODO with this title already exists
+- `422 Unprocessable Entity` — Path traversal detected (invalid characters in title)
+
+**Security:**
+- Path traversal protection: rejects `/`, `\`, `..`, and control characters in the title
+- Duplicate title detection prevents accidental overwrites
+- Authentication required: Bearer token or shared-key validation
+
+---
+
 ### Quick Start
 
 ```bash
 # Create a daily summary job (via API)
+
 curl -X POST http://localhost:8000/api/v1/scheduler/jobs \
   -H "Authorization: Bearer <token>" \
   -H "Content-Type: application/json" \

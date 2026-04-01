@@ -77,6 +77,7 @@
         <button id="btn-nav-chat" class="sidebar-nav-btn active" title="Chat">💬 Chat</button>
         <button id="btn-nav-background" class="sidebar-nav-btn" title="Background Tasks">⚡ Tasks <span id="bg-task-badge" class="nav-badge hidden">0</span></button>
         <button id="btn-nav-scheduler" class="sidebar-nav-btn" title="Scheduled Tasks">📅 Scheduler</button>
+        <button id="btn-nav-secrets" class="sidebar-nav-btn" title="Secret Manager">ð Secrets</button>
       </div>
 
       <button id="btn-new-chat" class="btn btn-primary new-chat-btn">+ New Chat</button>
@@ -238,8 +239,21 @@
           <span class="todo-section-icon">✅</span>
           <span class="todo-section-label">Upcoming TODOs</span>
           <span id="todo-count" class="todo-count">0</span>
+          <button id="btn-add-todo" class="todo-add-btn" title="Add new TODO">＋</button>
           <button id="btn-refresh-todos" class="todo-refresh-btn" title="Refresh TODOs">↻</button>
           <button id="btn-toggle-queue" class="queue-toggle-btn" title="Expand panel">›</button>
+        </div>
+        <!-- Quick-add form (hidden by default) -->
+        <div id="todo-quick-add" class="todo-quick-add" style="display:none;">
+          <input id="todo-qa-title" class="todo-qa-input" type="text" placeholder="New TODO title…" autocomplete="off" />
+          <div class="todo-qa-row">
+            <input id="todo-qa-due" class="todo-qa-due" type="datetime-local" title="Due date (optional)" />
+            <input id="todo-qa-labels" class="todo-qa-labels" type="text" placeholder="Labels (comma-sep)" title="Labels (optional)" />
+          </div>
+          <div class="todo-qa-actions">
+            <button id="btn-todo-qa-save" class="todo-qa-save-btn">Add</button>
+            <button id="btn-todo-qa-cancel" class="todo-qa-cancel-btn">Cancel</button>
+          </div>
         </div>
         <div id="todo-items-list" class="todo-items-list">
           <p class="todo-empty"><img src="/static/icon-192.png" alt="" style="width:48px;height:48px;border-radius:10px;opacity:0.5;display:block;margin:0 auto 8px;"><span>No upcoming TODOs</span></p>
@@ -302,6 +316,48 @@
             <p class="bg-detail-empty">Select a task from the sidebar to view details</p>
           </div>
         </aside>
+      </div>
+    </section>
+
+    <!-- Secrets Manager panel (F019) -->
+    <section id="secrets-panel" class="secrets-panel hidden">
+      <header class="secrets-header glass-panel">
+        <div class="secrets-header-left">
+          <button id="btn-secrets-open-sidebar" class="btn-icon sidebar-open-btn hidden" title="Open sidebar">☰</button>
+          <h2 class="secrets-title">ð Secret Manager</h2>
+        </div>
+        <div class="secrets-header-actions">
+          <button id="btn-secrets-refresh" class="btn btn-ghost btn-sm">↺ Refresh</button>
+        </div>
+      </header>
+
+      <div class="secrets-body">
+        <div class="secrets-form glass-panel">
+          <h3 class="secrets-form-title">Store a Secret</h3>
+          <div class="secrets-form-row">
+            <label for="secret-name-input" class="secrets-label">Name</label>
+            <input id="secret-name-input" type="text" class="secrets-input" placeholder="e.g. MY_API_KEY" autocomplete="off" spellcheck="false" />
+          </div>
+          <div class="secrets-form-row">
+            <label for="secret-value-input" class="secrets-label">Value</label>
+            <div class="secrets-value-wrap">
+              <input id="secret-value-input" type="password" class="secrets-input secrets-input-value" placeholder="Secret value (masked)" autocomplete="off" />
+              <button id="btn-secrets-toggle-vis" class="btn btn-ghost btn-xs secrets-vis-btn" type="button" title="Toggle visibility">ð</button>
+            </div>
+          </div>
+          <div class="secrets-form-actions">
+            <button id="btn-secrets-save" class="btn btn-primary btn-sm">ð¾ Save</button>
+            <button id="btn-secrets-clear" class="btn btn-ghost btn-sm">Clear</button>
+          </div>
+          <div id="secrets-form-feedback" class="secrets-feedback hidden"></div>
+        </div>
+
+        <div class="secrets-list-wrap glass-panel">
+          <h3 class="secrets-list-title">Stored Secrets</h3>
+          <div id="secrets-list" class="secrets-list">
+            <p class="secrets-empty">Loading…</p>
+          </div>
+        </div>
       </div>
     </section>
 
