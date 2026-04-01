@@ -10862,7 +10862,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             "details": details,
         }
 
-    def _parse_todos_from_dir(todo_dir: Path, limit: int = 10) -> list:
+    def _parse_todos_from_dir(todo_dir: Path, limit: int = 100) -> list:
         """Read TODOs from the folder-based structure (ACTIVE/ subfolder)."""
         active_dir = todo_dir / "ACTIVE"
         if not active_dir.is_dir():
@@ -10877,7 +10877,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                         break
         return todos
 
-    def _parse_todos_from_md(todo_file: Path, limit: int = 10) -> list:
+    def _parse_todos_from_md(todo_file: Path, limit: int = 100) -> list:
         """Parse active TODOs from the markdown file, return up to `limit`.
 
         Supports both the legacy flat TODOs.md format and the new folder-based
@@ -10980,14 +10980,14 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         return todos[:limit]
 
     @app.get("/api/v1/todos")
-    async def get_todos(request: Request, agent: str = None, limit: int = 10):
+    async def get_todos(request: Request, agent: str = None, limit: int = 100):
         await authenticate(
             request,
             authorization=request.headers.get("authorization"),
             x_user_identity=request.headers.get("x-user-identity"),
             x_auth_channel=request.headers.get("x-auth-channel"),
         )
-        limit = min(max(1, limit), 50)
+        limit = min(max(1, limit), 200)
         todo_path = _resolve_todo_file(agent)
         todos = _parse_todos_from_md(todo_path, limit)
         return {

@@ -1195,7 +1195,7 @@ async function fetchAndRenderTodos() {
   const agentParam = agent && agent !== '—' ? `&agent=${encodeURIComponent(agent)}` : '';
 
   try {
-    const data = await apiRequest('GET', `/todos?limit=10${agentParam}`);
+    const data = await apiRequest('GET', `/todos?limit=100${agentParam}`);
     const todos = data.todos || [];
     
     // Sort todos by due date in ascending order (earliest first)
