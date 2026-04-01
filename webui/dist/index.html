@@ -13,7 +13,7 @@
   <link rel="icon" type="image/png" sizes="192x192" href="/static/icon-192.png" />
   <link rel="apple-touch-icon" href="/static/apple-touch-icon.png" />
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/highlight.js@11.9.0/styles/github-dark.min.css" />
-  <link rel="stylesheet" href="app.css?v=20260321mobile4" />
+  <link rel="stylesheet" href="app.css?v=20260401secrets1" />
 </head>
 <body>
   <!-- Auth overlay -->
@@ -77,7 +77,7 @@
         <button id="btn-nav-chat" class="sidebar-nav-btn active" title="Chat">💬 Chat</button>
         <button id="btn-nav-background" class="sidebar-nav-btn" title="Background Tasks">⚡ Tasks <span id="bg-task-badge" class="nav-badge hidden">0</span></button>
         <button id="btn-nav-scheduler" class="sidebar-nav-btn" title="Scheduled Tasks">📅 Scheduler</button>
-        <button id="btn-nav-secrets" class="sidebar-nav-btn" title="Secret Manager">ð Secrets</button>
+        <button id="btn-nav-secrets" class="sidebar-nav-btn" title="Secret Manager">🔐 Secrets</button>
       </div>
 
       <button id="btn-new-chat" class="btn btn-primary new-chat-btn">+ New Chat</button>
@@ -324,7 +324,7 @@
       <header class="secrets-header glass-panel">
         <div class="secrets-header-left">
           <button id="btn-secrets-open-sidebar" class="btn-icon sidebar-open-btn hidden" title="Open sidebar">☰</button>
-          <h2 class="secrets-title">ð Secret Manager</h2>
+          <h2 class="secrets-title">🔐 Secret Manager</h2>
         </div>
         <div class="secrets-header-actions">
           <button id="btn-secrets-refresh" class="btn btn-ghost btn-sm">↺ Refresh</button>
@@ -342,14 +342,14 @@
             <label for="secret-value-input" class="secrets-label">Value</label>
             <div class="secrets-value-wrap">
               <input id="secret-value-input" type="password" class="secrets-input secrets-input-value" placeholder="Secret value (masked)" autocomplete="off" />
-              <button id="btn-secrets-toggle-vis" class="btn btn-ghost btn-xs secrets-vis-btn" type="button" title="Toggle visibility">ð</button>
+              <button id="btn-secrets-toggle-vis" class="btn btn-ghost btn-xs secrets-vis-btn" type="button" title="Toggle visibility">👁</button>
             </div>
           </div>
           <div class="secrets-form-actions">
-            <button id="btn-secrets-save" class="btn btn-primary btn-sm">ð¾ Save</button>
+            <button id="btn-secrets-save" class="btn btn-primary btn-sm">💾 Save</button>
             <button id="btn-secrets-clear" class="btn btn-ghost btn-sm">Clear</button>
           </div>
-          <div id="secrets-form-feedback" class="secrets-feedback hidden"></div>
+          <div id="secrets-form-feedback" class="secrets-feedback hidden" role="alert" aria-live="polite"></div>
         </div>
 
         <div class="secrets-list-wrap glass-panel">
@@ -675,7 +675,7 @@
   <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/dompurify@3/dist/purify.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/highlight.js@11.9.0/highlight.min.js"></script>
-  <script src="app.js?v=20260321mobile4" type="module"></script>
+  <script src="app.js?v=20260401secrets1" type="module"></script>
 
     <!-- Skills slide-over panel (right side, below canvas) -->
     <aside id="skills-panel" class="skills-panel skills-hidden">

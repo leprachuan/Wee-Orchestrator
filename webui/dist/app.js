@@ -2762,7 +2762,11 @@ document.addEventListener('DOMContentLoaded', () => {
   });
   $('btn-secrets-toggle-vis').addEventListener('click', () => {
     const inp = $('secret-value-input');
-    inp.type = inp.type === 'password' ? 'text' : 'password';
+    const btn = $('btn-secrets-toggle-vis');
+    const isHidden = inp.type === 'password';
+    inp.type = isHidden ? 'text' : 'password';
+    btn.textContent = isHidden ? '👁‍🗨' : '👁';
+    btn.setAttribute('aria-pressed', isHidden ? 'true' : 'false');
   });
   $('secret-name-input').addEventListener('keydown', e => { if (e.key === 'Enter') $('secret-value-input').focus(); });
   $('secret-value-input').addEventListener('keydown', e => { if (e.key === 'Enter') saveSecret(); });
@@ -3139,7 +3143,9 @@ function showSecretsFeedback(msg, type) {
   fb.className = 'secrets-feedback secrets-feedback--' + type;
   show(fb);
   clearTimeout(fb._timer);
-  fb._timer = setTimeout(() => hide(fb), 5000);
+  if (type === 'success') {
+    fb._timer = setTimeout(() => hide(fb), 5000);
+  }
 }
 
 function escapeHtml(str) {
