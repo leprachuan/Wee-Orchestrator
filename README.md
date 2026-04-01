@@ -1150,10 +1150,54 @@ The built-in task scheduler (`task_scheduler.py`) runs AI jobs on a schedule wit
 | `GET` | `/api/v1/scheduler/jobs/{id}/results` | Retrieve execution results |
 | `GET` | `/api/v1/scheduler/jobs/{id}/logs` | Retrieve execution logs |
 
+### TODO Management
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `POST` | `/api/v1/todos` | Create a new TODO with optional due_date, labels, details |
+
+**POST /api/v1/todos** — Create a new TODO
+
+Request body:
+```json
+{
+  "title": "Complete user auth flow",
+  "due_date": "2026-04-15",
+  "labels": "backend,security",
+  "details": "Implement JWT tokens and refresh logic"
+}
+```
+
+Response (201 Created):
+```json
+{
+  "id": "To1a2b3",
+  "title": "Complete user auth flow",
+  "due_date": "2026-04-15",
+  "labels": "backend,security",
+  "details": "Implement JWT tokens and refresh logic",
+  "created_at": "2026-04-01T00:26:27Z"
+}
+```
+
+Errors:
+- `400 Bad Request` — Missing required `title` field or invalid JSON
+- `401 Unauthorized` — Missing or invalid Bearer token
+- `409 Conflict` — TODO with this title already exists
+- `422 Unprocessable Entity` — Path traversal detected (invalid characters in title)
+
+**Security:**
+- Path traversal protection: rejects `/`, `\`, `..`, and control characters in the title
+- Duplicate title detection prevents accidental overwrites
+- Authentication required: Bearer token or shared-key validation
+
+---
+
 ### Quick Start
 
 ```bash
 # Create a daily summary job (via API)
+
 curl -X POST http://localhost:8000/api/v1/scheduler/jobs \
   -H "Authorization: Bearer <token>" \
   -H "Content-Type: application/json" \
