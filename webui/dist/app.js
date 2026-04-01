@@ -2730,6 +2730,7 @@ document.addEventListener('DOMContentLoaded', () => {
   $('btn-nav-chat').addEventListener('click', showChatPanel);
   $('btn-nav-background').addEventListener('click', showBackgroundPanel);
   $('btn-nav-scheduler').addEventListener('click', showSchedulerPanel);
+  $('btn-nav-secrets').addEventListener('click', showSecretsPanel);
   $('btn-nav-notifications').addEventListener('click', toggleNotificationPanel);
 
   // Notification settings/actions
@@ -2749,6 +2750,24 @@ document.addEventListener('DOMContentLoaded', () => {
     const bar = $('notif-settings-bar');
     bar.classList.toggle('hidden');
   });
+
+  // --- Secrets panel listeners (F019) ---
+  if ($('btn-nav-secrets')) $('btn-nav-secrets').addEventListener('click', showSecretsPanel);
+  if ($('btn-secrets-open-sidebar')) $('btn-secrets-open-sidebar').addEventListener('click', () => toggleSidebar(true));
+  $('btn-secrets-refresh').addEventListener('click', loadSecrets);
+  $('btn-secrets-save').addEventListener('click', saveSecret);
+  $('btn-secrets-clear').addEventListener('click', () => {
+    $('secret-name-input').value = '';
+    $('secret-value-input').value = '';
+    hide($('secrets-form-feedback'));
+  });
+  $('btn-secrets-toggle-vis').addEventListener('click', () => {
+    const inp = $('secret-value-input');
+    inp.type = inp.type === 'password' ? 'text' : 'password';
+  });
+  $('secret-name-input').addEventListener('keydown', e => { if (e.key === 'Enter') $('secret-value-input').focus(); });
+  $('secret-value-input').addEventListener('keydown', e => { if (e.key === 'Enter') saveSecret(); });
+
   const notifToggle = $('notif-enabled-toggle');
   notifToggle.checked = isNotificationsEnabled();
   notifToggle.addEventListener('change', () => {
@@ -2968,6 +2987,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
 function showChatPanel() {
   show($('chat-panel'));
+  hide($('secrets-panel'));
   hide($('scheduler-panel'));
   hide($('background-panel'));
   show($('btn-new-chat'));
@@ -2979,11 +2999,13 @@ function showChatPanel() {
   $('btn-nav-scheduler').classList.remove('active');
   $('btn-nav-background').classList.remove('active');
   $('btn-nav-notifications').classList.remove('active');
+  $('btn-nav-secrets').classList.remove('active');
   hideNotificationPanel();
   if (isMobileViewport()) toggleSidebar(false);
 }
 
 function showSchedulerPanel() {
+  hide($('secrets-panel'));
   hide($('chat-panel'));
   show($('scheduler-panel'));
   hide($('background-panel'));
@@ -2996,6 +3018,7 @@ function showSchedulerPanel() {
   $('btn-nav-chat').classList.remove('active');
   $('btn-nav-background').classList.remove('active');
   $('btn-nav-notifications').classList.remove('active');
+  $('btn-nav-secrets').classList.remove('active');
   hideNotificationPanel();
   loadSchedulerJobs();
   loadSchedulerStatus();
@@ -3004,6 +3027,7 @@ function showSchedulerPanel() {
 }
 
 function showBackgroundPanel() {
+  hide($('secrets-panel'));
   hide($('chat-panel'));
   hide($('scheduler-panel'));
   show($('background-panel'));
@@ -3016,10 +3040,113 @@ function showBackgroundPanel() {
   $('btn-nav-chat').classList.remove('active');
   $('btn-nav-scheduler').classList.remove('active');
   $('btn-nav-notifications').classList.remove('active');
+  $('btn-nav-secrets').classList.remove('active');
   hideNotificationPanel();
   loadBackgroundTasks();
   // On mobile, keep sidebar open so task list is visible immediately
   if (isMobileViewport()) toggleSidebar(true);
+}
+
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// ─── Secrets Manager Panel (F019) ────────────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════════════════════
+
+function showSecretsPanel() {
+  hide($('chat-panel'));
+  hide($('scheduler-panel'));
+  hide($('background-panel'));
+  show($('secrets-panel'));
+  hide($('btn-new-chat'));
+  hide($('sessions-list'));
+  hide($('bg-sidebar-list'));
+  hide($('sched-sidebar-list'));
+  hide($('request-queue-panel'));
+  $('btn-nav-secrets').classList.add('active');
+  $('btn-nav-chat').classList.remove('active');
+  $('btn-nav-background').classList.remove('active');
+  $('btn-nav-scheduler').classList.remove('active');
+  $('btn-nav-notifications').classList.remove('active');
+  hideNotificationPanel();
+  loadSecrets();
+  if (isMobileViewport()) toggleSidebar(false);
+}
+
+async function loadSecrets() {
+  const listEl = $('secrets-list');
+  if (!listEl) return;
+  listEl.innerHTML = '<p class="secrets-empty">Loading\u2026</p>';
+  try {
+    const data = await apiRequest('GET', '/secrets');
+    const names = data.secrets || [];
+    if (names.length === 0) {
+      listEl.innerHTML = '<p class="secrets-empty">No secrets stored yet.</p>';
+      return;
+    }
+    listEl.innerHTML = names.map(name => `
+      <div class="secrets-item">
+        <span class="secrets-item-name">${escapeHtml(name)}</span>
+        <button class="btn btn-ghost btn-xs secrets-delete-btn" data-name="${escapeHtml(name)}" title="Delete secret">\u2715</button>
+      </div>
+    `).join('');
+    listEl.querySelectorAll('.secrets-delete-btn').forEach(btn => {
+      btn.addEventListener('click', () => deleteSecret(btn.dataset.name));
+    });
+  } catch (err) {
+    listEl.innerHTML = `<p class="secrets-empty secrets-error">\u26a0 ${escapeHtml(err.message)}</p>`;
+  }
+}
+
+async function saveSecret() {
+  const nameEl = $('secret-name-input');
+  const valueEl = $('secret-value-input');
+  const fb = $('secrets-form-feedback');
+  const name = (nameEl.value || '').trim();
+  const value = valueEl.value || '';
+  if (!name) { showSecretsFeedback('Name is required', 'error'); nameEl.focus(); return; }
+  if (!value) { showSecretsFeedback('Value is required', 'error'); valueEl.focus(); return; }
+  if (!/^[A-Za-z0-9._-]+$/.test(name)) {
+    showSecretsFeedback('Name may only contain letters, digits, hyphens, underscores, dots', 'error');
+    nameEl.focus();
+    return;
+  }
+  try {
+    const result = await apiRequest('POST', '/secrets', { name, value });
+    const action = result.action === 'updated' ? 'Updated' : 'Created';
+    showSecretsFeedback(`\u2705 ${action} secret "${name}"`, 'success');
+    nameEl.value = '';
+    valueEl.value = '';
+    loadSecrets();
+  } catch (err) {
+    showSecretsFeedback(`\u274c ${err.message}`, 'error');
+  }
+}
+
+async function deleteSecret(name) {
+  if (!confirm(`Delete secret "${name}"? This cannot be undone.`)) return;
+  try {
+    await apiRequest('DELETE', `/secrets/${encodeURIComponent(name)}`);
+    showSecretsFeedback(`\u2705 Deleted "${name}"`, 'success');
+    loadSecrets();
+  } catch (err) {
+    showSecretsFeedback(`\u274c ${err.message}`, 'error');
+  }
+}
+
+function showSecretsFeedback(msg, type) {
+  const fb = $('secrets-form-feedback');
+  if (!fb) return;
+  fb.textContent = msg;
+  fb.className = 'secrets-feedback secrets-feedback--' + type;
+  show(fb);
+  clearTimeout(fb._timer);
+  fb._timer = setTimeout(() => hide(fb), 5000);
+}
+
+function escapeHtml(str) {
+  const div = document.createElement('div');
+  div.textContent = str;
+  return div.innerHTML;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════

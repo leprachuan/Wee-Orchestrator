@@ -121,11 +121,11 @@ class FileBackend:
             )
 
     def _get_or_create_key(self) -> bytes:
-        key = self._keyring.get_password("secret-tool-file-key", os.getlogin())
+        key = self._keyring.get_password("secret-tool-file-key", os.environ.get("USER", "root"))
         if key:
             return key.encode()
         k = self._Fernet.generate_key()
-        self._keyring.set_password("secret-tool-file-key", os.getlogin(), k.decode())
+        self._keyring.set_password("secret-tool-file-key", os.environ.get("USER", "root"), k.decode())
         return k
 
     def _load_store(self, fernet: object) -> dict:

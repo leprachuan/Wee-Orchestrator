@@ -11633,6 +11633,143 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             result = apply_update(skill_key)
             return {"success": result.get("success", False), "result": result}
 
+    # ═══════════════════════════════════════════════════════════════════════════
+    # ─── Secrets Manager API (F019) ──────────────────────────────────────────
+    # ═══════════════════════════════════════════════════════════════════════════
+
+    _SECRET_TOOL_PATH = os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), "secret_tool", "secret_tool.py"
+    )
+
+    @app.get("/api/v1/secrets")
+    async def list_secrets(request: Request):
+        """Return stored secret names (never values). Authenticated."""
+        await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                sys.executable, _SECRET_TOOL_PATH, "list", "--backend", "file",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, stderr = await proc.communicate()
+            if proc.returncode != 0:
+                detail = stdout.decode().strip() or stderr.decode().strip() or "secret-tool list failed"
+                try:
+                    err = json.loads(detail)
+                    detail = err.get("message", detail)
+                except Exception:
+                    pass
+                raise HTTPException(status_code=500, detail=detail)
+            output = stdout.decode().strip()
+            if not output:
+                names = []
+            else:
+                try:
+                    data = json.loads(output)
+                    names = data if isinstance(data, list) else data.get("names", [])
+                except json.JSONDecodeError:
+                    names = [ln.strip() for ln in output.splitlines() if ln.strip()]
+            return {"secrets": names, "count": len(names)}
+        except HTTPException:
+            raise
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
+
+    @app.post("/api/v1/secrets")
+    async def store_secret(request: Request):
+        """Store a secret (name + value). Authenticated. Never returns the value."""
+        await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        body = await request.json()
+        name = (body.get("name") or "").strip()
+        value = body.get("value", "")
+        if not name:
+            raise HTTPException(status_code=400, detail="Secret name is required")
+        if not value:
+            raise HTTPException(status_code=400, detail="Secret value is required")
+        # Validate name: alphanumeric, hyphens, underscores, dots only
+        import re as _re_secrets
+        if not _re_secrets.match(r'^[A-Za-z0-9._-]+$', name):
+            raise HTTPException(
+                status_code=400,
+                detail="Secret name may only contain letters, digits, hyphens, underscores, and dots",
+            )
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                sys.executable, _SECRET_TOOL_PATH, "set",
+                "--name", name, "--value-stdin", "--backend", "file",
+                stdin=asyncio.subprocess.PIPE,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, stderr = await proc.communicate(input=f"{value}\n".encode())
+            if proc.returncode != 0:
+                detail = stdout.decode().strip() or stderr.decode().strip() or "secret-tool set failed"
+                try:
+                    err = json.loads(detail)
+                    detail = err.get("message", detail)
+                except Exception:
+                    pass
+                raise HTTPException(status_code=500, detail=detail)
+            result = json.loads(stdout.decode())
+            # Never return the value
+            return {
+                "status": result.get("status", "success"),
+                "action": result.get("action", "created"),
+                "name": name,
+            }
+        except HTTPException:
+            raise
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
+
+    @app.delete("/api/v1/secrets/{name}")
+    async def delete_secret(name: str, request: Request):
+        """Delete a secret by name. Authenticated."""
+        await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                sys.executable, _SECRET_TOOL_PATH, "delete",
+                "--name", name, "--backend", "file",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, stderr = await proc.communicate()
+            output = stdout.decode().strip()
+            if proc.returncode != 0:
+                detail = output or stderr.decode().strip() or "secret-tool delete failed"
+                try:
+                    err = json.loads(detail)
+                    detail = err.get("message", detail)
+                except Exception:
+                    pass
+                raise HTTPException(status_code=404, detail=detail)
+            result = json.loads(output)
+            return {
+                "status": result.get("status", "success"),
+                "action": result.get("action", "deleted"),
+                "name": name,
+            }
+        except HTTPException:
+            raise
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
+
+
     # --- Session Permissions API ---
     @app.get("/api/v1/sessions/{session_id}/permissions")
     async def get_session_permissions(session_id: str, request: Request):
