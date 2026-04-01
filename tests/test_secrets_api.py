@@ -1,6 +1,5 @@
 """Tests for F019: Secrets Manager API endpoints."""
 
-import json
 import os
 import sys
 import unittest

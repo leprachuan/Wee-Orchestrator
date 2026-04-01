@@ -11697,8 +11697,8 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         if not value:
             raise HTTPException(status_code=400, detail="Secret value is required")
         # Validate name: alphanumeric, hyphens, underscores, dots only
-        import re as _re_secrets
-        if not _re_secrets.match(r'^[A-Za-z0-9._-]+$', name):
+
+        if not re.match(r'^[A-Za-z0-9._-]+$', name):
             raise HTTPException(
                 status_code=400,
                 detail="Secret name may only contain letters, digits, hyphens, underscores, and dots",
@@ -11741,6 +11741,11 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             x_user_identity=request.headers.get("x-user-identity"),
             x_auth_channel=request.headers.get("x-auth-channel"),
         )
+        if not re.match(r"^[A-Za-z0-9._-]+$", name):
+            raise HTTPException(
+                status_code=400,
+                detail="Secret name may only contain letters, digits, hyphens, underscores, and dots",
+            )
         try:
             proc = await asyncio.create_subprocess_exec(
                 sys.executable, _SECRET_TOOL_PATH, "delete",
