@@ -9276,6 +9276,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         timeout: int = None,
         notify: bool = True,
         permission_mode: str = "restricted",
+        memory_injected: bool = False,
     ):
         """Blocking function that runs a background task in a subprocess.
         Called from a thread pool executor.
@@ -9543,6 +9544,9 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 channel=channel,
                 bg_identity=user_identity,
             )
+            # Track memory injection state in session so compaction re-inject works
+            if memory_injected:
+                session_mgr.update_session_field(session_id, "memory_injected", True)
 
             # -- Inject steering check instruction ----------------------------
             steering_path = bg_task_mgr.get_steering_path(task_id)
@@ -10002,6 +10006,24 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 session_pref = defaults.get("notification_preference", "all")
                 notify_pref = session_pref != "off"
 
+        # --- Memory injection for top-level background tasks ---
+        # Sub-tasks dispatched from inside a bg task have origin_session_id set;
+        # skip injection for those to avoid double-injection.
+        effective_prompt = body.prompt
+        if not body.origin_session_id:
+            try:
+                from memory_context import get_memory_context, prepend_memory
+                _mem_ctx = get_memory_context()
+                if _mem_ctx:
+                    effective_prompt = prepend_memory(body.prompt, _mem_ctx)
+                    print(
+                        f"[Memory] Injected context for task {task_id} "
+                        f"({len(_mem_ctx)} chars)",
+                        flush=True,
+                    )
+            except Exception as _mem_exc:
+                print(f"[Memory] Injection skipped: {_mem_exc}", flush=True)
+
         # Check concurrent limit — queue instead of rejecting
         running = bg_task_mgr.count_running(channel, identity, agent)
         agent_config = session_mgr.AGENTS.get(agent, {})
@@ -10018,7 +10040,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 agent=agent,
                 runtime=runtime,
                 model=model,
-                prompt=body.prompt,
+                prompt=effective_prompt,
                 status="queued",
                 timeout=bg_timeout,
                 notify=notify_pref,
@@ -10049,7 +10071,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             agent=agent,
             runtime=runtime,
             model=model,
-            prompt=body.prompt,
+            prompt=effective_prompt,
             status="running",
             timeout=bg_timeout,
             notify=notify_pref,
@@ -10063,12 +10085,14 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
 
         # Run in background thread using shared executor
         loop = asyncio.get_running_loop()
+        # effective_prompt != body.prompt means memory was injected for this task
+        _memory_was_injected = effective_prompt != body.prompt
         loop.run_in_executor(
             bg_executor,  # Use shared executor instead of creating new one
             _run_background_task,
             task_id,
             session_id,
-            body.prompt,
+            effective_prompt,
             agent,
             runtime,
             model,
@@ -10077,6 +10101,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             bg_timeout,
             notify_pref,
             perm_mode,
+            _memory_was_injected,
         )
 
         return {
