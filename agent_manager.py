@@ -5070,6 +5070,9 @@ User Request:
             )
             context_prompt = context_prompt + sandboxed_instruction
 
+        # Expand home path for MCP config file
+        mcp_config_path = os.path.expanduser("~/.copilot/mcp-config.json")
+        
         cmd = [
             self.copilot_bin,
             "-p",
@@ -5078,6 +5081,8 @@ User Request:
             "--no-color",
             "--model",
             model,
+            "--additional-mcp-config",
+            f"@{mcp_config_path}",
         ]
 
         # Add elevated flags for full access
