@@ -6,6 +6,21 @@ All notable changes to Wee Orchestrator are documented here.
 
 ### Added
 
+#### F024: Brief One-Line Notifications for Background & Scheduled Tasks
+- **Status**: ✅ QA Approved (commit 0c0bb3f on dev)
+- **Commit**: 0c0bb3f
+- External notifications (Telegram, WebEx) now deliver single-line format instead of verbose multi-line messages
+- Format: `✅ task_id done — description` (max 200 chars, auto-truncated with ellipsis)
+- Full output/error details remain in WebUI notification dict (output_preview[:500], error[:500])
+- Changes:
+  - `_format_notification_message()` in notification_manager.py rewritten for single-line output
+  - Added `_MAX_NOTIFICATION_LENGTH=200` constant to both notification_manager.py and scheduler/executor.py
+  - Added `_brief_notification()` helper in executor.py
+  - Replaced 8 verbose multi-line notification strings across scheduler AI mode (4) and command mode (4)
+- Testing: 25 new tests in test_brief_notifications.py covering format, truncation, length validation, and WebUI preservation
+- QA baseline: 659 tests pass (0 new failures), 4 pre-existing flake8 issues unchanged, all dev services active
+- **Ready for deployment**: No breaking changes, backwards compatible, no new config required
+
 #### F019: WebUI Secrets Manager — Store Secrets via UI
 - **Status**: ✅ QA Approved (commit 44df840 on dev; F020-F023 follow-up bugs approved)
 - **Commit**: b4efcdc (main feature); 44df840 (UX bug fixes)
