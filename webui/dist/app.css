@@ -5043,6 +5043,11 @@ html, body {
   font-size: 0.8rem;
   justify-content: center;
 }
+.sidebar-tool-btn.active {
+  background: rgba(62,207,142,0.18);
+  border-color: rgba(62,207,142,0.4);
+  color: #b6f5d1;
+}
 
 /* Modal overlay */
 .modal-overlay {
