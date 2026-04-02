@@ -12682,6 +12682,158 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             "agent": body.agent or "orchestrator",
         }
 
+    # --- Memory Promotion ─────────────────────────────────────────────────────
+
+    MEMORY_PROMOTER_SCRIPT = Path("/opt/foster-skills/memory-promoter/memory_promoter.py")
+
+    class PromoteMemoryRequest(BaseModel):
+        agent: Optional[str] = None
+
+    @app.post("/api/v1/memory/promote")
+    async def promote_memory(body: PromoteMemoryRequest, request: Request):
+        """Trigger memory promotion for a single agent (or orchestrator).
+
+        Spawns memory_promoter.py with the appropriate WEE_AGENT_DIR env var.
+        When agent is omitted, promotes orchestrator memory (/opt/memories/).
+        When agent is provided, looks up the agent path from agents.json.
+        """
+        await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+
+        agent_name = body.agent or "orchestrator"
+        if body.agent:
+            agent_cfg = session_mgr.AGENTS.get(body.agent)
+            if not agent_cfg:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"Unknown agent: {body.agent}",
+                )
+            agent_path = agent_cfg.get("path", "")
+        else:
+            orch = session_mgr.AGENTS.get("orchestrator", {})
+            agent_path = orch.get("path", "")
+
+        if not MEMORY_PROMOTER_SCRIPT.exists():
+            raise HTTPException(
+                status_code=503,
+                detail=f"Memory promoter script not found: {MEMORY_PROMOTER_SCRIPT}",
+            )
+
+        env = os.environ.copy()
+        if agent_path:
+            env["WEE_AGENT_DIR"] = agent_path
+
+        loop = asyncio.get_event_loop()
+        try:
+            result = await loop.run_in_executor(
+                None,
+                lambda: subprocess.run(
+                    [sys.executable, str(MEMORY_PROMOTER_SCRIPT)],
+                    capture_output=True,
+                    text=True,
+                    timeout=120,
+                    env=env,
+                ),
+            )
+            return {
+                "status": "ok",
+                "agent": agent_name,
+                "agent_path": agent_path,
+                "stdout": result.stdout[-2000:] if result.stdout else "",
+                "stderr": result.stderr[-1000:] if result.stderr else "",
+                "returncode": result.returncode,
+            }
+        except subprocess.TimeoutExpired:
+            raise HTTPException(
+                status_code=504,
+                detail=f"Memory promotion timed out for agent: {agent_name}",
+            )
+        except Exception as exc:
+            raise HTTPException(
+                status_code=500,
+                detail=f"Memory promotion failed for {agent_name}: {exc}",
+            )
+
+    @app.post("/api/v1/memory/promote-all")
+    async def promote_all_agents_memory(request: Request):
+        """Trigger memory promotion for ALL agents defined in agents.json.
+
+        Iterates over every agent in the config and runs memory_promoter.py
+        for each one, including the orchestrator.
+        """
+        await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+
+        if not MEMORY_PROMOTER_SCRIPT.exists():
+            raise HTTPException(
+                status_code=503,
+                detail=f"Memory promoter script not found: {MEMORY_PROMOTER_SCRIPT}",
+            )
+
+        agents = session_mgr.AGENTS
+        if not agents:
+            return {"status": "ok", "results": [], "message": "No agents configured"}
+
+        results = []
+        for agent_name, agent_cfg in agents.items():
+            agent_path = agent_cfg.get("path", "")
+            env = os.environ.copy()
+            if agent_path:
+                env["WEE_AGENT_DIR"] = agent_path
+
+            loop = asyncio.get_event_loop()
+            try:
+                result = await loop.run_in_executor(
+                    None,
+                    lambda env=env: subprocess.run(
+                        [sys.executable, str(MEMORY_PROMOTER_SCRIPT)],
+                        capture_output=True,
+                        text=True,
+                        timeout=120,
+                        env=env,
+                    ),
+                )
+                results.append({
+                    "agent": agent_name,
+                    "agent_path": agent_path,
+                    "status": "ok" if result.returncode == 0 else "error",
+                    "returncode": result.returncode,
+                    "stdout": result.stdout[-500:] if result.stdout else "",
+                    "stderr": result.stderr[-500:] if result.stderr else "",
+                })
+            except subprocess.TimeoutExpired:
+                results.append({
+                    "agent": agent_name,
+                    "agent_path": agent_path,
+                    "status": "timeout",
+                })
+            except Exception as exc:
+                results.append({
+                    "agent": agent_name,
+                    "agent_path": agent_path,
+                    "status": "error",
+                    "error": str(exc),
+                })
+
+        ok_count = sum(1 for r in results if r["status"] == "ok")
+        return {
+            "status": "ok",
+            "total": len(results),
+            "succeeded": ok_count,
+            "failed": len(results) - ok_count,
+            "results": results,
+        }
+
+
+
         # --- AI Media ─────────────────────────────────────────────────────────────
     _ai_media_dir = Path("/tmp/webui_ai_media")
     _ai_media_dir.mkdir(parents=True, exist_ok=True)
