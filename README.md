@@ -60,7 +60,8 @@ Wee-Orchestrator is a unified AI agent platform that lets you chat with **any AI
 - **🎤 Audio Transcription** — Voice messages auto-transcribed via Whisper (OpenAI or local)
 - **🔐 Secure Auth** — Pairing-code login, per-user ACLs, agent/model pinning, yolo/restricted modes
 - **📜 Session History** — Full conversation persistence with search and resume
-- **⚡ Background Tasks** — Delegate long-running work to background agents
+- **⚡ Background Tasks** — Delegate long-running work to background agents with in-thread status updates
+- **🔔 In-Thread Notifications** — Real-time task lifecycle updates (queued → running → complete) in your conversation
 - **🔌 Extensible Skills** — Plugin architecture for adding capabilities (Cisco Meraki, Home Assistant, etc.)
 - **⚙️ Slash Command Registry — Pure-server commands that bypass the LLM for reduced latency; auto-registers with Telegram BotFather for autocomplete; built-in `/secret` command for secure credential management
 
@@ -98,7 +99,7 @@ Wee-Orchestrator provides a flexible framework to:
 - Send and receive **files and images** over Telegram and WebEx
 - Enforce per-user **agent pinning**, **model pinning**, and **yolo/restricted mode** ACLs
 
-For release history see **[RELEASE_NOTES.md](./RELEASE_NOTES.md)**.
+For release history and feature documentation see **[CHANGELOG.md](./CHANGELOG.md)** and **[RELEASE_NOTES.md](./RELEASE_NOTES.md)**.
 
 ## ⚡ Quick Start
 
