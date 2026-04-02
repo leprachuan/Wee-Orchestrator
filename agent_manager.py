@@ -9667,7 +9667,12 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             ).get("path", os.getcwd())
 
             proc_timeout = (timeout or 900) + 30
-            env = {**os.environ, "COPILOT_AGENT": agent, "COPILOT_RUNTIME": runtime}
+            env = {
+                **os.environ,
+                "COPILOT_AGENT": agent,
+                "COPILOT_RUNTIME": runtime,
+                "WEE_AGENT_DIR": agent_dir,
+            }
 
             # Use Popen for incremental output capture
             process = subprocess.Popen(
@@ -10006,19 +10011,24 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 session_pref = defaults.get("notification_preference", "all")
                 notify_pref = session_pref != "off"
 
-        # --- Memory injection for top-level background tasks ---
+        # --- Per-agent memory injection for top-level background tasks ---
         # Sub-tasks dispatched from inside a bg task have origin_session_id set;
         # skip injection for those to avoid double-injection.
         effective_prompt = body.prompt
         if not body.origin_session_id:
             try:
-                from memory_context import get_memory_context, prepend_memory
-                _mem_ctx = get_memory_context()
+                from memory.inject import get_memory_context, prepend_memory
+
+                _agent_cfg = session_mgr.AGENTS.get(
+                    agent, session_mgr.AGENTS.get("orchestrator", {})
+                )
+                _agent_path = _agent_cfg.get("path", "")
+                _mem_ctx = get_memory_context(agent_path=_agent_path)
                 if _mem_ctx:
                     effective_prompt = prepend_memory(body.prompt, _mem_ctx)
                     print(
-                        f"[Memory] Injected context for task {task_id} "
-                        f"({len(_mem_ctx)} chars)",
+                        f"[Memory] Injected {len(_mem_ctx)} chars for "
+                        f"agent={agent} path={_agent_path}",
                         flush=True,
                     )
             except Exception as _mem_exc:
@@ -12626,7 +12636,53 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 status_code=500, detail=f"Failed to list voices: {str(exc)[:200]}"
             )
 
-    # --- AI Media ─────────────────────────────────────────────────────────────
+    # --- Per-Agent Memory ─────────────────────────────────────────────────
+
+    class DailyNoteRequest(BaseModel):
+        content: str
+        agent: Optional[str] = None
+
+        @field_validator("content")
+        @classmethod
+        def validate_content(cls, v):
+            if not v or not v.strip():
+                raise ValueError("Content must not be empty")
+            if len(v) > 10000:
+                raise ValueError("Content must be 10,000 characters or less")
+            return v
+
+    @app.post("/api/v1/memory/daily")
+    async def append_daily_note_api(body: DailyNoteRequest, request: Request):
+        """Append a timestamped entry to an agent's daily notes."""
+        await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        from memory.daily import append_daily_note as _append_note
+
+        agent_path = None
+        if body.agent:
+            agent_cfg = session_mgr.AGENTS.get(body.agent)
+            if not agent_cfg:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"Unknown agent: {body.agent}",
+                )
+            agent_path = agent_cfg.get("path", "")
+        else:
+            orch = session_mgr.AGENTS.get("orchestrator", {})
+            agent_path = orch.get("path", "")
+
+        note_file = _append_note(body.content, agent_path=agent_path)
+        return {
+            "status": "ok",
+            "file": str(note_file),
+            "agent": body.agent or "orchestrator",
+        }
+
+        # --- AI Media ─────────────────────────────────────────────────────────────
     _ai_media_dir = Path("/tmp/webui_ai_media")
     _ai_media_dir.mkdir(parents=True, exist_ok=True)
     app.mount("/ai-media", StaticFiles(directory=str(_ai_media_dir)), name="ai_media")

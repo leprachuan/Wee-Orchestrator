@@ -1,0 +1,138 @@
+"""memory.inject -- Memory context injection for Wee Orchestrator.
+
+Provides per-agent memory resolution and context building for session-start
+injection.  Replaces the old memory_context.py wrapper that shelled out to
+the foster-skills flat-memory skill.
+"""
+
+import os
+import sys
+from datetime import date, timedelta
+from pathlib import Path
+from typing import Optional
+
+MAX_MEMORY_CHARS = 4000
+SEPARATOR = "\u2500" * 60
+BORDER = "=" * 60
+
+COMPACTION_SIGNALS = (
+    "I don't have context about",
+    "As a new session",
+    "I don't have access to previous",
+    "I wasn't given context",
+)
+
+
+def resolve_memory_dir(agent_path: Optional[str] = None) -> Path:
+    """Resolve memory root for an agent.
+
+    Resolution chain (first match wins):
+        1. WEE_MEMORY_DIR env var  -- explicit override
+        2. WEE_AGENT_DIR  env var  -- ``{dir}/memories``
+        3. *agent_path* parameter  -- ``{path}/memories`` (from agents.json)
+        4. ``/opt/memories``       -- fallback (orchestrator default)
+    """
+    explicit = os.environ.get("WEE_MEMORY_DIR", "")
+    if explicit:
+        return Path(explicit)
+    agent_dir = os.environ.get("WEE_AGENT_DIR", "")
+    if agent_dir:
+        return Path(agent_dir) / "memories"
+    if agent_path:
+        return Path(agent_path) / "memories"
+    return Path("/opt/memories")
+
+
+def _read_file(path: Path) -> Optional[str]:
+    """Return file contents stripped, or None if missing/empty."""
+    try:
+        content = path.read_text(encoding="utf-8").strip()
+        return content if content else None
+    except FileNotFoundError:
+        return None
+    except Exception as exc:
+        print(
+            f"[memory.inject] WARNING: could not read {path}: {exc}",
+            file=sys.stderr,
+        )
+        return None
+
+
+def build_context(agent_path: Optional[str] = None) -> str:
+    """Build the full memory context block for session-start injection.
+
+    Reads MEMORY.md (long-term) plus today/yesterday daily notes.
+    Returns empty string if no memory files exist.
+    """
+    memory_dir = resolve_memory_dir(agent_path)
+    memory_md = memory_dir / "MEMORY.md"
+    daily_dir = memory_dir / "daily"
+
+    sections: list[str] = []
+
+    core = _read_file(memory_md)
+    if core:
+        sections.append(f"## LONG-TERM MEMORY\n\n{core}")
+
+    today = date.today()
+    today_notes = _read_file(daily_dir / f"{today.isoformat()}.md")
+    if today_notes:
+        sections.append(f"## TODAY'S NOTES ({today.isoformat()})\n\n{today_notes}")
+
+    yesterday = today - timedelta(days=1)
+    yesterday_notes = _read_file(daily_dir / f"{yesterday.isoformat()}.md")
+    if yesterday_notes:
+        sections.append(
+            f"## YESTERDAY'S NOTES ({yesterday.isoformat()})\n\n{yesterday_notes}"
+        )
+
+    if not sections:
+        return ""
+
+    header = (
+        f"{BORDER}\n"
+        "[MEMORY CONTEXT \u2014 injected at session start, do not re-read]\n"
+        f"{BORDER}"
+    )
+    footer = f"{BORDER}\n[END MEMORY CONTEXT]\n{BORDER}"
+    body = f"\n\n{SEPARATOR}\n\n".join(sections)
+
+    return f"{header}\n\n{body}\n\n{footer}"
+
+
+def get_memory_context(agent_path: Optional[str] = None) -> str:
+    """Return memory context string, truncated to MAX_MEMORY_CHARS.
+
+    Falls back to MEMORY.md only if the full context exceeds the limit.
+    Returns empty string on any failure.
+    """
+    try:
+        ctx = build_context(agent_path)
+        if not ctx:
+            return ""
+        if len(ctx) <= MAX_MEMORY_CHARS:
+            return ctx
+        # Truncate: try MEMORY.md only
+        memory_dir = resolve_memory_dir(agent_path)
+        core = _read_file(memory_dir / "MEMORY.md")
+        if core:
+            truncated = f"[MEMORY CONTEXT]\n{core}\n[END MEMORY CONTEXT]"
+            return truncated[:MAX_MEMORY_CHARS]
+        return ""
+    except Exception:
+        return ""
+
+
+def prepend_memory(prompt: str, memory_context: str) -> str:
+    """Prepend memory context to prompt."""
+    if not memory_context:
+        return prompt
+    return f"{memory_context}\n\n{prompt}"
+
+
+def detect_compaction(last_response: str) -> bool:
+    """Return True if the response suggests context compaction occurred."""
+    if not last_response:
+        return False
+    lower = last_response.lower()
+    return any(signal.lower() in lower for signal in COMPACTION_SIGNALS)
