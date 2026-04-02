@@ -3104,7 +3104,7 @@ async function loadSecrets() {
           <span class="secrets-item-name">${escapeHtml(name)}</span>
         </div>
         <div class="secrets-item-actions">
-          <button class="secrets-copy-btn" data-name="${escapeHtml(name)}" title="Copy value">📋</button>
+          <button class="secrets-edit-btn" data-name="${escapeHtml(name)}" title="Edit / rotate value">✏️</button>
           <button class="secrets-delete-btn" data-name="${escapeHtml(name)}" title="Delete secret">✕</button>
         </div>
       </div>
@@ -3112,28 +3112,64 @@ async function loadSecrets() {
     listEl.querySelectorAll('.secrets-delete-btn').forEach(btn => {
       btn.addEventListener('click', () => deleteSecret(btn.dataset.name));
     });
-    listEl.querySelectorAll('.secrets-copy-btn').forEach(btn => {
-      btn.addEventListener('click', () => copySecretValue(btn, btn.dataset.name));
+    listEl.querySelectorAll('.secrets-edit-btn').forEach(btn => {
+      btn.addEventListener('click', () => editSecret(btn.dataset.name));
     });
   } catch (err) {
     listEl.innerHTML = `<div class="secrets-empty-state"><p class="secrets-empty-text secrets-error">⚠ ${escapeHtml(err.message)}</p></div>`;
   }
 }
 
-async function copySecretValue(btn, name) {
+function editSecret(name) {
+  // Collapse any other open edit forms first
+  document.querySelectorAll('.secrets-edit-inline').forEach(el => el.remove());
+  document.querySelectorAll('.secrets-item--editing').forEach(el => el.classList.remove('secrets-item--editing'));
+
+  const item = document.querySelector(`.secrets-edit-btn[data-name="${CSS.escape(name)}"]`);
+  if (!item) return;
+  const row = item.closest('.secrets-item');
+  if (!row) return;
+  row.classList.add('secrets-item--editing');
+
+  const form = document.createElement('div');
+  form.className = 'secrets-edit-inline';
+  form.innerHTML = `
+    <div class="secrets-edit-row">
+      <span class="secrets-edit-label">Rotate value for <strong>${escapeHtml(name)}</strong></span>
+      <div class="secrets-edit-input-wrap">
+        <input type="password" class="secrets-input glass-input secrets-edit-value" placeholder="Enter new value\u2026" autocomplete="off" />
+      </div>
+      <div class="secrets-edit-actions">
+        <button class="btn btn-primary btn-sm secrets-edit-save" type="button">Save</button>
+        <button class="btn btn-ghost btn-sm secrets-edit-cancel" type="button">Cancel</button>
+      </div>
+    </div>`;
+  row.after(form);
+
+  const inp = form.querySelector('.secrets-edit-value');
+  inp.focus();
+  inp.addEventListener('keydown', e => {
+    if (e.key === 'Enter') submitEditSecret(name, inp.value);
+    if (e.key === 'Escape') cancelEditSecret(row, form);
+  });
+  form.querySelector('.secrets-edit-save').addEventListener('click', () => submitEditSecret(name, inp.value));
+  form.querySelector('.secrets-edit-cancel').addEventListener('click', () => cancelEditSecret(row, form));
+}
+
+async function submitEditSecret(name, value) {
+  if (!value) { showSecretsFeedback('New value is required', 'error'); return; }
   try {
-    const data = await apiRequest('GET', `/secrets/${encodeURIComponent(name)}`);
-    if (data.value !== undefined) {
-      await navigator.clipboard.writeText(data.value);
-      btn.classList.add('copied');
-      btn.textContent = '✓';
-      setTimeout(() => { btn.classList.remove('copied'); btn.textContent = '📋'; }, 1500);
-    } else {
-      showSecretsFeedback('Could not retrieve secret value', 'error');
-    }
+    await apiRequest('POST', '/secrets', { name, value });
+    showSecretsFeedback(`✅ Rotated secret "${escapeHtml(name)}"`, 'success');
+    loadSecrets();
   } catch (err) {
-    showSecretsFeedback(`Copy failed: ${err.message}`, 'error');
+    showSecretsFeedback(`❌ ${err.message}`, 'error');
   }
+}
+
+function cancelEditSecret(row, form) {
+  row.classList.remove('secrets-item--editing');
+  form.remove();
 }
 
 async function saveSecret() {

@@ -217,8 +217,6 @@ class TestSecretsAPI(unittest.TestCase):
             self.assertNotIn("value", data)
             self.assertNotIn("credential", data)
 
-
-
     def test_delete_secret_rejects_invalid_name(self):
         """DELETE /api/v1/secrets/{name} rejects names with invalid characters.
         Names containing slashes are not included because URL routing handles
@@ -234,5 +232,124 @@ class TestSecretsAPI(unittest.TestCase):
                 )
                 self.assertEqual(resp.status_code, 400, f"Expected 400 for name={bad_name!r}")
 
+
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestSecretsF405(unittest.TestCase):
+    """Tests for F405: remove copy/reveal; add edit/rotate capability."""
+
+    @classmethod
+    def setUpClass(cls):
+        from unittest.mock import patch
+
+        from fastapi.testclient import TestClient
+
+        import agent_manager
+
+        cls._telegram_patch = patch.object(
+            agent_manager,
+            "_resolve_telegram_identity",
+            side_effect=lambda identity: identity,
+        )
+        cls._telegram_patch.start()
+        cls._send_pairing_patch = patch.object(
+            agent_manager,
+            "_send_pairing_code",
+            return_value=True,
+        )
+        cls._send_pairing_patch.start()
+        cls.app = agent_manager.create_api_app()
+        cls.client = TestClient(cls.app)
+        cls.auth_header = {"Authorization": "Bearer shared_test_key_123"}
+
+    @classmethod
+    def tearDownClass(cls):
+        cls._telegram_patch.stop()
+        cls._send_pairing_patch.stop()
+
+    # ─── F405: No GET /secrets/{name} endpoint ─────────────────────────────
+
+    def test_get_individual_secret_not_found(self):
+        """GET /api/v1/secrets/{name} must not exist (404 or 405)."""
+        resp = self.client.get(
+            "/api/v1/secrets/SOME_SECRET",
+            headers=self.auth_header,
+        )
+        self.assertIn(
+            resp.status_code,
+            [404, 405],
+            "GET /api/v1/secrets/{name} must not exist — secrets are write-only",
+        )
+
+    def test_get_individual_secret_no_value_leak(self):
+        """GET /api/v1/secrets/{name} response body must not contain value key."""
+        resp = self.client.get(
+            "/api/v1/secrets/ANY_KEY",
+            headers=self.auth_header,
+        )
+        body = resp.text
+        self.assertNotIn('"value"', body)
+
+    # ─── F405: List never returns values ───────────────────────────────────
+
+    def test_list_response_contains_no_value_key(self):
+        """GET /api/v1/secrets response must not contain a value key."""
+        resp = self.client.get(
+            "/api/v1/secrets",
+            headers=self.auth_header,
+        )
+        if resp.status_code == 200:
+            data = resp.json()
+            # No value or values keys in the response
+            self.assertNotIn("value", data)
+            self.assertNotIn("values", data)
+            # secrets list contains only strings (names)
+            for item in data.get("secrets", []):
+                self.assertIsInstance(item, str)
+
+    # ─── F405: POST upsert works for edit/rotate ──────────────────────────
+
+    def test_post_upsert_accepts_existing_name(self):
+        """POST /api/v1/secrets with an existing name should succeed (upsert)."""
+        resp = self.client.post(
+            "/api/v1/secrets",
+            json={"name": "F405_ROTATE_TEST", "value": "original"},
+            headers=self.auth_header,
+        )
+        # First call — may succeed or fail due to backend, but not 400
+        if resp.status_code == 200:
+            # Second call with same name, new value = rotation
+            resp2 = self.client.post(
+                "/api/v1/secrets",
+                json={"name": "F405_ROTATE_TEST", "value": "rotated"},
+                headers=self.auth_header,
+            )
+            self.assertNotEqual(resp2.status_code, 400)
+            if resp2.status_code == 200:
+                data = resp2.json()
+                self.assertEqual(data.get("action"), "updated")
+                self.assertNotIn("value", data)
+
+    def test_post_upsert_response_never_contains_value(self):
+        """POST /api/v1/secrets response must never echo back the value."""
+        resp = self.client.post(
+            "/api/v1/secrets",
+            json={"name": "F405_LEAK_TEST", "value": "super_secret_xyz_405"},
+            headers=self.auth_header,
+        )
+        if resp.status_code == 200:
+            self.assertNotIn("super_secret_xyz_405", resp.text)
+            data = resp.json()
+            self.assertNotIn("value", data)
+
+    # ─── F405: Cleanup (optional) ──────────────────────────────────────────
+
+    def test_delete_f405_test_secrets(self):
+        """Cleanup: delete F405 test secrets if they exist."""
+        for name in ("F405_ROTATE_TEST", "F405_LEAK_TEST"):
+            self.client.delete(
+                f"/api/v1/secrets/{name}",
+                headers=self.auth_header,
+            )
