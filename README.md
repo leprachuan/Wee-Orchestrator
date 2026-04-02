@@ -62,7 +62,7 @@ Wee-Orchestrator is a unified AI agent platform that lets you chat with **any AI
 - **📜 Session History** — Full conversation persistence with search and resume
 - **⚡ Background Tasks** — Delegate long-running work to background agents
 - **🔌 Extensible Skills** — Plugin architecture for adding capabilities (Cisco Meraki, Home Assistant, etc.)
-- **⚙️ Slash Command Registry** — Pure-server commands that bypass the LLM for reduced latency; built-in `/secret` command for secure credential management
+- **⚙️ Slash Command Registry — Pure-server commands that bypass the LLM for reduced latency; auto-registers with Telegram BotFather for autocomplete; built-in `/secret` command for secure credential management
 
 ---
 
