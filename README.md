@@ -952,6 +952,17 @@ Automatically removes CLI metadata from output:
 - Token usage statistics
 - Session headers and banners
 
+### Background Task Memory Injection
+Background tasks automatically receive session context at startup:
+- **MEMORY.md**: Your persistent memory file with important facts and context
+- **Daily Notes**: Today's (and yesterday's) timestamped notes from `memories/daily/`
+- **Automatic Prepending**: Context is injected only for top-level background tasks; sub-tasks skip injection to prevent duplication
+- **Fail-Silent**: If memory files are missing, tasks continue without context (no errors)
+- **Session Tracking**: The `memory_injected` flag tracks whether context was injected for this session
+- **Sub-Task Detection**: Sub-tasks created from within a background task (via `origin_session_id`) automatically skip memory injection
+
+This ensures that AI agents have access to relevant context without requiring explicit setup per task.
+
 ## Testing
 
 A comprehensive test suite is included to ensure code quality and prevent regressions when making changes.

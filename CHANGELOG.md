@@ -6,6 +6,21 @@ All notable changes to Wee Orchestrator are documented here.
 
 ### Added
 
+#### F025: Session-Start Memory Injection
+- **Status**: ✅ QA Approved (commit c03e0b8 on dev)
+- **Commit**: c03e0b8
+- Automatically inject session context (MEMORY.md + daily notes) at the start of background tasks
+- Context prepended to top-level task prompts; sub-tasks skipped via `origin_session_id` to prevent double-injection
+- Wraps `/opt/foster-skills/flat-memory/memory_inject.py` via new `memory_context.py` module
+- Session-level tracking: `memory_injected` flag stored in session metadata
+- Compaction detection (for future re-injection): `detect_compaction()` checks for known context-loss phrases
+- Fail-silent design: If memory inject script is missing or errors, task continues without context
+- Testing: 10 new tests covering `get_memory_context()`, `prepend_memory()`, and `detect_compaction()`
+- QA baseline: 701 tests pass, 9 skipped, 2 MINORs noted:
+  - `detect_compaction()` defined but not yet called (infrastructure ready, integration pending)
+  - Queued-task promotion paths don't pass `memory_injected` param to `_run_background_task()` (no runtime impact)
+- **Ready for PR**: No breaking changes, backwards compatible, memory context optional
+
 #### F024: Brief One-Line Notifications for Background & Scheduled Tasks
 - **Status**: ✅ QA Approved (commit 0c0bb3f on dev)
 - **Commit**: 0c0bb3f
