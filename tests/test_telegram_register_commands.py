@@ -8,10 +8,7 @@ errors gracefully.
 
 import os
 import sys
-import json
-from unittest.mock import MagicMock, patch, PropertyMock
-
-import pytest
+from unittest.mock import MagicMock, patch
 
 # Ensure project root is importable
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -20,6 +17,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _make_connector():
     """Create a minimal TelegramConnector with mocked network calls."""
@@ -79,35 +77,37 @@ class TestRegisterBotCommandsPayload:
         connector = _make_connector()
         cmds = _mock_session_manager_commands()
 
-        with patch(
-            "telegram_connector.agent_manager.SessionManager"
-        ) as MockSM:
+        with patch("telegram_connector.agent_manager.SessionManager") as MockSM:
             MockSM.return_value.get_slash_commands.return_value = cmds
             mock_resp = MagicMock()
             mock_resp.json.return_value = {"ok": True}
             mock_resp.raise_for_status = MagicMock()
-            with patch("telegram_connector.requests.post", return_value=mock_resp) as mock_post:
+            with patch(
+                "telegram_connector.requests.post", return_value=mock_resp
+            ) as mock_post:
                 connector.register_bot_commands()
                 call_args = mock_post.call_args
-                payload = call_args[1]["json"] if "json" in call_args[1] else call_args[0][1]
+                payload = (
+                    call_args[1]["json"] if "json" in call_args[1] else call_args[0][1]
+                )
                 for cmd in payload["commands"]:
-                    assert not cmd["command"].startswith("/"), (
-                        f"Command {cmd['command']} should not start with /"
-                    )
+                    assert not cmd["command"].startswith(
+                        "/"
+                    ), f"Command {cmd['command']} should not start with /"
 
     def test_all_commands_lowercase(self):
         """Telegram requires command names to be lowercase."""
         connector = _make_connector()
         cmds = _mock_session_manager_commands()
 
-        with patch(
-            "telegram_connector.agent_manager.SessionManager"
-        ) as MockSM:
+        with patch("telegram_connector.agent_manager.SessionManager") as MockSM:
             MockSM.return_value.get_slash_commands.return_value = cmds
             mock_resp = MagicMock()
             mock_resp.json.return_value = {"ok": True}
             mock_resp.raise_for_status = MagicMock()
-            with patch("telegram_connector.requests.post", return_value=mock_resp) as mock_post:
+            with patch(
+                "telegram_connector.requests.post", return_value=mock_resp
+            ) as mock_post:
                 connector.register_bot_commands()
                 payload = mock_post.call_args[1]["json"]
                 for cmd in payload["commands"]:
@@ -118,14 +118,14 @@ class TestRegisterBotCommandsPayload:
         connector = _make_connector()
         cmds = _mock_session_manager_commands()
 
-        with patch(
-            "telegram_connector.agent_manager.SessionManager"
-        ) as MockSM:
+        with patch("telegram_connector.agent_manager.SessionManager") as MockSM:
             MockSM.return_value.get_slash_commands.return_value = cmds
             mock_resp = MagicMock()
             mock_resp.json.return_value = {"ok": True}
             mock_resp.raise_for_status = MagicMock()
-            with patch("telegram_connector.requests.post", return_value=mock_resp) as mock_post:
+            with patch(
+                "telegram_connector.requests.post", return_value=mock_resp
+            ) as mock_post:
                 connector.register_bot_commands()
                 payload = mock_post.call_args[1]["json"]
                 names = [c["command"] for c in payload["commands"]]
@@ -136,14 +136,14 @@ class TestRegisterBotCommandsPayload:
         connector = _make_connector()
         cmds = _mock_session_manager_commands()
 
-        with patch(
-            "telegram_connector.agent_manager.SessionManager"
-        ) as MockSM:
+        with patch("telegram_connector.agent_manager.SessionManager") as MockSM:
             MockSM.return_value.get_slash_commands.return_value = cmds
             mock_resp = MagicMock()
             mock_resp.json.return_value = {"ok": True}
             mock_resp.raise_for_status = MagicMock()
-            with patch("telegram_connector.requests.post", return_value=mock_resp) as mock_post:
+            with patch(
+                "telegram_connector.requests.post", return_value=mock_resp
+            ) as mock_post:
                 connector.register_bot_commands()
                 payload = mock_post.call_args[1]["json"]
                 names = [c["command"] for c in payload["commands"]]
@@ -154,14 +154,14 @@ class TestRegisterBotCommandsPayload:
         connector = _make_connector()
         cmds = {"/x": "Hi"}  # short description
 
-        with patch(
-            "telegram_connector.agent_manager.SessionManager"
-        ) as MockSM:
+        with patch("telegram_connector.agent_manager.SessionManager") as MockSM:
             MockSM.return_value.get_slash_commands.return_value = cmds
             mock_resp = MagicMock()
             mock_resp.json.return_value = {"ok": True}
             mock_resp.raise_for_status = MagicMock()
-            with patch("telegram_connector.requests.post", return_value=mock_resp) as mock_post:
+            with patch(
+                "telegram_connector.requests.post", return_value=mock_resp
+            ) as mock_post:
                 connector.register_bot_commands()
                 payload = mock_post.call_args[1]["json"]
                 for cmd in payload["commands"]:
@@ -172,14 +172,14 @@ class TestRegisterBotCommandsPayload:
         connector = _make_connector()
         cmds = {"/longdesc": "A" * 500}
 
-        with patch(
-            "telegram_connector.agent_manager.SessionManager"
-        ) as MockSM:
+        with patch("telegram_connector.agent_manager.SessionManager") as MockSM:
             MockSM.return_value.get_slash_commands.return_value = cmds
             mock_resp = MagicMock()
             mock_resp.json.return_value = {"ok": True}
             mock_resp.raise_for_status = MagicMock()
-            with patch("telegram_connector.requests.post", return_value=mock_resp) as mock_post:
+            with patch(
+                "telegram_connector.requests.post", return_value=mock_resp
+            ) as mock_post:
                 connector.register_bot_commands()
                 payload = mock_post.call_args[1]["json"]
                 for cmd in payload["commands"]:
@@ -194,14 +194,14 @@ class TestRegisterBotCommandsPayload:
             "/good_name": "Has underscore",
         }
 
-        with patch(
-            "telegram_connector.agent_manager.SessionManager"
-        ) as MockSM:
+        with patch("telegram_connector.agent_manager.SessionManager") as MockSM:
             MockSM.return_value.get_slash_commands.return_value = cmds
             mock_resp = MagicMock()
             mock_resp.json.return_value = {"ok": True}
             mock_resp.raise_for_status = MagicMock()
-            with patch("telegram_connector.requests.post", return_value=mock_resp) as mock_post:
+            with patch(
+                "telegram_connector.requests.post", return_value=mock_resp
+            ) as mock_post:
                 connector.register_bot_commands()
                 payload = mock_post.call_args[1]["json"]
                 names = [c["command"] for c in payload["commands"]]
@@ -215,14 +215,14 @@ class TestRegisterBotCommandsPayload:
         connector = _make_connector()
         cmds = _mock_session_manager_commands()
 
-        with patch(
-            "telegram_connector.agent_manager.SessionManager"
-        ) as MockSM:
+        with patch("telegram_connector.agent_manager.SessionManager") as MockSM:
             MockSM.return_value.get_slash_commands.return_value = cmds
             mock_resp = MagicMock()
             mock_resp.json.return_value = {"ok": True}
             mock_resp.raise_for_status = MagicMock()
-            with patch("telegram_connector.requests.post", return_value=mock_resp) as mock_post:
+            with patch(
+                "telegram_connector.requests.post", return_value=mock_resp
+            ) as mock_post:
                 connector.register_bot_commands()
                 payload = mock_post.call_args[1]["json"]
                 names = [c["command"] for c in payload["commands"]]
@@ -242,9 +242,7 @@ class TestRegisterBotCommandsAPI:
         connector = _make_connector()
         cmds = _mock_session_manager_commands()
 
-        with patch(
-            "telegram_connector.agent_manager.SessionManager"
-        ) as MockSM:
+        with patch("telegram_connector.agent_manager.SessionManager") as MockSM:
             MockSM.return_value.get_slash_commands.return_value = cmds
             mock_resp = MagicMock()
             mock_resp.json.return_value = {"ok": True}
@@ -259,9 +257,7 @@ class TestRegisterBotCommandsAPI:
         connector = _make_connector()
         cmds = _mock_session_manager_commands()
 
-        with patch(
-            "telegram_connector.agent_manager.SessionManager"
-        ) as MockSM:
+        with patch("telegram_connector.agent_manager.SessionManager") as MockSM:
             MockSM.return_value.get_slash_commands.return_value = cmds
             with patch(
                 "telegram_connector.requests.post",
@@ -276,9 +272,7 @@ class TestRegisterBotCommandsAPI:
         connector = _make_connector()
         cmds = _mock_session_manager_commands()
 
-        with patch(
-            "telegram_connector.agent_manager.SessionManager"
-        ) as MockSM:
+        with patch("telegram_connector.agent_manager.SessionManager") as MockSM:
             MockSM.return_value.get_slash_commands.return_value = cmds
             mock_resp = MagicMock()
             mock_resp.json.return_value = {
@@ -295,9 +289,7 @@ class TestRegisterBotCommandsAPI:
         """No commands → warning, no API call."""
         connector = _make_connector()
 
-        with patch(
-            "telegram_connector.agent_manager.SessionManager"
-        ) as MockSM:
+        with patch("telegram_connector.agent_manager.SessionManager") as MockSM:
             MockSM.return_value.get_slash_commands.return_value = {}
             with patch("telegram_connector.requests.post") as mock_post:
                 result = connector.register_bot_commands()
@@ -320,14 +312,14 @@ class TestRegisterBotCommandsAPI:
         connector = _make_connector()
         cmds = {"/help": "Show help"}
 
-        with patch(
-            "telegram_connector.agent_manager.SessionManager"
-        ) as MockSM:
+        with patch("telegram_connector.agent_manager.SessionManager") as MockSM:
             MockSM.return_value.get_slash_commands.return_value = cmds
             mock_resp = MagicMock()
             mock_resp.json.return_value = {"ok": True}
             mock_resp.raise_for_status = MagicMock()
-            with patch("telegram_connector.requests.post", return_value=mock_resp) as mock_post:
+            with patch(
+                "telegram_connector.requests.post", return_value=mock_resp
+            ) as mock_post:
                 connector.register_bot_commands()
                 url = mock_post.call_args[0][0]
                 assert url.endswith("/setMyCommands")
@@ -338,9 +330,7 @@ class TestRegisterBotCommandsAPI:
         connector = _make_connector()
         cmds = {"/help": "Show help", "/status": "Check status"}
 
-        with patch(
-            "telegram_connector.agent_manager.SessionManager"
-        ) as MockSM:
+        with patch("telegram_connector.agent_manager.SessionManager") as MockSM:
             MockSM.return_value.get_slash_commands.return_value = cmds
             mock_resp = MagicMock()
             mock_resp.json.return_value = {"ok": True}
