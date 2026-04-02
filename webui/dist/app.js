@@ -153,13 +153,11 @@ const TTS = {
     btn.title = 'Generating speech…';
 
     try {
-      const auth = loadAuth();
-      const token = auth?.token || '';
       const res = await fetch(`${API_BASE}/tts`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`,
+          'Authorization': `Bearer ${STATE.token}`,
         },
         body: JSON.stringify({ text }),
       });
