@@ -20,6 +20,20 @@ All notable changes to Wee Orchestrator are documented here.
 - **Ready for deployment**: No breaking changes, backwards compatible, no new config required
 
 
+#### F402: Fix TTS Authorization Error on Objects
+- **Status**: ✅ QA Approved (commit 7390c8e on dev)
+- **Commit**: 7390c8e
+- **Issue**: TTS fetch calls on objects were failing with 401 Unauthorized due to incorrect auth token retrieval
+- **Root Cause**: `loadAuth()` function populates global `STATE` but returns `undefined`, causing TTS fetch to use `auth?.token` which was always `undefined`, resulting in empty Bearer token header
+- **Fix**: Changed TTS fetch call to use `STATE.token` directly, consistent with all other authenticated API calls throughout the codebase
+- **Changes**:
+  - webui/dist/app.js: Updated TTS fetch auth parameter (line 160)
+  - webui/dist/index.html: Cache-bust to v=20260402tts1
+- **Testing**: 674 tests pass (9 skipped), py_compile OK, no fetch calls remain with loadAuth pattern
+- **QA verification**: All 4 dev services running on 192.168.1.100, no regressions
+- **Ready for deployment**: No breaking changes, backwards compatible, no new config required
+
+
 #### F024: Brief One-Line Notifications for Background & Scheduled Tasks
 - **Status**: ✅ QA Approved (commit 0c0bb3f on dev)
 - **Commit**: 0c0bb3f
