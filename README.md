@@ -958,7 +958,88 @@ A comprehensive test suite is included to ensure code quality and prevent regres
 
 ### Running Tests
 
-#### Quick Start
+#### Memory Promotion
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `POST` | `/api/v1/memory/promote` | Promote memory for a single agent (or orchestrator) |
+| `POST` | `/api/v1/memory/promote-all` | Promote memory across all agents in agents.json |
+
+**POST /api/v1/memory/promote** — Trigger memory promotion for a single agent
+
+Consolidates daily notes (`/memories/daily/*.md`) into the agent's `MEMORY.md` using LLM analysis. Durable facts are elevated, duplicates removed, and the knowledge base refreshed.
+
+Request body (JSON):
+```json
+{
+  "agent": "devops"  // Optional — if omitted, promotes orchestrator memory
+}
+```
+
+Response (200 OK):
+```json
+{
+  "status": "ok",
+  "agent": "devops",
+  "agent_path": "/opt/MyHomeDevops",
+  "stdout": "Promoted 8 facts from 3 daily notes...",
+  "stderr": "",
+  "returncode": 0
+}
+```
+
+Error responses:
+- `401 Unauthorized` — Missing or invalid Bearer token
+- `404 Not Found` — Unknown agent name
+- `503 Service Unavailable` — Memory promoter script not found
+- `504 Gateway Timeout` — Promotion exceeded 120-second timeout
+- `500 Internal Server Error` — Subprocess error or other failure
+
+**POST /api/v1/memory/promote-all** — Trigger memory promotion for ALL agents
+
+Iterates through every agent in `agents.json` (including orchestrator) and runs memory promotion for each. Handles partial failures gracefully — continues promotion for other agents if one fails.
+
+Request body: Empty or omitted
+
+Response (200 OK):
+```json
+{
+  "status": "ok",
+  "total": 4,
+  "succeeded": 4,
+  "failed": 0,
+  "results": [
+    {
+      "agent": "orchestrator",
+      "agent_path": "/opt/memories",
+      "status": "ok",
+      "returncode": 0,
+      "stdout": "..."
+    },
+    {
+      "agent": "devops",
+      "agent_path": "/opt/MyHomeDevops",
+      "status": "ok",
+      "returncode": 0,
+      "stdout": "..."
+    }
+  ]
+}
+```
+
+**Security:**
+- Both endpoints require API authentication (Bearer token or shared-key validation)
+- Memory promotion is read-only for daily notes, write-only to MEMORY.md
+- Agent path resolved from agents.json; prevents directory traversal
+
+**Helper Script:**
+For scheduling memory promotion via the task scheduler or cron:
+```bash
+bash scripts/promote_all_agents_memory.sh
+```
+
+
+### Quick Start
 
 ```bash
 # Run all tests
@@ -1218,6 +1299,87 @@ Errors:
 
 ---
 
+### Memory Promotion
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `POST` | `/api/v1/memory/promote` | Promote memory for a single agent (or orchestrator) |
+| `POST` | `/api/v1/memory/promote-all` | Promote memory across all agents in agents.json |
+
+**POST /api/v1/memory/promote** — Trigger memory promotion for a single agent
+
+Consolidates daily notes (`/memories/daily/*.md`) into the agent's `MEMORY.md` using LLM analysis. Durable facts are elevated, duplicates removed, and the knowledge base refreshed.
+
+Request body (JSON):
+```json
+{
+  "agent": "devops"  // Optional — if omitted, promotes orchestrator memory
+}
+```
+
+Response (200 OK):
+```json
+{
+  "status": "ok",
+  "agent": "devops",
+  "agent_path": "/opt/MyHomeDevops",
+  "stdout": "Promoted 8 facts from 3 daily notes...",
+  "stderr": "",
+  "returncode": 0
+}
+```
+
+Error responses:
+- `401 Unauthorized` — Missing or invalid Bearer token
+- `404 Not Found` — Unknown agent name
+- `503 Service Unavailable` — Memory promoter script not found
+- `504 Gateway Timeout` — Promotion exceeded 120-second timeout
+- `500 Internal Server Error` — Subprocess error or other failure
+
+**POST /api/v1/memory/promote-all** — Trigger memory promotion for ALL agents
+
+Iterates through every agent in `agents.json` (including orchestrator) and runs memory promotion for each. Handles partial failures gracefully — continues promotion for other agents if one fails.
+
+Request body: Empty or omitted
+
+Response (200 OK):
+```json
+{
+  "status": "ok",
+  "total": 4,
+  "succeeded": 4,
+  "failed": 0,
+  "results": [
+    {
+      "agent": "orchestrator",
+      "agent_path": "/opt/memories",
+      "status": "ok",
+      "returncode": 0,
+      "stdout": "..."
+    },
+    {
+      "agent": "devops",
+      "agent_path": "/opt/MyHomeDevops",
+      "status": "ok",
+      "returncode": 0,
+      "stdout": "..."
+    }
+  ]
+}
+```
+
+**Security:**
+- Both endpoints require API authentication (Bearer token or shared-key validation)
+- Memory promotion is read-only for daily notes, write-only to MEMORY.md
+- Agent path resolved from agents.json; prevents directory traversal
+
+**Helper Script:**
+For scheduling memory promotion via the task scheduler or cron:
+```bash
+bash scripts/promote_all_agents_memory.sh
+```
+
+
 ### Quick Start
 
 ```bash
@@ -1412,6 +1574,87 @@ The Telegram connector bridges Telegram chat with your N8N Copilot Shim agents.
 - 🔐 User access control (whitelist/blacklist)
 - 🎯 Route to any configured agent
 - ⚙️ Per-user session management
+
+### Memory Promotion
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `POST` | `/api/v1/memory/promote` | Promote memory for a single agent (or orchestrator) |
+| `POST` | `/api/v1/memory/promote-all` | Promote memory across all agents in agents.json |
+
+**POST /api/v1/memory/promote** — Trigger memory promotion for a single agent
+
+Consolidates daily notes (`/memories/daily/*.md`) into the agent's `MEMORY.md` using LLM analysis. Durable facts are elevated, duplicates removed, and the knowledge base refreshed.
+
+Request body (JSON):
+```json
+{
+  "agent": "devops"  // Optional — if omitted, promotes orchestrator memory
+}
+```
+
+Response (200 OK):
+```json
+{
+  "status": "ok",
+  "agent": "devops",
+  "agent_path": "/opt/MyHomeDevops",
+  "stdout": "Promoted 8 facts from 3 daily notes...",
+  "stderr": "",
+  "returncode": 0
+}
+```
+
+Error responses:
+- `401 Unauthorized` — Missing or invalid Bearer token
+- `404 Not Found` — Unknown agent name
+- `503 Service Unavailable` — Memory promoter script not found
+- `504 Gateway Timeout` — Promotion exceeded 120-second timeout
+- `500 Internal Server Error` — Subprocess error or other failure
+
+**POST /api/v1/memory/promote-all** — Trigger memory promotion for ALL agents
+
+Iterates through every agent in `agents.json` (including orchestrator) and runs memory promotion for each. Handles partial failures gracefully — continues promotion for other agents if one fails.
+
+Request body: Empty or omitted
+
+Response (200 OK):
+```json
+{
+  "status": "ok",
+  "total": 4,
+  "succeeded": 4,
+  "failed": 0,
+  "results": [
+    {
+      "agent": "orchestrator",
+      "agent_path": "/opt/memories",
+      "status": "ok",
+      "returncode": 0,
+      "stdout": "..."
+    },
+    {
+      "agent": "devops",
+      "agent_path": "/opt/MyHomeDevops",
+      "status": "ok",
+      "returncode": 0,
+      "stdout": "..."
+    }
+  ]
+}
+```
+
+**Security:**
+- Both endpoints require API authentication (Bearer token or shared-key validation)
+- Memory promotion is read-only for daily notes, write-only to MEMORY.md
+- Agent path resolved from agents.json; prevents directory traversal
+
+**Helper Script:**
+For scheduling memory promotion via the task scheduler or cron:
+```bash
+bash scripts/promote_all_agents_memory.sh
+```
+
 
 ### Quick Start
 

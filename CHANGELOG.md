@@ -9,6 +9,26 @@ All notable changes to Wee Orchestrator are documented here.
 #### F016: Telegram Slash Command Registration with BotFather
 - **Status**: ✅ QA Approved (commit 3cdf77a on dev)
 - **Commit**: 3cdf77a
+
+#### F407: Per-Agent Memory Promotion Endpoints
+- **Status**: ✅ QA Approved (commit 55f3a4f on dev)
+- **Commit**: 55f3a4f
+- Two new API endpoints for triggering memory promotion (daily notes → MEMORY.md consolidation):
+  - **POST /api/v1/memory/promote** — Promote memory for a single agent (or orchestrator if agent omitted)
+  - **POST /api/v1/memory/promote-all** — Fan-out promotion across all agents in agents.json
+- Endpoint behavior:
+  - Each endpoint spawns `memory_promoter.py` with correct `WEE_AGENT_DIR` environment variable
+  - Agent path resolution from agents.json; 404 error for unknown agents
+  - 120-second timeout per agent; 504 error on timeout; 503 if script missing
+  - Full stdout/stderr capture (last 2000/1000 chars) in response for debugging
+  - `/promote-all` handles partial failures gracefully — continues on individual agent errors
+- Helper script: `scripts/promote_all_agents_memory.sh` for use in task scheduler jobs
+- Security: Both endpoints require standard API authentication (Bearer token)
+- **Testing**: 13 new tests covering auth, agent resolution, error handling, fan-out, 404/503/504 behaviors
+- **QA baseline**: 735 tests pass (9 skipped), 0 regressions, flake8 clean
+- **Minor note**: 2 cosmetic F841 unused variables in test file (mock_run on lines 89, 206) — non-functional
+- **Ready for deployment**: No breaking changes, backwards compatible, no new config required
+
 - Automatically registers Telegram slash commands with BotFather for UI autocomplete
 - `register_bot_commands()` method in TelegramConnector dynamically pulls command list from SessionManager
 - Builds valid Telegram BotCommand payload; calls `setMyCommands` API on startup
