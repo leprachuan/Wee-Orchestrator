@@ -6649,13 +6649,19 @@ User Request:
 
         cursor_bin = self.cursor_bin or "agent"
 
+        # Cursor CLI free plans require --model auto explicitly;
+        # omitting --model or passing an unrecognised name causes a
+        # "Named models unavailable" error.  Validate and default.
+        _cursor_default = os.getenv("CURSOR_DEFAULT_MODEL", "auto")
+        if not model or not self.get_model_from_name(model, "cursor"):
+            model = _cursor_default
+
         # -p is headless/print mode; --trust bypasses workspace prompts
         # --yolo auto-approves all tool calls (elevated mode)
         cmd = [cursor_bin, "-p", "--trust"]
         if mode == "elevated":
             cmd.append("--yolo")
-        if model:
-            cmd += ["--model", model]
+        cmd += ["--model", model]
         cmd += ["--workspace", agent_dir]
 
         # Check for existing cursor session to resume
@@ -9618,11 +9624,18 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                     if hasattr(session_mgr, "cursor_bin") and session_mgr.cursor_bin
                     else (_which_bin("agent") or "agent")
                 )
+                # Validate cursor model - free plans require "auto"
+                _cursor_model = model
+                if not _cursor_model or not session_mgr.get_model_from_name(
+                    _cursor_model, "cursor"
+                ):
+                    _cursor_model = os.environ.get(
+                        "CURSOR_DEFAULT_MODEL", "auto"
+                    )
                 cmd = [_cursor_bin, "-p", "--trust"]
                 if permission_mode == "elevated":
                     cmd.append("--yolo")
-                if model:
-                    cmd.extend(["--model", model])
+                cmd.extend(["--model", _cursor_model])
                 cmd.extend(["--workspace", agent_dir])
                 cmd.extend(["--", context_prompt])
             else:
