@@ -1232,6 +1232,8 @@ async function fetchAndRenderTodos() {
     const now = new Date();
     list.innerHTML = todos.map((t, idx) => {
       let dueBadge = '';
+      let isOverdue = false;
+      let overdueClass = '';
       if (t.due) {
         // Parse due date - supports YYYY-MM-DD HH:MM and MM/DD/YYYY HH:MM:SS formats
         let dueDate;
@@ -1245,8 +1247,8 @@ async function fetchAndRenderTodos() {
           const dp = datePart.split('/');
           dueDate = new Date(`${dp[2]}-${(dp[0]||'01').padStart(2,'0')}-${(dp[1]||'01').padStart(2,'0')}T${timePart}`);
         }
-        const isOverdue = dueDate < now;
-        const overdueClass = isOverdue ? ' overdue' : '';
+        isOverdue = dueDate < now;
+        overdueClass = isOverdue ? ' overdue' : '';
         dueBadge = `<span class="todo-due${overdueClass}">${isOverdue ? '⚠️' : '📅'} ${t.due}</span>`;
       }
 
