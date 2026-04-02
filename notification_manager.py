@@ -21,6 +21,7 @@ _PREFS_FILE = os.path.join(
     os.path.expanduser("~"), ".copilot", "notification_prefs.json"
 )
 _MAX_NOTIFICATIONS = 200
+_MAX_NOTIFICATION_LENGTH = 200
 
 
 class NotificationManager:
@@ -415,27 +416,19 @@ class NotificationManager:
 
 
 def _format_notification_message(notification: dict) -> str:
-    """Format notification as human-readable text for external channels."""
+    """Format notification as a brief one-line message for external channels.
+
+    Output/error details are intentionally omitted — users can check the
+    Tasks tab or ``/background status <id>`` for full results.
+    """
     status = notification.get("status", "unknown")
     task_id = notification.get("task_id", "?")
     description = notification.get("description", "Background task")
-    created_at = notification.get("created_at", "")
 
-    if status == "completed":
-        icon = "✅"
-        title = "Task Completed"
-        preview = notification.get("output_preview")
-        body = f"\n\n📤 *Preview:*\n{preview[:300]}" if preview else ""
-    else:
-        icon = "❌"
-        title = "Task Failed"
-        error = notification.get("error")
-        body = f"\n\n⚠️ *Error:*\n{error[:300]}" if error else ""
+    icon = "✅" if status == "completed" else "❌"
+    verb = "done" if status == "completed" else "failed"
 
-    return (
-        f"{icon} *{title}*\n"
-        f"📋 *Task:* `{task_id}`\n"
-        f"📝 *Description:* {description[:200]}\n"
-        f"🕐 *At:* {created_at}"
-        f"{body}"
-    )
+    msg = f"{icon} {task_id} {verb} — {description}"
+    if len(msg) > _MAX_NOTIFICATION_LENGTH:
+        msg = msg[: _MAX_NOTIFICATION_LENGTH - 3] + "..."
+    return msg
