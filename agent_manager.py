@@ -8091,7 +8091,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                     "directories": {"allow_read": [], "allow_write": [], "deny": []},
                     "tools": {"allow": ["*"], "deny": []},
                     "network": {"allow_urls": ["*"], "deny_urls": []},
-                    "mcp": {"allow": [], "deny": ["*"]},
+                    "mcp": {"allow": ["*"], "deny": []},
                 },
             )
             session_mgr.update_session_field(session_id, "permissions", default_perms)
@@ -12033,7 +12033,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 "directories": {"allow_read": [], "allow_write": [], "deny": []},
                 "tools": {"allow": ["*"], "deny": []},
                 "network": {"allow_urls": ["*"], "deny_urls": []},
-                "mcp": {"allow": [], "deny": ["*"]},
+                "mcp": {"allow": ["*"], "deny": []},
             },
         )
 
@@ -12086,7 +12086,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                         },
                         "tools": {"allow": ["*"], "deny": []},
                         "network": {"allow_urls": ["*"], "deny_urls": []},
-                        "mcp": {"allow": [], "deny": ["*"]},
+                        "mcp": {"allow": ["*"], "deny": []},
                     },
                 )
             current_perms["mode"] = new_mode
