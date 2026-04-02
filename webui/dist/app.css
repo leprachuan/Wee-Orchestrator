@@ -2036,9 +2036,10 @@ html, body {
   }
 
   /* Background Tasks & Scheduler panels — same positioning as main-panel on mobile */
+}
 
 /* ═══════════════════════════════════════════════════════════════════════════════
-   ─── Secrets Manager Panel (F019) ───────────────────────────────────────────
+   ─── Secrets Manager Panel (F019) — Leprachaun Glassmorphism Redesign ────────
    ═══════════════════════════════════════════════════════════════════════════════ */
 
 .secrets-panel {
@@ -2049,11 +2050,12 @@ html, body {
   position: relative;
 }
 
+/* ─── Header ─── */
 .secrets-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0 20px;
+  padding: 0 24px;
   height: var(--header-height);
   border-radius: 0;
   flex-shrink: 0;
@@ -2063,204 +2065,474 @@ html, body {
 .secrets-header-left {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 12px;
+}
+
+.secrets-header-icon {
+  font-size: 22px;
+  line-height: 1;
+  filter: drop-shadow(0 0 8px rgba(62,207,142,0.4));
+}
+
+.secrets-header-text {
+  display: flex;
+  flex-direction: column;
 }
 
 .secrets-title {
-  font-size: 16px;
+  font-size: 17px;
   font-weight: 700;
   color: var(--text-primary);
+  letter-spacing: -0.01em;
+}
+
+.secrets-subtitle {
+  font-size: 11px;
+  color: var(--text-muted);
+  letter-spacing: 0.02em;
 }
 
 .secrets-header-actions {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 10px;
 }
 
+.secrets-count-badge {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 3px 10px;
+  border-radius: 10px;
+  background: rgba(62,207,142,0.12);
+  color: #3ecf8e;
+  border: 1px solid rgba(62,207,142,0.25);
+  letter-spacing: 0.03em;
+}
+
+/* ─── Body layout ─── */
 .secrets-body {
   flex: 1;
-  display: flex;
-  flex-direction: column;
   overflow-y: auto;
-  padding: 20px;
-  gap: 20px;
+  padding: 24px;
+}
+
+.secrets-grid {
+  display: grid !important;
+  grid-template-columns: 1fr 1fr;
+  gap: 24px;
+  width: 100%;
+  align-content: start;
+}
+
+/* ─── Section headers ─── */
+.secrets-section-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 20px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid rgba(62,207,142,0.15);
+}
+
+.secrets-section-icon {
+  font-size: 16px;
+  color: var(--accent);
+  filter: drop-shadow(0 0 6px rgba(62,207,142,0.35));
+}
+
+.secrets-section-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin: 0;
+  letter-spacing: -0.005em;
 }
 
 /* ─── Store form ─── */
 .secrets-form {
-  padding: 20px;
-  border-radius: var(--radius-md);
+  padding: 24px;
+  border-radius: var(--radius);
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  gap: 0;
+  position: relative;
+  overflow: hidden;
+  border: 1px solid rgba(62,207,142,0.1);
 }
 
-.secrets-form-title {
-  font-size: 14px;
-  font-weight: 600;
-  color: var(--text-primary);
-  margin: 0;
+.secrets-form::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: linear-gradient(90deg, transparent, var(--accent), transparent);
+  opacity: 0.5;
+}
+
+.secrets-form-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  margin-bottom: 20px;
 }
 
 .secrets-form-row {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 6px;
 }
 
 .secrets-label {
-  font-size: 12px;
-  font-weight: 500;
+  font-size: 11px;
+  font-weight: 600;
   color: var(--text-secondary);
   text-transform: uppercase;
-  letter-spacing: 0.5px;
+  letter-spacing: 0.08em;
 }
 
 .secrets-input {
-  background: rgba(255,255,255,0.04);
-  border: 1px solid var(--glass-border);
+  -webkit-appearance: none;
+  -moz-appearance: none;
+  appearance: none;
+  width: 100%;
+  background: rgba(255,255,255,0.06) !important;
+  border: 1px solid rgba(255,255,255,0.15) !important;
   border-radius: var(--radius-sm);
-  padding: 8px 12px;
+  padding: 11px 14px;
   font-size: 14px;
-  font-family: var(--font-mono, 'SF Mono', 'Fira Code', 'Cascadia Code', monospace);
-  color: var(--text-primary);
+  font-family: var(--font-mono);
+  color: var(--text-primary) !important;
   outline: none;
-  transition: border-color 0.15s;
+  transition: border-color 0.2s, box-shadow 0.2s, background 0.2s;
+}
+
+.secrets-input:hover {
+  background: rgba(255,255,255,0.09) !important;
+  border-color: rgba(255,255,255,0.22) !important;
 }
 
 .secrets-input:focus {
-  border-color: var(--accent);
-  box-shadow: 0 0 0 2px rgba(var(--accent-rgb, 99,102,241), 0.15);
+  border-color: var(--accent) !important;
+  box-shadow: 0 0 0 3px var(--accent-glow);
+  background: rgba(255,255,255,0.08) !important;
 }
 
 .secrets-input::placeholder {
   color: var(--text-muted);
+  font-family: var(--font);
 }
 
+.secrets-input-hint {
+  font-size: 10px;
+  color: var(--text-muted);
+  margin-top: 2px;
+  opacity: 0.7;
+}
+
+/* ─── Value field with eye toggle ─── */
 .secrets-value-wrap {
+  position: relative;
   display: flex;
   align-items: center;
-  gap: 6px;
+  width: 100%;
 }
 
 .secrets-input-value {
   flex: 1;
+  padding-right: 44px;
 }
 
-.secrets-vis-btn {
-  padding: 6px 8px;
+.secrets-eye-btn {
+  position: absolute;
+  right: 6px;
+  top: 50%;
+  transform: translateY(-50%);
+  background: rgba(255,255,255,0.08);
+  border: 1px solid rgba(255,255,255,0.1);
+  border-radius: var(--radius-xs);
+  padding: 5px 7px;
   font-size: 14px;
   line-height: 1;
-  flex-shrink: 0;
+  cursor: pointer;
+  color: var(--text-secondary);
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+  z-index: 2;
 }
 
+.secrets-eye-btn:hover {
+  background: rgba(62,207,142,0.12);
+  color: var(--accent);
+  border-color: rgba(62,207,142,0.2);
+}
+
+.eye-icon { font-size: 14px; }
+
+/* ─── Form actions ─── */
 .secrets-form-actions {
   display: flex;
-  gap: 8px;
-  margin-top: 4px;
+  gap: 10px;
 }
 
+.secrets-save-btn {
+  flex: 1;
+  padding: 10px 20px !important;
+  font-size: 14px !important;
+  font-weight: 600 !important;
+  border-radius: var(--radius-sm) !important;
+  transition: all 0.2s !important;
+  white-space: nowrap;
+}
+
+.secrets-save-btn:not(:disabled):hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 20px var(--accent-glow) !important;
+}
+
+.btn-icon-inline {
+  margin-right: 4px;
+}
+
+.secrets-clear-btn {
+  padding: 10px 20px !important;
+  font-size: 14px !important;
+  border-radius: var(--radius-sm) !important;
+  white-space: nowrap;
+  border: 1px solid var(--glass-border) !important;
+}
+
+/* ─── Feedback ─── */
 .secrets-feedback {
   font-size: 13px;
-  padding: 8px 12px;
+  padding: 10px 14px;
   border-radius: var(--radius-sm);
-  margin-top: 4px;
+  margin-top: 14px;
+  font-weight: 500;
 }
 
 .secrets-feedback--success {
-  background: rgba(34, 197, 94, 0.1);
-  color: #22c55e;
-  border: 1px solid rgba(34, 197, 94, 0.2);
+  background: rgba(62,207,142,0.1);
+  color: #3ecf8e;
+  border: 1px solid rgba(62,207,142,0.25);
 }
 
 .secrets-feedback--error {
-  background: rgba(239, 68, 68, 0.1);
-  color: #ef4444;
-  border: 1px solid rgba(239, 68, 68, 0.2);
+  background: rgba(255,95,109,0.1);
+  color: #ff8888;
+  border: 1px solid rgba(255,95,109,0.25);
 }
 
-/* ─── Secrets list ─── */
+/* ─── Stored secrets list ─── */
 .secrets-list-wrap {
-  padding: 20px;
-  border-radius: var(--radius-md);
-  flex: 1;
+  padding: 24px;
+  border-radius: var(--radius);
   display: flex;
   flex-direction: column;
-  min-height: 200px;
+  min-height: 300px;
+  position: relative;
+  overflow: hidden;
+  border: 1px solid rgba(62,207,142,0.1);
 }
 
-.secrets-list-title {
-  font-size: 14px;
-  font-weight: 600;
-  color: var(--text-primary);
-  margin: 0 0 12px 0;
+.secrets-list-wrap::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: linear-gradient(90deg, transparent, rgba(62,207,142,0.5), transparent);
+  opacity: 0.5;
 }
 
 .secrets-list {
+  flex: 1;
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 8px;
+  overflow-y: auto;
 }
 
+/* ─── Secret item cards ─── */
 .secrets-item {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 8px 12px;
+  padding: 12px 16px;
   background: rgba(255,255,255,0.03);
   border: 1px solid var(--glass-border);
   border-radius: var(--radius-sm);
-  transition: background 0.15s, border-color 0.15s;
+  transition: all 0.2s;
+  gap: 12px;
 }
 
 .secrets-item:hover {
-  background: rgba(255,255,255,0.06);
-  border-color: rgba(255,255,255,0.12);
+  background: rgba(62,207,142,0.06);
+  border-color: rgba(62,207,142,0.2);
+  transform: translateY(-1px);
+  box-shadow: 0 4px 16px rgba(0,0,0,0.2);
+}
+
+.secrets-item-left {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  flex: 1;
+}
+
+.secrets-item-icon {
+  font-size: 14px;
+  color: var(--accent);
+  opacity: 0.7;
+  flex-shrink: 0;
 }
 
 .secrets-item-name {
-  font-family: var(--font-mono, 'SF Mono', 'Fira Code', 'Cascadia Code', monospace);
+  font-family: var(--font-mono);
   font-size: 13px;
   color: var(--text-primary);
-  word-break: break-all;
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
+.secrets-item-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.secrets-copy-btn,
 .secrets-delete-btn {
-  color: var(--text-muted);
-  padding: 2px 6px;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius-xs);
+  padding: 5px 8px;
   font-size: 13px;
-  border-radius: var(--radius-sm);
-  transition: color 0.15s, background 0.15s;
+  cursor: pointer;
+  transition: all 0.15s;
+  color: var(--text-muted);
+  line-height: 1;
+}
+
+.secrets-copy-btn:hover {
+  color: var(--accent);
+  background: rgba(62,207,142,0.1);
+  border-color: rgba(62,207,142,0.2);
+}
+
+.secrets-copy-btn.copied {
+  color: #3ecf8e;
 }
 
 .secrets-delete-btn:hover {
-  color: var(--danger, #ef4444);
-  background: rgba(239, 68, 68, 0.1);
+  color: var(--danger);
+  background: rgba(255,95,109,0.1);
+  border-color: rgba(255,95,109,0.2);
 }
 
-.secrets-empty {
+/* ─── Empty state ─── */
+.secrets-empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 48px 24px;
+  flex: 1;
+}
+
+.secrets-empty-icon {
+  font-size: 40px;
+  margin-bottom: 16px;
+  opacity: 0.5;
+  filter: drop-shadow(0 0 12px rgba(62,207,142,0.2));
+}
+
+.secrets-empty-text {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  margin: 0 0 6px;
+}
+
+.secrets-empty-hint {
+  font-size: 12px;
   color: var(--text-muted);
-  font-size: 13px;
+  margin: 0;
   text-align: center;
-  padding: 30px 20px;
 }
 
 .secrets-error {
-  color: var(--danger, #ef4444);
+  color: var(--danger) !important;
 }
 
-/* ─── Mobile ─── */
-@media (max-width: 768px) {
+/* ─── Loading state ─── */
+.secrets-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 40px 20px;
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+.secrets-loading-dot {
+  width: 6px;
+  height: 6px;
+  background: var(--accent);
+  border-radius: 50%;
+  animation: secrets-pulse 1.2s ease-in-out infinite;
+}
+
+.secrets-loading-dot:nth-child(2) { animation-delay: 0.15s; }
+.secrets-loading-dot:nth-child(3) { animation-delay: 0.3s; }
+
+@keyframes secrets-pulse {
+  0%, 80%, 100% { opacity: 0.3; transform: scale(0.8); }
+  40% { opacity: 1; transform: scale(1.2); }
+}
+
+/* ─── Mobile responsive ─── */
+@media (max-width: 640px) {
+  .secrets-grid {
+    grid-template-columns: 1fr;
+  }
+  .secrets-body {
+    padding: 16px;
+  }
+  .secrets-form,
+  .secrets-list-wrap {
+    padding: 18px;
+  }
+}
+
+@media (max-width: 480px) {
   .secrets-body {
     padding: 12px;
-    gap: 12px;
   }
-  .secrets-form, .secrets-list-wrap {
+  .secrets-form,
+  .secrets-list-wrap {
     padding: 14px;
+  }
+  .secrets-header {
+    padding: 0 14px;
+  }
+  .secrets-form-actions {
+    flex-direction: column;
+  }
+  .secrets-save-btn {
+    width: 100%;
   }
 }
 
+
+
+@media (max-width: 768px) {
   .background-panel {
     position: fixed;
     top: 0;

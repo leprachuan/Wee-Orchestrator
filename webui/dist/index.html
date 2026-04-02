@@ -13,7 +13,7 @@
   <link rel="icon" type="image/png" sizes="192x192" href="/static/icon-192.png" />
   <link rel="apple-touch-icon" href="/static/apple-touch-icon.png" />
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/highlight.js@11.9.0/styles/github-dark.min.css" />
-  <link rel="stylesheet" href="app.css?v=20260401secrets1" />
+  <link rel="stylesheet" href="app.css?v=20260402secrets5" />
 </head>
 <body>
   <!-- Auth overlay -->
@@ -319,43 +319,70 @@
       </div>
     </section>
 
-    <!-- Secrets Manager panel (F019) -->
+<!-- Secrets Manager panel (F019) — Redesigned -->
     <section id="secrets-panel" class="secrets-panel hidden">
       <header class="secrets-header glass-panel">
         <div class="secrets-header-left">
           <button id="btn-secrets-open-sidebar" class="btn-icon sidebar-open-btn hidden" title="Open sidebar">☰</button>
-          <h2 class="secrets-title">🔐 Secret Manager</h2>
+          <div class="secrets-header-icon">🔐</div>
+          <div class="secrets-header-text">
+            <h2 class="secrets-title">Secret Manager</h2>
+            <span class="secrets-subtitle">Securely store &amp; manage credentials</span>
+          </div>
         </div>
         <div class="secrets-header-actions">
+          <span id="secrets-count-badge" class="secrets-count-badge">0 secrets</span>
           <button id="btn-secrets-refresh" class="btn btn-ghost btn-sm">↺ Refresh</button>
         </div>
       </header>
 
       <div class="secrets-body">
-        <div class="secrets-form glass-panel">
-          <h3 class="secrets-form-title">Store a Secret</h3>
-          <div class="secrets-form-row">
-            <label for="secret-name-input" class="secrets-label">Name</label>
-            <input id="secret-name-input" type="text" class="secrets-input" placeholder="e.g. MY_API_KEY" autocomplete="off" spellcheck="false" />
-          </div>
-          <div class="secrets-form-row">
-            <label for="secret-value-input" class="secrets-label">Value</label>
-            <div class="secrets-value-wrap">
-              <input id="secret-value-input" type="password" class="secrets-input secrets-input-value" placeholder="Secret value (masked)" autocomplete="off" />
-              <button id="btn-secrets-toggle-vis" class="btn btn-ghost btn-xs secrets-vis-btn" type="button" title="Toggle visibility">👁</button>
+        <div class="secrets-grid">
+          <!-- Store a Secret section -->
+          <div class="secrets-form glass-panel">
+            <div class="secrets-section-header">
+              <span class="secrets-section-icon">✦</span>
+              <h3 class="secrets-section-title">Store a Secret</h3>
             </div>
+            <div class="secrets-form-fields">
+              <div class="secrets-form-row">
+                <label for="secret-name-input" class="secrets-label">Secret Name</label>
+                <input id="secret-name-input" type="text" class="secrets-input glass-input" placeholder="e.g. MY_API_KEY" autocomplete="off" spellcheck="false" />
+                <span class="secrets-input-hint">Letters, digits, hyphens, underscores, dots</span>
+              </div>
+              <div class="secrets-form-row">
+                <label for="secret-value-input" class="secrets-label">Secret Value</label>
+                <div class="secrets-value-wrap">
+                  <input id="secret-value-input" type="password" class="secrets-input secrets-input-value glass-input" placeholder="Enter secret value…" autocomplete="off" />
+                  <button id="btn-secrets-toggle-vis" class="secrets-eye-btn" type="button" title="Toggle visibility">
+                    <span class="eye-icon eye-closed">👁‍🗨</span>
+                    <span class="eye-icon eye-open hidden">👁</span>
+                  </button>
+                </div>
+              </div>
+            </div>
+            <div class="secrets-form-actions">
+              <button id="btn-secrets-save" class="btn btn-primary secrets-save-btn">
+                <span class="btn-icon-inline">💾</span> Save Secret
+              </button>
+              <button id="btn-secrets-clear" class="btn btn-ghost secrets-clear-btn">Clear</button>
+            </div>
+            <div id="secrets-form-feedback" class="secrets-feedback hidden" role="alert" aria-live="polite"></div>
           </div>
-          <div class="secrets-form-actions">
-            <button id="btn-secrets-save" class="btn btn-primary btn-sm">💾 Save</button>
-            <button id="btn-secrets-clear" class="btn btn-ghost btn-sm">Clear</button>
-          </div>
-          <div id="secrets-form-feedback" class="secrets-feedback hidden" role="alert" aria-live="polite"></div>
-        </div>
 
-        <div class="secrets-list-wrap glass-panel">
-          <h3 class="secrets-list-title">Stored Secrets</h3>
-          <div id="secrets-list" class="secrets-list">
-            <p class="secrets-empty">Loading…</p>
+          <!-- Stored Secrets section -->
+          <div class="secrets-list-wrap glass-panel">
+            <div class="secrets-section-header">
+              <span class="secrets-section-icon">☘</span>
+              <h3 class="secrets-section-title">Stored Secrets</h3>
+            </div>
+            <div id="secrets-list" class="secrets-list">
+              <div class="secrets-empty-state">
+                <div class="secrets-empty-icon">🔒</div>
+                <p class="secrets-empty-text">No secrets stored yet</p>
+                <p class="secrets-empty-hint">Use the form to securely store your first credential</p>
+              </div>
+            </div>
           </div>
         </div>
       </div>
@@ -675,7 +702,7 @@
   <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/dompurify@3/dist/purify.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/highlight.js@11.9.0/highlight.min.js"></script>
-  <script src="app.js?v=20260401secrets1" type="module"></script>
+  <script src="app.js?v=20260402secrets5" type="module"></script>
 
     <!-- Skills slide-over panel (right side, below canvas) -->
     <aside id="skills-panel" class="skills-panel skills-hidden">

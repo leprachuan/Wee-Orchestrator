@@ -2760,13 +2760,16 @@ document.addEventListener('DOMContentLoaded', () => {
     $('secret-value-input').value = '';
     hide($('secrets-form-feedback'));
   });
-  $('btn-secrets-toggle-vis').addEventListener('click', () => {
-    const inp = $('secret-value-input');
-    const btn = $('btn-secrets-toggle-vis');
-    const isHidden = inp.type === 'password';
-    inp.type = isHidden ? 'text' : 'password';
-    btn.textContent = isHidden ? '👁‍🗨' : '👁';
-    btn.setAttribute('aria-pressed', isHidden ? 'true' : 'false');
+  $("btn-secrets-toggle-vis").addEventListener("click", () => {
+    const inp = $("secret-value-input");
+    const isHidden = inp.type === "password";
+    inp.type = isHidden ? "text" : "password";
+    const closedIcon = $("btn-secrets-toggle-vis").querySelector(".eye-closed");
+    const openIcon = $("btn-secrets-toggle-vis").querySelector(".eye-open");
+    if (closedIcon && openIcon) {
+      closedIcon.classList.toggle("hidden", isHidden);
+      openIcon.classList.toggle("hidden", !isHidden);
+    }
   });
   $('secret-name-input').addEventListener('keydown', e => { if (e.key === 'Enter') $('secret-value-input').focus(); });
   $('secret-value-input').addEventListener('keydown', e => { if (e.key === 'Enter') saveSecret(); });
@@ -3052,7 +3055,7 @@ function showBackgroundPanel() {
 
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// ─── Secrets Manager Panel (F019) ────────────────────────────────────────────
+// ─── Secrets Manager Panel (F019) — Redesigned ──────────────────────────────
 // ═══════════════════════════════════════════════════════════════════════════════
 
 function showSecretsPanel() {
@@ -3078,25 +3081,58 @@ function showSecretsPanel() {
 async function loadSecrets() {
   const listEl = $('secrets-list');
   if (!listEl) return;
-  listEl.innerHTML = '<p class="secrets-empty">Loading\u2026</p>';
+  listEl.innerHTML = '<div class="secrets-loading"><span class="secrets-loading-dot"></span><span class="secrets-loading-dot"></span><span class="secrets-loading-dot"></span></div>';
   try {
     const data = await apiRequest('GET', '/secrets');
     const names = data.secrets || [];
+    // Update count badge
+    const badge = $('secrets-count-badge');
+    if (badge) badge.textContent = names.length + (names.length === 1 ? ' secret' : ' secrets');
     if (names.length === 0) {
-      listEl.innerHTML = '<p class="secrets-empty">No secrets stored yet.</p>';
+      listEl.innerHTML = `
+        <div class="secrets-empty-state">
+          <div class="secrets-empty-icon">🔒</div>
+          <p class="secrets-empty-text">No secrets stored yet</p>
+          <p class="secrets-empty-hint">Use the form to securely store your first credential</p>
+        </div>`;
       return;
     }
     listEl.innerHTML = names.map(name => `
       <div class="secrets-item">
-        <span class="secrets-item-name">${escapeHtml(name)}</span>
-        <button class="btn btn-ghost btn-xs secrets-delete-btn" data-name="${escapeHtml(name)}" title="Delete secret">\u2715</button>
+        <div class="secrets-item-left">
+          <span class="secrets-item-icon">🔑</span>
+          <span class="secrets-item-name">${escapeHtml(name)}</span>
+        </div>
+        <div class="secrets-item-actions">
+          <button class="secrets-copy-btn" data-name="${escapeHtml(name)}" title="Copy value">📋</button>
+          <button class="secrets-delete-btn" data-name="${escapeHtml(name)}" title="Delete secret">✕</button>
+        </div>
       </div>
     `).join('');
     listEl.querySelectorAll('.secrets-delete-btn').forEach(btn => {
       btn.addEventListener('click', () => deleteSecret(btn.dataset.name));
     });
+    listEl.querySelectorAll('.secrets-copy-btn').forEach(btn => {
+      btn.addEventListener('click', () => copySecretValue(btn, btn.dataset.name));
+    });
   } catch (err) {
-    listEl.innerHTML = `<p class="secrets-empty secrets-error">\u26a0 ${escapeHtml(err.message)}</p>`;
+    listEl.innerHTML = `<div class="secrets-empty-state"><p class="secrets-empty-text secrets-error">⚠ ${escapeHtml(err.message)}</p></div>`;
+  }
+}
+
+async function copySecretValue(btn, name) {
+  try {
+    const data = await apiRequest('GET', `/secrets/${encodeURIComponent(name)}`);
+    if (data.value !== undefined) {
+      await navigator.clipboard.writeText(data.value);
+      btn.classList.add('copied');
+      btn.textContent = '✓';
+      setTimeout(() => { btn.classList.remove('copied'); btn.textContent = '📋'; }, 1500);
+    } else {
+      showSecretsFeedback('Could not retrieve secret value', 'error');
+    }
+  } catch (err) {
+    showSecretsFeedback(`Copy failed: ${err.message}`, 'error');
   }
 }
 
@@ -3116,12 +3152,12 @@ async function saveSecret() {
   try {
     const result = await apiRequest('POST', '/secrets', { name, value });
     const action = result.action === 'updated' ? 'Updated' : 'Created';
-    showSecretsFeedback(`\u2705 ${action} secret "${name}"`, 'success');
+    showSecretsFeedback(`✅ ${action} secret "${name}"`, 'success');
     nameEl.value = '';
     valueEl.value = '';
     loadSecrets();
   } catch (err) {
-    showSecretsFeedback(`\u274c ${err.message}`, 'error');
+    showSecretsFeedback(`❌ ${err.message}`, 'error');
   }
 }
 
@@ -3129,10 +3165,10 @@ async function deleteSecret(name) {
   if (!confirm(`Delete secret "${name}"? This cannot be undone.`)) return;
   try {
     await apiRequest('DELETE', `/secrets/${encodeURIComponent(name)}`);
-    showSecretsFeedback(`\u2705 Deleted "${name}"`, 'success');
+    showSecretsFeedback(`✅ Deleted "${name}"`, 'success');
     loadSecrets();
   } catch (err) {
-    showSecretsFeedback(`\u274c ${err.message}`, 'error');
+    showSecretsFeedback(`❌ ${err.message}`, 'error');
   }
 }
 
@@ -3143,9 +3179,7 @@ function showSecretsFeedback(msg, type) {
   fb.className = 'secrets-feedback secrets-feedback--' + type;
   show(fb);
   clearTimeout(fb._timer);
-  if (type === 'success') {
-    fb._timer = setTimeout(() => hide(fb), 5000);
-  }
+  fb._timer = setTimeout(() => hide(fb), 5000);
 }
 
 function escapeHtml(str) {
