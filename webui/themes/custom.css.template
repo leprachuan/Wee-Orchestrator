@@ -1,0 +1,70 @@
+/* =====================================================
+   Wee Orchestrator — Custom Theme Template
+   =====================================================
+   Copy this file to a new .css file (e.g., my-theme.css)
+   and customize the CSS variables below.
+
+   The theme name is derived from the filename:
+     my-theme.css → data-theme="my-theme"
+
+   See docs/THEMING.md for the full variable reference.
+   ===================================================== */
+
+[data-theme="my-theme"] {
+  /* ── Primary accent (buttons, links, focus rings) ─── */
+  --accent:         #6366f1;
+  --accent-hover:   #4f46e5;
+  --accent-glow:    rgba(99,102,241,0.30);
+  --accent-rgb:     99, 102, 241;
+
+  /* ── Secondary accent (tags, badges, highlights) ──── */
+  --gold:           #f59e0b;
+  --gold-hover:     #d97706;
+  --gold-glow:      rgba(245,158,11,0.25);
+
+  /* ── Danger / error ───────────────────────────────── */
+  --danger:         #ef4444;
+  --danger-hover:   #dc2626;
+
+  /* ── Backgrounds ──────────────────────────────────── */
+  --bg-primary:     #0f0f23;
+  --bg-secondary:   #1a1a35;
+  --bg-tertiary:    #252547;
+  --surface:        rgba(26,26,53,0.70);
+  --surface-raised: rgba(99,102,241,0.06);
+  --surface-sunken: rgba(8,8,18,0.50);
+  --surface-overlay: rgba(15,15,35,0.85);
+
+  /* ── Text ─────────────────────────────────────────── */
+  --text-primary:   #e2e8f0;
+  --text-secondary: #94a3b8;
+  --text-muted:     #64748b;
+  --text-inverse:   #0f172a;
+
+  /* ── Glassmorphism ────────────────────────────────── */
+  --glass-bg:       rgba(26,26,53,0.55);
+  --glass-border:   rgba(99,102,241,0.12);
+  --glass-shadow:   0 18px 48px rgba(0,0,0,0.45),
+                    0 0 0 1px rgba(99,102,241,0.08),
+                    inset 0 1px 0 rgba(255,255,255,0.04);
+  --glass-blur:     blur(28px) saturate(180%);
+
+  /* ── Borders ──────────────────────────────────────── */
+  --border-subtle:  rgba(99,102,241,0.10);
+  --border-default: rgba(99,102,241,0.18);
+  --border-strong:  rgba(99,102,241,0.30);
+  --divider:        rgba(99,102,241,0.08);
+
+  /* ── Scrollbar ────────────────────────────────────── */
+  --scrollbar-track: rgba(15,15,35,0.40);
+  --scrollbar-thumb: rgba(99,102,241,0.25);
+  --scrollbar-hover: rgba(99,102,241,0.40);
+}
+
+/* Optional: custom body background gradient */
+html[data-theme="my-theme"] body {
+  background:
+    radial-gradient(circle at 15% 15%, rgba(99,102,241,0.12), transparent 35%),
+    radial-gradient(circle at 80% 20%, rgba(245,158,11,0.06), transparent 25%),
+    #0f0f23;
+}

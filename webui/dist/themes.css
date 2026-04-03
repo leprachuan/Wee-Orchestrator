@@ -411,3 +411,7 @@ html[data-theme="cyberpunk"] .blob-3 {
 .theme-swatch-cyberpunk .s1 { background: #ff2d6f; }
 .theme-swatch-cyberpunk .s2 { background: #00f0ff; }
 .theme-swatch-cyberpunk .s3 { background: #0d0015; border-color: rgba(255,255,255,0.2); }
+
+.theme-swatch-custom .s1 { background: #9c27b0; }
+.theme-swatch-custom .s2 { background: #ff9800; }
+.theme-swatch-custom .s3 { background: #1a1a2e; border-color: rgba(255,255,255,0.2); }

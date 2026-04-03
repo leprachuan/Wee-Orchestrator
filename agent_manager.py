@@ -25,6 +25,29 @@ from uuid import uuid4
 # Dynamically determine the repo base directory (works regardless of where repo is cloned)
 SCRIPT_BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
+# ── Theme constants (F025) ──────────────────────────────────────────────
+_BUILTIN_THEMES = [
+    {
+        "name": "emerald", "label": "Emerald",
+        "description": "Default glassmorphism", "builtin": True,
+    },
+    {
+        "name": "midnight", "label": "Midnight",
+        "description": "Deep blue ocean", "builtin": True,
+    },
+    {
+        "name": "sunrise", "label": "Sunrise",
+        "description": "Warm light mode", "builtin": True,
+    },
+    {
+        "name": "cyberpunk", "label": "Cyberpunk",
+        "description": "Neon pink & cyan", "builtin": True,
+    },
+]
+_THEME_NAME_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$")
+_themes_dir = Path(os.path.abspath(__file__)).parent / "webui" / "themes"
+
+
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
@@ -7594,7 +7617,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         WebSocketDisconnect,
     )
     from fastapi.middleware.cors import CORSMiddleware
-    from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+    from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
     from fastapi.staticfiles import StaticFiles
     from pydantic import BaseModel, field_validator
 
@@ -12994,6 +13017,58 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             "results": results,
         }
 
+
+
+    # ── Themes API (F025) ─────────────────────────────────────────────
+
+    @app.get("/api/v1/themes")
+    async def list_themes(request: Request):
+        """List built-in and custom themes."""
+        await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        themes = list(_BUILTIN_THEMES)
+        if _themes_dir.exists():
+            for css_file in sorted(_themes_dir.glob("*.css")):
+                name = css_file.stem
+                if name == "custom.css" or name.startswith("."):
+                    continue
+                if any(t["name"] == name for t in themes):
+                    continue
+                themes.append({
+                    "name": name,
+                    "label": name.replace("-", " ").replace("_", " ").title(),
+                    "description": "Custom theme",
+                    "builtin": False,
+                })
+        return {"themes": themes, "count": len(themes)}
+
+    @app.get("/api/v1/themes/{name}/css")
+    async def get_theme_css(name: str, request: Request):
+        """Serve CSS for a custom theme. Path traversal protected."""
+        await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        if not _THEME_NAME_RE.match(name):
+            raise HTTPException(
+                status_code=400,
+                detail="Invalid theme name",
+            )
+        css_path = (_themes_dir / f"{name}.css").resolve()
+        if not str(css_path).startswith(str(_themes_dir.resolve())):
+            raise HTTPException(status_code=400, detail="Invalid theme name")
+        if not css_path.exists():
+            raise HTTPException(status_code=404, detail="Theme not found")
+        return Response(
+            content=css_path.read_text(encoding="utf-8"),
+            media_type="text/css",
+        )
 
 
         # --- AI Media ─────────────────────────────────────────────────────────────

@@ -14,7 +14,7 @@
   <link rel="apple-touch-icon" href="/static/apple-touch-icon.png" />
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/highlight.js@11.9.0/styles/github-dark.min.css" />
   <link rel="stylesheet" href="app.css?v=20260403f027" />
-  <link rel="stylesheet" href="themes.css?v=20260403f025" />
+  <link rel="stylesheet" href="themes.css?v=20260403f025custom" />
 </head>
 <body>
   <!-- Auth overlay -->
@@ -771,10 +771,13 @@
     </aside>
 
 
+  <!-- Custom theme CSS link (F025 enhanced) -->
+  <link id="custom-theme-css" rel="stylesheet" href="" disabled />
   <!-- Theme switching (F025) -->
   <script>
   (function() {
     var THEME_KEY = 'wee_theme';
+    var BUILTIN_THEMES = ['', 'midnight', 'sunrise', 'cyberpunk'];
 
     function applyTheme(name) {
       if (name && name !== 'emerald') {
@@ -795,6 +798,22 @@
           hlLink.href = 'https://cdn.jsdelivr.net/npm/highlight.js@11.9.0/styles/github.min.css';
         } else {
           hlLink.href = 'https://cdn.jsdelivr.net/npm/highlight.js@11.9.0/styles/github-dark.min.css';
+        }
+      }
+      // Load/unload custom theme CSS
+      var customLink = document.getElementById('custom-theme-css');
+      if (customLink) {
+        if (name && BUILTIN_THEMES.indexOf(name) === -1) {
+          customLink.href = '/api/v1/themes/' + encodeURIComponent(name) + '/css';
+          customLink.disabled = false;
+          customLink.onerror = function() {
+            console.warn('Failed to load custom theme: ' + name + '. Falling back to default.');
+            customLink.disabled = true;
+            document.documentElement.removeAttribute('data-theme');
+          };
+        } else {
+          customLink.href = '';
+          customLink.disabled = true;
         }
       }
     }
@@ -824,6 +843,42 @@
     // Apply saved theme immediately (before paint)
     applyTheme(getTheme());
 
+    // Fetch custom themes from API and add to picker
+    function loadCustomThemes() {
+      var token = (typeof STATE !== 'undefined' && STATE.token) ? STATE.token : localStorage.getItem('wee_auth_token') || '';
+      if (!token) return;
+      fetch('/api/v1/themes', {
+        headers: { 'Authorization': 'Bearer ' + token }
+      })
+      .then(function(r) { return r.ok ? r.json() : null; })
+      .then(function(data) {
+        if (!data || !data.themes) return;
+        var picker = document.getElementById('theme-picker');
+        if (!picker) return;
+        var existing = {};
+        picker.querySelectorAll('.theme-option').forEach(function(el) {
+          existing[el.getAttribute('data-theme-value')] = true;
+        });
+        data.themes.forEach(function(t) {
+          var val = (t.name === 'emerald') ? '' : t.name;
+          if (existing[val]) return;
+          var div = document.createElement('div');
+          div.className = 'theme-option';
+          div.setAttribute('data-theme-value', val);
+          div.innerHTML = '<div class="theme-swatch theme-swatch-custom">' +
+            '<span class="theme-swatch-dot s1"></span>' +
+            '<span class="theme-swatch-dot s2"></span>' +
+            '<span class="theme-swatch-dot s3"></span></div>' +
+            '<div><div class="theme-option-label">' +
+            t.label + '</div><div class="theme-option-desc">' +
+            t.description + '</div></div>';
+          picker.appendChild(div);
+        });
+        updatePickerUI(getTheme());
+      })
+      .catch(function() { /* ignore — custom themes just won't appear */ });
+    }
+
     document.addEventListener('DOMContentLoaded', function() {
       var btn = document.getElementById('btn-theme');
       var picker = document.getElementById('theme-picker');
@@ -850,6 +905,9 @@
           picker.classList.remove('open');
         }
       });
+
+      // Load custom themes after auth is ready
+      setTimeout(loadCustomThemes, 1500);
     });
   })();
   </script>
