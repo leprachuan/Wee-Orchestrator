@@ -5017,9 +5017,11 @@ Example: python3 {SCRIPT_BASE_DIR}/agent_manager.py --agent research-dev --runti
         wee_executor_instruction = f"""
 [Wee Executor] Unified privileged operations interface — use instead of raw curl/API calls.
   python3 {SCRIPT_BASE_DIR}/scripts/wee_executor.py -c create_background_task -a '{{"agent": "<name>", "prompt": "...", "model": "claude-haiku-4.5"}}'
+  python3 {SCRIPT_BASE_DIR}/scripts/wee_executor.py -c get_secret -a '{{"name": "SECRET_NAME"}}'
   python3 {SCRIPT_BASE_DIR}/scripts/wee_executor.py --list-capabilities
 Benefits: auto-auth (no token exposure), agent validation, rate limiting, HMAC signing, audit logging.
-When to use: Prefer wee_executor over direct curl for background tasks — it handles auth, validation, and logging automatically."""
+When to use: Prefer wee_executor over direct curl for background tasks — it handles auth, validation, and logging automatically.
+⚠️ get_secret requires WEE_ELEVATED=true (set by agent_manager for elevated sessions). Secret values are never logged."""
 
         # Inject cross-runtime handoff context on the first message of a new session.
         # get_handoff_context() is one-time: it reads and deletes the handoff file so

@@ -37,6 +37,10 @@ Exit codes:
     2 — capability not available in current mode
     3 — API / network error
 
+Capabilities:
+    - create_background_task: Create background tasks via orchestrator API
+    - get_secret: Retrieve secrets from secure store (elevated mode required)
+
 Future capabilities (not yet implemented):
     - run_task: Execute a task in the current session
     - query_memory: Read/write agent-specific memories
@@ -51,7 +55,9 @@ import hmac
 import json
 import logging
 import os
+import re
 import ssl
+import subprocess
 import sys
 import time
 import urllib.error
@@ -72,6 +78,7 @@ SESSIONS_JSON = BASE_DIR / ".task-scheduler" / "sessions.json"
 
 MAX_RATE_PER_MINUTE = 10
 TASK_VERIFY_TIMEOUT = 3
+SECRET_NAME_RE = re.compile(r"^[A-Za-z0-9._-]+$")
 
 MODE_INTERACTIVE = "interactive"
 MODE_BACKGROUND = "background"
@@ -445,6 +452,133 @@ def cap_create_background_task(
     }
 
 
+# ── Capability: get_secret ─────────────────────────────────────────────
+
+
+def cap_get_secret(
+    args: Dict, session_id: Optional[str], mode: str
+) -> Dict:
+    """Retrieve a secret from the secret store via secret_tool.
+
+    Requires WEE_ELEVATED=true env var for defense-in-depth security.
+    Secret values are returned but NEVER written to audit logs.
+
+    Args (in args dict):
+        name:    Secret name to retrieve (required)
+        backend: Storage backend — keyring or file (default: keyring)
+
+    Returns:
+        {status, name, backend} on success (secret in "value" key)
+        {error, code} on failure
+    """
+    name = args.get("name")
+    if not name:
+        return {
+            "error": "Missing required field: name",
+            "code": "MISSING_FIELDS",
+        }
+
+    if not SECRET_NAME_RE.match(name):
+        return {
+            "error": (
+                "Invalid secret name — only alphanumeric, dot, "
+                "hyphen, and underscore allowed"
+            ),
+            "code": "INVALID_NAME",
+        }
+
+    elevated = os.environ.get("WEE_ELEVATED", "").lower() in ("true", "1")
+    if not elevated:
+        return {
+            "error": (
+                "get_secret requires elevated mode. "
+                "Set WEE_ELEVATED=true in the session environment."
+            ),
+            "code": "ELEVATION_REQUIRED",
+        }
+
+    backend = args.get("backend", "keyring")
+    if backend not in ("keyring", "file"):
+        return {
+            "error": f"Invalid backend '{backend}'. Must be 'keyring' or 'file'.",
+            "code": "INVALID_BACKEND",
+        }
+
+    rate_key = session_id or "anonymous"
+    if not _check_rate_limit(rate_key):
+        return {
+            "error": f"Rate limit exceeded ({MAX_RATE_PER_MINUTE}/min)",
+            "code": "RATE_LIMITED",
+        }
+
+    secret_tool_path = str(BASE_DIR / "secret_tool" / "secret_tool.py")
+
+    # Audit log the access attempt (never log the value)
+    logger.info(
+        "get_secret: name=%s, backend=%s, session=%s",
+        name,
+        backend,
+        session_id,
+    )
+
+    try:
+        result = subprocess.run(
+            [
+                sys.executable,
+                secret_tool_path,
+                "get",
+                "--name",
+                name,
+                "--backend",
+                backend,
+            ],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+    except subprocess.TimeoutExpired:
+        logger.error("get_secret timed out for name=%s", name)
+        return {"error": "Secret retrieval timed out", "code": "TIMEOUT"}
+    except FileNotFoundError:
+        logger.error("secret_tool.py not found at %s", secret_tool_path)
+        return {
+            "error": "secret_tool.py not found",
+            "code": "TOOL_NOT_FOUND",
+        }
+    except Exception as exc:
+        logger.error("get_secret subprocess error: %s", exc)
+        return {"error": str(exc), "code": "UNKNOWN_ERROR"}
+
+    if result.returncode == 0 and result.stdout.strip():
+        return {
+            "status": "success",
+            "value": result.stdout.strip(),
+            "name": name,
+            "backend": backend,
+        }
+
+    # Parse JSON error response from secret_tool
+    stderr = result.stderr.strip()
+    stdout = result.stdout.strip()
+    try:
+        parsed = json.loads(stdout or stderr)
+        if parsed.get("status") == "failure":
+            return {
+                "error": parsed.get("message", "Secret not found"),
+                "code": "NOT_FOUND",
+                "name": name,
+            }
+        return parsed
+    except (json.JSONDecodeError, TypeError):
+        pass
+
+    return {
+        "error": stderr or stdout or "Failed to retrieve secret",
+        "code": "GET_SECRET_FAILED",
+        "name": name,
+    }
+
+
 # ── Capability Registry ────────────────────────────────────────────────
 
 
@@ -485,6 +619,19 @@ register_capability(
         "model": "claude-haiku-4.5",
         "timeout": 600,
     },
+)
+
+register_capability(
+    name="get_secret",
+    handler=cap_get_secret,
+    allowed_modes=[MODE_INTERACTIVE, MODE_SYNC],
+    description=(
+        "Retrieve a secret from the secure store "
+        "(requires WEE_ELEVATED=true)"
+    ),
+    required_args=["name"],
+    optional_args=["backend"],
+    example={"name": "MY_API_KEY", "backend": "keyring"},
 )
 
 

@@ -5,6 +5,7 @@ Covers:
   - Mode detection (interactive, background, sync, api)
   - Capability filtering by mode
   - create_background_task (success, API error, invalid agent, rate limit)
+  - get_secret (elevation, name validation, subprocess, backends)
   - register_capability helper
   - list-capabilities and help output
   - Exit codes (0 success, 1 general, 2 mode restriction, 3 API error)
@@ -47,6 +48,7 @@ def _clean_env(monkeypatch, tmp_path):
         "WEE_CHANNEL",
         "WEE_API_URL",
         "API_PORT",
+        "WEE_ELEVATED",
     ):
         monkeypatch.delenv(var, raising=False)
     # Redirect log/rate-limit files to tmp
@@ -185,6 +187,30 @@ class TestCapabilityFiltering:
         caps = wee_executor.list_capabilities(wee_executor.MODE_API)
         names = [c["name"] for c in caps]
         assert "create_background_task" not in names
+
+    def test_get_secret_allowed_interactive(self):
+        """get_secret is allowed in interactive mode."""
+        caps = wee_executor.list_capabilities(wee_executor.MODE_INTERACTIVE)
+        names = [c["name"] for c in caps]
+        assert "get_secret" in names
+
+    def test_get_secret_allowed_sync(self):
+        """get_secret is allowed in sync mode."""
+        caps = wee_executor.list_capabilities(wee_executor.MODE_SYNC)
+        names = [c["name"] for c in caps]
+        assert "get_secret" in names
+
+    def test_get_secret_denied_background(self):
+        """get_secret is NOT allowed in background mode."""
+        caps = wee_executor.list_capabilities(wee_executor.MODE_BACKGROUND)
+        names = [c["name"] for c in caps]
+        assert "get_secret" not in names
+
+    def test_get_secret_denied_api(self):
+        """get_secret is NOT allowed in api mode."""
+        caps = wee_executor.list_capabilities(wee_executor.MODE_API)
+        names = [c["name"] for c in caps]
+        assert "get_secret" not in names
 
 
 # ── register_capability Tests ─────────────────────────────────────────
@@ -466,3 +492,270 @@ class TestIdentityResolution:
         identity, channel = wee_executor._resolve_identity()
         assert identity == ""
         assert channel == "api"
+
+
+# ── get_secret Tests ──────────────────────────────────────────────────
+
+
+class TestGetSecret:
+    """Tests for cap_get_secret() capability."""
+
+    def test_missing_name_field(self):
+        """Missing name returns MISSING_FIELDS."""
+        result = wee_executor.cap_get_secret(
+            {}, "session-1", wee_executor.MODE_INTERACTIVE
+        )
+        assert "error" in result
+        assert result["code"] == "MISSING_FIELDS"
+
+    def test_invalid_name_path_traversal(self):
+        """Path traversal in name returns INVALID_NAME."""
+        result = wee_executor.cap_get_secret(
+            {"name": "../etc/passwd"},
+            "session-1",
+            wee_executor.MODE_INTERACTIVE,
+        )
+        assert result["code"] == "INVALID_NAME"
+
+    def test_invalid_name_spaces(self):
+        """Spaces in name returns INVALID_NAME."""
+        result = wee_executor.cap_get_secret(
+            {"name": "has spaces"},
+            "session-1",
+            wee_executor.MODE_INTERACTIVE,
+        )
+        assert result["code"] == "INVALID_NAME"
+
+    def test_no_elevation_returns_error(self):
+        """Without WEE_ELEVATED, returns ELEVATION_REQUIRED."""
+        result = wee_executor.cap_get_secret(
+            {"name": "valid_key"},
+            "session-1",
+            wee_executor.MODE_INTERACTIVE,
+        )
+        assert result["code"] == "ELEVATION_REQUIRED"
+        assert "elevated mode" in result["error"].lower()
+
+    def test_elevation_false_returns_error(self, monkeypatch):
+        """WEE_ELEVATED=false still returns ELEVATION_REQUIRED."""
+        monkeypatch.setenv("WEE_ELEVATED", "false")
+        result = wee_executor.cap_get_secret(
+            {"name": "valid_key"},
+            "session-1",
+            wee_executor.MODE_INTERACTIVE,
+        )
+        assert result["code"] == "ELEVATION_REQUIRED"
+
+    def test_invalid_backend(self, monkeypatch):
+        """Invalid backend returns INVALID_BACKEND."""
+        monkeypatch.setenv("WEE_ELEVATED", "true")
+        result = wee_executor.cap_get_secret(
+            {"name": "valid_key", "backend": "mysql"},
+            "session-1",
+            wee_executor.MODE_INTERACTIVE,
+        )
+        assert result["code"] == "INVALID_BACKEND"
+
+    @patch("subprocess.run")
+    def test_success_keyring(self, mock_run, monkeypatch):
+        """Successful secret retrieval from keyring backend."""
+        monkeypatch.setenv("WEE_ELEVATED", "true")
+        mock_run.return_value = MagicMock(
+            returncode=0, stdout="my_secret_value\n", stderr=""
+        )
+        result = wee_executor.cap_get_secret(
+            {"name": "db_password"},
+            "session-1",
+            wee_executor.MODE_INTERACTIVE,
+        )
+        assert result["status"] == "success"
+        assert result["value"] == "my_secret_value"
+        assert result["name"] == "db_password"
+        assert result["backend"] == "keyring"
+
+    @patch("subprocess.run")
+    def test_success_file_backend(self, mock_run, monkeypatch):
+        """Successful secret retrieval from file backend."""
+        monkeypatch.setenv("WEE_ELEVATED", "true")
+        mock_run.return_value = MagicMock(
+            returncode=0, stdout="file_secret\n", stderr=""
+        )
+        result = wee_executor.cap_get_secret(
+            {"name": "api_token", "backend": "file"},
+            "session-1",
+            wee_executor.MODE_INTERACTIVE,
+        )
+        assert result["status"] == "success"
+        assert result["value"] == "file_secret"
+        assert result["backend"] == "file"
+
+    @patch("subprocess.run")
+    def test_subprocess_calls_secret_tool(self, mock_run, monkeypatch):
+        """Verify subprocess calls secret_tool.py with correct args."""
+        monkeypatch.setenv("WEE_ELEVATED", "true")
+        mock_run.return_value = MagicMock(
+            returncode=0, stdout="val", stderr=""
+        )
+        wee_executor.cap_get_secret(
+            {"name": "my_key", "backend": "file"},
+            "session-1",
+            wee_executor.MODE_INTERACTIVE,
+        )
+        call_args = mock_run.call_args
+        cmd = call_args[0][0]
+        assert any("secret_tool.py" in str(c) for c in cmd)
+        assert "get" in cmd
+        assert "--name" in cmd
+        name_idx = cmd.index("--name")
+        assert cmd[name_idx + 1] == "my_key"
+        assert "--backend" in cmd
+        backend_idx = cmd.index("--backend")
+        assert cmd[backend_idx + 1] == "file"
+
+    @patch("subprocess.run")
+    def test_not_found_json(self, mock_run, monkeypatch):
+        """Secret not found returns NOT_FOUND (JSON error from tool)."""
+        monkeypatch.setenv("WEE_ELEVATED", "true")
+        mock_run.return_value = MagicMock(
+            returncode=1,
+            stdout='{"status": "failure", "message": "not found"}',
+            stderr="",
+        )
+        result = wee_executor.cap_get_secret(
+            {"name": "missing_key"},
+            "session-1",
+            wee_executor.MODE_INTERACTIVE,
+        )
+        assert result["code"] == "NOT_FOUND"
+
+    @patch("subprocess.run")
+    def test_subprocess_timeout(self, mock_run, monkeypatch):
+        """Subprocess timeout returns TIMEOUT."""
+        monkeypatch.setenv("WEE_ELEVATED", "true")
+        import subprocess as sp
+
+        mock_run.side_effect = sp.TimeoutExpired(cmd="test", timeout=10)
+        result = wee_executor.cap_get_secret(
+            {"name": "slow_key"},
+            "session-1",
+            wee_executor.MODE_INTERACTIVE,
+        )
+        assert result["code"] == "TIMEOUT"
+
+    @patch("subprocess.run")
+    def test_tool_not_found(self, mock_run, monkeypatch):
+        """Missing secret_tool.py returns TOOL_NOT_FOUND."""
+        monkeypatch.setenv("WEE_ELEVATED", "true")
+        mock_run.side_effect = FileNotFoundError("No such file")
+        result = wee_executor.cap_get_secret(
+            {"name": "some_key"},
+            "session-1",
+            wee_executor.MODE_INTERACTIVE,
+        )
+        assert result["code"] == "TOOL_NOT_FOUND"
+
+    def test_rate_limit(self, monkeypatch, tmp_path):
+        """Rate-limited get_secret returns RATE_LIMITED."""
+        monkeypatch.setenv("WEE_ELEVATED", "true")
+        import time as t
+
+        now = t.time()
+        limits = {"session-rl": [now - i for i in range(10)]}
+        rate_file = tmp_path / ".rate_limits.json"
+        rate_file.write_text(json.dumps(limits))
+        monkeypatch.setattr(wee_executor, "RATE_LIMIT_FILE", rate_file)
+
+        result = wee_executor.cap_get_secret(
+            {"name": "rate_test"},
+            "session-rl",
+            wee_executor.MODE_INTERACTIVE,
+        )
+        assert result["code"] == "RATE_LIMITED"
+
+    @patch("subprocess.run")
+    def test_elevation_with_1(self, mock_run, monkeypatch):
+        """WEE_ELEVATED=1 also grants elevation."""
+        monkeypatch.setenv("WEE_ELEVATED", "1")
+        mock_run.return_value = MagicMock(
+            returncode=0, stdout="secret_val", stderr=""
+        )
+        result = wee_executor.cap_get_secret(
+            {"name": "key_1"},
+            "session-1",
+            wee_executor.MODE_INTERACTIVE,
+        )
+        assert result["status"] == "success"
+
+    def test_valid_name_with_dots_hyphens(self, monkeypatch):
+        """Names with dots and hyphens are valid (elevation still needed)."""
+        result = wee_executor.cap_get_secret(
+            {"name": "my.api-key_v2"},
+            "session-1",
+            wee_executor.MODE_INTERACTIVE,
+        )
+        # Should pass name validation, fail on elevation
+        assert result["code"] == "ELEVATION_REQUIRED"
+
+    def test_cli_get_secret_exit_1_no_elevation(self, monkeypatch, capsys):
+        """CLI get_secret without elevation exits with code 1."""
+        monkeypatch.setenv("WEE_SESSION_ID", "test-session")
+        monkeypatch.setattr(
+            "sys.argv",
+            [
+                "wee_executor.py",
+                "-c",
+                "get_secret",
+                "-a",
+                '{"name": "test_key"}',
+            ],
+        )
+        with pytest.raises(SystemExit) as exc_info:
+            wee_executor.main()
+        assert exc_info.value.code == 1
+        captured = capsys.readouterr()
+        output = json.loads(captured.out)
+        assert output["code"] == "ELEVATION_REQUIRED"
+
+    @patch("subprocess.run")
+    def test_cli_get_secret_success(self, mock_run, monkeypatch, capsys):
+        """CLI get_secret with elevation succeeds."""
+        monkeypatch.setenv("WEE_SESSION_ID", "test-session")
+        monkeypatch.setenv("WEE_ELEVATED", "true")
+        mock_run.return_value = MagicMock(
+            returncode=0, stdout="the_secret", stderr=""
+        )
+        monkeypatch.setattr(
+            "sys.argv",
+            [
+                "wee_executor.py",
+                "-c",
+                "get_secret",
+                "-a",
+                '{"name": "prod_key"}',
+            ],
+        )
+        wee_executor.main()
+        captured = capsys.readouterr()
+        output = json.loads(captured.out)
+        assert output["status"] == "success"
+        assert output["value"] == "the_secret"
+
+    def test_cli_get_secret_mode_restricted_background(
+        self, monkeypatch, capsys
+    ):
+        """get_secret is mode-restricted in background mode."""
+        monkeypatch.setenv("WEE_SESSION_ID", "test-session")
+        monkeypatch.setenv("WEE_TASK_ID", "bg_123")
+        monkeypatch.setattr(
+            "sys.argv",
+            [
+                "wee_executor.py",
+                "-c",
+                "get_secret",
+                "-a",
+                '{"name": "test_key"}',
+            ],
+        )
+        with pytest.raises(SystemExit) as exc_info:
+            wee_executor.main()
+        assert exc_info.value.code == 2
