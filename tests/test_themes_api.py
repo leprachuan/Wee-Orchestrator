@@ -111,73 +111,39 @@ class TestListThemes:
             assert ocean["label"] == "Ocean Breeze"
 
 
-class TestGetThemeCSS:
-    """GET /api/v1/themes/{name}/css."""
 
-    def test_get_custom_theme_css(self, client, themes_dir):
-        with patch(
-            "agent_manager._themes_dir", themes_dir
-        ):
-            r = client.get(
-                "/api/v1/themes/ocean-breeze/css", headers=AUTH_HEADER
-            )
-            assert r.status_code == 200
-            assert "text/css" in r.headers["content-type"]
-            assert "--accent: #0ea5e9" in r.text
+class TestCustomThemeCSSInListing:
+    """Custom theme CSS is included in the themes list response (B01 fix)."""
 
-    def test_get_theme_css_not_found(self, client, themes_dir):
-        with patch(
-            "agent_manager._themes_dir", themes_dir
-        ):
-            r = client.get(
-                "/api/v1/themes/nonexistent/css", headers=AUTH_HEADER
-            )
-            assert r.status_code == 404
+    def test_custom_theme_includes_css(self, client, themes_dir):
+        """CSS content is embedded in the listing so JS can cache and inject it."""
+        with patch("agent_manager._themes_dir", themes_dir):
+            r = client.get("/api/v1/themes", headers=AUTH_HEADER)
+            data = r.json()
+            ocean = next(t for t in data["themes"] if t["name"] == "ocean-breeze")
+            assert "css" in ocean
+            assert "--accent: #0ea5e9" in ocean["css"]
 
-    def test_get_theme_css_no_auth_required(self, client, themes_dir):
-        """CSS endpoint has no auth (link elements cannot send headers)."""
+    def test_builtin_themes_have_no_css_field(self, client):
+        """Built-in themes ship as static files — no css field in listing."""
+        r = client.get("/api/v1/themes", headers=AUTH_HEADER)
+        data = r.json()
+        for theme in data["themes"]:
+            if theme["builtin"]:
+                assert "css" not in theme or theme.get("css") is None
+
+    def test_css_endpoint_removed(self, client, themes_dir):
+        """GET /api/v1/themes/{name}/css endpoint must not exist (B01 fix)."""
         with patch("agent_manager._themes_dir", themes_dir):
             r = client.get("/api/v1/themes/ocean-breeze/css")
-            assert r.status_code == 200
-            assert "--accent: #0ea5e9" in r.text
+            assert r.status_code == 404
 
-    def test_path_traversal_blocked_dots(self, client, themes_dir):
-        with patch(
-            "agent_manager._themes_dir", themes_dir
-        ):
-            r = client.get(
-                "/api/v1/themes/../../../etc/passwd/css",
-                headers=AUTH_HEADER,
-            )
-            assert r.status_code in (400, 404, 422)
-
-    def test_path_traversal_blocked_slashes(self, client, themes_dir):
-        with patch(
-            "agent_manager._themes_dir", themes_dir
-        ):
-            r = client.get(
-                "/api/v1/themes/..%2f..%2fetc%2fpasswd/css",
-                headers=AUTH_HEADER,
-            )
-            assert r.status_code in (400, 404, 422)
-
-    def test_invalid_theme_name_rejected(self, client, themes_dir):
-        with patch(
-            "agent_manager._themes_dir", themes_dir
-        ):
-            r = client.get(
-                "/api/v1/themes/bad name!/css", headers=AUTH_HEADER
-            )
-            assert r.status_code in (400, 422)
-
-    def test_empty_theme_name_rejected(self, client, themes_dir):
-        with patch(
-            "agent_manager._themes_dir", themes_dir
-        ):
-            r = client.get(
-                "/api/v1/themes//css", headers=AUTH_HEADER
-            )
-            assert r.status_code in (400, 404, 307)
+    def test_path_traversal_via_name_rejected(self, client, themes_dir):
+        """Theme name regex blocks traversal attempts at the listing level."""
+        from agent_manager import _THEME_NAME_RE
+        assert not _THEME_NAME_RE.match("../etc/passwd")
+        assert not _THEME_NAME_RE.match("..%2fetc%2fpasswd")
+        assert not _THEME_NAME_RE.match("bad name!")
 
 
 class TestThemeNameRegex:

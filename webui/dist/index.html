@@ -771,13 +771,12 @@
     </aside>
 
 
-  <!-- Custom theme CSS link (F025 enhanced) -->
-  <link id="custom-theme-css" rel="stylesheet" href="" disabled />
   <!-- Theme switching (F025) -->
   <script>
   (function() {
     var THEME_KEY = 'wee_theme';
     var BUILTIN_THEMES = ['', 'midnight', 'sunrise', 'cyberpunk'];
+    var _customThemeCSS = {};
 
     function applyTheme(name) {
       if (name && name !== 'emerald') {
@@ -800,21 +799,17 @@
           hlLink.href = 'https://cdn.jsdelivr.net/npm/highlight.js@11.9.0/styles/github-dark.min.css';
         }
       }
-      // Load/unload custom theme CSS
-      var customLink = document.getElementById('custom-theme-css');
-      if (customLink) {
-        if (name && BUILTIN_THEMES.indexOf(name) === -1) {
-          customLink.href = '/api/v1/themes/' + encodeURIComponent(name) + '/css';
-          customLink.disabled = false;
-          customLink.onerror = function() {
-            console.warn('Failed to load custom theme: ' + name + '. Falling back to default.');
-            customLink.disabled = true;
-            document.documentElement.removeAttribute('data-theme');
-          };
-        } else {
-          customLink.href = '';
-          customLink.disabled = true;
+      // Inject custom CSS via <style> element (no auth needed — CSS fetched via authenticated themes list)
+      var styleEl = document.getElementById('custom-theme-style');
+      if (name && BUILTIN_THEMES.indexOf(name) === -1) {
+        if (!styleEl) {
+          styleEl = document.createElement('style');
+          styleEl.id = 'custom-theme-style';
+          document.head.appendChild(styleEl);
         }
+        styleEl.textContent = _customThemeCSS[name] || '';
+      } else if (styleEl) {
+        styleEl.textContent = '';
       }
     }
 
@@ -860,21 +855,35 @@
           existing[el.getAttribute('data-theme-value')] = true;
         });
         data.themes.forEach(function(t) {
+          if (!t.builtin && t.css) { _customThemeCSS[t.name] = t.css; }
           var val = (t.name === 'emerald') ? '' : t.name;
           if (existing[val]) return;
           var div = document.createElement('div');
           div.className = 'theme-option';
           div.setAttribute('data-theme-value', val);
-          div.innerHTML = '<div class="theme-swatch theme-swatch-custom">' +
-            '<span class="theme-swatch-dot s1"></span>' +
-            '<span class="theme-swatch-dot s2"></span>' +
-            '<span class="theme-swatch-dot s3"></span></div>' +
-            '<div><div class="theme-option-label">' +
-            t.label + '</div><div class="theme-option-desc">' +
-            t.description + '</div></div>';
+          var swatch = document.createElement('div');
+          swatch.className = 'theme-swatch theme-swatch-custom';
+          ['s1', 's2', 's3'].forEach(function(cls) {
+            var dot = document.createElement('span');
+            dot.className = 'theme-swatch-dot ' + cls;
+            swatch.appendChild(dot);
+          });
+          var info = document.createElement('div');
+          var labelEl = document.createElement('div');
+          labelEl.className = 'theme-option-label';
+          labelEl.textContent = t.label;
+          var descEl = document.createElement('div');
+          descEl.className = 'theme-option-desc';
+          descEl.textContent = t.description;
+          info.appendChild(labelEl);
+          info.appendChild(descEl);
+          div.appendChild(swatch);
+          div.appendChild(info);
           picker.appendChild(div);
         });
-        updatePickerUI(getTheme());
+        var cur = getTheme();
+        updatePickerUI(cur);
+        if (cur && BUILTIN_THEMES.indexOf(cur) === -1) { applyTheme(cur); }
       })
       .catch(function() { /* ignore — custom themes just won't appear */ });
     }
