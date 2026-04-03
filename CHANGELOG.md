@@ -7,7 +7,7 @@ All notable changes to Wee Orchestrator are documented here.
 ### Added
 
 #### F025 (Enhanced): Custom Themes API — wee-qa Fix Round 2
-- **Status**: 🔄 QA Submitted (commit 6d45763 on dev)
+- **Status**: ✅ QA Approved (commits 6d45763 + 56ac461 on dev)
 - **Commit**: 6d45763
 - Adds custom theme support via `/api/v1/themes` endpoint with CSS embedded in listing response
 - **B01 (BLOCKER) Fix**: Removed `/api/v1/themes/{name}/css` endpoint entirely.
