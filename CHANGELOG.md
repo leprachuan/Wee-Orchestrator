@@ -6,6 +6,22 @@ All notable changes to Wee Orchestrator are documented here.
 
 ### Added
 
+
+#### F025: CSS Theming/Skinning System
+- **Status**: 🔄 QA Review In Progress (REJECTED — fixing issues)
+- **Commit**: 7446a56
+- Adds 4 themes (Emerald default, Midnight, Sunrise, Cyberpunk) with CSS variable-based customization
+- Theme switching via `data-theme` attribute on html element, persisted in localStorage
+- Theme picker UI in sidebar toolbar with color swatch previews
+- Sunrise light mode includes highlight.js theme swap; mobile-friendly meta theme-color updates
+- **Changes**:
+  - webui/dist/themes.css: 3 alternate theme definitions with CSS variable overrides (334 lines)
+  - webui/dist/index.html: theme picker UI and JS switching logic (106 lines)
+- **QA Verdict**: REJECTED (2 MAJORs found)
+  - MAJOR 1: Missing sunrise override for `.settings-textarea` (app.css L5148) — hardcoded rgba(0,0,0,0.35) background with dark text color → **invisible text in Settings panel**
+  - MAJOR 2: Missing sunrise override for `.logs-output` (app.css L5238) — hardcoded rgba(0,0,0,0.3) background with dark text color → **invisible text in Logs panel**
+- **Next State**: wee-dev (bg_c5bce42b) is fixing both issues; will re-dispatch to wee-qa for re-review
+- CSS syntax valid, JS clean, no security issues; only light-mode theme completeness issue
 #### F016: Telegram Slash Command Registration with BotFather
 - **Status**: ✅ QA Approved (commit 3cdf77a on dev)
 - **Commit**: 3cdf77a
