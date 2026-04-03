@@ -10,6 +10,22 @@ All notable changes to Wee Orchestrator are documented here.
 - **Status**: ✅ QA Approved (commit 3cdf77a on dev)
 - **Commit**: 3cdf77a
 
+#### F025: Custom Themes API — wee-qa Fix Round 2
+- **Status**: ✅ QA Approved (commits 6d45763 + 56ac461 on dev)
+- **Commits**: 6d45763 (initial), 56ac461 (wee-qa fixes)
+- Adds custom theme support via `/api/v1/themes` endpoint with CSS embedded in listing response
+- **B01 (BLOCKER) Fix**: Removed `/api/v1/themes/{name}/css` endpoint entirely.
+  - CSS content now embedded as `css` field in each custom theme object in the themes list response.
+  - `loadCustomThemes()` caches CSS content in `_customThemeCSS` map (populated via the already-authenticated themes list call).
+  - `applyTheme()` now injects custom CSS via `<style id="custom-theme-style">` element instead of `<link href="...">`.
+  - `<link>` elements cannot send `Authorization` headers — the root cause of always-401 custom theme loading.
+  - After `loadCustomThemes()` completes, re-applies current theme if it's custom (handles localStorage-persisted custom themes on page load).
+- **M01 Fix**: `name == "custom.css"` dead code → corrected to `name == "custom"` (stem of `custom.css.template` is `custom.css` but `.template` files don't match `*.css` glob).
+- **M02 Fix**: E501 violation on `fastapi.responses` import line — split to multi-line parenthesized import form.
+- **M03 Fix**: `innerHTML` with server data in `loadCustomThemes()` → replaced with explicit DOM element creation using `textContent` for label/description fields.
+- **Testing**: Replaced `TestGetThemeCSS` (9 tests, endpoint removed) with `TestCustomThemeCSSInListing` (4 new tests: css in listing, builtins have no css field, endpoint returns 404, traversal regex). 17 themes tests pass; full suite 859 passed, 9 skipped.
+- **Ready for PR**: Feature approved and ready for dev → main PR. Foster can create PR at will.
+
 #### F407: Per-Agent Memory Promotion Endpoints
 - **Status**: ✅ QA Approved (commit 55f3a4f on dev)
 - **Commit**: 55f3a4f
