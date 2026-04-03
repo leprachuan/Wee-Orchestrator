@@ -183,6 +183,73 @@ html[data-theme="sunrise"] .logs-output {
   color: var(--text-primary);
 }
 
+/* Comprehensive sunrise overrides for hardcoded dark backgrounds */
+html[data-theme="sunrise"] .session-rename-input {
+  background: rgba(32,28,24,0.04);
+  color: var(--text-primary);
+  border-color: rgba(32,28,24,0.12);
+}
+
+html[data-theme="sunrise"] .assistant .message-bubble code {
+  background: rgba(32,28,24,0.06);
+  color: rgba(32,28,24,0.85);
+}
+
+html[data-theme="sunrise"] .assistant .message-bubble pre {
+  background: rgba(32,28,24,0.06);
+}
+
+html[data-theme="sunrise"] .bg-detail-output {
+  background: rgba(32,28,24,0.04);
+  color: var(--text-primary);
+}
+
+html[data-theme="sunrise"] .sched-task-pre {
+  background: rgba(32,28,24,0.04);
+  color: var(--text-primary);
+}
+
+html[data-theme="sunrise"] .result-output {
+  background: rgba(32,28,24,0.04);
+  color: var(--text-primary);
+}
+
+html[data-theme="sunrise"] .fv-content .fv-preview pre {
+  background: rgba(32,28,24,0.04);
+  color: var(--text-primary);
+}
+
+html[data-theme="sunrise"] .td-content pre {
+  background: rgba(32,28,24,0.04);
+  color: var(--text-primary);
+}
+
+html[data-theme="sunrise"] .asf-textarea,
+html[data-theme="sunrise"] .asf-select {
+  background: rgba(32,28,24,0.04);
+  color: var(--text-primary);
+  border-color: rgba(32,28,24,0.12);
+}
+
+html[data-theme="sunrise"] .bg-log-rendered pre {
+  background: rgba(32,28,24,0.04);
+  color: var(--text-primary);
+}
+
+html[data-theme="sunrise"] .canvas-content .log-area {
+  background: rgba(32,28,24,0.04);
+  color: var(--text-primary);
+}
+
+html[data-theme="sunrise"] .canvas-content .code-block {
+  background: rgba(32,28,24,0.05);
+  color: var(--text-primary);
+}
+
+html[data-theme="sunrise"] .log-line-error { color: #dc3545; }
+html[data-theme="sunrise"] .log-line-warn  { color: #b45309; }
+html[data-theme="sunrise"] .log-line-info  { color: #2563eb; }
+
 /* ─────────────────────────────────────────────────────
    Cyberpunk — Neon pink/cyan
    ───────────────────────────────────────────────────── */
