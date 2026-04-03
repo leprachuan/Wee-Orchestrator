@@ -1483,6 +1483,7 @@ class SessionManager:
         self._register_slash("/timeout", self._slash_timeout, "Get/set execution timeout")
         self._register_slash("/render", self._slash_render, "Get/set output render format")
         self._register_slash("/notifications", self._slash_notifications, "Toggle background notifications")
+        self._register_slash("/silent", self._slash_silent, "Toggle silent mode (hide tool calls)")
         self._register_slash("/mode", self._slash_mode, "Set permission mode")
         self._register_slash("/schedule", self._slash_schedule, "Manage scheduled jobs")
         self._register_slash("/background", self._slash_background, "Manage background tasks")
@@ -2164,6 +2165,31 @@ You can mention an agent in your prompt and it will auto-delegate:
             return "✓ Background task notifications muted for Telegram/WebEx (WebUI only)."
         else:
             return "Usage: `/notifications [on|off]` to toggle background task notifications."
+
+    def _slash_silent(self, argument, session_data, n8n_session_id):
+        """Handle /silent slash command (F026)."""
+        if not argument:
+            current = session_data.get("silent_mode", False)
+            status = "ON" if current else "OFF"
+            vis = "hidden" if current else "shown"
+            return (
+                f"\U0001f507 **Silent mode:** `{status}`\n"
+                f"Tool calls are {vis} in responses.\n"
+                "Usage: `/silent on` or `/silent off`"
+            )
+
+        arg = argument.strip().lower()
+        if arg in ("on", "true", "1", "enable"):
+            self.update_session_field(n8n_session_id, "silent_mode", True)
+            return "\u2713 Silent mode enabled \u2014 tool call output hidden."
+        elif arg in ("off", "false", "0", "disable"):
+            self.update_session_field(n8n_session_id, "silent_mode", False)
+            return "\u2713 Silent mode disabled \u2014 tool call output visible."
+        else:
+            return (
+                "Usage: `/silent [on|off]`\n"
+                "Hides tool call output from responses (tools still execute)."
+            )
 
     def _slash_mode(self, argument, session_data, n8n_session_id):
         """Handle /mode slash command."""
@@ -3407,6 +3433,7 @@ You can mention an agent in your prompt and it will auto-delegate:
             "channel": channel,
             "last_activity": time.time(),
             "permissions": None,  # Inherited from agent config on session create
+            "silent_mode": channel in ("telegram", "webex"),  # F026
         }
 
         # Store identity if provided, so we can find sessions by user later
@@ -4997,6 +5024,18 @@ replacing the generic "Still working on it..." placeholder. Emit one every ~30 s
 long tasks. Your final answer must NOT contain these markers — they are stripped automatically.
 Do NOT emit status updates for quick operations (< 15 seconds)."""
 
+        # Silent mode context (F026)
+        _sd_f026 = self.load_session_data(n8n_session_id) or {}
+        _silent_mode = _sd_f026.get("silent_mode", False)
+        silent_mode_instruction = ""
+        if _silent_mode:
+            silent_mode_instruction = (
+                "\n[Silent Mode: ON]\n"
+                "Tool call output is hidden from the user on this mobile channel. "
+                "Tools still execute normally \u2014 the user just does not see tool "
+                "names/arguments in the response stream. Keep responses concise."
+            )
+
         # Channel-specific injected context files
         injection_dir = Path(
             os.environ.get("INJECTION_DIR", Path(SCRIPT_BASE_DIR) / "injections")
@@ -5011,7 +5050,7 @@ Do NOT emit status updates for quick operations (< 15 seconds)."""
             injection_text = ""
 
         context = f"""{handoff_prefix}[Session ID: {n8n_session_id}]
-{runtime_instruction}{injection_text}{mobile_channel_instruction}{agent_desc}{files_context}{render_instruction}{bg_task_instruction}{canvas_instruction}{wee_executor_instruction}{timeout_instruction}
+{runtime_instruction}{injection_text}{mobile_channel_instruction}{silent_mode_instruction}{agent_desc}{files_context}{render_instruction}{bg_task_instruction}{canvas_instruction}{wee_executor_instruction}{timeout_instruction}
 
 User Request:
 {prompt}"""
@@ -8370,7 +8409,10 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                                     # Fallback for non-Claude runtimes
                                     yield f"data: {_json.dumps({'type': 'chunk', 'text': data})}\n\n"
                             elif kind == "tool_call":
-                                yield f"data: {_json.dumps({'type': 'tool_call', **_sanitize_tool_call_for_display(data)})}\n\n"
+                                # F026: skip tool_call SSE events in silent mode
+                                _sd = session_mgr.load_session_data(session_id)
+                                if not (_sd and _sd.get("silent_mode")):
+                                    yield f"data: {_json.dumps({'type': 'tool_call', **_sanitize_tool_call_for_display(data)})}\n\n"
                             elif kind == "done":
                                 break  # subprocess finished; final result in future
                     except Exception as exc:
@@ -8490,7 +8532,10 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                         else:
                             yield f"data: {_json.dumps({'type': 'chunk', 'text': data})}\n\n"
                     elif kind == "tool_call":
-                        yield f"data: {_json.dumps({'type': 'tool_call', **_sanitize_tool_call_for_display(data)})}\n\n"
+                        # F026: skip tool_call SSE events in silent mode
+                        _sd = session_mgr.load_session_data(session_id)
+                        if not (_sd and _sd.get("silent_mode")):
+                            yield f"data: {_json.dumps({'type': 'tool_call', **_sanitize_tool_call_for_display(data)})}\n\n"
                     elif kind == "done":
                         # Query already finished — send done event with stored result
                         session_data = session_mgr.get_or_create_session_data(
@@ -8542,7 +8587,10 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                         else:
                             yield f"data: {_json.dumps({'type': 'chunk', 'text': data})}\n\n"
                     elif kind == "tool_call":
-                        yield f"data: {_json.dumps({'type': 'tool_call', **_sanitize_tool_call_for_display(data)})}\n\n"
+                        # F026: skip tool_call SSE events in silent mode
+                        _sd = session_mgr.load_session_data(session_id)
+                        if not (_sd and _sd.get("silent_mode")):
+                            yield f"data: {_json.dumps({'type': 'tool_call', **_sanitize_tool_call_for_display(data)})}\n\n"
                     elif kind == "done":
                         break
 
