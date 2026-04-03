@@ -6,6 +6,30 @@ All notable changes to Wee Orchestrator are documented here.
 
 ### Added
 
+#### F027: Verbose Mode Toggle for Tool Call Visibility
+- **Status**: ✅ QA Approved (commit edcc105 on dev)
+- **Commit**: edcc105
+- Adds session-level verbose mode toggle to show/hide tool call details in WebUI chat interface
+- **Features**:
+  - New **PATCH /api/v1/sessions/{id}/settings** endpoint for updating session settings
+  - `silent_mode` field in settings (boolean); controls tool call display without affecting actual logging
+  - WebUI header toggle button (aria-pressed="true|false") with visual feedback
+  - CSS `.tc-line` visibility control based on verbose state
+- **API Endpoint** — `PATCH /api/v1/sessions/{id}/settings`:
+  - Accepts JSON body: `{"silent_mode": true|false}` (whitelist-based field filtering)
+  - Returns 401 without bearer token, 422 for non-boolean values, 404 for missing sessions
+  - Updates persisted session object; settings returned in subsequent `GET /api/v1/sessions/{id}` calls
+  - Security: Requires API authentication (Bearer token)
+- **WebUI Integration**:
+  - Toggle button in WebUI header with aria-pressed state indication
+  - Click handler updates server setting via PATCH endpoint
+  - CSS hides tool call lines (`.tc-line`) when verbose mode off
+  - Graceful error handling with user feedback on API failures
+- **Testing**: 19 new tests covering auth, type validation, 404/422 responses, field whitelist, settings persistence
+- **QA baseline**: 799 tests pass (9 skipped), 0 regressions, flake8 clean
+- **Minor note**: Non-blocking dead code — localStorage.setItem called in click handler but no corresponding getItem; commit message promises localStorage fallback but only server-side persistence implemented. Feature works correctly. localStorage should be removed or fully implemented in future cleanup pass.
+- **Ready for deployment**: No breaking changes, backwards compatible, no new config required
+
 
 #### F025: CSS Theming/Skinning System
 - **Status**: ✅ QA Approved (commits 7446a56, 70e5b75, b367375)

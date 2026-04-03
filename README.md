@@ -1050,6 +1050,43 @@ bash scripts/promote_all_agents_memory.sh
 ```
 
 
+**PATCH /api/v1/sessions/{id}/settings** — Update session settings
+
+Modify session-level settings like verbose mode (tool call visibility). Settings are persisted and returned in subsequent session queries.
+
+Request body (JSON):
+```json
+{
+  "silent_mode": false  // Show tool call lines; set to true to hide
+}
+```
+
+Response (200 OK):
+```json
+{
+  "id": "sess_abc123",
+  "silent_mode": false,
+  "created_at": "2026-04-03T20:00:00Z",
+  "updated_at": "2026-04-03T21:05:42Z"
+}
+```
+
+Error responses:
+- `401 Unauthorized` — Missing or invalid Bearer token
+- `404 Not Found` — Session does not exist
+- `422 Unprocessable Entity` — Invalid value (e.g., non-boolean for `silent_mode`)
+
+**Features:**
+- Whitelist-based field filtering — only recognized fields are accepted (currently: `silent_mode`)
+- WebUI toggle button in header reflects and controls this setting
+- Tool call lines (`.tc-line`) hidden when `silent_mode=true`, shown when `false`
+- Does not affect logging or session history — only visual display
+
+**Security:**
+- Requires API authentication (Bearer token)
+- Per-session settings — each user session has independent configuration
+
+
 ### Quick Start
 
 ```bash
@@ -1391,6 +1428,43 @@ bash scripts/promote_all_agents_memory.sh
 ```
 
 
+**PATCH /api/v1/sessions/{id}/settings** — Update session settings
+
+Modify session-level settings like verbose mode (tool call visibility). Settings are persisted and returned in subsequent session queries.
+
+Request body (JSON):
+```json
+{
+  "silent_mode": false  // Show tool call lines; set to true to hide
+}
+```
+
+Response (200 OK):
+```json
+{
+  "id": "sess_abc123",
+  "silent_mode": false,
+  "created_at": "2026-04-03T20:00:00Z",
+  "updated_at": "2026-04-03T21:05:42Z"
+}
+```
+
+Error responses:
+- `401 Unauthorized` — Missing or invalid Bearer token
+- `404 Not Found` — Session does not exist
+- `422 Unprocessable Entity` — Invalid value (e.g., non-boolean for `silent_mode`)
+
+**Features:**
+- Whitelist-based field filtering — only recognized fields are accepted (currently: `silent_mode`)
+- WebUI toggle button in header reflects and controls this setting
+- Tool call lines (`.tc-line`) hidden when `silent_mode=true`, shown when `false`
+- Does not affect logging or session history — only visual display
+
+**Security:**
+- Requires API authentication (Bearer token)
+- Per-session settings — each user session has independent configuration
+
+
 ### Quick Start
 
 ```bash
@@ -1665,6 +1739,43 @@ For scheduling memory promotion via the task scheduler or cron:
 ```bash
 bash scripts/promote_all_agents_memory.sh
 ```
+
+
+**PATCH /api/v1/sessions/{id}/settings** — Update session settings
+
+Modify session-level settings like verbose mode (tool call visibility). Settings are persisted and returned in subsequent session queries.
+
+Request body (JSON):
+```json
+{
+  "silent_mode": false  // Show tool call lines; set to true to hide
+}
+```
+
+Response (200 OK):
+```json
+{
+  "id": "sess_abc123",
+  "silent_mode": false,
+  "created_at": "2026-04-03T20:00:00Z",
+  "updated_at": "2026-04-03T21:05:42Z"
+}
+```
+
+Error responses:
+- `401 Unauthorized` — Missing or invalid Bearer token
+- `404 Not Found` — Session does not exist
+- `422 Unprocessable Entity` — Invalid value (e.g., non-boolean for `silent_mode`)
+
+**Features:**
+- Whitelist-based field filtering — only recognized fields are accepted (currently: `silent_mode`)
+- WebUI toggle button in header reflects and controls this setting
+- Tool call lines (`.tc-line`) hidden when `silent_mode=true`, shown when `false`
+- Does not affect logging or session history — only visual display
+
+**Security:**
+- Requires API authentication (Bearer token)
+- Per-session settings — each user session has independent configuration
 
 
 ### Quick Start
