@@ -6331,6 +6331,25 @@ html, body {
 }
 .tc-status.running { color: #f5c542; }
 .tc-status.done { color: #3ecf8e; }
+/* F027: Verbose mode toggle */
+.meta-pill.meta-verbose {
+  color: #a0d4ff;
+  border-color: rgba(160,212,255,0.28);
+  background: rgba(160,212,255,0.12);
+  cursor: pointer;
+  transition: opacity 0.2s, background 0.2s;
+}
+.meta-pill.meta-verbose:hover {
+  background: rgba(160,212,255,0.22);
+}
+.meta-pill.meta-verbose.verbose-off {
+  opacity: 0.5;
+  color: var(--text-muted, #6b7280);
+  border-color: rgba(107,114,128,0.28);
+  background: rgba(107,114,128,0.08);
+}
+.tool-calls-hidden .tc-line { display: none !important; }
+
 /* Hide old standalone row */
 .tool-call-row { display: none; }
 

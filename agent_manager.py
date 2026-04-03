@@ -8656,6 +8656,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             "model": data.get("model"),
             "yolo_mode": data.get("yolo_mode", "restricted"),
             "permissions": data.get("permissions"),
+            "silent_mode": data.get("silent_mode", False),  # F027
         }
 
         # Include running query info so the frontend can reconnect streams
@@ -12112,6 +12113,48 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             raise HTTPException(status_code=500, detail=str(e))
 
     # --- Session Permissions API ---
+    @app.patch("/api/v1/sessions/{session_id}/settings")
+    async def update_session_settings(
+        session_id: str, request: Request
+    ):
+        """F027: Update session settings (e.g. silent_mode toggle)."""
+        user = await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+
+        data = session_mgr.load_session_data(session_id)
+        if not data:
+            raise HTTPException(
+                status_code=404, detail="Session not found"
+            )
+
+        body = await request.json()
+        _allowed = {"silent_mode"}
+        updated = {}
+        for field in _allowed:
+            if field in body:
+                val = body[field]
+                if field == "silent_mode" and not isinstance(val, bool):
+                    raise HTTPException(
+                        status_code=422,
+                        detail="silent_mode must be boolean",
+                    )
+                session_mgr.update_session_field(
+                    session_id, field, val
+                )
+                updated[field] = val
+
+        if not updated:
+            raise HTTPException(
+                status_code=422,
+                detail="No valid settings fields provided",
+            )
+
+        return {"updated": updated, "session_id": session_id}
+
     @app.get("/api/v1/sessions/{session_id}/permissions")
     async def get_session_permissions(session_id: str, request: Request):
         """Return current session permissions (inherited from agent or overridden)."""
