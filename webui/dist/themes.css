@@ -224,6 +224,7 @@ html[data-theme="sunrise"] .td-content pre {
   color: var(--text-primary);
 }
 
+html[data-theme="sunrise"] .asf-input,
 html[data-theme="sunrise"] .asf-textarea,
 html[data-theme="sunrise"] .asf-select {
   background: rgba(32,28,24,0.04);
