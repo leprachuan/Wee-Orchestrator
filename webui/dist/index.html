@@ -14,6 +14,7 @@
   <link rel="apple-touch-icon" href="/static/apple-touch-icon.png" />
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/highlight.js@11.9.0/styles/github-dark.min.css" />
   <link rel="stylesheet" href="app.css?v=20260402secrets3" />
+  <link rel="stylesheet" href="themes.css?v=20260403f025" />
 </head>
 <body>
   <!-- Auth overlay -->
@@ -87,6 +88,28 @@
         <button id="btn-settings" class="btn btn-ghost btn-sm sidebar-tool-btn" title="Agent Settings">⚙️ Settings</button>
         <button id="btn-nav-secrets" class="btn btn-ghost btn-sm sidebar-tool-btn" title="Secret Manager">🔐 Secrets</button>
         <button id="btn-logs" class="btn btn-ghost btn-sm sidebar-tool-btn" title="Service Logs">📋 Logs</button>
+        <div class="theme-picker-wrap">
+          <button id="btn-theme" class="btn btn-ghost btn-sm sidebar-tool-btn" title="Theme">🎨 Theme</button>
+          <div id="theme-picker" class="theme-picker-dropdown">
+            <div class="theme-picker-title">Choose Theme</div>
+            <div class="theme-option" data-theme-value="">
+              <div class="theme-swatch theme-swatch-emerald"><span class="theme-swatch-dot s1"></span><span class="theme-swatch-dot s2"></span><span class="theme-swatch-dot s3"></span></div>
+              <div><div class="theme-option-label">Emerald</div><div class="theme-option-desc">Default glass</div></div>
+            </div>
+            <div class="theme-option" data-theme-value="midnight">
+              <div class="theme-swatch theme-swatch-midnight"><span class="theme-swatch-dot s1"></span><span class="theme-swatch-dot s2"></span><span class="theme-swatch-dot s3"></span></div>
+              <div><div class="theme-option-label">Midnight</div><div class="theme-option-desc">Deep blue ocean</div></div>
+            </div>
+            <div class="theme-option" data-theme-value="sunrise">
+              <div class="theme-swatch theme-swatch-sunrise"><span class="theme-swatch-dot s1"></span><span class="theme-swatch-dot s2"></span><span class="theme-swatch-dot s3"></span></div>
+              <div><div class="theme-option-label">Sunrise</div><div class="theme-option-desc">Warm light mode</div></div>
+            </div>
+            <div class="theme-option" data-theme-value="cyberpunk">
+              <div class="theme-swatch theme-swatch-cyberpunk"><span class="theme-swatch-dot s1"></span><span class="theme-swatch-dot s2"></span><span class="theme-swatch-dot s3"></span></div>
+              <div><div class="theme-option-label">Cyberpunk</div><div class="theme-option-desc">Neon pink &amp; cyan</div></div>
+            </div>
+          </div>
+        </div>
       </div>
       <div class="sidebar-footer">
         <span id="sidebar-identity" class="sidebar-user"></span>
@@ -746,5 +769,88 @@
       </div>
     </aside>
 
+
+  <!-- Theme switching (F025) -->
+  <script>
+  (function() {
+    var THEME_KEY = 'wee_theme';
+
+    function applyTheme(name) {
+      if (name && name !== 'emerald') {
+        document.documentElement.setAttribute('data-theme', name);
+      } else {
+        document.documentElement.removeAttribute('data-theme');
+      }
+      // Update meta theme-color for mobile
+      var metaTheme = document.querySelector('meta[name="theme-color"]');
+      if (metaTheme) {
+        var colors = { '': '#0a0e1a', midnight: '#060a1e', sunrise: '#faf7f2', cyberpunk: '#0d0015' };
+        metaTheme.content = colors[name || ''] || '#0a0e1a';
+      }
+      // Update highlight.js theme for sunrise
+      var hlLink = document.querySelector('link[href*="highlight.js"]');
+      if (hlLink) {
+        if (name === 'sunrise') {
+          hlLink.href = 'https://cdn.jsdelivr.net/npm/highlight.js@11.9.0/styles/github.min.css';
+        } else {
+          hlLink.href = 'https://cdn.jsdelivr.net/npm/highlight.js@11.9.0/styles/github-dark.min.css';
+        }
+      }
+    }
+
+    function getTheme() {
+      return localStorage.getItem(THEME_KEY) || '';
+    }
+
+    function setTheme(name) {
+      if (name) {
+        localStorage.setItem(THEME_KEY, name);
+      } else {
+        localStorage.removeItem(THEME_KEY);
+      }
+      applyTheme(name);
+      updatePickerUI(name);
+    }
+
+    function updatePickerUI(name) {
+      var opts = document.querySelectorAll('.theme-option');
+      opts.forEach(function(opt) {
+        var val = opt.getAttribute('data-theme-value');
+        opt.classList.toggle('active', val === (name || ''));
+      });
+    }
+
+    // Apply saved theme immediately (before paint)
+    applyTheme(getTheme());
+
+    document.addEventListener('DOMContentLoaded', function() {
+      var btn = document.getElementById('btn-theme');
+      var picker = document.getElementById('theme-picker');
+      if (!btn || !picker) return;
+
+      updatePickerUI(getTheme());
+
+      btn.addEventListener('click', function(e) {
+        e.stopPropagation();
+        picker.classList.toggle('open');
+      });
+
+      picker.addEventListener('click', function(e) {
+        var opt = e.target.closest('.theme-option');
+        if (!opt) return;
+        var val = opt.getAttribute('data-theme-value');
+        setTheme(val);
+        picker.classList.remove('open');
+      });
+
+      // Close on outside click
+      document.addEventListener('click', function(e) {
+        if (!btn.contains(e.target) && !picker.contains(e.target)) {
+          picker.classList.remove('open');
+        }
+      });
+    });
+  })();
+  </script>
 </body>
 </html>
