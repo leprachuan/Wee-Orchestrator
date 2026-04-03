@@ -8,8 +8,8 @@ All notable changes to Wee Orchestrator are documented here.
 
 
 #### F025: CSS Theming/Skinning System
-- **Status**: 🔄 QA Review In Progress (REJECTED — fixing issues)
-- **Commit**: 7446a56
+- **Status**: ✅ QA Approved (commits 7446a56, 70e5b75, b367375)
+- **Initial Commit**: 7446a56
 - Adds 4 themes (Emerald default, Midnight, Sunrise, Cyberpunk) with CSS variable-based customization
 - Theme switching via `data-theme` attribute on html element, persisted in localStorage
 - Theme picker UI in sidebar toolbar with color swatch previews
@@ -17,11 +17,14 @@ All notable changes to Wee Orchestrator are documented here.
 - **Changes**:
   - webui/dist/themes.css: 3 alternate theme definitions with CSS variable overrides (334 lines)
   - webui/dist/index.html: theme picker UI and JS switching logic (106 lines)
-- **QA Verdict**: REJECTED (2 MAJORs found)
-  - MAJOR 1: Missing sunrise override for `.settings-textarea` (app.css L5148) — hardcoded rgba(0,0,0,0.35) background with dark text color → **invisible text in Settings panel**
-  - MAJOR 2: Missing sunrise override for `.logs-output` (app.css L5238) — hardcoded rgba(0,0,0,0.3) background with dark text color → **invisible text in Logs panel**
-- **Next State**: wee-dev (bg_c5bce42b) is fixing both issues; will re-dispatch to wee-qa for re-review
-- CSS syntax valid, JS clean, no security issues; only light-mode theme completeness issue
+- **QA Resolution**:
+  - FIXED MAJOR 1: Added sunrise override for `.settings-textarea` (70e5b75) — white background, dark text now visible
+  - FIXED MAJOR 2: Added sunrise override for `.logs-output` (70e5b75) — white background, dark text now visible
+  - b367375: Comprehensive sunrise overrides for 12 additional hardcoded dark backgrounds across app UI
+  - All fixes verified against app.css; 765 tests pass (9 skipped)
+  - MINOR non-blocking: `.asf-input` missing from sunrise override (white text on dark bg — readable but inconsistent in agent setup form)
+- **Ready for PR**: Approved by wee-qa. dev → main, Foster can create PR at will.
+
 #### F016: Telegram Slash Command Registration with BotFather
 - **Status**: ✅ QA Approved (commit 3cdf77a on dev)
 - **Commit**: 3cdf77a
