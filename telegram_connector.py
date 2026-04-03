@@ -233,6 +233,73 @@ class TelegramConnector:
                 file=sys.stderr,
             )
 
+    def register_bot_commands(self) -> str:
+        """Register slash commands with Telegram BotFather for autocomplete.
+
+        Fetches command names and descriptions from agent_manager's
+        SessionManager slash-command registry and calls the Telegram
+        Bot API ``setMyCommands`` endpoint.  Called automatically on
+        startup and can be refreshed via ``/registercommands``.
+        """
+        try:
+            from agent_manager import SessionManager
+
+            sm = SessionManager()
+            commands = sm.get_slash_commands()
+        except Exception as e:
+            logger.warning(
+                "Failed to load slash commands from SessionManager: %s", e
+            )
+            commands = {}
+
+        if not commands:
+            return "\u26a0\ufe0f No slash commands found to register."
+
+        bot_commands = []
+        seen: set = set()
+        for cmd, desc in commands.items():
+            name = cmd.lstrip("/").lower()
+            if not re.match(r"^[a-z0-9_]{1,32}$", name):
+                continue
+            if name in seen:
+                continue
+            seen.add(name)
+            desc = (desc or "No description")[:256]
+            if len(desc) < 3:
+                desc = desc + "." * (3 - len(desc))
+            bot_commands.append({"command": name, "description": desc})
+
+        bot_commands.append(
+            {
+                "command": "registercommands",
+                "description": "Re-register slash commands with Telegram",
+            }
+        )
+        bot_commands.sort(key=lambda x: x["command"])
+
+        try:
+            resp = requests.post(
+                f"{self.api_url}/setMyCommands",
+                json={"commands": bot_commands},
+                timeout=10,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            if data.get("ok"):
+                count = len(bot_commands)
+                logger.info("Registered %d commands with Telegram", count)
+                return (
+                    f"\u2705 Registered {count} commands with Telegram."
+                )
+            else:
+                err = data.get("description", "Unknown error")
+                return f"\u26a0\ufe0f setMyCommands failed: {err}"
+        except Exception as e:
+            logger.error("Failed to register bot commands: %s", e)
+            return (
+                f"\u274c Failed to register commands: {str(e)[:100]}"
+            )
+
     def _enforce_pinned_session(self, user_id: int, session_id: str):
         """For pinned users, push pinned agent/runtime/model into the SessionManager.
         Must be called before every query or command so the SessionManager's session
@@ -1270,6 +1337,10 @@ class TelegramConnector:
                     self.send_message(
                         chat_id, "❌ You are not authorized to enable YOLO mode."
                     )
+                # F016: /registercommands — re-register with BotFather
+                elif cmd_lower == "/registercommands":
+                    result = self.register_bot_commands()
+                    self.send_message(chat_id, result)
                 else:
                     # Regular slash commands - get user timeout
                     timeout = self.config.get_user_timeout(user_id)
@@ -1517,6 +1588,10 @@ class TelegramConnector:
         """Start polling for messages"""
         self.running = True
         print(f"Starting Telegram connector with token: {self.token[:20]}...")
+
+        # F016: Register slash commands with BotFather for autocomplete
+        reg_result = self.register_bot_commands()
+        print(f"[F016] {reg_result}", file=sys.stderr)
 
         try:
             while self.running:

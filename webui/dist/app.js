@@ -153,13 +153,11 @@ const TTS = {
     btn.title = 'Generating speech…';
 
     try {
-      const auth = loadAuth();
-      const token = auth?.token || '';
       const res = await fetch(`${API_BASE}/tts`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`,
+          'Authorization': `Bearer ${STATE.token}`,
         },
         body: JSON.stringify({ text }),
       });
@@ -2762,9 +2760,16 @@ document.addEventListener('DOMContentLoaded', () => {
     $('secret-value-input').value = '';
     hide($('secrets-form-feedback'));
   });
-  $('btn-secrets-toggle-vis').addEventListener('click', () => {
-    const inp = $('secret-value-input');
-    inp.type = inp.type === 'password' ? 'text' : 'password';
+  $("btn-secrets-toggle-vis").addEventListener("click", () => {
+    const inp = $("secret-value-input");
+    const isHidden = inp.type === "password";
+    inp.type = isHidden ? "text" : "password";
+    const closedIcon = $("btn-secrets-toggle-vis").querySelector(".eye-closed");
+    const openIcon = $("btn-secrets-toggle-vis").querySelector(".eye-open");
+    if (closedIcon && openIcon) {
+      closedIcon.classList.toggle("hidden", isHidden);
+      openIcon.classList.toggle("hidden", !isHidden);
+    }
   });
   $('secret-name-input').addEventListener('keydown', e => { if (e.key === 'Enter') $('secret-value-input').focus(); });
   $('secret-value-input').addEventListener('keydown', e => { if (e.key === 'Enter') saveSecret(); });
@@ -3050,7 +3055,7 @@ function showBackgroundPanel() {
 
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// ─── Secrets Manager Panel (F019) ────────────────────────────────────────────
+// ─── Secrets Manager Panel (F019) — Redesigned ──────────────────────────────
 // ═══════════════════════════════════════════════════════════════════════════════
 
 function showSecretsPanel() {
@@ -3076,26 +3081,95 @@ function showSecretsPanel() {
 async function loadSecrets() {
   const listEl = $('secrets-list');
   if (!listEl) return;
-  listEl.innerHTML = '<p class="secrets-empty">Loading\u2026</p>';
+  listEl.innerHTML = '<div class="secrets-loading"><span class="secrets-loading-dot"></span><span class="secrets-loading-dot"></span><span class="secrets-loading-dot"></span></div>';
   try {
     const data = await apiRequest('GET', '/secrets');
     const names = data.secrets || [];
+    // Update count badge
+    const badge = $('secrets-count-badge');
+    if (badge) badge.textContent = names.length + (names.length === 1 ? ' secret' : ' secrets');
     if (names.length === 0) {
-      listEl.innerHTML = '<p class="secrets-empty">No secrets stored yet.</p>';
+      listEl.innerHTML = `
+        <div class="secrets-empty-state">
+          <div class="secrets-empty-icon">🔒</div>
+          <p class="secrets-empty-text">No secrets stored yet</p>
+          <p class="secrets-empty-hint">Use the form to securely store your first credential</p>
+        </div>`;
       return;
     }
     listEl.innerHTML = names.map(name => `
       <div class="secrets-item">
-        <span class="secrets-item-name">${escapeHtml(name)}</span>
-        <button class="btn btn-ghost btn-xs secrets-delete-btn" data-name="${escapeHtml(name)}" title="Delete secret">\u2715</button>
+        <div class="secrets-item-left">
+          <span class="secrets-item-icon">🔑</span>
+          <span class="secrets-item-name">${escapeHtml(name)}</span>
+        </div>
+        <div class="secrets-item-actions">
+          <button class="secrets-edit-btn" data-name="${escapeHtml(name)}" title="Edit / rotate value">✏️</button>
+          <button class="secrets-delete-btn" data-name="${escapeHtml(name)}" title="Delete secret">✕</button>
+        </div>
       </div>
     `).join('');
     listEl.querySelectorAll('.secrets-delete-btn').forEach(btn => {
       btn.addEventListener('click', () => deleteSecret(btn.dataset.name));
     });
+    listEl.querySelectorAll('.secrets-edit-btn').forEach(btn => {
+      btn.addEventListener('click', () => editSecret(btn.dataset.name));
+    });
   } catch (err) {
-    listEl.innerHTML = `<p class="secrets-empty secrets-error">\u26a0 ${escapeHtml(err.message)}</p>`;
+    listEl.innerHTML = `<div class="secrets-empty-state"><p class="secrets-empty-text secrets-error">⚠ ${escapeHtml(err.message)}</p></div>`;
   }
+}
+
+function editSecret(name) {
+  // Collapse any other open edit forms first
+  document.querySelectorAll('.secrets-edit-inline').forEach(el => el.remove());
+  document.querySelectorAll('.secrets-item--editing').forEach(el => el.classList.remove('secrets-item--editing'));
+
+  const item = document.querySelector(`.secrets-edit-btn[data-name="${CSS.escape(name)}"]`);
+  if (!item) return;
+  const row = item.closest('.secrets-item');
+  if (!row) return;
+  row.classList.add('secrets-item--editing');
+
+  const form = document.createElement('div');
+  form.className = 'secrets-edit-inline';
+  form.innerHTML = `
+    <div class="secrets-edit-row">
+      <span class="secrets-edit-label">Rotate value for <strong>${escapeHtml(name)}</strong></span>
+      <div class="secrets-edit-input-wrap">
+        <input type="password" class="secrets-input glass-input secrets-edit-value" placeholder="Enter new value\u2026" autocomplete="off" />
+      </div>
+      <div class="secrets-edit-actions">
+        <button class="btn btn-primary btn-sm secrets-edit-save" type="button">Save</button>
+        <button class="btn btn-ghost btn-sm secrets-edit-cancel" type="button">Cancel</button>
+      </div>
+    </div>`;
+  row.after(form);
+
+  const inp = form.querySelector('.secrets-edit-value');
+  inp.focus();
+  inp.addEventListener('keydown', e => {
+    if (e.key === 'Enter') submitEditSecret(name, inp.value);
+    if (e.key === 'Escape') cancelEditSecret(row, form);
+  });
+  form.querySelector('.secrets-edit-save').addEventListener('click', () => submitEditSecret(name, inp.value));
+  form.querySelector('.secrets-edit-cancel').addEventListener('click', () => cancelEditSecret(row, form));
+}
+
+async function submitEditSecret(name, value) {
+  if (!value) { showSecretsFeedback('New value is required', 'error'); return; }
+  try {
+    await apiRequest('POST', '/secrets', { name, value });
+    showSecretsFeedback(`✅ Rotated secret "${escapeHtml(name)}"`, 'success');
+    loadSecrets();
+  } catch (err) {
+    showSecretsFeedback(`❌ ${err.message}`, 'error');
+  }
+}
+
+function cancelEditSecret(row, form) {
+  row.classList.remove('secrets-item--editing');
+  form.remove();
 }
 
 async function saveSecret() {
@@ -3114,12 +3188,12 @@ async function saveSecret() {
   try {
     const result = await apiRequest('POST', '/secrets', { name, value });
     const action = result.action === 'updated' ? 'Updated' : 'Created';
-    showSecretsFeedback(`\u2705 ${action} secret "${name}"`, 'success');
+    showSecretsFeedback(`✅ ${action} secret "${name}"`, 'success');
     nameEl.value = '';
     valueEl.value = '';
     loadSecrets();
   } catch (err) {
-    showSecretsFeedback(`\u274c ${err.message}`, 'error');
+    showSecretsFeedback(`❌ ${err.message}`, 'error');
   }
 }
 
@@ -3127,10 +3201,10 @@ async function deleteSecret(name) {
   if (!confirm(`Delete secret "${name}"? This cannot be undone.`)) return;
   try {
     await apiRequest('DELETE', `/secrets/${encodeURIComponent(name)}`);
-    showSecretsFeedback(`\u2705 Deleted "${name}"`, 'success');
+    showSecretsFeedback(`✅ Deleted "${name}"`, 'success');
     loadSecrets();
   } catch (err) {
-    showSecretsFeedback(`\u274c ${err.message}`, 'error');
+    showSecretsFeedback(`❌ ${err.message}`, 'error');
   }
 }
 

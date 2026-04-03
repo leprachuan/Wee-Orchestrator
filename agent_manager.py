@@ -27,7 +27,6 @@ SCRIPT_BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 logger = logging.getLogger(__name__)
 
-
 # ---------------------------------------------------------------------------
 # Credential sanitization for UI display
 # ---------------------------------------------------------------------------
@@ -60,7 +59,6 @@ _CURL_USER_RE = re.compile(
     r"""(-u\s+)(\S+)""",
 )
 
-
 def _sanitize_command_for_display(text: str) -> str:
     """Redact sensitive headers and credentials from command strings for UI display.
 
@@ -89,7 +87,6 @@ def _sanitize_command_for_display(text: str) -> str:
     text = _CURL_USER_RE.sub(r"\1[REDACTED]", text)
     return text
 
-
 def _sanitize_tool_call_for_display(data: dict) -> dict:
     """Return a shallow copy of a tool_call event dict with sensitive
     credentials redacted from the ``input`` field.  Other fields are
@@ -116,7 +113,6 @@ def _sanitize_tool_call_for_display(data: dict) -> dict:
                 new_inp[field] = _sanitize_command_for_display(new_inp[field])
         sanitized["input"] = new_inp
     return sanitized
-
 
 class RateLimiter:
     """In-memory per-IP rate limiter with sliding window."""
@@ -145,7 +141,6 @@ class RateLimiter:
                         del self.records[ip][ep]
                 if not self.records[ip]:
                     del self.records[ip]
-
 
 class AuthManager:
     """Manages pairing codes, session tokens, and shared key validation."""
@@ -293,7 +288,6 @@ class AuthManager:
                 if now > entry["expires_at"] or now > absolute_expires_at:
                     del self.session_tokens[token]
         self._save_sessions()
-
 
 class BackgroundTaskManager:
     """Manages background task lifecycle: creation, tracking, output capture, cleanup."""
@@ -624,7 +618,6 @@ class BackgroundTaskManager:
         except OSError:
             pass
 
-
 # Executable resolution
 def find_executable(name: str) -> Optional[str]:
     """Find executable in multiple common locations
@@ -660,22 +653,18 @@ def find_executable(name: str) -> Optional[str]:
 
     return None
 
-
 # Environment-based configuration
 def get_default_agent() -> str:
     """Get default agent from environment or use orchestrator"""
     return os.environ.get("COPILOT_DEFAULT_AGENT", "orchestrator")
 
-
 def get_default_model() -> str:
     """Get default model from environment or use gpt-5-mini"""
     return os.environ.get("COPILOT_DEFAULT_MODEL", "gpt-5-mini")
 
-
 def get_default_runtime() -> str:
     """Get default runtime from environment or use copilot"""
     return os.environ.get("COPILOT_DEFAULT_RUNTIME", "copilot")
-
 
 def get_command_timeout() -> int:
     """Get command execution timeout from environment or use default 300 seconds"""
@@ -696,7 +685,6 @@ def get_command_timeout() -> int:
             file=sys.stderr,
         )
 
-
 def get_bg_command_timeout() -> int:
     """Get background task timeout from environment or use default 900 seconds (15 minutes)"""
     try:
@@ -707,7 +695,6 @@ def get_bg_command_timeout() -> int:
         return timeout
     except ValueError:
         return 900
-
 
 def estimate_background_timeout(prompt: str, default: int = 900) -> int:
     """Estimate an appropriate timeout for a background task based on the prompt.
@@ -788,7 +775,6 @@ def estimate_background_timeout(prompt: str, default: int = 900) -> int:
             return 120  # 2 min
 
     return default
-
 
 class HistoryManager:
     """Persists per-user chat history in ~/.copilot/chat-history.json."""
@@ -992,7 +978,6 @@ class HistoryManager:
             self._save(data)
             return True
 
-
 class RuntimeUsageTracker:
     """Queries GitHub Copilot premium request usage from the billing API."""
 
@@ -1124,7 +1109,6 @@ class RuntimeUsageTracker:
             "period": month,
             "source": "unavailable",
         }
-
 
 class SessionManager:
     """Manages AI CLI sessions (Copilot & OpenCode) for N8N integration"""
@@ -1482,39 +1466,34 @@ class SessionManager:
     def _init_slash_commands(self):
         """Initialize the slash command registry.
 
-        New pure-server commands should be registered here with a handler.
-        Legacy commands (handled by the if/elif chain in execute()) are
-        registered with handler=None for documentation/discovery.
+        Every command here is handled entirely server-side.
+        Commands with a handler bypass the LLM, reducing
+        latency and token cost.  To add a new pure-server
+        command, create a ``_slash_<name>`` method and
+        register it below.
         """
-        # -- Pure-server commands (registry-based handlers) --
+        self._register_slash("/help", self._slash_help, "Show available commands")
+        self._register_slash("/status", self._slash_status, "Check status of running query")
+        self._register_slash("/cancel", self._slash_cancel, "Cancel running query")
+        self._register_slash("/capabilities", self._slash_capabilities, "Show agent capabilities")
+        self._register_slash("/runtime", self._slash_runtime, "Manage runtime (list/set/current)")
+        self._register_slash("/agent", self._slash_agent, "Manage agent (list/set/current/invoke)")
+        self._register_slash("/model", self._slash_model, "Manage model (list/set/current)")
+        self._register_slash("/session", self._slash_session, "Manage session (list/reset/info)")
+        self._register_slash("/timeout", self._slash_timeout, "Get/set execution timeout")
+        self._register_slash("/render", self._slash_render, "Get/set output render format")
+        self._register_slash("/notifications", self._slash_notifications, "Toggle background notifications")
+        self._register_slash("/mode", self._slash_mode, "Set permission mode")
+        self._register_slash("/schedule", self._slash_schedule, "Manage scheduled jobs")
+        self._register_slash("/background", self._slash_background, "Manage background tasks")
+        self._register_slash("/update", self._slash_update, "Pull latest and restart")
+        self._register_slash("/upgrade", self._slash_update, "Pull latest and restart")
+        self._register_slash("/pull", self._slash_update, "Pull latest and restart")
         self._register_slash(
             "/secret",
             self._slash_secret,
-            "Manage secrets (set/delete/list) — values never touch the LLM",
+            "Manage secrets (set/delete/list)",
         )
-
-        # -- Legacy commands (handled by if/elif in execute()) --
-        legacy_commands = [
-            ("/help", "Show available commands"),
-            ("/status", "Check status of running query"),
-            ("/cancel", "Cancel running query"),
-            ("/capabilities", "Show orchestrator capabilities"),
-            ("/runtime", "Manage runtime (list/set/current)"),
-            ("/model", "Manage model (list/set/current)"),
-            ("/agent", "Manage agent (list/set/current/invoke)"),
-            ("/session", "Session management (reset)"),
-            ("/timeout", "Manage query timeout"),
-            ("/render", "Manage render type"),
-            ("/mode", "Manage permission mode"),
-            ("/notifications", "Toggle background task notifications"),
-            ("/schedule", "Manage scheduled tasks"),
-            ("/background", "Manage background tasks"),
-            ("/update", "Pull latest code and restart services"),
-            ("/upgrade", "Alias for /update"),
-            ("/pull", "Alias for /update"),
-        ]
-        for cmd, desc in legacy_commands:
-            self._register_slash(cmd, None, desc)
 
     def get_slash_commands(self) -> Dict[str, str]:
         """Return a dict of all registered slash commands and descriptions."""
@@ -1656,6 +1635,983 @@ class SessionManager:
             return f"\u2713 Secret `{name}` deleted."
         except Exception as e:
             return f"\u274c Error deleting secret: {e}"
+
+    # ── Slash command handlers (F020) ───────────────────────────────
+
+    def _slash_help(self, argument, session_data, n8n_session_id):
+        """Handle /help slash command."""
+        return """🆘 **Available Commands**
+
+**Orchestrator:**
+   • /capabilities - Show what the orchestrator can help with
+
+**Bash Commands:**
+   • !command - Execute bash command directly (e.g., !pwd, !ls -la)
+   • Commands run in current agent's directory with 10s timeout
+
+**Runtime Management:**
+   • /runtime list - Show available runtimes
+   • /runtime set (auto|copilot|opencode|claude|gemini|codex|devin|cursor) - Switch runtime
+   • /runtime current - Show current runtime
+
+**Model Management:**
+   • /model list - Show available models for current runtime
+   • /model set "model_name" - Switch model
+   • /model current - Show current model
+
+**Mode Management:**
+   • /mode current - Show current mode
+   • /mode elevated - Full access, auto-approve (no prompts)
+   • /mode restricted - Bounded access (default)
+   /mode sandboxed - Read-only, no external access
+   • /mode list - Show available modes
+
+**Agent Management:**
+   • /agent list - Show all available agents and their locations
+   • /agent set <agent_name> — switch to an agent and work with it.
+   • /agent current - Show current agent
+   • /agent invoke "agent_name" "prompt" - Delegate to sub-agent
+
+**Session:**
+   • /session reset - Reset session (preserves model, runtime, agent)
+   • /timeout or /timeout current - Show current timeout
+   • /timeout set [seconds] - Set timeout (30-3600 seconds / 1 hour max)
+   • /render or /render current - Show current render type
+   • /render set [text|markdown|html|telegram_html] - Set render type
+
+**Query Management:**
+   • /status - Check status of running query for this session
+   • /cancel - Cancel running query for this session
+
+**Scheduler:**
+   • /schedule list - List all scheduled jobs
+   • /schedule status - Scheduler health status
+   • /schedule add <name> | <schedule> | <task> - Create a new job
+   • /schedule info <job_id> - Show job details
+   • /schedule pause <job_id> - Pause a job
+   • /schedule resume <job_id> - Resume a paused job
+   • /schedule delete <job_id> - Delete a job
+   • /schedule logs <job_id> - View job logs
+   • /schedule results <job_id> - View execution results
+
+**Background Tasks:**
+   • /background <prompt> - Run a task in the background
+   • /background agent=<name> <prompt> - Override agent
+   • /background list - List your background tasks
+   • /background status <task_id> - Check task status
+   • /background kill <task_id> - Kill a running task
+
+**Secrets:**
+   • /secret list - List stored secret names
+   • /secret set <name> <value> - Store a secret (value never sent to LLM)
+   • /secret delete <name> - Delete a secret
+
+**System:**
+   • /update - Pull latest dev code and restart all dev services
+   • /update status - Show last update log
+
+**Auto-Delegation:**
+You can mention an agent in your prompt and it will auto-delegate:
+   • ask the family agent for Parkers Christmas ideas
+   • have the devops agent check production status
+   • this is in the projects agent, find the auth code
+
+**Examples:**
+   /capabilities
+   !pwd
+   !echo "Hello World"
+   !ls -la
+   /mode elevated
+   /runtime set gemini
+   /model set "gpt-5.2"
+   /agent set "family"
+   /agent invoke family "Find Christmas ideas for Parker"
+   ask the family agent what are Parkers Christmas ideas
+   have the devops agent check the server status
+"""
+
+    def _slash_status(self, argument, session_data, n8n_session_id):
+        """Handle /status slash command."""
+        # Check if there's a running query for this session
+        query_info = self.get_running_query(n8n_session_id)
+
+        if not query_info:
+            return "✓ No running query for this session"
+
+        # Check if process is still running
+        pid = query_info["pid"]
+        if not self.is_process_running(pid):
+            # Process finished but tracking wasn't cleaned up
+            self.clear_running_query(n8n_session_id)
+            return "✓ No running query for this session (last query has completed)"
+
+        # Process is running - show status
+        runtime = query_info.get("runtime", "unknown")
+        agent = query_info.get("agent", "unknown")
+        prompt_snippet = query_info.get("prompt", "")[:100]
+        start_time = query_info.get("start_time", 0)
+        elapsed = int(time.time() - start_time)
+        elapsed_min = elapsed // 60
+        elapsed_sec = elapsed % 60
+        last_output = query_info.get("last_output", "")
+
+        status_msg = f"""🔄 **Query Running**
+
+**Runtime:** {runtime}
+**Agent:** {agent}
+**PID:** {pid}
+**Elapsed Time:** {elapsed_min}m {elapsed_sec}s
+**Prompt:** {prompt_snippet}...
+
+**Recent Output:**
+{last_output[-self.MAX_OUTPUT_DISPLAY :] if last_output else "(no output yet)"}
+"""
+        return status_msg
+
+    def _slash_cancel(self, argument, session_data, n8n_session_id):
+        """Handle /cancel slash command."""
+        # Find and cancel running query
+        query_info = self.get_running_query(n8n_session_id)
+
+        if not query_info:
+            return "❌ No running query to cancel for this session"
+
+        pid = query_info["pid"]
+
+        # Check if process is still running
+        if not self.is_process_running(pid):
+            self.clear_running_query(n8n_session_id)
+            return "✓ No running query to cancel (query has already completed)"
+
+        # Kill the process
+        if self.kill_process(pid):
+            self.clear_running_query(n8n_session_id)
+            runtime = query_info.get("runtime", "unknown")
+            return f"✓ Cancelled running query (PID: {pid}, Runtime: {runtime})"
+        else:
+            return f"❌ Failed to cancel query (PID: {pid}). Process may have already terminated."
+
+    def _slash_capabilities(self, argument, session_data, n8n_session_id):
+        """Handle /capabilities slash command."""
+        return self.get_capabilities()
+
+    def _slash_runtime(self, argument, session_data, n8n_session_id):
+        """Handle /runtime slash command."""
+        current_runtime = session_data.get("runtime", "copilot")
+        if not argument:
+            return "Usage: /runtime [list|set|current]"
+        if argument == "list":
+            return (
+                "🤖 **Available Runtimes**\n\n"
+                "• `copilot` (GitHub Copilot)\n"
+                "• `opencode` (OpenCode CLI)\n"
+                "• `claude` (Claude Code CLI)\n"
+                "• `gemini` (Google Gemini CLI)\n"
+                "• `codex` (Codex CLI)\n"
+                "• `devin` (Devin CLI)\n"
+                "• `cursor` (Cursor Agent CLI)"
+            )
+        elif argument == "current":
+            return f"🤖 **Current Runtime:** `{current_runtime}`"
+        elif argument.startswith("set "):
+            new_runtime = argument[4:].strip().lower()
+            if new_runtime not in [
+                "copilot",
+                "opencode",
+                "claude",
+                "gemini",
+                "codex",
+                "devin",
+                "cursor",
+            ]:
+                return (
+                    f"Unknown runtime: '{new_runtime}'. Use "
+                    "copilot, opencode, claude, gemini, "
+                    "codex, devin, or cursor."
+                )
+
+            # Capture previous session state before any updates
+            prev_runtime = current_runtime
+            prev_session_id = session_data.get("session_id")
+
+            # Generate the new session ID up front so the handoff can reference it
+            new_session_id = str(uuid4())
+
+            # Prepare session handoff if the runtime is actually changing and
+            # there is prior history to hand off
+            if prev_runtime != new_runtime and prev_session_id:
+                try:
+                    from session_handoff import SessionHandoff, _handoff_logger
+
+                    handoff = SessionHandoff()
+
+                    # Log the reason for handoff (user command: /runtime set)
+                    _handoff_logger.info(
+                        f"HANDOFF REASON: User executed '/runtime set {new_runtime}' command | "
+                        f"n8n_session={n8n_session_id} | "
+                        f"current_agent={session_data.get('agent', 'unknown')}"
+                    )
+
+                    handoff.export_transcript(n8n_session_id, prev_session_id)
+                    handoff.write_handoff_summary(
+                        n8n_session_id,
+                        new_session_id,
+                        prev_session_id,
+                        prev_runtime,
+                        new_runtime,
+                    )
+                    print(
+                        f"[Handoff] Prepared handoff: {prev_runtime} → {new_runtime} "
+                        f"(prev_session={prev_session_id}, new_session={new_session_id})",
+                        file=sys.stderr,
+                    )
+                except Exception as _handoff_err:
+                    print(
+                        f"[Handoff] Warning: handoff preparation failed: {_handoff_err}",
+                        file=sys.stderr,
+                    )
+                    try:
+                        from session_handoff import _handoff_logger
+
+                        _handoff_logger.error(
+                            f"HANDOFF FAILED: {_handoff_err} | "
+                            f"prev_runtime={prev_runtime} new_runtime={new_runtime}"
+                        )
+                    except Exception:
+                        pass
+
+            self.update_session_field(n8n_session_id, "runtime", new_runtime)
+
+            # When switching runtime, reset the session ID to a new UUID since session formats are incompatible
+            # (e.g., OpenCode uses "ses_*" format, Claude uses UUID format, CODEX uses UUID format, etc.)
+            self.update_session_field(n8n_session_id, "session_id", new_session_id)
+
+            # When switching runtime, also reset the model to a default for that runtime
+            default_model = "gpt-5-mini"  # Default fallback
+            if new_runtime == "copilot":
+                default_model = "gpt-5-mini"
+            elif new_runtime == "opencode":
+                default_model = "opencode/gpt-5-nano"
+            elif new_runtime == "claude":
+                default_model = "haiku"
+            elif new_runtime == "gemini":
+                default_model = "gemini-1.5-flash"
+            elif new_runtime == "codex":
+                default_model = "gpt-5.4"
+            elif new_runtime == "devin":
+                default_model = os.getenv("DEVIN_DEFAULT_MODEL", "claude-sonnet-4")
+            elif new_runtime == "cursor":
+                default_model = os.getenv("CURSOR_DEFAULT_MODEL", "auto")
+
+            self.update_session_field(n8n_session_id, "model", default_model)
+            return f"✓ Switched runtime to **{new_runtime}**. Model set to `{default_model}`. Session reset."
+
+    def _slash_agent(self, argument, session_data, n8n_session_id):
+        """Handle /agent slash command."""
+        current_runtime = session_data.get("runtime", "copilot")
+
+        if not argument:
+            return "Usage: /agent [list|set|current|invoke]"
+        if argument == "list":
+            out = "# 🤖 Available Agents\n\n"
+            for k, v in self.AGENTS.items():
+                out += f"### {k}\n{v['description']}\n\n**Location:** `{v['path']}`\n\n"
+            return out
+        elif argument == "current":
+            ag = session_data.get("agent", "devops")
+            info = self.AGENTS.get(ag, self.AGENTS["orchestrator"])
+            return f"Current Agent: **{ag}**\n{info['description']}"
+        elif argument.startswith("set "):
+            agent = argument[4:].strip().strip("\"'")
+            return self.set_agent(n8n_session_id, agent)
+        elif argument.startswith("invoke "):
+            # Parse: /agent invoke <agent_name> <prompt...>
+            invoke_args = argument[7:].strip()  # Remove 'invoke '
+            parts = invoke_args.split(None, 1)  # Split on first space
+            if len(parts) < 2:
+                return "Usage: /agent invoke [agent_name] [prompt]"
+
+            agent_name = parts[0].strip("\"'")
+            sub_prompt = parts[1]
+
+            if agent_name not in self.AGENTS:
+                available = ", ".join(self.AGENTS.keys())
+                return f"Unknown agent: '{agent_name}'. Available: {available}"
+
+            # Invoke the sub-agent with a new session
+            print(
+                f"[Agent] Invoking sub-agent '{agent_name}' with delegation",
+                file=sys.stderr,
+            )
+            sub_session_id = str(uuid4())
+
+            # Save delegation context
+            delegation_data = {
+                "session_id": sub_session_id,
+                "model": session_data.get("model", "gpt-5-mini"),
+                "agent": agent_name,
+                "runtime": current_runtime,
+                "is_delegation": True,
+            }
+
+            # Execute in sub-agent context
+            return self._execute_with_context(
+                sub_prompt, delegation_data, n8n_session_id
+            )
+
+    def _slash_model(self, argument, session_data, n8n_session_id):
+        """Handle /model slash command."""
+        current_runtime = session_data.get("runtime", "copilot")
+
+        if not argument:
+            argument = "list"  # Default to list if no argument provided
+
+        # Handle model selection for the current runtime
+        effective_rt = current_runtime
+
+        if argument == "list" or argument.startswith("list "):
+            models_dict = self.get_models_for_runtime(effective_rt)
+            out = f"📋 **Available Models ({current_runtime})**\n\n"
+            if not models_dict:
+                return (
+                    out
+                    + f"❌ No models available for {effective_rt}. Check CLI configuration."
+                )
+            for cat in sorted(models_dict.keys()):
+                out += f"**{cat}:**\n"
+                for mid in sorted(models_dict[cat]):
+                    desc = self._get_model_description(mid, effective_rt)
+                    if desc:
+                        out += f"  • `{mid}` - {desc}\n"
+                    else:
+                        out += f"  • `{mid}`\n"
+            return out
+
+        elif argument == "current":
+            return (
+                f"Current Model: `{session_data.get('model')}` ({current_runtime})"
+            )
+        elif argument.startswith("set "):
+            model_name = argument[4:].strip().strip('"')
+            model_id = self.get_model_from_name(model_name, effective_rt)
+            if not model_id:
+                return f"Unknown model '{model_name}' for runtime {effective_rt}"
+            self.update_session_field(n8n_session_id, "model", model_id)
+            return f"✓ Switched to model `{model_id}`"
+
+    def _slash_session(self, argument, session_data, n8n_session_id):
+        """Handle /session slash command."""
+        if argument == "reset":
+            with self._session_map_lock:
+                session_map = self.load_session_map()
+                old_data = session_map.get(n8n_session_id)
+                # Preserve user-selected config across reset
+                preserved = {}
+                if isinstance(old_data, dict):
+                    for key in (
+                        "model",
+                        "runtime",
+                        "agent",
+                        "timeout",
+                        "render_type",
+                        "channel",
+                        "bot_id",
+                        "identity",
+                        "permissions",
+                        "yolo_mode",
+                    ):
+                        if key in old_data and old_data[key] is not None:
+                            preserved[key] = old_data[key]
+                # Build fresh session with new backend session ID
+                new_data = {
+                    "session_id": str(uuid4()),
+                    "last_activity": time.time(),
+                }
+                new_data.update(preserved)
+                session_map[n8n_session_id] = new_data
+                self.save_session_map(session_map)
+            parts = ["\u2713 Session reset. Next message starts fresh."]
+            if (
+                preserved.get("model")
+                or preserved.get("runtime")
+                or preserved.get("agent")
+            ):
+                kept = []
+                if "model" in preserved:
+                    kept.append("model=`" + preserved["model"] + "`")
+                if "runtime" in preserved:
+                    kept.append("runtime=`" + preserved["runtime"] + "`")
+                if "agent" in preserved:
+                    kept.append("agent=`" + preserved["agent"] + "`")
+                parts.append("Preserved: " + ", ".join(kept) + ".")
+            return " ".join(parts)
+
+    def _slash_timeout(self, argument, session_data, n8n_session_id):
+        """Handle /timeout slash command."""
+        if not argument:
+            argument = "current"  # Default to showing current timeout
+
+        if argument == "current":
+            # Get timeout from session, or show default
+            session_timeout = session_data.get("timeout")
+            if session_timeout:
+                return f"⏱️ **Current Timeout:** `{session_timeout}` seconds"
+            else:
+                return f"⏱️ **Current Timeout:** `{self.command_timeout}` seconds (default)"
+
+        elif argument.startswith("set "):
+            timeout_str = argument[4:].strip()
+            try:
+                timeout_seconds = int(timeout_str)
+                # Validate timeout (minimum 30 seconds, maximum 3600 seconds / 1 hour)
+                if timeout_seconds < 30:
+                    return f"❌ Timeout must be at least 30 seconds. You specified: {timeout_seconds}s"
+                if timeout_seconds > 3600:
+                    return f"❌ Timeout must not exceed 3600 seconds (1 hour). You specified: {timeout_seconds}s"
+
+                # Store timeout in session
+                self.update_session_field(
+                    n8n_session_id, "timeout", str(timeout_seconds)
+                )
+                return (
+                    f"✓ Timeout set to `{timeout_seconds}` seconds for this session"
+                )
+            except ValueError:
+                return f"❌ Invalid timeout value '{timeout_str}'. Please provide a number (30-600 seconds)"
+        else:
+            return (
+                "Usage: `/timeout` or `/timeout current` to show current timeout\n"
+                "       `/timeout set [seconds]` to set a new timeout (30-3600 seconds)"
+            )
+
+    def _slash_render(self, argument, session_data, n8n_session_id):
+        """Handle /render slash command."""
+        if not argument:
+            argument = "current"  # Default to showing current render type
+
+        if argument == "current":
+            # Get render type from session, or show default
+            render_type = session_data.get("render_type", "text")
+            return f"🎨 **Current Render Type:** `{render_type}`"
+
+        elif argument.startswith("set "):
+            render_type = argument[4:].strip().lower()
+            valid_types = ["text", "markdown", "html", "telegram_html"]
+            if render_type not in valid_types:
+                return f"❌ Invalid render type '{render_type}'. Valid options: {', '.join(valid_types)}"
+
+            # Store render type in session
+            self.update_session_field(n8n_session_id, "render_type", render_type)
+            return f"✓ Render type set to `{render_type}` for this session"
+        else:
+            return (
+                "Usage: `/render` or `/render current` to show current render type\n"
+                "       `/render set [text|markdown|html|telegram_html]` to set render type"
+            )
+
+    def _slash_notifications(self, argument, session_data, n8n_session_id):
+        """Handle /notifications slash command."""
+        if not argument:
+            argument = "current"
+
+        # Resolve identity for per-user preference store
+        _notif_identity = self._bg_identity or session_data.get("identity")
+        _notif_channel = session_data.get("channel", "webui")
+
+        if argument == "current":
+            # Check global preference first, then per-identity, then session
+            if self._notification_mgr:
+                if self._notification_mgr.is_muted("_global"):
+                    pref = "off"
+                elif _notif_identity:
+                    pref = self._notification_mgr.get_user_pref(_notif_identity)
+                else:
+                    pref = session_data.get("notification_preference", "all")
+            else:
+                pref = session_data.get("notification_preference", "all")
+            status = "ON (All updates)" if pref == "all" else "OFF (WebUI only)"
+            return f"🔔 **Background Notifications:** `{status}`"
+
+        elif argument in ["on", "all"]:
+            self.update_session_field(
+                n8n_session_id, "notification_preference", "all"
+            )
+            if self._notification_mgr:
+                # Store under specific identity if available
+                if _notif_identity:
+                    self._notification_mgr.set_user_pref(
+                        _notif_identity, _notif_channel, "all"
+                    )
+                # Always store global preference so it applies across all channels
+                self._notification_mgr.set_user_pref(
+                    "_global", _notif_channel, "all"
+                )
+            return "✓ Background task notifications enabled for Telegram/WebEx."
+
+        elif argument in ["off", "mute"]:
+            self.update_session_field(
+                n8n_session_id, "notification_preference", "off"
+            )
+            if self._notification_mgr:
+                if _notif_identity:
+                    self._notification_mgr.set_user_pref(
+                        _notif_identity, _notif_channel, "off"
+                    )
+                # Always store global preference so it applies across all channels
+                self._notification_mgr.set_user_pref(
+                    "_global", _notif_channel, "off"
+                )
+            return "✓ Background task notifications muted for Telegram/WebEx (WebUI only)."
+        else:
+            return "Usage: `/notifications [on|off]` to toggle background task notifications."
+
+    def _slash_mode(self, argument, session_data, n8n_session_id):
+        """Handle /mode slash command."""
+        if not argument:
+            argument = "current"  # Default to showing current mode
+
+        if argument == "current":
+            _perms = session_data.get("permissions", {})
+            _pm = (
+                _perms.get("mode", "restricted")
+                if isinstance(_perms, dict)
+                else "restricted"
+            )
+            if _pm not in ("elevated", "restricted", "sandboxed"):
+                _pm = (
+                    "elevated"
+                    if session_data.get("yolo_mode") == "on"
+                    else "restricted"
+                )
+            return f"\u26a1 **Current Mode:** `{_pm}`"
+
+        elif argument == "list":
+            return (
+                "\U0001f4cb **Available Permission Modes:**\n\n"
+                "\u2022 `elevated` \u26a1 - Full access, auto-approve all operations\n"
+                "\u2022 `restricted` \U0001f512 - Bounded to agent directory (default)\n"
+                "\u2022 `sandboxed` \U0001f3d6\ufe0f - Read-only, no external access"
+            )
+
+        elif argument in ("elevated", "yolo"):
+            _cur_perms = session_data.get("permissions", {})
+            if not isinstance(_cur_perms, dict):
+                _cur_perms = {}
+            _cur_perms["mode"] = "elevated"
+            self.update_session_field(n8n_session_id, "permissions", _cur_perms)
+            self.update_session_field(n8n_session_id, "yolo_mode", "on")
+            return "\u2713 Elevated mode enabled \u26a1 - auto-approving actions without prompts"
+
+        elif argument == "restricted":
+            _cur_perms = session_data.get("permissions", {})
+            if not isinstance(_cur_perms, dict):
+                _cur_perms = {}
+            _cur_perms["mode"] = "restricted"
+            self.update_session_field(n8n_session_id, "permissions", _cur_perms)
+            self.update_session_field(n8n_session_id, "yolo_mode", "restricted")
+            return (
+                "\u2713 Restricted mode enabled \U0001f512 - normal prompts enabled"
+            )
+
+        elif argument == "sandboxed":
+            _cur_perms = session_data.get("permissions", {})
+            if not isinstance(_cur_perms, dict):
+                _cur_perms = {}
+            _cur_perms["mode"] = "sandboxed"
+            self.update_session_field(n8n_session_id, "permissions", _cur_perms)
+            self.update_session_field(n8n_session_id, "yolo_mode", "restricted")
+            return "\u2713 Sandboxed mode enabled \U0001f3d6\ufe0f - read-only, no external access"
+
+        else:
+            return (
+                "Usage: `/mode current` - Show current mode\n"
+                "       `/mode list` - Show available modes\n"
+                "       `/mode elevated` - Full access mode\n"
+                "       `/mode restricted` - Bounded access mode\n"
+                "       `/mode sandboxed` - Read-only mode"
+            )
+
+    def _slash_schedule(self, argument, session_data, n8n_session_id):
+        """Handle /schedule slash command."""
+        if not SCHEDULER_ENABLED:
+            return "⚠️ Scheduler is not enabled on this instance."
+
+        try:
+            scheduler = _get_scheduler()
+        except Exception as e:
+            return f"⚠️ Scheduler unavailable: {e}"
+
+        sub = (argument or "").strip()
+        sub_lower = sub.lower()
+
+        # /schedule or /schedule list
+        if not sub or sub_lower == "list":
+            result = scheduler.list_jobs()
+            jobs = result.get("result", [])
+            if not jobs:
+                return "📅 **Scheduled Jobs**\n\nNo jobs scheduled."
+            lines = ["📅 **Scheduled Jobs**\n"]
+            for j in jobs:
+                status = "▶️" if j.get("enabled") else "⏸"
+                recurring = "🔁" if j.get("recurring") else "1️⃣"
+                lines.append(
+                    f"{status} {recurring} `{j['id']}` — **{j['name']}**\n"
+                    f"   Schedule: `{j['schedule']}`\n"
+                    f"   Next run: `{j.get('next_run','?')}`\n"
+                    f"   Agent: `{j.get('agent','?')}` / Runtime: `{j.get('runtime','?')}`"
+                )
+            return "\n\n".join(lines)
+
+        # /schedule status
+        elif sub_lower == "status":
+            result = scheduler.doctor()
+            info = result.get("result", result)
+            lines = ["🩺 **Scheduler Status**\n"]
+            for k, v in info.items():
+                lines.append(f"• **{k}**: `{v}`")
+            return "\n".join(lines)
+
+        # /schedule pause <job_id>
+        elif sub_lower.startswith("pause "):
+            job_id = sub[6:].strip()
+            result = scheduler.pause_job(job_id)
+            if result.get("success"):
+                return f"⏸ Job `{job_id}` paused."
+            return f"❌ {result.get('message', 'Failed to pause job.')}"
+
+        # /schedule resume <job_id>
+        elif sub_lower.startswith("resume "):
+            job_id = sub[7:].strip()
+            result = scheduler.resume_job(job_id)
+            if result.get("success"):
+                return f"▶️ Job `{job_id}` resumed."
+            return f"❌ {result.get('message', 'Failed to resume job.')}"
+
+        # /schedule delete <job_id>
+        elif sub_lower.startswith("delete ") or sub_lower.startswith("remove "):
+            job_id = sub.split(" ", 1)[1].strip()
+            result = scheduler.delete_job(job_id)
+            if result.get("success"):
+                return f"🗑️ Job `{job_id}` deleted."
+            return f"❌ {result.get('message', 'Failed to delete job.')}"
+
+        # /schedule info <job_id>
+        elif sub_lower.startswith("info "):
+            job_id = sub[5:].strip()
+            result = scheduler.get_job(job_id)
+            if not result.get("success"):
+                return f"❌ {result.get('message', 'Job not found.')}"
+            j = result["result"]
+            cron_line = f"\n• **Cron:** `{j['cron']}`" if j.get("cron") else ""
+            return (
+                f"📋 **Job: {j['name']}**\n\n"
+                f"• **ID:** `{j['id']}`\n"
+                f"• **Schedule:** `{j['schedule']}`{cron_line}\n"
+                f"• **Next run:** `{j.get('next_run','?')}`\n"
+                f"• **Last run:** `{j.get('last_run','never')}`\n"
+                f"• **Agent:** `{j.get('agent','?')}` / Runtime: `{j.get('runtime','?')}`\n"
+                f"• **Recurring:** {'Yes 🔁' if j.get('recurring') else 'No 1️⃣'}\n"
+                f"• **Enabled:** {'Yes ▶️' if j.get('enabled') else 'No ⏸'}\n"
+                f"• **Task:** {j.get('task','')}"
+            )
+
+        # /schedule logs <job_id>
+        elif sub_lower.startswith("logs "):
+            job_id = sub[5:].strip()
+            result = scheduler.get_logs(job_id)
+            if not result.get("success"):
+                return f"❌ {result.get('message', 'No logs found.')}"
+            logs = result.get("result", [])
+            if not logs:
+                return f"📜 No logs for job `{job_id}`."
+            recent = logs[-20:]  # last 20 entries
+            lines = [f"📜 **Logs for `{job_id}`** (last {len(recent)}):\n"]
+            lines.extend(f"`{entry}`" for entry in recent)
+            return "\n".join(lines)
+
+        # /schedule results <job_id>
+        elif sub_lower.startswith("results "):
+            job_id = sub[8:].strip()
+            result = scheduler.get_results(job_id)
+            if not result.get("success"):
+                return f"❌ {result.get('message', 'No results found.')}"
+            results = result.get("result", [])
+            if not results:
+                return f"📊 No results for job `{job_id}` yet."
+            lines = [f"📊 **Results for `{job_id}`** ({len(results)} runs):\n"]
+            for r in results[-5:]:  # last 5 runs
+                status = "✅" if r.get("success") else "❌"
+                lines.append(
+                    f"{status} `{r.get('timestamp','?')}` — {r.get('summary','')[:100]}"
+                )
+            return "\n".join(lines)
+
+        # /schedule add <name> | <schedule> | <task>
+        # e.g.: /schedule add Daily Report | every day at 9am | generate daily summary
+        elif sub_lower.startswith("add "):
+            raw = sub[4:].strip()
+            parts = [p.strip() for p in raw.split("|")]
+            if len(parts) < 3:
+                return (
+                    "Usage: `/schedule add <name> | <schedule> | <task>`\n\n"
+                    "Example: `/schedule add Daily Report | every day at 9am | generate a daily summary`\n"
+                    "Example: `/schedule add One-time Ping | in 10 minutes | say hello`"
+                )
+            name, schedule_str, task = parts[0], parts[1], parts[2]
+            recurring = not any(w in schedule_str.lower() for w in ["in ", "once"])
+            result = scheduler.schedule_task(
+                name=name,
+                schedule=schedule_str,
+                task=task,
+                recurring=recurring,
+            )
+            if result.get("success"):
+                j = result["result"]
+                cron_line = f"\n• **Cron:** `{j['cron']}`" if j.get("cron") else ""
+                return (
+                    f"✅ **Job scheduled!**\n\n"
+                    f"• **ID:** `{j['id']}`\n"
+                    f"• **Name:** {j['name']}\n"
+                    f"• **Schedule:** `{j['schedule']}`{cron_line}\n"
+                    f"• **Next run:** `{j.get('next_run','?')}`\n"
+                    f"• **Recurring:** {'Yes 🔁' if j.get('recurring') else 'No 1️⃣'}"
+                )
+            return f"❌ {result.get('message', 'Failed to schedule job.')}"
+
+        else:
+            return (
+                "📅 **Schedule Commands**\n\n"
+                "• `/schedule list` — List all scheduled jobs\n"
+                "• `/schedule status` — Scheduler health status\n"
+                "• `/schedule add <name> | <schedule> | <task>` — Create a new job\n"
+                "• `/schedule info <job_id>` — Show job details\n"
+                "• `/schedule pause <job_id>` — Pause a job\n"
+                "• `/schedule resume <job_id>` — Resume a paused job\n"
+                "• `/schedule delete <job_id>` — Delete a job\n"
+                "• `/schedule logs <job_id>` — View job logs\n"
+                "• `/schedule results <job_id>` — View job execution results\n\n"
+                "**Examples:**\n"
+                "`/schedule add Daily Report | every day at 9am | generate daily summary`\n"
+                "`/schedule pause daily-report`\n"
+                "`/schedule delete daily-report`"
+            )
+
+    def _slash_background(self, argument, session_data, n8n_session_id):
+        """Handle /background slash command."""
+        sub = (argument or "").strip()
+        if not sub or sub.lower() == "help":
+            return (
+                "⚡ **Background Task Commands**\n\n"
+                "• `/background <prompt>` — Run a task in the background\n"
+                "• `/background agent=devops <prompt>` — Override agent\n"
+                "• `/background runtime=claude model=sonnet <prompt>` — Override runtime/model\n"
+                "• `/background timeout=600 <prompt>` — Override timeout (seconds)\n"
+                "• `/background list` — List your background tasks\n"
+                "• `/background status <task_id>` — Check task status\n"
+                "• `/background kill <task_id>` — Kill a running task\n"
+                "• `/background steer <task_id> <instruction>` — Steer a running task\n\n"
+                "Background tasks run in separate sessions and don't block your chat.\n"
+                "Monitor them in the ⚡ Tasks tab in the sidebar."
+            )
+
+        if not self._bg_task_mgr:
+            return "⚠️ Background task manager not available."
+
+        sub_lower = sub.lower()
+
+        if sub_lower == "list":
+            tasks = self._bg_task_mgr.list_all_tasks()
+            if not tasks:
+                return "⚡ **Background Tasks**\n\nNo background tasks."
+            icons = {
+                "running": "🟢",
+                "completed": "✅",
+                "failed": "❌",
+                "killed": "🛑",
+            }
+            lines = ["⚡ **Background Tasks**\n"]
+            for t in tasks:
+                icon = icons.get(t["status"], "❓")
+                lines.append(
+                    f"{icon} `{t['task_id']}` — **{t['status']}**\n"
+                    f"   Agent: `{t['agent']}` | Prompt: {t['prompt'][:80]}..."
+                )
+            return "\n\n".join(lines)
+
+        if sub_lower.startswith("status "):
+            tid = sub[7:].strip()
+            task = self._bg_task_mgr.get_task(tid)
+            if not task:
+                return f"❌ Task `{tid}` not found."
+            icons = {
+                "running": "🟢",
+                "completed": "✅",
+                "failed": "❌",
+                "killed": "🛑",
+            }
+            icon = icons.get(task["status"], "❓")
+            elapsed = ""
+            if task["status"] == "running":
+                try:
+                    ct = time.mktime(
+                        time.strptime(task["created_at"], "%Y-%m-%dT%H:%M:%SZ")
+                    )
+                    secs = int(time.time() - ct)
+                    elapsed = f"\n**Elapsed:** {secs // 60}m {secs % 60}s"
+                except Exception:
+                    pass
+            return (
+                f"{icon} **Task: `{task['task_id']}`**\n\n"
+                f"**Status:** {task['status']}\n"
+                f"**Agent:** `{task['agent']}` | Runtime: `{task['runtime']}` | Model: `{task['model']}`\n"
+                f"**Prompt:** {task['prompt'][:200]}"
+                f"{elapsed}"
+            )
+
+        if sub_lower.startswith("steer "):
+            parts = sub[6:].strip().split(None, 1)
+            if len(parts) < 2:
+                return "Usage: `/background steer <task_id> <instruction>`"
+            tid, instruction = parts
+            task = self._bg_task_mgr.get_task(tid)
+            if not task:
+                return f"Task `{tid}` not found."
+            if task["status"] != "running":
+                return f"Task `{tid}` is {task['status']}, not running."
+            self._bg_task_mgr.write_steering(tid, instruction)
+            return (
+                f"\U0001f3af **Steering sent to `{tid}`**\n\n"
+                f"Instruction: {instruction[:200]}"
+            )
+
+        if sub_lower.startswith("kill "):
+            tid = sub[5:].strip()
+            if self._bg_task_mgr.kill_task(tid):
+                return f"🛑 Task `{tid}` killed."
+            return f"❌ Could not kill task `{tid}` (not found or not running)."
+
+        # Otherwise it's a prompt to run in the background
+        # Parse optional overrides: agent=X runtime=Y model=Z timeout=N
+        bg_agent = session_data.get("agent", "orchestrator")
+        bg_runtime = session_data.get("runtime", "copilot")
+        bg_model = session_data.get("model", "gpt-5-mini")
+        bg_timeout_override = None
+        bg_prompt_parts = []
+        for word in sub.split():
+            if word.startswith("agent="):
+                bg_agent = word[6:]
+            elif word.startswith("runtime="):
+                bg_runtime = word[8:]
+            elif word.startswith("model="):
+                bg_model = word[6:]
+            elif word.startswith("timeout="):
+                try:
+                    bg_timeout_override = int(word[8:])
+                except ValueError:
+                    pass
+            else:
+                bg_prompt_parts.append(word)
+        bg_prompt = " ".join(bg_prompt_parts)
+
+        if not bg_prompt:
+            return "❌ No prompt provided. Usage: `/background <prompt>`"
+
+        channel = session_data.get("channel", "webui")
+        identity = self._bg_identity or "unknown"
+
+        running = self._bg_task_mgr.count_running(channel, identity)
+        if running >= BackgroundTaskManager.MAX_TASKS_PER_USER:
+            return f"❌ Maximum {BackgroundTaskManager.MAX_TASKS_PER_USER} concurrent background tasks allowed."
+
+        bg_timeout = (
+            bg_timeout_override
+            if bg_timeout_override is not None
+            else get_bg_command_timeout()
+        )
+        task_id = f"bg_{str(uuid4())[:8]}"
+        bg_session_id = f"bg_{str(uuid4())[:8]}"
+        self._bg_task_mgr.create_task(
+            task_id=task_id,
+            session_id=bg_session_id,
+            user_identity=identity,
+            channel=channel,
+            agent=bg_agent,
+            runtime=bg_runtime,
+            model=bg_model,
+            prompt=bg_prompt,
+            origin_session_id=n8n_session_id,
+        )
+        # Launch in background thread
+        import concurrent.futures as _cf
+
+        _cf.ThreadPoolExecutor(max_workers=1).submit(
+            self._execute_background_task,
+            task_id,
+            bg_session_id,
+            bg_prompt,
+            bg_agent,
+            bg_runtime,
+            bg_model,
+            channel,
+            bg_timeout,
+        )
+
+        return (
+            f"⚡ **Background task started!**\n\n"
+            f"• **Task ID:** `{task_id}`\n"
+            f"• **Agent:** `{bg_agent}` | Runtime: `{bg_runtime}` | Model: `{bg_model}`\n"
+            f"• **Timeout:** `{bg_timeout}s` ({bg_timeout // 60}m)\n"
+            f"• **Prompt:** {bg_prompt[:150]}\n\n"
+            f"Check the ⚡ Tasks tab or use `/background status {task_id}` to monitor."
+        )
+
+    def _slash_update(self, argument, session_data, n8n_session_id):
+        """Handle /update / /upgrade / /pull slash command."""
+        sub = (argument or "").strip().lower()
+
+        # Detect environment from this file's location
+        _repo_dir = os.path.dirname(os.path.abspath(__file__))
+        _is_dev = _repo_dir.endswith("-dev")
+        _env_label = "dev" if _is_dev else "prod"
+        _log_path = "/tmp/wee-update.log" if _is_dev else "/tmp/wee-update-prod.log"
+        _branch = "dev" if _is_dev else "main"
+
+        if sub == "status":
+            try:
+                with open(_log_path) as f:
+                    tail = f.readlines()[-30:]
+                return f"📋 **Last update log** (`{_log_path}`):\n```\n{''.join(tail)}```"
+            except FileNotFoundError:
+                return "ℹ️ No update log found. No update has been run yet."
+            except Exception as e:
+                return f"❌ Error reading update log: {e}"
+
+        if sub == "help":
+            return (
+                f"🔄 **Update Commands** ({_env_label})\n\n"
+                f"• `/update` — Pull latest code from `{_branch}` and restart all {_env_label} services\n"
+                f"• `/update status` — Show last update log\n"
+                f"• `/update help` — This message\n\n"
+                f"Aliases: `/upgrade`, `/pull`\n\n"
+                f"The update runs fully detached — it survives the service restart.\n"
+                f"You'll get a Telegram notification when it completes."
+            )
+
+        # Launch the detached update process
+        try:
+            from update_launcher import launch_update
+
+            pid = launch_update()
+        except Exception as e:
+            return f"❌ Failed to launch update: {e}"
+
+        return (
+            f"🔄 **Update started** (PID: `{pid}`)\n\n"
+            f"Pulling latest `{_branch}` and restarting {_env_label} services.\n"
+            f"I may go offline briefly — you will receive a Telegram notification when complete.\n\n"
+            f"Log: `{_log_path}`\n"
+            f"Check status later: `/update status`"
+        )
 
     def _load_agents_config(self, config_file: Optional[str] = None) -> Dict:
         """Load agents configuration from JSON file
@@ -5698,13 +6654,19 @@ User Request:
 
         cursor_bin = self.cursor_bin or "agent"
 
+        # Cursor CLI free plans require --model auto explicitly;
+        # omitting --model or passing an unrecognised name causes a
+        # "Named models unavailable" error.  Validate and default.
+        _cursor_default = os.getenv("CURSOR_DEFAULT_MODEL", "auto")
+        if not model or not self.get_model_from_name(model, "cursor"):
+            model = _cursor_default
+
         # -p is headless/print mode; --trust bypasses workspace prompts
         # --yolo auto-approves all tool calls (elevated mode)
         cmd = [cursor_bin, "-p", "--trust"]
         if mode == "elevated":
             cmd.append("--yolo")
-        if model:
-            cmd += ["--model", model]
+        cmd += ["--model", model]
         cmd += ["--workspace", agent_dir]
 
         # Check for existing cursor session to resume
@@ -6224,940 +7186,6 @@ User Request:
             if entry.get("handler"):
                 return entry["handler"](argument, session_data, n8n_session_id)
 
-        # Legacy slash command handlers (gradually migrate to registry above)
-        if command == "/help":
-            return """🆘 **Available Commands**
-
-**Orchestrator:**
-   • /capabilities - Show what the orchestrator can help with
-
-**Bash Commands:**
-   • !command - Execute bash command directly (e.g., !pwd, !ls -la)
-   • Commands run in current agent's directory with 10s timeout
-
-**Runtime Management:**
-   • /runtime list - Show available runtimes
-   • /runtime set (auto|copilot|opencode|claude|gemini|codex|devin|cursor) - Switch runtime
-   • /runtime current - Show current runtime
-
-**Model Management:**
-   • /model list - Show available models for current runtime
-   • /model set "model_name" - Switch model
-   • /model current - Show current model
-
-**Mode Management:**
-   • /mode current - Show current mode
-   • /mode elevated - Full access, auto-approve (no prompts)
-   • /mode restricted - Bounded access (default)
-   /mode sandboxed - Read-only, no external access
-   • /mode list - Show available modes
-
-**Agent Management:**
-   • /agent list - Show all available agents and their locations
-   • /agent set <agent_name> — switch to an agent and work with it.
-   • /agent current - Show current agent
-   • /agent invoke "agent_name" "prompt" - Delegate to sub-agent
-
-**Session:**
-   • /session reset - Reset session (preserves model, runtime, agent)
-   • /timeout or /timeout current - Show current timeout
-   • /timeout set [seconds] - Set timeout (30-3600 seconds / 1 hour max)
-   • /render or /render current - Show current render type
-   • /render set [text|markdown|html|telegram_html] - Set render type
-
-**Query Management:**
-   • /status - Check status of running query for this session
-   • /cancel - Cancel running query for this session
-
-**Scheduler:**
-   • /schedule list - List all scheduled jobs
-   • /schedule status - Scheduler health status
-   • /schedule add <name> | <schedule> | <task> - Create a new job
-   • /schedule info <job_id> - Show job details
-   • /schedule pause <job_id> - Pause a job
-   • /schedule resume <job_id> - Resume a paused job
-   • /schedule delete <job_id> - Delete a job
-   • /schedule logs <job_id> - View job logs
-   • /schedule results <job_id> - View execution results
-
-**Background Tasks:**
-   • /background <prompt> - Run a task in the background
-   • /background agent=<name> <prompt> - Override agent
-   • /background list - List your background tasks
-   • /background status <task_id> - Check task status
-   • /background kill <task_id> - Kill a running task
-
-**Secrets:**
-   • /secret list - List stored secret names
-   • /secret set <name> <value> - Store a secret (value never sent to LLM)
-   • /secret delete <name> - Delete a secret
-
-**System:**
-   • /update - Pull latest dev code and restart all dev services
-   • /update status - Show last update log
-
-**Auto-Delegation:**
-You can mention an agent in your prompt and it will auto-delegate:
-   • ask the family agent for Parkers Christmas ideas
-   • have the devops agent check production status
-   • this is in the projects agent, find the auth code
-
-**Examples:**
-   /capabilities
-   !pwd
-   !echo "Hello World"
-   !ls -la
-   /mode elevated
-   /runtime set gemini
-   /model set "gpt-5.2"
-   /agent set "family"
-   /agent invoke family "Find Christmas ideas for Parker"
-   ask the family agent what are Parkers Christmas ideas
-   have the devops agent check the server status
-"""
-
-        elif command == "/status":
-            # Check if there's a running query for this session
-            query_info = self.get_running_query(n8n_session_id)
-
-            if not query_info:
-                return "✓ No running query for this session"
-
-            # Check if process is still running
-            pid = query_info["pid"]
-            if not self.is_process_running(pid):
-                # Process finished but tracking wasn't cleaned up
-                self.clear_running_query(n8n_session_id)
-                return "✓ No running query for this session (last query has completed)"
-
-            # Process is running - show status
-            runtime = query_info.get("runtime", "unknown")
-            agent = query_info.get("agent", "unknown")
-            prompt_snippet = query_info.get("prompt", "")[:100]
-            start_time = query_info.get("start_time", 0)
-            elapsed = int(time.time() - start_time)
-            elapsed_min = elapsed // 60
-            elapsed_sec = elapsed % 60
-            last_output = query_info.get("last_output", "")
-
-            status_msg = f"""🔄 **Query Running**
-
-**Runtime:** {runtime}
-**Agent:** {agent}
-**PID:** {pid}
-**Elapsed Time:** {elapsed_min}m {elapsed_sec}s
-**Prompt:** {prompt_snippet}...
-
-**Recent Output:**
-{last_output[-self.MAX_OUTPUT_DISPLAY :] if last_output else "(no output yet)"}
-"""
-            return status_msg
-
-        elif command == "/cancel":
-            # Find and cancel running query
-            query_info = self.get_running_query(n8n_session_id)
-
-            if not query_info:
-                return "❌ No running query to cancel for this session"
-
-            pid = query_info["pid"]
-
-            # Check if process is still running
-            if not self.is_process_running(pid):
-                self.clear_running_query(n8n_session_id)
-                return "✓ No running query to cancel (query has already completed)"
-
-            # Kill the process
-            if self.kill_process(pid):
-                self.clear_running_query(n8n_session_id)
-                runtime = query_info.get("runtime", "unknown")
-                return f"✓ Cancelled running query (PID: {pid}, Runtime: {runtime})"
-            else:
-                return f"❌ Failed to cancel query (PID: {pid}). Process may have already terminated."
-
-        elif command == "/capabilities":
-            return self.get_capabilities()
-
-        elif command == "/runtime":
-            if not argument:
-                return "Usage: /runtime [list|set|current]"
-            if argument == "list":
-                return "🤖 **Available Runtimes**\n\n• `copilot` (GitHub Copilot)\n• `opencode` (OpenCode CLI)\n• `claude` (Claude Code CLI)\n• `gemini` (Google Gemini CLI)\n• `codex` (Codex CLI)\n• `devin` (Devin CLI)\n• `cursor` (Cursor Agent CLI)"
-            elif argument == "current":
-                return f"🤖 **Current Runtime:** `{current_runtime}`"
-            elif argument.startswith("set "):
-                new_runtime = argument[4:].strip().lower()
-                if new_runtime not in [
-                    "copilot",
-                    "opencode",
-                    "claude",
-                    "gemini",
-                    "codex",
-                    "devin",
-                    "cursor",
-                ]:
-                    return f"Unknown runtime: '{new_runtime}'. Use 'copilot', 'opencode', 'claude', 'gemini', 'codex', 'devin', or 'cursor'."
-
-                # Capture previous session state before any updates
-                prev_runtime = current_runtime
-                prev_session_id = session_data.get("session_id")
-
-                # Generate the new session ID up front so the handoff can reference it
-                new_session_id = str(uuid4())
-
-                # Prepare session handoff if the runtime is actually changing and
-                # there is prior history to hand off
-                if prev_runtime != new_runtime and prev_session_id:
-                    try:
-                        from session_handoff import SessionHandoff, _handoff_logger
-
-                        handoff = SessionHandoff()
-
-                        # Log the reason for handoff (user command: /runtime set)
-                        _handoff_logger.info(
-                            f"HANDOFF REASON: User executed '/runtime set {new_runtime}' command | "
-                            f"n8n_session={n8n_session_id} | "
-                            f"current_agent={session_data.get('agent', 'unknown')}"
-                        )
-
-                        handoff.export_transcript(n8n_session_id, prev_session_id)
-                        handoff.write_handoff_summary(
-                            n8n_session_id,
-                            new_session_id,
-                            prev_session_id,
-                            prev_runtime,
-                            new_runtime,
-                        )
-                        print(
-                            f"[Handoff] Prepared handoff: {prev_runtime} → {new_runtime} "
-                            f"(prev_session={prev_session_id}, new_session={new_session_id})",
-                            file=sys.stderr,
-                        )
-                    except Exception as _handoff_err:
-                        print(
-                            f"[Handoff] Warning: handoff preparation failed: {_handoff_err}",
-                            file=sys.stderr,
-                        )
-                        try:
-                            from session_handoff import _handoff_logger
-
-                            _handoff_logger.error(
-                                f"HANDOFF FAILED: {_handoff_err} | "
-                                f"prev_runtime={prev_runtime} new_runtime={new_runtime}"
-                            )
-                        except Exception:
-                            pass
-
-                self.update_session_field(n8n_session_id, "runtime", new_runtime)
-
-                # When switching runtime, reset the session ID to a new UUID since session formats are incompatible
-                # (e.g., OpenCode uses "ses_*" format, Claude uses UUID format, CODEX uses UUID format, etc.)
-                self.update_session_field(n8n_session_id, "session_id", new_session_id)
-
-                # When switching runtime, also reset the model to a default for that runtime
-                default_model = "gpt-5-mini"  # Default fallback
-                if new_runtime == "copilot":
-                    default_model = "gpt-5-mini"
-                elif new_runtime == "opencode":
-                    default_model = "opencode/gpt-5-nano"
-                elif new_runtime == "claude":
-                    default_model = "haiku"
-                elif new_runtime == "gemini":
-                    default_model = "gemini-1.5-flash"
-                elif new_runtime == "codex":
-                    default_model = "gpt-5.4"
-                elif new_runtime == "devin":
-                    default_model = os.getenv("DEVIN_DEFAULT_MODEL", "claude-sonnet-4")
-                elif new_runtime == "cursor":
-                    default_model = os.getenv("CURSOR_DEFAULT_MODEL", "auto")
-
-                self.update_session_field(n8n_session_id, "model", default_model)
-                return f"✓ Switched runtime to **{new_runtime}**. Model set to `{default_model}`. Session reset."
-
-        elif command == "/agent":
-            if not argument:
-                return "Usage: /agent [list|set|current|invoke]"
-            if argument == "list":
-                out = "# 🤖 Available Agents\n\n"
-                for k, v in self.AGENTS.items():
-                    out += f"### {k}\n{v['description']}\n\n**Location:** `{v['path']}`\n\n"
-                return out
-            elif argument == "current":
-                ag = session_data.get("agent", "devops")
-                info = self.AGENTS.get(ag, self.AGENTS["orchestrator"])
-                return f"Current Agent: **{ag}**\n{info['description']}"
-            elif argument.startswith("set "):
-                agent = argument[4:].strip().strip("\"'")
-                return self.set_agent(n8n_session_id, agent)
-            elif argument.startswith("invoke "):
-                # Parse: /agent invoke <agent_name> <prompt...>
-                invoke_args = argument[7:].strip()  # Remove 'invoke '
-                parts = invoke_args.split(None, 1)  # Split on first space
-                if len(parts) < 2:
-                    return "Usage: /agent invoke [agent_name] [prompt]"
-
-                agent_name = parts[0].strip("\"'")
-                sub_prompt = parts[1]
-
-                if agent_name not in self.AGENTS:
-                    available = ", ".join(self.AGENTS.keys())
-                    return f"Unknown agent: '{agent_name}'. Available: {available}"
-
-                # Invoke the sub-agent with a new session
-                print(
-                    f"[Agent] Invoking sub-agent '{agent_name}' with delegation",
-                    file=sys.stderr,
-                )
-                sub_session_id = str(uuid4())
-
-                # Save delegation context
-                delegation_data = {
-                    "session_id": sub_session_id,
-                    "model": session_data.get("model", "gpt-5-mini"),
-                    "agent": agent_name,
-                    "runtime": current_runtime,
-                    "is_delegation": True,
-                }
-
-                # Execute in sub-agent context
-                return self._execute_with_context(
-                    sub_prompt, delegation_data, n8n_session_id
-                )
-
-        elif command == "/model":
-            if not argument:
-                argument = "list"  # Default to list if no argument provided
-
-            # Handle model selection for the current runtime
-            effective_rt = current_runtime
-
-            if argument == "list" or argument.startswith("list "):
-                models_dict = self.get_models_for_runtime(effective_rt)
-                out = f"📋 **Available Models ({current_runtime})**\n\n"
-                if not models_dict:
-                    return (
-                        out
-                        + f"❌ No models available for {effective_rt}. Check CLI configuration."
-                    )
-                for cat in sorted(models_dict.keys()):
-                    out += f"**{cat}:**\n"
-                    for mid in sorted(models_dict[cat]):
-                        desc = self._get_model_description(mid, effective_rt)
-                        if desc:
-                            out += f"  • `{mid}` - {desc}\n"
-                        else:
-                            out += f"  • `{mid}`\n"
-                return out
-
-            elif argument == "current":
-                return (
-                    f"Current Model: `{session_data.get('model')}` ({current_runtime})"
-                )
-            elif argument.startswith("set "):
-                model_name = argument[4:].strip().strip('"')
-                model_id = self.get_model_from_name(model_name, effective_rt)
-                if not model_id:
-                    return f"Unknown model '{model_name}' for runtime {effective_rt}"
-                self.update_session_field(n8n_session_id, "model", model_id)
-                return f"✓ Switched to model `{model_id}`"
-
-        elif command == "/session":
-            if argument == "reset":
-                with self._session_map_lock:
-                    session_map = self.load_session_map()
-                    old_data = session_map.get(n8n_session_id)
-                    # Preserve user-selected config across reset
-                    preserved = {}
-                    if isinstance(old_data, dict):
-                        for key in (
-                            "model",
-                            "runtime",
-                            "agent",
-                            "timeout",
-                            "render_type",
-                            "channel",
-                            "bot_id",
-                            "identity",
-                            "permissions",
-                            "yolo_mode",
-                        ):
-                            if key in old_data and old_data[key] is not None:
-                                preserved[key] = old_data[key]
-                    # Build fresh session with new backend session ID
-                    new_data = {
-                        "session_id": str(uuid4()),
-                        "last_activity": time.time(),
-                    }
-                    new_data.update(preserved)
-                    session_map[n8n_session_id] = new_data
-                    self.save_session_map(session_map)
-                parts = ["\u2713 Session reset. Next message starts fresh."]
-                if (
-                    preserved.get("model")
-                    or preserved.get("runtime")
-                    or preserved.get("agent")
-                ):
-                    kept = []
-                    if "model" in preserved:
-                        kept.append("model=`" + preserved["model"] + "`")
-                    if "runtime" in preserved:
-                        kept.append("runtime=`" + preserved["runtime"] + "`")
-                    if "agent" in preserved:
-                        kept.append("agent=`" + preserved["agent"] + "`")
-                    parts.append("Preserved: " + ", ".join(kept) + ".")
-                return " ".join(parts)
-
-        elif command == "/timeout":
-            if not argument:
-                argument = "current"  # Default to showing current timeout
-
-            if argument == "current":
-                # Get timeout from session, or show default
-                session_timeout = session_data.get("timeout")
-                if session_timeout:
-                    return f"⏱️ **Current Timeout:** `{session_timeout}` seconds"
-                else:
-                    return f"⏱️ **Current Timeout:** `{self.command_timeout}` seconds (default)"
-
-            elif argument.startswith("set "):
-                timeout_str = argument[4:].strip()
-                try:
-                    timeout_seconds = int(timeout_str)
-                    # Validate timeout (minimum 30 seconds, maximum 3600 seconds / 1 hour)
-                    if timeout_seconds < 30:
-                        return f"❌ Timeout must be at least 30 seconds. You specified: {timeout_seconds}s"
-                    if timeout_seconds > 3600:
-                        return f"❌ Timeout must not exceed 3600 seconds (1 hour). You specified: {timeout_seconds}s"
-
-                    # Store timeout in session
-                    self.update_session_field(
-                        n8n_session_id, "timeout", str(timeout_seconds)
-                    )
-                    return (
-                        f"✓ Timeout set to `{timeout_seconds}` seconds for this session"
-                    )
-                except ValueError:
-                    return f"❌ Invalid timeout value '{timeout_str}'. Please provide a number (30-600 seconds)"
-            else:
-                return "Usage: `/timeout` or `/timeout current` to show current timeout\n       `/timeout set [seconds]` to set a new timeout (30-3600 seconds)"
-
-        elif command == "/render":
-            if not argument:
-                argument = "current"  # Default to showing current render type
-
-            if argument == "current":
-                # Get render type from session, or show default
-                render_type = session_data.get("render_type", "text")
-                return f"🎨 **Current Render Type:** `{render_type}`"
-
-            elif argument.startswith("set "):
-                render_type = argument[4:].strip().lower()
-                valid_types = ["text", "markdown", "html", "telegram_html"]
-                if render_type not in valid_types:
-                    return f"❌ Invalid render type '{render_type}'. Valid options: {', '.join(valid_types)}"
-
-                # Store render type in session
-                self.update_session_field(n8n_session_id, "render_type", render_type)
-                return f"✓ Render type set to `{render_type}` for this session"
-            else:
-                return "Usage: `/render` or `/render current` to show current render type\n       `/render set [text|markdown|html|telegram_html]` to set render type"
-
-        elif command == "/notifications":
-            if not argument:
-                argument = "current"
-
-            # Resolve identity for per-user preference store
-            _notif_identity = self._bg_identity or session_data.get("identity")
-            _notif_channel = session_data.get("channel", "webui")
-
-            if argument == "current":
-                # Check global preference first, then per-identity, then session
-                if self._notification_mgr:
-                    if self._notification_mgr.is_muted("_global"):
-                        pref = "off"
-                    elif _notif_identity:
-                        pref = self._notification_mgr.get_user_pref(_notif_identity)
-                    else:
-                        pref = session_data.get("notification_preference", "all")
-                else:
-                    pref = session_data.get("notification_preference", "all")
-                status = "ON (All updates)" if pref == "all" else "OFF (WebUI only)"
-                return f"🔔 **Background Notifications:** `{status}`"
-
-            elif argument in ["on", "all"]:
-                self.update_session_field(
-                    n8n_session_id, "notification_preference", "all"
-                )
-                if self._notification_mgr:
-                    # Store under specific identity if available
-                    if _notif_identity:
-                        self._notification_mgr.set_user_pref(
-                            _notif_identity, _notif_channel, "all"
-                        )
-                    # Always store global preference so it applies across all channels
-                    self._notification_mgr.set_user_pref(
-                        "_global", _notif_channel, "all"
-                    )
-                return "✓ Background task notifications enabled for Telegram/WebEx."
-
-            elif argument in ["off", "mute"]:
-                self.update_session_field(
-                    n8n_session_id, "notification_preference", "off"
-                )
-                if self._notification_mgr:
-                    if _notif_identity:
-                        self._notification_mgr.set_user_pref(
-                            _notif_identity, _notif_channel, "off"
-                        )
-                    # Always store global preference so it applies across all channels
-                    self._notification_mgr.set_user_pref(
-                        "_global", _notif_channel, "off"
-                    )
-                return "✓ Background task notifications muted for Telegram/WebEx (WebUI only)."
-            else:
-                return "Usage: `/notifications [on|off]` to toggle background task notifications."
-
-        elif command == "/mode":
-            if not argument:
-                argument = "current"  # Default to showing current mode
-
-            if argument == "current":
-                _perms = session_data.get("permissions", {})
-                _pm = (
-                    _perms.get("mode", "restricted")
-                    if isinstance(_perms, dict)
-                    else "restricted"
-                )
-                if _pm not in ("elevated", "restricted", "sandboxed"):
-                    _pm = (
-                        "elevated"
-                        if session_data.get("yolo_mode") == "on"
-                        else "restricted"
-                    )
-                return f"\u26a1 **Current Mode:** `{_pm}`"
-
-            elif argument == "list":
-                return (
-                    "\U0001f4cb **Available Permission Modes:**\n\n"
-                    "\u2022 `elevated` \u26a1 - Full access, auto-approve all operations\n"
-                    "\u2022 `restricted` \U0001f512 - Bounded to agent directory (default)\n"
-                    "\u2022 `sandboxed` \U0001f3d6\ufe0f - Read-only, no external access"
-                )
-
-            elif argument in ("elevated", "yolo"):
-                _cur_perms = session_data.get("permissions", {})
-                if not isinstance(_cur_perms, dict):
-                    _cur_perms = {}
-                _cur_perms["mode"] = "elevated"
-                self.update_session_field(n8n_session_id, "permissions", _cur_perms)
-                self.update_session_field(n8n_session_id, "yolo_mode", "on")
-                return "\u2713 Elevated mode enabled \u26a1 - auto-approving actions without prompts"
-
-            elif argument == "restricted":
-                _cur_perms = session_data.get("permissions", {})
-                if not isinstance(_cur_perms, dict):
-                    _cur_perms = {}
-                _cur_perms["mode"] = "restricted"
-                self.update_session_field(n8n_session_id, "permissions", _cur_perms)
-                self.update_session_field(n8n_session_id, "yolo_mode", "restricted")
-                return (
-                    "\u2713 Restricted mode enabled \U0001f512 - normal prompts enabled"
-                )
-
-            elif argument == "sandboxed":
-                _cur_perms = session_data.get("permissions", {})
-                if not isinstance(_cur_perms, dict):
-                    _cur_perms = {}
-                _cur_perms["mode"] = "sandboxed"
-                self.update_session_field(n8n_session_id, "permissions", _cur_perms)
-                self.update_session_field(n8n_session_id, "yolo_mode", "restricted")
-                return "\u2713 Sandboxed mode enabled \U0001f3d6\ufe0f - read-only, no external access"
-
-            else:
-                return (
-                    "Usage: `/mode current` - Show current mode\n"
-                    "       `/mode list` - Show available modes\n"
-                    "       `/mode elevated` - Full access mode\n"
-                    "       `/mode restricted` - Bounded access mode\n"
-                    "       `/mode sandboxed` - Read-only mode"
-                )
-
-        elif command == "/schedule":
-            if not SCHEDULER_ENABLED:
-                return "⚠️ Scheduler is not enabled on this instance."
-
-            try:
-                scheduler = _get_scheduler()
-            except Exception as e:
-                return f"⚠️ Scheduler unavailable: {e}"
-
-            sub = (argument or "").strip()
-            sub_lower = sub.lower()
-
-            # /schedule or /schedule list
-            if not sub or sub_lower == "list":
-                result = scheduler.list_jobs()
-                jobs = result.get("result", [])
-                if not jobs:
-                    return "📅 **Scheduled Jobs**\n\nNo jobs scheduled."
-                lines = ["📅 **Scheduled Jobs**\n"]
-                for j in jobs:
-                    status = "▶️" if j.get("enabled") else "⏸"
-                    recurring = "🔁" if j.get("recurring") else "1️⃣"
-                    lines.append(
-                        f"{status} {recurring} `{j['id']}` — **{j['name']}**\n"
-                        f"   Schedule: `{j['schedule']}`\n"
-                        f"   Next run: `{j.get('next_run','?')}`\n"
-                        f"   Agent: `{j.get('agent','?')}` / Runtime: `{j.get('runtime','?')}`"
-                    )
-                return "\n\n".join(lines)
-
-            # /schedule status
-            elif sub_lower == "status":
-                result = scheduler.doctor()
-                info = result.get("result", result)
-                lines = ["🩺 **Scheduler Status**\n"]
-                for k, v in info.items():
-                    lines.append(f"• **{k}**: `{v}`")
-                return "\n".join(lines)
-
-            # /schedule pause <job_id>
-            elif sub_lower.startswith("pause "):
-                job_id = sub[6:].strip()
-                result = scheduler.pause_job(job_id)
-                if result.get("success"):
-                    return f"⏸ Job `{job_id}` paused."
-                return f"❌ {result.get('message', 'Failed to pause job.')}"
-
-            # /schedule resume <job_id>
-            elif sub_lower.startswith("resume "):
-                job_id = sub[7:].strip()
-                result = scheduler.resume_job(job_id)
-                if result.get("success"):
-                    return f"▶️ Job `{job_id}` resumed."
-                return f"❌ {result.get('message', 'Failed to resume job.')}"
-
-            # /schedule delete <job_id>
-            elif sub_lower.startswith("delete ") or sub_lower.startswith("remove "):
-                job_id = sub.split(" ", 1)[1].strip()
-                result = scheduler.delete_job(job_id)
-                if result.get("success"):
-                    return f"🗑️ Job `{job_id}` deleted."
-                return f"❌ {result.get('message', 'Failed to delete job.')}"
-
-            # /schedule info <job_id>
-            elif sub_lower.startswith("info "):
-                job_id = sub[5:].strip()
-                result = scheduler.get_job(job_id)
-                if not result.get("success"):
-                    return f"❌ {result.get('message', 'Job not found.')}"
-                j = result["result"]
-                cron_line = f"\n• **Cron:** `{j['cron']}`" if j.get("cron") else ""
-                return (
-                    f"📋 **Job: {j['name']}**\n\n"
-                    f"• **ID:** `{j['id']}`\n"
-                    f"• **Schedule:** `{j['schedule']}`{cron_line}\n"
-                    f"• **Next run:** `{j.get('next_run','?')}`\n"
-                    f"• **Last run:** `{j.get('last_run','never')}`\n"
-                    f"• **Agent:** `{j.get('agent','?')}` / Runtime: `{j.get('runtime','?')}`\n"
-                    f"• **Recurring:** {'Yes 🔁' if j.get('recurring') else 'No 1️⃣'}\n"
-                    f"• **Enabled:** {'Yes ▶️' if j.get('enabled') else 'No ⏸'}\n"
-                    f"• **Task:** {j.get('task','')}"
-                )
-
-            # /schedule logs <job_id>
-            elif sub_lower.startswith("logs "):
-                job_id = sub[5:].strip()
-                result = scheduler.get_logs(job_id)
-                if not result.get("success"):
-                    return f"❌ {result.get('message', 'No logs found.')}"
-                logs = result.get("result", [])
-                if not logs:
-                    return f"📜 No logs for job `{job_id}`."
-                recent = logs[-20:]  # last 20 entries
-                lines = [f"📜 **Logs for `{job_id}`** (last {len(recent)}):\n"]
-                lines.extend(f"`{entry}`" for entry in recent)
-                return "\n".join(lines)
-
-            # /schedule results <job_id>
-            elif sub_lower.startswith("results "):
-                job_id = sub[8:].strip()
-                result = scheduler.get_results(job_id)
-                if not result.get("success"):
-                    return f"❌ {result.get('message', 'No results found.')}"
-                results = result.get("result", [])
-                if not results:
-                    return f"📊 No results for job `{job_id}` yet."
-                lines = [f"📊 **Results for `{job_id}`** ({len(results)} runs):\n"]
-                for r in results[-5:]:  # last 5 runs
-                    status = "✅" if r.get("success") else "❌"
-                    lines.append(
-                        f"{status} `{r.get('timestamp','?')}` — {r.get('summary','')[:100]}"
-                    )
-                return "\n".join(lines)
-
-            # /schedule add <name> | <schedule> | <task>
-            # e.g.: /schedule add Daily Report | every day at 9am | generate daily summary
-            elif sub_lower.startswith("add "):
-                raw = sub[4:].strip()
-                parts = [p.strip() for p in raw.split("|")]
-                if len(parts) < 3:
-                    return (
-                        "Usage: `/schedule add <name> | <schedule> | <task>`\n\n"
-                        "Example: `/schedule add Daily Report | every day at 9am | generate a daily summary`\n"
-                        "Example: `/schedule add One-time Ping | in 10 minutes | say hello`"
-                    )
-                name, schedule_str, task = parts[0], parts[1], parts[2]
-                recurring = not any(w in schedule_str.lower() for w in ["in ", "once"])
-                result = scheduler.schedule_task(
-                    name=name,
-                    schedule=schedule_str,
-                    task=task,
-                    recurring=recurring,
-                )
-                if result.get("success"):
-                    j = result["result"]
-                    cron_line = f"\n• **Cron:** `{j['cron']}`" if j.get("cron") else ""
-                    return (
-                        f"✅ **Job scheduled!**\n\n"
-                        f"• **ID:** `{j['id']}`\n"
-                        f"• **Name:** {j['name']}\n"
-                        f"• **Schedule:** `{j['schedule']}`{cron_line}\n"
-                        f"• **Next run:** `{j.get('next_run','?')}`\n"
-                        f"• **Recurring:** {'Yes 🔁' if j.get('recurring') else 'No 1️⃣'}"
-                    )
-                return f"❌ {result.get('message', 'Failed to schedule job.')}"
-
-            else:
-                return (
-                    "📅 **Schedule Commands**\n\n"
-                    "• `/schedule list` — List all scheduled jobs\n"
-                    "• `/schedule status` — Scheduler health status\n"
-                    "• `/schedule add <name> | <schedule> | <task>` — Create a new job\n"
-                    "• `/schedule info <job_id>` — Show job details\n"
-                    "• `/schedule pause <job_id>` — Pause a job\n"
-                    "• `/schedule resume <job_id>` — Resume a paused job\n"
-                    "• `/schedule delete <job_id>` — Delete a job\n"
-                    "• `/schedule logs <job_id>` — View job logs\n"
-                    "• `/schedule results <job_id>` — View job execution results\n\n"
-                    "**Examples:**\n"
-                    "`/schedule add Daily Report | every day at 9am | generate daily summary`\n"
-                    "`/schedule pause daily-report`\n"
-                    "`/schedule delete daily-report`"
-                )
-
-        elif command == "/background":
-            sub = (argument or "").strip()
-            if not sub or sub.lower() == "help":
-                return (
-                    "⚡ **Background Task Commands**\n\n"
-                    "• `/background <prompt>` — Run a task in the background\n"
-                    "• `/background agent=devops <prompt>` — Override agent\n"
-                    "• `/background runtime=claude model=sonnet <prompt>` — Override runtime/model\n"
-                    "• `/background timeout=600 <prompt>` — Override timeout (seconds)\n"
-                    "• `/background list` — List your background tasks\n"
-                    "• `/background status <task_id>` — Check task status\n"
-                    "• `/background kill <task_id>` — Kill a running task\n"
-                    "• `/background steer <task_id> <instruction>` — Steer a running task\n\n"
-                    "Background tasks run in separate sessions and don't block your chat.\n"
-                    "Monitor them in the ⚡ Tasks tab in the sidebar."
-                )
-
-            sub_lower = sub.lower()
-
-            if sub_lower == "list":
-                tasks = self._bg_task_mgr.list_all_tasks()
-                if not tasks:
-                    return "⚡ **Background Tasks**\n\nNo background tasks."
-                icons = {
-                    "running": "🟢",
-                    "completed": "✅",
-                    "failed": "❌",
-                    "killed": "🛑",
-                }
-                lines = ["⚡ **Background Tasks**\n"]
-                for t in tasks:
-                    icon = icons.get(t["status"], "❓")
-                    lines.append(
-                        f"{icon} `{t['task_id']}` — **{t['status']}**\n"
-                        f"   Agent: `{t['agent']}` | Prompt: {t['prompt'][:80]}..."
-                    )
-                return "\n\n".join(lines)
-
-            if sub_lower.startswith("status "):
-                tid = sub[7:].strip()
-                task = self._bg_task_mgr.get_task(tid)
-                if not task:
-                    return f"❌ Task `{tid}` not found."
-                icons = {
-                    "running": "🟢",
-                    "completed": "✅",
-                    "failed": "❌",
-                    "killed": "🛑",
-                }
-                icon = icons.get(task["status"], "❓")
-                elapsed = ""
-                if task["status"] == "running":
-                    try:
-                        ct = time.mktime(
-                            time.strptime(task["created_at"], "%Y-%m-%dT%H:%M:%SZ")
-                        )
-                        secs = int(time.time() - ct)
-                        elapsed = f"\n**Elapsed:** {secs // 60}m {secs % 60}s"
-                    except Exception:
-                        pass
-                return (
-                    f"{icon} **Task: `{task['task_id']}`**\n\n"
-                    f"**Status:** {task['status']}\n"
-                    f"**Agent:** `{task['agent']}` | Runtime: `{task['runtime']}` | Model: `{task['model']}`\n"
-                    f"**Prompt:** {task['prompt'][:200]}"
-                    f"{elapsed}"
-                )
-
-            if sub_lower.startswith("steer "):
-                parts = sub[6:].strip().split(None, 1)
-                if len(parts) < 2:
-                    return "Usage: `/background steer <task_id> <instruction>`"
-                tid, instruction = parts
-                task = self._bg_task_mgr.get_task(tid)
-                if not task:
-                    return f"Task `{tid}` not found."
-                if task["status"] != "running":
-                    return f"Task `{tid}` is {task['status']}, not running."
-                self._bg_task_mgr.write_steering(tid, instruction)
-                return (
-                    f"\U0001f3af **Steering sent to `{tid}`**\n\n"
-                    f"Instruction: {instruction[:200]}"
-                )
-
-            if sub_lower.startswith("kill "):
-                tid = sub[5:].strip()
-                if self._bg_task_mgr.kill_task(tid):
-                    return f"🛑 Task `{tid}` killed."
-                return f"❌ Could not kill task `{tid}` (not found or not running)."
-
-            # Otherwise it's a prompt to run in the background
-            # Parse optional overrides: agent=X runtime=Y model=Z timeout=N
-            bg_agent = session_data.get("agent", "orchestrator")
-            bg_runtime = session_data.get("runtime", "copilot")
-            bg_model = session_data.get("model", "gpt-5-mini")
-            bg_timeout_override = None
-            bg_prompt_parts = []
-            for word in sub.split():
-                if word.startswith("agent="):
-                    bg_agent = word[6:]
-                elif word.startswith("runtime="):
-                    bg_runtime = word[8:]
-                elif word.startswith("model="):
-                    bg_model = word[6:]
-                elif word.startswith("timeout="):
-                    try:
-                        bg_timeout_override = int(word[8:])
-                    except ValueError:
-                        pass
-                else:
-                    bg_prompt_parts.append(word)
-            bg_prompt = " ".join(bg_prompt_parts)
-
-            if not bg_prompt:
-                return "❌ No prompt provided. Usage: `/background <prompt>`"
-
-            channel = session_data.get("channel", "webui")
-            identity = self._bg_identity or "unknown"
-
-            running = self._bg_task_mgr.count_running(channel, identity)
-            if running >= BackgroundTaskManager.MAX_TASKS_PER_USER:
-                return f"❌ Maximum {BackgroundTaskManager.MAX_TASKS_PER_USER} concurrent background tasks allowed."
-
-            bg_timeout = (
-                bg_timeout_override
-                if bg_timeout_override is not None
-                else get_bg_command_timeout()
-            )
-            task_id = f"bg_{str(uuid4())[:8]}"
-            bg_session_id = f"bg_{str(uuid4())[:8]}"
-            self._bg_task_mgr.create_task(
-                task_id=task_id,
-                session_id=bg_session_id,
-                user_identity=identity,
-                channel=channel,
-                agent=bg_agent,
-                runtime=bg_runtime,
-                model=bg_model,
-                prompt=bg_prompt,
-                origin_session_id=n8n_session_id,
-            )
-            # Launch in background thread
-            import concurrent.futures as _cf
-
-            _cf.ThreadPoolExecutor(max_workers=1).submit(
-                self._execute_background_task,
-                task_id,
-                bg_session_id,
-                bg_prompt,
-                bg_agent,
-                bg_runtime,
-                bg_model,
-                channel,
-                bg_timeout,
-            )
-
-            return (
-                f"⚡ **Background task started!**\n\n"
-                f"• **Task ID:** `{task_id}`\n"
-                f"• **Agent:** `{bg_agent}` | Runtime: `{bg_runtime}` | Model: `{bg_model}`\n"
-                f"• **Timeout:** `{bg_timeout}s` ({bg_timeout // 60}m)\n"
-                f"• **Prompt:** {bg_prompt[:150]}\n\n"
-                f"Check the ⚡ Tasks tab or use `/background status {task_id}` to monitor."
-            )
-
-        elif command in ("/update", "/upgrade", "/pull"):
-            sub = (argument or "").strip().lower()
-
-            # Detect environment from this file's location
-            _repo_dir = os.path.dirname(os.path.abspath(__file__))
-            _is_dev = _repo_dir.endswith("-dev")
-            _env_label = "dev" if _is_dev else "prod"
-            _log_path = "/tmp/wee-update.log" if _is_dev else "/tmp/wee-update-prod.log"
-            _branch = "dev" if _is_dev else "main"
-
-            if sub == "status":
-                try:
-                    with open(_log_path) as f:
-                        tail = f.readlines()[-30:]
-                    return f"📋 **Last update log** (`{_log_path}`):\n```\n{''.join(tail)}```"
-                except FileNotFoundError:
-                    return "ℹ️ No update log found. No update has been run yet."
-                except Exception as e:
-                    return f"❌ Error reading update log: {e}"
-
-            if sub == "help":
-                return (
-                    f"🔄 **Update Commands** ({_env_label})\n\n"
-                    f"• `/update` — Pull latest code from `{_branch}` and restart all {_env_label} services\n"
-                    f"• `/update status` — Show last update log\n"
-                    f"• `/update help` — This message\n\n"
-                    f"Aliases: `/upgrade`, `/pull`\n\n"
-                    f"The update runs fully detached — it survives the service restart.\n"
-                    f"You'll get a Telegram notification when it completes."
-                )
-
-            # Launch the detached update process
-            try:
-                from update_launcher import launch_update
-
-                pid = launch_update()
-            except Exception as e:
-                return f"❌ Failed to launch update: {e}"
-
-            return (
-                f"🔄 **Update started** (PID: `{pid}`)\n\n"
-                f"Pulling latest `{_branch}` and restarting {_env_label} services.\n"
-                f"I may go offline briefly — you will receive a Telegram notification when complete.\n\n"
-                f"Log: `{_log_path}`\n"
-                f"Check status later: `/update status`"
-            )
-
         # --- Execution ---
 
         # Prepare for execution
@@ -7272,7 +7300,6 @@ You can mention an agent in your prompt and it will auto-delegate:
 
         return output
 
-
 def _check_command_result(result: str, error_keywords: List[str]) -> None:
     """Helper function to check command results and exit on error
 
@@ -7288,13 +7315,11 @@ def _check_command_result(result: str, error_keywords: List[str]) -> None:
             print(result, file=sys.stderr)
             sys.exit(1)
 
-
 # ---------------------------------------------------------------------------
 # FastAPI Application
 # ---------------------------------------------------------------------------
 
 _api_auth_manager: Optional["AuthManager"] = None
-
 
 def _send_pairing_code(channel: str, identity: str, code: str) -> bool:
     """Deliver a pairing code. Returns True on success, False on failure."""
@@ -7361,7 +7386,6 @@ def _send_pairing_code(channel: str, identity: str, code: str) -> bool:
     except Exception as exc:  # noqa: BLE001
         print(f"[API] Warning: could not send pairing code via {channel}: {exc}")
 
-
 def _get_telegram_username(user_id: str):
     """Look up @username for a numeric Telegram user_id in telegram_config.json.
     Returns the username string (without @), or None if not found."""
@@ -7375,7 +7399,6 @@ def _get_telegram_username(user_id: str):
         return username.lstrip("@") if username else None
     except Exception:
         return None
-
 
 def _ddg_image_search(query: str, max_results: int = 4) -> list:
     """Fetch image results from DuckDuckGo without an API key.
@@ -7433,7 +7456,6 @@ def _ddg_image_search(query: str, max_results: int = 4) -> list:
     except Exception:
         return []
 
-
 def _resolve_telegram_identity(username: str):
     """Reverse-lookup @username in telegram_config.json user_pairings.
     Returns numeric user_id string, or None if not found (user must message bot first).
@@ -7449,7 +7471,6 @@ def _resolve_telegram_identity(username: str):
         return None
     except Exception:
         return None
-
 
 def create_api_app():  # noqa: C901 – factory kept in one place intentionally
     """Factory that builds and returns the FastAPI application."""
@@ -8075,7 +8096,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                     "directories": {"allow_read": [], "allow_write": [], "deny": []},
                     "tools": {"allow": ["*"], "deny": []},
                     "network": {"allow_urls": ["*"], "deny_urls": []},
-                    "mcp": {"allow": [], "deny": ["*"]},
+                    "mcp": {"allow": ["*"], "deny": []},
                 },
             )
             session_mgr.update_session_field(session_id, "permissions", default_perms)
@@ -9260,6 +9281,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         timeout: int = None,
         notify: bool = True,
         permission_mode: str = "restricted",
+        memory_injected: bool = False,
     ):
         """Blocking function that runs a background task in a subprocess.
         Called from a thread pool executor.
@@ -9527,7 +9549,9 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 channel=channel,
                 bg_identity=user_identity,
             )
-
+            # Track memory injection state in session so compaction re-inject works
+            if memory_injected:
+                session_mgr.update_session_field(session_id, "memory_injected", True)
 
             # -- Inject steering check instruction ----------------------------
             steering_path = bg_task_mgr.get_steering_path(task_id)
@@ -9609,11 +9633,18 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                     if hasattr(session_mgr, "cursor_bin") and session_mgr.cursor_bin
                     else (_which_bin("agent") or "agent")
                 )
+                # Validate cursor model - free plans require "auto"
+                _cursor_model = model
+                if not _cursor_model or not session_mgr.get_model_from_name(
+                    _cursor_model, "cursor"
+                ):
+                    _cursor_model = os.environ.get(
+                        "CURSOR_DEFAULT_MODEL", "auto"
+                    )
                 cmd = [_cursor_bin, "-p", "--trust"]
                 if permission_mode == "elevated":
                     cmd.append("--yolo")
-                if model:
-                    cmd.extend(["--model", model])
+                cmd.extend(["--model", _cursor_model])
                 cmd.extend(["--workspace", agent_dir])
                 cmd.extend(["--", context_prompt])
             else:
@@ -9641,7 +9672,12 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             ).get("path", os.getcwd())
 
             proc_timeout = (timeout or 900) + 30
-            env = {**os.environ, "COPILOT_AGENT": agent, "COPILOT_RUNTIME": runtime}
+            env = {
+                **os.environ,
+                "COPILOT_AGENT": agent,
+                "COPILOT_RUNTIME": runtime,
+                "WEE_AGENT_DIR": agent_dir,
+            }
 
             # Use Popen for incremental output capture
             process = subprocess.Popen(
@@ -9980,6 +10016,29 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 session_pref = defaults.get("notification_preference", "all")
                 notify_pref = session_pref != "off"
 
+        # --- Per-agent memory injection for top-level background tasks ---
+        # Sub-tasks dispatched from inside a bg task have origin_session_id set;
+        # skip injection for those to avoid double-injection.
+        effective_prompt = body.prompt
+        if not body.origin_session_id:
+            try:
+                from memory.inject import get_memory_context, prepend_memory
+
+                _agent_cfg = session_mgr.AGENTS.get(
+                    agent, session_mgr.AGENTS.get("orchestrator", {})
+                )
+                _agent_path = _agent_cfg.get("path", "")
+                _mem_ctx = get_memory_context(agent_path=_agent_path)
+                if _mem_ctx:
+                    effective_prompt = prepend_memory(body.prompt, _mem_ctx)
+                    print(
+                        f"[Memory] Injected {len(_mem_ctx)} chars for "
+                        f"agent={agent} path={_agent_path}",
+                        flush=True,
+                    )
+            except Exception as _mem_exc:
+                print(f"[Memory] Injection skipped: {_mem_exc}", flush=True)
+
         # Check concurrent limit — queue instead of rejecting
         running = bg_task_mgr.count_running(channel, identity, agent)
         agent_config = session_mgr.AGENTS.get(agent, {})
@@ -9996,7 +10055,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 agent=agent,
                 runtime=runtime,
                 model=model,
-                prompt=body.prompt,
+                prompt=effective_prompt,
                 status="queued",
                 timeout=bg_timeout,
                 notify=notify_pref,
@@ -10027,7 +10086,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             agent=agent,
             runtime=runtime,
             model=model,
-            prompt=body.prompt,
+            prompt=effective_prompt,
             status="running",
             timeout=bg_timeout,
             notify=notify_pref,
@@ -10041,12 +10100,14 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
 
         # Run in background thread using shared executor
         loop = asyncio.get_running_loop()
+        # effective_prompt != body.prompt means memory was injected for this task
+        _memory_was_injected = effective_prompt != body.prompt
         loop.run_in_executor(
             bg_executor,  # Use shared executor instead of creating new one
             _run_background_task,
             task_id,
             session_id,
-            body.prompt,
+            effective_prompt,
             agent,
             runtime,
             model,
@@ -10055,6 +10116,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             bg_timeout,
             notify_pref,
             perm_mode,
+            _memory_was_injected,
         )
 
         return {
@@ -10258,7 +10320,6 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         else:
             bg_task_mgr.delete_task(task_id)
             return {"task_id": task_id, "action": "deleted"}
-
 
     # --- Background Task Steering ---
 
@@ -11988,7 +12049,6 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         except Exception as e:
             raise HTTPException(status_code=500, detail=str(e))
 
-
     # --- Session Permissions API ---
     @app.get("/api/v1/sessions/{session_id}/permissions")
     async def get_session_permissions(session_id: str, request: Request):
@@ -12013,7 +12073,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 "directories": {"allow_read": [], "allow_write": [], "deny": []},
                 "tools": {"allow": ["*"], "deny": []},
                 "network": {"allow_urls": ["*"], "deny_urls": []},
-                "mcp": {"allow": [], "deny": ["*"]},
+                "mcp": {"allow": ["*"], "deny": []},
             },
         )
 
@@ -12066,7 +12126,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                         },
                         "tools": {"allow": ["*"], "deny": []},
                         "network": {"allow_urls": ["*"], "deny_urls": []},
-                        "mcp": {"allow": [], "deny": ["*"]},
+                        "mcp": {"allow": ["*"], "deny": []},
                     },
                 )
             current_perms["mode"] = new_mode
@@ -12581,7 +12641,205 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 status_code=500, detail=f"Failed to list voices: {str(exc)[:200]}"
             )
 
-    # --- AI Media ─────────────────────────────────────────────────────────────
+    # --- Per-Agent Memory ─────────────────────────────────────────────────
+
+    class DailyNoteRequest(BaseModel):
+        content: str
+        agent: Optional[str] = None
+
+        @field_validator("content")
+        @classmethod
+        def validate_content(cls, v):
+            if not v or not v.strip():
+                raise ValueError("Content must not be empty")
+            if len(v) > 10000:
+                raise ValueError("Content must be 10,000 characters or less")
+            return v
+
+    @app.post("/api/v1/memory/daily")
+    async def append_daily_note_api(body: DailyNoteRequest, request: Request):
+        """Append a timestamped entry to an agent's daily notes."""
+        await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        from memory.daily import append_daily_note as _append_note
+
+        agent_path = None
+        if body.agent:
+            agent_cfg = session_mgr.AGENTS.get(body.agent)
+            if not agent_cfg:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"Unknown agent: {body.agent}",
+                )
+            agent_path = agent_cfg.get("path", "")
+        else:
+            orch = session_mgr.AGENTS.get("orchestrator", {})
+            agent_path = orch.get("path", "")
+
+        note_file = _append_note(body.content, agent_path=agent_path)
+        return {
+            "status": "ok",
+            "file": str(note_file),
+            "agent": body.agent or "orchestrator",
+        }
+
+    # --- Memory Promotion ─────────────────────────────────────────────────────
+
+    MEMORY_PROMOTER_SCRIPT = Path("/opt/foster-skills/memory-promoter/memory_promoter.py")
+
+    class PromoteMemoryRequest(BaseModel):
+        agent: Optional[str] = None
+
+    @app.post("/api/v1/memory/promote")
+    async def promote_memory(body: PromoteMemoryRequest, request: Request):
+        """Trigger memory promotion for a single agent (or orchestrator).
+
+        Spawns memory_promoter.py with the appropriate WEE_AGENT_DIR env var.
+        When agent is omitted, promotes orchestrator memory (/opt/memories/).
+        When agent is provided, looks up the agent path from agents.json.
+        """
+        await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+
+        agent_name = body.agent or "orchestrator"
+        if body.agent:
+            agent_cfg = session_mgr.AGENTS.get(body.agent)
+            if not agent_cfg:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"Unknown agent: {body.agent}",
+                )
+            agent_path = agent_cfg.get("path", "")
+        else:
+            orch = session_mgr.AGENTS.get("orchestrator", {})
+            agent_path = orch.get("path", "")
+
+        if not MEMORY_PROMOTER_SCRIPT.exists():
+            raise HTTPException(
+                status_code=503,
+                detail=f"Memory promoter script not found: {MEMORY_PROMOTER_SCRIPT}",
+            )
+
+        env = os.environ.copy()
+        if agent_path:
+            env["WEE_AGENT_DIR"] = agent_path
+
+        loop = asyncio.get_event_loop()
+        try:
+            result = await loop.run_in_executor(
+                None,
+                lambda: subprocess.run(
+                    [sys.executable, str(MEMORY_PROMOTER_SCRIPT)],
+                    capture_output=True,
+                    text=True,
+                    timeout=120,
+                    env=env,
+                ),
+            )
+            return {
+                "status": "ok",
+                "agent": agent_name,
+                "agent_path": agent_path,
+                "stdout": result.stdout[-2000:] if result.stdout else "",
+                "stderr": result.stderr[-1000:] if result.stderr else "",
+                "returncode": result.returncode,
+            }
+        except subprocess.TimeoutExpired:
+            raise HTTPException(
+                status_code=504,
+                detail=f"Memory promotion timed out for agent: {agent_name}",
+            )
+        except Exception as exc:
+            raise HTTPException(
+                status_code=500,
+                detail=f"Memory promotion failed for {agent_name}: {exc}",
+            )
+
+    @app.post("/api/v1/memory/promote-all")
+    async def promote_all_agents_memory(request: Request):
+        """Trigger memory promotion for ALL agents defined in agents.json.
+
+        Iterates over every agent in the config and runs memory_promoter.py
+        for each one, including the orchestrator.
+        """
+        await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+
+        if not MEMORY_PROMOTER_SCRIPT.exists():
+            raise HTTPException(
+                status_code=503,
+                detail=f"Memory promoter script not found: {MEMORY_PROMOTER_SCRIPT}",
+            )
+
+        agents = session_mgr.AGENTS
+        if not agents:
+            return {"status": "ok", "results": [], "message": "No agents configured"}
+
+        results = []
+        for agent_name, agent_cfg in agents.items():
+            agent_path = agent_cfg.get("path", "")
+            env = os.environ.copy()
+            if agent_path:
+                env["WEE_AGENT_DIR"] = agent_path
+
+            loop = asyncio.get_event_loop()
+            try:
+                result = await loop.run_in_executor(
+                    None,
+                    lambda env=env: subprocess.run(
+                        [sys.executable, str(MEMORY_PROMOTER_SCRIPT)],
+                        capture_output=True,
+                        text=True,
+                        timeout=120,
+                        env=env,
+                    ),
+                )
+                results.append({
+                    "agent": agent_name,
+                    "agent_path": agent_path,
+                    "status": "ok" if result.returncode == 0 else "error",
+                    "returncode": result.returncode,
+                    "stdout": result.stdout[-500:] if result.stdout else "",
+                    "stderr": result.stderr[-500:] if result.stderr else "",
+                })
+            except subprocess.TimeoutExpired:
+                results.append({
+                    "agent": agent_name,
+                    "agent_path": agent_path,
+                    "status": "timeout",
+                })
+            except Exception as exc:
+                results.append({
+                    "agent": agent_name,
+                    "agent_path": agent_path,
+                    "status": "error",
+                    "error": str(exc),
+                })
+
+        ok_count = sum(1 for r in results if r["status"] == "ok")
+        return {
+            "status": "ok",
+            "total": len(results),
+            "succeeded": ok_count,
+            "failed": len(results) - ok_count,
+            "results": results,
+        }
+
+
+
+        # --- AI Media ─────────────────────────────────────────────────────────────
     _ai_media_dir = Path("/tmp/webui_ai_media")
     _ai_media_dir.mkdir(parents=True, exist_ok=True)
     app.mount("/ai-media", StaticFiles(directory=str(_ai_media_dir)), name="ai_media")
@@ -12598,7 +12856,6 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         app.mount("/static", StaticFiles(directory=str(_static_dir)), name="static")
 
     return app
-
 
 def start_api_server():
     """Load dotenv, create the FastAPI app, and run uvicorn."""
@@ -12663,7 +12920,6 @@ def start_api_server():
     else:
         print(f"[API] Listening on {proto}://{host}:{port}", file=sys.stderr)
         uvicorn.run(app, host=host, port=port, **ssl_kwargs)
-
 
 def main():
     parser = argparse.ArgumentParser(
@@ -12827,7 +13083,6 @@ Examples:
     # Execute the main prompt
     output = manager.execute(args.prompt, args.session_id)
     print(output)
-
 
 if __name__ == "__main__":
     if "--api" in sys.argv:

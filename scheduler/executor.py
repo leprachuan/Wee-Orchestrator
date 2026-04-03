@@ -34,6 +34,17 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+_MAX_NOTIFICATION_LENGTH = 200
+
+
+def _brief_notification(icon: str, job_name: str, verb: str) -> str:
+    """Return a one-line notification capped at _MAX_NOTIFICATION_LENGTH."""
+    msg = f"{icon} {job_name} — {verb}"
+    if len(msg) > _MAX_NOTIFICATION_LENGTH:
+        msg = msg[: _MAX_NOTIFICATION_LENGTH - 3] + "..."
+    return msg
+
+
 # Telegram connector for direct per-user delivery
 sys.path.insert(0, str(_REPO_ROOT))
 try:
@@ -366,8 +377,10 @@ class TaskSchedulerExecutor:
                 logger.info(f"Job {job_id} completed successfully")
 
                 if notify:
-                    notification_text = f"✅ Job Completed: {job['name']}\n\nTask: {task[:100]}\n\nResult:\n{output[:500]}"
-                    self._notify_creator(job, notification_text)
+                    self._notify_creator(
+                        job,
+                        _brief_notification("✅", job["name"], "done"),
+                    )
 
                 return output
             else:
@@ -377,8 +390,10 @@ class TaskSchedulerExecutor:
                 logger.error(f"Job {job_id} failed with code {result.returncode}")
 
                 if notify:
-                    notification_text = f"❌ Job Failed: {job['name']}\n\nTask: {task[:100]}\n\nError:\n{error_msg[:500]}"
-                    self._notify_creator(job, notification_text)
+                    self._notify_creator(
+                        job,
+                        _brief_notification("❌", job["name"], "failed"),
+                    )
 
                 return None
 
@@ -396,7 +411,7 @@ class TaskSchedulerExecutor:
             if notify:
                 self._notify_creator(
                     job,
-                    f"⏱️ Job Timeout: {job['name']}\n\nTask: {task[:100]}\n\nExecution exceeded {timeout_mins:.1f} minute limit",
+                    _brief_notification("⏱️", job["name"], "timed out"),
                 )
             return None
 
@@ -409,7 +424,7 @@ class TaskSchedulerExecutor:
             if job.get("notify"):
                 self._notify_creator(
                     job,
-                    f"⚠️ Job Exception: {job['name']}\n\nTask: {task[:100]}\n\nError:\n{error_str[:200]}",
+                    _brief_notification("⚠️", job["name"], "error"),
                 )
             return None
         finally:
@@ -451,8 +466,10 @@ class TaskSchedulerExecutor:
                 logger.info(f"Job {job_id} (command mode) completed successfully")
 
                 if notify:
-                    notification_text = f"✅ Command Completed: {job['name']}\n\nCommand: {task[:100]}\n\nOutput:\n{output[:500]}"
-                    self._notify_creator(job, notification_text)
+                    self._notify_creator(
+                        job,
+                        _brief_notification("✅", job["name"], "done"),
+                    )
 
                 return output
             else:
@@ -468,8 +485,10 @@ class TaskSchedulerExecutor:
                 )
 
                 if notify:
-                    notification_text = f"❌ Command Failed: {job['name']}\n\nCommand: {task[:100]}\n\nError:\n{error_msg[:500]}"
-                    self._notify_creator(job, notification_text)
+                    self._notify_creator(
+                        job,
+                        _brief_notification("❌", job["name"], "failed"),
+                    )
 
                 return None
 
@@ -487,7 +506,7 @@ class TaskSchedulerExecutor:
             if job.get("notify"):
                 self._notify_creator(
                     job,
-                    f"⏱️ Job Timeout: {job['name']}\n\nCommand: {task[:100]}\n\nExecution exceeded {timeout_mins:.1f} minute limit",
+                    _brief_notification("⏱️", job["name"], "timed out"),
                 )
             return None
 
@@ -500,7 +519,7 @@ class TaskSchedulerExecutor:
             if job.get("notify"):
                 self._notify_creator(
                     job,
-                    f"⚠️ Job Exception: {job['name']}\n\nCommand: {task[:100]}\n\nError:\n{error_str[:200]}",
+                    _brief_notification("⚠️", job["name"], "error"),
                 )
             return None
         finally:

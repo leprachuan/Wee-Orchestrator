@@ -6,6 +6,53 @@ All notable changes to Wee Orchestrator are documented here.
 
 ### Added
 
+#### F016: Telegram Slash Command Registration with BotFather
+- **Status**: ✅ QA Approved (commit 3cdf77a on dev)
+- **Commit**: 3cdf77a
+
+#### F407: Per-Agent Memory Promotion Endpoints
+- **Status**: ✅ QA Approved (commit 55f3a4f on dev)
+- **Commit**: 55f3a4f
+- Two new API endpoints for triggering memory promotion (daily notes → MEMORY.md consolidation):
+  - **POST /api/v1/memory/promote** — Promote memory for a single agent (or orchestrator if agent omitted)
+  - **POST /api/v1/memory/promote-all** — Fan-out promotion across all agents in agents.json
+- Endpoint behavior:
+  - Each endpoint spawns `memory_promoter.py` with correct `WEE_AGENT_DIR` environment variable
+  - Agent path resolution from agents.json; 404 error for unknown agents
+  - 120-second timeout per agent; 504 error on timeout; 503 if script missing
+  - Full stdout/stderr capture (last 2000/1000 chars) in response for debugging
+  - `/promote-all` handles partial failures gracefully — continues on individual agent errors
+- Helper script: `scripts/promote_all_agents_memory.sh` for use in task scheduler jobs
+- Security: Both endpoints require standard API authentication (Bearer token)
+- **Testing**: 13 new tests covering auth, agent resolution, error handling, fan-out, 404/503/504 behaviors
+- **QA baseline**: 735 tests pass (9 skipped), 0 regressions, flake8 clean
+- **Minor note**: 2 cosmetic F841 unused variables in test file (mock_run on lines 89, 206) — non-functional
+- **Ready for deployment**: No breaking changes, backwards compatible, no new config required
+
+- Automatically registers Telegram slash commands with BotFather for UI autocomplete
+- `register_bot_commands()` method in TelegramConnector dynamically pulls command list from SessionManager
+- Builds valid Telegram BotCommand payload; calls `setMyCommands` API on startup
+- Added `/registercommands` handler for manual refresh if commands change
+- Startup registration happens before polling begins
+- **Testing**: 15 new tests covering payload construction, API calls, error handling
+- **QA baseline**: 674 tests pass (9 skipped), flake8 clean, all services operational
+- **Minor cleanup**: Removed unused imports (json, PropertyMock, pytest); fixed 10 E501 line-length violations
+- **Ready for deployment**: No breaking changes, backwards compatible, no new config required
+
+
+#### F402: Fix TTS Authorization Error on Objects
+- **Status**: ✅ QA Approved (commit 7390c8e on dev)
+- **Commit**: 7390c8e
+- **Issue**: TTS fetch calls on objects were failing with 401 Unauthorized due to incorrect auth token retrieval
+- **Root Cause**: `loadAuth()` function populates global `STATE` but returns `undefined`, causing TTS fetch to use `auth?.token` which was always `undefined`, resulting in empty Bearer token header
+- **Fix**: Changed TTS fetch call to use `STATE.token` directly, consistent with all other authenticated API calls throughout the codebase
+- **Changes**:
+  - webui/dist/app.js: Updated TTS fetch auth parameter (line 160)
+  - webui/dist/index.html: Cache-bust to v=20260402tts1
+- **Testing**: 674 tests pass (9 skipped), py_compile OK, no fetch calls remain with loadAuth pattern
+- **QA verification**: All 4 dev services running on 192.168.1.100, no regressions
+- **Ready for deployment**: No breaking changes, backwards compatible, no new config required
+
 #### F025: Session-Start Memory Injection
 - **Status**: ✅ QA Approved (commit c03e0b8 on dev)
 - **Commit**: c03e0b8

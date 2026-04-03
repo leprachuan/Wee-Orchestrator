@@ -120,7 +120,7 @@ function emptyPermissions(): AgentPermissions {
     directories: { allow_read: [], allow_write: [], deny: [] },
     tools: { allow: ['*'], deny: [] },
     network: { allow_urls: ['*'], deny_urls: [] },
-    mcp: { allow: [], deny: ['*'] },
+    mcp: { allow: ['*'], deny: [] },
   };
 }
 
