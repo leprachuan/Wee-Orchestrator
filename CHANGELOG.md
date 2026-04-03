@@ -6,6 +6,21 @@ All notable changes to Wee Orchestrator are documented here.
 
 ### Added
 
+#### F025 (Enhanced): Custom Themes API — wee-qa Fix Round 2
+- **Status**: 🔄 QA Submitted (commit 6d45763 on dev)
+- **Commit**: 6d45763
+- Adds custom theme support via `/api/v1/themes` endpoint with CSS embedded in listing response
+- **B01 (BLOCKER) Fix**: Removed `/api/v1/themes/{name}/css` endpoint entirely.
+  - CSS content now embedded as `css` field in each custom theme object in the themes list response.
+  - `loadCustomThemes()` caches CSS content in `_customThemeCSS` map (populated via the already-authenticated themes list call).
+  - `applyTheme()` now injects custom CSS via `<style id="custom-theme-style">` element instead of `<link href="...">`.
+  - `<link>` elements cannot send `Authorization` headers — the root cause of always-401 custom theme loading.
+  - After `loadCustomThemes()` completes, re-applies current theme if it's custom (handles localStorage-persisted custom themes on page load).
+- **M01 Fix**: `name == "custom.css"` dead code → corrected to `name == "custom"` (stem of `custom.css.template` is `custom.css` but `.template` files don't match `*.css` glob).
+- **M02 Fix**: E501 violation on `fastapi.responses` import line — split to multi-line parenthesized import form.
+- **M03 Fix**: `innerHTML` with server data in `loadCustomThemes()` → replaced with explicit DOM element creation using `textContent` for label/description fields.
+- **Testing**: Replaced `TestGetThemeCSS` (9 tests, endpoint removed) with `TestCustomThemeCSSInListing` (4 new tests: css in listing, builtins have no css field, endpoint returns 404, traversal regex). 17 themes tests pass; full suite 857 passed, 9 skipped.
+
 #### F027: Verbose Mode Toggle for Tool Call Visibility
 - **Status**: ✅ QA Approved (commit edcc105 on dev)
 - **Commit**: edcc105
