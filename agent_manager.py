@@ -114,6 +114,23 @@ def _sanitize_tool_call_for_display(data: dict) -> dict:
         sanitized["input"] = new_inp
     return sanitized
 
+
+def _resolve_silent_default(channel: str) -> bool:
+    """Resolve silent_mode default from WEE_VERBOSE env var or channel.
+
+    Priority: WEE_VERBOSE env var > channel-based default.
+    WEE_VERBOSE=true means verbose (silent=false).
+    WEE_VERBOSE=false means not verbose (silent=true).
+    """
+    env_val = os.environ.get("WEE_VERBOSE", "").strip().lower()
+    if env_val in ("true", "1", "on"):
+        return False  # verbose = not silent
+    if env_val in ("false", "0", "off"):
+        return True  # not verbose = silent
+    # Default: channel-based
+    return channel in ("telegram", "webex")
+
+
 class RateLimiter:
     """In-memory per-IP rate limiter with sliding window."""
 
@@ -1484,6 +1501,9 @@ class SessionManager:
         self._register_slash("/render", self._slash_render, "Get/set output render format")
         self._register_slash("/notifications", self._slash_notifications, "Toggle background notifications")
         self._register_slash("/silent", self._slash_silent, "Toggle silent mode (hide tool calls)")
+        self._register_slash(
+            "/verbose", self._slash_verbose, "Toggle verbose mode"
+        )
         self._register_slash("/mode", self._slash_mode, "Set permission mode")
         self._register_slash("/schedule", self._slash_schedule, "Manage scheduled jobs")
         self._register_slash("/background", self._slash_background, "Manage background tasks")
@@ -2189,6 +2209,34 @@ You can mention an agent in your prompt and it will auto-delegate:
             return (
                 "Usage: `/silent [on|off]`\n"
                 "Hides tool call output from responses (tools still execute)."
+            )
+
+    def _slash_verbose(self, argument, session_data, n8n_session_id):
+        """Handle /verbose slash command (F026 FEATURE_QUEUE).
+
+        Inverse of /silent: /verbose on = show tool calls (silent_mode=false).
+        """
+        if not argument:
+            current = session_data.get("silent_mode", False)
+            status = "OFF" if current else "ON"
+            vis = "shown" if not current else "hidden"
+            return (
+                "\U0001f50a **Verbose mode:** `{}`\n"
+                "Tool calls are {} in responses.\n"
+                "Usage: `/verbose on` or `/verbose off`"
+            ).format(status, vis)
+
+        arg = argument.strip().lower()
+        if arg in ("on", "true", "1", "enable"):
+            self.update_session_field(n8n_session_id, "silent_mode", False)
+            return "\u2713 Verbose mode enabled \u2014 tool call output visible."
+        elif arg in ("off", "false", "0", "disable"):
+            self.update_session_field(n8n_session_id, "silent_mode", True)
+            return "\u2713 Verbose mode disabled \u2014 tool call output hidden."
+        else:
+            return (
+                "Usage: `/verbose [on|off]`\n"
+                "Shows tool call output in responses (inverse of /silent)."
             )
 
     def _slash_mode(self, argument, session_data, n8n_session_id):
@@ -3433,7 +3481,7 @@ You can mention an agent in your prompt and it will auto-delegate:
             "channel": channel,
             "last_activity": time.time(),
             "permissions": None,  # Inherited from agent config on session create
-            "silent_mode": channel in ("telegram", "webex"),  # F026
+            "silent_mode": _resolve_silent_default(channel),  # F026
         }
 
         # Store identity if provided, so we can find sessions by user later
@@ -4857,6 +4905,8 @@ These commands allow you to control the agent's behavior and are processed by th
 - /background status <task_id> - Check background task status
 - /background kill <task_id> - Kill a running background task
 - /background steer <task_id> <instruction> - Send steering to a running task
+- /silent <on|off> - Toggle silent mode (hide tool calls from responses)
+- /verbose <on|off> - Toggle verbose mode (show tool calls in responses)
 - /update - Pull latest code from dev branch and restart all dev services (aliases: /upgrade, /pull)
 
 [Skills Discovery & Management]
