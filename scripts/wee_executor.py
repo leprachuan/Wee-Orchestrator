@@ -6,6 +6,14 @@ Provides a secure, audited CLI for agents to execute privileged operations
 (background task creation, etc.) without direct access to API tokens or
 internal infrastructure details.
 
+Architecture
+============
+- Agents call this script via CLI with --capability <name> --args '{...}'
+- Session is detected from WEE_SESSION_ID env (set by agent_manager.py)
+- Mode (interactive/background/sync/api) determines which capabilities are allowed
+- Bearer token is read from env/config, never exposed to agents
+- All invocations are rate-limited and audit-logged
+
 Usage:
     python3 scripts/wee_executor.py --capability create_background_task \
         --args '{"agent": "research", "prompt": "look up X"}'
@@ -13,18 +21,28 @@ Usage:
     python3 scripts/wee_executor.py --list-capabilities
 
 Session Detection (priority order):
-    1. WEE_SESSION_ID env var
-    2. SESSION_ID env var
+    1. WEE_SESSION_ID env var (set by agent_manager.py)
+    2. SESSION_ID env var (legacy)
     3. Most recent active session from .task-scheduler/sessions.json
 
 Mode Detection:
     - background: WEE_TASK_ID env var is set
+    - sync: WEE_TASK_SYNC env var is set (queue-and-wait tasks)
     - api: no session detected
-    - interactive: default (session detected, not background)
+    - interactive: default (session detected, not background/sync)
 
 Exit codes:
     0 — success
-    1 — error (details in JSON output)
+    1 — session not found or general error
+    2 — capability not available in current mode
+    3 — API / network error
+
+Future capabilities (not yet implemented):
+    - run_task: Execute a task in the current session
+    - query_memory: Read/write agent-specific memories
+    - dispatch_agent: Delegate work to another agent
+    - list_sessions: Show active sessions (admin only, mode-restricted)
+    - get_session_context: Retrieve current session context
 """
 
 import argparse
@@ -57,6 +75,7 @@ TASK_VERIFY_TIMEOUT = 3
 
 MODE_INTERACTIVE = "interactive"
 MODE_BACKGROUND = "background"
+MODE_SYNC = "sync"
 MODE_API = "api"
 
 
@@ -69,19 +88,20 @@ def _setup_logging() -> logging.Logger:
     _logger = logging.getLogger("wee_executor")
     _logger.setLevel(logging.DEBUG)
 
-    fh = logging.FileHandler(LOG_FILE, encoding="utf-8")
-    fh.setLevel(logging.DEBUG)
-    fh.setFormatter(
-        logging.Formatter(
-            "%(asctime)s [%(levelname)s] %(message)s", datefmt="%Y-%m-%d %H:%M:%S"
+    if not _logger.handlers:
+        fh = logging.FileHandler(LOG_FILE, encoding="utf-8")
+        fh.setLevel(logging.DEBUG)
+        fh.setFormatter(
+            logging.Formatter(
+                "%(asctime)s [%(levelname)s] %(message)s", datefmt="%Y-%m-%d %H:%M:%S"
+            )
         )
-    )
-    _logger.addHandler(fh)
+        _logger.addHandler(fh)
 
-    sh = logging.StreamHandler(sys.stderr)
-    sh.setLevel(logging.WARNING)
-    sh.setFormatter(logging.Formatter("%(levelname)s: %(message)s"))
-    _logger.addHandler(sh)
+        sh = logging.StreamHandler(sys.stderr)
+        sh.setLevel(logging.WARNING)
+        sh.setFormatter(logging.Formatter("%(levelname)s: %(message)s"))
+        _logger.addHandler(sh)
 
     return _logger
 
@@ -103,7 +123,6 @@ def _load_env_file() -> Dict[str, str]:
             if "=" in line:
                 k, _, v = line.partition("=")
                 val = v.strip()
-                # Strip surrounding quotes
                 if len(val) >= 2 and val[0] == val[-1] and val[0] in ("'", '"'):
                     val = val[1:-1]
                 env[k.strip()] = val
@@ -193,6 +212,8 @@ def _detect_from_sessions_json() -> Optional[str]:
 def _detect_mode(session_id: Optional[str]) -> str:
     """Determine session mode from env context."""
     if os.environ.get("WEE_TASK_ID"):
+        if os.environ.get("WEE_TASK_SYNC"):
+            return MODE_SYNC
         return MODE_BACKGROUND
     if not session_id:
         return MODE_API
@@ -336,12 +357,6 @@ def cap_create_background_task(
         {task_id, status, agent, monitor_url} on success
         {error, code} on failure
     """
-    if mode == MODE_API:
-        return {
-            "error": "create_background_task not available in api mode",
-            "code": "MODE_RESTRICTED",
-        }
-
     agent = args.get("agent")
     prompt = args.get("prompt")
     if not agent or not prompt:
@@ -386,10 +401,11 @@ def cap_create_background_task(
     }
 
     logger.info(
-        "Creating background task: agent=%s, runtime=%s, model=%s",
+        "Creating background task: agent=%s, runtime=%s, model=%s, session=%s",
         agent,
         body["runtime"],
         body["model"],
+        session_id,
     )
 
     result = _api_request(
@@ -413,6 +429,7 @@ def cap_create_background_task(
                 "task_id": task_id,
                 "status": status,
                 "agent": agent,
+                "session_id": session_id,
                 "monitor_url": f"{api_url}/api/v1/background-tasks/{task_id}",
             }
         else:
@@ -423,32 +440,52 @@ def cap_create_background_task(
     return {
         "task_id": task_id,
         "status": result.get("status", "created"),
+        "session_id": session_id,
         "raw_response": result,
     }
 
 
 # ── Capability Registry ────────────────────────────────────────────────
 
-CAPABILITIES: Dict[str, Dict[str, Any]] = {
-    "create_background_task": {
-        "handler": cap_create_background_task,
-        "description": "Create a background task via the orchestrator API",
-        "modes": [MODE_INTERACTIVE, MODE_BACKGROUND],
-        "required_args": ["agent", "prompt"],
-        "optional_args": ["runtime", "model", "timeout", "notify"],
-        "example": {
-            "agent": "research",
-            "prompt": "Look up the latest Python 3.13 features",
-            "runtime": "copilot",
-            "model": "claude-haiku-4.5",
-            "timeout": 600,
-        },
+
+def register_capability(
+    name: str,
+    handler,
+    allowed_modes: List[str],
+    description: str,
+    required_args: Optional[List[str]] = None,
+    optional_args: Optional[List[str]] = None,
+    example: Optional[Dict] = None,
+) -> None:
+    """Register a new capability in the CAPABILITIES dict."""
+    CAPABILITIES[name] = {
+        "handler": handler,
+        "description": description,
+        "modes": allowed_modes,
+        "required_args": required_args or [],
+        "optional_args": optional_args or [],
+        "example": example,
+    }
+
+
+CAPABILITIES: Dict[str, Dict[str, Any]] = {}
+
+# Register built-in capabilities
+register_capability(
+    name="create_background_task",
+    handler=cap_create_background_task,
+    allowed_modes=[MODE_INTERACTIVE, MODE_SYNC],
+    description="Create a background task via the orchestrator API",
+    required_args=["agent", "prompt"],
+    optional_args=["runtime", "model", "timeout", "notify"],
+    example={
+        "agent": "research",
+        "prompt": "Look up the latest Python 3.13 features",
+        "runtime": "copilot",
+        "model": "claude-haiku-4.5",
+        "timeout": 600,
     },
-    # Phase B stubs:
-    # "list_tasks": { ... },
-    # "cancel_task": { ... },
-    # "get_task_result": { ... },
-}
+)
 
 
 def list_capabilities(mode: str = MODE_INTERACTIVE) -> List[Dict]:
@@ -540,18 +577,23 @@ def main() -> None:
     cap = CAPABILITIES[cap_name]
 
     if mode not in cap["modes"]:
+        avail = [
+            c["name"]
+            for c in list_capabilities(mode)
+        ]
         print(
             json.dumps(
                 {
                     "error": (
                         f"Capability '{cap_name}' not available in {mode} mode. "
-                        f"Allowed: {cap['modes']}"
+                        f"Allowed modes: {cap['modes']}"
                     ),
                     "code": "MODE_RESTRICTED",
+                    "available_capabilities": avail,
                 }
             )
         )
-        sys.exit(1)
+        sys.exit(2)
 
     try:
         cap_args = json.loads(parsed.args) if parsed.args else {}
@@ -576,6 +618,9 @@ def main() -> None:
     print(json.dumps(result, indent=2))
 
     if "error" in result:
+        code = result.get("code", "")
+        if code.startswith("HTTP_") or code in ("CONNECTION_FAILED", "UNKNOWN_ERROR"):
+            sys.exit(3)
         sys.exit(1)
 
 

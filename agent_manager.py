@@ -5185,6 +5185,8 @@ User Request:
                 pass  # non-fatal; streaming still works with defaults
 
         try:
+            # Set WEE_SESSION_ID so agents can use wee_executor.py
+            _sub_env = {**os.environ, "WEE_SESSION_ID": n8n_session_id}
             if _pty_master is not None:
                 process = subprocess.Popen(
                     cmd,
@@ -5192,6 +5194,7 @@ User Request:
                     stdout=_pty_slave,
                     stderr=subprocess.PIPE,
                     cwd=cwd,
+                    env=_sub_env,
                 )
                 os.close(_pty_slave)
             else:
@@ -5202,6 +5205,7 @@ User Request:
                     text=True,
                     cwd=cwd,
                     bufsize=1,  # line-buffered for faster streaming chunk delivery
+                    env=_sub_env,
                 )
 
             self.track_running_query(
@@ -9685,6 +9689,8 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 "COPILOT_AGENT": agent,
                 "COPILOT_RUNTIME": runtime,
                 "WEE_AGENT_DIR": agent_dir,
+                "WEE_SESSION_ID": session_id,
+                "WEE_TASK_ID": task_id,
             }
 
             # Use Popen for incremental output capture

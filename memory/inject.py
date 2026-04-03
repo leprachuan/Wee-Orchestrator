@@ -130,6 +130,58 @@ def prepend_memory(prompt: str, memory_context: str) -> str:
     return f"{memory_context}\n\n{prompt}"
 
 
+
+
+def build_executor_context(session_id: str = "", mode: str = "interactive") -> str:
+    """Build Wee Executor usage guide for context injection.
+
+    Returns a markdown section agents can reference to use wee_executor.py.
+    """
+    import subprocess as _sp
+    script = Path(__file__).resolve().parent.parent / "scripts" / "wee_executor.py"
+    if not script.exists():
+        return ""
+
+    # Dynamically fetch available capabilities
+    caps_text = ""
+    try:
+        result = _sp.run(
+            ["python3", str(script), "--list-capabilities", "--json"],
+            capture_output=True, text=True, timeout=5,
+            env={**__import__("os").environ, "WEE_SESSION_ID": session_id or "ctx"}
+        )
+        if result.returncode == 0:
+            import json as _json
+            caps = _json.loads(result.stdout)
+            for cap in caps:
+                req = ", ".join(cap.get("required_args", []))
+                opt = ", ".join(cap.get("optional_args", []))
+                caps_text += f"  - **{cap['name']}**: {cap['description']}\n"
+                caps_text += f"    Required: {req}  Optional: {opt}\n"
+    except Exception:
+        caps_text = "  - create_background_task: Create background tasks\n"
+
+    return (
+        "## Wee Executor\n"
+        "\n"
+        "Use `wee_executor.py` to safely invoke privileged operations. "
+        "Bearer tokens are handled internally — never exposed to agents.\n"
+        "\n"
+        f"**Current mode:** {mode}\n"
+        "\n"
+        "**Available capabilities:**\n"
+        f"{caps_text}"
+        "\n"
+        "**Usage:**\n"
+        "```bash\n"
+        "python3 /opt/n8n-copilot-shim-dev/scripts/wee_executor.py "
+        "--capability create_background_task "
+        "--args '{\"agent\": \"research\", \"prompt\": \"look up X\"}'\n"
+        "```\n"
+        "\n"
+        "**Security:** Bearer token is hidden. WEE_SESSION_ID is set automatically.\n"
+    )
+
 def detect_compaction(last_response: str) -> bool:
     """Return True if the response suggests context compaction occurred."""
     if not last_response:
