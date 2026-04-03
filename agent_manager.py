@@ -4936,6 +4936,14 @@ Example: python3 {SCRIPT_BASE_DIR}/agent_manager.py --agent research-dev --runti
         canvas_instruction = f"""
 [Wee Canvas] Native real-time visual panel in the WebUI (progress boards, charts, forms, approval flows). Client: `{SCRIPT_BASE_DIR}/canvas.py` — `from canvas import Canvas; c = Canvas(); c.open()`. Full docs: {SCRIPT_BASE_DIR}/docs/canvas.md"""
 
+        # Inject Wee Executor capability hint
+        wee_executor_instruction = f"""
+[Wee Executor] Unified privileged operations interface — use instead of raw curl/API calls.
+  python3 {SCRIPT_BASE_DIR}/scripts/wee_executor.py -c create_background_task -a '{{"agent": "<name>", "prompt": "...", "model": "claude-haiku-4.5"}}'
+  python3 {SCRIPT_BASE_DIR}/scripts/wee_executor.py --list-capabilities
+Benefits: auto-auth (no token exposure), agent validation, rate limiting, HMAC signing, audit logging.
+When to use: Prefer wee_executor over direct curl for background tasks — it handles auth, validation, and logging automatically."""
+
         # Inject cross-runtime handoff context on the first message of a new session.
         # get_handoff_context() is one-time: it reads and deletes the handoff file so
         # subsequent messages in the same session are not affected.
@@ -5003,7 +5011,7 @@ Do NOT emit status updates for quick operations (< 15 seconds)."""
             injection_text = ""
 
         context = f"""{handoff_prefix}[Session ID: {n8n_session_id}]
-{runtime_instruction}{injection_text}{mobile_channel_instruction}{agent_desc}{files_context}{render_instruction}{bg_task_instruction}{canvas_instruction}{timeout_instruction}
+{runtime_instruction}{injection_text}{mobile_channel_instruction}{agent_desc}{files_context}{render_instruction}{bg_task_instruction}{canvas_instruction}{wee_executor_instruction}{timeout_instruction}
 
 User Request:
 {prompt}"""
