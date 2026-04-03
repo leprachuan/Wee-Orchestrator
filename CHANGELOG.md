@@ -30,6 +30,29 @@ All notable changes to Wee Orchestrator are documented here.
 - **Minor note**: Non-blocking dead code — localStorage.setItem called in click handler but no corresponding getItem; commit message promises localStorage fallback but only server-side persistence implemented. Feature works correctly. localStorage should be removed or fully implemented in future cleanup pass.
 - **Ready for deployment**: No breaking changes, backwards compatible, no new config required
 
+#### F024: get_secret Capability in wee_executor.py
+- **Status**: ✅ QA Approved (commit 4232d55 on dev)
+- **Commit**: 4232d55
+- Adds `get_secret(name, backend)` capability to wee_executor for safe secret retrieval in privileged contexts
+- **Defense-in-depth Security**:
+  - **Mode filtering**: Callable only in `interactive` and `sync` modes; blocked in `background` and `api` modes
+  - **Elevation requirement**: Requires `WEE_ELEVATED=true` environment variable (prevents accidental secret access)
+  - **Name validation**: Regex-based whitelist (`SECRET_NAME_RE`) — only alphanumeric, dot, hyphen, underscore; blocks path traversal attempts (e.g., `../etc/passwd` → rejected)
+  - **Rate limiting**: Per-session rate limit on secret retrieval (50 requests/minute)
+  - **Audit logging**: All calls logged with secret name + backend only; **secret values never logged** for compliance
+- **Implementation**:
+  - New `cap_get_secret()` handler in wee_executor.py — subprocess delegate to `secret_tool.py`
+  - Supports both `keyring` (system) and `file` (encrypted JSON) backends
+  - Returns `{status, name, backend, value}` on success; `{error, code}` on failure
+- **Agent Context Injection**:
+  - agent_manager.py automatically includes `get_secret()` example in context injection for agents running with `WEE_ELEVATED=true`
+  - Example shows usage pattern and elevation requirement warning
+- **Testing**: 52/52 wee_executor tests pass (20 new F024 tests + 32 baseline)
+  - Coverage: elevation enforcement, name validation, path traversal protection, mode restrictions, backend validation, subprocess integration, timeout handling, rate limiting, audit log format
+  - Integration tests: CLI usage with agent_manager.py; session-aware mode enforcement
+- **QA baseline**: 842 total tests pass (9 skipped), 0 regressions, flake8 clean
+- **Minor note**: Pre-existing E501 on docstring line 3 (90 chars) — not introduced by F024, flagged for future cleanup
+- **Ready for PR**: No breaking changes, backwards compatible, no new dependencies, no config required
 
 #### F025: CSS Theming/Skinning System
 - **Status**: ✅ QA Approved (commits 7446a56, 70e5b75, b367375)

@@ -840,6 +840,65 @@ echo "my-db-password" | /secret set db_password
 /secret delete db_password
 ```
 
+#### Programmatic Secret Access in AI Agents (wee_executor)
+
+AI agents running in privileged modes can retrieve secrets programmatically via the **`get_secret()` capability** in `wee_executor.py` (F024).
+
+**When to use:**
+- AI agents need secure access to credentials (API keys, database passwords) during task execution
+- Secrets must never be logged or exposed to LLM context
+- Only available in `interactive` and `sync` modes; blocked in `background` and `api` modes for security
+
+**Requirements:**
+1. **Elevation flag**: Task must run with `WEE_ELEVATED=true` in the session environment
+2. **Name validation**: Secret names must match `^[A-Za-z0-9._-]+$` (alphanumeric, dot, hyphen, underscore)
+3. **Mode restriction**: Only callable from `interactive` or `sync` mode sessions
+
+**Capability signature:**
+```python
+# Called within an AI agent's context
+get_secret(
+    name: str,           # Secret name (e.g., "GITHUB_TOKEN")
+    backend: str = "keyring"  # Storage backend: "keyring" or "file"
+) -> Dict
+# Returns: {status, name, backend, value} on success
+#          {error, code} on failure (e.g., ELEVATION_REQUIRED, INVALID_NAME)
+```
+
+**Agent Context Injection:**
+When an agent runs with `WEE_ELEVATED=true`, `agent_manager.py` automatically injects `get_secret()` documentation and usage examples into the agent's context. The agent can then call `get_secret()` to retrieve secrets needed for the task.
+
+**Security:**
+- 🔐 **Elevation requirement**: Prevents accidental secret access from untrusted agents
+- 🛡️ **Name validation**: Blocks path traversal attempts (e.g., `../etc/passwd` rejected)
+- 🚫 **Mode filtering**: Only in `interactive`/`sync` modes; disabled in `background`/`api` for API call safety
+- 📋 **Audit logging**: All calls logged with name + backend; **secret values never logged** for compliance
+- ⏱️ **Rate limiting**: 50 requests/minute per session to prevent brute-force attacks
+
+**How it works:**
+1. AI agent calls `get_secret(name="GITHUB_TOKEN", backend="keyring")`
+2. `wee_executor.py` validates the name and checks `WEE_ELEVATED=true`
+3. Subprocess delegates to `secret_tool.py` to retrieve the secret value
+4. Secret is returned to the agent but never written to logs
+5. Agent can use the secret for its task (e.g., authenticate to GitHub API)
+
+**Example agent usage (conceptual):**
+```
+Agent (with WEE_ELEVATED=true):
+  "I need to push code to GitHub. Let me get my credentials."
+  
+  get_secret(name="GITHUB_TOKEN", backend="keyring")
+  → {status: "success", name: "GITHUB_TOKEN", value: "ghp_...", backend: "keyring"}
+  
+  # Now the agent has the token and can authenticate API calls
+```
+
+**Available backends:**
+- `keyring` (default): System keyring (GNOME Keyring, Macos Keychain, etc.)
+- `file`: Encrypted JSON store (requires `cryptography` + `python-keyring`)
+
+See **[docs/secret-tool.md](./docs/secret-tool.md)** for CLI and storage backend details.
+
 ### N8N Integration
 
 Use in an N8N workflow:
