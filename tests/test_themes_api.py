@@ -134,9 +134,12 @@ class TestGetThemeCSS:
             )
             assert r.status_code == 404
 
-    def test_get_theme_css_requires_auth(self, client):
-        r = client.get("/api/v1/themes/ocean-breeze/css")
-        assert r.status_code == 401
+    def test_get_theme_css_no_auth_required(self, client, themes_dir):
+        """CSS endpoint has no auth (link elements cannot send headers)."""
+        with patch("agent_manager._themes_dir", themes_dir):
+            r = client.get("/api/v1/themes/ocean-breeze/css")
+            assert r.status_code == 200
+            assert "--accent: #0ea5e9" in r.text
 
     def test_path_traversal_blocked_dots(self, client, themes_dir):
         with patch(
