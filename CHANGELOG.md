@@ -4,6 +4,18 @@ All notable changes to Wee Orchestrator are documented here.
 
 ## [Unreleased] — Dev Branch
 
+### Fixed
+
+#### #63: Delete Skill Button Not Working in WebUI
+- **Status**: ✅ QA Approved (commit 4c8ad30 on dev)
+- **Commit**: 4c8ad30
+- **Issue**: Delete skill button in WebUI Skills panel was non-functional due to missing window exposure
+- **Root Cause**: The `_deleteSkill()` function was not assigned to the window object. All inline onclick handlers require functions to be on `window` scope. Other skill panel functions (`_deleteOrigin`, `_skillCheckUpdate`, `_skillTriggerUpdate`, `_showOriginForm`, `_saveOrigin`) were already exposed but `_deleteSkill` was missed.
+- **Fix**: Added `window._deleteSkill = _deleteSkill;` to the window exposure block in `webui/dist/app.js` (line 7517)
+- **Testing**: 859 passed, 9 skipped — no regressions
+- **Impact**: Users can now delete skills from the WebUI Skills panel as intended
+
+
 ### Added
 
 #### F025 (Enhanced): Custom Themes API — wee-qa Fix Round 2
