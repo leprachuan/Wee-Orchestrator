@@ -25,6 +25,29 @@ from uuid import uuid4
 # Dynamically determine the repo base directory (works regardless of where repo is cloned)
 SCRIPT_BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
+# ── Theme constants (F025) ──────────────────────────────────────────────
+_BUILTIN_THEMES = [
+    {
+        "name": "emerald", "label": "Emerald",
+        "description": "Default glassmorphism", "builtin": True,
+    },
+    {
+        "name": "midnight", "label": "Midnight",
+        "description": "Deep blue ocean", "builtin": True,
+    },
+    {
+        "name": "sunrise", "label": "Sunrise",
+        "description": "Warm light mode", "builtin": True,
+    },
+    {
+        "name": "cyberpunk", "label": "Cyberpunk",
+        "description": "Neon pink & cyan", "builtin": True,
+    },
+]
+_THEME_NAME_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$")
+_themes_dir = Path(os.path.abspath(__file__)).parent / "webui" / "themes"
+
+
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
@@ -113,6 +136,23 @@ def _sanitize_tool_call_for_display(data: dict) -> dict:
                 new_inp[field] = _sanitize_command_for_display(new_inp[field])
         sanitized["input"] = new_inp
     return sanitized
+
+
+def _resolve_silent_default(channel: str) -> bool:
+    """Resolve silent_mode default from WEE_VERBOSE env var or channel.
+
+    Priority: WEE_VERBOSE env var > channel-based default.
+    WEE_VERBOSE=true means verbose (silent=false).
+    WEE_VERBOSE=false means not verbose (silent=true).
+    """
+    env_val = os.environ.get("WEE_VERBOSE", "").strip().lower()
+    if env_val in ("true", "1", "on"):
+        return False  # verbose = not silent
+    if env_val in ("false", "0", "off"):
+        return True  # not verbose = silent
+    # Default: channel-based
+    return channel in ("telegram", "webex")
+
 
 class RateLimiter:
     """In-memory per-IP rate limiter with sliding window."""
@@ -1483,6 +1523,10 @@ class SessionManager:
         self._register_slash("/timeout", self._slash_timeout, "Get/set execution timeout")
         self._register_slash("/render", self._slash_render, "Get/set output render format")
         self._register_slash("/notifications", self._slash_notifications, "Toggle background notifications")
+        self._register_slash("/silent", self._slash_silent, "Toggle silent mode (hide tool calls)")
+        self._register_slash(
+            "/verbose", self._slash_verbose, "Toggle verbose mode"
+        )
         self._register_slash("/mode", self._slash_mode, "Set permission mode")
         self._register_slash("/schedule", self._slash_schedule, "Manage scheduled jobs")
         self._register_slash("/background", self._slash_background, "Manage background tasks")
@@ -2164,6 +2208,59 @@ You can mention an agent in your prompt and it will auto-delegate:
             return "✓ Background task notifications muted for Telegram/WebEx (WebUI only)."
         else:
             return "Usage: `/notifications [on|off]` to toggle background task notifications."
+
+    def _slash_silent(self, argument, session_data, n8n_session_id):
+        """Handle /silent slash command (F026)."""
+        if not argument:
+            current = session_data.get("silent_mode", False)
+            status = "ON" if current else "OFF"
+            vis = "hidden" if current else "shown"
+            return (
+                f"\U0001f507 **Silent mode:** `{status}`\n"
+                f"Tool calls are {vis} in responses.\n"
+                "Usage: `/silent on` or `/silent off`"
+            )
+
+        arg = argument.strip().lower()
+        if arg in ("on", "true", "1", "enable"):
+            self.update_session_field(n8n_session_id, "silent_mode", True)
+            return "\u2713 Silent mode enabled \u2014 tool call output hidden."
+        elif arg in ("off", "false", "0", "disable"):
+            self.update_session_field(n8n_session_id, "silent_mode", False)
+            return "\u2713 Silent mode disabled \u2014 tool call output visible."
+        else:
+            return (
+                "Usage: `/silent [on|off]`\n"
+                "Hides tool call output from responses (tools still execute)."
+            )
+
+    def _slash_verbose(self, argument, session_data, n8n_session_id):
+        """Handle /verbose slash command (F026 FEATURE_QUEUE).
+
+        Inverse of /silent: /verbose on = show tool calls (silent_mode=false).
+        """
+        if not argument:
+            current = session_data.get("silent_mode", False)
+            status = "OFF" if current else "ON"
+            vis = "shown" if not current else "hidden"
+            return (
+                "\U0001f50a **Verbose mode:** `{}`\n"
+                "Tool calls are {} in responses.\n"
+                "Usage: `/verbose on` or `/verbose off`"
+            ).format(status, vis)
+
+        arg = argument.strip().lower()
+        if arg in ("on", "true", "1", "enable"):
+            self.update_session_field(n8n_session_id, "silent_mode", False)
+            return "\u2713 Verbose mode enabled \u2014 tool call output visible."
+        elif arg in ("off", "false", "0", "disable"):
+            self.update_session_field(n8n_session_id, "silent_mode", True)
+            return "\u2713 Verbose mode disabled \u2014 tool call output hidden."
+        else:
+            return (
+                "Usage: `/verbose [on|off]`\n"
+                "Shows tool call output in responses (inverse of /silent)."
+            )
 
     def _slash_mode(self, argument, session_data, n8n_session_id):
         """Handle /mode slash command."""
@@ -3407,6 +3504,7 @@ You can mention an agent in your prompt and it will auto-delegate:
             "channel": channel,
             "last_activity": time.time(),
             "permissions": None,  # Inherited from agent config on session create
+            "silent_mode": _resolve_silent_default(channel),  # F026
         }
 
         # Store identity if provided, so we can find sessions by user later
@@ -4830,6 +4928,8 @@ These commands allow you to control the agent's behavior and are processed by th
 - /background status <task_id> - Check background task status
 - /background kill <task_id> - Kill a running background task
 - /background steer <task_id> <instruction> - Send steering to a running task
+- /silent <on|off> - Toggle silent mode (hide tool calls from responses)
+- /verbose <on|off> - Toggle verbose mode (show tool calls in responses)
 - /update - Pull latest code from dev branch and restart all dev services (aliases: /upgrade, /pull)
 
 [Skills Discovery & Management]
@@ -4936,6 +5036,16 @@ Example: python3 {SCRIPT_BASE_DIR}/agent_manager.py --agent research-dev --runti
         canvas_instruction = f"""
 [Wee Canvas] Native real-time visual panel in the WebUI (progress boards, charts, forms, approval flows). Client: `{SCRIPT_BASE_DIR}/canvas.py` — `from canvas import Canvas; c = Canvas(); c.open()`. Full docs: {SCRIPT_BASE_DIR}/docs/canvas.md"""
 
+        # Inject Wee Executor capability hint
+        wee_executor_instruction = f"""
+[Wee Executor] Unified privileged operations interface — use instead of raw curl/API calls.
+  python3 {SCRIPT_BASE_DIR}/scripts/wee_executor.py -c create_background_task -a '{{"agent": "<name>", "prompt": "...", "model": "claude-haiku-4.5"}}'
+  python3 {SCRIPT_BASE_DIR}/scripts/wee_executor.py -c get_secret -a '{{"name": "SECRET_NAME"}}'
+  python3 {SCRIPT_BASE_DIR}/scripts/wee_executor.py --list-capabilities
+Benefits: auto-auth (no token exposure), agent validation, rate limiting, HMAC signing, audit logging.
+When to use: Prefer wee_executor over direct curl for background tasks — it handles auth, validation, and logging automatically.
+⚠️ get_secret requires WEE_ELEVATED=true (set by agent_manager for elevated sessions). Secret values are never logged."""
+
         # Inject cross-runtime handoff context on the first message of a new session.
         # get_handoff_context() is one-time: it reads and deletes the handoff file so
         # subsequent messages in the same session are not affected.
@@ -4989,6 +5099,18 @@ replacing the generic "Still working on it..." placeholder. Emit one every ~30 s
 long tasks. Your final answer must NOT contain these markers — they are stripped automatically.
 Do NOT emit status updates for quick operations (< 15 seconds)."""
 
+        # Silent mode context (F026)
+        _sd_f026 = self.load_session_data(n8n_session_id) or {}
+        _silent_mode = _sd_f026.get("silent_mode", False)
+        silent_mode_instruction = ""
+        if _silent_mode:
+            silent_mode_instruction = (
+                "\n[Silent Mode: ON]\n"
+                "Tool call output is hidden from the user on this mobile channel. "
+                "Tools still execute normally \u2014 the user just does not see tool "
+                "names/arguments in the response stream. Keep responses concise."
+            )
+
         # Channel-specific injected context files
         injection_dir = Path(
             os.environ.get("INJECTION_DIR", Path(SCRIPT_BASE_DIR) / "injections")
@@ -5003,7 +5125,7 @@ Do NOT emit status updates for quick operations (< 15 seconds)."""
             injection_text = ""
 
         context = f"""{handoff_prefix}[Session ID: {n8n_session_id}]
-{runtime_instruction}{injection_text}{mobile_channel_instruction}{agent_desc}{files_context}{render_instruction}{bg_task_instruction}{canvas_instruction}{timeout_instruction}
+{runtime_instruction}{injection_text}{mobile_channel_instruction}{silent_mode_instruction}{agent_desc}{files_context}{render_instruction}{bg_task_instruction}{canvas_instruction}{wee_executor_instruction}{timeout_instruction}
 
 User Request:
 {prompt}"""
@@ -5177,6 +5299,8 @@ User Request:
                 pass  # non-fatal; streaming still works with defaults
 
         try:
+            # Set WEE_SESSION_ID so agents can use wee_executor.py
+            _sub_env = {**os.environ, "WEE_SESSION_ID": n8n_session_id}
             if _pty_master is not None:
                 process = subprocess.Popen(
                     cmd,
@@ -5184,6 +5308,7 @@ User Request:
                     stdout=_pty_slave,
                     stderr=subprocess.PIPE,
                     cwd=cwd,
+                    env=_sub_env,
                 )
                 os.close(_pty_slave)
             else:
@@ -5194,6 +5319,7 @@ User Request:
                     text=True,
                     cwd=cwd,
                     bufsize=1,  # line-buffered for faster streaming chunk delivery
+                    env=_sub_env,
                 )
 
             self.track_running_query(
@@ -7491,7 +7617,9 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         WebSocketDisconnect,
     )
     from fastapi.middleware.cors import CORSMiddleware
-    from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+    from fastapi.responses import (
+        FileResponse, JSONResponse, Response, StreamingResponse
+    )
     from fastapi.staticfiles import StaticFiles
     from pydantic import BaseModel, field_validator
 
@@ -8358,7 +8486,10 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                                     # Fallback for non-Claude runtimes
                                     yield f"data: {_json.dumps({'type': 'chunk', 'text': data})}\n\n"
                             elif kind == "tool_call":
-                                yield f"data: {_json.dumps({'type': 'tool_call', **_sanitize_tool_call_for_display(data)})}\n\n"
+                                # F026: skip tool_call SSE events in silent mode
+                                _sd = session_mgr.load_session_data(session_id)
+                                if not (_sd and _sd.get("silent_mode")):
+                                    yield f"data: {_json.dumps({'type': 'tool_call', **_sanitize_tool_call_for_display(data)})}\n\n"
                             elif kind == "done":
                                 break  # subprocess finished; final result in future
                     except Exception as exc:
@@ -8478,7 +8609,10 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                         else:
                             yield f"data: {_json.dumps({'type': 'chunk', 'text': data})}\n\n"
                     elif kind == "tool_call":
-                        yield f"data: {_json.dumps({'type': 'tool_call', **_sanitize_tool_call_for_display(data)})}\n\n"
+                        # F026: skip tool_call SSE events in silent mode
+                        _sd = session_mgr.load_session_data(session_id)
+                        if not (_sd and _sd.get("silent_mode")):
+                            yield f"data: {_json.dumps({'type': 'tool_call', **_sanitize_tool_call_for_display(data)})}\n\n"
                     elif kind == "done":
                         # Query already finished — send done event with stored result
                         session_data = session_mgr.get_or_create_session_data(
@@ -8530,7 +8664,10 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                         else:
                             yield f"data: {_json.dumps({'type': 'chunk', 'text': data})}\n\n"
                     elif kind == "tool_call":
-                        yield f"data: {_json.dumps({'type': 'tool_call', **_sanitize_tool_call_for_display(data)})}\n\n"
+                        # F026: skip tool_call SSE events in silent mode
+                        _sd = session_mgr.load_session_data(session_id)
+                        if not (_sd and _sd.get("silent_mode")):
+                            yield f"data: {_json.dumps({'type': 'tool_call', **_sanitize_tool_call_for_display(data)})}\n\n"
                     elif kind == "done":
                         break
 
@@ -8596,6 +8733,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             "model": data.get("model"),
             "yolo_mode": data.get("yolo_mode", "restricted"),
             "permissions": data.get("permissions"),
+            "silent_mode": data.get("silent_mode", False),  # F027
         }
 
         # Include running query info so the frontend can reconnect streams
@@ -9677,6 +9815,8 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 "COPILOT_AGENT": agent,
                 "COPILOT_RUNTIME": runtime,
                 "WEE_AGENT_DIR": agent_dir,
+                "WEE_SESSION_ID": session_id,
+                "WEE_TASK_ID": task_id,
             }
 
             # Use Popen for incremental output capture
@@ -12050,6 +12190,48 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             raise HTTPException(status_code=500, detail=str(e))
 
     # --- Session Permissions API ---
+    @app.patch("/api/v1/sessions/{session_id}/settings")
+    async def update_session_settings(
+        session_id: str, request: Request
+    ):
+        """F027: Update session settings (e.g. silent_mode toggle)."""
+        user = await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+
+        data = session_mgr.load_session_data(session_id)
+        if not data:
+            raise HTTPException(
+                status_code=404, detail="Session not found"
+            )
+
+        body = await request.json()
+        _allowed = {"silent_mode"}
+        updated = {}
+        for field in _allowed:
+            if field in body:
+                val = body[field]
+                if field == "silent_mode" and not isinstance(val, bool):
+                    raise HTTPException(
+                        status_code=422,
+                        detail="silent_mode must be boolean",
+                    )
+                session_mgr.update_session_field(
+                    session_id, field, val
+                )
+                updated[field] = val
+
+        if not updated:
+            raise HTTPException(
+                status_code=422,
+                detail="No valid settings fields provided",
+            )
+
+        return {"updated": updated, "session_id": session_id}
+
     @app.get("/api/v1/sessions/{session_id}/permissions")
     async def get_session_permissions(session_id: str, request: Request):
         """Return current session permissions (inherited from agent or overridden)."""
@@ -12836,6 +13018,36 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             "failed": len(results) - ok_count,
             "results": results,
         }
+
+
+
+    # ── Themes API (F025) ─────────────────────────────────────────────
+
+    @app.get("/api/v1/themes")
+    async def list_themes(request: Request):
+        """List built-in and custom themes."""
+        await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        themes = list(_BUILTIN_THEMES)
+        if _themes_dir.exists():
+            for css_file in sorted(_themes_dir.glob("*.css")):
+                name = css_file.stem
+                if name == "custom" or name.startswith("."):
+                    continue
+                if any(t["name"] == name for t in themes):
+                    continue
+                themes.append({
+                    "name": name,
+                    "label": name.replace("-", " ").replace("_", " ").title(),
+                    "description": "Custom theme",
+                    "builtin": False,
+                    "css": css_file.read_text(encoding="utf-8"),
+                })
+        return {"themes": themes, "count": len(themes)}
 
 
 

@@ -1,0 +1,417 @@
+/* =====================================================
+   Wee Orchestrator — Theme Definitions (F025)
+   =====================================================
+   Default theme (Emerald) is defined in :root in app.css.
+   These themes override via [data-theme="X"] on <html>.
+   ===================================================== */
+
+/* ─────────────────────────────────────────────────────
+   Midnight — Deep blue, ocean-inspired
+   ───────────────────────────────────────────────────── */
+[data-theme="midnight"] {
+  --accent:         #6c9fff;
+  --accent-hover:   #5a8de6;
+  --accent-glow:    rgba(108,159,255,0.32);
+  --accent-rgb:     108, 159, 255;
+  --gold:           #ffa726;
+  --gold-hover:     #f09000;
+  --gold-glow:      rgba(255,167,38,0.34);
+  --danger:         #ff6b8a;
+  --danger-hover:   #e0506a;
+  --text-primary:   rgba(255,255,255,0.92);
+  --text-secondary: rgba(255,255,255,0.58);
+  --text-muted:     rgba(255,255,255,0.35);
+  --glass-bg:       rgba(12,18,42,0.62);
+  --glass-border:   rgba(108,159,255,0.14);
+  --glass-shadow:   0 18px 48px rgba(0,0,0,0.48), 0 0 0 1px rgba(108,159,255,0.06), inset 0 1px 0 rgba(255,255,255,0.06);
+  --glass-blur:     blur(24px) saturate(180%);
+  --surface-raised: rgba(108,159,255,0.08);
+  --surface-sunken: rgba(4,8,22,0.42);
+  --surface-overlay: rgba(6,10,30,0.78);
+}
+
+html[data-theme="midnight"] body {
+  background:
+    radial-gradient(circle at 10% 10%, rgba(20,40,100,0.40), transparent 32%),
+    radial-gradient(circle at 82% 16%, rgba(255,167,38,0.10), transparent 24%),
+    radial-gradient(circle at 88% 86%, rgba(108,159,255,0.18), transparent 30%),
+    #060a1e;
+}
+
+html[data-theme="midnight"] ::selection {
+  background: rgba(108,159,255,0.28);
+  color: #f0f5ff;
+}
+
+html[data-theme="midnight"] .blob-1 {
+  background: radial-gradient(circle, rgba(108,159,255,0.18), transparent 70%);
+}
+
+html[data-theme="midnight"] .blob-2 {
+  background: radial-gradient(circle, rgba(255,167,38,0.12), transparent 70%);
+}
+
+html[data-theme="midnight"] .blob-3 {
+  background: radial-gradient(circle, rgba(60,90,180,0.14), transparent 70%);
+}
+
+/* ─────────────────────────────────────────────────────
+   Sunrise — Warm light mode
+   ───────────────────────────────────────────────────── */
+[data-theme="sunrise"] {
+  --accent:         #e07b39;
+  --accent-hover:   #c96a2e;
+  --accent-glow:    rgba(224,123,57,0.24);
+  --accent-rgb:     224, 123, 57;
+  --gold:           #2e9e6b;
+  --gold-hover:     #258a5a;
+  --gold-glow:      rgba(46,158,107,0.24);
+  --danger:         #dc3545;
+  --danger-hover:   #c82333;
+  --text:           rgba(32,28,24,0.92);
+  --text-primary:   rgba(32,28,24,0.92);
+  --text-secondary: rgba(32,28,24,0.60);
+  --text-muted:     rgba(32,28,24,0.38);
+  --glass-bg:       rgba(255,252,248,0.72);
+  --glass-border:   rgba(32,28,24,0.10);
+  --glass-shadow:   0 12px 40px rgba(0,0,0,0.08), 0 0 0 1px rgba(224,123,57,0.06), inset 0 1px 0 rgba(255,255,255,0.80);
+  --glass-blur:     blur(20px) saturate(140%);
+  --surface-raised: rgba(32,28,24,0.04);
+  --surface-sunken: rgba(32,28,24,0.06);
+  --surface-overlay: rgba(255,252,248,0.88);
+  --border-color:   rgba(32,28,24,0.12);
+}
+
+html[data-theme="sunrise"] body {
+  color: rgba(32,28,24,0.92);
+  background:
+    radial-gradient(circle at 10% 10%, rgba(224,123,57,0.12), transparent 32%),
+    radial-gradient(circle at 82% 16%, rgba(46,158,107,0.08), transparent 24%),
+    radial-gradient(circle at 88% 86%, rgba(180,140,80,0.10), transparent 30%),
+    #faf7f2;
+}
+
+html[data-theme="sunrise"] ::selection {
+  background: rgba(224,123,57,0.20);
+  color: #1a1610;
+}
+
+html[data-theme="sunrise"] .blob-1 {
+  background: radial-gradient(circle, rgba(224,123,57,0.08), transparent 70%);
+}
+
+html[data-theme="sunrise"] .blob-2 {
+  background: radial-gradient(circle, rgba(46,158,107,0.06), transparent 70%);
+}
+
+html[data-theme="sunrise"] .blob-3 {
+  background: radial-gradient(circle, rgba(180,140,80,0.06), transparent 70%);
+}
+
+/* Light mode overrides for elements with hardcoded dark colors */
+html[data-theme="sunrise"] .sidebar {
+  border-right: 1px solid rgba(32,28,24,0.08);
+}
+
+html[data-theme="sunrise"] .message-bubble.assistant {
+  background: var(--glass-bg);
+  color: var(--text-primary);
+}
+
+html[data-theme="sunrise"] .glass-input,
+html[data-theme="sunrise"] .message-textarea {
+  color: var(--text-primary);
+  background: rgba(255,255,255,0.60);
+  border-color: rgba(32,28,24,0.12);
+}
+
+html[data-theme="sunrise"] .glass-input::placeholder,
+html[data-theme="sunrise"] .message-textarea::placeholder {
+  color: var(--text-muted);
+}
+
+html[data-theme="sunrise"] .session-item:hover {
+  background: rgba(224,123,57,0.08);
+}
+
+html[data-theme="sunrise"] .session-item.active {
+  background: rgba(224,123,57,0.12);
+  border-color: rgba(224,123,57,0.24);
+}
+
+html[data-theme="sunrise"] .meta-pill {
+  background: rgba(32,28,24,0.06);
+  color: var(--text-secondary);
+}
+
+html[data-theme="sunrise"] .btn-ghost {
+  color: var(--text-secondary);
+}
+
+html[data-theme="sunrise"] .btn-ghost:hover {
+  background: rgba(32,28,24,0.06);
+  color: var(--text-primary);
+}
+
+html[data-theme="sunrise"] pre,
+html[data-theme="sunrise"] code {
+  background: rgba(32,28,24,0.05);
+}
+
+html[data-theme="sunrise"] pre code {
+  color: rgba(32,28,24,0.85);
+}
+
+html[data-theme="sunrise"] .auth-overlay {
+  background: rgba(250,247,242,0.90);
+}
+
+html[data-theme="sunrise"] .scroll-bottom-btn {
+  background: var(--glass-bg);
+  color: var(--text-primary);
+  border-color: var(--glass-border);
+}
+
+html[data-theme="sunrise"] .settings-textarea {
+  background: rgba(32,28,24,0.06);
+  color: var(--text-primary);
+  border-color: rgba(32,28,24,0.12);
+}
+
+html[data-theme="sunrise"] .logs-output {
+  background: rgba(32,28,24,0.04);
+  color: var(--text-primary);
+}
+
+/* Comprehensive sunrise overrides for hardcoded dark backgrounds */
+html[data-theme="sunrise"] .session-rename-input {
+  background: rgba(32,28,24,0.04);
+  color: var(--text-primary);
+  border-color: rgba(32,28,24,0.12);
+}
+
+html[data-theme="sunrise"] .assistant .message-bubble code {
+  background: rgba(32,28,24,0.06);
+  color: rgba(32,28,24,0.85);
+}
+
+html[data-theme="sunrise"] .assistant .message-bubble pre {
+  background: rgba(32,28,24,0.06);
+}
+
+html[data-theme="sunrise"] .bg-detail-output {
+  background: rgba(32,28,24,0.04);
+  color: var(--text-primary);
+}
+
+html[data-theme="sunrise"] .sched-task-pre {
+  background: rgba(32,28,24,0.04);
+  color: var(--text-primary);
+}
+
+html[data-theme="sunrise"] .result-output {
+  background: rgba(32,28,24,0.04);
+  color: var(--text-primary);
+}
+
+html[data-theme="sunrise"] .fv-content .fv-preview pre {
+  background: rgba(32,28,24,0.04);
+  color: var(--text-primary);
+}
+
+html[data-theme="sunrise"] .td-content pre {
+  background: rgba(32,28,24,0.04);
+  color: var(--text-primary);
+}
+
+html[data-theme="sunrise"] .asf-input,
+html[data-theme="sunrise"] .asf-textarea,
+html[data-theme="sunrise"] .asf-select {
+  background: rgba(32,28,24,0.04);
+  color: var(--text-primary);
+  border-color: rgba(32,28,24,0.12);
+}
+
+html[data-theme="sunrise"] .bg-log-rendered pre {
+  background: rgba(32,28,24,0.04);
+  color: var(--text-primary);
+}
+
+html[data-theme="sunrise"] .canvas-content .log-area {
+  background: rgba(32,28,24,0.04);
+  color: var(--text-primary);
+}
+
+html[data-theme="sunrise"] .canvas-content .code-block {
+  background: rgba(32,28,24,0.05);
+  color: var(--text-primary);
+}
+
+html[data-theme="sunrise"] .log-line-error { color: #dc3545; }
+html[data-theme="sunrise"] .log-line-warn  { color: #b45309; }
+html[data-theme="sunrise"] .log-line-info  { color: #2563eb; }
+
+/* ─────────────────────────────────────────────────────
+   Cyberpunk — Neon pink/cyan
+   ───────────────────────────────────────────────────── */
+[data-theme="cyberpunk"] {
+  --accent:         #ff2d6f;
+  --accent-hover:   #e6225e;
+  --accent-glow:    rgba(255,45,111,0.34);
+  --accent-rgb:     255, 45, 111;
+  --gold:           #00f0ff;
+  --gold-hover:     #00d4e0;
+  --gold-glow:      rgba(0,240,255,0.28);
+  --danger:         #ff4444;
+  --danger-hover:   #e03333;
+  --text-primary:   rgba(255,255,255,0.94);
+  --text-secondary: rgba(255,255,255,0.58);
+  --text-muted:     rgba(255,255,255,0.34);
+  --glass-bg:       rgba(18,8,28,0.62);
+  --glass-border:   rgba(255,45,111,0.14);
+  --glass-shadow:   0 18px 48px rgba(0,0,0,0.50), 0 0 0 1px rgba(255,45,111,0.08), inset 0 1px 0 rgba(255,255,255,0.06);
+  --glass-blur:     blur(28px) saturate(200%);
+  --surface-raised: rgba(255,45,111,0.06);
+  --surface-sunken: rgba(8,2,16,0.44);
+  --surface-overlay: rgba(12,4,22,0.80);
+}
+
+html[data-theme="cyberpunk"] body {
+  background:
+    radial-gradient(circle at 10% 10%, rgba(255,45,111,0.18), transparent 32%),
+    radial-gradient(circle at 82% 16%, rgba(0,240,255,0.10), transparent 24%),
+    radial-gradient(circle at 88% 86%, rgba(120,0,200,0.16), transparent 30%),
+    #0d0015;
+}
+
+html[data-theme="cyberpunk"] ::selection {
+  background: rgba(255,45,111,0.30);
+  color: #fff0f4;
+}
+
+html[data-theme="cyberpunk"] .blob-1 {
+  background: radial-gradient(circle, rgba(255,45,111,0.16), transparent 70%);
+}
+
+html[data-theme="cyberpunk"] .blob-2 {
+  background: radial-gradient(circle, rgba(0,240,255,0.10), transparent 70%);
+}
+
+html[data-theme="cyberpunk"] .blob-3 {
+  background: radial-gradient(circle, rgba(120,0,200,0.12), transparent 70%);
+}
+
+/* ─────────────────────────────────────────────────────
+   Theme Picker UI Styles
+   ───────────────────────────────────────────────────── */
+.theme-picker-wrap {
+  position: relative;
+  display: inline-block;
+}
+
+.theme-picker-dropdown {
+  display: none;
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 50%;
+  transform: translateX(-50%);
+  width: 220px;
+  padding: 10px;
+  background: var(--glass-bg);
+  backdrop-filter: var(--glass-blur);
+  -webkit-backdrop-filter: var(--glass-blur);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--glass-shadow);
+  z-index: 200;
+  animation: theme-picker-in 0.15s ease;
+}
+
+.theme-picker-dropdown.open {
+  display: block;
+}
+
+@keyframes theme-picker-in {
+  from { opacity: 0; transform: translateX(-50%) translateY(6px); }
+  to   { opacity: 1; transform: translateX(-50%) translateY(0); }
+}
+
+.theme-picker-title {
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  margin-bottom: 8px;
+  padding: 0 4px;
+}
+
+.theme-option {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border-radius: var(--radius-xs);
+  cursor: pointer;
+  border: 1px solid transparent;
+  transition: background var(--transition), border-color var(--transition);
+  margin-bottom: 4px;
+}
+
+.theme-option:last-child {
+  margin-bottom: 0;
+}
+
+.theme-option:hover {
+  background: var(--surface-raised);
+}
+
+.theme-option.active {
+  background: var(--surface-raised);
+  border-color: var(--accent);
+}
+
+.theme-swatch {
+  display: flex;
+  gap: 3px;
+  flex-shrink: 0;
+}
+
+.theme-swatch-dot {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  border: 1px solid rgba(255,255,255,0.15);
+}
+
+.theme-option-label {
+  font-size: 0.82rem;
+  font-weight: 500;
+  color: var(--text-primary);
+}
+
+.theme-option-desc {
+  font-size: 0.68rem;
+  color: var(--text-muted);
+}
+
+/* Swatch colors for each theme */
+.theme-swatch-emerald .s1 { background: #3ecf8e; }
+.theme-swatch-emerald .s2 { background: #f5c542; }
+.theme-swatch-emerald .s3 { background: #0a0e1a; border-color: rgba(255,255,255,0.2); }
+
+.theme-swatch-midnight .s1 { background: #6c9fff; }
+.theme-swatch-midnight .s2 { background: #ffa726; }
+.theme-swatch-midnight .s3 { background: #060a1e; border-color: rgba(255,255,255,0.2); }
+
+.theme-swatch-sunrise .s1 { background: #e07b39; }
+.theme-swatch-sunrise .s2 { background: #2e9e6b; }
+.theme-swatch-sunrise .s3 { background: #faf7f2; border-color: rgba(0,0,0,0.15); }
+
+.theme-swatch-cyberpunk .s1 { background: #ff2d6f; }
+.theme-swatch-cyberpunk .s2 { background: #00f0ff; }
+.theme-swatch-cyberpunk .s3 { background: #0d0015; border-color: rgba(255,255,255,0.2); }
+
+.theme-swatch-custom .s1 { background: #9c27b0; }
+.theme-swatch-custom .s2 { background: #ff9800; }
+.theme-swatch-custom .s3 { background: #1a1a2e; border-color: rgba(255,255,255,0.2); }

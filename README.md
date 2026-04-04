@@ -840,6 +840,65 @@ echo "my-db-password" | /secret set db_password
 /secret delete db_password
 ```
 
+#### Programmatic Secret Access in AI Agents (wee_executor)
+
+AI agents running in privileged modes can retrieve secrets programmatically via the **`get_secret()` capability** in `wee_executor.py` (F024).
+
+**When to use:**
+- AI agents need secure access to credentials (API keys, database passwords) during task execution
+- Secrets must never be logged or exposed to LLM context
+- Only available in `interactive` and `sync` modes; blocked in `background` and `api` modes for security
+
+**Requirements:**
+1. **Elevation flag**: Task must run with `WEE_ELEVATED=true` in the session environment
+2. **Name validation**: Secret names must match `^[A-Za-z0-9._-]+$` (alphanumeric, dot, hyphen, underscore)
+3. **Mode restriction**: Only callable from `interactive` or `sync` mode sessions
+
+**Capability signature:**
+```python
+# Called within an AI agent's context
+get_secret(
+    name: str,           # Secret name (e.g., "GITHUB_TOKEN")
+    backend: str = "keyring"  # Storage backend: "keyring" or "file"
+) -> Dict
+# Returns: {status, name, backend, value} on success
+#          {error, code} on failure (e.g., ELEVATION_REQUIRED, INVALID_NAME)
+```
+
+**Agent Context Injection:**
+When an agent runs with `WEE_ELEVATED=true`, `agent_manager.py` automatically injects `get_secret()` documentation and usage examples into the agent's context. The agent can then call `get_secret()` to retrieve secrets needed for the task.
+
+**Security:**
+- 🔐 **Elevation requirement**: Prevents accidental secret access from untrusted agents
+- 🛡️ **Name validation**: Blocks path traversal attempts (e.g., `../etc/passwd` rejected)
+- 🚫 **Mode filtering**: Only in `interactive`/`sync` modes; disabled in `background`/`api` for API call safety
+- 📋 **Audit logging**: All calls logged with name + backend; **secret values never logged** for compliance
+- ⏱️ **Rate limiting**: 50 requests/minute per session to prevent brute-force attacks
+
+**How it works:**
+1. AI agent calls `get_secret(name="GITHUB_TOKEN", backend="keyring")`
+2. `wee_executor.py` validates the name and checks `WEE_ELEVATED=true`
+3. Subprocess delegates to `secret_tool.py` to retrieve the secret value
+4. Secret is returned to the agent but never written to logs
+5. Agent can use the secret for its task (e.g., authenticate to GitHub API)
+
+**Example agent usage (conceptual):**
+```
+Agent (with WEE_ELEVATED=true):
+  "I need to push code to GitHub. Let me get my credentials."
+  
+  get_secret(name="GITHUB_TOKEN", backend="keyring")
+  → {status: "success", name: "GITHUB_TOKEN", value: "ghp_...", backend: "keyring"}
+  
+  # Now the agent has the token and can authenticate API calls
+```
+
+**Available backends:**
+- `keyring` (default): System keyring (GNOME Keyring, Macos Keychain, etc.)
+- `file`: Encrypted JSON store (requires `cryptography` + `python-keyring`)
+
+See **[docs/secret-tool.md](./docs/secret-tool.md)** for CLI and storage backend details.
+
 ### N8N Integration
 
 Use in an N8N workflow:
@@ -1048,6 +1107,43 @@ For scheduling memory promotion via the task scheduler or cron:
 ```bash
 bash scripts/promote_all_agents_memory.sh
 ```
+
+
+**PATCH /api/v1/sessions/{id}/settings** — Update session settings
+
+Modify session-level settings like verbose mode (tool call visibility). Settings are persisted and returned in subsequent session queries.
+
+Request body (JSON):
+```json
+{
+  "silent_mode": false  // Show tool call lines; set to true to hide
+}
+```
+
+Response (200 OK):
+```json
+{
+  "id": "sess_abc123",
+  "silent_mode": false,
+  "created_at": "2026-04-03T20:00:00Z",
+  "updated_at": "2026-04-03T21:05:42Z"
+}
+```
+
+Error responses:
+- `401 Unauthorized` — Missing or invalid Bearer token
+- `404 Not Found` — Session does not exist
+- `422 Unprocessable Entity` — Invalid value (e.g., non-boolean for `silent_mode`)
+
+**Features:**
+- Whitelist-based field filtering — only recognized fields are accepted (currently: `silent_mode`)
+- WebUI toggle button in header reflects and controls this setting
+- Tool call lines (`.tc-line`) hidden when `silent_mode=true`, shown when `false`
+- Does not affect logging or session history — only visual display
+
+**Security:**
+- Requires API authentication (Bearer token)
+- Per-session settings — each user session has independent configuration
 
 
 ### Quick Start
@@ -1391,6 +1487,43 @@ bash scripts/promote_all_agents_memory.sh
 ```
 
 
+**PATCH /api/v1/sessions/{id}/settings** — Update session settings
+
+Modify session-level settings like verbose mode (tool call visibility). Settings are persisted and returned in subsequent session queries.
+
+Request body (JSON):
+```json
+{
+  "silent_mode": false  // Show tool call lines; set to true to hide
+}
+```
+
+Response (200 OK):
+```json
+{
+  "id": "sess_abc123",
+  "silent_mode": false,
+  "created_at": "2026-04-03T20:00:00Z",
+  "updated_at": "2026-04-03T21:05:42Z"
+}
+```
+
+Error responses:
+- `401 Unauthorized` — Missing or invalid Bearer token
+- `404 Not Found` — Session does not exist
+- `422 Unprocessable Entity` — Invalid value (e.g., non-boolean for `silent_mode`)
+
+**Features:**
+- Whitelist-based field filtering — only recognized fields are accepted (currently: `silent_mode`)
+- WebUI toggle button in header reflects and controls this setting
+- Tool call lines (`.tc-line`) hidden when `silent_mode=true`, shown when `false`
+- Does not affect logging or session history — only visual display
+
+**Security:**
+- Requires API authentication (Bearer token)
+- Per-session settings — each user session has independent configuration
+
+
 ### Quick Start
 
 ```bash
@@ -1665,6 +1798,43 @@ For scheduling memory promotion via the task scheduler or cron:
 ```bash
 bash scripts/promote_all_agents_memory.sh
 ```
+
+
+**PATCH /api/v1/sessions/{id}/settings** — Update session settings
+
+Modify session-level settings like verbose mode (tool call visibility). Settings are persisted and returned in subsequent session queries.
+
+Request body (JSON):
+```json
+{
+  "silent_mode": false  // Show tool call lines; set to true to hide
+}
+```
+
+Response (200 OK):
+```json
+{
+  "id": "sess_abc123",
+  "silent_mode": false,
+  "created_at": "2026-04-03T20:00:00Z",
+  "updated_at": "2026-04-03T21:05:42Z"
+}
+```
+
+Error responses:
+- `401 Unauthorized` — Missing or invalid Bearer token
+- `404 Not Found` — Session does not exist
+- `422 Unprocessable Entity` — Invalid value (e.g., non-boolean for `silent_mode`)
+
+**Features:**
+- Whitelist-based field filtering — only recognized fields are accepted (currently: `silent_mode`)
+- WebUI toggle button in header reflects and controls this setting
+- Tool call lines (`.tc-line`) hidden when `silent_mode=true`, shown when `false`
+- Does not affect logging or session history — only visual display
+
+**Security:**
+- Requires API authentication (Bearer token)
+- Per-session settings — each user session has independent configuration
 
 
 ### Quick Start

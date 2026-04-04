@@ -6,6 +6,87 @@ All notable changes to Wee Orchestrator are documented here.
 
 ### Added
 
+#### F025 (Enhanced): Custom Themes API — wee-qa Fix Round 2
+- **Status**: ✅ QA Approved (commits 6d45763 + 56ac461 on dev)
+- **Commit**: 6d45763
+- Adds custom theme support via `/api/v1/themes` endpoint with CSS embedded in listing response
+- **B01 (BLOCKER) Fix**: Removed `/api/v1/themes/{name}/css` endpoint entirely.
+  - CSS content now embedded as `css` field in each custom theme object in the themes list response.
+  - `loadCustomThemes()` caches CSS content in `_customThemeCSS` map (populated via the already-authenticated themes list call).
+  - `applyTheme()` now injects custom CSS via `<style id="custom-theme-style">` element instead of `<link href="...">`.
+  - `<link>` elements cannot send `Authorization` headers — the root cause of always-401 custom theme loading.
+  - After `loadCustomThemes()` completes, re-applies current theme if it's custom (handles localStorage-persisted custom themes on page load).
+- **M01 Fix**: `name == "custom.css"` dead code → corrected to `name == "custom"` (stem of `custom.css.template` is `custom.css` but `.template` files don't match `*.css` glob).
+- **M02 Fix**: E501 violation on `fastapi.responses` import line — split to multi-line parenthesized import form.
+- **M03 Fix**: `innerHTML` with server data in `loadCustomThemes()` → replaced with explicit DOM element creation using `textContent` for label/description fields.
+- **Testing**: Replaced `TestGetThemeCSS` (9 tests, endpoint removed) with `TestCustomThemeCSSInListing` (4 new tests: css in listing, builtins have no css field, endpoint returns 404, traversal regex). 17 themes tests pass; full suite 857 passed, 9 skipped.
+
+#### F027: Verbose Mode Toggle for Tool Call Visibility
+- **Status**: ✅ QA Approved (commit edcc105 on dev)
+- **Commit**: edcc105
+- Adds session-level verbose mode toggle to show/hide tool call details in WebUI chat interface
+- **Features**:
+  - New **PATCH /api/v1/sessions/{id}/settings** endpoint for updating session settings
+  - `silent_mode` field in settings (boolean); controls tool call display without affecting actual logging
+  - WebUI header toggle button (aria-pressed="true|false") with visual feedback
+  - CSS `.tc-line` visibility control based on verbose state
+- **API Endpoint** — `PATCH /api/v1/sessions/{id}/settings`:
+  - Accepts JSON body: `{"silent_mode": true|false}` (whitelist-based field filtering)
+  - Returns 401 without bearer token, 422 for non-boolean values, 404 for missing sessions
+  - Updates persisted session object; settings returned in subsequent `GET /api/v1/sessions/{id}` calls
+  - Security: Requires API authentication (Bearer token)
+- **WebUI Integration**:
+  - Toggle button in WebUI header with aria-pressed state indication
+  - Click handler updates server setting via PATCH endpoint
+  - CSS hides tool call lines (`.tc-line`) when verbose mode off
+  - Graceful error handling with user feedback on API failures
+- **Testing**: 19 new tests covering auth, type validation, 404/422 responses, field whitelist, settings persistence
+- **QA baseline**: 799 tests pass (9 skipped), 0 regressions, flake8 clean
+- **Minor note**: Non-blocking dead code — localStorage.setItem called in click handler but no corresponding getItem; commit message promises localStorage fallback but only server-side persistence implemented. Feature works correctly. localStorage should be removed or fully implemented in future cleanup pass.
+- **Ready for deployment**: No breaking changes, backwards compatible, no new config required
+
+#### F024: get_secret Capability in wee_executor.py
+- **Status**: ✅ QA Approved (commit 4232d55 on dev)
+- **Commit**: 4232d55
+- Adds `get_secret(name, backend)` capability to wee_executor for safe secret retrieval in privileged contexts
+- **Defense-in-depth Security**:
+  - **Mode filtering**: Callable only in `interactive` and `sync` modes; blocked in `background` and `api` modes
+  - **Elevation requirement**: Requires `WEE_ELEVATED=true` environment variable (prevents accidental secret access)
+  - **Name validation**: Regex-based whitelist (`SECRET_NAME_RE`) — only alphanumeric, dot, hyphen, underscore; blocks path traversal attempts (e.g., `../etc/passwd` → rejected)
+  - **Rate limiting**: Per-session rate limit on secret retrieval (50 requests/minute)
+  - **Audit logging**: All calls logged with secret name + backend only; **secret values never logged** for compliance
+- **Implementation**:
+  - New `cap_get_secret()` handler in wee_executor.py — subprocess delegate to `secret_tool.py`
+  - Supports both `keyring` (system) and `file` (encrypted JSON) backends
+  - Returns `{status, name, backend, value}` on success; `{error, code}` on failure
+- **Agent Context Injection**:
+  - agent_manager.py automatically includes `get_secret()` example in context injection for agents running with `WEE_ELEVATED=true`
+  - Example shows usage pattern and elevation requirement warning
+- **Testing**: 52/52 wee_executor tests pass (20 new F024 tests + 32 baseline)
+  - Coverage: elevation enforcement, name validation, path traversal protection, mode restrictions, backend validation, subprocess integration, timeout handling, rate limiting, audit log format
+  - Integration tests: CLI usage with agent_manager.py; session-aware mode enforcement
+- **QA baseline**: 842 total tests pass (9 skipped), 0 regressions, flake8 clean
+- **Minor note**: Pre-existing E501 on docstring line 3 (90 chars) — not introduced by F024, flagged for future cleanup
+- **Ready for PR**: No breaking changes, backwards compatible, no new dependencies, no config required
+
+#### F025: CSS Theming/Skinning System
+- **Status**: ✅ QA Approved (commits 7446a56, 70e5b75, b367375)
+- **Initial Commit**: 7446a56
+- Adds 4 themes (Emerald default, Midnight, Sunrise, Cyberpunk) with CSS variable-based customization
+- Theme switching via `data-theme` attribute on html element, persisted in localStorage
+- Theme picker UI in sidebar toolbar with color swatch previews
+- Sunrise light mode includes highlight.js theme swap; mobile-friendly meta theme-color updates
+- **Changes**:
+  - webui/dist/themes.css: 3 alternate theme definitions with CSS variable overrides (334 lines)
+  - webui/dist/index.html: theme picker UI and JS switching logic (106 lines)
+- **QA Resolution**:
+  - FIXED MAJOR 1: Added sunrise override for `.settings-textarea` (70e5b75) — white background, dark text now visible
+  - FIXED MAJOR 2: Added sunrise override for `.logs-output` (70e5b75) — white background, dark text now visible
+  - b367375: Comprehensive sunrise overrides for 12 additional hardcoded dark backgrounds across app UI
+  - All fixes verified against app.css; 765 tests pass (9 skipped)
+  - MINOR non-blocking: `.asf-input` missing from sunrise override (white text on dark bg — readable but inconsistent in agent setup form)
+- **Ready for PR**: Approved by wee-qa. dev → main, Foster can create PR at will.
+
 #### F016: Telegram Slash Command Registration with BotFather
 - **Status**: ✅ QA Approved (commit 3cdf77a on dev)
 - **Commit**: 3cdf77a

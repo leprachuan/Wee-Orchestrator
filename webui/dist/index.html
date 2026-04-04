@@ -13,7 +13,8 @@
   <link rel="icon" type="image/png" sizes="192x192" href="/static/icon-192.png" />
   <link rel="apple-touch-icon" href="/static/apple-touch-icon.png" />
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/highlight.js@11.9.0/styles/github-dark.min.css" />
-  <link rel="stylesheet" href="app.css?v=20260402secrets3" />
+  <link rel="stylesheet" href="app.css?v=20260403f027" />
+  <link rel="stylesheet" href="themes.css?v=20260403f025custom" />
 </head>
 <body>
   <!-- Auth overlay -->
@@ -87,6 +88,28 @@
         <button id="btn-settings" class="btn btn-ghost btn-sm sidebar-tool-btn" title="Agent Settings">⚙️ Settings</button>
         <button id="btn-nav-secrets" class="btn btn-ghost btn-sm sidebar-tool-btn" title="Secret Manager">🔐 Secrets</button>
         <button id="btn-logs" class="btn btn-ghost btn-sm sidebar-tool-btn" title="Service Logs">📋 Logs</button>
+        <div class="theme-picker-wrap">
+          <button id="btn-theme" class="btn btn-ghost btn-sm sidebar-tool-btn" title="Theme">🎨 Theme</button>
+          <div id="theme-picker" class="theme-picker-dropdown">
+            <div class="theme-picker-title">Choose Theme</div>
+            <div class="theme-option" data-theme-value="">
+              <div class="theme-swatch theme-swatch-emerald"><span class="theme-swatch-dot s1"></span><span class="theme-swatch-dot s2"></span><span class="theme-swatch-dot s3"></span></div>
+              <div><div class="theme-option-label">Emerald</div><div class="theme-option-desc">Default glass</div></div>
+            </div>
+            <div class="theme-option" data-theme-value="midnight">
+              <div class="theme-swatch theme-swatch-midnight"><span class="theme-swatch-dot s1"></span><span class="theme-swatch-dot s2"></span><span class="theme-swatch-dot s3"></span></div>
+              <div><div class="theme-option-label">Midnight</div><div class="theme-option-desc">Deep blue ocean</div></div>
+            </div>
+            <div class="theme-option" data-theme-value="sunrise">
+              <div class="theme-swatch theme-swatch-sunrise"><span class="theme-swatch-dot s1"></span><span class="theme-swatch-dot s2"></span><span class="theme-swatch-dot s3"></span></div>
+              <div><div class="theme-option-label">Sunrise</div><div class="theme-option-desc">Warm light mode</div></div>
+            </div>
+            <div class="theme-option" data-theme-value="cyberpunk">
+              <div class="theme-swatch theme-swatch-cyberpunk"><span class="theme-swatch-dot s1"></span><span class="theme-swatch-dot s2"></span><span class="theme-swatch-dot s3"></span></div>
+              <div><div class="theme-option-label">Cyberpunk</div><div class="theme-option-desc">Neon pink &amp; cyan</div></div>
+            </div>
+          </div>
+        </div>
       </div>
       <div class="sidebar-footer">
         <span id="sidebar-identity" class="sidebar-user"></span>
@@ -109,6 +132,7 @@
           <span id="meta-runtime" class="meta-pill meta-runtime" title="Runtime">—</span>
           <span id="meta-model"   class="meta-pill meta-model"   title="Model">—</span>
           <span id="meta-permissions" class="meta-pill meta-permissions" title="Permissions">🔒 restricted</span>
+<button id="btn-verbose-toggle" class="meta-pill meta-verbose" title="Tool calls visible — click to hide" aria-pressed="false">⚙️</button>
 <button id="btn-nav-notifications" class="meta-pill meta-alerts" title="Alerts">🔔<span id="notif-badge" class="nav-badge notif-badge-red hidden">0</span></button>
         </div>
       </header>
@@ -414,17 +438,17 @@
 
     <!-- Canvas slide-over panel (right side) -->
     <aside id="canvas-panel" class="canvas-panel canvas-hidden">
-      <div class="canvas-edge-tab" id="canvas-edge-tab" title="Toggle Canvas">🎨</div>
+      <div class="canvas-edge-tab" id="canvas-edge-tab" title="Toggle Canvas">📺</div>
       <div class="canvas-inner">
         <div class="canvas-header">
-          <h2 class="canvas-title">🎨 Wee Canvas</h2>
+          <h2 class="canvas-title">📺 Wee Canvas</h2>
           <button id="btn-canvas-close" class="btn-icon" title="Close canvas">✕</button>
         </div>
         <div id="canvas-tab-bar" class="canvas-tab-bar"></div>
         <div id="canvas-closed-sessions" class="canvas-closed-sessions"></div>
         <div id="canvas-content" class="canvas-content">
           <div id="canvas-empty" class="canvas-empty">
-            <div style="font-size:48px;opacity:0.4;">🎨</div>
+            <div style="font-size:48px;opacity:0.4;">📺</div>
             <div style="font-size:16px;font-weight:600;color:var(--text-secondary);margin-top:8px;">No active canvas</div>
             <div style="font-size:13px;color:var(--text-muted);margin-top:4px;">Canvas sessions will appear here when agents push content.</div>
           </div>
@@ -702,7 +726,7 @@
   <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/dompurify@3/dist/purify.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/highlight.js@11.9.0/highlight.min.js"></script>
-  <script src="app.js?v=20260402secrets3" type="module"></script>
+  <script src="app.js?v=20260403f027" type="module"></script>
 
     <!-- Skills slide-over panel (right side, below canvas) -->
     <aside id="skills-panel" class="skills-panel skills-hidden">
@@ -746,5 +770,155 @@
       </div>
     </aside>
 
+
+  <!-- Theme switching (F025) -->
+  <script>
+  (function() {
+    var THEME_KEY = 'wee_theme';
+    var BUILTIN_THEMES = ['', 'midnight', 'sunrise', 'cyberpunk'];
+    var _customThemeCSS = {};
+
+    function applyTheme(name) {
+      if (name && name !== 'emerald') {
+        document.documentElement.setAttribute('data-theme', name);
+      } else {
+        document.documentElement.removeAttribute('data-theme');
+      }
+      // Update meta theme-color for mobile
+      var metaTheme = document.querySelector('meta[name="theme-color"]');
+      if (metaTheme) {
+        var colors = { '': '#0a0e1a', midnight: '#060a1e', sunrise: '#faf7f2', cyberpunk: '#0d0015' };
+        metaTheme.content = colors[name || ''] || '#0a0e1a';
+      }
+      // Update highlight.js theme for sunrise
+      var hlLink = document.querySelector('link[href*="highlight.js"]');
+      if (hlLink) {
+        if (name === 'sunrise') {
+          hlLink.href = 'https://cdn.jsdelivr.net/npm/highlight.js@11.9.0/styles/github.min.css';
+        } else {
+          hlLink.href = 'https://cdn.jsdelivr.net/npm/highlight.js@11.9.0/styles/github-dark.min.css';
+        }
+      }
+      // Inject custom CSS via <style> element (no auth needed — CSS fetched via authenticated themes list)
+      var styleEl = document.getElementById('custom-theme-style');
+      if (name && BUILTIN_THEMES.indexOf(name) === -1) {
+        if (!styleEl) {
+          styleEl = document.createElement('style');
+          styleEl.id = 'custom-theme-style';
+          document.head.appendChild(styleEl);
+        }
+        styleEl.textContent = _customThemeCSS[name] || '';
+      } else if (styleEl) {
+        styleEl.textContent = '';
+      }
+    }
+
+    function getTheme() {
+      return localStorage.getItem(THEME_KEY) || '';
+    }
+
+    function setTheme(name) {
+      if (name) {
+        localStorage.setItem(THEME_KEY, name);
+      } else {
+        localStorage.removeItem(THEME_KEY);
+      }
+      applyTheme(name);
+      updatePickerUI(name);
+    }
+
+    function updatePickerUI(name) {
+      var opts = document.querySelectorAll('.theme-option');
+      opts.forEach(function(opt) {
+        var val = opt.getAttribute('data-theme-value');
+        opt.classList.toggle('active', val === (name || ''));
+      });
+    }
+
+    // Apply saved theme immediately (before paint)
+    applyTheme(getTheme());
+
+    // Fetch custom themes from API and add to picker
+    function loadCustomThemes() {
+      var token = (typeof STATE !== 'undefined' && STATE.token) ? STATE.token : localStorage.getItem('wee_auth_token') || '';
+      if (!token) return;
+      fetch('/api/v1/themes', {
+        headers: { 'Authorization': 'Bearer ' + token }
+      })
+      .then(function(r) { return r.ok ? r.json() : null; })
+      .then(function(data) {
+        if (!data || !data.themes) return;
+        var picker = document.getElementById('theme-picker');
+        if (!picker) return;
+        var existing = {};
+        picker.querySelectorAll('.theme-option').forEach(function(el) {
+          existing[el.getAttribute('data-theme-value')] = true;
+        });
+        data.themes.forEach(function(t) {
+          if (!t.builtin && t.css) { _customThemeCSS[t.name] = t.css; }
+          var val = (t.name === 'emerald') ? '' : t.name;
+          if (existing[val]) return;
+          var div = document.createElement('div');
+          div.className = 'theme-option';
+          div.setAttribute('data-theme-value', val);
+          var swatch = document.createElement('div');
+          swatch.className = 'theme-swatch theme-swatch-custom';
+          ['s1', 's2', 's3'].forEach(function(cls) {
+            var dot = document.createElement('span');
+            dot.className = 'theme-swatch-dot ' + cls;
+            swatch.appendChild(dot);
+          });
+          var info = document.createElement('div');
+          var labelEl = document.createElement('div');
+          labelEl.className = 'theme-option-label';
+          labelEl.textContent = t.label;
+          var descEl = document.createElement('div');
+          descEl.className = 'theme-option-desc';
+          descEl.textContent = t.description;
+          info.appendChild(labelEl);
+          info.appendChild(descEl);
+          div.appendChild(swatch);
+          div.appendChild(info);
+          picker.appendChild(div);
+        });
+        var cur = getTheme();
+        updatePickerUI(cur);
+        if (cur && BUILTIN_THEMES.indexOf(cur) === -1) { applyTheme(cur); }
+      })
+      .catch(function() { /* ignore — custom themes just won't appear */ });
+    }
+
+    document.addEventListener('DOMContentLoaded', function() {
+      var btn = document.getElementById('btn-theme');
+      var picker = document.getElementById('theme-picker');
+      if (!btn || !picker) return;
+
+      updatePickerUI(getTheme());
+
+      btn.addEventListener('click', function(e) {
+        e.stopPropagation();
+        picker.classList.toggle('open');
+      });
+
+      picker.addEventListener('click', function(e) {
+        var opt = e.target.closest('.theme-option');
+        if (!opt) return;
+        var val = opt.getAttribute('data-theme-value');
+        setTheme(val);
+        picker.classList.remove('open');
+      });
+
+      // Close on outside click
+      document.addEventListener('click', function(e) {
+        if (!btn.contains(e.target) && !picker.contains(e.target)) {
+          picker.classList.remove('open');
+        }
+      });
+
+      // Load custom themes after auth is ready
+      setTimeout(loadCustomThemes, 1500);
+    });
+  })();
+  </script>
 </body>
 </html>

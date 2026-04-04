@@ -1,0 +1,99 @@
+/* =====================================================
+   Leprachaun Glassmorphism — Custom Theme
+   =====================================================
+   Irish/leprechaun-themed dark glassmorphism with
+   emerald accents, frosted glass panels, and
+   Celtic-inspired gold details.
+   ===================================================== */
+
+[data-theme="leprachaun-glassmorphism"] {
+  /* ── Primary palette ──────────────────────────────── */
+  --accent:         #00c853;
+  --accent-hover:   #00b548;
+  --accent-glow:    rgba(0,200,83,0.30);
+  --accent-rgb:     0, 200, 83;
+  --gold:           #ffd700;
+  --gold-hover:     #e6c200;
+  --gold-glow:      rgba(255,215,0,0.25);
+  --danger:         #ff5252;
+  --danger-hover:   #e04848;
+
+  /* ── Surfaces ─────────────────────────────────────── */
+  --bg-primary:     #061a0e;
+  --bg-secondary:   #0a2614;
+  --bg-tertiary:    #0d301a;
+  --surface:        rgba(10,38,20,0.70);
+  --surface-raised: rgba(0,200,83,0.06);
+  --surface-sunken: rgba(2,12,6,0.50);
+  --surface-overlay: rgba(6,26,14,0.85);
+
+  /* ── Text ─────────────────────────────────────────── */
+  --text-primary:   #e8f5e9;
+  --text-secondary: #a5d6a7;
+  --text-muted:     #66bb6a;
+  --text-inverse:   #061a0e;
+
+  /* ── Glass ────────────────────────────────────────── */
+  --glass-bg:       rgba(10,38,20,0.55);
+  --glass-border:   rgba(0,200,83,0.12);
+  --glass-shadow:   0 18px 48px rgba(0,0,0,0.45),
+                    0 0 0 1px rgba(0,200,83,0.08),
+                    inset 0 1px 0 rgba(255,255,255,0.04);
+  --glass-blur:     blur(28px) saturate(180%);
+
+  /* ── Borders & dividers ───────────────────────────── */
+  --border-subtle:  rgba(0,200,83,0.10);
+  --border-default: rgba(0,200,83,0.18);
+  --border-strong:  rgba(0,200,83,0.30);
+  --divider:        rgba(0,200,83,0.08);
+
+  /* ── Scrollbar ────────────────────────────────────── */
+  --scrollbar-track: rgba(6,26,14,0.40);
+  --scrollbar-thumb: rgba(0,200,83,0.25);
+  --scrollbar-hover: rgba(0,200,83,0.40);
+}
+
+html[data-theme="leprachaun-glassmorphism"] body {
+  background:
+    radial-gradient(circle at 15% 15%, rgba(0,200,83,0.15), transparent 35%),
+    radial-gradient(circle at 80% 20%, rgba(255,215,0,0.08), transparent 25%),
+    radial-gradient(circle at 85% 85%, rgba(0,150,60,0.12), transparent 30%),
+    #061a0e;
+}
+
+html[data-theme="leprachaun-glassmorphism"] ::selection {
+  background: rgba(0,200,83,0.30);
+  color: #e8f5e9;
+}
+
+html[data-theme="leprachaun-glassmorphism"] .blob-1 {
+  background: radial-gradient(circle, rgba(0,200,83,0.12), transparent 70%);
+}
+
+html[data-theme="leprachaun-glassmorphism"] .blob-2 {
+  background: radial-gradient(circle, rgba(255,215,0,0.06), transparent 70%);
+}
+
+html[data-theme="leprachaun-glassmorphism"] .blob-3 {
+  background: radial-gradient(circle, rgba(0,150,60,0.10), transparent 70%);
+}
+
+/* ── Gold accents for Celtic details ────────────────── */
+html[data-theme="leprachaun-glassmorphism"] .sidebar-logo,
+html[data-theme="leprachaun-glassmorphism"] .sidebar-title {
+  color: #ffd700;
+  text-shadow: 0 0 12px rgba(255,215,0,0.25);
+}
+
+html[data-theme="leprachaun-glassmorphism"] .btn-primary {
+  background: linear-gradient(135deg, #00c853 0%, #009624 100%);
+  border: 1px solid rgba(255,215,0,0.15);
+  box-shadow: 0 2px 12px rgba(0,200,83,0.25),
+              inset 0 1px 0 rgba(255,255,255,0.10);
+}
+
+html[data-theme="leprachaun-glassmorphism"] .btn-primary:hover {
+  background: linear-gradient(135deg, #00e65b 0%, #00b548 100%);
+  box-shadow: 0 4px 20px rgba(0,200,83,0.35),
+              inset 0 1px 0 rgba(255,255,255,0.15);
+}

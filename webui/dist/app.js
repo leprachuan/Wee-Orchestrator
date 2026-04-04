@@ -32,6 +32,7 @@ const STATE = {
   fileViewerData:  null,           // cached file data
   // Per-session stream tracking for multi-session streaming support
   sessionStreams:  {},             // sessionId -> { isProcessing, abortController, query }
+  silentMode:     false,          // F027: tool call visibility (true=hidden)
 };
 
 // ─── Persist ──────────────────────────────────────────────────────────────────
@@ -297,6 +298,26 @@ function runtimeIconHTML(runtime, size = 14) {
 }
 
 // ─── Session Meta Pills ───────────────────────────────────────────────────────
+// F027: Verbose mode toggle — update UI state
+function _updateVerboseToggleUI(silent) {
+  const btn = document.getElementById('btn-verbose-toggle');
+  if (!btn) return;
+  const msgContainer = document.getElementById('messages');
+  if (silent) {
+    btn.textContent = '🔇';
+    btn.title = 'Tool calls hidden — click to show';
+    btn.setAttribute('aria-pressed', 'true');
+    btn.classList.add('verbose-off');
+    if (msgContainer) msgContainer.classList.add('tool-calls-hidden');
+  } else {
+    btn.textContent = '⚙️';
+    btn.title = 'Tool calls visible — click to hide';
+    btn.setAttribute('aria-pressed', 'false');
+    btn.classList.remove('verbose-off');
+    if (msgContainer) msgContainer.classList.remove('tool-calls-hidden');
+  }
+}
+
 function updateSessionMeta(data) {
   const set = (id, text, extra = '') => {
     const el = $(id);
@@ -340,6 +361,14 @@ function updateSessionMeta(data) {
     permEl.classList.toggle('perm-sandboxed', permMode === 'sandboxed');
   }
 
+
+  // F027: Verbose toggle — sync from session status
+  const _verboseBtn = document.getElementById('btn-verbose-toggle');
+  if (_verboseBtn) {
+    const _silentMode = !!data?.silent_mode;
+    STATE.silentMode = _silentMode;
+    _updateVerboseToggleUI(_silentMode);
+  }
 
   // Refresh TODOs when agent changes
   if (typeof fetchAndRenderTodos === 'function') {
@@ -2731,6 +2760,25 @@ document.addEventListener('DOMContentLoaded', () => {
   $('btn-nav-background').addEventListener('click', showBackgroundPanel);
   $('btn-nav-scheduler').addEventListener('click', showSchedulerPanel);
   $('btn-nav-notifications').addEventListener('click', toggleNotificationPanel);
+
+  // F027: Verbose mode toggle click handler
+  $('btn-verbose-toggle')?.addEventListener('click', async () => {
+    if (!STATE.currentSessionId) return;
+    const newSilent = !STATE.silentMode;
+    STATE.silentMode = newSilent;
+    _updateVerboseToggleUI(newSilent);
+    localStorage.setItem(
+      'wee_verbose_' + STATE.currentSessionId,
+      newSilent ? '0' : '1'
+    );
+    try {
+      await apiRequest(
+        'PATCH',
+        '/sessions/' + STATE.currentSessionId + '/settings',
+        { silent_mode: newSilent }
+      );
+    } catch (_) { /* non-fatal — UI already updated */ }
+  });
 
   // Notification settings/actions
   $('btn-notif-mark-all-read').addEventListener('click', async () => {
