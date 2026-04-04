@@ -7514,6 +7514,7 @@ window._skillCheckUpdate = _skillCheckUpdate;
 window._skillTriggerUpdate = _skillTriggerUpdate;
 window._showOriginForm = _showOriginForm;
 window._saveOrigin = _saveOrigin;
+window._deleteSkill = _deleteSkill;
 window._deleteOrigin = _deleteOrigin;
 window._closeSkillDetail = _closeSkillDetail;
 window._openSkillDetail = _openSkillDetail;
