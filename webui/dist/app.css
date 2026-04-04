@@ -5086,15 +5086,20 @@ html, body {
 /* Sidebar toolbar */
 .sidebar-toolbar {
   display: flex;
+  flex-wrap: wrap;
   gap: 6px;
   padding: 8px 12px 4px;
   border-top: 1px solid var(--glass-border);
   margin-top: auto;
 }
 .sidebar-tool-btn {
-  flex: 1;
+  flex: 1 1 auto;
+  min-width: 0;
   font-size: 0.8rem;
   justify-content: center;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .sidebar-tool-btn.active {
   background: rgba(62,207,142,0.18);
