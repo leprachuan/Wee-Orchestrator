@@ -5,6 +5,24 @@ All notable changes to Wee Orchestrator are documented here.
 ## [Unreleased] — Dev Branch
 
 ### Fixed
+#### #72: Remove Memory Context Prompt Fallback, Inject at Session Creation
+- **Status**: ✅ QA Approved (commit 30d1400 on dev)
+- **Commit**: 30d1400
+- **Issue**: Memory context was injected as a prompt prefix in `_run_background_task()`, a fragile approach that only applied to background tasks. Other code paths (interactive sessions, queued jobs, promoted sessions) lacked memory context. The [MEMORY CONTEXT] wrapper block was unwieldy and duplicated memory across multiple system messages.
+- **Fix**: Moved memory injection from background task prompt-prepend into `build_agent_context_prompt()` to run once per session creation for all code paths:
+  - **memory/inject.py**: Removed [MEMORY CONTEXT] block wrapper from `build_context()` and `get_memory_context()` — now returns raw sections only
+  - **agent_manager.py `build_agent_context_prompt()`**: Added `memory_injected` flag check; injects memory via `get_memory_context()` if not yet set for the session
+  - **agent_manager.py `_run_background_task()`**: Removed explicit memory injection block (replaced by one-liner comment directing to build_agent_context_prompt)
+  - **Session-Level Injection**: Memory is now injected exactly once per session at context build time, not at task execution time
+- **Testing**: 34 tests in `tests/test_memory_native.py` (new `TestNoPromptPrefix` class with 4 tests):
+  - No [MEMORY CONTEXT] markers in output
+  - `memory_injected` flag prevents double-injection
+  - `build_agent_context_prompt()` includes memory without wrapper block
+  - Existing tests updated to assert absence of wrapper
+- **Metrics**: 947 tests pass, 9 skipped, 0 failures — no regressions
+- **Impact**: Memory context is now consistently injected across all session types (background, interactive, queued); cleaner output without wrapper markers; single injection point eliminates duplication risks
+
+
 #### #71: Scheduler Backward Clock Drift Skips Jobs
 - **Status**: QA Approved (commit 867c553 on dev)
 - **Commit**: 867c553

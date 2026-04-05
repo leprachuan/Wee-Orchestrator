@@ -1011,16 +1011,17 @@ Automatically removes CLI metadata from output:
 - Token usage statistics
 - Session headers and banners
 
-### Background Task Memory Injection
-Background tasks automatically receive session context at startup:
-- **MEMORY.md**: Your persistent memory file with important facts and context
-- **Daily Notes**: Today's (and yesterday's) timestamped notes from `memories/daily/`
-- **Automatic Prepending**: Context is injected only for top-level background tasks; sub-tasks skip injection to prevent duplication
+### Session Memory Injection
+Memory context is automatically injected at session creation time for all code paths:
+- **When**: Memory is injected once per session in `build_agent_context_prompt()` when the session is first created
+- **What**: MEMORY.md (persistent facts) and daily notes (today/yesterday timestamps) from `memories/daily/`
+- **Scope**: All session types — background tasks, interactive sessions, queued jobs, and promoted sessions
+- **Single Injection**: The `memory_injected` flag ensures context is prepended exactly once per session, preventing duplication
+- **Sub-Task Handling**: Sub-tasks created from within a background task (via `origin_session_id`) automatically skip re-injection
 - **Fail-Silent**: If memory files are missing, tasks continue without context (no errors)
-- **Session Tracking**: The `memory_injected` flag tracks whether context was injected for this session
-- **Sub-Task Detection**: Sub-tasks created from within a background task (via `origin_session_id`) automatically skip memory injection
+- **No Wrapper Block**: Memory sections are injected raw without [MEMORY CONTEXT] wrapper markers for cleaner output
 
-This ensures that AI agents have access to relevant context without requiring explicit setup per task.
+This unified approach ensures all agents have access to relevant context without fragile prompt-based injection or code-path-specific handling.
 
 ## Testing
 
