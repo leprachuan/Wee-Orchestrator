@@ -1207,6 +1207,42 @@ Error response body (JSON):
 }
 ```
 
+
+**Code Generation Improvements** (#68): Additional handling for empty/null responses and connection errors:
+
+| HTTP Status | Error Code | Triggers |
+|-------------|-----------|---------|
+| `502` | `empty_response` | Null, empty, or whitespace-only runtime output |
+| `502` | `connection_refused` | `ECONNREFUSED` — Model server not running (e.g., local Ollama/OpenCode instance down) |
+| `502` | `connection_reset` | `ECONNRESET` or `socket hang up` — Server closed connection unexpectedly |
+| `504` | `connection_timeout` | `ETIMEDOUT` — Model server slow or hung |
+
+Additional processing (#68):
+- **ANSI Stripping**: ANSI escape codes (color, formatting) stripped from runtime output before error detection — prevents formatting codes from interfering with pattern matching in code generation scenarios
+- **Example empty response**:
+  ```json
+  {
+    "detail": {
+      "error": "empty_response",
+      "message": "Runtime returned empty/null output",
+      "runtime": "opencode",
+      "model": "gemma4-26b"
+    }
+  }
+  ```
+- **Example connection error**:
+  ```json
+  {
+    "detail": {
+      "error": "connection_refused",
+      "message": "Error: connect ECONNREFUSED 127.0.0.1:5000",
+      "runtime": "opencode",
+      "code": "ECONNREFUSED"
+    }
+  }
+  ```
+
+Other error responses:
 Other error responses:
 - `401 Unauthorized` — Missing or invalid Bearer token
 - `422 Unprocessable Entity` — `prompt` missing, exceeds 10,000 chars, or invalid field type

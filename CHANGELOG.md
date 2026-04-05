@@ -5,6 +5,32 @@ All notable changes to Wee Orchestrator are documented here.
 ## [Unreleased] — Dev Branch
 
 ### Fixed
+#### #68: OpenCode/Gemma4 Code Generation Improvements
+- **Status**: ✅ QA Approved (commit 9a0aee1 on dev)
+- **Commit**: 9a0aee1
+- **Issue**: OpenCode/Gemma4 code generation test (`code_gen`) was receiving misleading HTTP 200 responses when the runtime produced empty/null output or connection errors. Root cause identical to #66/#67 — test ran before `/api/v1/query` existed and accumulated artifacts from runtime issues.
+- **Improvements**:
+  - **ANSI Stripping**: Strip ANSI escape codes from runtime output before error detection and response formatting. Prevents color codes from interfering with pattern matching.
+  - **Empty Response Detection**: Return `502 Bad Gateway` (empty_response error) for null, empty, or whitespace-only runtime output. Previously returned HTTP 200 with empty body.
+  - **Connection Error Patterns**: Added detection for local model server failures:
+    - `ECONNREFUSED` (502) — Connection refused (server not running)
+    - `ETIMEDOUT` (504) — Connection timeout (server slow/hung)
+    - `ECONNRESET` / `socket hang up` (502) — Connection reset by peer
+  - **Response Format** (connection error example):
+    ```json
+    {
+      "detail": {
+        "error": "connection_refused",
+        "message": "Error: connect ECONNREFUSED 127.0.0.1:5000",
+        "runtime": "opencode",
+        "code": "ECONNREFUSED"
+      }
+    }
+    ```
+- **Testing**: 11 new tests in `TestQueryEndpointCodeGen` covering ANSI stripping, empty response detection, and connection error patterns. 2 tests updated in `TestQueryEndpointErrorDetection` — empty/None responses now correctly return 502 instead of 200.
+- **Suite Results**: 901 tests pass, 9 skipped, 0 failures — no regressions.
+- **Impact**: Code generation evaluator tests now receive accurate HTTP status codes and error details; connection issues and empty responses no longer masked as success. Improves debugging and error recovery for OpenCode/Gemma4 scenarios.
+
 #### #67: Runtime Error Detection for /api/v1/query Endpoint
 - **Status**: ✅ QA Approved (commit 5fe872d on dev)
 - **Commit**: 5fe872d
