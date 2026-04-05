@@ -5191,8 +5191,44 @@ Do NOT emit status updates for quick operations (< 15 seconds)."""
         except Exception:
             injection_text = ""
 
+        # --- Per-session memory injection (runs once per session) ---
+        # Inject memory context from MEMORY.md + daily notes at session
+        # creation.  The memory_injected flag on the session prevents
+        # re-injection on subsequent messages in the same session.
+        memory_section = ""
+        try:
+            _session_data = self.load_session_data(n8n_session_id)
+            if not (_session_data or {}).get("memory_injected"):
+                from memory.inject import get_memory_context
+                agent_info_mem = self.AGENTS.get(
+                    agent, self.AGENTS.get("orchestrator", {})
+                )
+                _mem_ctx = get_memory_context(
+                    agent_path=agent_info_mem.get("path", "")
+                )
+                if _mem_ctx:
+                    memory_section = f"\n\n{_mem_ctx}\n"
+                    self.update_session_field(
+                        n8n_session_id, "memory_injected", True
+                    )
+                    print(
+                        f"[Memory] Injected {len(_mem_ctx)} chars for "
+                        f"session={n8n_session_id} agent={agent}",
+                        flush=True,
+                    )
+                else:
+                    # No memory files — still mark as injected
+                    self.update_session_field(
+                        n8n_session_id, "memory_injected", True
+                    )
+        except Exception as _mem_exc:
+            print(
+                f"[Memory] Injection skipped: {_mem_exc}",
+                flush=True,
+            )
+
         context = f"""{handoff_prefix}[Session ID: {n8n_session_id}]
-{runtime_instruction}{injection_text}{mobile_channel_instruction}{silent_mode_instruction}{agent_desc}{files_context}{render_instruction}{bg_task_instruction}{canvas_instruction}{wee_executor_instruction}{timeout_instruction}
+{runtime_instruction}{injection_text}{mobile_channel_instruction}{silent_mode_instruction}{memory_section}{agent_desc}{files_context}{render_instruction}{bg_task_instruction}{canvas_instruction}{wee_executor_instruction}{timeout_instruction}
 
 User Request:
 {prompt}"""
@@ -9971,38 +10007,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 channel=channel,
                 bg_identity=user_identity,
             )
-            # --- Per-session memory injection (runs once at session start) ---
-            # This replaces the old prompt-prepend fallback. Memory is injected
-            # here at execution time so queued/promoted tasks get fresh context.
-            # Sub-tasks dispatched from inside a bg task have origin_session_id;
-            # skip injection for those to avoid double-injection.
-            _task_rec = bg_task_mgr.get_task(task_id) if bg_task_mgr else None
-            _is_sub_task = bool(
-                _task_rec and _task_rec.get("origin_session_id")
-            )
-            if not _is_sub_task:
-                try:
-                    from memory.inject import get_memory_context
-                    _agent_cfg = session_mgr.AGENTS.get(
-                        agent, session_mgr.AGENTS.get("orchestrator", {})
-                    )
-                    _agent_path = _agent_cfg.get("path", "")
-                    _mem_ctx = get_memory_context(agent_path=_agent_path)
-                    if _mem_ctx:
-                        context_prompt = f"{_mem_ctx}\n\n{context_prompt}"
-                        session_mgr.update_session_field(
-                            session_id, "memory_injected", True
-                        )
-                        print(
-                            f"[Memory] Injected {len(_mem_ctx)} chars at session "
-                            f"start for agent={agent}",
-                            flush=True,
-                        )
-                except Exception as _mem_exc:
-                    print(
-                        f"[Memory] Session injection skipped: {_mem_exc}",
-                        flush=True,
-                    )
+            # Memory injection moved to build_agent_context_prompt (Issue #72)
 
             # -- Inject steering check instruction ----------------------------
             steering_path = bg_task_mgr.get_steering_path(task_id)
@@ -10469,7 +10474,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 session_pref = defaults.get("notification_preference", "all")
                 notify_pref = session_pref != "off"
 
-        # Memory injection is handled at session start inside _run_background_task
+        # Memory injection is handled at session creation in build_agent_context_prompt
         # (not here at API time) so queued/promoted tasks get fresh context.
         effective_prompt = body.prompt
 
