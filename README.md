@@ -1466,6 +1466,21 @@ The built-in task scheduler (`task_scheduler.py`) runs AI jobs on a schedule wit
 - ⏸️ **Pause / Resume** — temporarily disable jobs without deleting them
 - 📋 **Results history** — last N results stored per job, viewable via API or Web UI
 
+### Clock Drift Handling
+
+The scheduler is resilient to system clock adjustments (NTP corrections, manual time changes, etc.). Four complementary mechanisms ensure consistent job execution:
+
+- **Drift Detection** — Compares wall-clock vs monotonic time each cycle. Logs warnings when drift exceeds 30 seconds with direction and magnitude.
+- **Per-Job Monotonic Cooldown** — Records monotonic time of last execution for each job. Prevents double-execution when a backward clock jump reschedules a job into an already-executed time slot.
+- **Stale Job Recalculation** — Recurring jobs more than 1 hour overdue get their next run advanced to the next future slot instead of executing stale runs. One-time jobs are never recalculated.
+- **Drift-Aware Readiness Check** — Applies all three guards before execution. Logs info when executing catchup runs.
+
+**Bottom line:** If your system experiences a clock adjustment, the scheduler will:
+- Skip any jobs that have already been executed (monotonic cooldown)
+- Advance any recurring jobs that would be stale (1+ hour old)
+- Continue executing new jobs normally
+
+
 ### REST API Endpoints
 
 | Method | Path | Description |

@@ -5,6 +5,25 @@ All notable changes to Wee Orchestrator are documented here.
 ## [Unreleased] — Dev Branch
 
 ### Fixed
+#### #70: Scheduler Clock Drift Handling
+- **Status**: ✅ QA Approved (commit 4be10e2 on dev)
+- **Commit**: 4be10e2
+- **Issue**: Task scheduler executor was vulnerable to system clock adjustments (NTP corrections, manual time changes). A backward clock jump could cause jobs to execute multiple times (reentry into already-executed time slots). A forward jump could cause jobs to be skipped if they landed outside the scheduling window. No mechanism to detect or handle drift.
+- **Fix**: Added four complementary clock drift handling mechanisms:
+  - **Drift Detection** (`_detect_clock_drift()`): Compares wall-clock delta vs monotonic time delta each cycle. When drift exceeds 30 seconds, logs warning with direction and magnitude.
+  - **Per-Job Monotonic Cooldown** (`_job_last_exec_mono`): Records monotonic time of last execution for each job. Prevents double-execution when a backward clock jump reschedules a job into an already-executed time slot. Cooldown expires after 10 monotonic seconds.
+  - **Stale Job Recalculation** (`_recalculate_stale_jobs()`): Recurring jobs whose `next_run` is more than 1 hour (MAX_CATCHUP_WINDOW) overdue get their `next_run` advanced to the next future slot instead of executing stale runs. Logs warning with overdue duration. One-time jobs are never recalculated.
+  - **Drift-Aware Readiness Check** (`_is_job_ready()`): Enhanced to apply all three guards. Returns `False` for stale jobs so recalculation runs; returns `False` during monotonic cooldown window; logs info when executing catchup runs >30s overdue.
+- **Modernization**: Replaced deprecated `datetime.utcnow()` with `datetime.now(timezone.utc)` throughout executor (6 callsites). Properly handles ISO 8601 conversion (`+00:00` → `Z`).
+- **Testing**: 18 new tests in `tests/test_scheduler_clock_drift.py` covering:
+  - Drift detection (forward/backward/normal)
+  - Monotonic cooldown (prevents double-exec, expires correctly)
+  - Stale job recalculation (recurring vs one-time, MAX_CATCHUP_WINDOW boundary)
+  - Integration tests with mock clock scenarios
+  - Verification that `datetime.utcnow()` is no longer used
+- **Metrics**: 919 tests pass (40 scheduler tests including 18 new), 0 failures — no regressions
+- **Impact**: Scheduler now resilient to system clock adjustments; no more duplicate executions or skipped jobs after clock events. Enterprises running NTP sync or time-keeping hardware can rely on Wee Orchestrator for consistent job execution
+
 #### #68: OpenCode/Gemma4 Code Generation Improvements
 - **Status**: ✅ QA Approved (commit 9a0aee1 on dev)
 - **Commit**: 9a0aee1
