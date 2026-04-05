@@ -5,6 +5,21 @@ All notable changes to Wee Orchestrator are documented here.
 ## [Unreleased] — Dev Branch
 
 ### Fixed
+#### #66: Added POST /api/v1/query Stateless Endpoint
+- **Status**: ✅ QA Approved (commit 2763cc4 on dev)
+- **Commit**: 2763cc4
+- **Issue**: Test suite expected a stateless query endpoint `/api/v1/query` to exist but it was missing (404)
+- **Feature**: New POST `/api/v1/query` endpoint for one-shot queries without session management:
+  - Creates ephemeral session internally
+  - Executes prompt, returns result in single response
+  - Automatically cleans up session after completion
+  - Accepts `prompt`, `runtime` (copilot/claude), `model`, `agent`, `timeout` parameters
+  - Includes 10k character prompt validation
+  - Rate-limited to 30 requests/minute per IP
+- **OpenCode/Gemma4 Support**: Endpoint works with all supported runtimes
+- **Testing**: 880 tests pass, 9 skipped, 0 failures. 10 new tests for query endpoint all pass.
+- **Impact**: Enables stateless, fire-and-forget query operations without session complexity
+
 
 #### #63: Delete Skill Button Not Working in WebUI
 - **Status**: ✅ QA Approved (commit 4c8ad30 on dev)
