@@ -9583,7 +9583,6 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         timeout: int = None,
         notify: bool = True,
         permission_mode: str = "restricted",
-        memory_injected: bool = False,
     ):
         """Blocking function that runs a background task in a subprocess.
         Called from a thread pool executor.
@@ -9851,9 +9850,38 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 channel=channel,
                 bg_identity=user_identity,
             )
-            # Track memory injection state in session so compaction re-inject works
-            if memory_injected:
-                session_mgr.update_session_field(session_id, "memory_injected", True)
+            # --- Per-session memory injection (runs once at session start) ---
+            # This replaces the old prompt-prepend fallback. Memory is injected
+            # here at execution time so queued/promoted tasks get fresh context.
+            # Sub-tasks dispatched from inside a bg task have origin_session_id;
+            # skip injection for those to avoid double-injection.
+            _task_rec = bg_task_mgr.get_task(task_id) if bg_task_mgr else None
+            _is_sub_task = bool(
+                _task_rec and _task_rec.get("origin_session_id")
+            )
+            if not _is_sub_task:
+                try:
+                    from memory.inject import get_memory_context
+                    _agent_cfg = session_mgr.AGENTS.get(
+                        agent, session_mgr.AGENTS.get("orchestrator", {})
+                    )
+                    _agent_path = _agent_cfg.get("path", "")
+                    _mem_ctx = get_memory_context(agent_path=_agent_path)
+                    if _mem_ctx:
+                        context_prompt = f"{_mem_ctx}\n\n{context_prompt}"
+                        session_mgr.update_session_field(
+                            session_id, "memory_injected", True
+                        )
+                        print(
+                            f"[Memory] Injected {len(_mem_ctx)} chars at session "
+                            f"start for agent={agent}",
+                            flush=True,
+                        )
+                except Exception as _mem_exc:
+                    print(
+                        f"[Memory] Session injection skipped: {_mem_exc}",
+                        flush=True,
+                    )
 
             # -- Inject steering check instruction ----------------------------
             steering_path = bg_task_mgr.get_steering_path(task_id)
@@ -10320,28 +10348,9 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 session_pref = defaults.get("notification_preference", "all")
                 notify_pref = session_pref != "off"
 
-        # --- Per-agent memory injection for top-level background tasks ---
-        # Sub-tasks dispatched from inside a bg task have origin_session_id set;
-        # skip injection for those to avoid double-injection.
+        # Memory injection is handled at session start inside _run_background_task
+        # (not here at API time) so queued/promoted tasks get fresh context.
         effective_prompt = body.prompt
-        if not body.origin_session_id:
-            try:
-                from memory.inject import get_memory_context, prepend_memory
-
-                _agent_cfg = session_mgr.AGENTS.get(
-                    agent, session_mgr.AGENTS.get("orchestrator", {})
-                )
-                _agent_path = _agent_cfg.get("path", "")
-                _mem_ctx = get_memory_context(agent_path=_agent_path)
-                if _mem_ctx:
-                    effective_prompt = prepend_memory(body.prompt, _mem_ctx)
-                    print(
-                        f"[Memory] Injected {len(_mem_ctx)} chars for "
-                        f"agent={agent} path={_agent_path}",
-                        flush=True,
-                    )
-            except Exception as _mem_exc:
-                print(f"[Memory] Injection skipped: {_mem_exc}", flush=True)
 
         # Check concurrent limit — queue instead of rejecting
         running = bg_task_mgr.count_running(channel, identity, agent)
@@ -10404,10 +10413,8 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
 
         # Run in background thread using shared executor
         loop = asyncio.get_running_loop()
-        # effective_prompt != body.prompt means memory was injected for this task
-        _memory_was_injected = effective_prompt != body.prompt
         loop.run_in_executor(
-            bg_executor,  # Use shared executor instead of creating new one
+            bg_executor,
             _run_background_task,
             task_id,
             session_id,
@@ -10420,7 +10427,6 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             bg_timeout,
             notify_pref,
             perm_mode,
-            _memory_was_injected,
         )
 
         return {

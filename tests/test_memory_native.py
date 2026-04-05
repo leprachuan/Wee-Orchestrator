@@ -216,26 +216,45 @@ class TestGetMemoryContext:
             assert "Agent A fact" not in ctx_b
 
 
-# ── prepend_memory ────────────────────────────────────────────────────────
+# ── session-level memory injection ────────────────────────────────────────
 
 
-class TestPrependMemory:
-    def test_prepends_context(self):
-        from memory.inject import prepend_memory
+class TestSessionMemoryInjection:
+    """Verify memory is injected at session start, not prompt-prepended."""
 
-        result = prepend_memory("my prompt", "[MEMORY]facts[/MEMORY]")
-        assert result.startswith("[MEMORY]facts[/MEMORY]")
-        assert result.endswith("my prompt")
+    def test_get_memory_context_returns_context_block(self, tmp_path):
+        """get_memory_context returns a MEMORY CONTEXT block (not prepended to prompt)."""
+        from memory.inject import get_memory_context
 
-    def test_empty_context_returns_prompt(self):
-        from memory.inject import prepend_memory
+        (tmp_path / "MEMORY.md").write_text("Durable fact\n")
+        with patch.dict(os.environ, {"WEE_MEMORY_DIR": str(tmp_path)}, clear=False):
+            ctx = get_memory_context()
+            assert "MEMORY CONTEXT" in ctx
+            assert "Durable fact" in ctx
+            # Context is standalone — not prepended to any prompt
+            assert ctx.startswith("=")
 
-        assert prepend_memory("my prompt", "") == "my prompt"
+    def test_no_prepend_memory_import(self):
+        """prepend_memory is no longer exposed by memory.inject."""
+        import memory.inject as mi
 
-    def test_none_like_empty(self):
-        from memory.inject import prepend_memory
+        assert not hasattr(mi, "prepend_memory"), (
+            "prepend_memory should be removed — memory is injected at session start"
+        )
 
-        assert prepend_memory("my prompt", None) == "my prompt"
+    def test_memory_injected_flag_semantics(self, tmp_path):
+        """Session flag tracks whether memory was injected at session start."""
+        from memory.inject import get_memory_context
+
+        (tmp_path / "MEMORY.md").write_text("Test fact\n")
+        with patch.dict(os.environ, {"WEE_MEMORY_DIR": str(tmp_path)}, clear=False):
+            ctx = get_memory_context()
+
+        # Simulate _run_background_task session injection logic
+        session = {"memory_injected": False}
+        if ctx:
+            session["memory_injected"] = True
+        assert session["memory_injected"] is True
 
 
 # ── detect_compaction ─────────────────────────────────────────────────────
@@ -432,21 +451,19 @@ class TestInjectOnce:
 
     def test_inject_once_flag(self):
         """memory_injected flag prevents double injection."""
-        # The flag is tracked in session state; test the logic
+        # Session-level injection: get_memory_context is called once,
+        # result prepended to context_prompt (not user prompt).
         memory_injected = False
-        prompt = "Do something"
-        effective_prompt = prompt
 
-        if not memory_injected:
-            from memory.inject import get_memory_context, prepend_memory
+        from memory.inject import get_memory_context
 
-            ctx = get_memory_context(agent_path="/nonexistent")
-            if ctx:
-                effective_prompt = prepend_memory(prompt, ctx)
-                memory_injected = True
+        ctx = get_memory_context(agent_path="/nonexistent")
+        if ctx:
+            # Would be prepended to context_prompt in _run_background_task
+            memory_injected = True
 
-        # With no memory files, prompt should be unchanged
-        assert effective_prompt == prompt
+        # With no memory files at /nonexistent, no injection occurs
+        assert memory_injected is False
 
     def test_re_inject_on_compaction(self):
         """Compaction detection triggers re-injection."""

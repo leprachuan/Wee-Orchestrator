@@ -13,7 +13,6 @@ from memory.inject import (
     build_context,
     detect_compaction,
     get_memory_context,
-    prepend_memory,
     resolve_memory_dir,
 )
 
@@ -21,7 +20,6 @@ __all__ = [
     "resolve_memory_dir",
     "build_context",
     "get_memory_context",
-    "prepend_memory",
     "detect_compaction",
     "append_daily_note",
 ]

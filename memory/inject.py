@@ -123,13 +123,6 @@ def get_memory_context(agent_path: Optional[str] = None) -> str:
         return ""
 
 
-def prepend_memory(prompt: str, memory_context: str) -> str:
-    """Prepend memory context to prompt."""
-    if not memory_context:
-        return prompt
-    return f"{memory_context}\n\n{prompt}"
-
-
 
 
 def build_executor_context(session_id: str = "", mode: str = "interactive") -> str:
