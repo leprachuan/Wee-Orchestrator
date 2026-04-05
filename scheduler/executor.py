@@ -14,7 +14,7 @@ import os
 import subprocess
 import sys
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, Optional
 
@@ -33,6 +33,13 @@ logging.basicConfig(
     ],
 )
 logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Clock drift handling constants
+# ---------------------------------------------------------------------------
+_CLOCK_DRIFT_THRESHOLD = 30  # seconds — log warning when drift exceeds this
+_MAX_CATCHUP_WINDOW = 3600  # 1 hour — skip (recalculate) runs older than this
+_MIN_EXEC_INTERVAL_MONO = 10  # monotonic seconds — cooldown between same-job runs
 
 _MAX_NOTIFICATION_LENGTH = 200
 
@@ -92,6 +99,40 @@ class TaskSchedulerExecutor:
 
         self._check_stale_checkpoints()
 
+        # Clock drift detection — compare wall clock vs monotonic clock
+        self._last_check_wall = time.time()
+        self._last_check_mono = time.monotonic()
+        # Per-job monotonic timestamp of last execution (prevents double-exec
+        # when a backward clock jump causes _calculate_next_run to re-schedule
+        # into an already-executed time slot).
+        self._job_last_exec_mono: Dict[str, float] = {}
+
+    def _detect_clock_drift(self) -> float:
+        """Compare wall-clock delta with monotonic delta to detect drift.
+
+        Returns drift in seconds (positive = forward jump, negative = backward).
+        Updates internal tracking timestamps.
+        """
+        now_wall = time.time()
+        now_mono = time.monotonic()
+
+        wall_delta = now_wall - self._last_check_wall
+        mono_delta = now_mono - self._last_check_mono
+
+        drift = wall_delta - mono_delta
+
+        self._last_check_wall = now_wall
+        self._last_check_mono = now_mono
+
+        if abs(drift) > _CLOCK_DRIFT_THRESHOLD:
+            direction = "forward" if drift > 0 else "backward"
+            logger.warning(
+                f"System clock drift detected: {drift:+.1f}s ({direction}) — "
+                f"wall Δ={wall_delta:.1f}s vs mono Δ={mono_delta:.1f}s"
+            )
+
+        return drift
+
     def _load_jobs(self) -> Dict:
         """Load jobs from JSON."""
         if not self.jobs_file.exists():
@@ -144,7 +185,7 @@ class TaskSchedulerExecutor:
         checkpoint_file = self.data_dir / f".checkpoint_{job_id}.json"
         checkpoint = {
             "job_id": job_id,
-            "started_at": datetime.utcnow().isoformat() + "Z",
+            "started_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
             "pid": os.getpid(),
         }
         try:
@@ -164,7 +205,7 @@ class TaskSchedulerExecutor:
     def _log_job(self, job_id: str, message: str):
         """Log job execution to job-specific log file."""
         log_file = self.logs_dir / f"{job_id}.log"
-        timestamp = datetime.utcnow().isoformat() + "Z"
+        timestamp = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
         try:
             with open(log_file, "a") as f:
                 f.write(f"[{timestamp}] {message}\n")
@@ -184,7 +225,7 @@ class TaskSchedulerExecutor:
         Creates a JSON file with complete execution details for auditing and analysis.
         """
         result_file = self.results_dir / f"{job_id}.jsonl"
-        timestamp = datetime.utcnow().isoformat() + "Z"
+        timestamp = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
         result = {
             "timestamp": timestamp,
@@ -526,7 +567,14 @@ class TaskSchedulerExecutor:
             self._clear_checkpoint(job_id)
 
     def _is_job_ready(self, job: Dict) -> bool:
-        """Check if a job is ready to execute (enabled and time has passed)."""
+        """Check if a job is ready to execute (enabled and time has passed).
+
+        Handles clock drift by:
+        - Using monotonic cooldown to prevent double-execution after
+          backward clock jumps.
+        - Detecting stale next_run (past MAX_CATCHUP_WINDOW) and returning
+          ``False`` so that ``_recalculate_stale_jobs`` can fix it instead.
+        """
         if not job.get("enabled", True):
             return False
 
@@ -538,8 +586,39 @@ class TaskSchedulerExecutor:
             next_run = datetime.fromisoformat(
                 next_run_str.replace("Z", "+00:00")
             ).replace(tzinfo=None)
-            now = datetime.utcnow()
-            return next_run <= now
+            now = datetime.now(timezone.utc).replace(tzinfo=None)
+
+            if next_run > now:
+                return False
+
+            job_id = job.get("id", "")
+
+            # Monotonic cooldown — prevents double-execution when a backward
+            # clock jump causes _calculate_next_run to schedule the same slot.
+            last_exec_mono = self._job_last_exec_mono.get(job_id)
+            if last_exec_mono is not None:
+                elapsed_mono = time.monotonic() - last_exec_mono
+                if elapsed_mono < _MIN_EXEC_INTERVAL_MONO:
+                    return False
+
+            # Stale run guard — recurring jobs whose next_run is extremely old
+            # should be rescheduled, not executed with stale context.
+            overdue_seconds = (now - next_run).total_seconds()
+            if overdue_seconds > _MAX_CATCHUP_WINDOW and job.get("recurring", True):
+                logger.warning(
+                    f"Job {job_id} next_run is {overdue_seconds:.0f}s overdue "
+                    f"(>{_MAX_CATCHUP_WINDOW}s catchup window) — "
+                    f"will recalculate instead of executing stale run"
+                )
+                return False
+
+            if overdue_seconds > _CLOCK_DRIFT_THRESHOLD:
+                logger.info(
+                    f"Job {job_id} is {overdue_seconds:.0f}s overdue — "
+                    f"executing catchup run"
+                )
+
+            return True
         except (ValueError, TypeError):
             logger.warning(f"Invalid next_run format: {next_run_str}")
             return False
@@ -563,12 +642,72 @@ class TaskSchedulerExecutor:
         logger.warning(f"Could not calculate next run for job")
         return None
 
+    def _recalculate_stale_jobs(self, data: Dict) -> Dict[str, Dict]:
+        """Recalculate next_run for recurring jobs past the catchup window.
+
+        Returns a dict of ``{job_id: updates}`` for jobs whose ``next_run``
+        is so far in the past that executing them would be stale.  Instead
+        of running them, we advance ``next_run`` to the next future slot.
+        """
+        modified: Dict[str, Dict] = {}
+        now = datetime.now(timezone.utc).replace(tzinfo=None)
+
+        for job in data.get("jobs", []):
+            if not job.get("enabled", True):
+                continue
+            if not job.get("recurring", True):
+                continue
+
+            next_run_str = job.get("next_run")
+            if not next_run_str:
+                continue
+
+            try:
+                next_run = datetime.fromisoformat(
+                    next_run_str.replace("Z", "+00:00")
+                ).replace(tzinfo=None)
+                overdue = (now - next_run).total_seconds()
+
+                if overdue > _MAX_CATCHUP_WINDOW:
+                    job_id = job["id"]
+                    new_next = self._calculate_next_run(job)
+                    if new_next:
+                        modified[job_id] = {"next_run": new_next}
+                        logger.warning(
+                            f"Job {job_id} was {overdue:.0f}s overdue "
+                            f"(>{_MAX_CATCHUP_WINDOW}s window) — "
+                            f"advanced next_run to {new_next}"
+                        )
+                    else:
+                        modified[job_id] = {"enabled": False}
+                        logger.warning(
+                            f"Job {job_id} stale and could not recalculate — "
+                            f"disabling"
+                        )
+            except (ValueError, TypeError):
+                continue
+
+        return modified
+
     def check_and_execute(self):
-        """Check for ready jobs and execute them."""
+        """Check for ready jobs and execute them.
+
+        On each cycle, drift between the wall clock and monotonic clock is
+        measured.  Stale recurring jobs (past the catchup window) get their
+        ``next_run`` advanced without executing.  A per-job monotonic
+        cooldown prevents double-execution after backward clock jumps.
+        """
+        # --- clock drift detection ---
+        drift = self._detect_clock_drift()
+
         data = self._load_jobs()
 
+        # --- recalculate stale recurring jobs (forward jump / long outage) ---
+        stale_updates = self._recalculate_stale_jobs(data)
+
         # Track which jobs were modified so we only write back when necessary
-        modified_jobs = {}  # job_id -> dict of updated fields
+        modified_jobs: Dict[str, Dict] = {}
+        modified_jobs.update(stale_updates)
 
         for job in data.get("jobs", []):
             if not self._is_job_ready(job):
@@ -577,12 +716,16 @@ class TaskSchedulerExecutor:
             job_id = job["id"]
             logger.info(f"Job ready: {job_id}")
 
+            # Record monotonic execution time BEFORE executing to close any
+            # race window on backward clock jumps.
+            self._job_last_exec_mono[job_id] = time.monotonic()
+
             # Execute the job
             result = self._execute_task(job)
 
             # Update job record
-            now = datetime.utcnow()
-            updates = {"last_run": now.isoformat() + "Z"}
+            now = datetime.now(timezone.utc)
+            updates = {"last_run": now.isoformat().replace("+00:00", "Z")}
 
             # Handle recurring vs one-time jobs
             recurring = job.get("recurring", True)  # Default: recurring
