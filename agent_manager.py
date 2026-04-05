@@ -4726,11 +4726,32 @@ Example skill structure:
     def _execute_with_context(
         self, prompt: str, delegation_data: dict, n8n_session_id: str
     ) -> str:
-        """Execute a prompt with specific agent context (for sub-agent delegation)"""
+        """Execute a prompt with specific agent context (for sub-agent delegation).
+
+        When is_delegation is True in delegation_data, an ephemeral session key
+        is used so the delegated agent does not overwrite the caller's
+        session_map entry (agent field, session_id, etc.).  Fixes #65.
+        """
         session_id = delegation_data.get("session_id")
         model = delegation_data.get("model", "gpt-5-mini")
         agent = delegation_data.get("agent", "orchestrator")
         runtime = delegation_data.get("runtime", "copilot")
+        is_delegation = delegation_data.get("is_delegation", False)
+
+        # Issue #65: For delegated tasks, use an ephemeral session key to
+        # avoid overwriting the caller's session_map entry.
+        effective_sid = n8n_session_id
+        if is_delegation and n8n_session_id:
+            effective_sid = f"delegation_{session_id}"
+            # Pre-populate ephemeral session with caller's channel/identity so
+            # downstream code (build_agent_context_prompt, status updates) works.
+            caller_data = self.get_or_create_session_data(n8n_session_id)
+            self.get_or_create_session_data(effective_sid)
+            for field in ("channel", "identity", "render_type", "bot_id"):
+                val = caller_data.get(field)
+                if val is not None:
+                    self.update_session_field(effective_sid, field, val)
+            self.update_session_field(effective_sid, "agent", agent)
 
         output = self._dispatch_single_runtime(
             runtime,
@@ -4739,10 +4760,20 @@ Example skill structure:
             agent,
             session_id if runtime == "claude" else None,
             False,
-            n8n_session_id,
+            effective_sid,
             self.command_timeout,
             "text",
         )
+
+        # Clean up ephemeral delegation session to avoid session_map bloat
+        if effective_sid != n8n_session_id:
+            try:
+                with self._session_map_lock:
+                    session_map = self.load_session_map()
+                    session_map.pop(effective_sid, None)
+                    self.save_session_map(session_map)
+            except Exception:
+                pass
 
         return output
 
@@ -7888,6 +7919,21 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 raise ValueError("Query must be 10,000 characters or less")
             return v
 
+
+    class QueryRequest(BaseModel):
+        """One-shot query without session management."""
+        prompt: str
+        runtime: Optional[str] = None
+        model: Optional[str] = None
+        agent: Optional[str] = None
+        timeout: Optional[int] = None
+
+        @field_validator("prompt")
+        @classmethod
+        def validate_prompt_length(cls, v):
+            if len(v) > 10000:
+                raise ValueError("Prompt must be 10,000 characters or less")
+            return v
     # ---- authentication dependency ----
     async def authenticate(
         request: Request,
@@ -8331,6 +8377,124 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             "response": result,
             "runtime": runtime,
             "model": session_data.get("model"),
+        }
+
+    @app.post("/api/v1/query")
+    async def stateless_query(body: QueryRequest, request: Request):
+        """One-shot query endpoint - no session management required.
+
+        Creates a temporary session, executes the prompt, returns the result.
+        Useful for testing, scripting, and simple integrations.
+        """
+        user = await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+
+        client_ip = request.client.host if request.client else "unknown"
+        if not rate_limiter.check(client_ip, "query", max_requests=30, window=60):
+            raise HTTPException(status_code=429, detail="Rate limit exceeded")
+
+        session_id = f"query_{str(uuid4())[:8]}"
+        session_mgr.get_or_create_session_data(session_id, identity=user["identity"])
+        session_mgr.update_session_field(session_id, "channel", user["channel"])
+        session_mgr.update_session_field(session_id, "render_type", "text")
+
+        effective_agent = body.agent or get_default_agent()
+        session_mgr.update_session_field(session_id, "agent", effective_agent)
+
+        if body.model:
+            current_rt = body.runtime or "copilot"
+            model_id = session_mgr.get_model_from_name(body.model, current_rt)
+            session_mgr.update_session_field(
+                session_id, "model", model_id or body.model
+            )
+        if body.runtime:
+            session_mgr.update_session_field(session_id, "runtime", body.runtime)
+
+        if body.timeout:
+            session_mgr.update_session_field(session_id, "timeout", body.timeout)
+
+        session_mgr._bg_identity = user["identity"]
+        loop = asyncio.get_event_loop()
+        with concurrent.futures.ThreadPoolExecutor() as pool:
+            result = await loop.run_in_executor(
+                pool, session_mgr.execute, body.prompt, session_id
+            )
+
+        session_data = session_mgr.get_or_create_session_data(
+            session_id, identity=user["identity"]
+        )
+        runtime = session_data.get("runtime", "copilot")
+        model = session_data.get("model")
+        # Clean up temporary query session to avoid session_map bloat
+        try:
+            with session_mgr._session_map_lock:
+                _smap = session_mgr.load_session_map()
+                _smap.pop(session_id, None)
+                session_mgr.save_session_map(_smap)
+        except Exception:
+            pass
+
+        # Strip ANSI escape codes from runtime output (#68)
+        _ansi_re = re.compile(
+            r"\x1b\[[0-9;]*[a-zA-Z]"
+            r"|\x1b\][^\x07]*\x07"
+            r"|\x1b\([A-Z0-9]"
+        )
+        if result and isinstance(result, str):
+            result = _ansi_re.sub("", result)
+
+        # Detect empty / null responses — runtime produced no output (#68)
+        if not result or (isinstance(result, str) and not result.strip()):
+            raise HTTPException(
+                status_code=502,
+                detail={
+                    "error": "empty_response",
+                    "message": "Runtime returned no output",
+                    "runtime": runtime,
+                    "model": model,
+                },
+            )
+
+        # Detect runtime execution errors and return proper HTTP codes
+        _RUNTIME_ERROR_PATTERNS = [
+            ("ProviderModelNotFoundError", 422, "model_not_found"),
+            ("Model not found:", 422, "model_not_found"),
+            ("NotFoundError:", 422, "resource_not_found"),
+            ("Resource not found", 422, "resource_not_found"),
+            ("rate limit", 429, "rate_limited"),
+            ("RateLimitError", 429, "rate_limited"),
+            ("PermissionDeniedError", 403, "permission_denied"),
+            ("AuthenticationError", 401, "auth_error"),
+            ("Error: executable not found", 503, "runtime_unavailable"),
+            ("ECONNREFUSED", 502, "connection_refused"),
+            ("Connection refused", 502, "connection_refused"),
+            ("connect ECONNREFUSED", 502, "connection_refused"),
+            ("ETIMEDOUT", 504, "connection_timeout"),
+            ("ECONNRESET", 502, "connection_reset"),
+            ("socket hang up", 502, "connection_reset"),
+        ]
+        if isinstance(result, str):
+            for pattern, status_code, error_code in _RUNTIME_ERROR_PATTERNS:
+                if pattern.lower() in result.lower():
+                    raise HTTPException(
+                        status_code=status_code,
+                        detail={
+                            "error": error_code,
+                            "message": result.strip()[:500],
+                            "runtime": runtime,
+                            "model": model,
+                        },
+                    )
+
+        return {
+            "session_id": session_id,
+            "response": result,
+            "runtime": runtime,
+            "model": model,
         }
 
     @app.post("/api/v1/sessions/{session_id}/stream")

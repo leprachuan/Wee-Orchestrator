@@ -4,54 +4,119 @@ All notable changes to Wee Orchestrator are documented here.
 
 ## [Unreleased] — Dev Branch
 
-### Added
+### Fixed
+#### #68: OpenCode/Gemma4 Code Generation Improvements
+- **Status**: ✅ QA Approved (commit 9a0aee1 on dev)
+- **Commit**: 9a0aee1
+- **Issue**: OpenCode/Gemma4 code generation test (`code_gen`) was receiving misleading HTTP 200 responses when the runtime produced empty/null output or connection errors. Root cause identical to #66/#67 — test ran before `/api/v1/query` existed and accumulated artifacts from runtime issues.
+- **Improvements**:
+  - **ANSI Stripping**: Strip ANSI escape codes from runtime output before error detection and response formatting. Prevents color codes from interfering with pattern matching.
+  - **Empty Response Detection**: Return `502 Bad Gateway` (empty_response error) for null, empty, or whitespace-only runtime output. Previously returned HTTP 200 with empty body.
+  - **Connection Error Patterns**: Added detection for local model server failures:
+    - `ECONNREFUSED` (502) — Connection refused (server not running)
+    - `ETIMEDOUT` (504) — Connection timeout (server slow/hung)
+    - `ECONNRESET` / `socket hang up` (502) — Connection reset by peer
+  - **Response Format** (connection error example):
+    ```json
+    {
+      "detail": {
+        "error": "connection_refused",
+        "message": "Error: connect ECONNREFUSED 127.0.0.1:5000",
+        "runtime": "opencode",
+        "code": "ECONNREFUSED"
+      }
+    }
+    ```
+- **Testing**: 11 new tests in `TestQueryEndpointCodeGen` covering ANSI stripping, empty response detection, and connection error patterns. 2 tests updated in `TestQueryEndpointErrorDetection` — empty/None responses now correctly return 502 instead of 200.
+- **Suite Results**: 901 tests pass, 9 skipped, 0 failures — no regressions.
+- **Impact**: Code generation evaluator tests now receive accurate HTTP status codes and error details; connection issues and empty responses no longer masked as success. Improves debugging and error recovery for OpenCode/Gemma4 scenarios.
 
-#### Issue #66: Stateless Query Endpoint
+#### #67: Runtime Error Detection for /api/v1/query Endpoint
+- **Status**: ✅ QA Approved (commit 5fe872d on dev)
+- **Commit**: 5fe872d
+- **Issue**: `/api/v1/query` returned HTTP 200 with error text in the response body when runtime execution failed (model not found, rate limited, permission denied, etc.). Evaluator tests like opencode/gemma4-26b calc test received misleading results — a successful HTTP status masking a runtime failure.
+- **Fix**: Added `_RUNTIME_ERROR_PATTERNS` detection to the `/api/v1/query` endpoint. When the runtime response matches a known error pattern, the endpoint returns a proper HTTP error status code with structured error detail instead of HTTP 200 with error text.
+- **Error Codes Mapped**:
+  - `422 Unprocessable Entity` — Model/resource not found (`ProviderModelNotFoundError`, `model not found`, `unknown model`)
+  - `429 Too Many Requests` — Rate limit exceeded (`RateLimitError`, `rate limit`, `too many requests`)
+  - `403 Forbidden` — Permission denied (`PermissionDeniedError`, `permission denied`, `access denied`)
+  - `401 Unauthorized` — Auth failure (`AuthenticationError`, `invalid api key`, `authentication failed`)
+  - `503 Service Unavailable` — Service unavailable (`ServiceUnavailableError`, `service unavailable`, `temporarily unavailable`)
+- **Response Format** (error case):
+  ```json
+  {
+    "detail": {
+      "error": "model_not_found",
+      "message": "ProviderModelNotFoundError: gemma4-26b not found... (truncated to 500 chars)",
+      "runtime": "opencode",
+      "model": "gemma4-26b"
+    }
+  }
+  ```
+- **Testing**: 890 tests pass, 9 skipped, 0 failures. 10 new tests in `TestQueryEndpointErrorDetection` all pass — covering all 5 error pattern categories, mixed case, multi-line errors, and non-error passthrough.
+- **Impact**: Evaluators and callers of `/api/v1/query` now receive accurate HTTP status codes; runtime failures are no longer masked as success responses.
+
+#### #66: Added POST /api/v1/query Stateless Endpoint
 - **Status**: ✅ QA Approved (commit 2763cc4 on dev)
 - **Commit**: 2763cc4
-- Adds `POST /api/v1/query` — a **stateless, one-shot query endpoint** for lightweight AI queries without session management
-- **Features**:
-  - **One-shot execution** — ephemeral session created, query executed, session cleaned up automatically
-  - **Full runtime/model control** — specify `runtime`, `model`, `agent`, and query timeout per request
-  - **No session overhead** — ideal for programmatic / scripted use cases; no need to manage session IDs
-  - **Rate limiting** — 30 requests per minute per IP address (sliding window)
-  - **Stateless response** — returns final response directly; no streaming
-- **API Endpoint** — `POST /api/v1/query`:
-  - Request body (JSON):
-    ```json
-    {
-      "prompt": "What is 2 + 2?",
-      "runtime": "copilot",
-      "model": "claude-haiku-4.5",
-      "agent": "orchestrator",
-      "timeout": 60
-    }
-    ```
-  - Response (200 OK):
-    ```json
-    {
-      "response": "2 + 2 = 4",
-      "runtime": "copilot",
-      "model": "claude-haiku-4.5",
-      "elapsed_ms": 2150
-    }
-    ```
-  - Error responses:
-    - `400 Bad Request` — Missing required fields or invalid JSON
-    - `401 Unauthorized` — Missing or invalid Bearer token
-    - `404 Not Found` — Unknown runtime, model, or agent
-    - `429 Too Many Requests` — Rate limit exceeded (30/min/IP)
-    - `504 Gateway Timeout` — Query exceeded specified timeout
-- **Security**:
-  - Requires API authentication (Bearer token or shared-key validation)
-  - Runs with the authority of the calling API user (rate-limited by IP)
-  - Ephemeral sessions are not persisted or visible in session history
-- **Testing**: Comprehensive test coverage in `tests/test_query_endpoint.py` including rate limiting, timeout handling, invalid inputs, and runtime/model resolution
-- **Use Cases**: 
-  - CI/CD pipelines querying AI without session overhead
-  - Lightweight scripts and integrations
-  - Programmatic AI calls from external systems
-- **Ready for deployment**: No breaking changes, backwards compatible, stateless architecture
+- **Issue**: Test suite expected a stateless query endpoint `/api/v1/query` to exist but it was missing (404)
+- **Feature**: New POST `/api/v1/query` endpoint for one-shot queries without session management:
+  - Creates ephemeral session internally
+  - Executes prompt, returns result in single response
+  - Automatically cleans up session after completion
+  - Accepts `prompt`, `runtime` (copilot/claude), `model`, `agent`, `timeout` parameters
+  - Includes 10k character prompt validation
+  - Rate-limited to 30 requests/minute per IP
+- **OpenCode/Gemma4 Support**: Endpoint works with all supported runtimes
+- **Testing**: 880 tests pass, 9 skipped, 0 failures. 10 new tests for query endpoint all pass.
+- **Impact**: Enables stateless, fire-and-forget query operations without session complexity
+
+
+#### #63: Delete Skill Button Not Working in WebUI
+- **Status**: ✅ QA Approved (commit 4c8ad30 on dev)
+- **Commit**: 4c8ad30
+- **Issue**: Delete skill button in WebUI Skills panel was non-functional due to missing window exposure
+- **Root Cause**: The `_deleteSkill()` function was not assigned to the window object. All inline onclick handlers require functions to be on `window` scope. Other skill panel functions (`_deleteOrigin`, `_skillCheckUpdate`, `_skillTriggerUpdate`, `_showOriginForm`, `_saveOrigin`) were already exposed but `_deleteSkill` was missed.
+- **Fix**: Added `window._deleteSkill = _deleteSkill;` to the window exposure block in `webui/dist/app.js` (line 7517)
+- **Testing**: 859 passed, 9 skipped — no regressions
+- **Impact**: Users can now delete skills from the WebUI Skills panel as intended
+
+#### #65: Auto-Delegation Session Isolation
+- **Status**: ✅ QA Approved (commit 3715325 on dev)
+- **Commit**: 3715325
+- **Issue**: Auto-delegation (via `detect_agent_delegation()`) and `/agent` command were passing the caller's `n8n_session_id` to `_execute_with_context()`, which allowed downstream code to overwrite the caller's `session_map` entry (agent, session_id, etc.). This violated session isolation boundaries and could cause cascading failures.
+- **Root Cause**: When delegating to another agent, the caller's session context was directly reused, allowing mutations to propagate back to the original session map.
+- **Fix**: When `is_delegation=True`, `_execute_with_context()` now:
+  - Creates an ephemeral `delegation_{uuid}` session key
+  - Copies essential fields (`channel`, `identity`, `render_type`, `bot_id`) from the caller
+  - Executes the delegated task using the ephemeral key
+  - Cleans up the ephemeral session afterward
+  - The caller's session_map entry is never touched
+- **Testing**: 11 new tests covering isolation, cleanup, channel inheritance, concurrent delegations, and non-delegation passthrough
+- **Metrics**: 870 tests pass, 9 skipped, 0 failures — no regressions
+- **Impact**: Session boundaries now properly enforced; cascading failures from delegation corruption eliminated
+
+
+### Added
+
+#### #69: BLOCKERS.md Template for Structured wee-dev Blocker Tracking
+- **Status**: ✅ QA Approved (commit 6d2aade on dev)
+- **Commit**: 6d2aade
+- Adds standardized `BLOCKERS.md` template at repository root for documenting blockers during wee-dev task execution
+- **Purpose**: Provides transparency on what's blocking progress, escalation channels, and resolution tracking
+- **Template Structure**:
+  - **Blocker entry format**: Timestamp, issue reference, blocker type, communication channel, status, resolution
+  - **Blocker types** (7 categories): missing-key, needs-approval, needs-clarification, resource-unavailable, dependency-missing, permission-denied, other
+  - **Communication decision tree**: Flowchart for determining optimal escalation channel (Telegram, approval-flow, GitHub) based on urgency and type
+  - **Status states** (6): OPEN, WAITING_FOR_KEY, WAITING_FOR_APPROVAL, ESCALATED, WORKAROUND_IN_PLACE, RESOLVED
+  - **Foster responsibilities section**: Outlines key decision points and action items for Foster (approvals, key management, access, resource allocation)
+  - **Worked examples** (3): API key missing, clarification needed, dependency blocker
+  - **Active/Resolved sections**: Ongoing blockers vs. resolved blockers for easy tracking across multiple wee-dev runs
+- **Outcomes**:
+  - wee-dev tasks now have a standardized format for documenting blockers
+  - Foster can review BLOCKERS.md to understand what's blocking work without digging through logs
+  - Escalation decisions are transparent and consistent
+- **QA Pass**: All requirements verified in commit 6d2aade. No BLOCKERs or MAJORs. Ready for production.
 
 #### F025 (Enhanced): Custom Themes API — wee-qa Fix Round 2
 - **Status**: ✅ QA Approved (commits 6d45763 + 56ac461 on dev)
@@ -137,22 +202,6 @@ All notable changes to Wee Orchestrator are documented here.
 #### F016: Telegram Slash Command Registration with BotFather
 - **Status**: ✅ QA Approved (commit 3cdf77a on dev)
 - **Commit**: 3cdf77a
-
-#### F025: Custom Themes API — wee-qa Fix Round 2
-- **Status**: ✅ QA Approved (commits 6d45763 + 56ac461 on dev)
-- **Commits**: 6d45763 (initial), 56ac461 (wee-qa fixes)
-- Adds custom theme support via `/api/v1/themes` endpoint with CSS embedded in listing response
-- **B01 (BLOCKER) Fix**: Removed `/api/v1/themes/{name}/css` endpoint entirely.
-  - CSS content now embedded as `css` field in each custom theme object in the themes list response.
-  - `loadCustomThemes()` caches CSS content in `_customThemeCSS` map (populated via the already-authenticated themes list call).
-  - `applyTheme()` now injects custom CSS via `<style id="custom-theme-style">` element instead of `<link href="...">`.
-  - `<link>` elements cannot send `Authorization` headers — the root cause of always-401 custom theme loading.
-  - After `loadCustomThemes()` completes, re-applies current theme if it's custom (handles localStorage-persisted custom themes on page load).
-- **M01 Fix**: `name == "custom.css"` dead code → corrected to `name == "custom"` (stem of `custom.css.template` is `custom.css` but `.template` files don't match `*.css` glob).
-- **M02 Fix**: E501 violation on `fastapi.responses` import line — split to multi-line parenthesized import form.
-- **M03 Fix**: `innerHTML` with server data in `loadCustomThemes()` → replaced with explicit DOM element creation using `textContent` for label/description fields.
-- **Testing**: Replaced `TestGetThemeCSS` (9 tests, endpoint removed) with `TestCustomThemeCSSInListing` (4 new tests: css in listing, builtins have no css field, endpoint returns 404, traversal regex). 17 themes tests pass; full suite 859 passed, 9 skipped.
-- **Ready for PR**: Feature approved and ready for dev → main PR. Foster can create PR at will.
 
 #### F407: Per-Agent Memory Promotion Endpoints
 - **Status**: ✅ QA Approved (commit 55f3a4f on dev)

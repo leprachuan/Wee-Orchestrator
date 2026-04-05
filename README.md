@@ -1203,6 +1203,124 @@ Error responses:
 - Per-session settings — each user session has independent configuration
 
 
+
+**POST /api/v1/query** — Stateless one-shot query endpoint
+
+Execute a prompt without managing sessions. The endpoint creates an ephemeral session internally, runs the prompt, returns the result, and cleans up automatically. Ideal for evaluators, CI checks, and fire-and-forget queries.
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `POST` | `/api/v1/query` | Execute a one-shot query; no session state retained |
+
+Request body (JSON):
+```json
+{
+  "prompt": "What is 2 + 2?",
+  "runtime": "copilot",
+  "model": "claude-haiku-4.5",
+  "agent": "orchestrator",
+  "timeout": 120
+}
+```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `prompt` | string | ✅ | Query text (max 10,000 characters) |
+| `runtime` | string | No | Runtime to use: `copilot`, `claude` (default: `copilot`) |
+| `model` | string | No | Model name; defaults to runtime's configured default |
+| `agent` | string | No | Agent name from `agents.json`; defaults to `orchestrator` |
+| `timeout` | integer | No | Execution timeout in seconds (default: 120) |
+
+Response (200 OK — successful execution):
+```json
+{
+  "result": "4",
+  "runtime": "copilot",
+  "model": "claude-haiku-4.5",
+  "agent": "orchestrator",
+  "elapsed": 1.42
+}
+```
+
+**Error Detection** (#67): When the runtime response contains a known error pattern, the endpoint returns the appropriate HTTP error status instead of 200 with error text:
+
+| HTTP Status | Error Code | Triggers |
+|-------------|-----------|---------|
+| `422` | `model_not_found` | `ProviderModelNotFoundError`, `model not found`, `unknown model` |
+| `429` | `rate_limit_exceeded` | `RateLimitError`, `rate limit`, `too many requests` |
+| `403` | `permission_denied` | `PermissionDeniedError`, `permission denied`, `access denied` |
+| `401` | `authentication_failed` | `AuthenticationError`, `invalid api key`, `authentication failed` |
+| `503` | `service_unavailable` | `ServiceUnavailableError`, `service unavailable`, `temporarily unavailable` |
+
+Error response body (JSON):
+```json
+{
+  "detail": {
+    "error": "model_not_found",
+    "message": "ProviderModelNotFoundError: gemma4-26b not found (truncated to 500 chars)",
+    "runtime": "opencode",
+    "model": "gemma4-26b"
+  }
+}
+```
+
+
+**Code Generation Improvements** (#68): Additional handling for empty/null responses and connection errors:
+
+| HTTP Status | Error Code | Triggers |
+|-------------|-----------|---------|
+| `502` | `empty_response` | Null, empty, or whitespace-only runtime output |
+| `502` | `connection_refused` | `ECONNREFUSED` — Model server not running (e.g., local Ollama/OpenCode instance down) |
+| `502` | `connection_reset` | `ECONNRESET` or `socket hang up` — Server closed connection unexpectedly |
+| `504` | `connection_timeout` | `ETIMEDOUT` — Model server slow or hung |
+
+Additional processing (#68):
+- **ANSI Stripping**: ANSI escape codes (color, formatting) stripped from runtime output before error detection — prevents formatting codes from interfering with pattern matching in code generation scenarios
+- **Example empty response**:
+  ```json
+  {
+    "detail": {
+      "error": "empty_response",
+      "message": "Runtime returned empty/null output",
+      "runtime": "opencode",
+      "model": "gemma4-26b"
+    }
+  }
+  ```
+- **Example connection error**:
+  ```json
+  {
+    "detail": {
+      "error": "connection_refused",
+      "message": "Error: connect ECONNREFUSED 127.0.0.1:5000",
+      "runtime": "opencode",
+      "code": "ECONNREFUSED"
+    }
+  }
+  ```
+
+Other error responses:
+Other error responses:
+- `401 Unauthorized` — Missing or invalid Bearer token
+- `422 Unprocessable Entity` — `prompt` missing, exceeds 10,000 chars, or invalid field type
+- `429 Too Many Requests` — Rate limit exceeded (30 requests/minute per IP)
+- `503 Service Unavailable` — Session execution failed (non-error-pattern failure)
+
+**Security:**
+- Requires API authentication (Bearer token)
+- Prompt validated to 10,000 character maximum
+- Rate-limited to 30 requests/minute per IP address
+- Ephemeral sessions cleaned up after execution regardless of success or failure
+
+**Example (curl):**
+```bash
+curl -s -X POST http://localhost:8000/api/v1/query \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $API_TOKEN" \
+  -d '{"prompt": "What is 2 + 2?", "runtime": "copilot", "model": "claude-haiku-4.5"}'
+```
+
+
 ### Quick Start
 
 ```bash
