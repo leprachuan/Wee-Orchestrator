@@ -5,6 +5,31 @@ All notable changes to Wee Orchestrator are documented here.
 ## [Unreleased] — Dev Branch
 
 ### Fixed
+#### #67: Runtime Error Detection for /api/v1/query Endpoint
+- **Status**: ✅ QA Approved (commit 5fe872d on dev)
+- **Commit**: 5fe872d
+- **Issue**: `/api/v1/query` returned HTTP 200 with error text in the response body when runtime execution failed (model not found, rate limited, permission denied, etc.). Evaluator tests like opencode/gemma4-26b calc test received misleading results — a successful HTTP status masking a runtime failure.
+- **Fix**: Added `_RUNTIME_ERROR_PATTERNS` detection to the `/api/v1/query` endpoint. When the runtime response matches a known error pattern, the endpoint returns a proper HTTP error status code with structured error detail instead of HTTP 200 with error text.
+- **Error Codes Mapped**:
+  - `422 Unprocessable Entity` — Model/resource not found (`ProviderModelNotFoundError`, `model not found`, `unknown model`)
+  - `429 Too Many Requests` — Rate limit exceeded (`RateLimitError`, `rate limit`, `too many requests`)
+  - `403 Forbidden` — Permission denied (`PermissionDeniedError`, `permission denied`, `access denied`)
+  - `401 Unauthorized` — Auth failure (`AuthenticationError`, `invalid api key`, `authentication failed`)
+  - `503 Service Unavailable` — Service unavailable (`ServiceUnavailableError`, `service unavailable`, `temporarily unavailable`)
+- **Response Format** (error case):
+  ```json
+  {
+    "detail": {
+      "error": "model_not_found",
+      "message": "ProviderModelNotFoundError: gemma4-26b not found... (truncated to 500 chars)",
+      "runtime": "opencode",
+      "model": "gemma4-26b"
+    }
+  }
+  ```
+- **Testing**: 890 tests pass, 9 skipped, 0 failures. 10 new tests in `TestQueryEndpointErrorDetection` all pass — covering all 5 error pattern categories, mixed case, multi-line errors, and non-error passthrough.
+- **Impact**: Evaluators and callers of `/api/v1/query` now receive accurate HTTP status codes; runtime failures are no longer masked as success responses.
+
 #### #66: Added POST /api/v1/query Stateless Endpoint
 - **Status**: ✅ QA Approved (commit 2763cc4 on dev)
 - **Commit**: 2763cc4
