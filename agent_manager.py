@@ -7919,6 +7919,21 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 raise ValueError("Query must be 10,000 characters or less")
             return v
 
+
+    class QueryRequest(BaseModel):
+        """One-shot query without session management."""
+        prompt: str
+        runtime: Optional[str] = None
+        model: Optional[str] = None
+        agent: Optional[str] = None
+        timeout: Optional[int] = None
+
+        @field_validator("prompt")
+        @classmethod
+        def validate_prompt_length(cls, v):
+            if len(v) > 10000:
+                raise ValueError("Prompt must be 10,000 characters or less")
+            return v
     # ---- authentication dependency ----
     async def authenticate(
         request: Request,
@@ -8357,6 +8372,71 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             session_id, identity=user["identity"]
         )
         runtime = session_data.get("runtime", "copilot")
+        return {
+            "session_id": session_id,
+            "response": result,
+            "runtime": runtime,
+            "model": session_data.get("model"),
+        }
+
+    @app.post("/api/v1/query")
+    async def stateless_query(body: QueryRequest, request: Request):
+        """One-shot query endpoint - no session management required.
+
+        Creates a temporary session, executes the prompt, returns the result.
+        Useful for testing, scripting, and simple integrations.
+        """
+        user = await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+
+        client_ip = request.client.host if request.client else "unknown"
+        if not rate_limiter.check(client_ip, "query", max_requests=30, window=60):
+            raise HTTPException(status_code=429, detail="Rate limit exceeded")
+
+        session_id = f"query_{str(uuid4())[:8]}"
+        session_mgr.get_or_create_session_data(session_id, identity=user["identity"])
+        session_mgr.update_session_field(session_id, "channel", user["channel"])
+        session_mgr.update_session_field(session_id, "render_type", "text")
+
+        effective_agent = body.agent or get_default_agent()
+        session_mgr.update_session_field(session_id, "agent", effective_agent)
+
+        if body.model:
+            current_rt = body.runtime or "copilot"
+            model_id = session_mgr.get_model_from_name(body.model, current_rt)
+            session_mgr.update_session_field(
+                session_id, "model", model_id or body.model
+            )
+        if body.runtime:
+            session_mgr.update_session_field(session_id, "runtime", body.runtime)
+
+        if body.timeout:
+            session_mgr.update_session_field(session_id, "timeout", body.timeout)
+
+        session_mgr._bg_identity = user["identity"]
+        loop = asyncio.get_event_loop()
+        with concurrent.futures.ThreadPoolExecutor() as pool:
+            result = await loop.run_in_executor(
+                pool, session_mgr.execute, body.prompt, session_id
+            )
+
+        session_data = session_mgr.get_or_create_session_data(
+            session_id, identity=user["identity"]
+        )
+        runtime = session_data.get("runtime", "copilot")
+        # Clean up temporary query session to avoid session_map bloat
+        try:
+            with session_mgr._session_map_lock:
+                _smap = session_mgr.load_session_map()
+                _smap.pop(session_id, None)
+                session_mgr.save_session_map(_smap)
+        except Exception:
+            pass
+
         return {
             "session_id": session_id,
             "response": result,
