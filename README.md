@@ -1468,17 +1468,31 @@ The built-in task scheduler (`task_scheduler.py`) runs AI jobs on a schedule wit
 
 ### Clock Drift Handling
 
-The scheduler is resilient to system clock adjustments (NTP corrections, manual time changes, etc.). Four complementary mechanisms ensure consistent job execution:
+The scheduler is resilient to system clock adjustments (NTP corrections, manual time changes, etc.). Five complementary mechanisms ensure consistent job execution:
 
 - **Drift Detection** — Compares wall-clock vs monotonic time each cycle. Logs warnings when drift exceeds 30 seconds with direction and magnitude.
 - **Per-Job Monotonic Cooldown** — Records monotonic time of last execution for each job. Prevents double-execution when a backward clock jump reschedules a job into an already-executed time slot.
 - **Stale Job Recalculation** — Recurring jobs more than 1 hour overdue get their next run advanced to the next future slot instead of executing stale runs. One-time jobs are never recalculated.
 - **Drift-Aware Readiness Check** — Applies all three guards before execution. Logs info when executing catchup runs.
+- **Wall-Clock Debt Compensation** (#71) — Tracks accumulated backward drift as a running debt. In each readiness check, `compensated_now = now + debt` expands the current-time window so jobs skipped during a backward jump are recovered automatically. Debt drains as the clock moves forward; capped at 600 seconds to prevent runaway compensation.
 
 **Bottom line:** If your system experiences a clock adjustment, the scheduler will:
 - Skip any jobs that have already been executed (monotonic cooldown)
 - Advance any recurring jobs that would be stale (1+ hour old)
+- Recover jobs missed during a backward clock jump (wall-clock debt compensation, up to 10 min)
 - Continue executing new jobs normally
+
+**Drift Diagnostics:** Call `executor.get_drift_diagnostics()` to inspect current compensation state:
+
+```python
+{
+    "wall_clock_debt_seconds": 15.3,     # accumulated backward drift (0 = inactive)
+    "drift_compensation_active": True,   # True when debt > 0
+    "drift_recovered_jobs": 4,           # total jobs recovered via compensation
+    "recent_drift_events": [...],        # last 10 drift events (direction + magnitude)
+    "compensation_cap_seconds": 600      # max compensation window
+}
+```
 
 
 ### REST API Endpoints

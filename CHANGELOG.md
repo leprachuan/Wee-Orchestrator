@@ -5,6 +5,38 @@ All notable changes to Wee Orchestrator are documented here.
 ## [Unreleased] — Dev Branch
 
 ### Fixed
+#### #71: Scheduler Backward Clock Drift Skips Jobs
+- **Status**: QA Approved (commit 867c553 on dev)
+- **Commit**: 867c553
+- **Root Cause**: _is_job_ready() compares next_run against wall-clock now. When the system clock jumps backward (NTP adjustment or manual time change), a job that was due becomes future-dated relative to the new time and is silently skipped with no log entry.
+- **Fix**: Implemented wall-clock debt compensation mechanism:
+  - _wall_clock_debt accumulates on each backward drift event
+  - In _is_job_ready(), computes compensated_now = now + debt (expanding the now window to cover lost time)
+  - Jobs within the debt window are recovered and executed with a clear log entry
+  - Debt drains on forward drift events (clock catches back up)
+  - Capped at _DRIFT_COMPENSATION_CAP = 600s (10 minutes) to prevent runaway compensation
+  - Drift events tracked in _drift_events list (capped at 50 most recent)
+  - _drift_recovered_count counter tracks total compensated executions
+- **Additional Improvements**:
+  - _recalculate_stale_jobs(): now logs ValueError/TypeError exceptions instead of silently swallowing them
+  - _is_job_ready(): error messages now include the job ID for easier log correlation
+  - New public method get_drift_diagnostics() returns current compensation state for external monitoring
+- **get_drift_diagnostics() Response**:
+  - wall_clock_debt_seconds: float -- accumulated backward drift (0 = no active compensation)
+  - drift_compensation_active: bool -- True when debt > 0
+  - drift_recovered_jobs: int -- total jobs recovered via compensation since executor start
+  - recent_drift_events: list -- last 10 drift events with direction and magnitude
+  - compensation_cap_seconds: int -- current cap (600)
+- **Testing**: 37 tests in tests/test_scheduler_clock_drift.py (up from 21), all passing:
+  - Backward drift compensation accumulates and drains correctly
+  - Jobs within debt window are recovered; jobs beyond cap are not
+  - Debt cap prevents runaway compensation
+  - get_drift_diagnostics() returns correct state in all scenarios
+  - _recalculate_stale_jobs() logs errors on malformed job data
+  - Integration: full cycle with backward/forward drift sequences
+- **Metrics**: 938 tests pass, 9 skipped, 0 failures -- no regressions
+- **Impact**: Schedulers behind NTP-synced hosts no longer silently drop jobs during backward clock corrections. All skipped jobs within the compensation window (up to 10 min) are recovered automatically with audit logging.
+
 #### #70: Scheduler Clock Drift Handling
 - **Status**: ✅ QA Approved (commit 4be10e2 on dev)
 - **Commit**: 4be10e2
