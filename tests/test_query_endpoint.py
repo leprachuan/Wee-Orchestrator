@@ -196,5 +196,197 @@ class TestQueryEndpoint(unittest.TestCase):
         self.assertEqual(len(session_ids), 3)
 
 
+class TestQueryEndpointErrorDetection(unittest.TestCase):
+    """Tests for runtime error detection in POST /api/v1/query (#67)."""
+
+    @classmethod
+    def setUpClass(cls):
+        from unittest.mock import patch as _p
+        from fastapi.testclient import TestClient
+        import agent_manager
+
+        cls._telegram_patch = _p.object(
+            agent_manager,
+            "_resolve_telegram_identity",
+            side_effect=lambda identity: identity,
+        )
+        cls._telegram_patch.start()
+        cls._send_pairing_patch = _p.object(
+            agent_manager,
+            "_send_pairing_code",
+            return_value=True,
+        )
+        cls._send_pairing_patch.start()
+        cls.app = agent_manager.create_api_app()
+        cls.client = TestClient(cls.app)
+        cls.auth = {
+            "Authorization": "Bearer shared_test_key_123",
+            "X-User-Identity": "test_user",
+            "X-Auth-Channel": "api",
+        }
+
+    @classmethod
+    def tearDownClass(cls):
+        cls._telegram_patch.stop()
+        cls._send_pairing_patch.stop()
+
+    @patch(
+        "agent_manager.SessionManager.execute",
+        return_value=(
+            "ProviderModelNotFoundError: ProviderModelNotFoundError\n"
+            '  providerID: "openai-compatible", modelID: "gemma4-26b"\n'
+            "Error: Model not found: openai-compatible/gemma4-26b."
+        ),
+    )
+    def test_query_model_not_found_returns_422(self, mock_execute):
+        """Model not found should return 422, not 200 with error in body."""
+        resp = self.client.post(
+            "/api/v1/query",
+            json={
+                "prompt": "Calculate 2+2",
+                "runtime": "opencode",
+                "model": "openai-compatible/gemma4-26b",
+            },
+            headers=self.auth,
+        )
+        self.assertEqual(resp.status_code, 422)
+        detail = resp.json()["detail"]
+        self.assertEqual(detail["error"], "model_not_found")
+        self.assertIn("runtime", detail)
+        self.assertIn("model", detail)
+        self.assertIn("message", detail)
+
+    @patch(
+        "agent_manager.SessionManager.execute",
+        return_value="NotFoundError: Resource not found for session xyz",
+    )
+    def test_query_resource_not_found_returns_422(self, mock_execute):
+        """Resource not found should return 422."""
+        resp = self.client.post(
+            "/api/v1/query",
+            json={"prompt": "test"},
+            headers=self.auth,
+        )
+        self.assertEqual(resp.status_code, 422)
+        detail = resp.json()["detail"]
+        self.assertEqual(detail["error"], "resource_not_found")
+
+    @patch(
+        "agent_manager.SessionManager.execute",
+        return_value="RateLimitError: Too many requests. Please try again later.",
+    )
+    def test_query_rate_limit_returns_429(self, mock_execute):
+        """Rate limit error from runtime should return 429."""
+        resp = self.client.post(
+            "/api/v1/query",
+            json={"prompt": "test"},
+            headers=self.auth,
+        )
+        self.assertEqual(resp.status_code, 429)
+        detail = resp.json()["detail"]
+        self.assertEqual(detail["error"], "rate_limited")
+
+    @patch(
+        "agent_manager.SessionManager.execute",
+        return_value=(
+            "Error: executable not found. Please install opencode "
+            "or ensure it is in PATH."
+        ),
+    )
+    def test_query_runtime_unavailable_returns_503(self, mock_execute):
+        """Missing runtime executable should return 503."""
+        resp = self.client.post(
+            "/api/v1/query",
+            json={"prompt": "test", "runtime": "opencode"},
+            headers=self.auth,
+        )
+        self.assertEqual(resp.status_code, 503)
+        detail = resp.json()["detail"]
+        self.assertEqual(detail["error"], "runtime_unavailable")
+
+    @patch(
+        "agent_manager.SessionManager.execute",
+        return_value="PermissionDeniedError: access denied for model gpt-5",
+    )
+    def test_query_permission_denied_returns_403(self, mock_execute):
+        """Permission denied from runtime should return 403."""
+        resp = self.client.post(
+            "/api/v1/query",
+            json={"prompt": "test"},
+            headers=self.auth,
+        )
+        self.assertEqual(resp.status_code, 403)
+        detail = resp.json()["detail"]
+        self.assertEqual(detail["error"], "permission_denied")
+
+    @patch(
+        "agent_manager.SessionManager.execute",
+        return_value="AuthenticationError: invalid API key for provider anthropic",
+    )
+    def test_query_auth_error_returns_401(self, mock_execute):
+        """Authentication error from runtime should return 401."""
+        resp = self.client.post(
+            "/api/v1/query",
+            json={"prompt": "test"},
+            headers=self.auth,
+        )
+        self.assertEqual(resp.status_code, 401)
+        detail = resp.json()["detail"]
+        self.assertEqual(detail["error"], "auth_error")
+
+    @patch(
+        "agent_manager.SessionManager.execute",
+        return_value="This is a normal response about calculating things",
+    )
+    def test_query_normal_response_returns_200(self, mock_execute):
+        """Normal response should still return 200."""
+        resp = self.client.post(
+            "/api/v1/query",
+            json={"prompt": "test"},
+            headers=self.auth,
+        )
+        self.assertEqual(resp.status_code, 200)
+        data = resp.json()
+        self.assertEqual(
+            data["response"],
+            "This is a normal response about calculating things",
+        )
+
+    @patch("agent_manager.SessionManager.execute", return_value="")
+    def test_query_empty_response_returns_200(self, mock_execute):
+        """Empty response should return 200 (not an error)."""
+        resp = self.client.post(
+            "/api/v1/query",
+            json={"prompt": "test"},
+            headers=self.auth,
+        )
+        self.assertEqual(resp.status_code, 200)
+
+    @patch("agent_manager.SessionManager.execute", return_value=None)
+    def test_query_none_response_returns_200(self, mock_execute):
+        """None response should return 200 (not crash)."""
+        resp = self.client.post(
+            "/api/v1/query",
+            json={"prompt": "test"},
+            headers=self.auth,
+        )
+        self.assertEqual(resp.status_code, 200)
+
+    @patch(
+        "agent_manager.SessionManager.execute",
+        return_value="Model not found: openai-compatible/gemma4-26b.\n" + "x" * 600,
+    )
+    def test_query_error_message_truncated_at_500(self, mock_execute):
+        """Error messages in detail should be truncated to 500 chars."""
+        resp = self.client.post(
+            "/api/v1/query",
+            json={"prompt": "test"},
+            headers=self.auth,
+        )
+        self.assertEqual(resp.status_code, 422)
+        detail = resp.json()["detail"]
+        self.assertLessEqual(len(detail["message"]), 500)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -8428,6 +8428,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             session_id, identity=user["identity"]
         )
         runtime = session_data.get("runtime", "copilot")
+        model = session_data.get("model")
         # Clean up temporary query session to avoid session_map bloat
         try:
             with session_mgr._session_map_lock:
@@ -8437,11 +8438,36 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         except Exception:
             pass
 
+        # Detect runtime execution errors and return proper HTTP codes
+        _RUNTIME_ERROR_PATTERNS = [
+            ("ProviderModelNotFoundError", 422, "model_not_found"),
+            ("Model not found:", 422, "model_not_found"),
+            ("NotFoundError:", 422, "resource_not_found"),
+            ("Resource not found", 422, "resource_not_found"),
+            ("rate limit", 429, "rate_limited"),
+            ("RateLimitError", 429, "rate_limited"),
+            ("PermissionDeniedError", 403, "permission_denied"),
+            ("AuthenticationError", 401, "auth_error"),
+            ("Error: executable not found", 503, "runtime_unavailable"),
+        ]
+        if result and isinstance(result, str):
+            for pattern, status_code, error_code in _RUNTIME_ERROR_PATTERNS:
+                if pattern.lower() in result.lower():
+                    raise HTTPException(
+                        status_code=status_code,
+                        detail={
+                            "error": error_code,
+                            "message": result.strip()[:500],
+                            "runtime": runtime,
+                            "model": model,
+                        },
+                    )
+
         return {
             "session_id": session_id,
             "response": result,
             "runtime": runtime,
-            "model": session_data.get("model"),
+            "model": model,
         }
 
     @app.post("/api/v1/sessions/{session_id}/stream")
