@@ -618,6 +618,42 @@ class BackgroundTaskManager:
             if len(kept) < len(tasks):
                 self._save(kept)
 
+
+    def reconcile_stale_tasks(self) -> dict:
+        """Reconcile orphaned tasks after a service restart.
+
+        - Mark 'running' tasks as 'failed' if their PID is no longer alive.
+        - Return a summary dict with counts of what was reconciled.
+        """
+        now_str = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        reconciled = {"stale_running": 0, "queued_ready": 0}
+        with self._lock:
+            tasks = self._load()
+            changed = False
+            for t in tasks:
+                if t["status"] == "running":
+                    pid = t.get("pid", 0)
+                    alive = False
+                    if pid:
+                        try:
+                            os.kill(pid, 0)
+                            alive = True
+                        except (ProcessLookupError, PermissionError):
+                            pass
+                    if not alive:
+                        t["status"] = "failed"
+                        t["error"] = "Orphaned after service restart (PID not found)"
+                        t["completed_at"] = now_str
+                        reconciled["stale_running"] += 1
+                        changed = True
+            if changed:
+                self._save(tasks)
+            # Count queued tasks that are now promotable
+            reconciled["queued_ready"] = sum(
+                1 for t in tasks if t["status"] == "queued"
+            )
+        return reconciled
+
     # -- Steering --------------------------------------------------------
     STEERING_DIR = os.path.join(
         os.environ.get("SCRIPT_BASE_DIR", os.path.dirname(os.path.abspath(__file__))),
@@ -5155,8 +5191,44 @@ Do NOT emit status updates for quick operations (< 15 seconds)."""
         except Exception:
             injection_text = ""
 
+        # --- Per-session memory injection (runs once per session) ---
+        # Inject memory context from MEMORY.md + daily notes at session
+        # creation.  The memory_injected flag on the session prevents
+        # re-injection on subsequent messages in the same session.
+        memory_section = ""
+        try:
+            _session_data = self.load_session_data(n8n_session_id)
+            if not (_session_data or {}).get("memory_injected"):
+                from memory.inject import get_memory_context
+                agent_info_mem = self.AGENTS.get(
+                    agent, self.AGENTS.get("orchestrator", {})
+                )
+                _mem_ctx = get_memory_context(
+                    agent_path=agent_info_mem.get("path", "")
+                )
+                if _mem_ctx:
+                    memory_section = f"\n\n{_mem_ctx}\n"
+                    self.update_session_field(
+                        n8n_session_id, "memory_injected", True
+                    )
+                    print(
+                        f"[Memory] Injected {len(_mem_ctx)} chars for "
+                        f"session={n8n_session_id} agent={agent}",
+                        flush=True,
+                    )
+                else:
+                    # No memory files — still mark as injected
+                    self.update_session_field(
+                        n8n_session_id, "memory_injected", True
+                    )
+        except Exception as _mem_exc:
+            print(
+                f"[Memory] Injection skipped: {_mem_exc}",
+                flush=True,
+            )
+
         context = f"""{handoff_prefix}[Session ID: {n8n_session_id}]
-{runtime_instruction}{injection_text}{mobile_channel_instruction}{silent_mode_instruction}{agent_desc}{files_context}{render_instruction}{bg_task_instruction}{canvas_instruction}{wee_executor_instruction}{timeout_instruction}
+{runtime_instruction}{injection_text}{mobile_channel_instruction}{silent_mode_instruction}{memory_section}{agent_desc}{files_context}{render_instruction}{bg_task_instruction}{canvas_instruction}{wee_executor_instruction}{timeout_instruction}
 
 User Request:
 {prompt}"""
@@ -7988,6 +8060,47 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 auth_mgr.cleanup_expired()
                 rate_limiter.cleanup()
                 bg_task_mgr.cleanup_old()
+                # Periodic reconciliation: promote queued tasks if slots available
+                try:
+                    _all = bg_task_mgr.list_all_tasks()
+                    _queued_periodic = [t for t in _all if t["status"] == "queued"]
+                    _queued_periodic.sort(key=lambda t: t.get("created_at", ""))
+                    for _qt in _queued_periodic:
+                        _agent = _qt.get("agent", "orchestrator")
+                        _ch = _qt.get("channel", "api")
+                        _uid = _qt.get("user_identity", "")
+                        _acfg = session_mgr.AGENTS.get(_agent, {})
+                        _mc = _acfg.get(
+                            "max_concurrent",
+                            BackgroundTaskManager.MAX_TASKS_PER_USER,
+                        )
+                        _rn = bg_task_mgr.count_running(_ch, _uid, _agent)
+                        if _rn >= _mc:
+                            continue
+                        _nsid = str(uuid4())
+                        bg_task_mgr.promote_queued_task(_qt["task_id"], _nsid)
+                        print(
+                            f"[Periodic] Promoting queued task {_qt['task_id']}",
+                            flush=True,
+                        )
+                        bg_executor.submit(
+                            _run_background_task,
+                            _qt["task_id"],
+                            _nsid,
+                            _qt["prompt"],
+                            _qt["agent"],
+                            _qt["runtime"],
+                            _qt["model"],
+                            _qt["channel"],
+                            _qt["user_identity"],
+                            _qt.get("timeout") or 900,
+                            _qt.get("notify", True),
+                        )
+                except Exception as _rec_exc:
+                    print(
+                        f"[Periodic] Queue reconciliation error: {_rec_exc}",
+                        flush=True,
+                    )
 
         async def _agents_file_watcher():
             """Poll agents.json mtime every 10s and hot-reload on change."""
@@ -8018,6 +8131,50 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                         f"[Hot-Reload] Error watching agents.json: {exc}",
                         file=sys.stderr,
                     )
+
+        # Reconcile orphaned tasks from previous process lifetime
+        _reconcile_result = bg_task_mgr.reconcile_stale_tasks()
+        if _reconcile_result["stale_running"] or _reconcile_result["queued_ready"]:
+            print(
+                f"[Startup] Task reconciliation: "
+                f"{_reconcile_result['stale_running']} stale running → failed, "
+                f"{_reconcile_result['queued_ready']} queued tasks ready for promotion",
+                flush=True,
+            )
+            # Promote queued tasks that now have available slots
+            _all_tasks = bg_task_mgr.list_all_tasks()
+            _queued = [t for t in _all_tasks if t["status"] == "queued"]
+            _queued.sort(key=lambda t: t.get("created_at", ""))
+            for _qt in _queued:
+                _agent = _qt.get("agent", "orchestrator")
+                _channel = _qt.get("channel", "api")
+                _identity = _qt.get("user_identity", "")
+                _agent_config = session_mgr.AGENTS.get(_agent, {})
+                _max_conc = _agent_config.get(
+                    "max_concurrent", BackgroundTaskManager.MAX_TASKS_PER_USER
+                )
+                _running_now = bg_task_mgr.count_running(_channel, _identity, _agent)
+                if _running_now >= _max_conc:
+                    continue
+                _new_sid = str(uuid4())
+                bg_task_mgr.promote_queued_task(_qt["task_id"], _new_sid)
+                print(
+                    f"[Startup] Promoting queued task {_qt['task_id']} → running",
+                    flush=True,
+                )
+                bg_executor.submit(
+                    _run_background_task,
+                    _qt["task_id"],
+                    _new_sid,
+                    _qt["prompt"],
+                    _qt["agent"],
+                    _qt["runtime"],
+                    _qt["model"],
+                    _qt["channel"],
+                    _qt["user_identity"],
+                    _qt.get("timeout") or 900,
+                    _qt.get("notify", True),
+                )
 
         cleanup_task = asyncio.ensure_future(_periodic_cleanup())
         watcher_task = asyncio.ensure_future(_agents_file_watcher())
@@ -9583,7 +9740,6 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         timeout: int = None,
         notify: bool = True,
         permission_mode: str = "restricted",
-        memory_injected: bool = False,
     ):
         """Blocking function that runs a background task in a subprocess.
         Called from a thread pool executor.
@@ -9851,9 +10007,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 channel=channel,
                 bg_identity=user_identity,
             )
-            # Track memory injection state in session so compaction re-inject works
-            if memory_injected:
-                session_mgr.update_session_field(session_id, "memory_injected", True)
+            # Memory injection moved to build_agent_context_prompt (Issue #72)
 
             # -- Inject steering check instruction ----------------------------
             steering_path = bg_task_mgr.get_steering_path(task_id)
@@ -10320,28 +10474,9 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 session_pref = defaults.get("notification_preference", "all")
                 notify_pref = session_pref != "off"
 
-        # --- Per-agent memory injection for top-level background tasks ---
-        # Sub-tasks dispatched from inside a bg task have origin_session_id set;
-        # skip injection for those to avoid double-injection.
+        # Memory injection is handled at session creation in build_agent_context_prompt
+        # (not here at API time) so queued/promoted tasks get fresh context.
         effective_prompt = body.prompt
-        if not body.origin_session_id:
-            try:
-                from memory.inject import get_memory_context, prepend_memory
-
-                _agent_cfg = session_mgr.AGENTS.get(
-                    agent, session_mgr.AGENTS.get("orchestrator", {})
-                )
-                _agent_path = _agent_cfg.get("path", "")
-                _mem_ctx = get_memory_context(agent_path=_agent_path)
-                if _mem_ctx:
-                    effective_prompt = prepend_memory(body.prompt, _mem_ctx)
-                    print(
-                        f"[Memory] Injected {len(_mem_ctx)} chars for "
-                        f"agent={agent} path={_agent_path}",
-                        flush=True,
-                    )
-            except Exception as _mem_exc:
-                print(f"[Memory] Injection skipped: {_mem_exc}", flush=True)
 
         # Check concurrent limit — queue instead of rejecting
         running = bg_task_mgr.count_running(channel, identity, agent)
@@ -10404,10 +10539,8 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
 
         # Run in background thread using shared executor
         loop = asyncio.get_running_loop()
-        # effective_prompt != body.prompt means memory was injected for this task
-        _memory_was_injected = effective_prompt != body.prompt
         loop.run_in_executor(
-            bg_executor,  # Use shared executor instead of creating new one
+            bg_executor,
             _run_background_task,
             task_id,
             session_id,
@@ -10420,7 +10553,6 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             bg_timeout,
             notify_pref,
             perm_mode,
-            _memory_was_injected,
         )
 
         return {

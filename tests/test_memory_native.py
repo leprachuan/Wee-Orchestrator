@@ -1,10 +1,11 @@
-"""Tests for the native per-agent memory system (F406).
+"""Tests for the native per-agent memory system (F406 / Issue #72).
 
 Covers:
   - resolve_memory_dir() resolution chain
   - build_context() and get_memory_context() reading MEMORY.md + daily notes
-  - Inject-once semantics (memory_injected flag)
+  - Inject-once semantics (memory_injected flag in build_agent_context_prompt)
   - Re-inject on compaction detection
+  - No [MEMORY CONTEXT] prefix in prompts (Issue #72)
   - append_daily_note() creates file in correct agent dir
   - Truncation guard (MAX_MEMORY_CHARS)
   - POST /api/v1/memory/daily endpoint
@@ -109,7 +110,9 @@ class TestBuildContext:
             result = build_context()
             assert "LONG-TERM MEMORY" in result
             assert "Important fact" in result
-            assert "MEMORY CONTEXT" in result
+            # Issue #72: no [MEMORY CONTEXT] wrapper
+            assert "[MEMORY CONTEXT" not in result
+            assert "[END MEMORY CONTEXT]" not in result
 
     def test_includes_today_notes(self, tmp_path):
         """Includes today's daily notes."""
@@ -178,6 +181,16 @@ class TestGetMemoryContext:
             result = get_memory_context()
             assert "Test fact" in result
 
+    def test_no_memory_context_wrapper(self, tmp_path):
+        """Issue #72: output must NOT contain [MEMORY CONTEXT] markers."""
+        from memory.inject import get_memory_context
+
+        (tmp_path / "MEMORY.md").write_text("Test fact\n")
+        with patch.dict(os.environ, {"WEE_MEMORY_DIR": str(tmp_path)}, clear=False):
+            result = get_memory_context()
+            assert "[MEMORY CONTEXT" not in result
+            assert "[END MEMORY CONTEXT]" not in result
+
     def test_truncation_guard(self, tmp_path):
         """Context exceeding MAX_MEMORY_CHARS triggers truncation."""
         from memory.inject import MAX_MEMORY_CHARS, get_memory_context
@@ -193,6 +206,22 @@ class TestGetMemoryContext:
         with patch.dict(os.environ, {"WEE_MEMORY_DIR": str(tmp_path)}, clear=False):
             result = get_memory_context()
             assert len(result) <= MAX_MEMORY_CHARS
+
+    def test_truncation_no_wrapper(self, tmp_path):
+        """Issue #72: truncated output also has no [MEMORY CONTEXT] wrapper."""
+        from memory.inject import MAX_MEMORY_CHARS, get_memory_context
+
+        big_content = "Z" * (MAX_MEMORY_CHARS + 500)
+        (tmp_path / "MEMORY.md").write_text(big_content)
+        daily = tmp_path / "daily"
+        daily.mkdir()
+        today = date.today().isoformat()
+        (daily / f"{today}.md").write_text("Y" * 2000)
+
+        with patch.dict(os.environ, {"WEE_MEMORY_DIR": str(tmp_path)}, clear=False):
+            result = get_memory_context()
+            assert "[MEMORY CONTEXT" not in result
+            assert "[END MEMORY CONTEXT]" not in result
 
     def test_agent_path_isolation(self, tmp_path):
         """Different agent_paths return different contexts."""
@@ -216,26 +245,73 @@ class TestGetMemoryContext:
             assert "Agent A fact" not in ctx_b
 
 
-# ── prepend_memory ────────────────────────────────────────────────────────
+# ── Issue #72: no prompt-prefix injection ─────────────────────────────────
 
 
-class TestPrependMemory:
-    def test_prepends_context(self):
-        from memory.inject import prepend_memory
+class TestNoPromptPrefix:
+    """Issue #72: Memory must be injected at session creation, not as a
+    prompt prefix.  The old [MEMORY CONTEXT] block must not appear in prompts.
+    """
 
-        result = prepend_memory("my prompt", "[MEMORY]facts[/MEMORY]")
-        assert result.startswith("[MEMORY]facts[/MEMORY]")
-        assert result.endswith("my prompt")
+    def test_build_context_no_wrapper(self, tmp_path):
+        """build_context returns raw sections without wrapper block."""
+        from memory.inject import build_context
 
-    def test_empty_context_returns_prompt(self):
-        from memory.inject import prepend_memory
+        (tmp_path / "MEMORY.md").write_text("Durable fact\n")
+        with patch.dict(os.environ, {"WEE_MEMORY_DIR": str(tmp_path)}, clear=False):
+            ctx = build_context()
+            assert "Durable fact" in ctx
+            assert "[MEMORY CONTEXT" not in ctx
+            assert "[END MEMORY CONTEXT]" not in ctx
+            # Should NOT start with '=' border
+            assert not ctx.startswith("=")
 
-        assert prepend_memory("my prompt", "") == "my prompt"
+    def test_no_prepend_memory_export(self):
+        """prepend_memory is not exposed by memory.inject."""
+        import memory.inject as mi
 
-    def test_none_like_empty(self):
-        from memory.inject import prepend_memory
+        assert not hasattr(mi, "prepend_memory"), (
+            "prepend_memory should be removed — memory is injected at session start"
+        )
 
-        assert prepend_memory("my prompt", None) == "my prompt"
+    def test_memory_injected_flag_prevents_double_injection(self, tmp_path):
+        """Simulates the flag check in build_agent_context_prompt."""
+        from memory.inject import get_memory_context
+
+        (tmp_path / "MEMORY.md").write_text("Test fact\n")
+
+        # First call: not injected yet
+        session = {}
+        with patch.dict(os.environ, {"WEE_MEMORY_DIR": str(tmp_path)}, clear=False):
+            if not session.get("memory_injected"):
+                ctx = get_memory_context()
+                if ctx:
+                    session["memory_injected"] = True
+
+        assert session["memory_injected"] is True
+        assert "Test fact" in ctx
+
+        # Second call: already injected — should skip
+        with patch.dict(os.environ, {"WEE_MEMORY_DIR": str(tmp_path)}, clear=False):
+            second_ctx = ""
+            if not session.get("memory_injected"):
+                second_ctx = get_memory_context()
+            assert second_ctx == ""
+
+    def test_all_code_paths_use_session_flag(self):
+        """Verify the memory_injected check is in build_agent_context_prompt."""
+        import inspect
+
+        # Import the session manager class
+        from agent_manager import SessionManager
+
+        source = inspect.getsource(SessionManager.build_agent_context_prompt)
+        assert "memory_injected" in source, (
+            "build_agent_context_prompt must check memory_injected flag"
+        )
+        assert "get_memory_context" in source, (
+            "build_agent_context_prompt must call get_memory_context"
+        )
 
 
 # ── detect_compaction ─────────────────────────────────────────────────────
@@ -432,21 +508,16 @@ class TestInjectOnce:
 
     def test_inject_once_flag(self):
         """memory_injected flag prevents double injection."""
-        # The flag is tracked in session state; test the logic
         memory_injected = False
-        prompt = "Do something"
-        effective_prompt = prompt
 
-        if not memory_injected:
-            from memory.inject import get_memory_context, prepend_memory
+        from memory.inject import get_memory_context
 
-            ctx = get_memory_context(agent_path="/nonexistent")
-            if ctx:
-                effective_prompt = prepend_memory(prompt, ctx)
-                memory_injected = True
+        ctx = get_memory_context(agent_path="/nonexistent")
+        if ctx:
+            memory_injected = True
 
-        # With no memory files, prompt should be unchanged
-        assert effective_prompt == prompt
+        # With no memory files at /nonexistent, no injection occurs
+        assert memory_injected is False
 
     def test_re_inject_on_compaction(self):
         """Compaction detection triggers re-injection."""
