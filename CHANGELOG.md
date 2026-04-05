@@ -15,6 +15,21 @@ All notable changes to Wee Orchestrator are documented here.
 - **Testing**: 859 passed, 9 skipped — no regressions
 - **Impact**: Users can now delete skills from the WebUI Skills panel as intended
 
+#### #65: Auto-Delegation Session Isolation
+- **Status**: ✅ QA Approved (commit 3715325 on dev)
+- **Commit**: 3715325
+- **Issue**: Auto-delegation (via `detect_agent_delegation()`) and `/agent` command were passing the caller's `n8n_session_id` to `_execute_with_context()`, which allowed downstream code to overwrite the caller's `session_map` entry (agent, session_id, etc.). This violated session isolation boundaries and could cause cascading failures.
+- **Root Cause**: When delegating to another agent, the caller's session context was directly reused, allowing mutations to propagate back to the original session map.
+- **Fix**: When `is_delegation=True`, `_execute_with_context()` now:
+  - Creates an ephemeral `delegation_{uuid}` session key
+  - Copies essential fields (`channel`, `identity`, `render_type`, `bot_id`) from the caller
+  - Executes the delegated task using the ephemeral key
+  - Cleans up the ephemeral session afterward
+  - The caller's session_map entry is never touched
+- **Testing**: 11 new tests covering isolation, cleanup, channel inheritance, concurrent delegations, and non-delegation passthrough
+- **Metrics**: 870 tests pass, 9 skipped, 0 failures — no regressions
+- **Impact**: Session boundaries now properly enforced; cascading failures from delegation corruption eliminated
+
 
 ### Added
 
