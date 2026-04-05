@@ -353,24 +353,28 @@ class TestQueryEndpointErrorDetection(unittest.TestCase):
         )
 
     @patch("agent_manager.SessionManager.execute", return_value="")
-    def test_query_empty_response_returns_200(self, mock_execute):
-        """Empty response should return 200 (not an error)."""
+    def test_query_empty_response_returns_502(self, mock_execute):
+        """Empty response should return 502 empty_response (#68)."""
         resp = self.client.post(
             "/api/v1/query",
             json={"prompt": "test"},
             headers=self.auth,
         )
-        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.status_code, 502)
+        detail = resp.json()["detail"]
+        self.assertEqual(detail["error"], "empty_response")
 
     @patch("agent_manager.SessionManager.execute", return_value=None)
-    def test_query_none_response_returns_200(self, mock_execute):
-        """None response should return 200 (not crash)."""
+    def test_query_none_response_returns_502(self, mock_execute):
+        """None response should return 502 empty_response (#68)."""
         resp = self.client.post(
             "/api/v1/query",
             json={"prompt": "test"},
             headers=self.auth,
         )
-        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.status_code, 502)
+        detail = resp.json()["detail"]
+        self.assertEqual(detail["error"], "empty_response")
 
     @patch(
         "agent_manager.SessionManager.execute",
@@ -390,3 +394,256 @@ class TestQueryEndpointErrorDetection(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestQueryEndpointCodeGen(unittest.TestCase):
+    """Tests for code generation scenarios via /api/v1/query (#68).
+
+    Validates ANSI stripping, empty-response detection, connection error
+    handling, and proper treatment of multi-line code output.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        from unittest.mock import patch as _p
+        from fastapi.testclient import TestClient
+        import agent_manager
+
+        cls._telegram_patch = _p.object(
+            agent_manager,
+            "_resolve_telegram_identity",
+            side_effect=lambda identity: identity,
+        )
+        cls._telegram_patch.start()
+        cls._send_pairing_patch = _p.object(
+            agent_manager,
+            "_send_pairing_code",
+            return_value=True,
+        )
+        cls._send_pairing_patch.start()
+        cls.app = agent_manager.create_api_app()
+        cls.client = TestClient(cls.app)
+        cls.auth = {
+            "Authorization": "Bearer shared_test_key_123",
+            "X-User-Identity": "test_user",
+            "X-Auth-Channel": "api",
+        }
+
+    @classmethod
+    def tearDownClass(cls):
+        cls._telegram_patch.stop()
+        cls._send_pairing_patch.stop()
+
+    # --- ANSI stripping ---
+
+    @patch(
+        "agent_manager.SessionManager.execute",
+        return_value=(
+            "\x1b[91m\x1b[1mError:\x1b[0m Model not found: "
+            "openai-compatible/gemma4-26b"
+        ),
+    )
+    def test_ansi_stripped_before_error_detection(self, mock_execute):
+        """ANSI codes should be stripped before error-pattern matching."""
+        resp = self.client.post(
+            "/api/v1/query",
+            json={
+                "prompt": "Write Python to filter primes",
+                "runtime": "opencode",
+                "model": "openai-compatible/gemma4-26b",
+            },
+            headers=self.auth,
+        )
+        self.assertEqual(resp.status_code, 422)
+        detail = resp.json()["detail"]
+        self.assertEqual(detail["error"], "model_not_found")
+        # Message should not contain raw ANSI escapes
+        self.assertNotIn("\x1b", detail["message"])
+
+    @patch(
+        "agent_manager.SessionManager.execute",
+        return_value=(
+            "\x1b[32mdef is_prime(n):\x1b[0m\n"
+            "\x1b[32m    return n > 1 and all(n % i for i in range(2, int(n**0.5)+1))\x1b[0m\n"
+            "\x1b[32mprimes = [x for x in range(1, 101) if is_prime(x)]\x1b[0m\n"
+            "\x1b[32mprint(sum(primes))\x1b[0m"
+        ),
+    )
+    def test_ansi_stripped_from_code_response(self, mock_execute):
+        """Code output with ANSI colors should have them stripped."""
+        resp = self.client.post(
+            "/api/v1/query",
+            json={
+                "prompt": "Write Python to sum primes under 100",
+                "runtime": "opencode",
+            },
+            headers=self.auth,
+        )
+        self.assertEqual(resp.status_code, 200)
+        data = resp.json()
+        self.assertNotIn("\x1b", data["response"])
+        self.assertIn("is_prime", data["response"])
+        self.assertIn("sum(primes)", data["response"])
+
+    # --- Empty / null response detection ---
+
+    @patch("agent_manager.SessionManager.execute", return_value=None)
+    def test_null_response_returns_502(self, mock_execute):
+        """None from runtime should return 502 empty_response."""
+        resp = self.client.post(
+            "/api/v1/query",
+            json={"prompt": "Write code"},
+            headers=self.auth,
+        )
+        self.assertEqual(resp.status_code, 502)
+        detail = resp.json()["detail"]
+        self.assertEqual(detail["error"], "empty_response")
+
+    @patch("agent_manager.SessionManager.execute", return_value="")
+    def test_empty_string_response_returns_502(self, mock_execute):
+        """Empty string from runtime should return 502 empty_response."""
+        resp = self.client.post(
+            "/api/v1/query",
+            json={"prompt": "Write code"},
+            headers=self.auth,
+        )
+        self.assertEqual(resp.status_code, 502)
+        detail = resp.json()["detail"]
+        self.assertEqual(detail["error"], "empty_response")
+
+    @patch("agent_manager.SessionManager.execute", return_value="   \n  \n  ")
+    def test_whitespace_only_response_returns_502(self, mock_execute):
+        """Whitespace-only response should return 502 empty_response."""
+        resp = self.client.post(
+            "/api/v1/query",
+            json={"prompt": "Write code"},
+            headers=self.auth,
+        )
+        self.assertEqual(resp.status_code, 502)
+        detail = resp.json()["detail"]
+        self.assertEqual(detail["error"], "empty_response")
+
+    # --- Connection error patterns ---
+
+    @patch(
+        "agent_manager.SessionManager.execute",
+        return_value="Error: connect ECONNREFUSED 127.0.0.1:11434",
+    )
+    def test_connection_refused_returns_502(self, mock_execute):
+        """Connection refused (e.g. local model server down) returns 502."""
+        resp = self.client.post(
+            "/api/v1/query",
+            json={
+                "prompt": "Write Python code",
+                "runtime": "opencode",
+                "model": "openai-compatible/gemma4-26b",
+            },
+            headers=self.auth,
+        )
+        self.assertEqual(resp.status_code, 502)
+        detail = resp.json()["detail"]
+        self.assertEqual(detail["error"], "connection_refused")
+
+    @patch(
+        "agent_manager.SessionManager.execute",
+        return_value="Error: socket hang up while calling model endpoint",
+    )
+    def test_socket_hangup_returns_502(self, mock_execute):
+        """Socket hang up returns 502 connection_reset."""
+        resp = self.client.post(
+            "/api/v1/query",
+            json={"prompt": "Generate code", "runtime": "opencode"},
+            headers=self.auth,
+        )
+        self.assertEqual(resp.status_code, 502)
+        detail = resp.json()["detail"]
+        self.assertEqual(detail["error"], "connection_reset")
+
+    @patch(
+        "agent_manager.SessionManager.execute",
+        return_value="ETIMEDOUT: connection timed out to 192.168.1.100:11434",
+    )
+    def test_connection_timeout_returns_504(self, mock_execute):
+        """Connection timeout returns 504."""
+        resp = self.client.post(
+            "/api/v1/query",
+            json={"prompt": "Generate code", "runtime": "opencode"},
+            headers=self.auth,
+        )
+        self.assertEqual(resp.status_code, 504)
+        detail = resp.json()["detail"]
+        self.assertEqual(detail["error"], "connection_timeout")
+
+    # --- Code generation output handling ---
+
+    @patch(
+        "agent_manager.SessionManager.execute",
+        return_value=(
+            "```python\n"
+            "def sieve_of_eratosthenes(limit):\n"
+            '    """Return list of primes up to limit."""\n'
+            "    is_prime = [True] * (limit + 1)\n"
+            "    is_prime[0] = is_prime[1] = False\n"
+            "    for i in range(2, int(limit**0.5) + 1):\n"
+            "        if is_prime[i]:\n"
+            "            for j in range(i*i, limit + 1, i):\n"
+            "                is_prime[j] = False\n"
+            "    return [i for i in range(limit + 1) if is_prime[i]]\n"
+            "\n"
+            "primes = sieve_of_eratosthenes(100)\n"
+            "print(f'Sum of primes: {sum(primes)}')\n"
+            "```\n"
+            "\nThe sum of primes from 1 to 100 is **1060**."
+        ),
+    )
+    def test_code_output_with_backticks_preserved(self, mock_execute):
+        """Code output with triple backticks should be preserved intact."""
+        resp = self.client.post(
+            "/api/v1/query",
+            json={"prompt": "Write Python to sum primes under 100"},
+            headers=self.auth,
+        )
+        self.assertEqual(resp.status_code, 200)
+        data = resp.json()
+        self.assertIn("```python", data["response"])
+        self.assertIn("sieve_of_eratosthenes", data["response"])
+        self.assertIn("```", data["response"])
+
+    @patch(
+        "agent_manager.SessionManager.execute",
+        return_value=(
+            'result = {"primes": [2, 3, 5, 7], "sum": 17}\n'
+            "print(json.dumps(result, indent=2))\n"
+            "# Output:\n"
+            "# {\n"
+            '#   "primes": [2, 3, 5, 7],\n'
+            '#   "sum": 17\n'
+            "# }"
+        ),
+    )
+    def test_code_output_with_json_chars(self, mock_execute):
+        """Code output with JSON-like chars (braces, quotes) should work."""
+        resp = self.client.post(
+            "/api/v1/query",
+            json={"prompt": "Generate JSON output code"},
+            headers=self.auth,
+        )
+        self.assertEqual(resp.status_code, 200)
+        data = resp.json()
+        self.assertIn('"primes"', data["response"])
+        self.assertIn('"sum"', data["response"])
+
+    @patch(
+        "agent_manager.SessionManager.execute",
+        return_value="x" * 50000,
+    )
+    def test_large_code_output_not_truncated(self, mock_execute):
+        """Large code output should not be truncated in response."""
+        resp = self.client.post(
+            "/api/v1/query",
+            json={"prompt": "Generate large code"},
+            headers=self.auth,
+        )
+        self.assertEqual(resp.status_code, 200)
+        data = resp.json()
+        self.assertEqual(len(data["response"]), 50000)

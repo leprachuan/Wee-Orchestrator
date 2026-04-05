@@ -8438,6 +8438,27 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         except Exception:
             pass
 
+        # Strip ANSI escape codes from runtime output (#68)
+        _ansi_re = re.compile(
+            r"\x1b\[[0-9;]*[a-zA-Z]"
+            r"|\x1b\][^\x07]*\x07"
+            r"|\x1b\([A-Z0-9]"
+        )
+        if result and isinstance(result, str):
+            result = _ansi_re.sub("", result)
+
+        # Detect empty / null responses — runtime produced no output (#68)
+        if not result or (isinstance(result, str) and not result.strip()):
+            raise HTTPException(
+                status_code=502,
+                detail={
+                    "error": "empty_response",
+                    "message": "Runtime returned no output",
+                    "runtime": runtime,
+                    "model": model,
+                },
+            )
+
         # Detect runtime execution errors and return proper HTTP codes
         _RUNTIME_ERROR_PATTERNS = [
             ("ProviderModelNotFoundError", 422, "model_not_found"),
@@ -8449,8 +8470,14 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             ("PermissionDeniedError", 403, "permission_denied"),
             ("AuthenticationError", 401, "auth_error"),
             ("Error: executable not found", 503, "runtime_unavailable"),
+            ("ECONNREFUSED", 502, "connection_refused"),
+            ("Connection refused", 502, "connection_refused"),
+            ("connect ECONNREFUSED", 502, "connection_refused"),
+            ("ETIMEDOUT", 504, "connection_timeout"),
+            ("ECONNRESET", 502, "connection_reset"),
+            ("socket hang up", 502, "connection_reset"),
         ]
-        if result and isinstance(result, str):
+        if isinstance(result, str):
             for pattern, status_code, error_code in _RUNTIME_ERROR_PATTERNS:
                 if pattern.lower() in result.lower():
                     raise HTTPException(
