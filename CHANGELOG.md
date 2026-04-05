@@ -6,6 +6,53 @@ All notable changes to Wee Orchestrator are documented here.
 
 ### Added
 
+#### Issue #66: Stateless Query Endpoint
+- **Status**: ✅ QA Approved (commit 2763cc4 on dev)
+- **Commit**: 2763cc4
+- Adds `POST /api/v1/query` — a **stateless, one-shot query endpoint** for lightweight AI queries without session management
+- **Features**:
+  - **One-shot execution** — ephemeral session created, query executed, session cleaned up automatically
+  - **Full runtime/model control** — specify `runtime`, `model`, `agent`, and query timeout per request
+  - **No session overhead** — ideal for programmatic / scripted use cases; no need to manage session IDs
+  - **Rate limiting** — 30 requests per minute per IP address (sliding window)
+  - **Stateless response** — returns final response directly; no streaming
+- **API Endpoint** — `POST /api/v1/query`:
+  - Request body (JSON):
+    ```json
+    {
+      "prompt": "What is 2 + 2?",
+      "runtime": "copilot",
+      "model": "claude-haiku-4.5",
+      "agent": "orchestrator",
+      "timeout": 60
+    }
+    ```
+  - Response (200 OK):
+    ```json
+    {
+      "response": "2 + 2 = 4",
+      "runtime": "copilot",
+      "model": "claude-haiku-4.5",
+      "elapsed_ms": 2150
+    }
+    ```
+  - Error responses:
+    - `400 Bad Request` — Missing required fields or invalid JSON
+    - `401 Unauthorized` — Missing or invalid Bearer token
+    - `404 Not Found` — Unknown runtime, model, or agent
+    - `429 Too Many Requests` — Rate limit exceeded (30/min/IP)
+    - `504 Gateway Timeout` — Query exceeded specified timeout
+- **Security**:
+  - Requires API authentication (Bearer token or shared-key validation)
+  - Runs with the authority of the calling API user (rate-limited by IP)
+  - Ephemeral sessions are not persisted or visible in session history
+- **Testing**: Comprehensive test coverage in `tests/test_query_endpoint.py` including rate limiting, timeout handling, invalid inputs, and runtime/model resolution
+- **Use Cases**: 
+  - CI/CD pipelines querying AI without session overhead
+  - Lightweight scripts and integrations
+  - Programmatic AI calls from external systems
+- **Ready for deployment**: No breaking changes, backwards compatible, stateless architecture
+
 #### F025 (Enhanced): Custom Themes API — wee-qa Fix Round 2
 - **Status**: ✅ QA Approved (commits 6d45763 + 56ac461 on dev)
 - **Commit**: 6d45763

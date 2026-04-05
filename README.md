@@ -1028,6 +1028,63 @@ A comprehensive test suite is included to ensure code quality and prevent regres
 
 ### Running Tests
 
+#### Stateless Query Endpoint
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `POST` | `/api/v1/query` | One-shot stateless query endpoint |
+
+**POST /api/v1/query** — Execute a single query without session management
+
+A lightweight, ephemeral-session endpoint for programmatic AI queries. Perfect for CI/CD pipelines, scripts, and integrations that don't need persistent session state.
+
+Request body (JSON):
+```json
+{
+  "prompt": "What is 2 + 2?",
+  "runtime": "copilot",
+  "model": "claude-haiku-4.5",
+  "agent": "orchestrator",
+  "timeout": 60
+}
+```
+
+Response (200 OK):
+```json
+{
+  "response": "2 + 2 = 4",
+  "runtime": "copilot",
+  "model": "claude-haiku-4.5",
+  "elapsed_ms": 2150
+}
+```
+
+**Parameters:**
+- `prompt` (string, required) — The query or command to send to the AI runtime
+- `runtime` (string, required) — AI runtime: `copilot`, `opencode`, `claude`, `gemini`, or `codex`
+- `model` (string, required) — Model name or alias (e.g., `claude-haiku-4.5`, `gpt-5-mini`)
+- `agent` (string, optional) — Agent context to use (default: `orchestrator`)
+- `timeout` (integer, optional) — Query timeout in seconds (default: 60)
+
+**Error responses:**
+- `400 Bad Request` — Missing required fields (`prompt`, `runtime`, `model`) or invalid JSON
+- `401 Unauthorized` — Missing or invalid Bearer token
+- `404 Not Found` — Unknown runtime, model, or agent
+- `429 Too Many Requests` — Rate limit exceeded (30 requests per minute per IP)
+- `504 Gateway Timeout` — Query exceeded specified timeout
+
+**Features:**
+- **Stateless** — No session created; ephemeral context cleaned up automatically after response
+- **Rate Limited** — 30 requests/minute per IP address (sliding window)
+- **Full Control** — Choose runtime, model, and agent per request
+- **Security** — Requires API authentication; executes with the authority of the calling user/token
+
+**Security:**
+- Requires API authentication (Bearer token or shared-key validation)
+- Runs with the authority of the calling API user (rate-limited by IP)
+- Ephemeral sessions are not persisted or visible in session history
+- Input validation prevents agent/model traversal attacks
+
 #### Memory Promotion
 
 | Method | Path | Description |
