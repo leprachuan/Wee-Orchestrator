@@ -618,6 +618,42 @@ class BackgroundTaskManager:
             if len(kept) < len(tasks):
                 self._save(kept)
 
+
+    def reconcile_stale_tasks(self) -> dict:
+        """Reconcile orphaned tasks after a service restart.
+
+        - Mark 'running' tasks as 'failed' if their PID is no longer alive.
+        - Return a summary dict with counts of what was reconciled.
+        """
+        now_str = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        reconciled = {"stale_running": 0, "queued_ready": 0}
+        with self._lock:
+            tasks = self._load()
+            changed = False
+            for t in tasks:
+                if t["status"] == "running":
+                    pid = t.get("pid", 0)
+                    alive = False
+                    if pid:
+                        try:
+                            os.kill(pid, 0)
+                            alive = True
+                        except (ProcessLookupError, PermissionError):
+                            pass
+                    if not alive:
+                        t["status"] = "failed"
+                        t["error"] = "Orphaned after service restart (PID not found)"
+                        t["completed_at"] = now_str
+                        reconciled["stale_running"] += 1
+                        changed = True
+            if changed:
+                self._save(tasks)
+            # Count queued tasks that are now promotable
+            reconciled["queued_ready"] = sum(
+                1 for t in tasks if t["status"] == "queued"
+            )
+        return reconciled
+
     # -- Steering --------------------------------------------------------
     STEERING_DIR = os.path.join(
         os.environ.get("SCRIPT_BASE_DIR", os.path.dirname(os.path.abspath(__file__))),
@@ -7988,6 +8024,47 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 auth_mgr.cleanup_expired()
                 rate_limiter.cleanup()
                 bg_task_mgr.cleanup_old()
+                # Periodic reconciliation: promote queued tasks if slots available
+                try:
+                    _all = bg_task_mgr.list_all_tasks()
+                    _queued_periodic = [t for t in _all if t["status"] == "queued"]
+                    _queued_periodic.sort(key=lambda t: t.get("created_at", ""))
+                    for _qt in _queued_periodic:
+                        _agent = _qt.get("agent", "orchestrator")
+                        _ch = _qt.get("channel", "api")
+                        _uid = _qt.get("user_identity", "")
+                        _acfg = session_mgr.AGENTS.get(_agent, {})
+                        _mc = _acfg.get(
+                            "max_concurrent",
+                            BackgroundTaskManager.MAX_TASKS_PER_USER,
+                        )
+                        _rn = bg_task_mgr.count_running(_ch, _uid, _agent)
+                        if _rn >= _mc:
+                            continue
+                        _nsid = str(uuid4())
+                        bg_task_mgr.promote_queued_task(_qt["task_id"], _nsid)
+                        print(
+                            f"[Periodic] Promoting queued task {_qt['task_id']}",
+                            flush=True,
+                        )
+                        bg_executor.submit(
+                            _run_background_task,
+                            _qt["task_id"],
+                            _nsid,
+                            _qt["prompt"],
+                            _qt["agent"],
+                            _qt["runtime"],
+                            _qt["model"],
+                            _qt["channel"],
+                            _qt["user_identity"],
+                            _qt.get("timeout") or 900,
+                            _qt.get("notify", True),
+                        )
+                except Exception as _rec_exc:
+                    print(
+                        f"[Periodic] Queue reconciliation error: {_rec_exc}",
+                        flush=True,
+                    )
 
         async def _agents_file_watcher():
             """Poll agents.json mtime every 10s and hot-reload on change."""
@@ -8018,6 +8095,50 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                         f"[Hot-Reload] Error watching agents.json: {exc}",
                         file=sys.stderr,
                     )
+
+        # Reconcile orphaned tasks from previous process lifetime
+        _reconcile_result = bg_task_mgr.reconcile_stale_tasks()
+        if _reconcile_result["stale_running"] or _reconcile_result["queued_ready"]:
+            print(
+                f"[Startup] Task reconciliation: "
+                f"{_reconcile_result['stale_running']} stale running → failed, "
+                f"{_reconcile_result['queued_ready']} queued tasks ready for promotion",
+                flush=True,
+            )
+            # Promote queued tasks that now have available slots
+            _all_tasks = bg_task_mgr.list_all_tasks()
+            _queued = [t for t in _all_tasks if t["status"] == "queued"]
+            _queued.sort(key=lambda t: t.get("created_at", ""))
+            for _qt in _queued:
+                _agent = _qt.get("agent", "orchestrator")
+                _channel = _qt.get("channel", "api")
+                _identity = _qt.get("user_identity", "")
+                _agent_config = session_mgr.AGENTS.get(_agent, {})
+                _max_conc = _agent_config.get(
+                    "max_concurrent", BackgroundTaskManager.MAX_TASKS_PER_USER
+                )
+                _running_now = bg_task_mgr.count_running(_channel, _identity, _agent)
+                if _running_now >= _max_conc:
+                    continue
+                _new_sid = str(uuid4())
+                bg_task_mgr.promote_queued_task(_qt["task_id"], _new_sid)
+                print(
+                    f"[Startup] Promoting queued task {_qt['task_id']} → running",
+                    flush=True,
+                )
+                bg_executor.submit(
+                    _run_background_task,
+                    _qt["task_id"],
+                    _new_sid,
+                    _qt["prompt"],
+                    _qt["agent"],
+                    _qt["runtime"],
+                    _qt["model"],
+                    _qt["channel"],
+                    _qt["user_identity"],
+                    _qt.get("timeout") or 900,
+                    _qt.get("notify", True),
+                )
 
         cleanup_task = asyncio.ensure_future(_periodic_cleanup())
         watcher_task = asyncio.ensure_future(_agents_file_watcher())
