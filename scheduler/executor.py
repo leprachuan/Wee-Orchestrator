@@ -14,7 +14,7 @@ import os
 import subprocess
 import sys
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Dict, Optional
 
@@ -40,6 +40,8 @@ logger = logging.getLogger(__name__)
 _CLOCK_DRIFT_THRESHOLD = 30  # seconds — log warning when drift exceeds this
 _MAX_CATCHUP_WINDOW = 3600  # 1 hour — skip (recalculate) runs older than this
 _MIN_EXEC_INTERVAL_MONO = 10  # monotonic seconds — cooldown between same-job runs
+_DRIFT_COMPENSATION_CAP = 600  # max backward-drift compensation (10 min)
+_DRIFT_EVENT_HISTORY = 50  # keep last N drift events for diagnostics
 
 _MAX_NOTIFICATION_LENGTH = 200
 
@@ -106,12 +108,19 @@ class TaskSchedulerExecutor:
         # when a backward clock jump causes _calculate_next_run to re-schedule
         # into an already-executed time slot).
         self._job_last_exec_mono: Dict[str, float] = {}
+        # Wall-clock debt: accumulated backward drift not yet recovered.
+        # Applied as compensation in _is_job_ready so backward jumps don't
+        # silently skip jobs that were due before the clock regressed.
+        self._wall_clock_debt: float = 0.0
+        self._drift_events: list = []  # recent (timestamp, drift_secs) tuples
+        self._drift_recovered_count: int = 0  # jobs recovered via compensation
 
     def _detect_clock_drift(self) -> float:
         """Compare wall-clock delta with monotonic delta to detect drift.
 
         Returns drift in seconds (positive = forward jump, negative = backward).
-        Updates internal tracking timestamps.
+        Updates internal tracking timestamps and wall-clock debt for backward
+        drift compensation (Issue #71).
         """
         now_wall = time.time()
         now_mono = time.monotonic()
@@ -130,6 +139,36 @@ class TaskSchedulerExecutor:
                 f"System clock drift detected: {drift:+.1f}s ({direction}) — "
                 f"wall Δ={wall_delta:.1f}s vs mono Δ={mono_delta:.1f}s"
             )
+
+            # Track event for diagnostics
+            self._drift_events.append(
+                (datetime.now(timezone.utc).isoformat(), round(drift, 1))
+            )
+            if len(self._drift_events) > _DRIFT_EVENT_HISTORY:
+                self._drift_events = self._drift_events[-_DRIFT_EVENT_HISTORY:]
+
+            # Update wall-clock debt for backward drift compensation
+            if drift < 0:
+                # Backward jump: increase debt (capped)
+                self._wall_clock_debt = min(
+                    self._wall_clock_debt + abs(drift),
+                    _DRIFT_COMPENSATION_CAP,
+                )
+                logger.warning(
+                    f"Wall-clock debt increased to {self._wall_clock_debt:.1f}s "
+                    f"(backward drift compensation active)"
+                )
+            else:
+                # Forward drift reduces debt (clock catching up via NTP slew)
+                if self._wall_clock_debt > 0:
+                    old_debt = self._wall_clock_debt
+                    self._wall_clock_debt = max(
+                        0.0, self._wall_clock_debt - drift
+                    )
+                    logger.info(
+                        f"Wall-clock debt reduced {old_debt:.1f}s → "
+                        f"{self._wall_clock_debt:.1f}s (forward drift recovery)"
+                    )
 
         return drift
 
@@ -570,6 +609,8 @@ class TaskSchedulerExecutor:
         """Check if a job is ready to execute (enabled and time has passed).
 
         Handles clock drift by:
+        - Using wall-clock debt compensation so backward clock jumps don't
+          silently skip jobs that were due before the regression (Issue #71).
         - Using monotonic cooldown to prevent double-execution after
           backward clock jumps.
         - Detecting stale next_run (past MAX_CATCHUP_WINDOW) and returning
@@ -588,8 +629,22 @@ class TaskSchedulerExecutor:
             ).replace(tzinfo=None)
             now = datetime.now(timezone.utc).replace(tzinfo=None)
 
-            if next_run > now:
+            # Apply wall-clock debt compensation: if the clock jumped backward,
+            # compensated_now represents what time it "should" be. This prevents
+            # jobs from being silently skipped after a backward NTP adjustment.
+            compensated_now = now
+            drift_compensated = False
+            if self._wall_clock_debt > 0:
+                compensated_now = now + timedelta(
+                    seconds=self._wall_clock_debt
+                )
+
+            if next_run > compensated_now:
                 return False
+
+            # If the job is only ready because of drift compensation, log it
+            if next_run > now and next_run <= compensated_now:
+                drift_compensated = True
 
             job_id = job.get("id", "")
 
@@ -603,7 +658,7 @@ class TaskSchedulerExecutor:
 
             # Stale run guard — recurring jobs whose next_run is extremely old
             # should be rescheduled, not executed with stale context.
-            overdue_seconds = (now - next_run).total_seconds()
+            overdue_seconds = (compensated_now - next_run).total_seconds()
             if overdue_seconds > _MAX_CATCHUP_WINDOW and job.get("recurring", True):
                 logger.warning(
                     f"Job {job_id} next_run is {overdue_seconds:.0f}s overdue "
@@ -612,15 +667,25 @@ class TaskSchedulerExecutor:
                 )
                 return False
 
-            if overdue_seconds > _CLOCK_DRIFT_THRESHOLD:
+            if drift_compensated:
+                gap = (next_run - now).total_seconds()
+                logger.info(
+                    f"Job {job_id} recovered via backward-drift compensation "
+                    f"(next_run {gap:.0f}s in future, debt={self._wall_clock_debt:.1f}s)"
+                )
+                self._drift_recovered_count += 1
+            elif overdue_seconds > _CLOCK_DRIFT_THRESHOLD:
                 logger.info(
                     f"Job {job_id} is {overdue_seconds:.0f}s overdue — "
                     f"executing catchup run"
                 )
 
             return True
-        except (ValueError, TypeError):
-            logger.warning(f"Invalid next_run format: {next_run_str}")
+        except (ValueError, TypeError) as exc:
+            logger.warning(
+                f"Invalid next_run format for job "
+                f"{job.get('id', '?')}: {next_run_str!r} ({exc})"
+            )
             return False
 
     def _calculate_next_run(self, job: Dict) -> Optional[str]:
@@ -684,21 +749,43 @@ class TaskSchedulerExecutor:
                             f"Job {job_id} stale and could not recalculate — "
                             f"disabling"
                         )
-            except (ValueError, TypeError):
+            except (ValueError, TypeError) as exc:
+                logger.warning(
+                    f"Could not parse next_run for job "
+                    f"{job.get('id', '?')}: {job.get('next_run')!r} ({exc})"
+                )
                 continue
 
         return modified
+
+    def get_drift_diagnostics(self) -> Dict:
+        """Return current drift handling state for diagnostics."""
+        return {
+            "wall_clock_debt_seconds": round(self._wall_clock_debt, 1),
+            "drift_compensation_active": self._wall_clock_debt > 0,
+            "drift_recovered_jobs": self._drift_recovered_count,
+            "recent_drift_events": self._drift_events[-10:],
+            "compensation_cap_seconds": _DRIFT_COMPENSATION_CAP,
+        }
 
     def check_and_execute(self):
         """Check for ready jobs and execute them.
 
         On each cycle, drift between the wall clock and monotonic clock is
-        measured.  Stale recurring jobs (past the catchup window) get their
-        ``next_run`` advanced without executing.  A per-job monotonic
-        cooldown prevents double-execution after backward clock jumps.
+        measured.  Wall-clock debt from backward jumps is tracked and used
+        to compensate job readiness checks (Issue #71).  Stale recurring
+        jobs (past the catchup window) get their ``next_run`` advanced
+        without executing.  A per-job monotonic cooldown prevents
+        double-execution after backward clock jumps.
         """
         # --- clock drift detection ---
         drift = self._detect_clock_drift()
+
+        if self._wall_clock_debt > 0:
+            logger.debug(
+                f"Drift compensation active: debt={self._wall_clock_debt:.1f}s, "
+                f"recovered={self._drift_recovered_count} jobs"
+            )
 
         data = self._load_jobs()
 
