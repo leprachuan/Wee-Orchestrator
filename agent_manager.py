@@ -4726,11 +4726,32 @@ Example skill structure:
     def _execute_with_context(
         self, prompt: str, delegation_data: dict, n8n_session_id: str
     ) -> str:
-        """Execute a prompt with specific agent context (for sub-agent delegation)"""
+        """Execute a prompt with specific agent context (for sub-agent delegation).
+
+        When is_delegation is True in delegation_data, an ephemeral session key
+        is used so the delegated agent does not overwrite the caller's
+        session_map entry (agent field, session_id, etc.).  Fixes #65.
+        """
         session_id = delegation_data.get("session_id")
         model = delegation_data.get("model", "gpt-5-mini")
         agent = delegation_data.get("agent", "orchestrator")
         runtime = delegation_data.get("runtime", "copilot")
+        is_delegation = delegation_data.get("is_delegation", False)
+
+        # Issue #65: For delegated tasks, use an ephemeral session key to
+        # avoid overwriting the caller's session_map entry.
+        effective_sid = n8n_session_id
+        if is_delegation and n8n_session_id:
+            effective_sid = f"delegation_{session_id}"
+            # Pre-populate ephemeral session with caller's channel/identity so
+            # downstream code (build_agent_context_prompt, status updates) works.
+            caller_data = self.get_or_create_session_data(n8n_session_id)
+            self.get_or_create_session_data(effective_sid)
+            for field in ("channel", "identity", "render_type", "bot_id"):
+                val = caller_data.get(field)
+                if val is not None:
+                    self.update_session_field(effective_sid, field, val)
+            self.update_session_field(effective_sid, "agent", agent)
 
         output = self._dispatch_single_runtime(
             runtime,
@@ -4739,10 +4760,20 @@ Example skill structure:
             agent,
             session_id if runtime == "claude" else None,
             False,
-            n8n_session_id,
+            effective_sid,
             self.command_timeout,
             "text",
         )
+
+        # Clean up ephemeral delegation session to avoid session_map bloat
+        if effective_sid != n8n_session_id:
+            try:
+                with self._session_map_lock:
+                    session_map = self.load_session_map()
+                    session_map.pop(effective_sid, None)
+                    self.save_session_map(session_map)
+            except Exception:
+                pass
 
         return output
 
