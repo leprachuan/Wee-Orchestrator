@@ -99,6 +99,25 @@ All notable changes to Wee Orchestrator are documented here.
 
 ### Added
 
+#### #69: BLOCKERS.md Template for Structured wee-dev Blocker Tracking
+- **Status**: ✅ QA Approved (commit 6d2aade on dev)
+- **Commit**: 6d2aade
+- Adds standardized `BLOCKERS.md` template at repository root for documenting blockers during wee-dev task execution
+- **Purpose**: Provides transparency on what's blocking progress, escalation channels, and resolution tracking
+- **Template Structure**:
+  - **Blocker entry format**: Timestamp, issue reference, blocker type, communication channel, status, resolution
+  - **Blocker types** (7 categories): missing-key, needs-approval, needs-clarification, resource-unavailable, dependency-missing, permission-denied, other
+  - **Communication decision tree**: Flowchart for determining optimal escalation channel (Telegram, approval-flow, GitHub) based on urgency and type
+  - **Status states** (6): OPEN, WAITING_FOR_KEY, WAITING_FOR_APPROVAL, ESCALATED, WORKAROUND_IN_PLACE, RESOLVED
+  - **Foster responsibilities section**: Outlines key decision points and action items for Foster (approvals, key management, access, resource allocation)
+  - **Worked examples** (3): API key missing, clarification needed, dependency blocker
+  - **Active/Resolved sections**: Ongoing blockers vs. resolved blockers for easy tracking across multiple wee-dev runs
+- **Outcomes**:
+  - wee-dev tasks now have a standardized format for documenting blockers
+  - Foster can review BLOCKERS.md to understand what's blocking work without digging through logs
+  - Escalation decisions are transparent and consistent
+- **QA Pass**: All requirements verified in commit 6d2aade. No BLOCKERs or MAJORs. Ready for production.
+
 #### F025 (Enhanced): Custom Themes API — wee-qa Fix Round 2
 - **Status**: ✅ QA Approved (commits 6d45763 + 56ac461 on dev)
 - **Commit**: 6d45763
