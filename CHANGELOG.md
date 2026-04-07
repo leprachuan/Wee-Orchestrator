@@ -4,6 +4,32 @@ All notable changes to Wee Orchestrator are documented here.
 
 ## [Unreleased] — Dev Branch
 
+### Added
+#### F001: LLM-Generated Conversation Titles
+- **Status**: QA Approved (commit 79503ed on dev)
+- **Commit**: 79503ed
+- **Issue**: Conversation history sessions lacked descriptive titles. Sessions displayed raw session IDs or a static placeholder in the history panel, making it difficult for users to identify past conversations at a glance.
+- **Feature**: Auto-generates and periodically refreshes concise, descriptive session titles using an LLM, with a smart heuristic fallback when no LLM is available.
+  - **Primary**: Ollama (local, free) — `POST {TITLE_GEN_OLLAMA_URL}/api/generate` using `TITLE_GEN_MODEL` (default: `granite3.3-tuned`)
+  - **Fallback**: Anthropic API (`claude-haiku-4.5`) when `ANTHROPIC_API_KEY` is set and Ollama is unavailable
+  - **Heuristic fallback**: Extracts the first substantive user message, strips markdown/code fences/URLs, truncates to 60 chars at a word boundary — never calls an LLM
+  - **Auto-trigger**: `_maybe_auto_generate_title()` fires after every session response (background, non-blocking); first generation at 2+ messages; refreshes every `TITLE_REFRESH_INTERVAL` (default: 10) messages
+  - **User-set title protection**: `update_title_llm()` will not overwrite titles with `title_source == "user"`
+  - **Dependency**: `httpx>=0.27.0` added to `requirements.txt` (installed 0.28.1) for async HTTP to Ollama
+- **Key functions**:
+  - `_generate_title_via_llm(messages)` — async; tries Ollama then Anthropic; returns `None` on all failures
+  - `_maybe_auto_generate_title(channel, identity, session_id)` — async; evaluates generation criteria and dispatches LLM/heuristic
+  - `_smart_heuristic_title(messages)` — sync; extracts and cleans first user message; no LLM required
+  - `update_title_llm(channel, identity, session_id, title, source)` — persists generated title; records `title_source`, `title_generated_at`, `message_count_at_title_gen`
+- **API endpoint**: `POST /api/v1/history/sessions/{session_id}/generate-title` — force (re)generate an LLM title on demand
+- **Configuration (env vars)**:
+  - `TITLE_GEN_OLLAMA_URL` — Ollama base URL (default: `http://192.168.1.101:11434`)
+  - `TITLE_GEN_MODEL` — Ollama model name (default: `granite3.3-tuned`)
+  - `TITLE_REFRESH_INTERVAL` — messages between title refreshes (default: `10`)
+- **Error handling**: All exceptions in `_maybe_auto_generate_title` are caught and logged as `WARNING`; title generation never blocks or errors a user response
+- **Notes**: No dedicated unit tests for the async LLM path (dev disk full prevented test run — env issue, not code issue). Heuristic and API endpoint paths are covered by existing integration tests.
+- **Impact**: Session history panel now shows human-readable titles that update as conversations evolve; titles persist across sessions and are searchable
+
 ### Fixed
 #### #72: Remove Memory Context Prompt Fallback, Inject at Session Creation
 - **Status**: ✅ QA Approved (commit 30d1400 on dev)

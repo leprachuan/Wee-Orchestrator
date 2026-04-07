@@ -1265,6 +1265,60 @@ curl -s -X POST http://localhost:8000/api/v1/query \
 ```
 
 
+**POST /api/v1/history/sessions/{session_id}/generate-title** — LLM title generation
+
+Force (re)generate a descriptive title for a session using an LLM or smart heuristic fallback. Useful when you want an immediate title refresh outside of the auto-trigger cycle.
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `POST` | `/api/v1/history/sessions/{session_id}/generate-title` | Generate or refresh an LLM title for the specified session |
+
+Response (200 OK — title generated):
+```json
+{
+  "session_id": "abc123",
+  "title": "Kubernetes cluster health check",
+  "source": "llm"
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `session_id` | string | The session whose title was updated |
+| `title` | string | The generated title (max 120 chars) |
+| `source` | string | `"llm"` (Ollama or Anthropic) or `"heuristic"` (no LLM used) |
+
+Error responses:
+- `401 Unauthorized` — Missing or invalid Bearer token
+- `404 Not Found` — Session does not exist or belongs to a different user
+- `400 Bad Request` — Session has no messages (nothing to summarize)
+- `500 Internal Server Error` — All title generation methods failed
+
+**Title generation cascade:**
+1. **Ollama** (local, free) — `POST {TITLE_GEN_OLLAMA_URL}/api/generate` with model `TITLE_GEN_MODEL`
+2. **Anthropic API** — `claude-haiku-4.5` when `ANTHROPIC_API_KEY` is set and Ollama is unavailable
+3. **Smart heuristic** — Extracts first substantive user message, strips markdown/code/URLs, word-boundary truncate to 60 chars
+
+**Auto-generation behavior (background):**
+- `_maybe_auto_generate_title()` is called non-blocking after every session response
+- First LLM title generated at ≥ 2 messages
+- Title refreshed every `TITLE_REFRESH_INTERVAL` messages (default: `10`) if source is `"llm"`
+- User-set titles (`title_source == "user"`) are never overwritten
+
+**Configuration (env vars):**
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `TITLE_GEN_OLLAMA_URL` | `http://192.168.1.101:11434` | Ollama API base URL |
+| `TITLE_GEN_MODEL` | `granite3.3-tuned` | Ollama model for title generation |
+| `TITLE_REFRESH_INTERVAL` | `10` | Messages between auto-refresh cycles |
+
+```bash
+# Force regenerate a title
+curl -s -X POST http://localhost:8000/api/v1/history/sessions/abc123/generate-title \
+  -H "Authorization: Bearer $API_TOKEN"
+```
+
+
 ### Quick Start
 
 ```bash
