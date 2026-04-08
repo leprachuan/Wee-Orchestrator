@@ -382,8 +382,17 @@ class TaskSchedulerExecutor:
         job_id = job["id"]
         mode = job.get("mode", "ai")  # Default to AI mode
 
-        # Route to appropriate executor
+        # Validate: command-mode tasks should not have LLM runtime/model fields.
+        # Having them is a misconfiguration — command mode always runs the shell
+        # command directly and never invokes an LLM (see issue #78).
         if mode == "command":
+            llm_fields = [f for f in ("runtime", "model") if job.get(f)]
+            if llm_fields:
+                logger.warning(
+                    f"Job {job_id} has mode='command' but also sets {llm_fields}. "
+                    "These fields are ignored for command-mode tasks. "
+                    "Remove them from the job config to silence this warning."
+                )
             return self._execute_command_mode(job)
         else:
             return self._execute_ai_mode(job)
