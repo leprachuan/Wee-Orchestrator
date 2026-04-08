@@ -7701,6 +7701,50 @@ def _resolve_telegram_identity(username: str):
     except Exception:
         return None
 
+def _compute_bg_task_defaults(session_map, identity, channel):
+    """Compute inheritable defaults from existing sessions for a new background task.
+
+    Only safe fields (notification_preference, runtime, model) are inherited.
+    The 'agent' field is intentionally excluded to prevent session agent leakage
+    (see issue #75).
+
+    Args:
+        session_map: dict of n8n_sid -> session_data
+        identity: user identity string
+        channel: auth channel string
+
+    Returns:
+        dict with only safe inherited fields (never contains 'agent')
+    """
+    SAFE_FIELDS = ("notification_preference", "runtime", "model")
+    matching_same = []
+    matching_other = []
+
+    for n8n_sid, data in session_map.items():
+        if isinstance(data, str):
+            data = {"session_id": data}
+        sid_identity = data.get("identity")
+        sid_channel = data.get("channel")
+        if sid_identity and sid_identity == identity:
+            if sid_channel == channel:
+                matching_same.append(data)
+            else:
+                matching_other.append(data)
+
+    defaults = {}
+    for data in matching_same + matching_other:
+        if not defaults:
+            for key in SAFE_FIELDS:
+                if key in data:
+                    defaults[key] = data[key]
+        # Always prefer notification_preference from any matching session
+        pref = data.get("notification_preference")
+        if pref and not defaults.get("notification_preference"):
+            defaults["notification_preference"] = pref
+
+    return defaults
+
+
 def create_api_app():  # noqa: C901 – factory kept in one place intentionally
     """Factory that builds and returns the FastAPI application."""
     import asyncio
@@ -7771,6 +7815,9 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
     history_mgr = HistoryManager()
     bg_task_mgr = BackgroundTaskManager()
     session_mgr._bg_task_mgr = bg_task_mgr
+    # Expose for testing/introspection (read-only reference)
+    import sys as _sys
+    _sys.modules[__name__]._session_mgr = session_mgr
     usage_tracker = RuntimeUsageTracker()
 
     # Shared thread pool executor for background tasks
@@ -10389,63 +10436,9 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         # Resolve agent/runtime/model — default to user's current session config
         # Determine defaults by searching for ANY session for this identity across all channels
         # to inherit preferences (like notification_preference).
-        defaults = {}
         session_map = session_mgr.load_session_map()
-
-        # Search session_map for matching n8n_session_ids by identity (highest priority)
-        # Then by channel, always respecting notification_preference if set
-        matching_sessions_same_channel = []
-        matching_sessions_other_channel = []
-
-        for n8n_sid, data in session_map.items():
-            # Handle legacy string format
-            if isinstance(data, str):
-                data = {"session_id": data}
-
-            # Check if this session belongs to this user (by identity if stored)
-            sid_identity = data.get("identity")
-            sid_channel = data.get("channel")
-
-            # Match by identity first (most reliable)
-            if sid_identity and sid_identity == identity:
-                if sid_channel == channel:
-                    matching_sessions_same_channel.append((n8n_sid, data))
-                else:
-                    matching_sessions_other_channel.append((n8n_sid, data))
-
-        # Use sessions from the same channel first
-        for n8n_sid, data in matching_sessions_same_channel:
-            if not defaults:
-                defaults = dict(data)
-                print(
-                    f"[API] Found matching session '{n8n_sid}' for {channel}/{identity}"
-                )
-
-            # Always check for notification_preference (highest priority)
-            pref = data.get("notification_preference")
-            if pref:
-                defaults["notification_preference"] = pref
-                print(
-                    f"[API] Inherited notification_preference '{pref}' from session '{n8n_sid}'"
-                )
-
-        # Fall back to other channels for the same user
-        for n8n_sid, data in matching_sessions_other_channel:
-            if not defaults:
-                defaults = dict(data)
-                print(
-                    f"[API] Found matching cross-channel session '{n8n_sid}' for {identity}"
-                )
-
-            # Always prioritize notification_preference across channels
-            pref = data.get("notification_preference")
-            if pref:
-                # If "off" is set anywhere, respect it
-                if pref == "off" or not defaults.get("notification_preference"):
-                    defaults["notification_preference"] = pref
-                    print(
-                        f"[API] Inherited notification_preference '{pref}' from cross-channel session '{n8n_sid}'"
-                    )
+        # Inherit only safe fields (never 'agent') from prior sessions — see issue #75
+        defaults = _compute_bg_task_defaults(session_map, identity, channel)
 
         agent = body.agent or defaults.get("agent", get_default_agent())
         runtime = body.runtime or defaults.get("runtime", get_default_runtime())
