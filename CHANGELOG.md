@@ -80,6 +80,26 @@ All notable changes to Wee Orchestrator are documented here.
 - **Metrics**: 947 tests pass, 9 skipped, 0 failures — no regressions
 - **Impact**: Memory context is now consistently injected across all session types (background, interactive, queued); cleaner output without wrapper markers; single injection point eliminates duplication risks
 
+#### #78: Task Scheduler Invokes LLM for Command-Only Tasks
+- **Status**: ✅ QA Approved (commit c115852 on dev)
+- **Commit**: c115852
+- **Issue**: Scheduler tasks with `mode="command"` should execute shell commands directly, never invoke an LLM. However, if a misconfigured task included both `mode="command"` and `runtime`/`model` fields, the executor would be ambiguous about whether to route to command mode or LLM mode. This ambiguity could cause command-only tasks to unexpectedly invoke LLM APIs, wasting compute and token budget.
+- **Fix**: Added validation in `_execute_task()`:
+  - When `mode="command"` is paired with `runtime` or `model` fields, log a `WARNING` with the misconfiguration details
+  - Always route command-mode tasks to `_execute_command_mode()`, never `_execute_ai_mode()`
+  - Command execution continues unaffected (backward compatible); misconfiguration is visible in logs for remediation
+- **Key Code**:
+  - `scheduler/executor.py`: `_execute_task()` checks `if mode == "command" and (runtime or model)` and emits warning before routing
+  - Validation prevents silent routing errors and surfaces misconfigurations during testing
+- **Testing**: 7 new unit tests in `tests/test_scheduler_command_mode.py`:
+  - Routing to `_execute_command_mode()` when `mode="command"` (with and without extra fields)
+  - Warning emission when `runtime` or `model` are present alongside `mode="command"`
+  - Result passthrough (no extra processing)
+  - Command execution with various shell scenarios (exit codes, output, errors)
+  - Edge case: `mode` field missing or empty
+- **Metrics**: 987 tests pass, 9 skipped, 0 failures — no regressions
+- **Impact**: Misconfigured scheduler tasks no longer silently route to LLM; operators receive clear warnings in logs for investigation and fix.
+
 
 #### #71: Scheduler Backward Clock Drift Skips Jobs
 - **Status**: QA Approved (commit 867c553 on dev)
