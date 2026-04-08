@@ -986,6 +986,25 @@ When creating a new session:
 - **Model:** gpt-5-mini (Copilot) / opencode/gpt-5-nano (OpenCode) / haiku (Claude) / gemini-1.5-flash (Gemini)
 - **Agent:** devops (or first available agent from config)
 
+### Background Task Agent Isolation (#75)
+When a background task is created without an explicit `agent` field, the system resolves the agent via `get_default_agent()` — **never** from an existing session. This prevents session agent leakage where a task dispatched from a specialized agent session (e.g., `devops`) would silently run under that agent instead of the system default.
+
+**Safe inherited fields** (copied from existing same-identity sessions):
+- `runtime` — inherits the session's active runtime
+- `model` — inherits the session's active model
+- `notification_preference` — inherits notification routing preference
+
+**Never inherited from sessions:**
+- `agent` — always resolved from the request body or system default
+
+This guarantee is enforced in `_compute_bg_task_defaults()` via an explicit `SAFE_FIELDS` whitelist. Agent must be explicitly provided in the request body to override the default:
+```json
+{
+  "prompt": "Deploy the app",
+  "agent": "devops"
+}
+```
+
 ## Advanced Features
 
 ### Dynamic Agent Loading
