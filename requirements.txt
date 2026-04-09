@@ -16,3 +16,4 @@ keyring>=25.0.0
 keyrings.alt>=5.0.0
 cryptography>=42.0.0
 github-copilot-sdk>=0.1.0
+claude-agent-sdk>=0.1.0

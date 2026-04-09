@@ -1,5 +1,28 @@
 # Changelog
 
+
+## [Unreleased] — Issue #77: Claude Agent SDK Runtime
+
+**Feature:** Add `claude-agent-sdk` as a new runtime option.
+
+- **What:** New `run_claude_agent_sdk()` async method (~160 lines) using `claude-agent-sdk` Python package
+- **Runtime name:** `claude-agent-sdk` (set via `/runtime set claude-agent-sdk`)
+- **Package:** `claude-agent-sdk>=0.1.0` added to requirements.txt
+- **Architecture:** Uses `query()` async generator → `AsyncIterator[Message]` streaming
+- **Permission modes:** elevated→`bypassPermissions`, sandboxed→`plan`, restricted→`default`
+- **Session resume:** Pass `session_id` in `ClaudeAgentOptions` for conversation continuity
+- **Error handling:** CLINotFoundError, CLIConnectionError, ProcessError + auth keyword detection
+- **Integration:** 16 integration points updated (help text, validation, model dispatch, session handling, dispatch routing, API endpoints, argparse)
+- **Tests:** 23 unit tests across 8 classes — import handling, mode mapping, streaming, errors, session resume, registration, dispatch
+- **Regression:** 1029 passed, 9 skipped, 0 failures
+- **Docs:** ARCHITECTURE.md updated with flow diagram + runtime comparison table
+
+**Key differences from `claude` (CLI subprocess) runtime:**
+- In-process async execution vs subprocess spawn
+- Structured error types vs stderr parsing
+- Native permission_mode field vs CLI flags
+- AsyncIterator streaming vs stdout line-by-line
+
 All notable changes to Wee Orchestrator are documented here.
 
 ## [Issue #76] Feature: Add Copilot SDK Runtime (Hybrid Approach)

@@ -1731,7 +1731,7 @@ class SessionManager:
 
 **Runtime Management:**
    • /runtime list - Show available runtimes
-   • /runtime set (auto|copilot|copilot-sdk|opencode|claude|gemini|codex|devin|cursor) - Switch runtime
+   • /runtime set (auto|copilot|copilot-sdk|opencode|claude|claude-agent-sdk|gemini|codex|devin|cursor) - Switch runtime
    • /runtime current - Show current runtime
 
 **Model Management:**
@@ -1890,7 +1890,8 @@ You can mention an agent in your prompt and it will auto-delegate:
                 "• `gemini` (Google Gemini CLI)\n"
                 "• `codex` (Codex CLI)\n"
                 "• `devin` (Devin CLI)\n"
-                "• `cursor` (Cursor Agent CLI)"
+                "• `cursor` (Cursor Agent CLI)\n"
+                "• `claude-agent-sdk` (Claude Agent SDK — native Python, in-process tools)"
             )
         elif argument == "current":
             return f"🤖 **Current Runtime:** `{current_runtime}`"
@@ -1901,6 +1902,7 @@ You can mention an agent in your prompt and it will auto-delegate:
                 "copilot-sdk",
                 "opencode",
                 "claude",
+                "claude-agent-sdk",
                 "gemini",
                 "codex",
                 "devin",
@@ -1908,8 +1910,8 @@ You can mention an agent in your prompt and it will auto-delegate:
             ]:
                 return (
                     f"Unknown runtime: '{new_runtime}'. Use "
-                    "copilot, copilot-sdk, opencode, claude, gemini, "
-                    "codex, devin, or cursor."
+                    "copilot, copilot-sdk, opencode, claude, claude-agent-sdk, "
+                    "gemini, codex, devin, or cursor."
                 )
 
             # Capture previous session state before any updates
@@ -1974,6 +1976,8 @@ You can mention an agent in your prompt and it will auto-delegate:
                 default_model = "gpt-5-mini"
             elif new_runtime == "copilot-sdk":
                 default_model = "gpt-5-mini"
+            elif new_runtime == "claude-agent-sdk":
+                default_model = "haiku"
             elif new_runtime == "opencode":
                 default_model = "opencode/gpt-5-nano"
             elif new_runtime == "claude":
@@ -3221,6 +3225,7 @@ You can mention an agent in your prompt and it will auto-delegate:
         # First check env-loaded models (if cached)
         env_models_map = {
             "claude": self._env_claude_models,
+            "claude-agent-sdk": self._env_claude_models,
             "gemini": self._env_gemini_models,
             "codex": self._env_codex_models,
             "devin": self._env_devin_models,
@@ -3236,6 +3241,7 @@ You can mention an agent in your prompt and it will auto-delegate:
         # Fall back to static models
         static_map = {
             "claude": self.CLAUDE_MODELS,
+            "claude-agent-sdk": self.CLAUDE_MODELS,
             "gemini": self.GEMINI_MODELS,
             "codex": self.CODEX_MODELS,
             "opencode": self.OPENCODE_MODELS,
@@ -3439,6 +3445,7 @@ You can mention an agent in your prompt and it will auto-delegate:
         dispatch = {
             "copilot": self.fetch_copilot_models,
             "copilot-sdk": self.fetch_copilot_models,
+            "claude-agent-sdk": self.fetch_claude_models,
             "opencode": self.fetch_opencode_models,
             "claude": self.fetch_claude_models,
             "gemini": self.fetch_gemini_models,
@@ -3616,7 +3623,7 @@ You can mention an agent in your prompt and it will auto-delegate:
 
             # Validate and fix session_id if corrupted
             session_id = merged.get("session_id", "")
-            if runtime in ["claude", "gemini", "codex", "copilot", "copilot-sdk", "devin", "cursor"]:
+            if runtime in ["claude", "claude-agent-sdk", "gemini", "codex", "copilot", "copilot-sdk", "devin", "cursor"]:
                 if not session_id or not (len(session_id) == 36 and "-" in session_id):
                     merged["session_id"] = str(uuid4())
             elif runtime == "opencode":
@@ -5829,7 +5836,7 @@ User Request:
                                                 "name": "shell",
                                                 "input": _oc_run.group(1).strip(),
                                             }
-                                elif runtime in ("copilot", "copilot-sdk"):
+                                elif runtime in ("copilot", "copilot-sdk", "claude-agent-sdk"):
                                     # Copilot shows tool calls as "● Description" and shell cmds as "  $ cmd"
                                     import re as _re_tc
 
@@ -6463,6 +6470,179 @@ User Request:
             return f"Error (Copilot SDK): {type(e).__name__}: {e}"
 
         return self.strip_metadata(output, "copilot-sdk")
+
+    def run_claude_agent_sdk(
+        self,
+        prompt: str,
+        model: str,
+        agent: str,
+        session_id: Optional[str],
+        resume: bool,
+        n8n_session_id: str,
+        timeout: Optional[int] = None,
+        render_type: str = "text",
+        mode: Optional[str] = None,
+    ) -> str:
+        """Execute via Claude Agent SDK (native Python, no CLI subprocess).
+
+        Uses the claude-agent-sdk package for direct API integration.
+        Benefits over CLI: in-process custom tools, subagents, session
+        forking, streaming events, structured error handling.
+
+        Requires Claude Pro, Team, or Enterprise subscription.
+        User must run `claude login` to authenticate first.
+        """
+        try:
+            from claude_agent_sdk import (
+                query as claude_sdk_query,
+                ClaudeAgentOptions,
+                AssistantMessage,
+                TextBlock,
+            )
+        except ImportError:
+            return (
+                "Error: claude-agent-sdk not installed. "
+                "Run: pip install claude-agent-sdk"
+            )
+
+        import asyncio
+
+        # Parse mode
+        if mode is None:
+            prompt_parsed, mode = self._parse_mode_command(prompt)
+        else:
+            prompt_parsed = prompt
+        if mode is None:
+            mode = self.mode or "restricted"
+
+        session_data = self.get_or_create_session_data(n8n_session_id)
+        mode = self._resolve_permission_mode(mode, session_data)
+
+        agent_dir = self.AGENTS.get(agent, self.AGENTS["orchestrator"])["path"]
+        effective_timeout = timeout if timeout is not None else self.command_timeout
+
+        channel = session_data.get("channel", "api")
+
+        # Build context prompt
+        sdk_session_id = session_id if resume and session_id else None
+        if sdk_session_id:
+            context_prompt = prompt_parsed
+        else:
+            context_prompt = self.build_agent_context_prompt(
+                agent,
+                prompt_parsed,
+                n8n_session_id,
+                render_type,
+                effective_timeout,
+                "claude-agent-sdk",
+                model,
+                channel,
+            )
+
+        # Add mode instructions
+        if mode == "elevated":
+            context_prompt += (
+                "\n\n[ELEVATED MODE ENABLED]\n"
+                "Full permissions granted. ALL commands requiring elevated privileges "
+                "MUST automatically prefix with 'sudo'. Sudo is configured without "
+                "password prompt (NOPASSWD:ALL)."
+            )
+        elif mode == "sandboxed":
+            context_prompt += (
+                "\n\n[SANDBOXED MODE ENABLED]\n"
+                "Read-only access only. Do NOT modify any files, run destructive "
+                "commands, or make network requests. Analysis and reporting only."
+            )
+
+        # Map permission mode for Claude Agent SDK
+        if mode == "elevated":
+            sdk_permission_mode = "bypassPermissions"
+        elif mode == "sandboxed":
+            sdk_permission_mode = "plan"
+        else:
+            sdk_permission_mode = "default"
+
+        async def _run_sdk() -> str:
+            collected_text: list = []
+
+            options = ClaudeAgentOptions(
+                permission_mode=sdk_permission_mode,
+                cwd=agent_dir,
+            )
+
+            # Set model if specified
+            if model:
+                options.model = model
+
+            # Resume session if available
+            if sdk_session_id:
+                options.session_id = sdk_session_id
+
+            try:
+                async for message in claude_sdk_query(
+                    prompt=context_prompt,
+                    options=options,
+                ):
+                    if isinstance(message, AssistantMessage):
+                        for block in message.content:
+                            if isinstance(block, TextBlock):
+                                collected_text.append(block.text)
+                    elif hasattr(message, "content"):
+                        # Fallback for other message types with content
+                        for block in getattr(message, "content", []):
+                            if hasattr(block, "text"):
+                                collected_text.append(block.text)
+
+            except Exception as e:
+                error_type = type(e).__name__
+                error_msg = str(e).lower()
+                if "clinotfound" in error_type.lower():
+                    return (
+                        "Error: Claude Code CLI not found. "
+                        "The claude-agent-sdk bundles the CLI automatically. "
+                        "Try reinstalling: pip install --force-reinstall claude-agent-sdk"
+                    )
+                elif "cliconnection" in error_type.lower() or "auth" in error_msg:
+                    return (
+                        "Error: Not authenticated with Claude. "
+                        "Run `claude login` to authenticate. "
+                        "Requires Claude Pro, Team, or Enterprise subscription."
+                    )
+                elif "processerror" in error_type.lower():
+                    return f"Error: Claude Agent SDK process error: {e}"
+                else:
+                    return f"Error (Claude Agent SDK): {error_type}: {e}"
+
+            output = "\n".join(collected_text)
+            if not output.strip():
+                return "Error: No response received from Claude Agent SDK"
+            return output
+
+        try:
+            loop = None
+            try:
+                loop = asyncio.get_running_loop()
+            except RuntimeError:
+                pass
+
+            if loop and loop.is_running():
+                import concurrent.futures
+                with concurrent.futures.ThreadPoolExecutor() as pool:
+                    output = pool.submit(
+                        asyncio.run, _run_sdk()
+                    ).result(timeout=effective_timeout)
+            else:
+                output = asyncio.run(_run_sdk())
+        except asyncio.TimeoutError:
+            return f"Error: Claude Agent SDK timed out after {effective_timeout}s"
+        except Exception as e:
+            print(
+                f"[Claude-Agent-SDK] Error: {type(e).__name__}: {e}",
+                file=sys.stderr,
+            )
+            return f"Error (Claude Agent SDK): {type(e).__name__}: {e}"
+
+        return self.strip_metadata(output, "claude")
 
     def run_opencode(
         self,
@@ -7202,7 +7382,7 @@ User Request:
             except Exception:
                 pass
             return False
-        elif runtime == "claude":
+        elif runtime in ("claude", "claude-agent-sdk"):
             if not session_id:
                 return False
             # Verify session actually exists in Claude's project storage.
@@ -7490,6 +7670,18 @@ User Request:
             )
         elif runtime == "claude":
             result = self.run_claude(
+                prompt,
+                model,
+                agent,
+                session_id if can_resume else None,
+                can_resume,
+                n8n_session_id,
+                effective_timeout,
+                render_type,
+                mode,
+            )
+        elif runtime == "claude-agent-sdk":
+            result = self.run_claude_agent_sdk(
                 prompt,
                 model,
                 agent,
@@ -8521,6 +8713,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             {"id": "copilot-sdk", "label": "copilot-sdk"},
             {"id": "opencode", "label": "opencode"},
             {"id": "claude", "label": "claude"},
+            {"id": "claude-agent-sdk", "label": "claude-agent-sdk"},
             {"id": "gemini", "label": "gemini"},
             {"id": "codex", "label": "codex"},
             {"id": "devin", "label": "devin"},
@@ -8542,6 +8735,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             "copilot-sdk",
             "opencode",
             "claude",
+            "claude-agent-sdk",
             "gemini",
             "codex",
             "devin",
@@ -13701,8 +13895,8 @@ Examples:
     runtime_group.add_argument(
         "--runtime",
         metavar="NAME",
-        choices=["copilot", "copilot-sdk", "opencode", "claude", "gemini", "codex", "devin", "cursor"],
-        help="Set the runtime to use (choices: copilot, copilot-sdk, opencode, claude, gemini, codex, devin, cursor)",
+        choices=["copilot", "copilot-sdk", "opencode", "claude", "claude-agent-sdk", "gemini", "codex", "devin", "cursor"],
+        help="Set the runtime to use (choices: copilot, copilot-sdk, opencode, claude, claude-agent-sdk, gemini, codex, devin, cursor)",
     )
     runtime_group.add_argument(
         "--list-runtimes",
