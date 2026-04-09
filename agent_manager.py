@@ -758,7 +758,7 @@ def check_runtime_available(runtime: str) -> bool:
     # Map runtime IDs to their executable/module names
     runtime_map = {
         'copilot': 'copilot',
-        'copilot-sdk': 'github-copilot-sdk',  # Python package
+        'copilot-sdk': 'copilot',  # Python package
         'claude': 'claude',
         'claude-agent-sdk': 'claude-agent-sdk',  # Python package
         'gemini': 'gemini',
