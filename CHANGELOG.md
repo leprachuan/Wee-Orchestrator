@@ -4,23 +4,28 @@ All notable changes to Wee Orchestrator are documented here.
 
 ## [Unreleased] — Dev Branch
 
-### In Review / Blocked
-#### #77: Claude Agent SDK Runtime
-- **Status**: ❌ QA Rejected (commit 6ea6371 on dev)
-- **Commit**: 6ea6371
-- **Feature**: Add claude-agent-sdk runtime to Wee Orchestrator for Agent SDK-based session continuity
-- **QA Result**: REJECTED — 1 MAJOR issue + 1 MINOR issue
-- **MAJOR Issue**: `run_claude_agent_sdk()` never imports or processes `ResultMessage` from the SDK async generator. `ResultMessage` contains `session_id` (str) which must be captured and stored via `update_session_field()` for session resumption to work. Current implementation starts a fresh session on every call, making the advertised session continuity feature non-functional.
-- **MINOR Issue**: `concurrent.futures.TimeoutError` not caught in `ThreadPoolExecutor` path — falls through to generic exception handler instead of returning a proper timeout response.
-- **Testing**: 
-  - 23 unit tests all pass
-  - Full regression suite: 1029 passed, 9 skipped, 0 failures
-  - No test coverage gap for session_id capture (issue undetected by unit tests)
-- **Fix Dispatched**: wee-dev background task (bg_4f301940) to address both MAJOR and MINOR issues
-- **Next State**: wee-dev fixes → wee-qa re-review → (conditional) APPROVE → PR dev→main
-- **Impact**: Feature blocked until session_id capture is implemented and re-approved by QA
-
 ### Fixed
+#### #77: Claude Agent SDK Runtime
+- **Status**: ✅ QA Approved (commits 6ea6371 + 0ecc7ab + 583ab20 on dev)
+- **Commits**: 6ea6371 (feat) + 0ecc7ab (fix) + 583ab20 (docs)
+- **Feature**: Add claude-agent-sdk runtime to Wee Orchestrator for Agent SDK-based session continuity
+- **QA Result**: APPROVED — both MAJOR and MINOR issues resolved
+- **Original Issues**:
+  - **MAJOR**: `run_claude_agent_sdk()` never imported or processed `ResultMessage` from the SDK async generator. `ResultMessage` contains `session_id` (str) which must be captured and stored via `update_session_field()` for session resumption to work.
+  - **MINOR**: `concurrent.futures.TimeoutError` not caught in `ThreadPoolExecutor` path — fell through to generic exception handler instead of returning a proper timeout response.
+- **Fixes Applied** (commit 0ecc7ab):
+  - Implemented `ResultMessage` import and async generator consumption in `run_claude_agent_sdk()`
+  - Added session_id capture and storage via `update_session_field()` for session resumption
+  - Added explicit `concurrent.futures.TimeoutError` exception handling in ThreadPoolExecutor path
+  - **Non-blocking follow-up** (commit 583ab20): Hoist `concurrent.futures` import before try block in `run_claude_agent_sdk()` for clarity
+- **Testing**:
+  - 24 new tests (from 23 baseline) all pass
+  - Full regression suite: 1030 passed, 9 skipped, 0 failures
+  - Session ID capture tested and verified
+  - TimeoutError handling verified across both ThreadPool and AsyncIO paths
+- **Impact**: Claude Agent SDK runtime now fully functional with proper session resumption and timeout handling. Users can maintain session state across multiple calls to Agent SDK-based workflows.
+
+### In Review / Blocked
 #### #72: Remove Memory Context Prompt Fallback, Inject at Session Creation
 - **Status**: ✅ QA Approved (commit 30d1400 on dev)
 - **Commit**: 30d1400
