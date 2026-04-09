@@ -1,6 +1,30 @@
 # Changelog
 
 
+## [Issue #81] Bug Fix: Claude SDK Multi-Turn Conversations
+**Status:** ✅ Fixed (commit a2610ba on dev)
+
+### Problem
+Claude SDK runtime failed on multi-turn conversations with exit code 1.
+Root cause: Using stateless query() which does not maintain conversation state.
+For resumed sessions, ClaudeSDKClient is now used instead.
+
+### Solution  
+Refactored to use ClaudeSDKClient for multi-turn (resumed) sessions
+while keeping query() for one-shot queries. Session context now properly
+preserved across turns with ResultMessage handling.
+
+### Changes
+- Added ClaudeSDKClient import for stateful multi-turn
+- Refactored _run_sdk() with conditional logic
+- Added _FakeClaudeSDKClient to test module
+- New test: test_multiturn_uses_clausdesdk_client()
+
+### Verification
+- 25 claude-sdk tests pass (24 existing + 1 new)
+- Full regression: 1031 passed, 9 skipped
+- Multi-turn sessions work with context preservation
+
 ## [Issue #77] Feature: Claude Agent SDK Runtime
 **Status:** ✅ QA Approved (commits 6ea6371 + 0ecc7ab on dev)
 
