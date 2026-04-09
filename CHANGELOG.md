@@ -3,7 +3,7 @@
 All notable changes to Wee Orchestrator are documented here.
 
 ## [Issue #76] Feature: Add Copilot SDK Runtime (Hybrid Approach)
-**Status:** ⏳ QA Pending
+**Status:** ✅ QA Approved (commit 7dec088)
 
 ### Summary
 Added new `copilot-sdk` runtime using the `github-copilot-sdk` Python package for native
