@@ -760,7 +760,7 @@ def check_runtime_available(runtime: str) -> bool:
         'copilot': 'copilot',
         'copilot-sdk': 'copilot',  # Python package
         'claude': 'claude',
-        'claude-agent-sdk': 'claude-agent-sdk',  # Python package
+        'claude-sdk': 'claude-sdk',  # Python package
         'gemini': 'gemini',
         'codex': 'codex',
         'devin': 'devin',
@@ -773,7 +773,7 @@ def check_runtime_available(runtime: str) -> bool:
         return False
     
     # For Python packages (SDK runtimes), try importing
-    if runtime in ('copilot-sdk', 'claude-agent-sdk'):
+    if runtime in ('copilot-sdk', 'claude-sdk'):
         try:
             module_name = executable_name.replace('-', '_')
             __import__(module_name)
@@ -809,10 +809,10 @@ def get_available_runtimes() -> List[Dict[str, str]]:
     all_runtimes = [
         {"id": "auto", "label": "auto"},
         {"id": "copilot", "label": "copilot"},
-        {"id": "copilot-sdk", "label": "copilot-sdk"},
+        {"id": "copilot-sdk", "label": "copilot-sdk", "icon": "🤖"},
         {"id": "opencode", "label": "opencode"},
         {"id": "claude", "label": "claude"},
-        {"id": "claude-agent-sdk", "label": "claude-agent-sdk"},
+        {"id": "claude-sdk", "label": "claude-sdk", "icon": "🧠"},
         {"id": "gemini", "label": "gemini"},
         {"id": "codex", "label": "codex"},
         {"id": "devin", "label": "devin"},
@@ -1811,7 +1811,7 @@ class SessionManager:
 
 **Runtime Management:**
    • /runtime list - Show available runtimes
-   • /runtime set (auto|copilot|copilot-sdk|opencode|claude|claude-agent-sdk|gemini|codex|devin|cursor) - Switch runtime
+   • /runtime set (auto|copilot|copilot-sdk|opencode|claude|claude-sdk|gemini|codex|devin|cursor) - Switch runtime
    • /runtime current - Show current runtime
 
 **Model Management:**
@@ -1971,7 +1971,7 @@ You can mention an agent in your prompt and it will auto-delegate:
                 "• `codex` (Codex CLI)\n"
                 "• `devin` (Devin CLI)\n"
                 "• `cursor` (Cursor Agent CLI)\n"
-                "• `claude-agent-sdk` (Claude Agent SDK — native Python, in-process tools)"
+                "• `claude-sdk` (Claude Agent SDK — native Python, in-process tools)"
             )
         elif argument == "current":
             return f"🤖 **Current Runtime:** `{current_runtime}`"
@@ -1982,7 +1982,7 @@ You can mention an agent in your prompt and it will auto-delegate:
                 "copilot-sdk",
                 "opencode",
                 "claude",
-                "claude-agent-sdk",
+                "claude-sdk",
                 "gemini",
                 "codex",
                 "devin",
@@ -1990,7 +1990,7 @@ You can mention an agent in your prompt and it will auto-delegate:
             ]:
                 return (
                     f"Unknown runtime: '{new_runtime}'. Use "
-                    "copilot, copilot-sdk, opencode, claude, claude-agent-sdk, "
+                    "copilot, copilot-sdk, opencode, claude, claude-sdk, "
                     "gemini, codex, devin, or cursor."
                 )
 
@@ -2056,7 +2056,7 @@ You can mention an agent in your prompt and it will auto-delegate:
                 default_model = "gpt-5-mini"
             elif new_runtime == "copilot-sdk":
                 default_model = "gpt-5-mini"
-            elif new_runtime == "claude-agent-sdk":
+            elif new_runtime == "claude-sdk":
                 default_model = "haiku"
             elif new_runtime == "opencode":
                 default_model = "opencode/gpt-5-nano"
@@ -3305,7 +3305,7 @@ You can mention an agent in your prompt and it will auto-delegate:
         # First check env-loaded models (if cached)
         env_models_map = {
             "claude": self._env_claude_models,
-            "claude-agent-sdk": self._env_claude_models,
+            "claude-sdk": self._env_claude_models,
             "gemini": self._env_gemini_models,
             "codex": self._env_codex_models,
             "devin": self._env_devin_models,
@@ -3321,7 +3321,7 @@ You can mention an agent in your prompt and it will auto-delegate:
         # Fall back to static models
         static_map = {
             "claude": self.CLAUDE_MODELS,
-            "claude-agent-sdk": self.CLAUDE_MODELS,
+            "claude-sdk": self.CLAUDE_MODELS,
             "gemini": self.GEMINI_MODELS,
             "codex": self.CODEX_MODELS,
             "opencode": self.OPENCODE_MODELS,
@@ -3525,7 +3525,7 @@ You can mention an agent in your prompt and it will auto-delegate:
         dispatch = {
             "copilot": self.fetch_copilot_models,
             "copilot-sdk": self.fetch_copilot_models,
-            "claude-agent-sdk": self.fetch_claude_models,
+            "claude-sdk": self.fetch_claude_models,
             "opencode": self.fetch_opencode_models,
             "claude": self.fetch_claude_models,
             "gemini": self.fetch_gemini_models,
@@ -3703,7 +3703,7 @@ You can mention an agent in your prompt and it will auto-delegate:
 
             # Validate and fix session_id if corrupted
             session_id = merged.get("session_id", "")
-            if runtime in ["claude", "claude-agent-sdk", "gemini", "codex", "copilot", "copilot-sdk", "devin", "cursor"]:
+            if runtime in ["claude", "claude-sdk", "gemini", "codex", "copilot", "copilot-sdk", "devin", "cursor"]:
                 if not session_id or not (len(session_id) == 36 and "-" in session_id):
                     merged["session_id"] = str(uuid4())
             elif runtime == "opencode":
@@ -5916,7 +5916,7 @@ User Request:
                                                 "name": "shell",
                                                 "input": _oc_run.group(1).strip(),
                                             }
-                                elif runtime in ("copilot", "copilot-sdk", "claude-agent-sdk"):
+                                elif runtime in ("copilot", "copilot-sdk", "claude-sdk"):
                                     # Copilot shows tool calls as "● Description" and shell cmds as "  $ cmd"
                                     import re as _re_tc
 
@@ -6551,7 +6551,7 @@ User Request:
 
         return self.strip_metadata(output, "copilot-sdk")
 
-    def run_claude_agent_sdk(
+    def run_claude_sdk(
         self,
         prompt: str,
         model: str,
@@ -6565,7 +6565,7 @@ User Request:
     ) -> str:
         """Execute via Claude Agent SDK (native Python, no CLI subprocess).
 
-        Uses the claude-agent-sdk package for direct API integration.
+        Uses the claude-sdk package for direct API integration.
         Benefits over CLI: in-process custom tools, subagents, session
         forking, streaming events, structured error handling.
 
@@ -6582,8 +6582,8 @@ User Request:
             )
         except ImportError:
             return (
-                "Error: claude-agent-sdk not installed. "
-                "Run: pip install claude-agent-sdk"
+                "Error: claude-sdk not installed. "
+                "Run: pip install claude-sdk"
             )
 
         import asyncio
@@ -6615,7 +6615,7 @@ User Request:
                 n8n_session_id,
                 render_type,
                 effective_timeout,
-                "claude-agent-sdk",
+                "claude-sdk",
                 model,
                 channel,
             )
@@ -6683,8 +6683,8 @@ User Request:
                 if "clinotfound" in error_type.lower():
                     return (
                         "Error: Claude Code CLI not found. "
-                        "The claude-agent-sdk bundles the CLI automatically. "
-                        "Try reinstalling: pip install --force-reinstall claude-agent-sdk"
+                        "The claude-sdk bundles the CLI automatically. "
+                        "Try reinstalling: pip install --force-reinstall claude-sdk"
                     )
                 elif "cliconnection" in error_type.lower() or "auth" in error_msg:
                     return (
@@ -7466,7 +7466,7 @@ User Request:
             except Exception:
                 pass
             return False
-        elif runtime in ("claude", "claude-agent-sdk"):
+        elif runtime in ("claude", "claude-sdk"):
             if not session_id:
                 return False
             # Verify session actually exists in Claude's project storage.
@@ -7764,8 +7764,8 @@ User Request:
                 render_type,
                 mode,
             )
-        elif runtime == "claude-agent-sdk":
-            result = self.run_claude_agent_sdk(
+        elif runtime == "claude-sdk":
+            result = self.run_claude_sdk(
                 prompt,
                 model,
                 agent,
@@ -8812,7 +8812,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             "copilot-sdk",
             "opencode",
             "claude",
-            "claude-agent-sdk",
+            "claude-sdk",
             "gemini",
             "codex",
             "devin",
@@ -13972,8 +13972,8 @@ Examples:
     runtime_group.add_argument(
         "--runtime",
         metavar="NAME",
-        choices=["copilot", "copilot-sdk", "opencode", "claude", "claude-agent-sdk", "gemini", "codex", "devin", "cursor"],
-        help="Set the runtime to use (choices: copilot, copilot-sdk, opencode, claude, claude-agent-sdk, gemini, codex, devin, cursor)",
+        choices=["copilot", "copilot-sdk", "opencode", "claude", "claude-sdk", "gemini", "codex", "devin", "cursor"],
+        help="Set the runtime to use (choices: copilot, copilot-sdk, opencode, claude, claude-sdk, gemini, codex, devin, cursor)",
     )
     runtime_group.add_argument(
         "--list-runtimes",

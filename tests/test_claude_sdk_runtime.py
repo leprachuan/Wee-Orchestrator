@@ -72,7 +72,7 @@ def _make_manager():
     }
     mgr.get_or_create_session_data = MagicMock(return_value={
         "channel": "api",
-        "runtime": "claude-agent-sdk",
+        "runtime": "claude-sdk",
         "model": "haiku",
         "session_id": "test-session-id",
         "mode": None,
@@ -87,7 +87,7 @@ def _make_manager():
 
 
 class TestImportError(unittest.TestCase):
-    """Test import handling when claude-agent-sdk is not installed."""
+    """Test import handling when claude-sdk is not installed."""
 
     def test_import_error_returns_install_message(self):
         mgr = _make_manager()
@@ -95,11 +95,11 @@ class TestImportError(unittest.TestCase):
         saved = sys.modules.pop("claude_agent_sdk", None)
         try:
             with patch.dict("sys.modules", {"claude_agent_sdk": None}):
-                result = mgr.run_claude_agent_sdk(
+                result = mgr.run_claude_sdk(
                     "test", "haiku", "orchestrator", None, False, "sess1"
                 )
-                self.assertIn("claude-agent-sdk not installed", result)
-                self.assertIn("pip install claude-agent-sdk", result)
+                self.assertIn("claude-sdk not installed", result)
+                self.assertIn("pip install claude-sdk", result)
         finally:
             if saved:
                 sys.modules["claude_agent_sdk"] = saved
@@ -122,7 +122,7 @@ class TestPermissionModeMapping(unittest.TestCase):
 
         fake_mod = _build_fake_module(capturing_query)
         with patch.dict("sys.modules", {"claude_agent_sdk": fake_mod}):
-            result = mgr.run_claude_agent_sdk(
+            result = mgr.run_claude_sdk(
                 "test prompt", "haiku", "orchestrator", None, False, "sess1",
                 mode=mode,
             )
@@ -164,7 +164,7 @@ class TestStreamingCollection(unittest.TestCase):
 
         fake_mod = _build_fake_module(mock_query)
         with patch.dict("sys.modules", {"claude_agent_sdk": fake_mod}):
-            result = mgr.run_claude_agent_sdk(
+            result = mgr.run_claude_sdk(
                 "test", "haiku", "orchestrator", None, False, "sess1"
             )
 
@@ -181,7 +181,7 @@ class TestStreamingCollection(unittest.TestCase):
 
         fake_mod = _build_fake_module(mock_query)
         with patch.dict("sys.modules", {"claude_agent_sdk": fake_mod}):
-            result = mgr.run_claude_agent_sdk(
+            result = mgr.run_claude_sdk(
                 "test", "haiku", "orchestrator", None, False, "sess1"
             )
 
@@ -202,7 +202,7 @@ class TestStreamingCollection(unittest.TestCase):
 
         fake_mod = _build_fake_module(mock_query)
         with patch.dict("sys.modules", {"claude_agent_sdk": fake_mod}):
-            result = mgr.run_claude_agent_sdk(
+            result = mgr.run_claude_sdk(
                 "test", "haiku", "orchestrator", None, False, "sess1"
             )
 
@@ -223,7 +223,7 @@ class TestErrorHandling(unittest.TestCase):
 
         fake_mod = _build_fake_module(error_query)
         with patch.dict("sys.modules", {"claude_agent_sdk": fake_mod}):
-            return mgr.run_claude_agent_sdk(
+            return mgr.run_claude_sdk(
                 "test", "haiku", "orchestrator", None, False, "sess1"
             )
 
@@ -266,7 +266,7 @@ class TestSessionResumption(unittest.TestCase):
 
         fake_mod = _build_fake_module(cap_query)
         with patch.dict("sys.modules", {"claude_agent_sdk": fake_mod}):
-            mgr.run_claude_agent_sdk(
+            mgr.run_claude_sdk(
                 "test", "haiku", "orchestrator",
                 "existing-sess-123", True, "sess1",
             )
@@ -287,7 +287,7 @@ class TestSessionResumption(unittest.TestCase):
 
         fake_mod = _build_fake_module(cap_query)
         with patch.dict("sys.modules", {"claude_agent_sdk": fake_mod}):
-            mgr.run_claude_agent_sdk(
+            mgr.run_claude_sdk(
                 "test", "haiku", "orchestrator",
                 None, False, "sess1",
             )
@@ -306,7 +306,7 @@ class TestSessionResumption(unittest.TestCase):
 
         fake_mod = _build_fake_module(cap_query)
         with patch.dict("sys.modules", {"claude_agent_sdk": fake_mod}):
-            mgr.run_claude_agent_sdk(
+            mgr.run_claude_sdk(
                 "test", "opus", "orchestrator", None, False, "sess1",
             )
 
@@ -325,7 +325,7 @@ class TestSessionResumption(unittest.TestCase):
 
         fake_mod = _build_fake_module(mock_query)
         with patch.dict("sys.modules", {"claude_agent_sdk": fake_mod}):
-            result = mgr.run_claude_agent_sdk(
+            result = mgr.run_claude_sdk(
                 "test", "haiku", "orchestrator", None, False, "sess1"
             )
 
@@ -335,29 +335,29 @@ class TestSessionResumption(unittest.TestCase):
         self.assertIn("response text", result)
 
 class TestRuntimeRegistration(unittest.TestCase):
-    """Test that claude-agent-sdk is registered in all integration points."""
+    """Test that claude-sdk is registered in all integration points."""
 
     def test_slash_runtime_list(self):
         mgr = _make_manager()
         result = mgr._slash_runtime("list", {}, "test-session")
-        self.assertIn("claude-agent-sdk", result)
+        self.assertIn("claude-sdk", result)
         self.assertIn("in-process tools", result)
 
     def test_slash_runtime_set_accepted(self):
         mgr = _make_manager()
         result = mgr._slash_runtime(
-            "set claude-agent-sdk",
+            "set claude-sdk",
             {"runtime": "copilot", "session_id": "old-sess"},
             "test-session",
         )
         self.assertNotIn("Unknown runtime", str(result))
 
     def test_session_validation_source(self):
-        """Verify source code includes claude-agent-sdk in session validation."""
+        """Verify source code includes claude-sdk in session validation."""
         import inspect
         from agent_manager import SessionManager
         source = inspect.getsource(SessionManager._get_or_create_session_data_unlocked)
-        self.assertIn("claude-agent-sdk", source)
+        self.assertIn("claude-sdk", source)
 
 
 class TestDispatch(unittest.TestCase):
@@ -365,12 +365,12 @@ class TestDispatch(unittest.TestCase):
 
     def test_dispatch_routes_correctly(self):
         mgr = _make_manager()
-        mgr.run_claude_agent_sdk = MagicMock(return_value="SDK response")
+        mgr.run_claude_sdk = MagicMock(return_value="SDK response")
 
         from agent_manager import SessionManager
         result = SessionManager._dispatch_single_runtime(
             mgr,
-            runtime="claude-agent-sdk",
+            runtime="claude-sdk",
             prompt="test",
             model="haiku",
             agent="orchestrator",
@@ -382,17 +382,17 @@ class TestDispatch(unittest.TestCase):
             mode="restricted",
         )
 
-        mgr.run_claude_agent_sdk.assert_called_once()
+        mgr.run_claude_sdk.assert_called_once()
         self.assertEqual(result, "SDK response")
 
     def test_dispatch_passes_mode(self):
         mgr = _make_manager()
-        mgr.run_claude_agent_sdk = MagicMock(return_value="resp")
+        mgr.run_claude_sdk = MagicMock(return_value="resp")
 
         from agent_manager import SessionManager
         SessionManager._dispatch_single_runtime(
             mgr,
-            runtime="claude-agent-sdk",
+            runtime="claude-sdk",
             prompt="test",
             model="haiku",
             agent="orchestrator",
@@ -404,13 +404,13 @@ class TestDispatch(unittest.TestCase):
             mode="elevated",
         )
 
-        args, kwargs = mgr.run_claude_agent_sdk.call_args
+        args, kwargs = mgr.run_claude_sdk.call_args
         # The mode should appear in positional or keyword args
         all_args = str(args) + str(kwargs)
         self.assertIn("elevated", all_args)
 
     def test_other_runtimes_unaffected(self):
-        """Ensure adding claude-agent-sdk doesn't break other runtime dispatch."""
+        """Ensure adding claude-sdk doesn't break other runtime dispatch."""
         mgr = _make_manager()
         mgr.run_claude = MagicMock(return_value="claude response")
 
