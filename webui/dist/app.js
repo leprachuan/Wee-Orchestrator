@@ -282,13 +282,15 @@ function hideError(id) { hide($(id)); }
 
 // ─── Runtime Brand Icons ──────────────────────────────────────────────────────
 const RUNTIME_ICONS = {
-  claude:   '/ui/assets/runtime-icons/claude.svg',
-  copilot:  '/ui/assets/runtime-icons/copilot.svg',
-  gemini:   '/ui/assets/runtime-icons/gemini.svg',
-  opencode: '/ui/assets/runtime-icons/opencode.svg',
-  codex:    '/ui/assets/runtime-icons/openai.svg',
-  devin:    '/ui/assets/runtime-icons/devin.svg',
-  cursor:   '/ui/assets/runtime-icons/cursor.svg',
+  claude:      '/ui/assets/runtime-icons/claude.svg',
+  'claude-sdk': '/ui/assets/runtime-icons/claude.svg',
+  copilot:     '/ui/assets/runtime-icons/copilot.svg',
+  'copilot-sdk': '/ui/assets/runtime-icons/copilot.svg',
+  gemini:      '/ui/assets/runtime-icons/gemini.svg',
+  opencode:    '/ui/assets/runtime-icons/opencode.svg',
+  codex:       '/ui/assets/runtime-icons/openai.svg',
+  devin:       '/ui/assets/runtime-icons/devin.svg',
+  cursor:      '/ui/assets/runtime-icons/cursor.svg',
 };
 
 function runtimeIconHTML(runtime, size = 14) {

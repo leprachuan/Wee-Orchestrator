@@ -816,7 +816,7 @@ def get_available_runtimes() -> List[Dict[str, str]]:
         {"id": "gemini", "label": "gemini"},
         {"id": "codex", "label": "codex"},
         {"id": "devin", "label": "devin"},
-        {"id": "cursor", "label": "cursor"},
+        {"id": "cursor", "label": "cursor", "icon": "🖱️"},
     ]
     
     available = [rt for rt in all_runtimes if check_runtime_available(rt['id'])]
