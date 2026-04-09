@@ -484,15 +484,28 @@ const PILL_OPTIONS = {
   },
   'meta-runtime': {
     label: 'Switch Runtime',
-    options: [
-      { label: `${runtimeIconHTML('claude')}claude`,         cmd: '/runtime set claude' },
-      { label: `${runtimeIconHTML('copilot')}copilot`,       cmd: '/runtime set copilot' },
-      { label: `${runtimeIconHTML('gemini')}gemini`,         cmd: '/runtime set gemini' },
-      { label: `${runtimeIconHTML('opencode')}opencode`,     cmd: '/runtime set opencode' },
-      { label: `${runtimeIconHTML('codex')}codex`,           cmd: '/runtime set codex' },
-      { label: `${runtimeIconHTML('devin')}devin`,           cmd: '/runtime set devin' },
-      { label: `${runtimeIconHTML('cursor')}cursor`,         cmd: '/runtime set cursor' },
-    ],
+    options: null,   // null = dynamically loaded
+    dynamicLoad: async () => {
+      try {
+        const data = await apiRequest('GET', '/runtimes');
+        const opts = (data.runtimes || []).map(r => ({
+          label: `${runtimeIconHTML(r.id)}${r.label}`,
+          cmd: `/runtime set ${r.id}`,
+        }));
+        return opts;
+      } catch (e) {
+        // Fallback to basic runtimes if API fails
+        return [
+          { label: `${runtimeIconHTML('claude')}claude`,         cmd: '/runtime set claude' },
+          { label: `${runtimeIconHTML('copilot')}copilot`,       cmd: '/runtime set copilot' },
+          { label: `${runtimeIconHTML('gemini')}gemini`,         cmd: '/runtime set gemini' },
+          { label: `${runtimeIconHTML('opencode')}opencode`,     cmd: '/runtime set opencode' },
+          { label: `${runtimeIconHTML('codex')}codex`,           cmd: '/runtime set codex' },
+          { label: `${runtimeIconHTML('devin')}devin`,           cmd: '/runtime set devin' },
+          { label: `${runtimeIconHTML('cursor')}cursor`,         cmd: '/runtime set cursor' },
+        ];
+      }
+    },
   },
   'meta-model': {
     label: 'Switch Model',

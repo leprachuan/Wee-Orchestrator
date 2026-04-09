@@ -742,6 +742,86 @@ def get_default_runtime() -> str:
     """Get default runtime from environment or use copilot"""
     return os.environ.get("COPILOT_DEFAULT_RUNTIME", "copilot")
 
+def check_runtime_available(runtime: str) -> bool:
+    """Check if a runtime is available on the system.
+    
+    Args:
+        runtime: Runtime ID (e.g., 'copilot', 'claude', 'copilot-sdk')
+    
+    Returns:
+        True if the runtime is available, False otherwise
+    """
+    # 'auto' is always available
+    if runtime == 'auto':
+        return True
+    
+    # Map runtime IDs to their executable/module names
+    runtime_map = {
+        'copilot': 'copilot',
+        'copilot-sdk': 'github-copilot-sdk',  # Python package
+        'claude': 'claude',
+        'claude-agent-sdk': 'claude-agent-sdk',  # Python package
+        'gemini': 'gemini',
+        'codex': 'codex',
+        'devin': 'devin',
+        'cursor': 'agent',  # Cursor uses 'agent' binary
+        'opencode': 'opencode',
+    }
+    
+    executable_name = runtime_map.get(runtime)
+    if not executable_name:
+        return False
+    
+    # For Python packages (SDK runtimes), try importing
+    if runtime in ('copilot-sdk', 'claude-agent-sdk'):
+        try:
+            module_name = executable_name.replace('-', '_')
+            __import__(module_name)
+            return True
+        except ImportError:
+            return False
+    
+    # For CLI runtimes, check if executable exists
+    # First try system PATH
+    if shutil.which(executable_name):
+        return True
+    
+    # Search additional common locations
+    search_paths = [
+        Path.home() / ".local" / "bin" / executable_name,
+        Path("/opt/homebrew/bin") / executable_name,
+        Path("/usr/local/bin") / executable_name,
+        Path("/usr/bin") / executable_name,
+    ]
+    
+    for path in search_paths:
+        if path.exists() and path.is_file():
+            return True
+    
+    return False
+
+def get_available_runtimes() -> List[Dict[str, str]]:
+    """Get list of available runtimes on this system.
+    
+    Returns:
+        List of runtime dicts with 'id' and 'label' keys
+    """
+    all_runtimes = [
+        {"id": "auto", "label": "auto"},
+        {"id": "copilot", "label": "copilot"},
+        {"id": "copilot-sdk", "label": "copilot-sdk"},
+        {"id": "opencode", "label": "opencode"},
+        {"id": "claude", "label": "claude"},
+        {"id": "claude-agent-sdk", "label": "claude-agent-sdk"},
+        {"id": "gemini", "label": "gemini"},
+        {"id": "codex", "label": "codex"},
+        {"id": "devin", "label": "devin"},
+        {"id": "cursor", "label": "cursor"},
+    ]
+    
+    available = [rt for rt in all_runtimes if check_runtime_available(rt['id'])]
+    return available
+
 def get_command_timeout() -> int:
     """Get command execution timeout from environment or use default 300 seconds"""
     try:
@@ -8710,19 +8790,12 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
 
     @app.get("/api/v1/runtimes")
     async def get_runtimes():
-        """Return list of available runtimes."""
-        runtimes = [
-            {"id": "auto", "label": "auto"},
-            {"id": "copilot", "label": "copilot"},
-            {"id": "copilot-sdk", "label": "copilot-sdk"},
-            {"id": "opencode", "label": "opencode"},
-            {"id": "claude", "label": "claude"},
-            {"id": "claude-agent-sdk", "label": "claude-agent-sdk"},
-            {"id": "gemini", "label": "gemini"},
-            {"id": "codex", "label": "codex"},
-            {"id": "devin", "label": "devin"},
-            {"id": "cursor", "label": "cursor"},
-        ]
+        """Return list of available runtimes on this system.
+        
+        Only runtimes that are actually installed/available are returned.
+        This prevents the WebUI from showing runtimes that cannot be used.
+        """
+        runtimes = get_available_runtimes()
         return {"runtimes": runtimes}
 
     @app.get("/api/v1/models")
