@@ -4,6 +4,22 @@ All notable changes to Wee Orchestrator are documented here.
 
 ## [Unreleased] — Dev Branch
 
+### In Review / Blocked
+#### #77: Claude Agent SDK Runtime
+- **Status**: ❌ QA Rejected (commit 6ea6371 on dev)
+- **Commit**: 6ea6371
+- **Feature**: Add claude-agent-sdk runtime to Wee Orchestrator for Agent SDK-based session continuity
+- **QA Result**: REJECTED — 1 MAJOR issue + 1 MINOR issue
+- **MAJOR Issue**: `run_claude_agent_sdk()` never imports or processes `ResultMessage` from the SDK async generator. `ResultMessage` contains `session_id` (str) which must be captured and stored via `update_session_field()` for session resumption to work. Current implementation starts a fresh session on every call, making the advertised session continuity feature non-functional.
+- **MINOR Issue**: `concurrent.futures.TimeoutError` not caught in `ThreadPoolExecutor` path — falls through to generic exception handler instead of returning a proper timeout response.
+- **Testing**: 
+  - 23 unit tests all pass
+  - Full regression suite: 1029 passed, 9 skipped, 0 failures
+  - No test coverage gap for session_id capture (issue undetected by unit tests)
+- **Fix Dispatched**: wee-dev background task (bg_4f301940) to address both MAJOR and MINOR issues
+- **Next State**: wee-dev fixes → wee-qa re-review → (conditional) APPROVE → PR dev→main
+- **Impact**: Feature blocked until session_id capture is implemented and re-approved by QA
+
 ### Fixed
 #### #72: Remove Memory Context Prompt Fallback, Inject at Session Creation
 - **Status**: ✅ QA Approved (commit 30d1400 on dev)
