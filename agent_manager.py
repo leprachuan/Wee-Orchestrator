@@ -6579,6 +6579,7 @@ User Request:
                 AssistantMessage,
                 TextBlock,
                 ResultMessage,
+                ClaudeSDKClient,
             )
         except ImportError:
             return (
@@ -6588,6 +6589,8 @@ User Request:
 
         import asyncio
 
+        import io
+        import sys
         # Parse mode
         if mode is None:
             prompt_parsed, mode = self._parse_mode_command(prompt)
@@ -6655,27 +6658,44 @@ User Request:
             if model:
                 options.model = model
 
-            # Resume session if available
-            if sdk_session_id:
-                options.session_id = sdk_session_id
-
             try:
-                async for message in claude_sdk_query(
-                    prompt=context_prompt,
-                    options=options,
-                ):
-                    if isinstance(message, AssistantMessage):
-                        for block in message.content:
-                            if isinstance(block, TextBlock):
-                                collected_text.append(block.text)
-                    elif isinstance(message, ResultMessage):
-                        if message.session_id:
-                            self.update_session_field(n8n_session_id, "session_id", message.session_id)
-                    elif hasattr(message, "content"):
-                        # Fallback for other message types with content
-                        for block in getattr(message, "content", []):
-                            if hasattr(block, "text"):
-                                collected_text.append(block.text)
+                if sdk_session_id:
+                    # Multi-turn conversation: use ClaudeSDKClient for state management
+                    client = ClaudeSDKClient(options=options)
+                    async with client:
+                        await client.query(
+                            prompt=context_prompt,
+                            session_id=sdk_session_id,
+                        )
+                        async for message in client.receive_messages():
+                            if isinstance(message, AssistantMessage):
+                                for block in message.content:
+                                    if isinstance(block, TextBlock):
+                                        collected_text.append(block.text)
+                            elif isinstance(message, ResultMessage):
+                                if message.session_id:
+                                    self.update_session_field(n8n_session_id, "session_id", message.session_id)
+                            elif hasattr(message, "content"):
+                                for block in getattr(message, "content", []):
+                                    if hasattr(block, "text"):
+                                        collected_text.append(block.text)
+                else:
+                    # One-shot query: use stateless query() function
+                    async for message in claude_sdk_query(
+                        prompt=context_prompt,
+                        options=options,
+                    ):
+                        if isinstance(message, AssistantMessage):
+                            for block in message.content:
+                                if isinstance(block, TextBlock):
+                                    collected_text.append(block.text)
+                        elif isinstance(message, ResultMessage):
+                            if message.session_id:
+                                self.update_session_field(n8n_session_id, "session_id", message.session_id)
+                        elif hasattr(message, "content"):
+                            for block in getattr(message, "content", []):
+                                if hasattr(block, "text"):
+                                    collected_text.append(block.text)
 
             except Exception as e:
                 error_type = type(e).__name__

@@ -39,6 +39,31 @@ _ClaudeAgentOptions = type("ClaudeAgentOptions", (), {
 })
 
 
+class _FakeClaudeSDKClient:
+    """Fake ClaudeSDKClient for testing."""
+    _captured = {}  # Class variable for capturing across instances
+    
+    def __init__(self, options=None):
+        self.options = options
+        self._query_fn = None
+    
+    async def __aenter__(self):
+        return self
+    
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        pass
+    
+    async def query(self, prompt, session_id=None):
+        # Capture for test inspection
+        _FakeClaudeSDKClient._captured["prompt"] = prompt
+        _FakeClaudeSDKClient._captured["session_id"] = session_id
+        _FakeClaudeSDKClient._captured["options_permission_mode"] = getattr(self.options, "permission_mode", None)
+    
+    async def receive_messages(self):
+        return
+        yield
+
+
 def _build_fake_module(query_fn=None):
     """Build a fake claude_agent_sdk module."""
     mod = types.ModuleType("claude_agent_sdk")
@@ -49,6 +74,7 @@ def _build_fake_module(query_fn=None):
 
     mod.query = query_fn or _default_query
     mod.ClaudeAgentOptions = _ClaudeAgentOptions
+    mod.ClaudeSDKClient = _FakeClaudeSDKClient
     mod.AssistantMessage = _AssistantMessage
     mod.TextBlock = _TextBlock
     mod.ResultMessage = _ResultMessage
@@ -256,24 +282,21 @@ class TestSessionResumption(unittest.TestCase):
 
     def test_resume_sets_session_id(self):
         mgr = _make_manager()
-        captured = {}
-
-        async def cap_query(prompt, options=None):
-            captured["session_id"] = getattr(options, "session_id", None)
-            captured["prompt"] = prompt
-            return
-            yield
-
-        fake_mod = _build_fake_module(cap_query)
+        
+        fake_mod = _build_fake_module()
         with patch.dict("sys.modules", {"claude_agent_sdk": fake_mod}):
+            # Reset captured data
+            _FakeClaudeSDKClient._captured = {}
+            
             mgr.run_claude_sdk(
                 "test", "haiku", "orchestrator",
                 "existing-sess-123", True, "sess1",
             )
 
-        self.assertEqual(captured["session_id"], "existing-sess-123")
+        # When resuming, ClaudeSDKClient.query() should be called with session_id
+        self.assertEqual(_FakeClaudeSDKClient._captured.get("session_id"), "existing-sess-123")
         # Resuming should use raw prompt
-        self.assertEqual(captured["prompt"], "test prompt")
+        self.assertEqual(_FakeClaudeSDKClient._captured.get("prompt"), "test prompt")
 
     def test_no_resume_uses_full_context(self):
         mgr = _make_manager()
@@ -333,6 +356,27 @@ class TestSessionResumption(unittest.TestCase):
             "sess1", "session_id", "new-sdk-session-abc"
         )
         self.assertIn("response text", result)
+
+    def test_multiturn_uses_clausdesdk_client(self):
+        """Verify multi-turn conversations use ClaudeSDKClient for state management."""
+        mgr = _make_manager()
+        
+        fake_mod = _build_fake_module()
+        with patch.dict("sys.modules", {"claude_agent_sdk": fake_mod}):
+            # Reset captured data
+            _FakeClaudeSDKClient._captured = {}
+            
+            # Call with resume=True and session_id set (simulating multi-turn)
+            mgr.run_claude_sdk(
+                "Follow-up question", "haiku", "orchestrator",
+                "session-abc-123", True, "sess1",
+            )
+
+        # Verify ClaudeSDKClient was used (not module-level query)
+        # When resuming, the session_id should be passed to client.query()
+        self.assertEqual(_FakeClaudeSDKClient._captured.get("session_id"), "session-abc-123")
+        # Verify that client received a prompt (exact content depends on mocks)
+        self.assertIsNotNone(_FakeClaudeSDKClient._captured.get("prompt"))
 
 class TestRuntimeRegistration(unittest.TestCase):
     """Test that claude-sdk is registered in all integration points."""
