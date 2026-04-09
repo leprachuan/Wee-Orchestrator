@@ -2,6 +2,46 @@
 
 All notable changes to Wee Orchestrator are documented here.
 
+## [Issue #76] Feature: Add Copilot SDK Runtime (Hybrid Approach)
+**Status:** ⏳ QA Pending
+
+### Summary
+Added new `copilot-sdk` runtime using the `github-copilot-sdk` Python package for native
+async integration. This hybrid approach enables advanced features (streaming via event
+handlers, session resumption, structured error handling) while maintaining full backward
+compatibility with the existing `copilot` CLI runtime.
+
+### Changes
+- **New runtime:** `copilot-sdk` — uses `CopilotClient` async SDK instead of subprocess
+- **New method:** `run_copilot_sdk()` in `SessionManager` (~90 lines)
+- **16 integration points updated:** slash commands, API endpoints, argparse, dispatch
+  routing, session management, strip_metadata, model fetch, help text, background tasks
+- **Requirements:** Added `github-copilot-sdk>=0.1.0` to `requirements.txt`
+- **Documentation:** Updated `ARCHITECTURE.md` with SDK flow diagram and comparison table
+- **Tests:** 19 new tests across 6 test classes (routing, strip_metadata, session mgmt,
+  run method with mocks, dispatch, API endpoints)
+
+### Key Technical Decisions
+- `run_copilot_sdk()` uses `asyncio.run()` internally to match existing synchronous runtime
+  pattern — safe because FastAPI runs it in `asyncio.to_thread()` (separate thread)
+- SDK import is lazy (inside method body) to avoid ImportError if package not installed
+- Shares model list with `copilot` CLI runtime (same backend)
+- Event handler captures `ASSISTANT_MESSAGE` events as fallback when `send_and_wait()` returns None
+- Three-tier response extraction: result_event → collected_messages → message history
+
+### Testing
+- 19 unit tests — all passing
+- Full regression suite: 1006 passed, 9 skipped, 0 failures
+- No regressions in existing test suite
+
+### Usage
+```
+/runtime set copilot-sdk          # Switch to SDK runtime
+/runtime set copilot              # Switch back to CLI runtime (backward compatible)
+```
+
+---
+
 ## [Unreleased] — Dev Branch
 
 ### Added

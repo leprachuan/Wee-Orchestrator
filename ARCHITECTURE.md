@@ -68,6 +68,7 @@ graph TB
 
     subgraph Runtimes["AI CLI Runtimes"]
         CP["🤖 GitHub Copilot CLI"]
+        CS["🟢 Copilot SDK (async)"]
         OC["🔵 OpenCode"]
         CL["🟠 Claude Code"]
         GM["🔴 Google Gemini"]
@@ -272,7 +273,7 @@ The central execution engine. Responsible for:
 | Method | Purpose |
 |--------|---------|
 | `execute()` | Entry point — parse slash command or dispatch to AI |
-| `run_copilot()` / `run_claude()` / `run_gemini()` / `run_opencode()` / `run_codex()` | Runtime-specific subprocess wrappers |
+| `run_copilot()` / `run_copilot_sdk()` / `run_claude()` / `run_gemini()` / `run_opencode()` / `run_codex()` | Runtime-specific wrappers (CLI subprocess or SDK async) |
 | `_execute_subprocess_with_tracking()` | Dual-path: streaming (queue-based line-by-line) or blocking (`communicate()`) |
 | `_register_stream()` / `_unregister_stream()` | Register/remove per-session SSE queue |
 | `set_agent()` | Switch agent and update session state |
@@ -281,6 +282,43 @@ The central execution engine. Responsible for:
 | `track_running_query()` / `clear_running_query()` | PID-based query lifecycle |
 
 ---
+
+
+### Copilot SDK Runtime (`copilot-sdk`)
+
+The `copilot-sdk` runtime uses the `github-copilot-sdk` Python package for native async
+integration instead of spawning a CLI subprocess. Added in Issue #76.
+
+```
+┌─────────────────────────────────────────────────────┐
+│  run_copilot_sdk()                                  │
+│                                                     │
+│  1. Import copilot SDK (lazy, avoids ImportError)   │
+│  2. Build context prompt (agent, skills, AGENTS.md) │
+│  3. async CopilotClient() context manager           │
+│  4. create_session() or resume_session()            │
+│     ├── on_event handler → collects messages        │
+│     ├── on_permission_request → auto-approve        │
+│     └── model, working_directory, config_dir        │
+│  5. session.send_and_wait(prompt, timeout)          │
+│  6. Extract response:                               │
+│     ├── result_event.data.content (primary)         │
+│     ├── collected_messages (event fallback)         │
+│     └── session.get_messages() (history fallback)   │
+│  7. strip_metadata() → return clean output          │
+└─────────────────────────────────────────────────────┘
+```
+
+**Key differences from CLI runtime (`copilot`):**
+
+| Aspect | `copilot` (CLI) | `copilot-sdk` (SDK) |
+|--------|----------------|---------------------|
+| Execution | `subprocess.Popen()` | `asyncio.run()` + `CopilotClient` |
+| Streaming | stdout line-by-line | Event handler (`on_event`) |
+| Session resume | `--resume` flag | `client.resume_session()` |
+| Error handling | stderr parsing | Structured exceptions |
+| Startup time | ~1-2s (new process) | ~100ms (persistent client) |
+| Dependencies | `copilot` binary | `github-copilot-sdk` PyPI package |
 
 ### `HistoryManager` (`agent_manager.py`)
 

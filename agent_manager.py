@@ -1731,7 +1731,7 @@ class SessionManager:
 
 **Runtime Management:**
    • /runtime list - Show available runtimes
-   • /runtime set (auto|copilot|opencode|claude|gemini|codex|devin|cursor) - Switch runtime
+   • /runtime set (auto|copilot|copilot-sdk|opencode|claude|gemini|codex|devin|cursor) - Switch runtime
    • /runtime current - Show current runtime
 
 **Model Management:**
@@ -1883,7 +1883,8 @@ You can mention an agent in your prompt and it will auto-delegate:
         if argument == "list":
             return (
                 "🤖 **Available Runtimes**\n\n"
-                "• `copilot` (GitHub Copilot)\n"
+                "• `copilot` (GitHub Copilot CLI)\n"
+                "• `copilot-sdk` (GitHub Copilot SDK — native Python, streaming)\n"
                 "• `opencode` (OpenCode CLI)\n"
                 "• `claude` (Claude Code CLI)\n"
                 "• `gemini` (Google Gemini CLI)\n"
@@ -1897,6 +1898,7 @@ You can mention an agent in your prompt and it will auto-delegate:
             new_runtime = argument[4:].strip().lower()
             if new_runtime not in [
                 "copilot",
+                "copilot-sdk",
                 "opencode",
                 "claude",
                 "gemini",
@@ -1906,7 +1908,7 @@ You can mention an agent in your prompt and it will auto-delegate:
             ]:
                 return (
                     f"Unknown runtime: '{new_runtime}'. Use "
-                    "copilot, opencode, claude, gemini, "
+                    "copilot, copilot-sdk, opencode, claude, gemini, "
                     "codex, devin, or cursor."
                 )
 
@@ -1969,6 +1971,8 @@ You can mention an agent in your prompt and it will auto-delegate:
             # When switching runtime, also reset the model to a default for that runtime
             default_model = "gpt-5-mini"  # Default fallback
             if new_runtime == "copilot":
+                default_model = "gpt-5-mini"
+            elif new_runtime == "copilot-sdk":
                 default_model = "gpt-5-mini"
             elif new_runtime == "opencode":
                 default_model = "opencode/gpt-5-nano"
@@ -3434,6 +3438,7 @@ You can mention an agent in your prompt and it will auto-delegate:
         """
         dispatch = {
             "copilot": self.fetch_copilot_models,
+            "copilot-sdk": self.fetch_copilot_models,
             "opencode": self.fetch_opencode_models,
             "claude": self.fetch_claude_models,
             "gemini": self.fetch_gemini_models,
@@ -3611,7 +3616,7 @@ You can mention an agent in your prompt and it will auto-delegate:
 
             # Validate and fix session_id if corrupted
             session_id = merged.get("session_id", "")
-            if runtime in ["claude", "gemini", "codex", "copilot", "devin", "cursor"]:
+            if runtime in ["claude", "gemini", "codex", "copilot", "copilot-sdk", "devin", "cursor"]:
                 if not session_id or not (len(session_id) == 36 and "-" in session_id):
                     merged["session_id"] = str(uuid4())
             elif runtime == "opencode":
@@ -4065,7 +4070,7 @@ You can mention an agent in your prompt and it will auto-delegate:
         lines = text.split("\n")
         result = []
 
-        if runtime == "copilot":
+        if runtime in ("copilot", "copilot-sdk"):
             in_metadata = False
             for line in lines:
                 # Strip ANSI escape codes (may leak despite --no-color)
@@ -5824,7 +5829,7 @@ User Request:
                                                 "name": "shell",
                                                 "input": _oc_run.group(1).strip(),
                                             }
-                                elif runtime == "copilot":
+                                elif runtime in ("copilot", "copilot-sdk"):
                                     # Copilot shows tool calls as "● Description" and shell cmds as "  $ cmd"
                                     import re as _re_tc
 
@@ -6288,6 +6293,176 @@ User Request:
             cmd, agent_dir, effective_timeout, "copilot", agent, prompt, n8n_session_id
         )
         return self.strip_metadata(output, "copilot")
+
+    def run_copilot_sdk(
+        self,
+        prompt: str,
+        model: str,
+        agent: str,
+        session_id: Optional[str],
+        resume: bool,
+        n8n_session_id: str,
+        timeout: Optional[int] = None,
+        render_type: str = "text",
+    ) -> str:
+        """Execute via Copilot SDK (native Python, no CLI subprocess).
+
+        Uses the github-copilot-sdk package for direct API integration.
+        Benefits over CLI: persistent client, ~100ms startup, streaming
+        events, structured error handling, custom tool support.
+        """
+        try:
+            from copilot import CopilotClient
+            from copilot.session import (
+                CopilotSession,
+                PermissionHandler,
+                SessionEventType,
+            )
+        except ImportError:
+            return (
+                "Error: github-copilot-sdk not installed. "
+                "Run: pip install github-copilot-sdk"
+            )
+
+        import asyncio
+
+        # Parse mode
+        prompt_parsed, mode = self._parse_mode_command(prompt)
+        if mode is None:
+            mode = self.mode or "restricted"
+
+        session_data = self.get_or_create_session_data(n8n_session_id)
+        mode = self._resolve_permission_mode(session_data, mode)
+
+        agent_dir = self.AGENTS.get(agent, self.AGENTS["orchestrator"])["path"]
+        effective_timeout = timeout if timeout is not None else self.command_timeout
+        channel = session_data.get("channel", "webui")
+
+        # Build context prompt
+        if resume and session_id:
+            context_prompt = prompt_parsed
+        else:
+            context_prompt = self.build_agent_context_prompt(
+                agent,
+                prompt_parsed,
+                n8n_session_id,
+                render_type,
+                effective_timeout,
+                "copilot-sdk",
+                model,
+                channel,
+            )
+
+        # Add mode instructions
+        if mode == "elevated":
+            context_prompt += (
+                "\n\n[ELEVATED MODE ENABLED]\n"
+                "Full permissions granted. ALL commands requiring elevated privileges "
+                "MUST automatically prefix with 'sudo'. Sudo is configured without "
+                "password prompt (NOPASSWD:ALL)."
+            )
+        elif mode == "sandboxed":
+            context_prompt += (
+                "\n\n[SANDBOXED MODE ENABLED]\n"
+                "Read-only access only. Do NOT modify any files, run destructive "
+                "commands, or make network requests. Analysis and reporting only."
+            )
+
+        # Store session_id for resumption tracking
+        sdk_session_id = session_id if resume and session_id else None
+
+        async def _run_sdk() -> str:
+            collected_messages: list = []
+
+            async with CopilotClient() as client:
+                # Event handler to collect assistant messages
+                def on_event(event):
+                    if event.type == SessionEventType.ASSISTANT_MESSAGE:
+                        if hasattr(event, "data") and hasattr(event.data, "content"):
+                            collected_messages.append(str(event.data.content))
+                    elif event.type == SessionEventType.SESSION_ERROR:
+                        if hasattr(event, "data"):
+                            err_msg = str(getattr(event.data, "message", event.data))
+                            collected_messages.append(f"[SDK Error] {err_msg}")
+
+                # Session creation kwargs
+                session_kwargs = {
+                    "on_permission_request": PermissionHandler.approve_all,
+                    "model": model or None,
+                    "working_directory": agent_dir,
+                    "on_event": on_event,
+                }
+
+                mcp_config_path = os.path.expanduser("~/.copilot/mcp-config.json")
+                if os.path.exists(mcp_config_path):
+                    session_kwargs["config_dir"] = os.path.expanduser("~/.copilot")
+
+                try:
+                    if sdk_session_id:
+                        print(
+                            f"[SDK] Resuming session: {sdk_session_id}",
+                            file=sys.stderr,
+                        )
+                        session = await client.resume_session(
+                            sdk_session_id, **session_kwargs
+                        )
+                    else:
+                        print(
+                            f"[SDK] Starting new session in {mode} mode",
+                            file=sys.stderr,
+                        )
+                        session = await client.create_session(**session_kwargs)
+                except Exception as sess_err:
+                    return f"Error (Copilot SDK session): {type(sess_err).__name__}: {sess_err}"
+
+                try:
+                    # Update session map with the SDK session ID
+                    actual_session_id = getattr(session, "session_id", None)
+                    if actual_session_id:
+                        self.update_session_field(
+                            n8n_session_id, "session_id", str(actual_session_id)
+                        )
+
+                    # Send prompt and wait for completion
+                    result_event = await session.send_and_wait(
+                        context_prompt, timeout=float(effective_timeout)
+                    )
+
+                    # Extract response from result event
+                    if result_event and hasattr(result_event, "data"):
+                        if hasattr(result_event.data, "content"):
+                            return str(result_event.data.content)
+
+                    # Fall back to collected messages from event handler
+                    if collected_messages:
+                        return "\n".join(collected_messages)
+
+                    # Fall back to full message history
+                    messages = session.get_messages()
+                    assistant_msgs = [
+                        m
+                        for m in messages
+                        if m.type == SessionEventType.ASSISTANT_MESSAGE
+                    ]
+                    if assistant_msgs:
+                        last = assistant_msgs[-1]
+                        if hasattr(last, "data") and hasattr(last.data, "content"):
+                            return str(last.data.content)
+
+                    return ""
+                finally:
+                    try:
+                        await session.disconnect()
+                    except Exception:
+                        pass
+
+        try:
+            output = asyncio.run(_run_sdk())
+        except Exception as e:
+            print(f"[SDK] Error: {type(e).__name__}: {e}", file=sys.stderr)
+            return f"Error (Copilot SDK): {type(e).__name__}: {e}"
+
+        return self.strip_metadata(output, "copilot-sdk")
 
     def run_opencode(
         self,
@@ -7010,7 +7185,7 @@ User Request:
         self, session_id: str, runtime: str, n8n_session_id: Optional[str] = None
     ) -> bool:
         """Check if session state exists for runtime"""
-        if runtime == "copilot":
+        if runtime in ("copilot", "copilot-sdk"):
             # Modern Copilot stores sessions as directories with events.jsonl inside
             session_dir = self.session_state_dir / session_id
             if session_dir.is_dir() and (session_dir / "events.jsonl").exists():
@@ -7079,7 +7254,7 @@ User Request:
     ) -> Optional[str]:
         """Get most recent session ID from storage or CLI"""
         try:
-            if runtime == "copilot":
+            if runtime in ("copilot", "copilot-sdk"):
                 # Modern Copilot: sessions are directories with events.jsonl inside
                 session_dirs = [
                     d
@@ -7282,6 +7457,17 @@ User Request:
 
         if runtime == "copilot":
             result = self.run_copilot(
+                prompt,
+                model,
+                agent,
+                session_id if can_resume else None,
+                can_resume,
+                n8n_session_id,
+                effective_timeout,
+                render_type,
+            )
+        elif runtime == "copilot-sdk":
+            result = self.run_copilot_sdk(
                 prompt,
                 model,
                 agent,
@@ -8332,6 +8518,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         runtimes = [
             {"id": "auto", "label": "auto"},
             {"id": "copilot", "label": "copilot"},
+            {"id": "copilot-sdk", "label": "copilot-sdk"},
             {"id": "opencode", "label": "opencode"},
             {"id": "claude", "label": "claude"},
             {"id": "gemini", "label": "gemini"},
@@ -8352,6 +8539,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         runtime = runtime.lower().strip()
         known_runtimes = {
             "copilot",
+            "copilot-sdk",
             "opencode",
             "claude",
             "gemini",
@@ -13513,8 +13701,8 @@ Examples:
     runtime_group.add_argument(
         "--runtime",
         metavar="NAME",
-        choices=["copilot", "opencode", "claude", "gemini", "codex", "devin", "cursor"],
-        help="Set the runtime to use (choices: copilot, opencode, claude, gemini, codex, devin, cursor)",
+        choices=["copilot", "copilot-sdk", "opencode", "claude", "gemini", "codex", "devin", "cursor"],
+        help="Set the runtime to use (choices: copilot, copilot-sdk, opencode, claude, gemini, codex, devin, cursor)",
     )
     runtime_group.add_argument(
         "--list-runtimes",
