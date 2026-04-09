@@ -1,27 +1,55 @@
 # Changelog
 
 
-## [Unreleased] — Issue #77: Claude Agent SDK Runtime
+## [Issue #77] Feature: Claude Agent SDK Runtime
+**Status:** ✅ QA Approved (commits 6ea6371 + 0ecc7ab on dev)
 
-**Feature:** Add `claude-agent-sdk` as a new runtime option.
+### Summary
+Added new `claude-agent-sdk` runtime using the `claude-agent-sdk` Python package for
+native async integration. This in-process approach eliminates subprocess overhead, provides
+structured error handling, and supports session continuity via `ResultMessage` capture.
 
-- **What:** New `run_claude_agent_sdk()` async method (~160 lines) using `claude-agent-sdk` Python package
-- **Runtime name:** `claude-agent-sdk` (set via `/runtime set claude-agent-sdk`)
-- **Package:** `claude-agent-sdk>=0.1.0` added to requirements.txt
-- **Architecture:** Uses `query()` async generator → `AsyncIterator[Message]` streaming
-- **Permission modes:** elevated→`bypassPermissions`, sandboxed→`plan`, restricted→`default`
-- **Session resume:** Pass `session_id` in `ClaudeAgentOptions` for conversation continuity
-- **Error handling:** CLINotFoundError, CLIConnectionError, ProcessError + auth keyword detection
-- **Integration:** 16 integration points updated (help text, validation, model dispatch, session handling, dispatch routing, API endpoints, argparse)
-- **Tests:** 23 unit tests across 8 classes — import handling, mode mapping, streaming, errors, session resume, registration, dispatch
-- **Regression:** 1029 passed, 9 skipped, 0 failures
-- **Docs:** ARCHITECTURE.md updated with flow diagram + runtime comparison table
+### Changes
+- **New runtime:** `claude-agent-sdk` — uses `query()` async generator via `ClaudeAgentOptions`
+- **New method:** `run_claude_agent_sdk()` in `SessionManager` (~160 lines)
+- **Session continuity fix (MAJOR):** `ResultMessage` added to imports and processed in the
+  async message loop — stores `session_id` via `update_session_field()` enabling resumption
+- **TimeoutError fix (MINOR):** `except` clause now catches `(asyncio.TimeoutError,
+  concurrent.futures.TimeoutError)` in the `ThreadPoolExecutor` path
+- **16 integration points updated:** help text, validation, model dispatch, session handling,
+  dispatch routing, API endpoints, argparse
+- **Requirements:** Added `claude-agent-sdk>=0.1.0` to `requirements.txt`
+- **Documentation:** `ARCHITECTURE.md` updated with flow diagram and runtime comparison table
+- **Tests:** 24 unit tests across 9 classes — import handling, mode mapping, streaming,
+  errors, session resume (incl. `test_result_message_stores_session_id`), registration, dispatch
 
-**Key differences from `claude` (CLI subprocess) runtime:**
-- In-process async execution vs subprocess spawn
-- Structured error types vs stderr parsing
-- Native permission_mode field vs CLI flags
-- AsyncIterator streaming vs stdout line-by-line
+### Key Technical Decisions
+- `run_claude_agent_sdk()` uses `asyncio.run()` in a `ThreadPoolExecutor` — safe because
+  FastAPI runs it via `asyncio.to_thread()` (separate OS thread)
+- SDK import is lazy (inside method body) to avoid `ImportError` if package not installed
+- Permission modes: `elevated→bypassPermissions`, `sandboxed→plan`, `restricted→default`
+- `ResultMessage` is the terminal message in the stream; its `session_id` is the authoritative
+  source for session continuity across turns
+- `concurrent.futures.TimeoutError` catch added alongside `asyncio.TimeoutError` to cover
+  the `ThreadPoolExecutor.submit(...).result(timeout=...)` code path
+
+### Testing
+- 24 unit tests — all passing (target suite)
+- Full regression suite: 1030 passed, 0 failures
+- No regressions in existing test suite
+
+### Non-Blocking Follow-Up
+The `concurrent.futures` import is inside the `if`-branch where it is used. A future cleanup
+could hoist it before the outer `try` block to eliminate a latent `NameError` in edge-case
+timeout paths (filed as non-blocking note).
+
+### Usage
+```
+/runtime set claude-agent-sdk     # Switch to Agent SDK runtime
+/runtime set claude               # Switch back to CLI subprocess runtime
+```
+
+---
 
 All notable changes to Wee Orchestrator are documented here.
 

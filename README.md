@@ -137,7 +137,7 @@ Then open `http://localhost:8000/ui` in your browser and pair via Telegram or We
 |---------|-------------|
 | `/agent <name>` | Switch to a different agent |
 | `/model <model>` | Change AI model mid-conversation |
-| `/runtime <runtime>` | Switch AI runtime (copilot, claude, gemini, opencode, codex, devin) |
+| `/runtime <runtime>` | Switch AI runtime (copilot, claude, claude-agent-sdk, gemini, opencode, copilot-sdk, codex, devin) |
 | `/timeout <seconds>` | Adjust execution timeout |
 | `/status` | Check running task status |
 | `/cancel` | Cancel the current running task |
@@ -534,6 +534,29 @@ All AI runtimes in this system are configured with **full tool access** to enabl
   - Allows all shell commands and tools without confirmation
 - **Security Note:** Only use in trusted, controlled environments
 
+#### Claude Agent SDK (Python)
+- **Package:** `claude-agent-sdk>=0.1.0` (install via `pip install claude-agent-sdk`)
+- **Enables:**
+  - In-process async execution (no subprocess spawn)
+  - Structured error types (`CLINotFoundError`, `CLIConnectionError`, `ProcessError`)
+  - Native `permission_mode` field instead of CLI flags
+  - Session continuity via `ResultMessage.session_id` capture
+- **Permission Modes:**
+  - `elevated` → `bypassPermissions` (full access, no prompts)
+  - `sandboxed` → `plan` (read-only + approval for writes)
+  - `restricted` → `default` (standard safety checks)
+- **Usage:** `/runtime set claude-agent-sdk`
+- **Issue:** [#77](../../issues/77)
+
+#### GitHub Copilot SDK (Python)
+- **Package:** `github-copilot-sdk>=0.1.0` (install via `pip install github-copilot-sdk`)
+- **Enables:**
+  - In-process async execution via `CopilotClient`
+  - Streaming via `ASSISTANT_MESSAGE` event handlers
+  - Session resumption and structured error handling
+- **Usage:** `/runtime set copilot-sdk`
+- **Issue:** [#76](../../issues/76)
+
 ### Security Considerations
 
 ⚠️ **Warning:** These configurations grant AI agents extensive system access:
@@ -714,7 +737,7 @@ Model Options:
 - `--list-models` - List all available models for current runtime and exit
 
 Runtime Options:
-- `--runtime NAME` - Set the runtime to use (choices: copilot, opencode, claude, gemini, codex, devin)
+- `--runtime NAME` - Set the runtime to use (choices: copilot, opencode, claude, claude-agent-sdk, gemini, copilot-sdk, codex, devin)
 - `--list-runtimes` - List all available runtimes and exit
 
 Configuration:
@@ -962,7 +985,7 @@ Sessions are automatically tracked and stored in:
 
 Each N8N session ID is mapped to:
 - A unique backend session ID (for resuming AI CLI sessions)
-- Current runtime (copilot/opencode/claude/gemini)
+- Current runtime (copilot/opencode/claude/claude-agent-sdk/gemini/copilot-sdk)
 - Current model
 - Current agent
 
