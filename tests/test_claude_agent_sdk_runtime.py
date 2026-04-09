@@ -30,6 +30,10 @@ _TextBlock = type("TextBlock", (), {
 _AssistantMessage = type("AssistantMessage", (), {
     "__init__": lambda self, content=None: setattr(self, "content", content or []),
 })
+_ResultMessage = type("ResultMessage", (), {
+    "__init__": lambda self, session_id="": setattr(self, "session_id", session_id),
+})
+
 _ClaudeAgentOptions = type("ClaudeAgentOptions", (), {
     "__init__": lambda self, **kw: self.__dict__.update(kw),
 })
@@ -47,6 +51,7 @@ def _build_fake_module(query_fn=None):
     mod.ClaudeAgentOptions = _ClaudeAgentOptions
     mod.AssistantMessage = _AssistantMessage
     mod.TextBlock = _TextBlock
+    mod.ResultMessage = _ResultMessage
     return mod
 
 
@@ -307,6 +312,27 @@ class TestSessionResumption(unittest.TestCase):
 
         self.assertEqual(captured["model"], "opus")
 
+
+    def test_result_message_stores_session_id(self):
+        """ResultMessage with session_id must call update_session_field."""
+        mgr = _make_manager()
+        result_msg = _ResultMessage(session_id="new-sdk-session-abc")
+        text_msg = _AssistantMessage([_TextBlock("response text")])
+
+        async def mock_query(prompt, options=None):
+            yield text_msg
+            yield result_msg
+
+        fake_mod = _build_fake_module(mock_query)
+        with patch.dict("sys.modules", {"claude_agent_sdk": fake_mod}):
+            result = mgr.run_claude_agent_sdk(
+                "test", "haiku", "orchestrator", None, False, "sess1"
+            )
+
+        mgr.update_session_field.assert_called_once_with(
+            "sess1", "session_id", "new-sdk-session-abc"
+        )
+        self.assertIn("response text", result)
 
 class TestRuntimeRegistration(unittest.TestCase):
     """Test that claude-agent-sdk is registered in all integration points."""

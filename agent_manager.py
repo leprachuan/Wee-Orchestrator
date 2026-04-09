@@ -6498,6 +6498,7 @@ User Request:
                 ClaudeAgentOptions,
                 AssistantMessage,
                 TextBlock,
+                ResultMessage,
             )
         except ImportError:
             return (
@@ -6587,6 +6588,9 @@ User Request:
                         for block in message.content:
                             if isinstance(block, TextBlock):
                                 collected_text.append(block.text)
+                    elif isinstance(message, ResultMessage):
+                        if message.session_id:
+                            self.update_session_field(n8n_session_id, "session_id", message.session_id)
                     elif hasattr(message, "content"):
                         # Fallback for other message types with content
                         for block in getattr(message, "content", []):
@@ -6633,7 +6637,7 @@ User Request:
                     ).result(timeout=effective_timeout)
             else:
                 output = asyncio.run(_run_sdk())
-        except asyncio.TimeoutError:
+        except (asyncio.TimeoutError, concurrent.futures.TimeoutError):
             return f"Error: Claude Agent SDK timed out after {effective_timeout}s"
         except Exception as e:
             print(
