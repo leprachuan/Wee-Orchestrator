@@ -6397,11 +6397,15 @@ User Request:
         tracking for background task progress (Issue #87).
         """
         try:
-            from copilot import CopilotClient
+            from copilot import CopilotClient, SubprocessConfig
             from copilot.session import (
                 CopilotSession,
+                ElicitationContext,
+                ElicitationResult,
                 PermissionHandler,
                 SessionEventType,
+                UserInputRequest,
+                UserInputResponse,
             )
         except ImportError:
             return (
@@ -6460,10 +6464,31 @@ User Request:
         # Store session_id for resumption tracking
         sdk_session_id = session_id if resume and session_id else None
 
+        # For elevated mode, pass --allow-all-paths and --yolo via SubprocessConfig
+        # so the underlying Copilot CLI grants full filesystem access and
+        # auto-approves command execution (equivalent to the standard runtime flags).
+        sdk_cli_args = ["--allow-all-paths", "--yolo"] if mode == "elevated" else []
+
+        def _auto_approve_user_input(
+            request: UserInputRequest, invocation: dict
+        ) -> UserInputResponse:
+            # Auto-approve user input requests so unattended tasks never block
+            if request.get("choices"):
+                answer = request["choices"][0]
+            else:
+                answer = "yes"
+            return UserInputResponse(answer=answer, wasFreeform=True)
+
+        def _auto_approve_elicitation(context: ElicitationContext) -> ElicitationResult:
+            # Auto-accept elicitation prompts (approval gates) for elevated mode
+            return ElicitationResult(action="accept")
+
         async def _run_sdk() -> str:
             collected_messages: list = []
 
-            async with CopilotClient() as client:
+            _sdk_config = SubprocessConfig(cli_args=sdk_cli_args) if sdk_cli_args else None
+            _client = CopilotClient(_sdk_config) if _sdk_config else CopilotClient()
+            async with _client as client:
                 # Event handler — streams chunks and detects tool calls
                 def on_event(event):
                     # ── Streaming deltas ──
@@ -6552,6 +6577,11 @@ User Request:
                     "working_directory": agent_dir,
                     "on_event": on_event,
                 }
+                # For elevated mode, auto-approve user input and elicitation
+                # requests so unattended tasks are never blocked by approval gates
+                if mode == "elevated":
+                    session_kwargs["on_user_input_request"] = _auto_approve_user_input
+                    session_kwargs["on_elicitation_request"] = _auto_approve_elicitation
 
                 mcp_config_path = os.path.expanduser("~/.copilot/mcp-config.json")
                 if os.path.exists(mcp_config_path):
@@ -6692,7 +6722,7 @@ User Request:
             mode = self.mode or "restricted"
 
         session_data = self.get_or_create_session_data(n8n_session_id)
-        mode = self._resolve_permission_mode(mode, session_data)
+        mode = self._resolve_permission_mode(session_data, mode)
 
         agent_dir = self.AGENTS.get(agent, self.AGENTS["orchestrator"])["path"]
         effective_timeout = timeout if timeout is not None else self.command_timeout

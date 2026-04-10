@@ -1,5 +1,75 @@
 # Changelog
 
+## [Issue #91] Bug: Permissions Not Honored for copilot-sdk and claude-sdk
+**Status:** Implementation Complete
+
+### Root Causes
+
+Two separate bugs prevented full-access permissions from being honored:
+
+#### Bug 1 — claude-sdk: `_resolve_permission_mode` arguments swapped
+`run_claude_sdk` called `self._resolve_permission_mode(mode, session_data)` with
+arguments in the **wrong order**. The method signature is
+`_resolve_permission_mode(self, session_data: dict, prompt_mode: str)`. As a result,
+`session_data` was always received as the first argument and compared to `"restricted"`
+as a dict — which is always truthy — causing `prompt_mode` to be returned as the
+session_data dict. The mode check `if mode == "elevated"` then always failed, so
+`sdk_permission_mode` was always `"default"` regardless of configured permissions.
+
+**Fix:** Corrected arg order to `self._resolve_permission_mode(session_data, mode)`.
+
+#### Bug 2 — copilot-sdk: Missing `--allow-all-paths` / `--yolo` flags + no approval handlers
+The standard `copilot` runtime passes `--allow-all-paths` and `--yolo` to the CLI for
+elevated mode. The `copilot-sdk` runtime used the Python SDK but never passed equivalent
+flags — the underlying Copilot CLI subprocess still ran with restricted access.
+
+Additionally, no `on_user_input_request` or `on_elicitation_request` handlers were
+registered, causing the SDK to raise `RuntimeError` or block indefinitely on any
+approval gate.
+
+**Fix:**
+- Pass `SubprocessConfig(cli_args=["--allow-all-paths", "--yolo"])` to `CopilotClient`
+  when mode is `"elevated"`, granting full filesystem access and auto-approving commands
+- Register `on_user_input_request` handler that auto-selects first choice (or "yes")
+  for elevated sessions — prevents RuntimeError on approval prompts
+- Register `on_elicitation_request` handler that returns `action="accept"` for elevated
+  sessions — prevents blocking on approval gates
+
+### Changes
+
+#### `agent_manager.py`
+- **`run_claude_sdk`:** Fixed `_resolve_permission_mode` call — args corrected to
+  `(session_data, mode)` order (was `(mode, session_data)`)
+- **`run_copilot_sdk`:** Added `SubprocessConfig` + `ElicitationContext/Result` +
+  `UserInputRequest/Response` to import block
+- **`run_copilot_sdk`:** Added `sdk_cli_args` — `["--allow-all-paths", "--yolo"]` for
+  elevated, `[]` otherwise; passed via `SubprocessConfig` to `CopilotClient`
+- **`run_copilot_sdk`:** Added `_auto_approve_user_input` handler (returns first choice
+  or "yes") and `_auto_approve_elicitation` handler (returns `action="accept"`)
+- **`run_copilot_sdk`:** Registered both handlers in `session_kwargs` for elevated mode
+
+#### `tests/test_sdk_permissions.py` (new, 12 tests)
+- `test_elevated_mode_passes_allow_all_paths_flag` — SubprocessConfig gets `--allow-all-paths`
+- `test_elevated_mode_passes_yolo_flag` — SubprocessConfig gets `--yolo`
+- `test_restricted_mode_no_dangerous_flags` — SubprocessConfig NOT created for restricted
+- `test_elevated_mode_sets_user_input_handler` — `on_user_input_request` set in elevated
+- `test_elevated_mode_sets_elicitation_handler` — `on_elicitation_request` set in elevated
+- `test_restricted_mode_no_user_input_handler` — handler not set in restricted mode
+- `test_auto_approve_user_input_handler_returns_yes` — handler logic verified
+- `test_auto_approve_elicitation_returns_accept` — elicitation handler logic verified
+- `test_resolve_permission_mode_arg_order_session_data_first` — arg order correctness
+- `test_elevated_session_resolves_to_elevated_mode` — elevated session resolves correctly
+- `test_restricted_session_resolves_to_restricted_mode` — restricted session resolves correctly
+- `test_permission_mode_mapping_elevated_to_bypass` — mode maps to SDK permission strings
+
+### Impact
+- Unattended background tasks with `elevated` permission mode now run without manual
+  intervention on both `copilot-sdk` and `claude-sdk` runtimes
+- Batch operations using these runtimes no longer stall on approval gates
+
+
+---
+
 ## [Issue #87] Feature: Streaming + Tool Call Support for copilot-sdk and claude-sdk
 **Status:** ✅ QA Approved (Commit: 001015e)
 
