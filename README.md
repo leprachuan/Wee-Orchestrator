@@ -545,17 +545,20 @@ All AI runtimes in this system are configured with **full tool access** to enabl
   - `elevated` → `bypassPermissions` (full access, no prompts)
   - `sandboxed` → `plan` (read-only + approval for writes)
   - `restricted` → `default` (standard safety checks)
+- **Streaming:** Real-time text chunks pushed to WebUI SSE consumers via `_StreamBuffer`
+- **Tool Calls:** `ToolUseBlock`/`ToolResultBlock` detection emits standardized tool_call events
 - **Usage:** `/runtime set claude-agent-sdk`
-- **Issue:** [#77](../../issues/77)
+- **Issues:** [#77](../../issues/77), [#87](../../issues/87)
 
 #### GitHub Copilot SDK (Python)
 - **Package:** `github-copilot-sdk>=0.1.0` (install via `pip install github-copilot-sdk`)
 - **Enables:**
   - In-process async execution via `CopilotClient`
-  - Streaming via `ASSISTANT_MESSAGE` event handlers
+  - Real-time streaming via `ASSISTANT_STREAMING_DELTA`/`ASSISTANT_MESSAGE_DELTA` events
+  - Tool call tracking via `TOOL_EXECUTION_START`/`COMPLETE` and `COMMAND_EXECUTE` events
   - Session resumption and structured error handling
 - **Usage:** `/runtime set copilot-sdk`
-- **Issue:** [#76](../../issues/76)
+- **Issues:** [#76](../../issues/76), [#87](../../issues/87)
 
 ### Security Considerations
 

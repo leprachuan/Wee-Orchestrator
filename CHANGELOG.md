@@ -1,5 +1,53 @@
 # Changelog
 
+## [Issue #87] Feature: Streaming + Tool Call Support for copilot-sdk and claude-sdk
+**Status:** 🔄 In QA Review
+
+### Summary
+Added real-time streaming response delivery and tool call event tracking for both
+`copilot-sdk` and `claude-sdk` runtimes, achieving feature parity with CLI-based
+runtimes for WebUI SSE consumers.
+
+### Changes
+
+#### copilot-sdk (`run_copilot_sdk`)
+- **Streaming:** `on_event` callback now handles `ASSISTANT_STREAMING_DELTA` and
+  `ASSISTANT_MESSAGE_DELTA` events, pushing text chunks to `_StreamBuffer` in real-time
+- **Tool calls:** `TOOL_EXECUTION_START`, `TOOL_EXECUTION_COMPLETE`, and `COMMAND_EXECUTE`
+  events generate standardized tool_call events with id, name, input, runtime, timestamp
+- **Done sentinel:** Pushed on all exit paths (success, error, session failure)
+- **Graceful fallback:** Uses `getattr(self, "_stream_buffers", {})` for test compatibility
+
+#### claude-sdk (`run_claude_sdk`)
+- **Streaming:** `TextBlock` content pushed as chunks during async iteration over `query()`
+- **Tool calls:** `ToolUseBlock` emits "detected" events with block.id/name/input;
+  `ToolResultBlock` emits "completed" events with tool_use_id and is_error flag
+- **Done sentinel:** Pushed on all exit paths including SDK exceptions
+- **New imports:** `ToolUseBlock`, `ToolResultBlock` from `claude_agent_sdk`
+
+#### Tool Event Format (both runtimes)
+```json
+{
+  "event": "detected|started|completed",
+  "id": "tc_<runtime>_N or block.id",
+  "name": "tool_name",
+  "input": "truncated_input (max 200 chars)",
+  "runtime": "copilot-sdk|claude-sdk",
+  "timestamp": "ISO 8601 UTC"
+}
+```
+
+### Tests
+- **18 new tests** in `tests/test_sdk_streaming_tools.py`:
+  - `TestCopilotSdkStreaming` (4 tests): streaming deltas, done sentinel, error paths, no-buffer
+  - `TestCopilotSdkToolCalls` (3 tests): tool start, command execute, start+complete lifecycle
+  - `TestClaudeSdkStreaming` (4 tests): text chunks, done sentinel, error, no-buffer
+  - `TestClaudeSdkToolCalls` (5 tests): ToolUseBlock, ToolResultBlock, error flag, multiple tools, session ID
+  - `TestToolEventStructure` (2 tests): required field validation for both runtimes
+- **47 existing SDK tests pass** (test_copilot_sdk_runtime.py + test_claude_sdk_runtime.py)
+- **1056 total tests pass**, 9 skipped, 0 failures
+
+
 ## [Issue #86] Bug Fix: claude-sdk Runtime Stalls on 2nd Turn
 **Status:** ✅ QA Approved (commit 4785965 on dev)
 

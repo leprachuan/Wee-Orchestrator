@@ -6392,6 +6392,9 @@ User Request:
         Uses the github-copilot-sdk package for direct API integration.
         Benefits over CLI: persistent client, ~100ms startup, streaming
         events, structured error handling, custom tool support.
+
+        Supports real-time streaming to WebUI SSE consumers and tool call
+        tracking for background task progress (Issue #87).
         """
         try:
             from copilot import CopilotClient
@@ -6419,6 +6422,10 @@ User Request:
         agent_dir = self.AGENTS.get(agent, self.AGENTS["orchestrator"])["path"]
         effective_timeout = timeout if timeout is not None else self.command_timeout
         channel = session_data.get("channel", "webui")
+
+        # Streaming infrastructure — push chunks to SSE consumers in real-time
+        stream_buffer = getattr(self, "_stream_buffers", {}).get(n8n_session_id)
+        _tool_call_counter = [0]
 
         # Build context prompt
         if resume and session_id:
@@ -6457,11 +6464,82 @@ User Request:
             collected_messages: list = []
 
             async with CopilotClient() as client:
-                # Event handler to collect assistant messages
+                # Event handler — streams chunks and detects tool calls
                 def on_event(event):
-                    if event.type == SessionEventType.ASSISTANT_MESSAGE:
+                    # ── Streaming deltas ──
+                    if event.type in (
+                        SessionEventType.ASSISTANT_STREAMING_DELTA,
+                        SessionEventType.ASSISTANT_MESSAGE_DELTA,
+                    ):
+                        delta_text = None
+                        if hasattr(event, "data"):
+                            if isinstance(event.data, str):
+                                delta_text = event.data
+                            elif hasattr(event.data, "content"):
+                                delta_text = str(event.data.content)
+                            elif hasattr(event.data, "delta"):
+                                delta_text = str(event.data.delta)
+                            elif hasattr(event.data, "text"):
+                                delta_text = str(event.data.text)
+                        if delta_text and stream_buffer:
+                            stream_buffer.push("chunk", delta_text)
+
+                    # ── Full assistant message ──
+                    elif event.type == SessionEventType.ASSISTANT_MESSAGE:
                         if hasattr(event, "data") and hasattr(event.data, "content"):
                             collected_messages.append(str(event.data.content))
+
+                    # ── Tool execution tracking ──
+                    elif event.type == SessionEventType.TOOL_EXECUTION_START:
+                        _tool_call_counter[0] += 1
+                        tool_name = "tool"
+                        tool_input = ""
+                        if hasattr(event, "data"):
+                            tool_name = getattr(event.data, "name", None) or getattr(event.data, "tool_name", None) or "tool"
+                            tool_input = str(getattr(event.data, "input", "") or getattr(event.data, "arguments", "") or "")
+                        tc_evt = {
+                            "event": "started",
+                            "id": f"tc_copilot-sdk_{_tool_call_counter[0]}",
+                            "name": str(tool_name),
+                            "input": tool_input[:200],
+                            "runtime": "copilot-sdk",
+                            "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                        }
+                        if stream_buffer:
+                            stream_buffer.push("tool_call", tc_evt)
+
+                    elif event.type == SessionEventType.TOOL_EXECUTION_COMPLETE:
+                        tool_name = "tool"
+                        if hasattr(event, "data"):
+                            tool_name = getattr(event.data, "name", None) or getattr(event.data, "tool_name", None) or "tool"
+                        tc_evt = {
+                            "event": "completed",
+                            "id": f"tc_copilot-sdk_{_tool_call_counter[0]}",
+                            "name": str(tool_name),
+                            "input": "",
+                            "runtime": "copilot-sdk",
+                            "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                        }
+                        if stream_buffer:
+                            stream_buffer.push("tool_call", tc_evt)
+
+                    elif event.type == SessionEventType.COMMAND_EXECUTE:
+                        _tool_call_counter[0] += 1
+                        cmd_text = ""
+                        if hasattr(event, "data"):
+                            cmd_text = str(getattr(event.data, "command", "") or getattr(event.data, "text", "") or event.data)
+                        tc_evt = {
+                            "event": "detected",
+                            "id": f"tc_copilot-sdk_{_tool_call_counter[0]}",
+                            "name": "shell",
+                            "input": cmd_text[:200],
+                            "runtime": "copilot-sdk",
+                            "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                        }
+                        if stream_buffer:
+                            stream_buffer.push("tool_call", tc_evt)
+
+                    # ── Errors ──
                     elif event.type == SessionEventType.SESSION_ERROR:
                         if hasattr(event, "data"):
                             err_msg = str(getattr(event.data, "message", event.data))
@@ -6495,6 +6573,8 @@ User Request:
                         )
                         session = await client.create_session(**session_kwargs)
                 except Exception as sess_err:
+                    if stream_buffer:
+                        stream_buffer.push("done", "")
                     return f"Error (Copilot SDK session): {type(sess_err).__name__}: {sess_err}"
 
                 try:
@@ -6513,11 +6593,17 @@ User Request:
                     # Extract response from result event
                     if result_event and hasattr(result_event, "data"):
                         if hasattr(result_event.data, "content"):
-                            return str(result_event.data.content)
+                            result_text = str(result_event.data.content)
+                            if stream_buffer:
+                                stream_buffer.push("done", result_text)
+                            return result_text
 
                     # Fall back to collected messages from event handler
                     if collected_messages:
-                        return "\n".join(collected_messages)
+                        result_text = "\n".join(collected_messages)
+                        if stream_buffer:
+                            stream_buffer.push("done", result_text)
+                        return result_text
 
                     # Fall back to full message history
                     messages = session.get_messages()
@@ -6529,8 +6615,13 @@ User Request:
                     if assistant_msgs:
                         last = assistant_msgs[-1]
                         if hasattr(last, "data") and hasattr(last.data, "content"):
-                            return str(last.data.content)
+                            result_text = str(last.data.content)
+                            if stream_buffer:
+                                stream_buffer.push("done", result_text)
+                            return result_text
 
+                    if stream_buffer:
+                        stream_buffer.push("done", "")
                     return ""
                 finally:
                     try:
@@ -6542,6 +6633,8 @@ User Request:
             output = asyncio.run(_run_sdk())
         except Exception as e:
             print(f"[SDK] Error: {type(e).__name__}: {e}", file=sys.stderr)
+            if stream_buffer:
+                stream_buffer.push("done", "")
             return f"Error (Copilot SDK): {type(e).__name__}: {e}"
 
         return self.strip_metadata(output, "copilot-sdk")
@@ -6564,6 +6657,9 @@ User Request:
         Benefits over CLI: in-process custom tools, subagents, session
         forking, streaming events, structured error handling.
 
+        Supports real-time streaming to WebUI SSE consumers and tool call
+        tracking via ToolUseBlock/ToolResultBlock detection (Issue #87).
+
         Requires Claude Pro, Team, or Enterprise subscription.
         User must run `claude login` to authenticate first.
         """
@@ -6574,6 +6670,8 @@ User Request:
                 AssistantMessage,
                 TextBlock,
                 ResultMessage,
+                ToolUseBlock,
+                ToolResultBlock,
             )
         except ImportError:
             return (
@@ -6600,6 +6698,10 @@ User Request:
         effective_timeout = timeout if timeout is not None else self.command_timeout
 
         channel = session_data.get("channel", "api")
+
+        # Streaming infrastructure — push chunks to SSE consumers in real-time
+        stream_buffer = getattr(self, "_stream_buffers", {}).get(n8n_session_id)
+        _tool_call_counter = [0]
 
         # Build context prompt
         sdk_session_id = session_id if resume and session_id else None
@@ -6671,6 +6773,32 @@ User Request:
                         for block in message.content:
                             if isinstance(block, TextBlock):
                                 collected_text.append(block.text)
+                                if stream_buffer:
+                                    stream_buffer.push("chunk", block.text)
+                            elif isinstance(block, ToolUseBlock):
+                                _tool_call_counter[0] += 1
+                                tc_evt = {
+                                    "event": "detected",
+                                    "id": block.id or f"tc_claude-sdk_{_tool_call_counter[0]}",
+                                    "name": block.name or "tool",
+                                    "input": str(block.input)[:200] if block.input else "",
+                                    "runtime": "claude-sdk",
+                                    "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                                }
+                                if stream_buffer:
+                                    stream_buffer.push("tool_call", tc_evt)
+                            elif isinstance(block, ToolResultBlock):
+                                tc_evt = {
+                                    "event": "completed",
+                                    "id": block.tool_use_id or f"tc_claude-sdk_{_tool_call_counter[0]}",
+                                    "name": "tool",
+                                    "input": str(block.content)[:200] if block.content else "",
+                                    "is_error": getattr(block, "is_error", False),
+                                    "runtime": "claude-sdk",
+                                    "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                                }
+                                if stream_buffer:
+                                    stream_buffer.push("tool_call", tc_evt)
                     elif isinstance(message, ResultMessage):
                         if message.session_id:
                             self.update_session_field(n8n_session_id, "session_id", message.session_id)
@@ -6678,10 +6806,14 @@ User Request:
                         for block in getattr(message, "content", []):
                             if hasattr(block, "text"):
                                 collected_text.append(block.text)
+                                if stream_buffer:
+                                    stream_buffer.push("chunk", block.text)
 
             except Exception as e:
                 error_type = type(e).__name__
                 error_msg = str(e).lower()
+                if stream_buffer:
+                    stream_buffer.push("done", "")
                 if "clinotfound" in error_type.lower():
                     return (
                         "Error: Claude Code CLI not found. "
@@ -6700,6 +6832,8 @@ User Request:
                     return f"Error (Claude Agent SDK): {error_type}: {e}"
 
             output = "\n".join(collected_text)
+            if stream_buffer:
+                stream_buffer.push("done", output)
             if not output.strip():
                 return "Error: No response received from Claude Agent SDK"
             return output
@@ -6720,12 +6854,16 @@ User Request:
             else:
                 output = asyncio.run(_run_sdk())
         except (asyncio.TimeoutError, concurrent.futures.TimeoutError):
+            if stream_buffer:
+                stream_buffer.push("done", "")
             return f"Error: Claude Agent SDK timed out after {effective_timeout}s"
         except Exception as e:
             print(
                 f"[Claude-Agent-SDK] Error: {type(e).__name__}: {e}",
                 file=sys.stderr,
             )
+            if stream_buffer:
+                stream_buffer.push("done", "")
             return f"Error (Claude Agent SDK): {type(e).__name__}: {e}"
 
         return self.strip_metadata(output, "claude")

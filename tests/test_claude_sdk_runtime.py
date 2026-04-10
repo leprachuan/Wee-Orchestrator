@@ -35,6 +35,17 @@ _ResultMessage = type("ResultMessage", (), {
     "__init__": lambda self, session_id="": setattr(self, "session_id", session_id),
 })
 
+_ToolUseBlock = type("ToolUseBlock", (), {
+    "__init__": lambda self, id="", name="", input=None: (
+        setattr(self, "id", id) or setattr(self, "name", name) or setattr(self, "input", input)
+    ),
+})
+_ToolResultBlock = type("ToolResultBlock", (), {
+    "__init__": lambda self, tool_use_id="", content=None, is_error=False: (
+        setattr(self, "tool_use_id", tool_use_id) or setattr(self, "content", content) or setattr(self, "is_error", is_error)
+    ),
+})
+
 _ClaudeAgentOptions = type("ClaudeAgentOptions", (), {
     "__init__": lambda self, **kw: self.__dict__.update(kw),
 })
@@ -53,6 +64,8 @@ def _build_fake_module(query_fn=None):
     mod.AssistantMessage = _AssistantMessage
     mod.TextBlock = _TextBlock
     mod.ResultMessage = _ResultMessage
+    mod.ToolUseBlock = _ToolUseBlock
+    mod.ToolResultBlock = _ToolResultBlock
     return mod
 
 
