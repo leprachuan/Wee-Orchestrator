@@ -1,5 +1,43 @@
 # Changelog
 
+## [Issue #94] Bug: claude-sdk elevated mode broken — args swapped
+**Status:** ✅ QA Approved (Commit: ea8495d)
+
+### Summary
+Identified and verified regression test coverage for a bug where `run_claude_sdk()` passed arguments to `_resolve_permission_mode()` in incorrect order (swapped args). The bug itself was already fixed in Issue #91 (commit a9ccce4), but this issue ensures regression prevention with targeted test coverage.
+
+### Bug Details
+In `run_claude_sdk()`, `_resolve_permission_mode()` was called with arguments swapped: `(mode, session_data)` instead of `(session_data, mode)`.
+
+**Function signature:** `_resolve_permission_mode(self, session_data: dict, prompt_mode: str)`
+
+With args swapped, the `session_data` dict landed in `prompt_mode`. The check `if prompt_mode != "restricted"` evaluated to True (dict != string), so the function immediately returned the dict. Downstream, `mode == "elevated"` always failed (dict != string), so `sdk_permission_mode` was never set to `bypassPermissions`. Elevated sessions via claude-sdk always fell through to default mode — bash tool still prompted for approvals.
+
+### Fix & Verification
+**Line 6748 in agent_manager.py:** `mode = self._resolve_permission_mode(session_data, mode)`
+
+The bug was already fixed in Issue #91 (commit a9ccce4) as a side effect of comprehensive permission mode overhaul. This issue adds targeted regression tests to prevent reintroduction.
+
+### Tests
+- `tests/test_issue94_claude_sdk_elevated.py` — **8/8 new tests pass**
+  - Swapped args return dict (demonstrating the bug)
+  - Correct args always return string
+  - Elevated mode maps to `bypassPermissions`
+  - Background task elevated permissions resolve correctly
+  - Return type is always string across all permission combinations
+
+### Test Results
+- **1111 total tests pass**, 9 skipped, 0 failures
+- All call sites verified (8 call sites confirmed correct arg order)
+- CHANGELOG entry accurate and complete
+- No regressions in existing permission tests
+
+### PR Status
+- PR #98 approved
+- Issue #94 closed
+
+---
+
 ## [Issue #93] Bug Fix: Add Secrets Management API Endpoints for WebUI Unlock
 **Status:** ✅ QA Approved (Commit: 3f351d3)
 

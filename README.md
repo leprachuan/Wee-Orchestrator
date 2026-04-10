@@ -548,7 +548,7 @@ All AI runtimes in this system are configured with **full tool access** to enabl
 - **Streaming:** Real-time text chunks pushed to WebUI SSE consumers via `_StreamBuffer`
 - **Tool Calls:** `ToolUseBlock`/`ToolResultBlock` detection emits standardized tool_call events
 - **Usage:** `/runtime set claude-agent-sdk`
-- **Issues:** [#77](../../issues/77), [#87](../../issues/87)
+- **Issues:** [#77](../../issues/77), [#87](../../issues/87), [#91](../../issues/91), [#94](../../issues/94)
 
 #### GitHub Copilot SDK (Python)
 - **Package:** `github-copilot-sdk>=0.1.0` (install via `pip install github-copilot-sdk`)
@@ -558,7 +558,7 @@ All AI runtimes in this system are configured with **full tool access** to enabl
   - Tool call tracking via `TOOL_EXECUTION_START`/`COMPLETE` and `COMMAND_EXECUTE` events
   - Session resumption and structured error handling
 - **Usage:** `/runtime set copilot-sdk`
-- **Issues:** [#76](../../issues/76), [#87](../../issues/87)
+- **Issues:** [#76](../../issues/76), [#87](../../issues/87), [#91](../../issues/91)
 
 ### Security Considerations
 
