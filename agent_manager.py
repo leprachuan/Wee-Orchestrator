@@ -751,10 +751,6 @@ def check_runtime_available(runtime: str) -> bool:
     Returns:
         True if the runtime is available, False otherwise
     """
-    # 'auto' is always available
-    if runtime == 'auto':
-        return True
-    
     # Map runtime IDs to their executable/module names
     runtime_map = {
         'copilot': 'copilot',
@@ -807,7 +803,6 @@ def get_available_runtimes() -> List[Dict[str, str]]:
         List of runtime dicts with 'id' and 'label' keys
     """
     all_runtimes = [
-        {"id": "auto", "label": "auto"},
         {"id": "copilot", "label": "copilot"},
         {"id": "copilot-sdk", "label": "copilot-sdk", "icon": "🤖"},
         {"id": "opencode", "label": "opencode"},
@@ -1811,7 +1806,7 @@ class SessionManager:
 
 **Runtime Management:**
    • /runtime list - Show available runtimes
-   • /runtime set (auto|copilot|copilot-sdk|opencode|claude|claude-sdk|gemini|codex|devin|cursor) - Switch runtime
+   • /runtime set (copilot|copilot-sdk|opencode|claude|claude-sdk|gemini|codex|devin|cursor) - Switch runtime
    • /runtime current - Show current runtime
 
 **Model Management:**
