@@ -1,5 +1,28 @@
 # Changelog
 
+## [Issue #84] Bug Fix: Remove Non-Functional Auto Runtime
+**Status:** ✅ Fixed (commit 266bee9 on dev)
+
+### Summary
+Removed the non-functional `auto` runtime that appeared in the UI runtime selector but had no execution handler. Selecting it would produce "Unknown runtime auto" errors.
+
+### Changes
+- **agent_manager.py:**
+  - Removed `auto` from `get_available_runtimes()` list
+  - Removed early-return bypass in `check_runtime_available()` that always returned True for `auto`
+  - Removed `auto` from `/runtime set` help text
+- **tests/test_auto_runtime_removed.py:** Added 4 regression tests:
+  - Verify `auto` not in available runtimes list
+  - Verify `check_runtime_available("auto")` returns False
+  - Verify `/runtime set auto` returns error
+  - Verify all listed runtimes have valid handlers
+
+### Impact
+- Users no longer see a broken `auto` option in the runtime selector
+- API `/api/v1/runtimes` no longer includes `auto`
+- No effect on the Cursor model `auto` (model selector, not runtime)
+
+
 
 ## [Issue #83] Feature: Display Response Generation Time
 **Status:** ✅ Implemented (commit 4da4529 on dev)
