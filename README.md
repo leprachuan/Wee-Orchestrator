@@ -1439,6 +1439,7 @@ Wee-Orchestrator ships a browser-based chat interface served at `/ui` by the API
 - 🍀 **Glassmorphism design** — frosted-glass panels, animated background blobs, responsive layout
 - 💬 **Chat panel** — markdown rendering, syntax highlighting, image display (no overflow), clickable meta pills
 - ⚡ **Streaming responses** — AI output streams to the browser in real-time via SSE; a blinking cursor shows progress and the bubble is replaced with fully-rendered markdown when complete
+- ⏱️ **Response generation timing** — each assistant message displays how long it took to generate (format: "⏱️ Generated in X.Xs"), helping you understand performance across different runtimes
 - 👤 **@username display** — shows `@handle` instead of raw numeric IDs in message headers
 - 🔍 **Typeahead** — `/command` highlighting and autocomplete in the input box
 - 📸 **File uploads** — drag-and-drop or click to attach images and files to messages
