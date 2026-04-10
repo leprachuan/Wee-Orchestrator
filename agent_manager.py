@@ -13310,6 +13310,82 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         except Exception as e:
             raise HTTPException(status_code=500, detail=str(e))
 
+    # --- Keyring Status & Unlock API (Issue #93) ---
+
+    @app.get("/api/v1/secrets/keyring-status")
+    async def keyring_status(request: Request):
+        """Return the current keyring / secret-store lock status."""
+        await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                sys.executable, _SECRET_TOOL_PATH, "status",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, stderr = await proc.communicate()
+            output = stdout.decode().strip()
+            if output:
+                try:
+                    return json.loads(output)
+                except json.JSONDecodeError:
+                    pass
+            return {"status": "unavailable",
+                    "message": output or stderr.decode().strip() or "Unknown error"}
+        except Exception as e:
+            return {"status": "error", "message": str(e)}
+
+    @app.post("/api/v1/secrets/keyring-unlock")
+    async def keyring_unlock(request: Request):
+        """Attempt to unlock the keyring with a user-supplied password.
+
+        The password is passed to the secret_tool subprocess via stdin
+        and is never logged or stored.
+        """
+        await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        body = await request.json()
+        password = body.get("password", "")
+        if not password:
+            raise HTTPException(status_code=400, detail="password is required")
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                sys.executable, _SECRET_TOOL_PATH, "unlock",
+                stdin=asyncio.subprocess.PIPE,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, stderr = await proc.communicate(
+                input=f"{password}\n".encode()
+            )
+            output = stdout.decode().strip()
+            if proc.returncode == 0 and output:
+                try:
+                    result = json.loads(output)
+                    return result
+                except json.JSONDecodeError:
+                    pass
+                return {"status": "success"}
+            detail = output or stderr.decode().strip() or "Unlock failed"
+            try:
+                err = json.loads(detail)
+                detail = err.get("message", detail)
+            except Exception:
+                pass
+            raise HTTPException(status_code=422, detail=detail)
+        except HTTPException:
+            raise
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
+
     # --- Session Permissions API ---
     @app.patch("/api/v1/sessions/{session_id}/settings")
     async def update_session_settings(
