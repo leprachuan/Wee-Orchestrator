@@ -10587,6 +10587,88 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 f"[API] Notification emit failed for {task_id}: {exc}", file=sys.stderr
             )
 
+    def _run_command_task(
+        task_id: str,
+        command: str,
+        working_dir: str,
+        timeout: int,
+        job_id: str,
+        job_name: str,
+        notify: bool = False,
+    ):
+        """Blocking function that runs a command-mode scheduled task directly via
+        subprocess.  Called from a thread pool executor — no LLM involved.
+
+        Mirrors the logic of scheduler/executor.py _execute_command_mode() but
+        integrates with the background-task manager so the result appears in
+        the Tasks panel with stdout/stderr output.
+        """
+        import subprocess as _sp
+
+        logger.info(
+            f"[Command Mode] Run Now executing job {job_id}: cmd={command[:80]}..."
+        )
+
+        try:
+            result = _sp.run(
+                command,
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+                shell=True,
+                cwd=working_dir,
+            )
+
+            if result.returncode == 0:
+                output = result.stdout.strip() or "(no output)"
+                bg_task_mgr.complete_task(task_id, output)
+                logger.info(
+                    f"[Command Mode] Run Now job {job_id} completed successfully"
+                )
+            else:
+                error_msg = (
+                    result.stderr
+                    or result.stdout
+                    or f"Command failed with exit code {result.returncode}"
+                )
+                bg_task_mgr.fail_task(task_id, error_msg)
+                logger.error(
+                    f"[Command Mode] Run Now job {job_id} failed: exit code {result.returncode}"
+                )
+        except _sp.TimeoutExpired:
+            bg_task_mgr.fail_task(
+                task_id, f"Command timed out after {timeout}s"
+            )
+            logger.error(
+                f"[Command Mode] Run Now job {job_id} timed out after {timeout}s"
+            )
+        except Exception as e:
+            bg_task_mgr.fail_task(task_id, str(e))
+            logger.error(
+                f"[Command Mode] Run Now job {job_id} exception: {e}"
+            )
+
+        # Save result to scheduler logs/results for consistency
+        try:
+            sched = _get_scheduler()
+            task_rec = bg_task_mgr.get_task(task_id)
+            success = task_rec and task_rec.get("status") == "completed"
+            sched._save_result(
+                job_id,
+                job_name,
+                success=success,
+                output=(task_rec or {}).get("final_response", ""),
+                error=(task_rec or {}).get("error", ""),
+            )
+            status_label = "succeeded" if success else "failed"
+            sched._log_job(
+                job_id, f"Run Now (command mode) {status_label}"
+            )
+        except Exception as exc:
+            logger.warning(
+                f"[Command Mode] Could not save scheduler result for {job_id}: {exc}"
+            )
+
     def _run_background_task(
         task_id: str,
         session_id: str,
@@ -12011,17 +12093,6 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             timeout = int(job.get("timeout") or 300)
             mode = job.get("mode", "ai")
 
-            if mode == "command":
-                # Command mode: wrap the shell command as the task text
-                prompt = f"[Scheduled command] {task}"
-            else:
-                prompt = task or f"Run scheduled job: {job.get('name', job_id)}"
-
-            # Resolve permission mode from job config
-            perm_mode = job.get("permission_mode", "restricted")
-            if perm_mode not in ("elevated", "restricted", "sandboxed"):
-                perm_mode = "restricted"
-
             # Use the triggering user's identity/channel for the bg task
             channel = user.get("channel", "api")
             identity = user.get("identity", "scheduler")
@@ -12029,47 +12100,95 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             task_id = f"sched_{job_id}_{str(uuid4())[:6]}"
             session_id = str(uuid4())
 
-            bg_task_mgr.create_task(
-                task_id=task_id,
-                session_id=session_id,
-                user_identity=identity,
-                channel=channel,
-                agent=agent,
-                runtime=runtime,
-                model=model,
-                prompt=prompt,
-                status="running",
-                timeout=timeout,
-                notify=job.get("notify", False),
-            )
+            if mode == "command":
+                # ---- Command mode: execute shell command directly (no LLM) ----
+                working_dir = job.get("working_dir", "/opt")
 
-            loop = asyncio.get_running_loop()
-            loop.run_in_executor(
-                bg_executor,
-                _run_background_task,
-                task_id,
-                session_id,
-                prompt,
-                agent,
-                runtime,
-                model,
-                channel,
-                identity,
-                timeout,
-                job.get("notify", False),
-                perm_mode,
-            )
+                bg_task_mgr.create_task(
+                    task_id=task_id,
+                    session_id=session_id,
+                    user_identity=identity,
+                    channel=channel,
+                    agent="command",
+                    runtime="shell",
+                    model="n/a",
+                    prompt=task,
+                    status="running",
+                    timeout=timeout,
+                    notify=job.get("notify", False),
+                )
 
-            return {
-                "success": True,
-                "task_id": task_id,
-                "job_id": job_id,
-                "agent": agent,
-                "runtime": runtime,
-                "permission_mode": perm_mode,
-                "status": "running",
-                "message": f"Job '{job.get('name', job_id)}' is now running",
-            }
+                loop = asyncio.get_running_loop()
+                loop.run_in_executor(
+                    bg_executor,
+                    _run_command_task,
+                    task_id,
+                    task,
+                    working_dir,
+                    timeout,
+                    job_id,
+                    job.get("name", job_id),
+                    job.get("notify", False),
+                )
+
+                return {
+                    "success": True,
+                    "task_id": task_id,
+                    "job_id": job_id,
+                    "mode": "command",
+                    "status": "running",
+                    "message": f"Command job '{job.get('name', job_id)}' is now running (direct shell execution)",
+                }
+            else:
+                # ---- AI mode: dispatch to LLM background task ----
+                prompt = task or f"Run scheduled job: {job.get('name', job_id)}"
+
+                # Resolve permission mode from job config
+                perm_mode = job.get("permission_mode", "restricted")
+                if perm_mode not in ("elevated", "restricted", "sandboxed"):
+                    perm_mode = "restricted"
+
+                bg_task_mgr.create_task(
+                    task_id=task_id,
+                    session_id=session_id,
+                    user_identity=identity,
+                    channel=channel,
+                    agent=agent,
+                    runtime=runtime,
+                    model=model,
+                    prompt=prompt,
+                    status="running",
+                    timeout=timeout,
+                    notify=job.get("notify", False),
+                )
+
+                loop = asyncio.get_running_loop()
+                loop.run_in_executor(
+                    bg_executor,
+                    _run_background_task,
+                    task_id,
+                    session_id,
+                    prompt,
+                    agent,
+                    runtime,
+                    model,
+                    channel,
+                    identity,
+                    timeout,
+                    job.get("notify", False),
+                    perm_mode,
+                )
+
+                return {
+                    "success": True,
+                    "task_id": task_id,
+                    "job_id": job_id,
+                    "agent": agent,
+                    "runtime": runtime,
+                    "permission_mode": perm_mode,
+                    "status": "running",
+                    "message": f"Job '{job.get('name', job_id)}' is now running",
+                }
 
         @app.get("/api/v1/scheduler/jobs/{job_id}/results")
         async def get_scheduler_job_results(
