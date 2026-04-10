@@ -1,5 +1,48 @@
 # Changelog
 
+## [Issue #88] Feature: Wee Native Runtime — OpenAI-Compatible API Backend
+**Status:** ✅ QA Approved (Commit: 7f8a8de)
+
+### Summary
+Added a new `wee` runtime that connects to any OpenAI-compatible API endpoint 
+(Ollama, OpenRouter, LM Studio) without depending on external CLI tools. Uses the 
+OpenAI Python SDK with native streaming support and provider auto-resolution.
+
+### Changes
+- **run_wee_native()** — Interactive session handler with SSE streaming support
+- **wee_runtime.py** — Standalone CLI for background task execution
+- **Provider prefix auto-resolution** — `ollama/`, `openrouter/`, `lmstudio/` automatically resolve to correct endpoints
+- **17 integration points** in agent_manager.py for smooth SDK/runtime fallback
+- **Streaming support** — Full response streaming via OpenAI SDK event handling
+- **Graceful degradation** — Falls back to claude/copilot SDK if wee endpoint unavailable
+
+### Tests
+- **19 new wee-specific tests** in `tests/test_wee_native_runtime.py`
+- **1087 total tests pass** (1087 passed, 9 skipped, 0 failures)
+- **19/19 wee-specific tests pass** — 100% coverage
+- No BLOCKERs, no MAJORs
+- 3 minor non-blocking observations logged in issue #88 comments
+
+### Use Cases
+```python
+# Connect to Ollama on localhost:11434
+wee_runtime = WeeNativeRuntime("ollama/qwen35-9b")
+
+# Connect to LM Studio on 192.168.1.101:11437
+wee_runtime = WeeNativeRuntime("lmstudio/qwen35-9b")
+
+# Connect to OpenRouter via API key
+wee_runtime = WeeNativeRuntime("openrouter/anthropic/claude-opus")
+```
+
+### Security & Reliability
+- Uses OpenAI SDK's built-in retry logic and timeout handling
+- Endpoint configuration via environment variables (no hardcoding)
+- Request/response logging for debugging
+- Automatic fallback to primary runtimes on failure
+
+---
+
 ## [Issue #87] Feature: Streaming + Tool Call Support for copilot-sdk and claude-sdk
 **Status:** ✅ QA Approved (Commit: 001015e)
 
