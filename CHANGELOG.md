@@ -1,7 +1,7 @@
 # Changelog
 
 ## [Issue #86] Bug Fix: claude-sdk Runtime Stalls on 2nd Turn
-**Status:** ✅ Fixed (pending QA)
+**Status:** ✅ QA Approved (commit 4785965 on dev)
 
 ### Root Cause
 Multi-turn conversations used `ClaudeSDKClient.receive_messages()` — an **infinite** async
