@@ -1,7 +1,7 @@
 # Changelog
 
 ## [Issue #87] Feature: Streaming + Tool Call Support for copilot-sdk and claude-sdk
-**Status:** 🔄 In QA Review
+**Status:** ✅ QA Approved (Commit: 001015e)
 
 ### Summary
 Added real-time streaming response delivery and tool call event tracking for both
