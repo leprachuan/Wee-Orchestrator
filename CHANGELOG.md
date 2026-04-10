@@ -1,5 +1,36 @@
 # Changelog
 
+## [Issue #94] Bug: claude-sdk elevated mode broken — args swapped
+**Status:** Fix verified — 8 regression tests, already fixed by Issue #91 (commit a9ccce4)
+
+### Bug
+In `run_claude_sdk()`, `_resolve_permission_mode()` was called with arguments
+swapped: `(mode, session_data)` instead of `(session_data, mode)`.
+
+**Function signature:** `_resolve_permission_mode(self, session_data: dict, prompt_mode: str)`
+
+With args swapped, the `session_data` dict landed in `prompt_mode`. The check
+`if prompt_mode != "restricted"` evaluated to True (dict != string), so the
+function immediately returned the dict. Downstream, `mode == "elevated"` always
+failed (dict != string), so `sdk_permission_mode` was never set to
+`bypassPermissions`. Elevated sessions via claude-sdk always fell through to
+default mode — bash tool still prompted for approvals.
+
+### Fix
+**Line ~6748 (dev):** `mode = self._resolve_permission_mode(session_data, mode)`
+
+Already fixed on dev by commit a9ccce4 (Issue #91). This issue adds targeted
+regression tests to prevent reintroduction.
+
+### Tests
+- `tests/test_issue94_claude_sdk_elevated.py` — 8 tests covering:
+  - Swapped args return dict (demonstrating the bug)
+  - Correct args always return string
+  - Elevated mode maps to `bypassPermissions`
+  - Background task elevated permissions resolve correctly
+  - Return type is always string across all permission combinations
+
+
 ## [Issue #88] Feature: Wee Native Runtime — OpenAI-compatible API backend
 **Status:** Implementation Complete — 19 new tests, 1087 total pass
 
