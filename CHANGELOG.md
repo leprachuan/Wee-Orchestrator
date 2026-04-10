@@ -1,5 +1,38 @@
 # Changelog
 
+## [Issue #93] Bug Fix: Add Secrets Management API Endpoints for WebUI Unlock
+**Status:** ✅ QA Approved (Commit: 3f351d3)
+
+### Summary
+Added API endpoints to detect and unlock GNOME Keyring secret store from the WebUI. When the keyring is locked, users can now use the WebUI to check status and unlock it, instead of failing silently on secret retrieval.
+
+### Changes
+- **GET /api/v1/secrets/keyring-status** — Check if GNOME Keyring is locked
+  - Returns: `{"locked": boolean, "message": "string"}`
+  - Status codes: 200 (success), 500 (backend error)
+  - Example: `curl -H "Authorization: Bearer <token>" https://127.0.0.1:8000/api/v1/secrets/keyring-status`
+
+- **POST /api/v1/secrets/keyring-unlock** — Unlock GNOME Keyring with password
+  - Request body: `{"password": "string"}`
+  - Returns: `{"success": boolean, "message": "string"}`
+  - Status codes: 200 (success/already unlocked), 401 (wrong password), 500 (backend error)
+  - Example: `curl -X POST -H "Authorization: Bearer <token>" -H "Content-Type: application/json" -d '{"password":"mypassword"}' https://127.0.0.1:8000/api/v1/secrets/keyring-unlock`
+
+- **README.md updated** with full endpoint documentation including schemas, curl examples, and security notes
+
+### Tests
+- **26/26 tests pass** across all suites
+- Full backwards compatibility — existing secret retrieval unchanged
+- Endpoint-specific tests for both locked/unlocked states
+
+### QA Notes
+- Round 1 MINOR (missing API documentation) — **RESOLVED** in commit 3f351d3
+- README now includes complete endpoint docs with schemas, status codes, examples
+- Backend implementation notes: Uses `python-keyring` + `gnome-keyring-daemon` via `secretstorage` library
+- Security: Password transmitted over HTTPS only, no logging of credentials
+
+---
+
 ## [Issue #88] Feature: Wee Native Runtime — OpenAI-Compatible API Backend
 **Status:** ✅ QA Approved (Commit: 7f8a8de)
 
