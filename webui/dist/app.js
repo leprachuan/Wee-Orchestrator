@@ -282,13 +282,15 @@ function hideError(id) { hide($(id)); }
 
 // ─── Runtime Brand Icons ──────────────────────────────────────────────────────
 const RUNTIME_ICONS = {
-  claude:   '/ui/assets/runtime-icons/claude.svg',
-  copilot:  '/ui/assets/runtime-icons/copilot.svg',
-  gemini:   '/ui/assets/runtime-icons/gemini.svg',
-  opencode: '/ui/assets/runtime-icons/opencode.svg',
-  codex:    '/ui/assets/runtime-icons/openai.svg',
-  devin:    '/ui/assets/runtime-icons/devin.svg',
-  cursor:   '/ui/assets/runtime-icons/cursor.svg',
+  claude:      '/ui/assets/runtime-icons/claude.svg',
+  'claude-sdk': '/ui/assets/runtime-icons/claude.svg',
+  copilot:     '/ui/assets/runtime-icons/copilot.svg',
+  'copilot-sdk': '/ui/assets/runtime-icons/copilot.svg',
+  gemini:      '/ui/assets/runtime-icons/gemini.svg',
+  opencode:    '/ui/assets/runtime-icons/opencode.svg',
+  codex:       '/ui/assets/runtime-icons/openai.svg',
+  devin:       '/ui/assets/runtime-icons/devin.svg',
+  cursor:      '/ui/assets/runtime-icons/cursor.svg',
 };
 
 function runtimeIconHTML(runtime, size = 14) {
@@ -484,15 +486,28 @@ const PILL_OPTIONS = {
   },
   'meta-runtime': {
     label: 'Switch Runtime',
-    options: [
-      { label: `${runtimeIconHTML('claude')}claude`,         cmd: '/runtime set claude' },
-      { label: `${runtimeIconHTML('copilot')}copilot`,       cmd: '/runtime set copilot' },
-      { label: `${runtimeIconHTML('gemini')}gemini`,         cmd: '/runtime set gemini' },
-      { label: `${runtimeIconHTML('opencode')}opencode`,     cmd: '/runtime set opencode' },
-      { label: `${runtimeIconHTML('codex')}codex`,           cmd: '/runtime set codex' },
-      { label: `${runtimeIconHTML('devin')}devin`,           cmd: '/runtime set devin' },
-      { label: `${runtimeIconHTML('cursor')}cursor`,         cmd: '/runtime set cursor' },
-    ],
+    options: null,   // null = dynamically loaded
+    dynamicLoad: async () => {
+      try {
+        const data = await apiRequest('GET', '/runtimes');
+        const opts = (data.runtimes || []).map(r => ({
+          label: `${runtimeIconHTML(r.id)}${r.label}`,
+          cmd: `/runtime set ${r.id}`,
+        }));
+        return opts;
+      } catch (e) {
+        // Fallback to basic runtimes if API fails
+        return [
+          { label: `${runtimeIconHTML('claude')}claude`,         cmd: '/runtime set claude' },
+          { label: `${runtimeIconHTML('copilot')}copilot`,       cmd: '/runtime set copilot' },
+          { label: `${runtimeIconHTML('gemini')}gemini`,         cmd: '/runtime set gemini' },
+          { label: `${runtimeIconHTML('opencode')}opencode`,     cmd: '/runtime set opencode' },
+          { label: `${runtimeIconHTML('codex')}codex`,           cmd: '/runtime set codex' },
+          { label: `${runtimeIconHTML('devin')}devin`,           cmd: '/runtime set devin' },
+          { label: `${runtimeIconHTML('cursor')}cursor`,         cmd: '/runtime set cursor' },
+        ];
+      }
+    },
   },
   'meta-model': {
     label: 'Switch Model',
@@ -1900,7 +1915,8 @@ async function sendMessage() {
   hideCommandDropdown();
 
   STATE.isProcessing = true;
-  STATE.sessionStreams[STATE.currentSessionId] = { isProcessing: true, query };
+  const sendStartTime = performance.now();
+  STATE.sessionStreams[STATE.currentSessionId] = { isProcessing: true, query, startTime: sendStartTime };
   showTyping();
   try {
     const result = await sendMessageStreaming(query, STATE.currentSessionId);
@@ -2135,6 +2151,11 @@ async function sendMessageStreaming(query, sessionId) {
           } else if (evt.type === 'done') {
             // Stop all remaining tool spinners
             cleanupAllToolSpinners();
+            // Calculate response timing
+            const sendEndTime = performance.now();
+            const sessionData = STATE.sessionStreams[sessionId];
+            const elapsedMs = sendEndTime - (sessionData?.startTime || sendEndTime);
+            const elapsedSec = elapsedMs / 1000;
             // Use accumulated streaming text when available (captures all
             // turns in multi-tool responses); fall back to done payload.
             const finalContent = rawText.trim()
@@ -2143,11 +2164,16 @@ async function sendMessageStreaming(query, sessionId) {
             if (streamBubble) {
               streamBubble.classList.remove('streaming');
               applyMarkdownToBubble(streamBubble, finalContent);
+              // Add timing indicator
+              const timingDiv = document.createElement('div');
+              timingDiv.className = 'message-timing';
+              timingDiv.textContent = `⏱️ Generated in ${elapsedSec.toFixed(1)}s`;
+              streamBubble.appendChild(timingDiv);
               streamBubble.appendChild(createTtsButton(streamBubble));
               scrollToBottom();
             } else {
               // Command/no-chunk path: render fresh bubble
-              await renderMessage('assistant', finalContent, []);
+              await renderMessage('assistant', finalContent, [], elapsedSec);
             }
             return evt;  // caller can read runtime/model
 
@@ -2488,7 +2514,7 @@ async function loadEarlierMessages() {
   }
 }
 
-async function renderMessage(role, content, files = []) {
+async function renderMessage(role, content, files = [], timing = null) {
   hide($('empty-state'));
 
   const container = $('messages');
@@ -2542,6 +2568,14 @@ async function renderMessage(role, content, files = []) {
 
   // Make file paths clickable in all messages
   if (typeof linkifyFilePaths === 'function') linkifyFilePaths(bubble);
+
+  // Add timing indicator for assistant messages
+  if (role === 'assistant' && timing) {
+    const timingDiv = document.createElement('div');
+    timingDiv.className = 'message-timing';
+    timingDiv.textContent = `⏱️ Generated in ${timing.toFixed(1)}s`;
+    bubble.appendChild(timingDiv);
+  }
 
   // Add TTS play button for assistant messages
   if (role === 'assistant') {

@@ -1,0 +1,990 @@
+2026-04-03 23:11:27 [INFO] Creating background task: agent=research, runtime=copilot, model=claude-haiku-4.5, session=session-1
+2026-04-03 23:11:27 [INFO] Task bg_abc123 verified: status=running
+2026-04-03 23:11:27 [INFO] Creating background task: agent=research, runtime=copilot, model=claude-haiku-4.5, session=session-1
+2026-04-03 23:11:27 [ERROR] Failed to create task: HTTP 500: Internal Server Error
+2026-04-03 23:11:27 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-03 23:11:27 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-03 23:11:27 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-03 23:11:27 [INFO] Session: id=test-session, mode=background, runtime=copilot
+2026-04-03 23:11:27 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-03 23:11:27 [INFO] Creating background task: agent=research, runtime=copilot, model=claude-haiku-4.5, session=test-session
+2026-04-03 23:11:27 [ERROR] Failed to create task: Connection failed: Connection refused
+2026-04-03 23:11:27 [INFO] get_secret: name=db_password, backend=keyring, session=session-1
+2026-04-03 23:11:27 [INFO] get_secret: name=api_token, backend=file, session=session-1
+2026-04-03 23:11:27 [INFO] get_secret: name=my_key, backend=file, session=session-1
+2026-04-03 23:11:27 [INFO] get_secret: name=missing_key, backend=keyring, session=session-1
+2026-04-03 23:11:27 [INFO] get_secret: name=slow_key, backend=keyring, session=session-1
+2026-04-03 23:11:27 [ERROR] get_secret timed out for name=slow_key
+2026-04-03 23:11:27 [INFO] get_secret: name=some_key, backend=keyring, session=session-1
+2026-04-03 23:11:27 [ERROR] secret_tool.py not found at /opt/n8n-copilot-shim-dev/secret_tool/secret_tool.py
+2026-04-03 23:11:27 [INFO] get_secret: name=key_1, backend=keyring, session=session-1
+2026-04-03 23:11:27 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-03 23:11:27 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-03 23:11:27 [INFO] get_secret: name=prod_key, backend=keyring, session=test-session
+2026-04-03 23:11:27 [INFO] Session: id=test-session, mode=background, runtime=copilot
+2026-04-03 23:16:32 [INFO] Creating background task: agent=research, runtime=copilot, model=claude-haiku-4.5, session=session-1
+2026-04-03 23:16:32 [INFO] Task bg_abc123 verified: status=running
+2026-04-03 23:16:32 [INFO] Creating background task: agent=research, runtime=copilot, model=claude-haiku-4.5, session=session-1
+2026-04-03 23:16:32 [ERROR] Failed to create task: HTTP 500: Internal Server Error
+2026-04-03 23:16:32 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-03 23:16:32 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-03 23:16:32 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-03 23:16:32 [INFO] Session: id=test-session, mode=background, runtime=copilot
+2026-04-03 23:16:32 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-03 23:16:32 [INFO] Creating background task: agent=research, runtime=copilot, model=claude-haiku-4.5, session=test-session
+2026-04-03 23:16:32 [ERROR] Failed to create task: Connection failed: Connection refused
+2026-04-03 23:16:32 [INFO] get_secret: name=db_password, backend=keyring, session=session-1
+2026-04-03 23:16:32 [INFO] get_secret: name=api_token, backend=file, session=session-1
+2026-04-03 23:16:32 [INFO] get_secret: name=my_key, backend=file, session=session-1
+2026-04-03 23:16:32 [INFO] get_secret: name=missing_key, backend=keyring, session=session-1
+2026-04-03 23:16:32 [INFO] get_secret: name=slow_key, backend=keyring, session=session-1
+2026-04-03 23:16:32 [ERROR] get_secret timed out for name=slow_key
+2026-04-03 23:16:32 [INFO] get_secret: name=some_key, backend=keyring, session=session-1
+2026-04-03 23:16:32 [ERROR] secret_tool.py not found at /opt/n8n-copilot-shim-dev/secret_tool/secret_tool.py
+2026-04-03 23:16:32 [INFO] get_secret: name=key_1, backend=keyring, session=session-1
+2026-04-03 23:16:32 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-03 23:16:32 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-03 23:16:32 [INFO] get_secret: name=prod_key, backend=keyring, session=test-session
+2026-04-03 23:16:32 [INFO] Session: id=test-session, mode=background, runtime=copilot
+2026-04-03 23:18:00 [INFO] Creating background task: agent=research, runtime=copilot, model=claude-haiku-4.5, session=session-1
+2026-04-03 23:18:01 [INFO] Task bg_abc123 verified: status=running
+2026-04-03 23:18:01 [INFO] Creating background task: agent=research, runtime=copilot, model=claude-haiku-4.5, session=session-1
+2026-04-03 23:18:01 [ERROR] Failed to create task: HTTP 500: Internal Server Error
+2026-04-03 23:18:01 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-03 23:18:01 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-03 23:18:01 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-03 23:18:01 [INFO] Session: id=test-session, mode=background, runtime=copilot
+2026-04-03 23:18:01 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-03 23:18:01 [INFO] Creating background task: agent=research, runtime=copilot, model=claude-haiku-4.5, session=test-session
+2026-04-03 23:18:01 [ERROR] Failed to create task: Connection failed: Connection refused
+2026-04-03 23:18:01 [INFO] get_secret: name=db_password, backend=keyring, session=session-1
+2026-04-03 23:18:01 [INFO] get_secret: name=api_token, backend=file, session=session-1
+2026-04-03 23:18:01 [INFO] get_secret: name=my_key, backend=file, session=session-1
+2026-04-03 23:18:01 [INFO] get_secret: name=missing_key, backend=keyring, session=session-1
+2026-04-03 23:18:01 [INFO] get_secret: name=slow_key, backend=keyring, session=session-1
+2026-04-03 23:18:01 [ERROR] get_secret timed out for name=slow_key
+2026-04-03 23:18:01 [INFO] get_secret: name=some_key, backend=keyring, session=session-1
+2026-04-03 23:18:01 [ERROR] secret_tool.py not found at /opt/n8n-copilot-shim-dev/secret_tool/secret_tool.py
+2026-04-03 23:18:01 [INFO] get_secret: name=key_1, backend=keyring, session=session-1
+2026-04-03 23:18:01 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-03 23:18:01 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-03 23:18:01 [INFO] get_secret: name=prod_key, backend=keyring, session=test-session
+2026-04-03 23:18:01 [INFO] Session: id=test-session, mode=background, runtime=copilot
+2026-04-04 13:27:21 [INFO] Creating background task: agent=research, runtime=copilot, model=claude-haiku-4.5, session=session-1
+2026-04-04 13:27:22 [INFO] Task bg_abc123 verified: status=running
+2026-04-04 13:27:22 [INFO] Creating background task: agent=research, runtime=copilot, model=claude-haiku-4.5, session=session-1
+2026-04-04 13:27:22 [ERROR] Failed to create task: HTTP 500: Internal Server Error
+2026-04-04 13:27:22 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-04 13:27:22 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-04 13:27:22 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-04 13:27:22 [INFO] Session: id=test-session, mode=background, runtime=copilot
+2026-04-04 13:27:22 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-04 13:27:22 [INFO] Creating background task: agent=research, runtime=copilot, model=claude-haiku-4.5, session=test-session
+2026-04-04 13:27:22 [ERROR] Failed to create task: Connection failed: Connection refused
+2026-04-04 13:27:22 [INFO] get_secret: name=db_password, backend=keyring, session=session-1
+2026-04-04 13:27:22 [INFO] get_secret: name=api_token, backend=file, session=session-1
+2026-04-04 13:27:22 [INFO] get_secret: name=my_key, backend=file, session=session-1
+2026-04-04 13:27:22 [INFO] get_secret: name=missing_key, backend=keyring, session=session-1
+2026-04-04 13:27:22 [INFO] get_secret: name=slow_key, backend=keyring, session=session-1
+2026-04-04 13:27:22 [ERROR] get_secret timed out for name=slow_key
+2026-04-04 13:27:22 [INFO] get_secret: name=some_key, backend=keyring, session=session-1
+2026-04-04 13:27:22 [ERROR] secret_tool.py not found at /opt/n8n-copilot-shim-dev/secret_tool/secret_tool.py
+2026-04-04 13:27:22 [INFO] get_secret: name=key_1, backend=keyring, session=session-1
+2026-04-04 13:27:22 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-04 13:27:22 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-04 13:27:22 [INFO] get_secret: name=prod_key, backend=keyring, session=test-session
+2026-04-04 13:27:22 [INFO] Session: id=test-session, mode=background, runtime=copilot
+2026-04-04 13:28:15 [INFO] Session: id=7eb3a5f4, mode=interactive, runtime=copilot
+2026-04-04 13:28:15 [INFO] get_secret: name=test, backend=keyring, session=7eb3a5f4
+2026-04-04 13:29:13 [INFO] Session: id=7eb3a5f4, mode=interactive, runtime=copilot
+2026-04-04 13:29:13 [INFO] get_secret: name=test, backend=keyring, session=7eb3a5f4
+2026-04-04 13:29:18 [INFO] Session: id=7eb3a5f4, mode=interactive, runtime=copilot
+2026-04-04 13:29:18 [INFO] get_secret: name=test, backend=file, session=7eb3a5f4
+2026-04-04 13:53:30 [INFO] Creating background task: agent=research, runtime=copilot, model=claude-haiku-4.5, session=session-1
+2026-04-04 13:53:30 [INFO] Task bg_abc123 verified: status=running
+2026-04-04 13:53:30 [INFO] Creating background task: agent=research, runtime=copilot, model=claude-haiku-4.5, session=session-1
+2026-04-04 13:53:30 [ERROR] Failed to create task: HTTP 500: Internal Server Error
+2026-04-04 13:53:30 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-04 13:53:30 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-04 13:53:30 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-04 13:53:30 [INFO] Session: id=test-session, mode=background, runtime=copilot
+2026-04-04 13:53:30 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-04 13:53:30 [INFO] Creating background task: agent=research, runtime=copilot, model=claude-haiku-4.5, session=test-session
+2026-04-04 13:53:30 [ERROR] Failed to create task: Connection failed: Connection refused
+2026-04-04 13:53:30 [INFO] get_secret: name=db_password, backend=keyring, session=session-1
+2026-04-04 13:53:30 [INFO] get_secret: name=api_token, backend=file, session=session-1
+2026-04-04 13:53:30 [INFO] get_secret: name=my_key, backend=file, session=session-1
+2026-04-04 13:53:30 [INFO] get_secret: name=missing_key, backend=keyring, session=session-1
+2026-04-04 13:53:30 [INFO] get_secret: name=slow_key, backend=keyring, session=session-1
+2026-04-04 13:53:30 [ERROR] get_secret timed out for name=slow_key
+2026-04-04 13:53:30 [INFO] get_secret: name=some_key, backend=keyring, session=session-1
+2026-04-04 13:53:30 [ERROR] secret_tool.py not found at /opt/n8n-copilot-shim-dev/secret_tool/secret_tool.py
+2026-04-04 13:53:30 [INFO] get_secret: name=key_1, backend=keyring, session=session-1
+2026-04-04 13:53:30 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-04 13:53:30 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-04 13:53:30 [INFO] get_secret: name=prod_key, backend=keyring, session=test-session
+2026-04-04 13:53:30 [INFO] Session: id=test-session, mode=background, runtime=copilot
+2026-04-04 14:04:09 [INFO] Creating background task: agent=research, runtime=copilot, model=claude-haiku-4.5, session=session-1
+2026-04-04 14:04:10 [INFO] Task bg_abc123 verified: status=running
+2026-04-04 14:04:10 [INFO] Creating background task: agent=research, runtime=copilot, model=claude-haiku-4.5, session=session-1
+2026-04-04 14:04:10 [ERROR] Failed to create task: HTTP 500: Internal Server Error
+2026-04-04 14:04:10 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-04 14:04:10 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-04 14:04:10 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-04 14:04:10 [INFO] Session: id=test-session, mode=background, runtime=copilot
+2026-04-04 14:04:10 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-04 14:04:10 [INFO] Creating background task: agent=research, runtime=copilot, model=claude-haiku-4.5, session=test-session
+2026-04-04 14:04:10 [ERROR] Failed to create task: Connection failed: Connection refused
+2026-04-04 14:04:10 [INFO] get_secret: name=db_password, backend=keyring, session=session-1
+2026-04-04 14:04:10 [INFO] get_secret: name=api_token, backend=file, session=session-1
+2026-04-04 14:04:10 [INFO] get_secret: name=my_key, backend=file, session=session-1
+2026-04-04 14:04:10 [INFO] get_secret: name=missing_key, backend=keyring, session=session-1
+2026-04-04 14:04:10 [INFO] get_secret: name=slow_key, backend=keyring, session=session-1
+2026-04-04 14:04:10 [ERROR] get_secret timed out for name=slow_key
+2026-04-04 14:04:10 [INFO] get_secret: name=some_key, backend=keyring, session=session-1
+2026-04-04 14:04:10 [ERROR] secret_tool.py not found at /opt/n8n-copilot-shim-dev/secret_tool/secret_tool.py
+2026-04-04 14:04:10 [INFO] get_secret: name=key_1, backend=keyring, session=session-1
+2026-04-04 14:04:10 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-04 14:04:10 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-04 14:04:10 [INFO] get_secret: name=prod_key, backend=keyring, session=test-session
+2026-04-04 14:04:10 [INFO] Session: id=test-session, mode=background, runtime=copilot
+2026-04-04 14:05:53 [INFO] Creating background task: agent=research, runtime=copilot, model=claude-haiku-4.5, session=session-1
+2026-04-04 14:05:54 [INFO] Task bg_abc123 verified: status=running
+2026-04-04 14:05:54 [INFO] Creating background task: agent=research, runtime=copilot, model=claude-haiku-4.5, session=session-1
+2026-04-04 14:05:54 [ERROR] Failed to create task: HTTP 500: Internal Server Error
+2026-04-04 14:05:54 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-04 14:05:54 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-04 14:05:54 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-04 14:05:54 [INFO] Session: id=test-session, mode=background, runtime=copilot
+2026-04-04 14:05:54 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-04 14:05:54 [INFO] Creating background task: agent=research, runtime=copilot, model=claude-haiku-4.5, session=test-session
+2026-04-04 14:05:54 [ERROR] Failed to create task: Connection failed: Connection refused
+2026-04-04 14:05:54 [INFO] get_secret: name=db_password, backend=keyring, session=session-1
+2026-04-04 14:05:54 [INFO] get_secret: name=api_token, backend=file, session=session-1
+2026-04-04 14:05:54 [INFO] get_secret: name=my_key, backend=file, session=session-1
+2026-04-04 14:05:54 [INFO] get_secret: name=missing_key, backend=keyring, session=session-1
+2026-04-04 14:05:54 [INFO] get_secret: name=slow_key, backend=keyring, session=session-1
+2026-04-04 14:05:54 [ERROR] get_secret timed out for name=slow_key
+2026-04-04 14:05:54 [INFO] get_secret: name=some_key, backend=keyring, session=session-1
+2026-04-04 14:05:54 [ERROR] secret_tool.py not found at /opt/n8n-copilot-shim-dev/secret_tool/secret_tool.py
+2026-04-04 14:05:54 [INFO] get_secret: name=key_1, backend=keyring, session=session-1
+2026-04-04 14:05:54 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-04 14:05:54 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-04 14:05:54 [INFO] get_secret: name=prod_key, backend=keyring, session=test-session
+2026-04-04 14:05:54 [INFO] Session: id=test-session, mode=background, runtime=copilot
+2026-04-04 14:17:46 [INFO] Creating background task: agent=research, runtime=copilot, model=claude-haiku-4.5, session=session-1
+2026-04-04 14:17:46 [INFO] Task bg_abc123 verified: status=running
+2026-04-04 14:17:46 [INFO] Creating background task: agent=research, runtime=copilot, model=claude-haiku-4.5, session=session-1
+2026-04-04 14:17:46 [ERROR] Failed to create task: HTTP 500: Internal Server Error
+2026-04-04 14:17:46 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-04 14:17:46 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-04 14:17:46 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-04 14:17:46 [INFO] Session: id=test-session, mode=background, runtime=copilot
+2026-04-04 14:17:46 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-04 14:17:46 [INFO] Creating background task: agent=research, runtime=copilot, model=claude-haiku-4.5, session=test-session
+2026-04-04 14:17:46 [ERROR] Failed to create task: Connection failed: Connection refused
+2026-04-04 14:17:46 [INFO] get_secret: name=db_password, backend=keyring, session=session-1
+2026-04-04 14:17:46 [INFO] get_secret: name=api_token, backend=file, session=session-1
+2026-04-04 14:17:46 [INFO] get_secret: name=my_key, backend=file, session=session-1
+2026-04-04 14:17:46 [INFO] get_secret: name=missing_key, backend=keyring, session=session-1
+2026-04-04 14:17:46 [INFO] get_secret: name=slow_key, backend=keyring, session=session-1
+2026-04-04 14:17:46 [ERROR] get_secret timed out for name=slow_key
+2026-04-04 14:17:46 [INFO] get_secret: name=some_key, backend=keyring, session=session-1
+2026-04-04 14:17:46 [ERROR] secret_tool.py not found at /opt/n8n-copilot-shim-dev/secret_tool/secret_tool.py
+2026-04-04 14:17:46 [INFO] get_secret: name=key_1, backend=keyring, session=session-1
+2026-04-04 14:17:46 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-04 14:17:46 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-04 14:17:46 [INFO] get_secret: name=prod_key, backend=keyring, session=test-session
+2026-04-04 14:17:46 [INFO] Session: id=test-session, mode=background, runtime=copilot
+2026-04-05 16:56:12 [INFO] Creating background task: agent=research, runtime=copilot, model=claude-haiku-4.5, session=session-1
+2026-04-05 16:56:13 [INFO] Task bg_abc123 verified: status=running
+2026-04-05 16:56:13 [INFO] Creating background task: agent=research, runtime=copilot, model=claude-haiku-4.5, session=session-1
+2026-04-05 16:56:13 [ERROR] Failed to create task: HTTP 500: Internal Server Error
+2026-04-05 16:56:13 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-05 16:56:13 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-05 16:56:13 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-05 16:56:13 [INFO] Session: id=test-session, mode=background, runtime=copilot
+2026-04-05 16:56:13 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-05 16:56:13 [INFO] Creating background task: agent=research, runtime=copilot, model=claude-haiku-4.5, session=test-session
+2026-04-05 16:56:13 [ERROR] Failed to create task: Connection failed: Connection refused
+2026-04-05 16:56:13 [INFO] get_secret: name=db_password, backend=keyring, session=session-1
+2026-04-05 16:56:13 [INFO] get_secret: name=api_token, backend=file, session=session-1
+2026-04-05 16:56:13 [INFO] get_secret: name=my_key, backend=file, session=session-1
+2026-04-05 16:56:13 [INFO] get_secret: name=missing_key, backend=keyring, session=session-1
+2026-04-05 16:56:13 [INFO] get_secret: name=slow_key, backend=keyring, session=session-1
+2026-04-05 16:56:13 [ERROR] get_secret timed out for name=slow_key
+2026-04-05 16:56:13 [INFO] get_secret: name=some_key, backend=keyring, session=session-1
+2026-04-05 16:56:13 [ERROR] secret_tool.py not found at /opt/n8n-copilot-shim-dev/secret_tool/secret_tool.py
+2026-04-05 16:56:13 [INFO] get_secret: name=key_1, backend=keyring, session=session-1
+2026-04-05 16:56:13 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-05 16:56:13 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-05 16:56:13 [INFO] get_secret: name=prod_key, backend=keyring, session=test-session
+2026-04-05 16:56:13 [INFO] Session: id=test-session, mode=background, runtime=copilot
+2026-04-05 16:58:18 [INFO] Creating background task: agent=research, runtime=copilot, model=claude-haiku-4.5, session=session-1
+2026-04-05 16:58:18 [INFO] Task bg_abc123 verified: status=running
+2026-04-05 16:58:18 [INFO] Creating background task: agent=research, runtime=copilot, model=claude-haiku-4.5, session=session-1
+2026-04-05 16:58:18 [ERROR] Failed to create task: HTTP 500: Internal Server Error
+2026-04-05 16:58:18 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-05 16:58:18 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-05 16:58:18 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-05 16:58:18 [INFO] Session: id=test-session, mode=background, runtime=copilot
+2026-04-05 16:58:18 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-05 16:58:18 [INFO] Creating background task: agent=research, runtime=copilot, model=claude-haiku-4.5, session=test-session
+2026-04-05 16:58:18 [ERROR] Failed to create task: Connection failed: Connection refused
+2026-04-05 16:58:18 [INFO] get_secret: name=db_password, backend=keyring, session=session-1
+2026-04-05 16:58:18 [INFO] get_secret: name=api_token, backend=file, session=session-1
+2026-04-05 16:58:18 [INFO] get_secret: name=my_key, backend=file, session=session-1
+2026-04-05 16:58:18 [INFO] get_secret: name=missing_key, backend=keyring, session=session-1
+2026-04-05 16:58:18 [INFO] get_secret: name=slow_key, backend=keyring, session=session-1
+2026-04-05 16:58:18 [ERROR] get_secret timed out for name=slow_key
+2026-04-05 16:58:18 [INFO] get_secret: name=some_key, backend=keyring, session=session-1
+2026-04-05 16:58:18 [ERROR] secret_tool.py not found at /opt/n8n-copilot-shim-dev/secret_tool/secret_tool.py
+2026-04-05 16:58:18 [INFO] get_secret: name=key_1, backend=keyring, session=session-1
+2026-04-05 16:58:18 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-05 16:58:18 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-05 16:58:18 [INFO] get_secret: name=prod_key, backend=keyring, session=test-session
+2026-04-05 16:58:18 [INFO] Session: id=test-session, mode=background, runtime=copilot
+2026-04-05 17:14:04 [INFO] Creating background task: agent=research, runtime=copilot, model=claude-haiku-4.5, session=session-1
+2026-04-05 17:14:04 [INFO] Task bg_abc123 verified: status=running
+2026-04-05 17:14:04 [INFO] Creating background task: agent=research, runtime=copilot, model=claude-haiku-4.5, session=session-1
+2026-04-05 17:14:04 [ERROR] Failed to create task: HTTP 500: Internal Server Error
+2026-04-05 17:14:04 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-05 17:14:04 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-05 17:14:04 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-05 17:14:04 [INFO] Session: id=test-session, mode=background, runtime=copilot
+2026-04-05 17:14:04 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-05 17:14:04 [INFO] Creating background task: agent=research, runtime=copilot, model=claude-haiku-4.5, session=test-session
+2026-04-05 17:14:04 [ERROR] Failed to create task: Connection failed: Connection refused
+2026-04-05 17:14:04 [INFO] get_secret: name=db_password, backend=keyring, session=session-1
+2026-04-05 17:14:04 [INFO] get_secret: name=api_token, backend=file, session=session-1
+2026-04-05 17:14:04 [INFO] get_secret: name=my_key, backend=file, session=session-1
+2026-04-05 17:14:04 [INFO] get_secret: name=missing_key, backend=keyring, session=session-1
+2026-04-05 17:14:04 [INFO] get_secret: name=slow_key, backend=keyring, session=session-1
+2026-04-05 17:14:04 [ERROR] get_secret timed out for name=slow_key
+2026-04-05 17:14:04 [INFO] get_secret: name=some_key, backend=keyring, session=session-1
+2026-04-05 17:14:04 [ERROR] secret_tool.py not found at /opt/n8n-copilot-shim-dev/secret_tool/secret_tool.py
+2026-04-05 17:14:04 [INFO] get_secret: name=key_1, backend=keyring, session=session-1
+2026-04-05 17:14:04 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-05 17:14:04 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-05 17:14:04 [INFO] get_secret: name=prod_key, backend=keyring, session=test-session
+2026-04-05 17:14:04 [INFO] Session: id=test-session, mode=background, runtime=copilot
+2026-04-05 17:28:22 [INFO] Creating background task: agent=research, runtime=copilot, model=claude-haiku-4.5, session=session-1
+2026-04-05 17:28:22 [INFO] Task bg_abc123 verified: status=running
+2026-04-05 17:28:22 [INFO] Creating background task: agent=research, runtime=copilot, model=claude-haiku-4.5, session=session-1
+2026-04-05 17:28:22 [ERROR] Failed to create task: HTTP 500: Internal Server Error
+2026-04-05 17:28:22 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-05 17:28:22 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-05 17:28:22 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-05 17:28:22 [INFO] Session: id=test-session, mode=background, runtime=copilot
+2026-04-05 17:28:22 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-05 17:28:22 [INFO] Creating background task: agent=research, runtime=copilot, model=claude-haiku-4.5, session=test-session
+2026-04-05 17:28:22 [ERROR] Failed to create task: Connection failed: Connection refused
+2026-04-05 17:28:22 [INFO] get_secret: name=db_password, backend=keyring, session=session-1
+2026-04-05 17:28:22 [INFO] get_secret: name=api_token, backend=file, session=session-1
+2026-04-05 17:28:22 [INFO] get_secret: name=my_key, backend=file, session=session-1
+2026-04-05 17:28:22 [INFO] get_secret: name=missing_key, backend=keyring, session=session-1
+2026-04-05 17:28:22 [INFO] get_secret: name=slow_key, backend=keyring, session=session-1
+2026-04-05 17:28:22 [ERROR] get_secret timed out for name=slow_key
+2026-04-05 17:28:22 [INFO] get_secret: name=some_key, backend=keyring, session=session-1
+2026-04-05 17:28:22 [ERROR] secret_tool.py not found at /opt/n8n-copilot-shim-dev/secret_tool/secret_tool.py
+2026-04-05 17:28:22 [INFO] get_secret: name=key_1, backend=keyring, session=session-1
+2026-04-05 17:28:22 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-05 17:28:22 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-05 17:28:22 [INFO] get_secret: name=prod_key, backend=keyring, session=test-session
+2026-04-05 17:28:22 [INFO] Session: id=test-session, mode=background, runtime=copilot
+2026-04-05 17:30:43 [INFO] Creating background task: agent=research, runtime=copilot, model=claude-haiku-4.5, session=session-1
+2026-04-05 17:30:43 [INFO] Task bg_abc123 verified: status=running
+2026-04-05 17:30:43 [INFO] Creating background task: agent=research, runtime=copilot, model=claude-haiku-4.5, session=session-1
+2026-04-05 17:30:43 [ERROR] Failed to create task: HTTP 500: Internal Server Error
+2026-04-05 17:30:43 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-05 17:30:43 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-05 17:30:43 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-05 17:30:43 [INFO] Session: id=test-session, mode=background, runtime=copilot
+2026-04-05 17:30:43 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-05 17:30:43 [INFO] Creating background task: agent=research, runtime=copilot, model=claude-haiku-4.5, session=test-session
+2026-04-05 17:30:43 [ERROR] Failed to create task: Connection failed: Connection refused
+2026-04-05 17:30:43 [INFO] get_secret: name=db_password, backend=keyring, session=session-1
+2026-04-05 17:30:43 [INFO] get_secret: name=api_token, backend=file, session=session-1
+2026-04-05 17:30:43 [INFO] get_secret: name=my_key, backend=file, session=session-1
+2026-04-05 17:30:43 [INFO] get_secret: name=missing_key, backend=keyring, session=session-1
+2026-04-05 17:30:43 [INFO] get_secret: name=slow_key, backend=keyring, session=session-1
+2026-04-05 17:30:43 [ERROR] get_secret timed out for name=slow_key
+2026-04-05 17:30:43 [INFO] get_secret: name=some_key, backend=keyring, session=session-1
+2026-04-05 17:30:43 [ERROR] secret_tool.py not found at /opt/n8n-copilot-shim-dev/secret_tool/secret_tool.py
+2026-04-05 17:30:43 [INFO] get_secret: name=key_1, backend=keyring, session=session-1
+2026-04-05 17:30:43 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-05 17:30:43 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-05 17:30:43 [INFO] get_secret: name=prod_key, backend=keyring, session=test-session
+2026-04-05 17:30:43 [INFO] Session: id=test-session, mode=background, runtime=copilot
+2026-04-05 17:33:35 [INFO] Creating background task: agent=research, runtime=copilot, model=claude-haiku-4.5, session=session-1
+2026-04-05 17:33:36 [INFO] Task bg_abc123 verified: status=running
+2026-04-05 17:33:36 [INFO] Creating background task: agent=research, runtime=copilot, model=claude-haiku-4.5, session=session-1
+2026-04-05 17:33:36 [ERROR] Failed to create task: HTTP 500: Internal Server Error
+2026-04-05 17:33:36 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-05 17:33:36 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-05 17:33:36 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-05 17:33:36 [INFO] Session: id=test-session, mode=background, runtime=copilot
+2026-04-05 17:33:36 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-05 17:33:36 [INFO] Creating background task: agent=research, runtime=copilot, model=claude-haiku-4.5, session=test-session
+2026-04-05 17:33:36 [ERROR] Failed to create task: Connection failed: Connection refused
+2026-04-05 17:33:36 [INFO] get_secret: name=db_password, backend=keyring, session=session-1
+2026-04-05 17:33:36 [INFO] get_secret: name=api_token, backend=file, session=session-1
+2026-04-05 17:33:36 [INFO] get_secret: name=my_key, backend=file, session=session-1
+2026-04-05 17:33:36 [INFO] get_secret: name=missing_key, backend=keyring, session=session-1
+2026-04-05 17:33:36 [INFO] get_secret: name=slow_key, backend=keyring, session=session-1
+2026-04-05 17:33:36 [ERROR] get_secret timed out for name=slow_key
+2026-04-05 17:33:36 [INFO] get_secret: name=some_key, backend=keyring, session=session-1
+2026-04-05 17:33:36 [ERROR] secret_tool.py not found at /opt/n8n-copilot-shim-dev/secret_tool/secret_tool.py
+2026-04-05 17:33:36 [INFO] get_secret: name=key_1, backend=keyring, session=session-1
+2026-04-05 17:33:36 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-05 17:33:36 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-05 17:33:36 [INFO] get_secret: name=prod_key, backend=keyring, session=test-session
+2026-04-05 17:33:36 [INFO] Session: id=test-session, mode=background, runtime=copilot
+2026-04-05 17:53:57 [INFO] Creating background task: agent=research, runtime=copilot, model=claude-haiku-4.5, session=session-1
+2026-04-05 17:53:58 [INFO] Task bg_abc123 verified: status=running
+2026-04-05 17:53:58 [INFO] Creating background task: agent=research, runtime=copilot, model=claude-haiku-4.5, session=session-1
+2026-04-05 17:53:58 [ERROR] Failed to create task: HTTP 500: Internal Server Error
+2026-04-05 17:53:58 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-05 17:53:58 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-05 17:53:58 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-05 17:53:58 [INFO] Session: id=test-session, mode=background, runtime=copilot
+2026-04-05 17:53:58 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-05 17:53:58 [INFO] Creating background task: agent=research, runtime=copilot, model=claude-haiku-4.5, session=test-session
+2026-04-05 17:53:58 [ERROR] Failed to create task: Connection failed: Connection refused
+2026-04-05 17:53:58 [INFO] get_secret: name=db_password, backend=keyring, session=session-1
+2026-04-05 17:53:58 [INFO] get_secret: name=api_token, backend=file, session=session-1
+2026-04-05 17:53:58 [INFO] get_secret: name=my_key, backend=file, session=session-1
+2026-04-05 17:53:58 [INFO] get_secret: name=missing_key, backend=keyring, session=session-1
+2026-04-05 17:53:58 [INFO] get_secret: name=slow_key, backend=keyring, session=session-1
+2026-04-05 17:53:58 [ERROR] get_secret timed out for name=slow_key
+2026-04-05 17:53:58 [INFO] get_secret: name=some_key, backend=keyring, session=session-1
+2026-04-05 17:53:58 [ERROR] secret_tool.py not found at /opt/n8n-copilot-shim-dev/secret_tool/secret_tool.py
+2026-04-05 17:53:58 [INFO] get_secret: name=key_1, backend=keyring, session=session-1
+2026-04-05 17:53:58 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-05 17:53:58 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-05 17:53:58 [INFO] get_secret: name=prod_key, backend=keyring, session=test-session
+2026-04-05 17:53:58 [INFO] Session: id=test-session, mode=background, runtime=copilot
+2026-04-05 17:57:24 [INFO] Creating background task: agent=research, runtime=copilot, model=claude-haiku-4.5, session=session-1
+2026-04-05 17:57:25 [INFO] Task bg_abc123 verified: status=running
+2026-04-05 17:57:25 [INFO] Creating background task: agent=research, runtime=copilot, model=claude-haiku-4.5, session=session-1
+2026-04-05 17:57:25 [ERROR] Failed to create task: HTTP 500: Internal Server Error
+2026-04-05 17:57:25 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-05 17:57:25 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-05 17:57:25 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-05 17:57:25 [INFO] Session: id=test-session, mode=background, runtime=copilot
+2026-04-05 17:57:25 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-05 17:57:25 [INFO] Creating background task: agent=research, runtime=copilot, model=claude-haiku-4.5, session=test-session
+2026-04-05 17:57:25 [ERROR] Failed to create task: Connection failed: Connection refused
+2026-04-05 17:57:25 [INFO] get_secret: name=db_password, backend=keyring, session=session-1
+2026-04-05 17:57:25 [INFO] get_secret: name=api_token, backend=file, session=session-1
+2026-04-05 17:57:25 [INFO] get_secret: name=my_key, backend=file, session=session-1
+2026-04-05 17:57:25 [INFO] get_secret: name=missing_key, backend=keyring, session=session-1
+2026-04-05 17:57:25 [INFO] get_secret: name=slow_key, backend=keyring, session=session-1
+2026-04-05 17:57:25 [ERROR] get_secret timed out for name=slow_key
+2026-04-05 17:57:25 [INFO] get_secret: name=some_key, backend=keyring, session=session-1
+2026-04-05 17:57:25 [ERROR] secret_tool.py not found at /opt/n8n-copilot-shim-dev/secret_tool/secret_tool.py
+2026-04-05 17:57:25 [INFO] get_secret: name=key_1, backend=keyring, session=session-1
+2026-04-05 17:57:25 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-05 17:57:25 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-05 17:57:25 [INFO] get_secret: name=prod_key, backend=keyring, session=test-session
+2026-04-05 17:57:25 [INFO] Session: id=test-session, mode=background, runtime=copilot
+2026-04-05 18:05:05 [INFO] Creating background task: agent=research, runtime=copilot, model=claude-haiku-4.5, session=session-1
+2026-04-05 18:05:06 [INFO] Task bg_abc123 verified: status=running
+2026-04-05 18:05:06 [INFO] Creating background task: agent=research, runtime=copilot, model=claude-haiku-4.5, session=session-1
+2026-04-05 18:05:06 [ERROR] Failed to create task: HTTP 500: Internal Server Error
+2026-04-05 18:05:06 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-05 18:05:06 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-05 18:05:06 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-05 18:05:06 [INFO] Session: id=test-session, mode=background, runtime=copilot
+2026-04-05 18:05:06 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-05 18:05:06 [INFO] Creating background task: agent=research, runtime=copilot, model=claude-haiku-4.5, session=test-session
+2026-04-05 18:05:06 [ERROR] Failed to create task: Connection failed: Connection refused
+2026-04-05 18:05:06 [INFO] get_secret: name=db_password, backend=keyring, session=session-1
+2026-04-05 18:05:06 [INFO] get_secret: name=api_token, backend=file, session=session-1
+2026-04-05 18:05:06 [INFO] get_secret: name=my_key, backend=file, session=session-1
+2026-04-05 18:05:06 [INFO] get_secret: name=missing_key, backend=keyring, session=session-1
+2026-04-05 18:05:06 [INFO] get_secret: name=slow_key, backend=keyring, session=session-1
+2026-04-05 18:05:06 [ERROR] get_secret timed out for name=slow_key
+2026-04-05 18:05:06 [INFO] get_secret: name=some_key, backend=keyring, session=session-1
+2026-04-05 18:05:06 [ERROR] secret_tool.py not found at /opt/n8n-copilot-shim-dev/secret_tool/secret_tool.py
+2026-04-05 18:05:06 [INFO] get_secret: name=key_1, backend=keyring, session=session-1
+2026-04-05 18:05:06 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-05 18:05:06 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-05 18:05:06 [INFO] get_secret: name=prod_key, backend=keyring, session=test-session
+2026-04-05 18:05:06 [INFO] Session: id=test-session, mode=background, runtime=copilot
+2026-04-05 18:22:29 [INFO] Creating background task: agent=research, runtime=copilot, model=claude-haiku-4.5, session=session-1
+2026-04-05 18:22:30 [INFO] Task bg_abc123 verified: status=running
+2026-04-05 18:22:30 [INFO] Creating background task: agent=research, runtime=copilot, model=claude-haiku-4.5, session=session-1
+2026-04-05 18:22:30 [ERROR] Failed to create task: HTTP 500: Internal Server Error
+2026-04-05 18:22:30 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-05 18:22:30 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-05 18:22:30 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-05 18:22:30 [INFO] Session: id=test-session, mode=background, runtime=copilot
+2026-04-05 18:22:30 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-05 18:22:30 [INFO] Creating background task: agent=research, runtime=copilot, model=claude-haiku-4.5, session=test-session
+2026-04-05 18:22:30 [ERROR] Failed to create task: Connection failed: Connection refused
+2026-04-05 18:22:30 [INFO] get_secret: name=db_password, backend=keyring, session=session-1
+2026-04-05 18:22:30 [INFO] get_secret: name=api_token, backend=file, session=session-1
+2026-04-05 18:22:30 [INFO] get_secret: name=my_key, backend=file, session=session-1
+2026-04-05 18:22:30 [INFO] get_secret: name=missing_key, backend=keyring, session=session-1
+2026-04-05 18:22:30 [INFO] get_secret: name=slow_key, backend=keyring, session=session-1
+2026-04-05 18:22:30 [ERROR] get_secret timed out for name=slow_key
+2026-04-05 18:22:30 [INFO] get_secret: name=some_key, backend=keyring, session=session-1
+2026-04-05 18:22:30 [ERROR] secret_tool.py not found at /opt/n8n-copilot-shim-dev/secret_tool/secret_tool.py
+2026-04-05 18:22:30 [INFO] get_secret: name=key_1, backend=keyring, session=session-1
+2026-04-05 18:22:30 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-05 18:22:30 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-05 18:22:30 [INFO] get_secret: name=prod_key, backend=keyring, session=test-session
+2026-04-05 18:22:30 [INFO] Session: id=test-session, mode=background, runtime=copilot
+2026-04-05 18:25:07 [INFO] Creating background task: agent=research, runtime=copilot, model=claude-haiku-4.5, session=session-1
+2026-04-05 18:25:08 [INFO] Task bg_abc123 verified: status=running
+2026-04-05 18:25:08 [INFO] Creating background task: agent=research, runtime=copilot, model=claude-haiku-4.5, session=session-1
+2026-04-05 18:25:08 [ERROR] Failed to create task: HTTP 500: Internal Server Error
+2026-04-05 18:25:08 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-05 18:25:08 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-05 18:25:08 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-05 18:25:08 [INFO] Session: id=test-session, mode=background, runtime=copilot
+2026-04-05 18:25:08 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-05 18:25:08 [INFO] Creating background task: agent=research, runtime=copilot, model=claude-haiku-4.5, session=test-session
+2026-04-05 18:25:08 [ERROR] Failed to create task: Connection failed: Connection refused
+2026-04-05 18:25:08 [INFO] get_secret: name=db_password, backend=keyring, session=session-1
+2026-04-05 18:25:08 [INFO] get_secret: name=api_token, backend=file, session=session-1
+2026-04-05 18:25:08 [INFO] get_secret: name=my_key, backend=file, session=session-1
+2026-04-05 18:25:08 [INFO] get_secret: name=missing_key, backend=keyring, session=session-1
+2026-04-05 18:25:08 [INFO] get_secret: name=slow_key, backend=keyring, session=session-1
+2026-04-05 18:25:08 [ERROR] get_secret timed out for name=slow_key
+2026-04-05 18:25:08 [INFO] get_secret: name=some_key, backend=keyring, session=session-1
+2026-04-05 18:25:08 [ERROR] secret_tool.py not found at /opt/n8n-copilot-shim-dev/secret_tool/secret_tool.py
+2026-04-05 18:25:08 [INFO] get_secret: name=key_1, backend=keyring, session=session-1
+2026-04-05 18:25:08 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-05 18:25:08 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-05 18:25:08 [INFO] get_secret: name=prod_key, backend=keyring, session=test-session
+2026-04-05 18:25:08 [INFO] Session: id=test-session, mode=background, runtime=copilot
+2026-04-05 18:33:34 [INFO] Creating background task: agent=research, runtime=copilot, model=claude-haiku-4.5, session=session-1
+2026-04-05 18:33:35 [INFO] Task bg_abc123 verified: status=running
+2026-04-05 18:33:35 [INFO] Creating background task: agent=research, runtime=copilot, model=claude-haiku-4.5, session=session-1
+2026-04-05 18:33:35 [ERROR] Failed to create task: HTTP 500: Internal Server Error
+2026-04-05 18:33:35 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-05 18:33:35 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-05 18:33:35 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-05 18:33:35 [INFO] Session: id=test-session, mode=background, runtime=copilot
+2026-04-05 18:33:35 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-05 18:33:35 [INFO] Creating background task: agent=research, runtime=copilot, model=claude-haiku-4.5, session=test-session
+2026-04-05 18:33:35 [ERROR] Failed to create task: Connection failed: Connection refused
+2026-04-05 18:33:35 [INFO] get_secret: name=db_password, backend=keyring, session=session-1
+2026-04-05 18:33:35 [INFO] get_secret: name=api_token, backend=file, session=session-1
+2026-04-05 18:33:35 [INFO] get_secret: name=my_key, backend=file, session=session-1
+2026-04-05 18:33:35 [INFO] get_secret: name=missing_key, backend=keyring, session=session-1
+2026-04-05 18:33:35 [INFO] get_secret: name=slow_key, backend=keyring, session=session-1
+2026-04-05 18:33:35 [ERROR] get_secret timed out for name=slow_key
+2026-04-05 18:33:35 [INFO] get_secret: name=some_key, backend=keyring, session=session-1
+2026-04-05 18:33:35 [ERROR] secret_tool.py not found at /opt/n8n-copilot-shim-dev/secret_tool/secret_tool.py
+2026-04-05 18:33:35 [INFO] get_secret: name=key_1, backend=keyring, session=session-1
+2026-04-05 18:33:35 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-05 18:33:35 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-05 18:33:35 [INFO] get_secret: name=prod_key, backend=keyring, session=test-session
+2026-04-05 18:33:35 [INFO] Session: id=test-session, mode=background, runtime=copilot
+2026-04-05 20:56:15 [INFO] Creating background task: agent=research, runtime=copilot, model=claude-haiku-4.5, session=session-1
+2026-04-05 20:56:15 [INFO] Task bg_abc123 verified: status=running
+2026-04-05 20:56:15 [INFO] Creating background task: agent=research, runtime=copilot, model=claude-haiku-4.5, session=session-1
+2026-04-05 20:56:15 [ERROR] Failed to create task: HTTP 500: Internal Server Error
+2026-04-05 20:56:15 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-05 20:56:15 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-05 20:56:15 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-05 20:56:15 [INFO] Session: id=test-session, mode=background, runtime=copilot
+2026-04-05 20:56:15 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-05 20:56:15 [INFO] Creating background task: agent=research, runtime=copilot, model=claude-haiku-4.5, session=test-session
+2026-04-05 20:56:15 [ERROR] Failed to create task: Connection failed: Connection refused
+2026-04-05 20:56:15 [INFO] get_secret: name=db_password, backend=keyring, session=session-1
+2026-04-05 20:56:15 [INFO] get_secret: name=api_token, backend=file, session=session-1
+2026-04-05 20:56:15 [INFO] get_secret: name=my_key, backend=file, session=session-1
+2026-04-05 20:56:15 [INFO] get_secret: name=missing_key, backend=keyring, session=session-1
+2026-04-05 20:56:15 [INFO] get_secret: name=slow_key, backend=keyring, session=session-1
+2026-04-05 20:56:15 [ERROR] get_secret timed out for name=slow_key
+2026-04-05 20:56:15 [INFO] get_secret: name=some_key, backend=keyring, session=session-1
+2026-04-05 20:56:15 [ERROR] secret_tool.py not found at /opt/n8n-copilot-shim-dev/secret_tool/secret_tool.py
+2026-04-05 20:56:15 [INFO] get_secret: name=key_1, backend=keyring, session=session-1
+2026-04-05 20:56:15 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-05 20:56:15 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-05 20:56:15 [INFO] get_secret: name=prod_key, backend=keyring, session=test-session
+2026-04-05 20:56:15 [INFO] Session: id=test-session, mode=background, runtime=copilot
+2026-04-05 21:05:24 [INFO] Creating background task: agent=research, runtime=copilot, model=claude-haiku-4.5, session=session-1
+2026-04-05 21:05:25 [INFO] Task bg_abc123 verified: status=running
+2026-04-05 21:05:25 [INFO] Creating background task: agent=research, runtime=copilot, model=claude-haiku-4.5, session=session-1
+2026-04-05 21:05:25 [ERROR] Failed to create task: HTTP 500: Internal Server Error
+2026-04-05 21:05:25 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-05 21:05:25 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-05 21:05:25 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-05 21:05:25 [INFO] Session: id=test-session, mode=background, runtime=copilot
+2026-04-05 21:05:25 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-05 21:05:25 [INFO] Creating background task: agent=research, runtime=copilot, model=claude-haiku-4.5, session=test-session
+2026-04-05 21:05:25 [ERROR] Failed to create task: Connection failed: Connection refused
+2026-04-05 21:05:25 [INFO] get_secret: name=db_password, backend=keyring, session=session-1
+2026-04-05 21:05:25 [INFO] get_secret: name=api_token, backend=file, session=session-1
+2026-04-05 21:05:25 [INFO] get_secret: name=my_key, backend=file, session=session-1
+2026-04-05 21:05:25 [INFO] get_secret: name=missing_key, backend=keyring, session=session-1
+2026-04-05 21:05:25 [INFO] get_secret: name=slow_key, backend=keyring, session=session-1
+2026-04-05 21:05:25 [ERROR] get_secret timed out for name=slow_key
+2026-04-05 21:05:25 [INFO] get_secret: name=some_key, backend=keyring, session=session-1
+2026-04-05 21:05:25 [ERROR] secret_tool.py not found at /opt/n8n-copilot-shim-dev/secret_tool/secret_tool.py
+2026-04-05 21:05:25 [INFO] get_secret: name=key_1, backend=keyring, session=session-1
+2026-04-05 21:05:25 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-05 21:05:25 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-05 21:05:25 [INFO] get_secret: name=prod_key, backend=keyring, session=test-session
+2026-04-05 21:05:25 [INFO] Session: id=test-session, mode=background, runtime=copilot
+2026-04-05 21:07:55 [INFO] Creating background task: agent=research, runtime=copilot, model=claude-haiku-4.5, session=session-1
+2026-04-05 21:07:56 [INFO] Task bg_abc123 verified: status=running
+2026-04-05 21:07:56 [INFO] Creating background task: agent=research, runtime=copilot, model=claude-haiku-4.5, session=session-1
+2026-04-05 21:07:56 [ERROR] Failed to create task: HTTP 500: Internal Server Error
+2026-04-05 21:07:56 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-05 21:07:56 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-05 21:07:56 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-05 21:07:56 [INFO] Session: id=test-session, mode=background, runtime=copilot
+2026-04-05 21:07:56 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-05 21:07:56 [INFO] Creating background task: agent=research, runtime=copilot, model=claude-haiku-4.5, session=test-session
+2026-04-05 21:07:56 [ERROR] Failed to create task: Connection failed: Connection refused
+2026-04-05 21:07:56 [INFO] get_secret: name=db_password, backend=keyring, session=session-1
+2026-04-05 21:07:56 [INFO] get_secret: name=api_token, backend=file, session=session-1
+2026-04-05 21:07:56 [INFO] get_secret: name=my_key, backend=file, session=session-1
+2026-04-05 21:07:56 [INFO] get_secret: name=missing_key, backend=keyring, session=session-1
+2026-04-05 21:07:56 [INFO] get_secret: name=slow_key, backend=keyring, session=session-1
+2026-04-05 21:07:56 [ERROR] get_secret timed out for name=slow_key
+2026-04-05 21:07:56 [INFO] get_secret: name=some_key, backend=keyring, session=session-1
+2026-04-05 21:07:56 [ERROR] secret_tool.py not found at /opt/n8n-copilot-shim-dev/secret_tool/secret_tool.py
+2026-04-05 21:07:56 [INFO] get_secret: name=key_1, backend=keyring, session=session-1
+2026-04-05 21:07:56 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-05 21:07:56 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-05 21:07:56 [INFO] get_secret: name=prod_key, backend=keyring, session=test-session
+2026-04-05 21:07:56 [INFO] Session: id=test-session, mode=background, runtime=copilot
+2026-04-05 21:25:09 [INFO] Creating background task: agent=research, runtime=copilot, model=claude-haiku-4.5, session=session-1
+2026-04-05 21:25:10 [INFO] Task bg_abc123 verified: status=running
+2026-04-05 21:25:10 [INFO] Creating background task: agent=research, runtime=copilot, model=claude-haiku-4.5, session=session-1
+2026-04-05 21:25:10 [ERROR] Failed to create task: HTTP 500: Internal Server Error
+2026-04-05 21:25:10 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-05 21:25:10 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-05 21:25:10 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-05 21:25:10 [INFO] Session: id=test-session, mode=background, runtime=copilot
+2026-04-05 21:25:10 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-05 21:25:10 [INFO] Creating background task: agent=research, runtime=copilot, model=claude-haiku-4.5, session=test-session
+2026-04-05 21:25:10 [ERROR] Failed to create task: Connection failed: Connection refused
+2026-04-05 21:25:10 [INFO] get_secret: name=db_password, backend=keyring, session=session-1
+2026-04-05 21:25:10 [INFO] get_secret: name=api_token, backend=file, session=session-1
+2026-04-05 21:25:10 [INFO] get_secret: name=my_key, backend=file, session=session-1
+2026-04-05 21:25:10 [INFO] get_secret: name=missing_key, backend=keyring, session=session-1
+2026-04-05 21:25:10 [INFO] get_secret: name=slow_key, backend=keyring, session=session-1
+2026-04-05 21:25:10 [ERROR] get_secret timed out for name=slow_key
+2026-04-05 21:25:10 [INFO] get_secret: name=some_key, backend=keyring, session=session-1
+2026-04-05 21:25:10 [ERROR] secret_tool.py not found at /opt/n8n-copilot-shim-dev/secret_tool/secret_tool.py
+2026-04-05 21:25:10 [INFO] get_secret: name=key_1, backend=keyring, session=session-1
+2026-04-05 21:25:10 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-05 21:25:10 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-05 21:25:10 [INFO] get_secret: name=prod_key, backend=keyring, session=test-session
+2026-04-05 21:25:10 [INFO] Session: id=test-session, mode=background, runtime=copilot
+2026-04-05 21:27:31 [INFO] Creating background task: agent=research, runtime=copilot, model=claude-haiku-4.5, session=session-1
+2026-04-05 21:27:31 [INFO] Task bg_abc123 verified: status=running
+2026-04-05 21:27:31 [INFO] Creating background task: agent=research, runtime=copilot, model=claude-haiku-4.5, session=session-1
+2026-04-05 21:27:31 [ERROR] Failed to create task: HTTP 500: Internal Server Error
+2026-04-05 21:27:31 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-05 21:27:31 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-05 21:27:31 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-05 21:27:31 [INFO] Session: id=test-session, mode=background, runtime=copilot
+2026-04-05 21:27:31 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-05 21:27:31 [INFO] Creating background task: agent=research, runtime=copilot, model=claude-haiku-4.5, session=test-session
+2026-04-05 21:27:31 [ERROR] Failed to create task: Connection failed: Connection refused
+2026-04-05 21:27:31 [INFO] get_secret: name=db_password, backend=keyring, session=session-1
+2026-04-05 21:27:31 [INFO] get_secret: name=api_token, backend=file, session=session-1
+2026-04-05 21:27:31 [INFO] get_secret: name=my_key, backend=file, session=session-1
+2026-04-05 21:27:31 [INFO] get_secret: name=missing_key, backend=keyring, session=session-1
+2026-04-05 21:27:31 [INFO] get_secret: name=slow_key, backend=keyring, session=session-1
+2026-04-05 21:27:31 [ERROR] get_secret timed out for name=slow_key
+2026-04-05 21:27:31 [INFO] get_secret: name=some_key, backend=keyring, session=session-1
+2026-04-05 21:27:31 [ERROR] secret_tool.py not found at /opt/n8n-copilot-shim-dev/secret_tool/secret_tool.py
+2026-04-05 21:27:31 [INFO] get_secret: name=key_1, backend=keyring, session=session-1
+2026-04-05 21:27:31 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-05 21:27:31 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-05 21:27:31 [INFO] get_secret: name=prod_key, backend=keyring, session=test-session
+2026-04-05 21:27:31 [INFO] Session: id=test-session, mode=background, runtime=copilot
+2026-04-05 21:33:36 [INFO] Creating background task: agent=research, runtime=copilot, model=claude-haiku-4.5, session=session-1
+2026-04-05 21:33:36 [INFO] Task bg_abc123 verified: status=running
+2026-04-05 21:33:36 [INFO] Creating background task: agent=research, runtime=copilot, model=claude-haiku-4.5, session=session-1
+2026-04-05 21:33:36 [ERROR] Failed to create task: HTTP 500: Internal Server Error
+2026-04-05 21:33:36 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-05 21:33:36 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-05 21:33:36 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-05 21:33:36 [INFO] Session: id=test-session, mode=background, runtime=copilot
+2026-04-05 21:33:36 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-05 21:33:36 [INFO] Creating background task: agent=research, runtime=copilot, model=claude-haiku-4.5, session=test-session
+2026-04-05 21:33:36 [ERROR] Failed to create task: Connection failed: Connection refused
+2026-04-05 21:33:36 [INFO] get_secret: name=db_password, backend=keyring, session=session-1
+2026-04-05 21:33:36 [INFO] get_secret: name=api_token, backend=file, session=session-1
+2026-04-05 21:33:36 [INFO] get_secret: name=my_key, backend=file, session=session-1
+2026-04-05 21:33:36 [INFO] get_secret: name=missing_key, backend=keyring, session=session-1
+2026-04-05 21:33:36 [INFO] get_secret: name=slow_key, backend=keyring, session=session-1
+2026-04-05 21:33:36 [ERROR] get_secret timed out for name=slow_key
+2026-04-05 21:33:36 [INFO] get_secret: name=some_key, backend=keyring, session=session-1
+2026-04-05 21:33:36 [ERROR] secret_tool.py not found at /opt/n8n-copilot-shim-dev/secret_tool/secret_tool.py
+2026-04-05 21:33:36 [INFO] get_secret: name=key_1, backend=keyring, session=session-1
+2026-04-05 21:33:36 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-05 21:33:36 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-05 21:33:36 [INFO] get_secret: name=prod_key, backend=keyring, session=test-session
+2026-04-05 21:33:36 [INFO] Session: id=test-session, mode=background, runtime=copilot
+2026-04-05 21:36:00 [INFO] Creating background task: agent=research, runtime=copilot, model=claude-haiku-4.5, session=session-1
+2026-04-05 21:36:01 [INFO] Task bg_abc123 verified: status=running
+2026-04-05 21:36:01 [INFO] Creating background task: agent=research, runtime=copilot, model=claude-haiku-4.5, session=session-1
+2026-04-05 21:36:01 [ERROR] Failed to create task: HTTP 500: Internal Server Error
+2026-04-05 21:36:01 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-05 21:36:01 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-05 21:36:01 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-05 21:36:01 [INFO] Session: id=test-session, mode=background, runtime=copilot
+2026-04-05 21:36:01 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-05 21:36:01 [INFO] Creating background task: agent=research, runtime=copilot, model=claude-haiku-4.5, session=test-session
+2026-04-05 21:36:01 [ERROR] Failed to create task: Connection failed: Connection refused
+2026-04-05 21:36:01 [INFO] get_secret: name=db_password, backend=keyring, session=session-1
+2026-04-05 21:36:01 [INFO] get_secret: name=api_token, backend=file, session=session-1
+2026-04-05 21:36:01 [INFO] get_secret: name=my_key, backend=file, session=session-1
+2026-04-05 21:36:01 [INFO] get_secret: name=missing_key, backend=keyring, session=session-1
+2026-04-05 21:36:01 [INFO] get_secret: name=slow_key, backend=keyring, session=session-1
+2026-04-05 21:36:01 [ERROR] get_secret timed out for name=slow_key
+2026-04-05 21:36:01 [INFO] get_secret: name=some_key, backend=keyring, session=session-1
+2026-04-05 21:36:01 [ERROR] secret_tool.py not found at /opt/n8n-copilot-shim-dev/secret_tool/secret_tool.py
+2026-04-05 21:36:01 [INFO] get_secret: name=key_1, backend=keyring, session=session-1
+2026-04-05 21:36:01 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-05 21:36:01 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-05 21:36:01 [INFO] get_secret: name=prod_key, backend=keyring, session=test-session
+2026-04-05 21:36:01 [INFO] Session: id=test-session, mode=background, runtime=copilot
+2026-04-05 22:16:25 [INFO] Creating background task: agent=research, runtime=copilot, model=claude-haiku-4.5, session=session-1
+2026-04-05 22:16:26 [INFO] Task bg_abc123 verified: status=running
+2026-04-05 22:16:26 [INFO] Creating background task: agent=research, runtime=copilot, model=claude-haiku-4.5, session=session-1
+2026-04-05 22:16:26 [ERROR] Failed to create task: HTTP 500: Internal Server Error
+2026-04-05 22:16:26 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-05 22:16:26 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-05 22:16:26 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-05 22:16:26 [INFO] Session: id=test-session, mode=background, runtime=copilot
+2026-04-05 22:16:26 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-05 22:16:26 [INFO] Creating background task: agent=research, runtime=copilot, model=claude-haiku-4.5, session=test-session
+2026-04-05 22:16:26 [ERROR] Failed to create task: Connection failed: Connection refused
+2026-04-05 22:16:26 [INFO] get_secret: name=db_password, backend=keyring, session=session-1
+2026-04-05 22:16:26 [INFO] get_secret: name=api_token, backend=file, session=session-1
+2026-04-05 22:16:26 [INFO] get_secret: name=my_key, backend=file, session=session-1
+2026-04-05 22:16:26 [INFO] get_secret: name=missing_key, backend=keyring, session=session-1
+2026-04-05 22:16:26 [INFO] get_secret: name=slow_key, backend=keyring, session=session-1
+2026-04-05 22:16:26 [ERROR] get_secret timed out for name=slow_key
+2026-04-05 22:16:26 [INFO] get_secret: name=some_key, backend=keyring, session=session-1
+2026-04-05 22:16:26 [ERROR] secret_tool.py not found at /opt/n8n-copilot-shim-dev/secret_tool/secret_tool.py
+2026-04-05 22:16:26 [INFO] get_secret: name=key_1, backend=keyring, session=session-1
+2026-04-05 22:16:26 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-05 22:16:26 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-05 22:16:26 [INFO] get_secret: name=prod_key, backend=keyring, session=test-session
+2026-04-05 22:16:26 [INFO] Session: id=test-session, mode=background, runtime=copilot
+2026-04-05 22:23:35 [INFO] Creating background task: agent=research, runtime=copilot, model=claude-haiku-4.5, session=session-1
+2026-04-05 22:23:35 [INFO] Task bg_abc123 verified: status=running
+2026-04-05 22:23:35 [INFO] Creating background task: agent=research, runtime=copilot, model=claude-haiku-4.5, session=session-1
+2026-04-05 22:23:35 [ERROR] Failed to create task: HTTP 500: Internal Server Error
+2026-04-05 22:23:35 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-05 22:23:35 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-05 22:23:35 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-05 22:23:35 [INFO] Session: id=test-session, mode=background, runtime=copilot
+2026-04-05 22:23:35 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-05 22:23:35 [INFO] Creating background task: agent=research, runtime=copilot, model=claude-haiku-4.5, session=test-session
+2026-04-05 22:23:35 [ERROR] Failed to create task: Connection failed: Connection refused
+2026-04-05 22:23:35 [INFO] get_secret: name=db_password, backend=keyring, session=session-1
+2026-04-05 22:23:35 [INFO] get_secret: name=api_token, backend=file, session=session-1
+2026-04-05 22:23:35 [INFO] get_secret: name=my_key, backend=file, session=session-1
+2026-04-05 22:23:35 [INFO] get_secret: name=missing_key, backend=keyring, session=session-1
+2026-04-05 22:23:35 [INFO] get_secret: name=slow_key, backend=keyring, session=session-1
+2026-04-05 22:23:35 [ERROR] get_secret timed out for name=slow_key
+2026-04-05 22:23:35 [INFO] get_secret: name=some_key, backend=keyring, session=session-1
+2026-04-05 22:23:35 [ERROR] secret_tool.py not found at /opt/n8n-copilot-shim-dev/secret_tool/secret_tool.py
+2026-04-05 22:23:35 [INFO] get_secret: name=key_1, backend=keyring, session=session-1
+2026-04-05 22:23:35 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-05 22:23:35 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-05 22:23:35 [INFO] get_secret: name=prod_key, backend=keyring, session=test-session
+2026-04-05 22:23:35 [INFO] Session: id=test-session, mode=background, runtime=copilot
+2026-04-05 22:32:41 [INFO] Creating background task: agent=research, runtime=copilot, model=claude-haiku-4.5, session=session-1
+2026-04-05 22:32:42 [INFO] Task bg_abc123 verified: status=running
+2026-04-05 22:32:42 [INFO] Creating background task: agent=research, runtime=copilot, model=claude-haiku-4.5, session=session-1
+2026-04-05 22:32:42 [ERROR] Failed to create task: HTTP 500: Internal Server Error
+2026-04-05 22:32:42 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-05 22:32:42 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-05 22:32:42 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-05 22:32:42 [INFO] Session: id=test-session, mode=background, runtime=copilot
+2026-04-05 22:32:42 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-05 22:32:42 [INFO] Creating background task: agent=research, runtime=copilot, model=claude-haiku-4.5, session=test-session
+2026-04-05 22:32:42 [ERROR] Failed to create task: Connection failed: Connection refused
+2026-04-05 22:32:42 [INFO] get_secret: name=db_password, backend=keyring, session=session-1
+2026-04-05 22:32:42 [INFO] get_secret: name=api_token, backend=file, session=session-1
+2026-04-05 22:32:42 [INFO] get_secret: name=my_key, backend=file, session=session-1
+2026-04-05 22:32:42 [INFO] get_secret: name=missing_key, backend=keyring, session=session-1
+2026-04-05 22:32:42 [INFO] get_secret: name=slow_key, backend=keyring, session=session-1
+2026-04-05 22:32:42 [ERROR] get_secret timed out for name=slow_key
+2026-04-05 22:32:42 [INFO] get_secret: name=some_key, backend=keyring, session=session-1
+2026-04-05 22:32:42 [ERROR] secret_tool.py not found at /opt/n8n-copilot-shim-dev/secret_tool/secret_tool.py
+2026-04-05 22:32:42 [INFO] get_secret: name=key_1, backend=keyring, session=session-1
+2026-04-05 22:32:42 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-05 22:32:42 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-05 22:32:42 [INFO] get_secret: name=prod_key, backend=keyring, session=test-session
+2026-04-05 22:32:42 [INFO] Session: id=test-session, mode=background, runtime=copilot
+2026-04-05 22:35:18 [INFO] Creating background task: agent=research, runtime=copilot, model=claude-haiku-4.5, session=session-1
+2026-04-05 22:35:18 [INFO] Task bg_abc123 verified: status=running
+2026-04-05 22:35:18 [INFO] Creating background task: agent=research, runtime=copilot, model=claude-haiku-4.5, session=session-1
+2026-04-05 22:35:18 [ERROR] Failed to create task: HTTP 500: Internal Server Error
+2026-04-05 22:35:18 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-05 22:35:18 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-05 22:35:18 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-05 22:35:18 [INFO] Session: id=test-session, mode=background, runtime=copilot
+2026-04-05 22:35:18 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-05 22:35:18 [INFO] Creating background task: agent=research, runtime=copilot, model=claude-haiku-4.5, session=test-session
+2026-04-05 22:35:18 [ERROR] Failed to create task: Connection failed: Connection refused
+2026-04-05 22:35:18 [INFO] get_secret: name=db_password, backend=keyring, session=session-1
+2026-04-05 22:35:18 [INFO] get_secret: name=api_token, backend=file, session=session-1
+2026-04-05 22:35:18 [INFO] get_secret: name=my_key, backend=file, session=session-1
+2026-04-05 22:35:18 [INFO] get_secret: name=missing_key, backend=keyring, session=session-1
+2026-04-05 22:35:18 [INFO] get_secret: name=slow_key, backend=keyring, session=session-1
+2026-04-05 22:35:18 [ERROR] get_secret timed out for name=slow_key
+2026-04-05 22:35:18 [INFO] get_secret: name=some_key, backend=keyring, session=session-1
+2026-04-05 22:35:18 [ERROR] secret_tool.py not found at /opt/n8n-copilot-shim-dev/secret_tool/secret_tool.py
+2026-04-05 22:35:18 [INFO] get_secret: name=key_1, backend=keyring, session=session-1
+2026-04-05 22:35:18 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-05 22:35:18 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-05 22:35:18 [INFO] get_secret: name=prod_key, backend=keyring, session=test-session
+2026-04-05 22:35:18 [INFO] Session: id=test-session, mode=background, runtime=copilot
+2026-04-07 22:13:32 [INFO] Creating background task: agent=research, runtime=copilot, model=claude-haiku-4.5, session=session-1
+2026-04-07 22:13:32 [INFO] Task bg_abc123 verified: status=running
+2026-04-07 22:13:32 [INFO] Creating background task: agent=research, runtime=copilot, model=claude-haiku-4.5, session=session-1
+2026-04-07 22:13:32 [ERROR] Failed to create task: HTTP 500: Internal Server Error
+2026-04-07 22:13:32 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-07 22:13:32 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-07 22:13:32 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-07 22:13:32 [INFO] Session: id=test-session, mode=background, runtime=copilot
+2026-04-07 22:13:32 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-07 22:13:32 [INFO] Creating background task: agent=research, runtime=copilot, model=claude-haiku-4.5, session=test-session
+2026-04-07 22:13:32 [ERROR] Failed to create task: Connection failed: Connection refused
+2026-04-07 22:13:32 [INFO] get_secret: name=db_password, backend=keyring, session=session-1
+2026-04-07 22:13:32 [INFO] get_secret: name=api_token, backend=file, session=session-1
+2026-04-07 22:13:32 [INFO] get_secret: name=my_key, backend=file, session=session-1
+2026-04-07 22:13:32 [INFO] get_secret: name=missing_key, backend=keyring, session=session-1
+2026-04-07 22:13:32 [INFO] get_secret: name=slow_key, backend=keyring, session=session-1
+2026-04-07 22:13:32 [ERROR] get_secret timed out for name=slow_key
+2026-04-07 22:13:32 [INFO] get_secret: name=some_key, backend=keyring, session=session-1
+2026-04-07 22:13:32 [ERROR] secret_tool.py not found at /opt/n8n-copilot-shim-dev/secret_tool/secret_tool.py
+2026-04-07 22:13:32 [INFO] get_secret: name=key_1, backend=keyring, session=session-1
+2026-04-07 22:13:32 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-07 22:13:32 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-07 22:13:32 [INFO] get_secret: name=prod_key, backend=keyring, session=test-session
+2026-04-07 22:13:32 [INFO] Session: id=test-session, mode=background, runtime=copilot
+2026-04-07 22:27:47 [INFO] Creating background task: agent=research, runtime=copilot, model=claude-haiku-4.5, session=session-1
+2026-04-07 22:27:47 [INFO] Task bg_abc123 verified: status=running
+2026-04-07 22:27:47 [INFO] Creating background task: agent=research, runtime=copilot, model=claude-haiku-4.5, session=session-1
+2026-04-07 22:27:47 [ERROR] Failed to create task: HTTP 500: Internal Server Error
+2026-04-07 22:27:47 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-07 22:27:47 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-07 22:27:47 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-07 22:27:47 [INFO] Session: id=test-session, mode=background, runtime=copilot
+2026-04-07 22:27:47 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-07 22:27:47 [INFO] Creating background task: agent=research, runtime=copilot, model=claude-haiku-4.5, session=test-session
+2026-04-07 22:27:47 [ERROR] Failed to create task: Connection failed: Connection refused
+2026-04-07 22:27:47 [INFO] get_secret: name=db_password, backend=keyring, session=session-1
+2026-04-07 22:27:47 [INFO] get_secret: name=api_token, backend=file, session=session-1
+2026-04-07 22:27:47 [INFO] get_secret: name=my_key, backend=file, session=session-1
+2026-04-07 22:27:47 [INFO] get_secret: name=missing_key, backend=keyring, session=session-1
+2026-04-07 22:27:47 [INFO] get_secret: name=slow_key, backend=keyring, session=session-1
+2026-04-07 22:27:47 [ERROR] get_secret timed out for name=slow_key
+2026-04-07 22:27:47 [INFO] get_secret: name=some_key, backend=keyring, session=session-1
+2026-04-07 22:27:47 [ERROR] secret_tool.py not found at /opt/n8n-copilot-shim-dev/secret_tool/secret_tool.py
+2026-04-07 22:27:47 [INFO] get_secret: name=key_1, backend=keyring, session=session-1
+2026-04-07 22:27:47 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-07 22:27:47 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-07 22:27:47 [INFO] get_secret: name=prod_key, backend=keyring, session=test-session
+2026-04-07 22:27:47 [INFO] Session: id=test-session, mode=background, runtime=copilot
+2026-04-08 04:17:01 [INFO] Creating background task: agent=research, runtime=copilot, model=claude-haiku-4.5, session=session-1
+2026-04-08 04:17:02 [INFO] Task bg_abc123 verified: status=running
+2026-04-08 04:17:02 [INFO] Creating background task: agent=research, runtime=copilot, model=claude-haiku-4.5, session=session-1
+2026-04-08 04:17:02 [ERROR] Failed to create task: HTTP 500: Internal Server Error
+2026-04-08 04:17:02 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-08 04:17:02 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-08 04:17:02 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-08 04:17:02 [INFO] Session: id=test-session, mode=background, runtime=copilot
+2026-04-08 04:17:02 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-08 04:17:02 [INFO] Creating background task: agent=research, runtime=copilot, model=claude-haiku-4.5, session=test-session
+2026-04-08 04:17:02 [ERROR] Failed to create task: Connection failed: Connection refused
+2026-04-08 04:17:02 [INFO] get_secret: name=db_password, backend=keyring, session=session-1
+2026-04-08 04:17:02 [INFO] get_secret: name=api_token, backend=file, session=session-1
+2026-04-08 04:17:02 [INFO] get_secret: name=my_key, backend=file, session=session-1
+2026-04-08 04:17:02 [INFO] get_secret: name=missing_key, backend=keyring, session=session-1
+2026-04-08 04:17:02 [INFO] get_secret: name=slow_key, backend=keyring, session=session-1
+2026-04-08 04:17:02 [ERROR] get_secret timed out for name=slow_key
+2026-04-08 04:17:02 [INFO] get_secret: name=some_key, backend=keyring, session=session-1
+2026-04-08 04:17:02 [ERROR] secret_tool.py not found at /opt/n8n-copilot-shim-dev/secret_tool/secret_tool.py
+2026-04-08 04:17:02 [INFO] get_secret: name=key_1, backend=keyring, session=session-1
+2026-04-08 04:17:02 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-08 04:17:02 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-08 04:17:02 [INFO] get_secret: name=prod_key, backend=keyring, session=test-session
+2026-04-08 04:17:02 [INFO] Session: id=test-session, mode=background, runtime=copilot
+2026-04-08 15:13:48 [INFO] Creating background task: agent=research, runtime=copilot, model=claude-haiku-4.5, session=session-1
+2026-04-08 15:13:49 [INFO] Task bg_abc123 verified: status=running
+2026-04-08 15:13:49 [INFO] Creating background task: agent=research, runtime=copilot, model=claude-haiku-4.5, session=session-1
+2026-04-08 15:13:49 [ERROR] Failed to create task: HTTP 500: Internal Server Error
+2026-04-08 15:13:49 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-08 15:13:49 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-08 15:13:49 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-08 15:13:49 [INFO] Session: id=test-session, mode=background, runtime=copilot
+2026-04-08 15:13:49 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-08 15:13:49 [INFO] Creating background task: agent=research, runtime=copilot, model=claude-haiku-4.5, session=test-session
+2026-04-08 15:13:49 [ERROR] Failed to create task: Connection failed: Connection refused
+2026-04-08 15:13:49 [INFO] get_secret: name=db_password, backend=keyring, session=session-1
+2026-04-08 15:13:49 [INFO] get_secret: name=api_token, backend=file, session=session-1
+2026-04-08 15:13:49 [INFO] get_secret: name=my_key, backend=file, session=session-1
+2026-04-08 15:13:49 [INFO] get_secret: name=missing_key, backend=keyring, session=session-1
+2026-04-08 15:13:49 [INFO] get_secret: name=slow_key, backend=keyring, session=session-1
+2026-04-08 15:13:49 [ERROR] get_secret timed out for name=slow_key
+2026-04-08 15:13:49 [INFO] get_secret: name=some_key, backend=keyring, session=session-1
+2026-04-08 15:13:49 [ERROR] secret_tool.py not found at /opt/n8n-copilot-shim-dev/secret_tool/secret_tool.py
+2026-04-08 15:13:49 [INFO] get_secret: name=key_1, backend=keyring, session=session-1
+2026-04-08 15:13:49 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-08 15:13:49 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-08 15:13:49 [INFO] get_secret: name=prod_key, backend=keyring, session=test-session
+2026-04-08 15:13:49 [INFO] Session: id=test-session, mode=background, runtime=copilot
+2026-04-08 23:36:35 [INFO] Creating background task: agent=research, runtime=copilot, model=claude-haiku-4.5, session=session-1
+2026-04-08 23:36:35 [INFO] Task bg_abc123 verified: status=running
+2026-04-08 23:36:35 [INFO] Creating background task: agent=research, runtime=copilot, model=claude-haiku-4.5, session=session-1
+2026-04-08 23:36:35 [ERROR] Failed to create task: HTTP 500: Internal Server Error
+2026-04-08 23:36:35 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-08 23:36:35 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-08 23:36:35 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-08 23:36:35 [INFO] Session: id=test-session, mode=background, runtime=copilot
+2026-04-08 23:36:35 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-08 23:36:35 [INFO] Creating background task: agent=research, runtime=copilot, model=claude-haiku-4.5, session=test-session
+2026-04-08 23:36:35 [ERROR] Failed to create task: Connection failed: Connection refused
+2026-04-08 23:36:35 [INFO] get_secret: name=db_password, backend=keyring, session=session-1
+2026-04-08 23:36:35 [INFO] get_secret: name=api_token, backend=file, session=session-1
+2026-04-08 23:36:35 [INFO] get_secret: name=my_key, backend=file, session=session-1
+2026-04-08 23:36:35 [INFO] get_secret: name=missing_key, backend=keyring, session=session-1
+2026-04-08 23:36:35 [INFO] get_secret: name=slow_key, backend=keyring, session=session-1
+2026-04-08 23:36:35 [ERROR] get_secret timed out for name=slow_key
+2026-04-08 23:36:35 [INFO] get_secret: name=some_key, backend=keyring, session=session-1
+2026-04-08 23:36:35 [ERROR] secret_tool.py not found at /opt/n8n-copilot-shim-dev/secret_tool/secret_tool.py
+2026-04-08 23:36:35 [INFO] get_secret: name=key_1, backend=keyring, session=session-1
+2026-04-08 23:36:35 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-08 23:36:35 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-08 23:36:35 [INFO] get_secret: name=prod_key, backend=keyring, session=test-session
+2026-04-08 23:36:35 [INFO] Session: id=test-session, mode=background, runtime=copilot
+2026-04-08 23:40:01 [INFO] Creating background task: agent=research, runtime=copilot, model=claude-haiku-4.5, session=session-1
+2026-04-08 23:40:01 [INFO] Task bg_abc123 verified: status=running
+2026-04-08 23:40:01 [INFO] Creating background task: agent=research, runtime=copilot, model=claude-haiku-4.5, session=session-1
+2026-04-08 23:40:01 [ERROR] Failed to create task: HTTP 500: Internal Server Error
+2026-04-08 23:40:01 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-08 23:40:01 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-08 23:40:01 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-08 23:40:01 [INFO] Session: id=test-session, mode=background, runtime=copilot
+2026-04-08 23:40:01 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-08 23:40:01 [INFO] Creating background task: agent=research, runtime=copilot, model=claude-haiku-4.5, session=test-session
+2026-04-08 23:40:01 [ERROR] Failed to create task: Connection failed: Connection refused
+2026-04-08 23:40:01 [INFO] get_secret: name=db_password, backend=keyring, session=session-1
+2026-04-08 23:40:01 [INFO] get_secret: name=api_token, backend=file, session=session-1
+2026-04-08 23:40:01 [INFO] get_secret: name=my_key, backend=file, session=session-1
+2026-04-08 23:40:01 [INFO] get_secret: name=missing_key, backend=keyring, session=session-1
+2026-04-08 23:40:01 [INFO] get_secret: name=slow_key, backend=keyring, session=session-1
+2026-04-08 23:40:01 [ERROR] get_secret timed out for name=slow_key
+2026-04-08 23:40:01 [INFO] get_secret: name=some_key, backend=keyring, session=session-1
+2026-04-08 23:40:01 [ERROR] secret_tool.py not found at /opt/n8n-copilot-shim-dev/secret_tool/secret_tool.py
+2026-04-08 23:40:01 [INFO] get_secret: name=key_1, backend=keyring, session=session-1
+2026-04-08 23:40:01 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-08 23:40:01 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-08 23:40:01 [INFO] get_secret: name=prod_key, backend=keyring, session=test-session
+2026-04-08 23:40:01 [INFO] Session: id=test-session, mode=background, runtime=copilot
+2026-04-08 23:41:06 [INFO] Creating background task: agent=research, runtime=copilot, model=claude-haiku-4.5, session=session-1
+2026-04-08 23:41:06 [INFO] Task bg_abc123 verified: status=running
+2026-04-08 23:41:06 [INFO] Creating background task: agent=research, runtime=copilot, model=claude-haiku-4.5, session=session-1
+2026-04-08 23:41:06 [ERROR] Failed to create task: HTTP 500: Internal Server Error
+2026-04-08 23:41:06 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-08 23:41:06 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-08 23:41:06 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-08 23:41:06 [INFO] Session: id=test-session, mode=background, runtime=copilot
+2026-04-08 23:41:06 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-08 23:41:06 [INFO] Creating background task: agent=research, runtime=copilot, model=claude-haiku-4.5, session=test-session
+2026-04-08 23:41:06 [ERROR] Failed to create task: Connection failed: Connection refused
+2026-04-08 23:41:06 [INFO] get_secret: name=db_password, backend=keyring, session=session-1
+2026-04-08 23:41:06 [INFO] get_secret: name=api_token, backend=file, session=session-1
+2026-04-08 23:41:06 [INFO] get_secret: name=my_key, backend=file, session=session-1
+2026-04-08 23:41:06 [INFO] get_secret: name=missing_key, backend=keyring, session=session-1
+2026-04-08 23:41:06 [INFO] get_secret: name=slow_key, backend=keyring, session=session-1
+2026-04-08 23:41:06 [ERROR] get_secret timed out for name=slow_key
+2026-04-08 23:41:06 [INFO] get_secret: name=some_key, backend=keyring, session=session-1
+2026-04-08 23:41:06 [ERROR] secret_tool.py not found at /opt/n8n-copilot-shim-dev/secret_tool/secret_tool.py
+2026-04-08 23:41:06 [INFO] get_secret: name=key_1, backend=keyring, session=session-1
+2026-04-08 23:41:06 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-08 23:41:06 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-08 23:41:06 [INFO] get_secret: name=prod_key, backend=keyring, session=test-session
+2026-04-08 23:41:06 [INFO] Session: id=test-session, mode=background, runtime=copilot
+2026-04-09 00:00:02 [INFO] Creating background task: agent=research, runtime=copilot, model=claude-haiku-4.5, session=session-1
+2026-04-09 00:00:03 [INFO] Task bg_abc123 verified: status=running
+2026-04-09 00:00:03 [INFO] Creating background task: agent=research, runtime=copilot, model=claude-haiku-4.5, session=session-1
+2026-04-09 00:00:03 [ERROR] Failed to create task: HTTP 500: Internal Server Error
+2026-04-09 00:00:03 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-09 00:00:03 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-09 00:00:03 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-09 00:00:03 [INFO] Session: id=test-session, mode=background, runtime=copilot
+2026-04-09 00:00:03 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-09 00:00:03 [INFO] Creating background task: agent=research, runtime=copilot, model=claude-haiku-4.5, session=test-session
+2026-04-09 00:00:03 [ERROR] Failed to create task: Connection failed: Connection refused
+2026-04-09 00:00:03 [INFO] get_secret: name=db_password, backend=keyring, session=session-1
+2026-04-09 00:00:03 [INFO] get_secret: name=api_token, backend=file, session=session-1
+2026-04-09 00:00:03 [INFO] get_secret: name=my_key, backend=file, session=session-1
+2026-04-09 00:00:03 [INFO] get_secret: name=missing_key, backend=keyring, session=session-1
+2026-04-09 00:00:03 [INFO] get_secret: name=slow_key, backend=keyring, session=session-1
+2026-04-09 00:00:03 [ERROR] get_secret timed out for name=slow_key
+2026-04-09 00:00:03 [INFO] get_secret: name=some_key, backend=keyring, session=session-1
+2026-04-09 00:00:03 [ERROR] secret_tool.py not found at /opt/n8n-copilot-shim-dev/secret_tool/secret_tool.py
+2026-04-09 00:00:03 [INFO] get_secret: name=key_1, backend=keyring, session=session-1
+2026-04-09 00:00:03 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-09 00:00:03 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-09 00:00:03 [INFO] get_secret: name=prod_key, backend=keyring, session=test-session
+2026-04-09 00:00:03 [INFO] Session: id=test-session, mode=background, runtime=copilot
+2026-04-10 00:02:32 [INFO] Creating background task: agent=research, runtime=copilot, model=claude-haiku-4.5, session=session-1
+2026-04-10 00:02:33 [INFO] Task bg_abc123 verified: status=running
+2026-04-10 00:02:33 [INFO] Creating background task: agent=research, runtime=copilot, model=claude-haiku-4.5, session=session-1
+2026-04-10 00:02:33 [ERROR] Failed to create task: HTTP 500: Internal Server Error
+2026-04-10 00:02:33 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-10 00:02:33 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-10 00:02:33 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-10 00:02:33 [INFO] Session: id=test-session, mode=background, runtime=copilot
+2026-04-10 00:02:33 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-10 00:02:33 [INFO] Creating background task: agent=research, runtime=copilot, model=claude-haiku-4.5, session=test-session
+2026-04-10 00:02:33 [ERROR] Failed to create task: Connection failed: Connection refused
+2026-04-10 00:02:33 [INFO] get_secret: name=db_password, backend=keyring, session=session-1
+2026-04-10 00:02:33 [INFO] get_secret: name=api_token, backend=file, session=session-1
+2026-04-10 00:02:33 [INFO] get_secret: name=my_key, backend=file, session=session-1
+2026-04-10 00:02:33 [INFO] get_secret: name=missing_key, backend=keyring, session=session-1
+2026-04-10 00:02:33 [INFO] get_secret: name=slow_key, backend=keyring, session=session-1
+2026-04-10 00:02:33 [ERROR] get_secret timed out for name=slow_key
+2026-04-10 00:02:33 [INFO] get_secret: name=some_key, backend=keyring, session=session-1
+2026-04-10 00:02:33 [ERROR] secret_tool.py not found at /opt/n8n-copilot-shim-dev/secret_tool/secret_tool.py
+2026-04-10 00:02:33 [INFO] get_secret: name=key_1, backend=keyring, session=session-1
+2026-04-10 00:02:33 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-10 00:02:33 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-10 00:02:33 [INFO] get_secret: name=prod_key, backend=keyring, session=test-session
+2026-04-10 00:02:33 [INFO] Session: id=test-session, mode=background, runtime=copilot
+2026-04-10 00:06:41 [INFO] Creating background task: agent=research, runtime=copilot, model=claude-haiku-4.5, session=session-1
+2026-04-10 00:06:41 [INFO] Task bg_abc123 verified: status=running
+2026-04-10 00:06:41 [INFO] Creating background task: agent=research, runtime=copilot, model=claude-haiku-4.5, session=session-1
+2026-04-10 00:06:41 [ERROR] Failed to create task: HTTP 500: Internal Server Error
+2026-04-10 00:06:41 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-10 00:06:41 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-10 00:06:41 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-10 00:06:41 [INFO] Session: id=test-session, mode=background, runtime=copilot
+2026-04-10 00:06:41 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-10 00:06:41 [INFO] Creating background task: agent=research, runtime=copilot, model=claude-haiku-4.5, session=test-session
+2026-04-10 00:06:41 [ERROR] Failed to create task: Connection failed: Connection refused
+2026-04-10 00:06:41 [INFO] get_secret: name=db_password, backend=keyring, session=session-1
+2026-04-10 00:06:41 [INFO] get_secret: name=api_token, backend=file, session=session-1
+2026-04-10 00:06:41 [INFO] get_secret: name=my_key, backend=file, session=session-1
+2026-04-10 00:06:41 [INFO] get_secret: name=missing_key, backend=keyring, session=session-1
+2026-04-10 00:06:41 [INFO] get_secret: name=slow_key, backend=keyring, session=session-1
+2026-04-10 00:06:41 [ERROR] get_secret timed out for name=slow_key
+2026-04-10 00:06:41 [INFO] get_secret: name=some_key, backend=keyring, session=session-1
+2026-04-10 00:06:41 [ERROR] secret_tool.py not found at /opt/n8n-copilot-shim-dev/secret_tool/secret_tool.py
+2026-04-10 00:06:41 [INFO] get_secret: name=key_1, backend=keyring, session=session-1
+2026-04-10 00:06:41 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-10 00:06:41 [INFO] Session: id=test-session, mode=interactive, runtime=copilot
+2026-04-10 00:06:41 [INFO] get_secret: name=prod_key, backend=keyring, session=test-session
+2026-04-10 00:06:41 [INFO] Session: id=test-session, mode=background, runtime=copilot

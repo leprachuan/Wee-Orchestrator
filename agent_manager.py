@@ -742,6 +742,81 @@ def get_default_runtime() -> str:
     """Get default runtime from environment or use copilot"""
     return os.environ.get("COPILOT_DEFAULT_RUNTIME", "copilot")
 
+def check_runtime_available(runtime: str) -> bool:
+    """Check if a runtime is available on the system.
+    
+    Args:
+        runtime: Runtime ID (e.g., 'copilot', 'claude', 'copilot-sdk')
+    
+    Returns:
+        True if the runtime is available, False otherwise
+    """
+    # Map runtime IDs to their executable/module names
+    runtime_map = {
+        'copilot': 'copilot',
+        'copilot-sdk': 'copilot',  # Python package
+        'claude': 'claude',
+        'claude-sdk': 'claude-sdk',  # Python package
+        'gemini': 'gemini',
+        'codex': 'codex',
+        'devin': 'devin',
+        'cursor': 'agent',  # Cursor uses 'agent' binary
+        'opencode': 'opencode',
+    }
+    
+    executable_name = runtime_map.get(runtime)
+    if not executable_name:
+        return False
+    
+    # For Python packages (SDK runtimes), try importing
+    if runtime in ('copilot-sdk', 'claude-sdk'):
+        try:
+            module_name = executable_name.replace('-', '_')
+            __import__(module_name)
+            return True
+        except ImportError:
+            return False
+    
+    # For CLI runtimes, check if executable exists
+    # First try system PATH
+    if shutil.which(executable_name):
+        return True
+    
+    # Search additional common locations
+    search_paths = [
+        Path.home() / ".local" / "bin" / executable_name,
+        Path("/opt/homebrew/bin") / executable_name,
+        Path("/usr/local/bin") / executable_name,
+        Path("/usr/bin") / executable_name,
+    ]
+    
+    for path in search_paths:
+        if path.exists() and path.is_file():
+            return True
+    
+    return False
+
+def get_available_runtimes() -> List[Dict[str, str]]:
+    """Get list of available runtimes on this system.
+    
+    Returns:
+        List of runtime dicts with 'id' and 'label' keys
+    """
+    all_runtimes = [
+        {"id": "copilot", "label": "copilot"},
+        {"id": "copilot-sdk", "label": "copilot-sdk", "icon": "🤖"},
+        {"id": "opencode", "label": "opencode"},
+        {"id": "claude", "label": "claude"},
+        {"id": "claude-sdk", "label": "claude-sdk", "icon": "🧠"},
+        {"id": "gemini", "label": "gemini"},
+        {"id": "codex", "label": "codex"},
+        {"id": "devin", "label": "devin"},
+        {"id": "cursor", "label": "cursor", "icon": "🖱️"},
+    ]
+    
+    available = [rt for rt in all_runtimes if check_runtime_available(rt['id'])]
+    return available
+
 def get_command_timeout() -> int:
     """Get command execution timeout from environment or use default 300 seconds"""
     try:
@@ -1731,7 +1806,7 @@ class SessionManager:
 
 **Runtime Management:**
    • /runtime list - Show available runtimes
-   • /runtime set (auto|copilot|opencode|claude|gemini|codex|devin|cursor) - Switch runtime
+   • /runtime set (copilot|copilot-sdk|opencode|claude|claude-sdk|gemini|codex|devin|cursor) - Switch runtime
    • /runtime current - Show current runtime
 
 **Model Management:**
@@ -1883,13 +1958,15 @@ You can mention an agent in your prompt and it will auto-delegate:
         if argument == "list":
             return (
                 "🤖 **Available Runtimes**\n\n"
-                "• `copilot` (GitHub Copilot)\n"
+                "• `copilot` (GitHub Copilot CLI)\n"
+                "• `copilot-sdk` (GitHub Copilot SDK — native Python, streaming)\n"
                 "• `opencode` (OpenCode CLI)\n"
                 "• `claude` (Claude Code CLI)\n"
                 "• `gemini` (Google Gemini CLI)\n"
                 "• `codex` (Codex CLI)\n"
                 "• `devin` (Devin CLI)\n"
-                "• `cursor` (Cursor Agent CLI)"
+                "• `cursor` (Cursor Agent CLI)\n"
+                "• `claude-sdk` (Claude Agent SDK — native Python, in-process tools)"
             )
         elif argument == "current":
             return f"🤖 **Current Runtime:** `{current_runtime}`"
@@ -1897,8 +1974,10 @@ You can mention an agent in your prompt and it will auto-delegate:
             new_runtime = argument[4:].strip().lower()
             if new_runtime not in [
                 "copilot",
+                "copilot-sdk",
                 "opencode",
                 "claude",
+                "claude-sdk",
                 "gemini",
                 "codex",
                 "devin",
@@ -1906,8 +1985,8 @@ You can mention an agent in your prompt and it will auto-delegate:
             ]:
                 return (
                     f"Unknown runtime: '{new_runtime}'. Use "
-                    "copilot, opencode, claude, gemini, "
-                    "codex, devin, or cursor."
+                    "copilot, copilot-sdk, opencode, claude, claude-sdk, "
+                    "gemini, codex, devin, or cursor."
                 )
 
             # Capture previous session state before any updates
@@ -1970,6 +2049,10 @@ You can mention an agent in your prompt and it will auto-delegate:
             default_model = "gpt-5-mini"  # Default fallback
             if new_runtime == "copilot":
                 default_model = "gpt-5-mini"
+            elif new_runtime == "copilot-sdk":
+                default_model = "gpt-5-mini"
+            elif new_runtime == "claude-sdk":
+                default_model = "haiku"
             elif new_runtime == "opencode":
                 default_model = "opencode/gpt-5-nano"
             elif new_runtime == "claude":
@@ -3217,6 +3300,7 @@ You can mention an agent in your prompt and it will auto-delegate:
         # First check env-loaded models (if cached)
         env_models_map = {
             "claude": self._env_claude_models,
+            "claude-sdk": self._env_claude_models,
             "gemini": self._env_gemini_models,
             "codex": self._env_codex_models,
             "devin": self._env_devin_models,
@@ -3232,6 +3316,7 @@ You can mention an agent in your prompt and it will auto-delegate:
         # Fall back to static models
         static_map = {
             "claude": self.CLAUDE_MODELS,
+            "claude-sdk": self.CLAUDE_MODELS,
             "gemini": self.GEMINI_MODELS,
             "codex": self.CODEX_MODELS,
             "opencode": self.OPENCODE_MODELS,
@@ -3434,6 +3519,8 @@ You can mention an agent in your prompt and it will auto-delegate:
         """
         dispatch = {
             "copilot": self.fetch_copilot_models,
+            "copilot-sdk": self.fetch_copilot_models,
+            "claude-sdk": self.fetch_claude_models,
             "opencode": self.fetch_opencode_models,
             "claude": self.fetch_claude_models,
             "gemini": self.fetch_gemini_models,
@@ -3611,7 +3698,7 @@ You can mention an agent in your prompt and it will auto-delegate:
 
             # Validate and fix session_id if corrupted
             session_id = merged.get("session_id", "")
-            if runtime in ["claude", "gemini", "codex", "copilot", "devin", "cursor"]:
+            if runtime in ["claude", "claude-sdk", "gemini", "codex", "copilot", "copilot-sdk", "devin", "cursor"]:
                 if not session_id or not (len(session_id) == 36 and "-" in session_id):
                     merged["session_id"] = str(uuid4())
             elif runtime == "opencode":
@@ -4065,7 +4152,7 @@ You can mention an agent in your prompt and it will auto-delegate:
         lines = text.split("\n")
         result = []
 
-        if runtime == "copilot":
+        if runtime in ("copilot", "copilot-sdk"):
             in_metadata = False
             for line in lines:
                 # Strip ANSI escape codes (may leak despite --no-color)
@@ -5824,7 +5911,7 @@ User Request:
                                                 "name": "shell",
                                                 "input": _oc_run.group(1).strip(),
                                             }
-                                elif runtime == "copilot":
+                                elif runtime in ("copilot", "copilot-sdk", "claude-sdk"):
                                     # Copilot shows tool calls as "● Description" and shell cmds as "  $ cmd"
                                     import re as _re_tc
 
@@ -6288,6 +6375,373 @@ User Request:
             cmd, agent_dir, effective_timeout, "copilot", agent, prompt, n8n_session_id
         )
         return self.strip_metadata(output, "copilot")
+
+    def run_copilot_sdk(
+        self,
+        prompt: str,
+        model: str,
+        agent: str,
+        session_id: Optional[str],
+        resume: bool,
+        n8n_session_id: str,
+        timeout: Optional[int] = None,
+        render_type: str = "text",
+    ) -> str:
+        """Execute via Copilot SDK (native Python, no CLI subprocess).
+
+        Uses the github-copilot-sdk package for direct API integration.
+        Benefits over CLI: persistent client, ~100ms startup, streaming
+        events, structured error handling, custom tool support.
+        """
+        try:
+            from copilot import CopilotClient
+            from copilot.session import (
+                CopilotSession,
+                PermissionHandler,
+                SessionEventType,
+            )
+        except ImportError:
+            return (
+                "Error: github-copilot-sdk not installed. "
+                "Run: pip install github-copilot-sdk"
+            )
+
+        import asyncio
+
+        # Parse mode
+        prompt_parsed, mode = self._parse_mode_command(prompt)
+        if mode is None:
+            mode = self.mode or "restricted"
+
+        session_data = self.get_or_create_session_data(n8n_session_id)
+        mode = self._resolve_permission_mode(session_data, mode)
+
+        agent_dir = self.AGENTS.get(agent, self.AGENTS["orchestrator"])["path"]
+        effective_timeout = timeout if timeout is not None else self.command_timeout
+        channel = session_data.get("channel", "webui")
+
+        # Build context prompt
+        if resume and session_id:
+            context_prompt = prompt_parsed
+        else:
+            context_prompt = self.build_agent_context_prompt(
+                agent,
+                prompt_parsed,
+                n8n_session_id,
+                render_type,
+                effective_timeout,
+                "copilot-sdk",
+                model,
+                channel,
+            )
+
+        # Add mode instructions
+        if mode == "elevated":
+            context_prompt += (
+                "\n\n[ELEVATED MODE ENABLED]\n"
+                "Full permissions granted. ALL commands requiring elevated privileges "
+                "MUST automatically prefix with 'sudo'. Sudo is configured without "
+                "password prompt (NOPASSWD:ALL)."
+            )
+        elif mode == "sandboxed":
+            context_prompt += (
+                "\n\n[SANDBOXED MODE ENABLED]\n"
+                "Read-only access only. Do NOT modify any files, run destructive "
+                "commands, or make network requests. Analysis and reporting only."
+            )
+
+        # Store session_id for resumption tracking
+        sdk_session_id = session_id if resume and session_id else None
+
+        async def _run_sdk() -> str:
+            collected_messages: list = []
+
+            async with CopilotClient() as client:
+                # Event handler to collect assistant messages
+                def on_event(event):
+                    if event.type == SessionEventType.ASSISTANT_MESSAGE:
+                        if hasattr(event, "data") and hasattr(event.data, "content"):
+                            collected_messages.append(str(event.data.content))
+                    elif event.type == SessionEventType.SESSION_ERROR:
+                        if hasattr(event, "data"):
+                            err_msg = str(getattr(event.data, "message", event.data))
+                            collected_messages.append(f"[SDK Error] {err_msg}")
+
+                # Session creation kwargs
+                session_kwargs = {
+                    "on_permission_request": PermissionHandler.approve_all,
+                    "model": model or None,
+                    "working_directory": agent_dir,
+                    "on_event": on_event,
+                }
+
+                mcp_config_path = os.path.expanduser("~/.copilot/mcp-config.json")
+                if os.path.exists(mcp_config_path):
+                    session_kwargs["config_dir"] = os.path.expanduser("~/.copilot")
+
+                try:
+                    if sdk_session_id:
+                        print(
+                            f"[SDK] Resuming session: {sdk_session_id}",
+                            file=sys.stderr,
+                        )
+                        session = await client.resume_session(
+                            sdk_session_id, **session_kwargs
+                        )
+                    else:
+                        print(
+                            f"[SDK] Starting new session in {mode} mode",
+                            file=sys.stderr,
+                        )
+                        session = await client.create_session(**session_kwargs)
+                except Exception as sess_err:
+                    return f"Error (Copilot SDK session): {type(sess_err).__name__}: {sess_err}"
+
+                try:
+                    # Update session map with the SDK session ID
+                    actual_session_id = getattr(session, "session_id", None)
+                    if actual_session_id:
+                        self.update_session_field(
+                            n8n_session_id, "session_id", str(actual_session_id)
+                        )
+
+                    # Send prompt and wait for completion
+                    result_event = await session.send_and_wait(
+                        context_prompt, timeout=float(effective_timeout)
+                    )
+
+                    # Extract response from result event
+                    if result_event and hasattr(result_event, "data"):
+                        if hasattr(result_event.data, "content"):
+                            return str(result_event.data.content)
+
+                    # Fall back to collected messages from event handler
+                    if collected_messages:
+                        return "\n".join(collected_messages)
+
+                    # Fall back to full message history
+                    messages = session.get_messages()
+                    assistant_msgs = [
+                        m
+                        for m in messages
+                        if m.type == SessionEventType.ASSISTANT_MESSAGE
+                    ]
+                    if assistant_msgs:
+                        last = assistant_msgs[-1]
+                        if hasattr(last, "data") and hasattr(last.data, "content"):
+                            return str(last.data.content)
+
+                    return ""
+                finally:
+                    try:
+                        await session.disconnect()
+                    except Exception:
+                        pass
+
+        try:
+            output = asyncio.run(_run_sdk())
+        except Exception as e:
+            print(f"[SDK] Error: {type(e).__name__}: {e}", file=sys.stderr)
+            return f"Error (Copilot SDK): {type(e).__name__}: {e}"
+
+        return self.strip_metadata(output, "copilot-sdk")
+
+    def run_claude_sdk(
+        self,
+        prompt: str,
+        model: str,
+        agent: str,
+        session_id: Optional[str],
+        resume: bool,
+        n8n_session_id: str,
+        timeout: Optional[int] = None,
+        render_type: str = "text",
+        mode: Optional[str] = None,
+    ) -> str:
+        """Execute via Claude Agent SDK (native Python, no CLI subprocess).
+
+        Uses the claude-sdk package for direct API integration.
+        Benefits over CLI: in-process custom tools, subagents, session
+        forking, streaming events, structured error handling.
+
+        Requires Claude Pro, Team, or Enterprise subscription.
+        User must run `claude login` to authenticate first.
+        """
+        try:
+            from claude_agent_sdk import (
+                query as claude_sdk_query,
+                ClaudeAgentOptions,
+                AssistantMessage,
+                TextBlock,
+                ResultMessage,
+                ClaudeSDKClient,
+            )
+        except ImportError:
+            return (
+                "Error: claude-sdk not installed. "
+                "Run: pip install claude-sdk"
+            )
+
+        import asyncio
+
+        import io
+        import sys
+        # Parse mode
+        if mode is None:
+            prompt_parsed, mode = self._parse_mode_command(prompt)
+        else:
+            prompt_parsed = prompt
+        if mode is None:
+            mode = self.mode or "restricted"
+
+        session_data = self.get_or_create_session_data(n8n_session_id)
+        mode = self._resolve_permission_mode(mode, session_data)
+
+        agent_dir = self.AGENTS.get(agent, self.AGENTS["orchestrator"])["path"]
+        effective_timeout = timeout if timeout is not None else self.command_timeout
+
+        channel = session_data.get("channel", "api")
+
+        # Build context prompt
+        sdk_session_id = session_id if resume and session_id else None
+        if sdk_session_id:
+            context_prompt = prompt_parsed
+        else:
+            context_prompt = self.build_agent_context_prompt(
+                agent,
+                prompt_parsed,
+                n8n_session_id,
+                render_type,
+                effective_timeout,
+                "claude-sdk",
+                model,
+                channel,
+            )
+
+        # Add mode instructions
+        if mode == "elevated":
+            context_prompt += (
+                "\n\n[ELEVATED MODE ENABLED]\n"
+                "Full permissions granted. ALL commands requiring elevated privileges "
+                "MUST automatically prefix with 'sudo'. Sudo is configured without "
+                "password prompt (NOPASSWD:ALL)."
+            )
+        elif mode == "sandboxed":
+            context_prompt += (
+                "\n\n[SANDBOXED MODE ENABLED]\n"
+                "Read-only access only. Do NOT modify any files, run destructive "
+                "commands, or make network requests. Analysis and reporting only."
+            )
+
+        # Map permission mode for Claude Agent SDK
+        if mode == "elevated":
+            sdk_permission_mode = "bypassPermissions"
+        elif mode == "sandboxed":
+            sdk_permission_mode = "plan"
+        else:
+            sdk_permission_mode = "default"
+
+        async def _run_sdk() -> str:
+            collected_text: list = []
+
+            options = ClaudeAgentOptions(
+                permission_mode=sdk_permission_mode,
+                cwd=agent_dir,
+            )
+
+            # Set model if specified
+            if model:
+                options.model = model
+
+            try:
+                if sdk_session_id:
+                    # Multi-turn conversation: use ClaudeSDKClient for state management
+                    client = ClaudeSDKClient(options=options)
+                    async with client:
+                        await client.query(
+                            prompt=context_prompt,
+                            session_id=sdk_session_id,
+                        )
+                        async for message in client.receive_messages():
+                            if isinstance(message, AssistantMessage):
+                                for block in message.content:
+                                    if isinstance(block, TextBlock):
+                                        collected_text.append(block.text)
+                            elif isinstance(message, ResultMessage):
+                                if message.session_id:
+                                    self.update_session_field(n8n_session_id, "session_id", message.session_id)
+                            elif hasattr(message, "content"):
+                                for block in getattr(message, "content", []):
+                                    if hasattr(block, "text"):
+                                        collected_text.append(block.text)
+                else:
+                    # One-shot query: use stateless query() function
+                    async for message in claude_sdk_query(
+                        prompt=context_prompt,
+                        options=options,
+                    ):
+                        if isinstance(message, AssistantMessage):
+                            for block in message.content:
+                                if isinstance(block, TextBlock):
+                                    collected_text.append(block.text)
+                        elif isinstance(message, ResultMessage):
+                            if message.session_id:
+                                self.update_session_field(n8n_session_id, "session_id", message.session_id)
+                        elif hasattr(message, "content"):
+                            for block in getattr(message, "content", []):
+                                if hasattr(block, "text"):
+                                    collected_text.append(block.text)
+
+            except Exception as e:
+                error_type = type(e).__name__
+                error_msg = str(e).lower()
+                if "clinotfound" in error_type.lower():
+                    return (
+                        "Error: Claude Code CLI not found. "
+                        "The claude-sdk bundles the CLI automatically. "
+                        "Try reinstalling: pip install --force-reinstall claude-sdk"
+                    )
+                elif "cliconnection" in error_type.lower() or "auth" in error_msg:
+                    return (
+                        "Error: Not authenticated with Claude. "
+                        "Run `claude login` to authenticate. "
+                        "Requires Claude Pro, Team, or Enterprise subscription."
+                    )
+                elif "processerror" in error_type.lower():
+                    return f"Error: Claude Agent SDK process error: {e}"
+                else:
+                    return f"Error (Claude Agent SDK): {error_type}: {e}"
+
+            output = "\n".join(collected_text)
+            if not output.strip():
+                return "Error: No response received from Claude Agent SDK"
+            return output
+
+        try:
+            loop = None
+            try:
+                loop = asyncio.get_running_loop()
+            except RuntimeError:
+                pass
+
+            if loop and loop.is_running():
+                import concurrent.futures
+                with concurrent.futures.ThreadPoolExecutor() as pool:
+                    output = pool.submit(
+                        asyncio.run, _run_sdk()
+                    ).result(timeout=effective_timeout)
+            else:
+                output = asyncio.run(_run_sdk())
+        except (asyncio.TimeoutError, concurrent.futures.TimeoutError):
+            return f"Error: Claude Agent SDK timed out after {effective_timeout}s"
+        except Exception as e:
+            print(
+                f"[Claude-Agent-SDK] Error: {type(e).__name__}: {e}",
+                file=sys.stderr,
+            )
+            return f"Error (Claude Agent SDK): {type(e).__name__}: {e}"
+
+        return self.strip_metadata(output, "claude")
 
     def run_opencode(
         self,
@@ -7010,7 +7464,7 @@ User Request:
         self, session_id: str, runtime: str, n8n_session_id: Optional[str] = None
     ) -> bool:
         """Check if session state exists for runtime"""
-        if runtime == "copilot":
+        if runtime in ("copilot", "copilot-sdk"):
             # Modern Copilot stores sessions as directories with events.jsonl inside
             session_dir = self.session_state_dir / session_id
             if session_dir.is_dir() and (session_dir / "events.jsonl").exists():
@@ -7027,7 +7481,7 @@ User Request:
             except Exception:
                 pass
             return False
-        elif runtime == "claude":
+        elif runtime in ("claude", "claude-sdk"):
             if not session_id:
                 return False
             # Verify session actually exists in Claude's project storage.
@@ -7079,7 +7533,7 @@ User Request:
     ) -> Optional[str]:
         """Get most recent session ID from storage or CLI"""
         try:
-            if runtime == "copilot":
+            if runtime in ("copilot", "copilot-sdk"):
                 # Modern Copilot: sessions are directories with events.jsonl inside
                 session_dirs = [
                     d
@@ -7291,6 +7745,17 @@ User Request:
                 effective_timeout,
                 render_type,
             )
+        elif runtime == "copilot-sdk":
+            result = self.run_copilot_sdk(
+                prompt,
+                model,
+                agent,
+                session_id if can_resume else None,
+                can_resume,
+                n8n_session_id,
+                effective_timeout,
+                render_type,
+            )
         elif runtime == "opencode":
             result = self.run_opencode(
                 prompt,
@@ -7304,6 +7769,18 @@ User Request:
             )
         elif runtime == "claude":
             result = self.run_claude(
+                prompt,
+                model,
+                agent,
+                session_id if can_resume else None,
+                can_resume,
+                n8n_session_id,
+                effective_timeout,
+                render_type,
+                mode,
+            )
+        elif runtime == "claude-sdk":
+            result = self.run_claude_sdk(
                 prompt,
                 model,
                 agent,
@@ -7701,6 +8178,50 @@ def _resolve_telegram_identity(username: str):
     except Exception:
         return None
 
+def _compute_bg_task_defaults(session_map, identity, channel):
+    """Compute inheritable defaults from existing sessions for a new background task.
+
+    Only safe fields (notification_preference, runtime, model) are inherited.
+    The 'agent' field is intentionally excluded to prevent session agent leakage
+    (see issue #75).
+
+    Args:
+        session_map: dict of n8n_sid -> session_data
+        identity: user identity string
+        channel: auth channel string
+
+    Returns:
+        dict with only safe inherited fields (never contains 'agent')
+    """
+    SAFE_FIELDS = ("notification_preference", "runtime", "model")
+    matching_same = []
+    matching_other = []
+
+    for n8n_sid, data in session_map.items():
+        if isinstance(data, str):
+            data = {"session_id": data}
+        sid_identity = data.get("identity")
+        sid_channel = data.get("channel")
+        if sid_identity and sid_identity == identity:
+            if sid_channel == channel:
+                matching_same.append(data)
+            else:
+                matching_other.append(data)
+
+    defaults = {}
+    for data in matching_same + matching_other:
+        if not defaults:
+            for key in SAFE_FIELDS:
+                if key in data:
+                    defaults[key] = data[key]
+        # Always prefer notification_preference from any matching session
+        pref = data.get("notification_preference")
+        if pref and not defaults.get("notification_preference"):
+            defaults["notification_preference"] = pref
+
+    return defaults
+
+
 def create_api_app():  # noqa: C901 – factory kept in one place intentionally
     """Factory that builds and returns the FastAPI application."""
     import asyncio
@@ -7771,6 +8292,9 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
     history_mgr = HistoryManager()
     bg_task_mgr = BackgroundTaskManager()
     session_mgr._bg_task_mgr = bg_task_mgr
+    # Expose for testing/introspection (read-only reference)
+    import sys as _sys
+    _sys.modules[__name__]._session_mgr = session_mgr
     usage_tracker = RuntimeUsageTracker()
 
     # Shared thread pool executor for background tasks
@@ -8281,17 +8805,12 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
 
     @app.get("/api/v1/runtimes")
     async def get_runtimes():
-        """Return list of available runtimes."""
-        runtimes = [
-            {"id": "auto", "label": "auto"},
-            {"id": "copilot", "label": "copilot"},
-            {"id": "opencode", "label": "opencode"},
-            {"id": "claude", "label": "claude"},
-            {"id": "gemini", "label": "gemini"},
-            {"id": "codex", "label": "codex"},
-            {"id": "devin", "label": "devin"},
-            {"id": "cursor", "label": "cursor"},
-        ]
+        """Return list of available runtimes on this system.
+        
+        Only runtimes that are actually installed/available are returned.
+        This prevents the WebUI from showing runtimes that cannot be used.
+        """
+        runtimes = get_available_runtimes()
         return {"runtimes": runtimes}
 
     @app.get("/api/v1/models")
@@ -8305,8 +8824,10 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         runtime = runtime.lower().strip()
         known_runtimes = {
             "copilot",
+            "copilot-sdk",
             "opencode",
             "claude",
+            "claude-sdk",
             "gemini",
             "codex",
             "devin",
@@ -10389,63 +10910,9 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         # Resolve agent/runtime/model — default to user's current session config
         # Determine defaults by searching for ANY session for this identity across all channels
         # to inherit preferences (like notification_preference).
-        defaults = {}
         session_map = session_mgr.load_session_map()
-
-        # Search session_map for matching n8n_session_ids by identity (highest priority)
-        # Then by channel, always respecting notification_preference if set
-        matching_sessions_same_channel = []
-        matching_sessions_other_channel = []
-
-        for n8n_sid, data in session_map.items():
-            # Handle legacy string format
-            if isinstance(data, str):
-                data = {"session_id": data}
-
-            # Check if this session belongs to this user (by identity if stored)
-            sid_identity = data.get("identity")
-            sid_channel = data.get("channel")
-
-            # Match by identity first (most reliable)
-            if sid_identity and sid_identity == identity:
-                if sid_channel == channel:
-                    matching_sessions_same_channel.append((n8n_sid, data))
-                else:
-                    matching_sessions_other_channel.append((n8n_sid, data))
-
-        # Use sessions from the same channel first
-        for n8n_sid, data in matching_sessions_same_channel:
-            if not defaults:
-                defaults = dict(data)
-                print(
-                    f"[API] Found matching session '{n8n_sid}' for {channel}/{identity}"
-                )
-
-            # Always check for notification_preference (highest priority)
-            pref = data.get("notification_preference")
-            if pref:
-                defaults["notification_preference"] = pref
-                print(
-                    f"[API] Inherited notification_preference '{pref}' from session '{n8n_sid}'"
-                )
-
-        # Fall back to other channels for the same user
-        for n8n_sid, data in matching_sessions_other_channel:
-            if not defaults:
-                defaults = dict(data)
-                print(
-                    f"[API] Found matching cross-channel session '{n8n_sid}' for {identity}"
-                )
-
-            # Always prioritize notification_preference across channels
-            pref = data.get("notification_preference")
-            if pref:
-                # If "off" is set anywhere, respect it
-                if pref == "off" or not defaults.get("notification_preference"):
-                    defaults["notification_preference"] = pref
-                    print(
-                        f"[API] Inherited notification_preference '{pref}' from cross-channel session '{n8n_sid}'"
-                    )
+        # Inherit only safe fields (never 'agent') from prior sessions — see issue #75
+        defaults = _compute_bg_task_defaults(session_map, identity, channel)
 
         agent = body.agent or defaults.get("agent", get_default_agent())
         runtime = body.runtime or defaults.get("runtime", get_default_runtime())
@@ -13520,8 +13987,8 @@ Examples:
     runtime_group.add_argument(
         "--runtime",
         metavar="NAME",
-        choices=["copilot", "opencode", "claude", "gemini", "codex", "devin", "cursor"],
-        help="Set the runtime to use (choices: copilot, opencode, claude, gemini, codex, devin, cursor)",
+        choices=["copilot", "copilot-sdk", "opencode", "claude", "claude-sdk", "gemini", "codex", "devin", "cursor"],
+        help="Set the runtime to use (choices: copilot, copilot-sdk, opencode, claude, claude-sdk, gemini, codex, devin, cursor)",
     )
     runtime_group.add_argument(
         "--list-runtimes",

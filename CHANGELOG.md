@@ -1,8 +1,210 @@
 # Changelog
 
+## [Issue #84] Bug Fix: Remove Non-Functional Auto Runtime
+**Status:** ✅ Fixed (commit 266bee9 on dev)
+
+### Summary
+Removed the non-functional `auto` runtime that appeared in the UI runtime selector but had no execution handler. Selecting it would produce "Unknown runtime auto" errors.
+
+### Changes
+- **agent_manager.py:**
+  - Removed `auto` from `get_available_runtimes()` list
+  - Removed early-return bypass in `check_runtime_available()` that always returned True for `auto`
+  - Removed `auto` from `/runtime set` help text
+- **tests/test_auto_runtime_removed.py:** Added 4 regression tests:
+  - Verify `auto` not in available runtimes list
+  - Verify `check_runtime_available("auto")` returns False
+  - Verify `/runtime set auto` returns error
+  - Verify all listed runtimes have valid handlers
+
+### Impact
+- Users no longer see a broken `auto` option in the runtime selector
+- API `/api/v1/runtimes` no longer includes `auto`
+- No effect on the Cursor model `auto` (model selector, not runtime)
+
+
+
+## [Issue #83] Feature: Display Response Generation Time
+**Status:** ✅ Implemented (commit 4da4529 on dev)
+
+### Summary
+Added response generation timing display in the WebUI message output box. Each assistant message now shows how long it took to generate the response with a subtle timestamp indicator positioned in the bottom right corner.
+
+### Changes
+- **WebUI (app.js):** 
+  - Added `messageTiming` to STATE object to track timing per session
+  - Modified `sendMessage()` to capture start time using `performance.now()`
+  - Updated `renderMessage()` signature to accept optional `timing` parameter
+  - Modified `sendMessageStreaming()` done handler to calculate elapsed time
+  - Automatically appends timing div to streaming bubbles and non-streaming responses
+  - Works with all runtimes (streaming path and command/no-chunk path)
+  
+- **WebUI (app.css):**
+  - Added `.message-timing` CSS class with subtle styling
+  - Gray text color using `var(--text-secondary)` with 0.45 opacity
+  - Small font (12px), italic styling
+  - Top border separator with subtle transparent line
+  - Positioned in bottom right of message bubble
+  - Timing calculated to 1 decimal place using `elapsedSec.toFixed(1)`
+  - Format: "⏱️ Generated in 2.5s"
+
+### User-Facing Behavior
+- Response messages display timing indicator below content, above TTS button
+- Timing is measured from user query send to response completion
+- Format: "⏱️ Generated in X.Xs" (e.g., "⏱️ Generated in 1.2s")
+- Timing display only appears on assistant messages, not user messages
+- Works for all runtimes: copilot, claude, claude-sdk, claude-agent-sdk, cursor, gemini, opencode
+
+### Test Results
+- Full regression suite: 1031 passed, 9 skipped, 0 failures (50.85s)
+- No breaking changes to existing functionality
+
+---
+
+
+## [Issue #81] Bug Fix: Claude SDK Multi-Turn Conversations
+**Status:** ✅ Fixed (commit a2610ba on dev)
+
+### Problem
+Claude SDK runtime failed on multi-turn conversations with exit code 1.
+Root cause: Using stateless query() which does not maintain conversation state.
+For resumed sessions, ClaudeSDKClient is now used instead.
+
+### Solution  
+Refactored to use ClaudeSDKClient for multi-turn (resumed) sessions
+while keeping query() for one-shot queries. Session context now properly
+preserved across turns with ResultMessage handling.
+
+### Changes
+- Added ClaudeSDKClient import for stateful multi-turn
+- Refactored _run_sdk() with conditional logic
+- Added _FakeClaudeSDKClient to test module
+- New test: test_multiturn_uses_clausdesdk_client()
+
+### Verification
+- 25 claude-sdk tests pass (24 existing + 1 new)
+- Full regression: 1031 passed, 9 skipped
+- Multi-turn sessions work with context preservation
+
+## [Issue #77] Feature: Claude Agent SDK Runtime
+**Status:** ✅ QA Approved (commits 6ea6371 + 0ecc7ab on dev)
+
+### Summary
+Added new `claude-agent-sdk` runtime using the `claude-agent-sdk` Python package for
+native async integration. This in-process approach eliminates subprocess overhead, provides
+structured error handling, and supports session continuity via `ResultMessage` capture.
+
+### Changes
+- **New runtime:** `claude-agent-sdk` — uses `query()` async generator via `ClaudeAgentOptions`
+- **New method:** `run_claude_agent_sdk()` in `SessionManager` (~160 lines)
+- **Session continuity fix (MAJOR):** `ResultMessage` added to imports and processed in the
+  async message loop — stores `session_id` via `update_session_field()` enabling resumption
+- **TimeoutError fix (MINOR):** `except` clause now catches `(asyncio.TimeoutError,
+  concurrent.futures.TimeoutError)` in the `ThreadPoolExecutor` path
+- **16 integration points updated:** help text, validation, model dispatch, session handling,
+  dispatch routing, API endpoints, argparse
+- **Requirements:** Added `claude-agent-sdk>=0.1.0` to `requirements.txt`
+- **Documentation:** `ARCHITECTURE.md` updated with flow diagram and runtime comparison table
+- **Tests:** 24 unit tests across 9 classes — import handling, mode mapping, streaming,
+  errors, session resume (incl. `test_result_message_stores_session_id`), registration, dispatch
+
+### Key Technical Decisions
+- `run_claude_agent_sdk()` uses `asyncio.run()` in a `ThreadPoolExecutor` — safe because
+  FastAPI runs it via `asyncio.to_thread()` (separate OS thread)
+- SDK import is lazy (inside method body) to avoid `ImportError` if package not installed
+- Permission modes: `elevated→bypassPermissions`, `sandboxed→plan`, `restricted→default`
+- `ResultMessage` is the terminal message in the stream; its `session_id` is the authoritative
+  source for session continuity across turns
+- `concurrent.futures.TimeoutError` catch added alongside `asyncio.TimeoutError` to cover
+  the `ThreadPoolExecutor.submit(...).result(timeout=...)` code path
+
+### Testing
+- 24 unit tests — all passing (target suite)
+- Full regression suite: 1030 passed, 0 failures
+- No regressions in existing test suite
+
+### Non-Blocking Follow-Up
+The `concurrent.futures` import is inside the `if`-branch where it is used. A future cleanup
+could hoist it before the outer `try` block to eliminate a latent `NameError` in edge-case
+timeout paths (filed as non-blocking note).
+
+### Usage
+```
+/runtime set claude-agent-sdk     # Switch to Agent SDK runtime
+/runtime set claude               # Switch back to CLI subprocess runtime
+```
+
+---
+
 All notable changes to Wee Orchestrator are documented here.
 
+## [Issue #76] Feature: Add Copilot SDK Runtime (Hybrid Approach)
+**Status:** ✅ QA Approved (commit 7dec088)
+
+### Summary
+Added new `copilot-sdk` runtime using the `github-copilot-sdk` Python package for native
+async integration. This hybrid approach enables advanced features (streaming via event
+handlers, session resumption, structured error handling) while maintaining full backward
+compatibility with the existing `copilot` CLI runtime.
+
+### Changes
+- **New runtime:** `copilot-sdk` — uses `CopilotClient` async SDK instead of subprocess
+- **New method:** `run_copilot_sdk()` in `SessionManager` (~90 lines)
+- **16 integration points updated:** slash commands, API endpoints, argparse, dispatch
+  routing, session management, strip_metadata, model fetch, help text, background tasks
+- **Requirements:** Added `github-copilot-sdk>=0.1.0` to `requirements.txt`
+- **Documentation:** Updated `ARCHITECTURE.md` with SDK flow diagram and comparison table
+- **Tests:** 19 new tests across 6 test classes (routing, strip_metadata, session mgmt,
+  run method with mocks, dispatch, API endpoints)
+
+### Key Technical Decisions
+- `run_copilot_sdk()` uses `asyncio.run()` internally to match existing synchronous runtime
+  pattern — safe because FastAPI runs it in `asyncio.to_thread()` (separate thread)
+- SDK import is lazy (inside method body) to avoid ImportError if package not installed
+- Shares model list with `copilot` CLI runtime (same backend)
+- Event handler captures `ASSISTANT_MESSAGE` events as fallback when `send_and_wait()` returns None
+- Three-tier response extraction: result_event → collected_messages → message history
+
+### Testing
+- 19 unit tests — all passing
+- Full regression suite: 1006 passed, 9 skipped, 0 failures
+- No regressions in existing test suite
+
+### Usage
+```
+/runtime set copilot-sdk          # Switch to SDK runtime
+/runtime set copilot              # Switch back to CLI runtime (backward compatible)
+```
+
+---
+
 ## [Unreleased] — Dev Branch
+
+### Added
+#### F001: LLM-Generated Conversation Titles
+- **Status**: QA Approved (commit 79503ed on dev)
+- **Commit**: 79503ed
+- **Issue**: Conversation history sessions lacked descriptive titles. Sessions displayed raw session IDs or a static placeholder in the history panel, making it difficult for users to identify past conversations at a glance.
+- **Feature**: Auto-generates and periodically refreshes concise, descriptive session titles using an LLM, with a smart heuristic fallback when no LLM is available.
+  - **Primary**: Ollama (local, free) — `POST {TITLE_GEN_OLLAMA_URL}/api/generate` using `TITLE_GEN_MODEL` (default: `granite3.3-tuned`)
+  - **Fallback**: Anthropic API (`claude-haiku-4.5`) when `ANTHROPIC_API_KEY` is set and Ollama is unavailable
+  - **Heuristic fallback**: Extracts the first substantive user message, strips markdown/code fences/URLs, truncates to 60 chars at a word boundary — never calls an LLM
+  - **Auto-trigger**: `_maybe_auto_generate_title()` fires after every session response (background, non-blocking); first generation at 2+ messages; refreshes every `TITLE_REFRESH_INTERVAL` (default: 10) messages
+  - **User-set title protection**: `update_title_llm()` will not overwrite titles with `title_source == "user"`
+  - **Dependency**: `httpx>=0.27.0` added to `requirements.txt` (installed 0.28.1) for async HTTP to Ollama
+- **Key functions**:
+  - `_generate_title_via_llm(messages)` — async; tries Ollama then Anthropic; returns `None` on all failures
+  - `_maybe_auto_generate_title(channel, identity, session_id)` — async; evaluates generation criteria and dispatches LLM/heuristic
+  - `_smart_heuristic_title(messages)` — sync; extracts and cleans first user message; no LLM required
+  - `update_title_llm(channel, identity, session_id, title, source)` — persists generated title; records `title_source`, `title_generated_at`, `message_count_at_title_gen`
+- **API endpoint**: `POST /api/v1/history/sessions/{session_id}/generate-title` — force (re)generate an LLM title on demand
+- **Configuration (env vars)**:
+  - `TITLE_GEN_OLLAMA_URL` — Ollama base URL (default: `http://192.168.1.101:11434`)
+  - `TITLE_GEN_MODEL` — Ollama model name (default: `granite3.3-tuned`)
+  - `TITLE_REFRESH_INTERVAL` — messages between title refreshes (default: `10`)
+- **Error handling**: All exceptions in `_maybe_auto_generate_title` are caught and logged as `WARNING`; title generation never blocks or errors a user response
+- **Notes**: No dedicated unit tests for the async LLM path (dev disk full prevented test run — env issue, not code issue). Heuristic and API endpoint paths are covered by existing integration tests.
+- **Impact**: Session history panel now shows human-readable titles that update as conversations evolve; titles persist across sessions and are searchable
 
 ### Fixed
 #### #77: Claude Agent SDK Runtime
@@ -42,6 +244,76 @@ All notable changes to Wee Orchestrator are documented here.
   - Existing tests updated to assert absence of wrapper
 - **Metrics**: 947 tests pass, 9 skipped, 0 failures — no regressions
 - **Impact**: Memory context is now consistently injected across all session types (background, interactive, queued); cleaner output without wrapper markers; single injection point eliminates duplication risks
+
+
+#### #71: Scheduler Backward Clock Drift Skips Jobs
+- **Status**: QA Approved (commit 867c553 on dev)
+- **Commit**: 867c553
+- **Root Cause**: _is_job_ready() compares next_run against wall-clock now. When the system clock jumps backward (NTP adjustment or manual time change), a job that was due becomes future-dated relative to the new time and is silently skipped with no log entry.
+- **Fix**: Implemented wall-clock debt compensation mechanism:
+  - _wall_clock_debt accumulates on each backward drift event
+  - In _is_job_ready(), computes compensated_now = now + debt (expanding the now window to cover lost time)
+  - Jobs within the debt window are recovered and executed with a clear log entry
+  - Debt drains on forward drift events (clock catches back up)
+  - Capped at _DRIFT_COMPENSATION_CAP = 600s (10 minutes) to prevent runaway compensation
+  - Drift events tracked in _drift_events list (capped at 50 most recent)
+  - _drift_recovered_count counter tracks total compensated executions
+- **Additional Improvements**:
+  - _recalculate_stale_jobs(): now logs ValueError/TypeError exceptions instead of silently swallowing them
+  - _is_job_ready(): error messages now include the job ID for easier log correlation
+  - New public method get_drift_diagnostics() returns current compensation state for external monitoring
+- **get_drift_diagnostics() Response**:
+  - wall_clock_debt_seconds: float -- accumulated backward drift (0 = no active compensation)
+  - drift_compensation_active: bool -- True when debt > 0
+  - drift_recovered_jobs: int -- total jobs recovered via compensation since executor start
+  - recent_drift_events: list -- last 10 drift events with direction and magnitude
+  - compensation_cap_seconds: int -- current cap (600)
+- **Testing**: 37 tests in tests/test_scheduler_clock_drift.py (up from 21), all passing:
+  - Backward drift compensation accumulates and drains correctly
+  - Jobs within debt window are recovered; jobs beyond cap are not
+  - Debt cap prevents runaway compensation
+  - get_drift_diagnostics() returns correct state in all scenarios
+  - _recalculate_stale_jobs() logs errors on malformed job data
+  - Integration: full cycle with backward/forward drift sequences
+- **Metrics**: 938 tests pass, 9 skipped, 0 failures -- no regressions
+- **Impact**: Schedulers behind NTP-synced hosts no longer silently drop jobs during backward clock corrections. All skipped jobs within the compensation window (up to 10 min) are recovered automatically with audit logging.
+
+#### #72: Remove Memory Context Prompt Fallback, Inject at Session Creation
+- **Status**: ✅ QA Approved (commit 30d1400 on dev)
+- **Commit**: 30d1400
+- **Issue**: Memory context was injected as a prompt prefix in `_run_background_task()`, a fragile approach that only applied to background tasks. Other code paths (interactive sessions, queued jobs, promoted sessions) lacked memory context. The [MEMORY CONTEXT] wrapper block was unwieldy and duplicated memory across multiple system messages.
+- **Fix**: Moved memory injection from background task prompt-prepend into `build_agent_context_prompt()` to run once per session creation for all code paths:
+  - **memory/inject.py**: Removed [MEMORY CONTEXT] block wrapper from `build_context()` and `get_memory_context()` — now returns raw sections only
+  - **agent_manager.py `build_agent_context_prompt()`**: Added `memory_injected` flag check; injects memory via `get_memory_context()` if not yet set for the session
+  - **agent_manager.py `_run_background_task()`**: Removed explicit memory injection block (replaced by one-liner comment directing to build_agent_context_prompt)
+  - **Session-Level Injection**: Memory is now injected exactly once per session at context build time, not at task execution time
+- **Testing**: 34 tests in `tests/test_memory_native.py` (new `TestNoPromptPrefix` class with 4 tests):
+  - No [MEMORY CONTEXT] markers in output
+  - `memory_injected` flag prevents double-injection
+  - `build_agent_context_prompt()` includes memory without wrapper block
+  - Existing tests updated to assert absence of wrapper
+- **Metrics**: 947 tests pass, 9 skipped, 0 failures — no regressions
+- **Impact**: Memory context is now consistently injected across all session types (background, interactive, queued); cleaner output without wrapper markers; single injection point eliminates duplication risks
+
+#### #78: Task Scheduler Invokes LLM for Command-Only Tasks
+- **Status**: ✅ QA Approved (commit c115852 on dev)
+- **Commit**: c115852
+- **Issue**: Scheduler tasks with `mode="command"` should execute shell commands directly, never invoke an LLM. However, if a misconfigured task included both `mode="command"` and `runtime`/`model` fields, the executor would be ambiguous about whether to route to command mode or LLM mode. This ambiguity could cause command-only tasks to unexpectedly invoke LLM APIs, wasting compute and token budget.
+- **Fix**: Added validation in `_execute_task()`:
+  - When `mode="command"` is paired with `runtime` or `model` fields, log a `WARNING` with the misconfiguration details
+  - Always route command-mode tasks to `_execute_command_mode()`, never `_execute_ai_mode()`
+  - Command execution continues unaffected (backward compatible); misconfiguration is visible in logs for remediation
+- **Key Code**:
+  - `scheduler/executor.py`: `_execute_task()` checks `if mode == "command" and (runtime or model)` and emits warning before routing
+  - Validation prevents silent routing errors and surfaces misconfigurations during testing
+- **Testing**: 7 new unit tests in `tests/test_scheduler_command_mode.py`:
+  - Routing to `_execute_command_mode()` when `mode="command"` (with and without extra fields)
+  - Warning emission when `runtime` or `model` are present alongside `mode="command"`
+  - Result passthrough (no extra processing)
+  - Command execution with various shell scenarios (exit codes, output, errors)
+  - Edge case: `mode` field missing or empty
+- **Metrics**: 987 tests pass, 9 skipped, 0 failures — no regressions
+- **Impact**: Misconfigured scheduler tasks no longer silently route to LLM; operators receive clear warnings in logs for investigation and fix.
 
 
 #### #71: Scheduler Backward Clock Drift Skips Jobs

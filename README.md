@@ -137,7 +137,7 @@ Then open `http://localhost:8000/ui` in your browser and pair via Telegram or We
 |---------|-------------|
 | `/agent <name>` | Switch to a different agent |
 | `/model <model>` | Change AI model mid-conversation |
-| `/runtime <runtime>` | Switch AI runtime (copilot, claude, gemini, opencode, codex, devin) |
+| `/runtime <runtime>` | Switch AI runtime (copilot, claude, claude-agent-sdk, gemini, opencode, copilot-sdk, codex, devin) |
 | `/timeout <seconds>` | Adjust execution timeout |
 | `/status` | Check running task status |
 | `/cancel` | Cancel the current running task |
@@ -534,6 +534,29 @@ All AI runtimes in this system are configured with **full tool access** to enabl
   - Allows all shell commands and tools without confirmation
 - **Security Note:** Only use in trusted, controlled environments
 
+#### Claude Agent SDK (Python)
+- **Package:** `claude-agent-sdk>=0.1.0` (install via `pip install claude-agent-sdk`)
+- **Enables:**
+  - In-process async execution (no subprocess spawn)
+  - Structured error types (`CLINotFoundError`, `CLIConnectionError`, `ProcessError`)
+  - Native `permission_mode` field instead of CLI flags
+  - Session continuity via `ResultMessage.session_id` capture
+- **Permission Modes:**
+  - `elevated` → `bypassPermissions` (full access, no prompts)
+  - `sandboxed` → `plan` (read-only + approval for writes)
+  - `restricted` → `default` (standard safety checks)
+- **Usage:** `/runtime set claude-agent-sdk`
+- **Issue:** [#77](../../issues/77)
+
+#### GitHub Copilot SDK (Python)
+- **Package:** `github-copilot-sdk>=0.1.0` (install via `pip install github-copilot-sdk`)
+- **Enables:**
+  - In-process async execution via `CopilotClient`
+  - Streaming via `ASSISTANT_MESSAGE` event handlers
+  - Session resumption and structured error handling
+- **Usage:** `/runtime set copilot-sdk`
+- **Issue:** [#76](../../issues/76)
+
 ### Security Considerations
 
 ⚠️ **Warning:** These configurations grant AI agents extensive system access:
@@ -714,7 +737,7 @@ Model Options:
 - `--list-models` - List all available models for current runtime and exit
 
 Runtime Options:
-- `--runtime NAME` - Set the runtime to use (choices: copilot, opencode, claude, gemini, codex, devin)
+- `--runtime NAME` - Set the runtime to use (choices: copilot, opencode, claude, claude-agent-sdk, gemini, copilot-sdk, codex, devin)
 - `--list-runtimes` - List all available runtimes and exit
 
 Configuration:
@@ -962,7 +985,7 @@ Sessions are automatically tracked and stored in:
 
 Each N8N session ID is mapped to:
 - A unique backend session ID (for resuming AI CLI sessions)
-- Current runtime (copilot/opencode/claude/gemini)
+- Current runtime (copilot/opencode/claude/claude-agent-sdk/gemini/copilot-sdk)
 - Current model
 - Current agent
 
@@ -985,6 +1008,25 @@ When creating a new session:
 - **Runtime:** copilot (use `/runtime set` to change)
 - **Model:** gpt-5-mini (Copilot) / opencode/gpt-5-nano (OpenCode) / haiku (Claude) / gemini-1.5-flash (Gemini)
 - **Agent:** devops (or first available agent from config)
+
+### Background Task Agent Isolation (#75)
+When a background task is created without an explicit `agent` field, the system resolves the agent via `get_default_agent()` — **never** from an existing session. This prevents session agent leakage where a task dispatched from a specialized agent session (e.g., `devops`) would silently run under that agent instead of the system default.
+
+**Safe inherited fields** (copied from existing same-identity sessions):
+- `runtime` — inherits the session's active runtime
+- `model` — inherits the session's active model
+- `notification_preference` — inherits notification routing preference
+
+**Never inherited from sessions:**
+- `agent` — always resolved from the request body or system default
+
+This guarantee is enforced in `_compute_bg_task_defaults()` via an explicit `SAFE_FIELDS` whitelist. Agent must be explicitly provided in the request body to override the default:
+```json
+{
+  "prompt": "Deploy the app",
+  "agent": "devops"
+}
+```
 
 ## Advanced Features
 
@@ -1322,6 +1364,60 @@ curl -s -X POST http://localhost:8000/api/v1/query \
 ```
 
 
+**POST /api/v1/history/sessions/{session_id}/generate-title** — LLM title generation
+
+Force (re)generate a descriptive title for a session using an LLM or smart heuristic fallback. Useful when you want an immediate title refresh outside of the auto-trigger cycle.
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `POST` | `/api/v1/history/sessions/{session_id}/generate-title` | Generate or refresh an LLM title for the specified session |
+
+Response (200 OK — title generated):
+```json
+{
+  "session_id": "abc123",
+  "title": "Kubernetes cluster health check",
+  "source": "llm"
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `session_id` | string | The session whose title was updated |
+| `title` | string | The generated title (max 120 chars) |
+| `source` | string | `"llm"` (Ollama or Anthropic) or `"heuristic"` (no LLM used) |
+
+Error responses:
+- `401 Unauthorized` — Missing or invalid Bearer token
+- `404 Not Found` — Session does not exist or belongs to a different user
+- `400 Bad Request` — Session has no messages (nothing to summarize)
+- `500 Internal Server Error` — All title generation methods failed
+
+**Title generation cascade:**
+1. **Ollama** (local, free) — `POST {TITLE_GEN_OLLAMA_URL}/api/generate` with model `TITLE_GEN_MODEL`
+2. **Anthropic API** — `claude-haiku-4.5` when `ANTHROPIC_API_KEY` is set and Ollama is unavailable
+3. **Smart heuristic** — Extracts first substantive user message, strips markdown/code/URLs, word-boundary truncate to 60 chars
+
+**Auto-generation behavior (background):**
+- `_maybe_auto_generate_title()` is called non-blocking after every session response
+- First LLM title generated at ≥ 2 messages
+- Title refreshed every `TITLE_REFRESH_INTERVAL` messages (default: `10`) if source is `"llm"`
+- User-set titles (`title_source == "user"`) are never overwritten
+
+**Configuration (env vars):**
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `TITLE_GEN_OLLAMA_URL` | `http://192.168.1.101:11434` | Ollama API base URL |
+| `TITLE_GEN_MODEL` | `granite3.3-tuned` | Ollama model for title generation |
+| `TITLE_REFRESH_INTERVAL` | `10` | Messages between auto-refresh cycles |
+
+```bash
+# Force regenerate a title
+curl -s -X POST http://localhost:8000/api/v1/history/sessions/abc123/generate-title \
+  -H "Authorization: Bearer $API_TOKEN"
+```
+
+
 ### Quick Start
 
 ```bash
@@ -1400,6 +1496,7 @@ Wee-Orchestrator ships a browser-based chat interface served at `/ui` by the API
 - 🍀 **Glassmorphism design** — frosted-glass panels, animated background blobs, responsive layout
 - 💬 **Chat panel** — markdown rendering, syntax highlighting, image display (no overflow), clickable meta pills
 - ⚡ **Streaming responses** — AI output streams to the browser in real-time via SSE; a blinking cursor shows progress and the bubble is replaced with fully-rendered markdown when complete
+- ⏱️ **Response generation timing** — each assistant message displays how long it took to generate (format: "⏱️ Generated in X.Xs"), helping you understand performance across different runtimes
 - 👤 **@username display** — shows `@handle` instead of raw numeric IDs in message headers
 - 🔍 **Typeahead** — `/command` highlighting and autocomplete in the input box
 - 📸 **File uploads** — drag-and-drop or click to attach images and files to messages

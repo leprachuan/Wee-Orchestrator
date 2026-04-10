@@ -1,0 +1,58 @@
+
+======================================================================
+OPENCODE AGENTIC FLOW TEST SUITE
+Model: gemma4-26b
+Runtime: opencode
+Started: 2026-04-05T16:50:27.960490
+======================================================================
+
+[1/4] Testing Context Persistence (5+ turns)...
+  Result: ✗ FAIL
+[2/4] Testing Tool Calling (multi-step)...
+    ✗ calc
+    ✗ code
+    ✗ logic
+  Result: ✗ FAIL (0/3)
+[3/4] Testing Agentic Flow (multi-step with state)...
+  Result: ✗ FAIL
+[4/4] Testing Edge Cases...
+    ✗ long_ctx
+    ✗ rapid
+    ✗ error
+  Result: ✗ FAIL (0/3)
+
+======================================================================
+TEST SUMMARY
+======================================================================
+Total Tests Run:    8
+Tests Passed:       0
+Tests Failed:       8
+
+By Category:
+  Context Persistence: ✗ FAIL
+  Tool Calling:        ✗ FAIL (0/3)
+  Agentic Flow:        ✗ FAIL
+  Edge Cases:          ✗ FAIL (0/3)
+
+Overall: 0/4 categories passed
+
+Failures (8):
+  - context_persistence: [Info] No skill_repositories.json found, using default Anthropic repository
+[Han
+  - tool_calc: [Info] No skill_repositories.json found, using default Anthropic repository
+Unkn
+  - tool_code: [Info] No skill_repositories.json found, using default Anthropic repository
+Unkn
+  - tool_logic: [Info] No skill_repositories.json found, using default Anthropic repository
+Unkn
+  - agentic_flow: [Info] No skill_repositories.json found, using default Anthropic repository
+Unkn
+======================================================================
+
+
+Final Result: {
+  "summary": "0/4 test categories passed",
+  "total_tests": 8,
+  "passed": 0,
+  "failed": 8
+}
