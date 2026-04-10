@@ -8,7 +8,6 @@ const API_BASE = '/api/v1';
 
 // ─── State ────────────────────────────────────────────────────────────────────
 const STATE = {
-  messageTiming: {},  // sessionId -> { startTime, endTime }
   token:           null,
   identity:        null,   // numeric/email identity
   channel:         null,
