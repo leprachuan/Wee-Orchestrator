@@ -17,7 +17,7 @@ import time
 
 # Provider presets: prefix → (api_base, default_api_key)
 PROVIDER_PRESETS = {
-    "ollama": ("http://192.168.1.101:11436/v1", "ollama"),
+    "ollama": ("http://192.168.1.101:11434/v1", "ollama"),
     "openrouter": ("https://openrouter.ai/api/v1", None),
     "lmstudio": ("http://localhost:1234/v1", "lm-studio"),
 }
@@ -49,7 +49,7 @@ def resolve_model_and_endpoint(model: str, api_base: str = None, api_key: str = 
     # Defaults
     if not resolved_base:
         resolved_base = os.environ.get(
-            "WEE_API_BASE", "http://192.168.1.101:11436/v1"
+            "WEE_API_BASE", "http://192.168.1.101:11434/v1"
         )
     if not resolved_key:
         # Try environment variables
