@@ -762,6 +762,7 @@ def check_runtime_available(runtime: str) -> bool:
         'devin': 'devin',
         'cursor': 'agent',  # Cursor uses 'agent' binary
         'opencode': 'opencode',
+        'wee': 'openai',  # OpenAI-compatible API (no binary needed),
     }
     
     executable_name = runtime_map.get(runtime)
@@ -769,7 +770,7 @@ def check_runtime_available(runtime: str) -> bool:
         return False
     
     # For Python packages (SDK runtimes), try importing
-    if runtime in ('copilot-sdk', 'claude-sdk'):
+    if runtime in ('copilot-sdk', 'claude-sdk', 'wee'):
         try:
             module_name = executable_name.replace('-', '_')
             __import__(module_name)
@@ -812,6 +813,7 @@ def get_available_runtimes() -> List[Dict[str, str]]:
         {"id": "codex", "label": "codex"},
         {"id": "devin", "label": "devin"},
         {"id": "cursor", "label": "cursor", "icon": "🖱️"},
+        {"id": "wee", "label": "wee", "icon": "🌿"},
     ]
     
     available = [rt for rt in all_runtimes if check_runtime_available(rt['id'])]
@@ -1806,7 +1808,7 @@ class SessionManager:
 
 **Runtime Management:**
    • /runtime list - Show available runtimes
-   • /runtime set (copilot|copilot-sdk|opencode|claude|claude-sdk|gemini|codex|devin|cursor) - Switch runtime
+   • /runtime set (copilot|copilot-sdk|opencode|claude|claude-sdk|gemini|codex|devin|cursor|wee) - Switch runtime
    • /runtime current - Show current runtime
 
 **Model Management:**
@@ -1966,7 +1968,8 @@ You can mention an agent in your prompt and it will auto-delegate:
                 "• `codex` (Codex CLI)\n"
                 "• `devin` (Devin CLI)\n"
                 "• `cursor` (Cursor Agent CLI)\n"
-                "• `claude-sdk` (Claude Agent SDK — native Python, in-process tools)"
+                "• `claude-sdk` (Claude Agent SDK — native Python, in-process tools)\n"
+                "• `wee` (Wee Native — OpenAI-compatible API: Ollama, OpenRouter, LM Studio)"
             )
         elif argument == "current":
             return f"🤖 **Current Runtime:** `{current_runtime}`"
@@ -1982,11 +1985,12 @@ You can mention an agent in your prompt and it will auto-delegate:
                 "codex",
                 "devin",
                 "cursor",
+                "wee",
             ]:
                 return (
                     f"Unknown runtime: '{new_runtime}'. Use "
                     "copilot, copilot-sdk, opencode, claude, claude-sdk, "
-                    "gemini, codex, devin, or cursor."
+                    "gemini, codex, devin, cursor, or wee."
                 )
 
             # Capture previous session state before any updates
@@ -2065,6 +2069,8 @@ You can mention an agent in your prompt and it will auto-delegate:
                 default_model = os.getenv("DEVIN_DEFAULT_MODEL", "claude-sonnet-4")
             elif new_runtime == "cursor":
                 default_model = os.getenv("CURSOR_DEFAULT_MODEL", "auto")
+            elif new_runtime == "wee":
+                default_model = os.getenv("WEE_DEFAULT_MODEL", "ollama/gemma4:e4b")
 
             self.update_session_field(n8n_session_id, "model", default_model)
             return f"✓ Switched runtime to **{new_runtime}**. Model set to `{default_model}`. Session reset."
@@ -3305,6 +3311,7 @@ You can mention an agent in your prompt and it will auto-delegate:
             "codex": self._env_codex_models,
             "devin": self._env_devin_models,
             "cursor": self._env_cursor_models,
+            "wee": {},
         }
         env_models = env_models_map.get(runtime)
         if env_models:
@@ -3322,6 +3329,7 @@ You can mention an agent in your prompt and it will auto-delegate:
             "opencode": self.OPENCODE_MODELS,
             "devin": self.DEVIN_MODELS,
             "cursor": self.CURSOR_MODELS,
+            "wee": {},
         }
         models_dict = static_map.get(runtime)
         if not models_dict:
@@ -3527,6 +3535,7 @@ You can mention an agent in your prompt and it will auto-delegate:
             "codex": self.fetch_codex_models,
             "devin": self.fetch_devin_models,
             "cursor": self.fetch_cursor_models,
+            "wee": lambda: {"Wee Native": [("ollama/gemma4:e4b", "Ollama Gemma 4 E4B (local)", []), ("openrouter/meta-llama/llama-4-scout", "Llama 4 Scout via OpenRouter", [])]},
         }
         fetcher = dispatch.get(runtime)
         if fetcher is None:
@@ -3695,10 +3704,13 @@ You can mention an agent in your prompt and it will auto-delegate:
                     current_model, "cursor"
                 ):
                     merged["model"] = os.getenv("CURSOR_DEFAULT_MODEL", "auto")
+            elif runtime == "wee":
+                if not merged.get("model"):
+                    merged["model"] = os.getenv("WEE_DEFAULT_MODEL", "ollama/gemma4:e4b")
 
             # Validate and fix session_id if corrupted
             session_id = merged.get("session_id", "")
-            if runtime in ["claude", "claude-sdk", "gemini", "codex", "copilot", "copilot-sdk", "devin", "cursor"]:
+            if runtime in ["claude", "claude-sdk", "gemini", "codex", "copilot", "copilot-sdk", "devin", "cursor", "wee"]:
                 if not session_id or not (len(session_id) == 36 and "-" in session_id):
                     merged["session_id"] = str(uuid4())
             elif runtime == "opencode":
@@ -4410,6 +4422,13 @@ You can mention an agent in your prompt and it will auto-delegate:
                 if re.match(r"^(Thinking|Working|\[cursor\])", clean_line.strip()):
                     continue
                 result.append(clean_line)
+
+        elif runtime == "wee":
+            # Wee native runtime outputs clean text - pass through directly
+            for line in lines:
+                if not line.strip() and not result:
+                    continue
+                result.append(line)
 
         # Remove trailing empty lines
         while result and not result[-1].strip():
@@ -5911,7 +5930,7 @@ User Request:
                                                 "name": "shell",
                                                 "input": _oc_run.group(1).strip(),
                                             }
-                                elif runtime in ("copilot", "copilot-sdk", "claude-sdk"):
+                                elif runtime in ("copilot", "copilot-sdk", "claude-sdk", "wee"):
                                     # Copilot shows tool calls as "● Description" and shell cmds as "  $ cmd"
                                     import re as _re_tc
 
@@ -7544,6 +7563,151 @@ User Request:
 
         return self.strip_metadata(output, "cursor")
 
+    def run_wee_native(
+        self,
+        prompt: str,
+        model: str,
+        agent: str,
+        session_id: Optional[str],
+        resume: bool,
+        n8n_session_id: str,
+        timeout: Optional[int] = None,
+        render_type: str = "text",
+    ) -> str:
+        """Execute via Wee Native runtime - OpenAI-compatible chat completions.
+
+        Connects to any OpenAI-compatible API endpoint (Ollama, OpenRouter,
+        LM Studio, etc.) using the openai Python package. No external CLI
+        binary required.
+
+        Model format: [provider/]model_name
+        Examples:
+            ollama/gemma4:e4b         - Ollama on Kubuntu
+            openrouter/meta-llama/llama-4-scout - OpenRouter cloud
+            gemma4:e4b                - Default endpoint (Ollama)
+
+        Supports real-time streaming to WebUI SSE consumers.
+        """
+        import json as _json
+
+        try:
+            from openai import OpenAI
+        except ImportError:
+            return (
+                "Error: openai package not installed. "
+                "Run: pip install openai"
+            )
+
+        session_data = self.get_or_create_session_data(n8n_session_id)
+        agent_dir = self.AGENTS.get(agent, self.AGENTS["orchestrator"])["path"]
+        effective_timeout = timeout if timeout is not None else self.command_timeout
+        channel = session_data.get("channel", "webui")
+
+        # Build context prompt with agent identity
+        context_prompt = self.build_agent_context_prompt(
+            prompt, agent, channel, n8n_session_id
+        )
+
+        # -- Resolve model, endpoint, and API key --
+        api_base = session_data.get("api_base") or os.environ.get(
+            "WEE_API_BASE"
+        )
+        api_key = session_data.get("api_key") or os.environ.get(
+            "WEE_API_KEY"
+        )
+
+        # Provider presets
+        _PRESETS = {
+            "ollama": ("http://192.168.1.101:11436/v1", "ollama"),
+            "openrouter": ("https://openrouter.ai/api/v1", None),
+            "lmstudio": ("http://localhost:1234/v1", "lm-studio"),
+        }
+
+        resolved_model = model
+        for prefix, (preset_base, preset_key) in _PRESETS.items():
+            if model.lower().startswith(f"{prefix}/"):
+                resolved_model = model[len(prefix) + 1:]
+                if not api_base:
+                    api_base = preset_base
+                if not api_key and preset_key:
+                    api_key = preset_key
+                break
+
+        if not api_base:
+            api_base = "http://192.168.1.101:11436/v1"
+        if not api_key:
+            # Try keyring for OpenRouter
+            if "openrouter" in api_base.lower():
+                try:
+                    import keyring
+                    api_key = keyring.get_password("openrouter", "api_key")
+                except Exception:
+                    pass
+            if not api_key:
+                api_key = "ollama"
+
+        print(
+            f"[Wee Native] model={resolved_model} api_base={api_base} "
+            f"session={n8n_session_id[:8]}...",
+            file=sys.stderr,
+        )
+
+        # -- Streaming infrastructure --
+        stream_buffer = getattr(self, "_stream_buffers", {}).get(n8n_session_id)
+
+        # -- Create OpenAI client and call API --
+        client = OpenAI(
+            base_url=api_base,
+            api_key=api_key,
+            timeout=effective_timeout,
+        )
+
+        messages = []
+        # System prompt from agent context
+        if context_prompt:
+            messages.append({"role": "system", "content": context_prompt})
+        messages.append({"role": "user", "content": prompt})
+
+        collected_output = []
+
+        try:
+            stream = client.chat.completions.create(
+                model=resolved_model,
+                messages=messages,
+                stream=True,
+            )
+
+            for chunk in stream:
+                if chunk.choices and chunk.choices[0].delta.content:
+                    token = chunk.choices[0].delta.content
+                    collected_output.append(token)
+
+                    # Push to SSE stream buffer for WebUI
+                    if stream_buffer:
+                        stream_buffer.push("chunk", {"text": token})
+
+            output = "".join(collected_output)
+
+            # Push done sentinel
+            if stream_buffer:
+                stream_buffer.push("done", output)
+
+            print(
+                f"[Wee Native] Completed. Output length: {len(output)} chars",
+                file=sys.stderr,
+            )
+            return output
+
+        except Exception as e:
+            error_msg = f"Error: Wee native runtime failed: {e}"
+            print(f"[Wee Native] {error_msg}", file=sys.stderr)
+
+            # Push error as done sentinel
+            if stream_buffer:
+                stream_buffer.push("done", error_msg)
+
+            return error_msg
+
     def _get_cursor_session_id(self, n8n_session_id: str) -> Optional[str]:
         """Return the stored cursor session flag for this n8n session, or None."""
         mapping_file = self.cursor_session_dir / f"{n8n_session_id}.json"
@@ -7981,6 +8145,17 @@ User Request:
             )
         elif runtime == "cursor":
             result = self.run_cursor(
+                prompt,
+                model,
+                agent,
+                session_id if can_resume else None,
+                can_resume,
+                n8n_session_id,
+                effective_timeout,
+                render_type,
+            )
+        elif runtime == "wee":
+            result = self.run_wee_native(
                 prompt,
                 model,
                 agent,
@@ -10779,6 +10954,26 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 cmd.extend(["--model", _cursor_model])
                 cmd.extend(["--workspace", agent_dir])
                 cmd.extend(["--", context_prompt])
+            elif runtime == "wee":
+                # Wee native runtime - uses standalone script with OpenAI SDK
+                _wee_script = os.path.join(
+                    os.path.dirname(os.path.abspath(__file__)),
+                    "wee_runtime.py",
+                )
+                cmd = [
+                    sys.executable, _wee_script,
+                    "--model", model,
+                    "--timeout", str(timeout or 300),
+                ]
+                # Resolve api_base and api_key from session/env
+                _wee_api_base = os.environ.get("WEE_API_BASE", "")
+                _wee_api_key = os.environ.get("WEE_API_KEY", "")
+                if _wee_api_base:
+                    cmd.extend(["--api-base", _wee_api_base])
+                if _wee_api_key:
+                    cmd.extend(["--api-key", _wee_api_key])
+                cmd.extend(["--system-prompt", context_prompt])
+                cmd.append(prompt)
             else:
                 # Default: copilot runtime
                 copilot_bin = (
