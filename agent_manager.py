@@ -6574,7 +6574,6 @@ User Request:
                 AssistantMessage,
                 TextBlock,
                 ResultMessage,
-                ClaudeSDKClient,
             )
         except ImportError:
             return (
@@ -6653,44 +6652,32 @@ User Request:
             if model:
                 options.model = model
 
+            # For multi-turn, use options.resume to continue the existing
+            # session.  The stateless query() function spawns a subprocess
+            # with --resume <id> which loads prior conversation context.
+            # Previous implementation used ClaudeSDKClient.receive_messages()
+            # which is an infinite async generator designed for interactive
+            # use — it never terminates after a single response, causing the
+            # 2nd-turn stall described in Issue #86.
+            if sdk_session_id:
+                options.resume = sdk_session_id
+
             try:
-                if sdk_session_id:
-                    # Multi-turn conversation: use ClaudeSDKClient for state management
-                    client = ClaudeSDKClient(options=options)
-                    async with client:
-                        await client.query(
-                            prompt=context_prompt,
-                            session_id=sdk_session_id,
-                        )
-                        async for message in client.receive_messages():
-                            if isinstance(message, AssistantMessage):
-                                for block in message.content:
-                                    if isinstance(block, TextBlock):
-                                        collected_text.append(block.text)
-                            elif isinstance(message, ResultMessage):
-                                if message.session_id:
-                                    self.update_session_field(n8n_session_id, "session_id", message.session_id)
-                            elif hasattr(message, "content"):
-                                for block in getattr(message, "content", []):
-                                    if hasattr(block, "text"):
-                                        collected_text.append(block.text)
-                else:
-                    # One-shot query: use stateless query() function
-                    async for message in claude_sdk_query(
-                        prompt=context_prompt,
-                        options=options,
-                    ):
-                        if isinstance(message, AssistantMessage):
-                            for block in message.content:
-                                if isinstance(block, TextBlock):
-                                    collected_text.append(block.text)
-                        elif isinstance(message, ResultMessage):
-                            if message.session_id:
-                                self.update_session_field(n8n_session_id, "session_id", message.session_id)
-                        elif hasattr(message, "content"):
-                            for block in getattr(message, "content", []):
-                                if hasattr(block, "text"):
-                                    collected_text.append(block.text)
+                async for message in claude_sdk_query(
+                    prompt=context_prompt,
+                    options=options,
+                ):
+                    if isinstance(message, AssistantMessage):
+                        for block in message.content:
+                            if isinstance(block, TextBlock):
+                                collected_text.append(block.text)
+                    elif isinstance(message, ResultMessage):
+                        if message.session_id:
+                            self.update_session_field(n8n_session_id, "session_id", message.session_id)
+                    elif hasattr(message, "content"):
+                        for block in getattr(message, "content", []):
+                            if hasattr(block, "text"):
+                                collected_text.append(block.text)
 
             except Exception as e:
                 error_type = type(e).__name__

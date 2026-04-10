@@ -1,5 +1,40 @@
 # Changelog
 
+## [Issue #86] Bug Fix: claude-sdk Runtime Stalls on 2nd Turn
+**Status:** ✅ Fixed (pending QA)
+
+### Root Cause
+Multi-turn conversations used `ClaudeSDKClient.receive_messages()` — an **infinite** async
+generator designed for interactive bidirectional sessions. It never terminates after a single
+response, causing the 2nd turn to hang indefinitely. The `ClaudeSDKClient` was also spawning
+a new subprocess per turn without loading prior conversation context.
+
+### Fix
+Unified both first-turn and multi-turn code paths to use the stateless `query()` function
+from `claude_agent_sdk`. For multi-turn, `options.resume` is set to the session ID, which
+passes `--resume <session_id>` to the CLI subprocess, loading prior conversation context
+and completing naturally when the response finishes.
+
+### Changes
+- **agent_manager.py:**
+  - Removed `ClaudeSDKClient` import (no longer needed)
+  - Replaced dual-path logic (ClaudeSDKClient vs query()) with unified `claude_sdk_query()` path
+  - Multi-turn sets `options.resume = session_id` for proper session resumption
+- **tests/test_claude_sdk_runtime.py:**
+  - Removed `_FakeClaudeSDKClient` mock class (no longer needed)
+  - Updated `TestSessionResumption` to verify `options.resume` is set correctly
+  - Added 3 new Issue #86 regression tests:
+    - `test_multiturn_uses_query_with_resume` — verifies query() path with resume option
+    - `test_multiturn_completes_without_stall` — verifies 2nd turn returns output
+    - `test_multiturn_stores_session_id_from_result` — verifies session_id stored on resume
+    - `test_resume_false_with_session_id_starts_new` — verifies resume=False ignores session_id
+  - Total: 28 tests (up from 24), all passing
+
+### Testing
+- 28/28 claude-sdk tests pass
+- 1038/1038 full regression tests pass, 9 skipped, 0 failures
+
+
 ## [Issue #84] Bug Fix: Remove Non-Functional Auto Runtime
 **Status:** ✅ Fixed (commit 266bee9 on dev)
 
