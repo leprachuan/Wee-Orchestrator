@@ -2393,7 +2393,7 @@ You can mention an agent in your prompt and it will auto-delegate:
             argument = "current"  # Default to showing current mode
 
         if argument == "current":
-            _perms = session_data.get("permissions", {})
+            _perms = session_data.get("permissions") or {}
             _pm = (
                 _perms.get("mode", "restricted")
                 if isinstance(_perms, dict)
@@ -4142,7 +4142,7 @@ You can mention an agent in your prompt and it will auto-delegate:
         """
         if prompt_mode != "restricted":
             return prompt_mode
-        perms = session_data.get("permissions", {})
+        perms = session_data.get("permissions") or {}  # Handle None from session template
         if isinstance(perms, dict) and perms.get("mode") in (
             "elevated",
             "restricted",
@@ -6405,6 +6405,7 @@ User Request:
         n8n_session_id: str,
         timeout: Optional[int] = None,
         render_type: str = "text",
+        mode: Optional[str] = None,
     ) -> str:
         """Execute via Copilot SDK (native Python, no CLI subprocess).
 
@@ -6434,10 +6435,13 @@ User Request:
 
         import asyncio
 
-        # Parse mode
-        prompt_parsed, mode = self._parse_mode_command(prompt)
+        # Parse mode — prefer explicit mode from dispatcher, then /mode in prompt
         if mode is None:
-            mode = self.mode or "restricted"
+            prompt_parsed, mode = self._parse_mode_command(prompt)
+            if mode is None:
+                mode = self.mode or "restricted"
+        else:
+            prompt_parsed = prompt
 
         session_data = self.get_or_create_session_data(n8n_session_id)
         mode = self._resolve_permission_mode(session_data, mode)
@@ -7985,6 +7989,9 @@ User Request:
         self.update_session_field(session_id, "runtime", runtime)
         self.update_session_field(session_id, "channel", channel)
         self.update_session_field(session_id, "render_type", "text")
+        # Background tasks run unattended — grant elevated permissions so
+        # SDK runtimes (copilot-sdk, claude-sdk) don't block on approval gates
+        self.update_session_field(session_id, "permissions", {"mode": "elevated"})
         if timeout is not None:
             self.update_session_field(session_id, "timeout", timeout)
         try:
@@ -8074,6 +8081,7 @@ User Request:
                 n8n_session_id,
                 effective_timeout,
                 render_type,
+                mode,
             )
         elif runtime == "opencode":
             result = self.run_opencode(
@@ -8231,7 +8239,7 @@ User Request:
         effective_timeout = self.get_effective_timeout(session_data)
         render_type = self.get_render_type(session_data)
         # Get permission mode from session (backward compat with yolo_mode)
-        _perms = session_data.get("permissions", {})
+        _perms = session_data.get("permissions") or {}  # Handle None from session template
         if isinstance(_perms, dict) and _perms.get("mode") in (
             "elevated",
             "restricted",
