@@ -40,73 +40,66 @@ Uses `provider/model_name` prefix syntax for auto-resolving API base URL and key
 Environment variables: `WEE_API_BASE`, `WEE_API_KEY`, `WEE_DEFAULT_MODEL`
 
 
-## [Issue #91] Bug: Permissions Not Honored for copilot-sdk and claude-sdk
-**Status:** Implementation Complete
+## [Issue #91] Bug Fix: Permissions Not Honored for copilot-sdk and claude-sdk
+**Status:** QA Approved (Commit: 558c9cf) -- 16 new tests, 1103 total pass, 34 permission tests pass
 
 ### Root Causes
 
-Two separate bugs prevented full-access permissions from being honored:
+Four bugs prevented SDK runtimes from receiving correct permission modes:
 
-#### Bug 1 — claude-sdk: `_resolve_permission_mode` arguments swapped
-`run_claude_sdk` called `self._resolve_permission_mode(mode, session_data)` with
-arguments in the **wrong order**. The method signature is
-`_resolve_permission_mode(self, session_data: dict, prompt_mode: str)`. As a result,
-`session_data` was always received as the first argument and compared to `"restricted"`
-as a dict — which is always truthy — causing `prompt_mode` to be returned as the
-session_data dict. The mode check `if mode == "elevated"` then always failed, so
-`sdk_permission_mode` was always `"default"` regardless of configured permissions.
+#### Bug 1 -- permissions: None not coalesced in _resolve_permission_mode() and execute()
+Session templates set permissions: None (key present, value None). The previous
+.get("permissions", {}) default only applies when the key is MISSING -- it returns
+None when the key exists with value None. isinstance(None, dict) then fails,
+so permission mode was never read from session data and always fell back to "restricted".
 
-**Fix:** Corrected arg order to `self._resolve_permission_mode(session_data, mode)`.
+Fix: Changed to .get("permissions") or {} in both _resolve_permission_mode() and
+execute() to coalesce None to an empty dict.
 
-#### Bug 2 — copilot-sdk: Missing `--allow-all-paths` / `--yolo` flags + no approval handlers
-The standard `copilot` runtime passes `--allow-all-paths` and `--yolo` to the CLI for
-elevated mode. The `copilot-sdk` runtime used the Python SDK but never passed equivalent
-flags — the underlying Copilot CLI subprocess still ran with restricted access.
+#### Bug 2 -- run_copilot_sdk lacked a mode parameter
+Unlike run_claude_sdk, run_copilot_sdk did not accept a mode parameter from the
+dispatcher, forcing it to re-resolve mode internally (hitting Bug 1 on every call).
 
-Additionally, no `on_user_input_request` or `on_elicitation_request` handlers were
-registered, causing the SDK to raise `RuntimeError` or block indefinitely on any
-approval gate.
+Fix: Added mode: Optional[str] = None parameter. When mode is passed from the
+dispatcher, it is used directly, bypassing the broken internal resolution path.
 
-**Fix:**
-- Pass `SubprocessConfig(cli_args=["--allow-all-paths", "--yolo"])` to `CopilotClient`
-  when mode is `"elevated"`, granting full filesystem access and auto-approving commands
-- Register `on_user_input_request` handler that auto-selects first choice (or "yes")
-  for elevated sessions — prevents RuntimeError on approval prompts
-- Register `on_elicitation_request` handler that returns `action="accept"` for elevated
-  sessions — prevents blocking on approval gates
+#### Bug 3 -- _dispatch_single_runtime did not pass mode to copilot-sdk
+The dispatcher forwarded mode to claude-sdk but not to copilot-sdk, so even after
+Bug 2 was fixed, elevated mode was never forwarded.
+
+Fix: Added mode to the run_copilot_sdk dispatch call.
+
+#### Bug 4 -- Background tasks defaulted to restricted permissions
+_execute_background_task created sessions without setting permissions, so they
+defaulted to None -> restricted. Background tasks are unattended and require
+elevated access to operate without approval gates.
+
+Fix: Set permissions = {"mode": "elevated"} in the session before calling execute().
 
 ### Changes
 
-#### `agent_manager.py`
-- **`run_claude_sdk`:** Fixed `_resolve_permission_mode` call — args corrected to
-  `(session_data, mode)` order (was `(mode, session_data)`)
-- **`run_copilot_sdk`:** Added `SubprocessConfig` + `ElicitationContext/Result` +
-  `UserInputRequest/Response` to import block
-- **`run_copilot_sdk`:** Added `sdk_cli_args` — `["--allow-all-paths", "--yolo"]` for
-  elevated, `[]` otherwise; passed via `SubprocessConfig` to `CopilotClient`
-- **`run_copilot_sdk`:** Added `_auto_approve_user_input` handler (returns first choice
-  or "yes") and `_auto_approve_elicitation` handler (returns `action="accept"`)
-- **`run_copilot_sdk`:** Registered both handlers in `session_kwargs` for elevated mode
+#### agent_manager.py
+- **_resolve_permission_mode():** .get("permissions") or {} -- coalesces None to {}
+- **execute():** Same None-safe coalescing for permissions key
+- **run_copilot_sdk():** Added mode: Optional[str] = None parameter for dispatcher parity with run_claude_sdk
+- **_dispatch_single_runtime():** Now passes mode argument to run_copilot_sdk dispatch call
+- **_execute_background_task():** Sets permissions = {mode: elevated} before execute() for unattended operation
+- **_slash_mode():** None-safe permissions display (coalesces None before dict access)
 
-#### `tests/test_sdk_permissions.py` (new, 12 tests)
-- `test_elevated_mode_passes_allow_all_paths_flag` — SubprocessConfig gets `--allow-all-paths`
-- `test_elevated_mode_passes_yolo_flag` — SubprocessConfig gets `--yolo`
-- `test_restricted_mode_no_dangerous_flags` — SubprocessConfig NOT created for restricted
-- `test_elevated_mode_sets_user_input_handler` — `on_user_input_request` set in elevated
-- `test_elevated_mode_sets_elicitation_handler` — `on_elicitation_request` set in elevated
-- `test_restricted_mode_no_user_input_handler` — handler not set in restricted mode
-- `test_auto_approve_user_input_handler_returns_yes` — handler logic verified
-- `test_auto_approve_elicitation_returns_accept` — elicitation handler logic verified
-- `test_resolve_permission_mode_arg_order_session_data_first` — arg order correctness
-- `test_elevated_session_resolves_to_elevated_mode` — elevated session resolves correctly
-- `test_restricted_session_resolves_to_restricted_mode` — restricted session resolves correctly
-- `test_permission_mode_mapping_elevated_to_bypass` — mode maps to SDK permission strings
+#### tests/test_issue91_permissions.py (new, 16 tests)
+- Permission None coalescing in _resolve_permission_mode and execute
+- run_copilot_sdk mode parameter forwarding
+- _dispatch_single_runtime passes mode to copilot-sdk
+- Background task session gets elevated permissions automatically
+- _slash_mode does not crash when permissions is None
+- End-to-end: elevated background task reaches SDK with correct mode
+- All 34 permission-related tests across test suite pass
 
 ### Impact
-- Unattended background tasks with `elevated` permission mode now run without manual
-  intervention on both `copilot-sdk` and `claude-sdk` runtimes
-- Batch operations using these runtimes no longer stall on approval gates
-
+- **Background tasks** on copilot-sdk and claude-sdk runtimes now automatically
+  run with elevated permissions -- no manual approval gates
+- **Session templates** with permissions: None no longer silently downgrade to restricted
+- **/mode display** no longer crashes when permissions is None
 
 ---
 

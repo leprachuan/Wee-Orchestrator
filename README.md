@@ -547,8 +547,10 @@ All AI runtimes in this system are configured with **full tool access** to enabl
   - `restricted` → `default` (standard safety checks)
 - **Streaming:** Real-time text chunks pushed to WebUI SSE consumers via `_StreamBuffer`
 - **Tool Calls:** `ToolUseBlock`/`ToolResultBlock` detection emits standardized tool_call events
+- **Permissions Fix:** Session templates with `permissions: None` now correctly coalesce to restricted mode; `elevated` sessions pass `bypassPermissions` through the full call chain (Issue #91)
+- **Background Tasks:** Unattended background tasks automatically run with elevated permissions (Issue #91)
 - **Usage:** `/runtime set claude-agent-sdk`
-- **Issues:** [#77](../../issues/77), [#87](../../issues/87)
+- **Issues:** [#77](../../issues/77), [#87](../../issues/87), [#91](../../issues/91)
 
 #### GitHub Copilot SDK (Python)
 - **Package:** `github-copilot-sdk>=0.1.0` (install via `pip install github-copilot-sdk`)
@@ -557,8 +559,13 @@ All AI runtimes in this system are configured with **full tool access** to enabl
   - Real-time streaming via `ASSISTANT_STREAMING_DELTA`/`ASSISTANT_MESSAGE_DELTA` events
   - Tool call tracking via `TOOL_EXECUTION_START`/`COMPLETE` and `COMMAND_EXECUTE` events
   - Session resumption and structured error handling
+- **Permission Modes:**
+  - `elevated` -- passes `mode` from dispatcher, sends `elevated` through full call chain (Issue #91)
+  - `restricted` -- default mode; standard safety checks apply
+- **Permissions Fix:** Added `mode` parameter parity with `claude-sdk`; dispatcher now forwards mode to `run_copilot_sdk` (Issue #91)
+- **Background Tasks:** Unattended background tasks automatically run with elevated permissions (Issue #91)
 - **Usage:** `/runtime set copilot-sdk`
-- **Issues:** [#76](../../issues/76), [#87](../../issues/87)
+- **Issues:** [#76](../../issues/76), [#87](../../issues/87), [#91](../../issues/91)
 
 #### Wee Native Runtime
 - **Also Known As:** `wee` — OpenAI-compatible API backend runtime
