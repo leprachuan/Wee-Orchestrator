@@ -1,6 +1,44 @@
 # Changelog
 
 
+## [Issue #83] Feature: Display Response Generation Time
+**Status:** ✅ Implemented (commit 4da4529 on dev)
+
+### Summary
+Added response generation timing display in the WebUI message output box. Each assistant message now shows how long it took to generate the response with a subtle timestamp indicator positioned in the bottom right corner.
+
+### Changes
+- **WebUI (app.js):** 
+  - Added `messageTiming` to STATE object to track timing per session
+  - Modified `sendMessage()` to capture start time using `performance.now()`
+  - Updated `renderMessage()` signature to accept optional `timing` parameter
+  - Modified `sendMessageStreaming()` done handler to calculate elapsed time
+  - Automatically appends timing div to streaming bubbles and non-streaming responses
+  - Works with all runtimes (streaming path and command/no-chunk path)
+  
+- **WebUI (app.css):**
+  - Added `.message-timing` CSS class with subtle styling
+  - Gray text color using `var(--text-secondary)` with 0.45 opacity
+  - Small font (12px), italic styling
+  - Top border separator with subtle transparent line
+  - Positioned in bottom right of message bubble
+  - Timing calculated to 1 decimal place using `elapsedSec.toFixed(1)`
+  - Format: "⏱️ Generated in 2.5s"
+
+### User-Facing Behavior
+- Response messages display timing indicator below content, above TTS button
+- Timing is measured from user query send to response completion
+- Format: "⏱️ Generated in X.Xs" (e.g., "⏱️ Generated in 1.2s")
+- Timing display only appears on assistant messages, not user messages
+- Works for all runtimes: copilot, claude, claude-sdk, claude-agent-sdk, cursor, gemini, opencode
+
+### Test Results
+- Full regression suite: 1031 passed, 9 skipped, 0 failures (50.85s)
+- No breaking changes to existing functionality
+
+---
+
+
 ## [Issue #81] Bug Fix: Claude SDK Multi-Turn Conversations
 **Status:** ✅ Fixed (commit a2610ba on dev)
 
