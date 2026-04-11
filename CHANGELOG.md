@@ -1,5 +1,53 @@
 # Changelog
 
+## [Issue #111] Bug: Wee runtime tool/skill execution audit
+**Status:** ✅ QA Approved (Commit: 502f267)
+
+### Summary
+Fixed critical bugs in wee native runtime tool and skill execution. Corrected argument order in context prompt building, added tool availability declaration to system prompt so local models (Ollama) recognize bash/python tools, and reorganized context prompt build to occur after model resolution.
+
+### Root Causes & Fixes
+
+1. **Wrong Argument Order in build_agent_context_prompt()**
+   - `run_cursor()` and `run_wee_native()` passed arguments in incorrect order to build_agent_context_prompt()
+   - Method expected (model, runtime, agent_name, tools) but received arguments in wrong sequence
+   - Fixed in agent_manager.py: corrected argument order in both function calls
+
+2. **Missing Tool Availability Declaration**
+   - Local models (Ollama, LM Studio) lacked knowledge of available tools (bash, python)
+   - Added `_wee_augment_system_prompt_with_tools()` function to inject [Available Tools] section
+   - System prompt now explicitly lists bash and python tools with usage format
+   - Enables local models to recognize and utilize tool-calling capabilities
+
+3. **Context Prompt Build Timing**
+   - Context prompt was being built before model resolution completed
+   - Moved context prompt build to occur after model is fully resolved
+   - Ensures correct model context is used in tool/skill execution
+
+### Changes
+- **agent_manager.py** — Fixed argument order in run_cursor() and run_wee_native() calls to build_agent_context_prompt()
+- **agent_manager.py** — Added _wee_augment_system_prompt_with_tools() to inject tool availability declaration
+- **agent_manager.py** — Reorganized model resolution and context prompt build sequence
+- **wee_runtime.py** — Aligned tool execution with augmented system prompt format
+
+### Tests
+- **1197 total tests pass**, 9 skipped, 0 failures
+- **7 new regression tests** for tool/skill execution audit
+- Tests validate correct argument ordering, tool availability declaration, and model resolution timing
+- Local model (Ollama) tool-calling verified end-to-end
+
+### QA Notes
+- wee-qa completed comprehensive tool/skill execution verification
+- Tested with various model endpoints (Ollama, LM Studio, OpenRouter)
+- Tool calling validated with bash and python tools on local models
+- System prompt augmentation verified for all runtime configurations
+
+### PR Status
+- Issue #111 approved by QA (commit 502f267 on branch issue/107-108-109)
+- Ready for PR: `issue/107-108-109` → `dev`
+
+---
+
 ## [Issue #107] Bug: Wee runtime multi-turn history loss
 **Status:** ✅ QA Approved (Commit: 83eb91e)
 
