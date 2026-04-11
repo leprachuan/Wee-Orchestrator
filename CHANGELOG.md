@@ -1,5 +1,90 @@
 # Changelog
 
+## [Issue #107] Bug: Wee runtime multi-turn history loss
+**Status:** ✅ QA Approved (Commit: 83eb91e)
+
+### Summary
+Fixed wee native runtime losing conversation history in multi-turn interactions. The runtime now correctly maintains and passes session history between turns, preventing context loss in interactive agent workflows.
+
+### Root Cause & Fix
+- Multi-turn session history was not being preserved between turns in wee_runtime.py
+- Added persistent message history accumulation across session turns
+- Fixed in wee_runtime.py: enhanced session state management to retain full conversation context
+
+### Changes
+- **wee_runtime.py** — Added message history preservation across turns
+- Session history now correctly accumulates and is passed to subsequent API calls
+- Multi-turn agentic loops now maintain full context
+
+### Tests
+- **1165 total tests pass**, 23 new tests added
+- **8 new regression tests** for multi-turn history preservation
+- Live integration tests validate context retention across 10+ turn interactions
+
+### QA Notes
+- wee-qa completed comprehensive multi-turn verification
+- Tested with various model endpoints (Ollama, LM Studio, OpenRouter)
+- Context retention validated in interactive agent workflows
+
+---
+
+## [Issue #108] Bug: Wee runtime tool-call agentic loop
+**Status:** ✅ QA Approved (Commit: 83eb91e)
+
+### Summary
+Fixed wee native runtime's tool-call agentic loop to properly execute and continue through multiple tool calls until completion. The runtime now correctly handles the complete cycle of tool invocation, result processing, and continuation.
+
+### Root Cause & Fix
+- Tool-call agentic loop was not iterating correctly through multiple tool invocations
+- Added proper loop continuation logic and result accumulation
+- Fixed in wee_runtime.py: enhanced tool execution cycle and message streaming
+
+### Changes
+- **wee_runtime.py** — Improved tool-call loop control flow
+- Tool results are now correctly accumulated and fed back into the loop
+- Loop continues until stop_reason indicates completion (no more tool calls)
+
+### Tests
+- **1165 total tests pass**, 23 new tests added
+- **7 new regression tests** for tool-call agentic loop execution
+- Tested with multi-step workflows requiring sequential tool invocations
+
+### QA Notes
+- wee-qa verified tool-call execution through complete agentic loops
+- Tested with complex multi-step workflows and function calls
+- All tool execution patterns validated
+
+---
+
+## [Issue #109] Feature: SSE tool events for wee runtime
+**Status:** ✅ QA Approved (Commit: 83eb91e)
+
+### Summary
+Added Server-Sent Events (SSE) support for tool execution events in wee native runtime. Tool events are now streamed in real-time (TOOL_EXECUTION_START, TOOL_EXECUTION_COMPLETE) providing better observability and client-side progress tracking.
+
+### Feature Implementation
+- Tool execution lifecycle events now emitted as SSE events
+- TOOL_EXECUTION_START: emitted when tool invocation begins
+- TOOL_EXECUTION_COMPLETE: emitted when tool returns results
+- Events include tool name, input parameters, and execution status
+
+### Changes
+- **wee_runtime.py** — Added SSE event emission for tool lifecycle
+- Event streaming matches copilot-sdk and claude-sdk patterns
+- Consistent event naming and format across all runtimes
+
+### Tests
+- **1165 total tests pass**, 23 new tests added
+- **8 new tests** for SSE tool event streaming
+- Events validated for both successful and failed tool invocations
+
+### QA Notes
+- wee-qa verified SSE event emission for all tool types
+- Tested with streaming client consumers
+- Event timing and format consistency validated
+
+---
+
 ## [Issue #105] Bug: Wee runtime stall with Ollama gemma4:e4b
 **Status:** ✅ QA Approved (Commit: 07733dc)
 
