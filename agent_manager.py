@@ -3522,6 +3522,29 @@ You can mention an agent in your prompt and it will auto-delegate:
 
         return self._static_models_to_dict(self.CURSOR_MODELS)
 
+    def _fetch_wee_models(self) -> Dict:
+        """Discover wee models dynamically from configured API hosts.
+
+        Queries Ollama and OpenAI-compatible endpoints, caches results
+        with TTL. Falls back to static presets if discovery fails entirely.
+        Issue #114.
+        """
+        try:
+            from wee_model_discovery import discover_wee_models
+            result = discover_wee_models()
+            if result:
+                return result
+        except Exception as e:
+            print(
+                f"[Wee] Model discovery failed: {e}",
+                file=sys.stderr,
+            )
+        # Fallback to static presets
+        return {"Wee Native (static)": [
+            "ollama/gemma4:e4b",
+            "openrouter/meta-llama/llama-4-scout",
+        ]}
+
     def get_models_for_runtime(self, runtime: str) -> Dict:
         """Fetch available models for a runtime, using CLI discovery where possible.
 
@@ -3539,7 +3562,7 @@ You can mention an agent in your prompt and it will auto-delegate:
             "codex": self.fetch_codex_models,
             "devin": self.fetch_devin_models,
             "cursor": self.fetch_cursor_models,
-            "wee": lambda: {"Wee Native": [("ollama/gemma4:e4b", "Ollama Gemma 4 E4B (local)", []), ("openrouter/meta-llama/llama-4-scout", "Llama 4 Scout via OpenRouter", [])]},
+            "wee": self._fetch_wee_models,
         }
         fetcher = dispatch.get(runtime)
         if fetcher is None:
@@ -9174,6 +9197,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             "codex",
             "devin",
             "cursor",
+            "wee",
         }
         if runtime not in known_runtimes:
             return {
@@ -9189,15 +9213,57 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             )
             models = []
             for _group, model_ids in raw.items():
-                for model_id in model_ids:
-                    label = (
-                        session_mgr._get_model_description(model_id, runtime)
-                        or model_id
-                    )
-                    models.append({"id": model_id, "label": label})
+                for entry in model_ids:
+                    # Handle both tuple (id, desc, aliases) and flat string formats
+                    if isinstance(entry, (list, tuple)):
+                        model_id = entry[0]
+                        label = entry[1] if len(entry) > 1 else model_id
+                    else:
+                        model_id = entry
+                        label = (
+                            session_mgr._get_model_description(model_id, runtime)
+                            or model_id
+                        )
+                    models.append({"id": model_id, "label": label, "group": _group})
             return {"runtime": runtime, "models": models}
         except Exception as e:
             return {"runtime": runtime, "models": [], "error": str(e)}
+
+    @app.get("/api/v1/wee/models")
+    async def get_wee_models(force: bool = False):
+        """Return discovered wee models with enriched metadata.
+
+        Queries Ollama and OpenAI-compatible hosts, returns models grouped
+        by provider with size, status, and modification time.
+
+        Query params:
+            force: bypass cache and re-discover (default false)
+        """
+        try:
+            from wee_model_discovery import get_discovery
+            discovery = get_discovery()
+            enriched = discovery.discover_all_enriched(force=force)
+            host_status = discovery.get_host_status()
+            return {
+                "runtime": "wee",
+                "providers": enriched,
+                "host_status": host_status,
+            }
+        except Exception as e:
+            return {"runtime": "wee", "providers": {}, "error": str(e)}
+
+    @app.post("/api/v1/wee/models/refresh")
+    async def refresh_wee_models():
+        """Force refresh the wee model cache."""
+        try:
+            from wee_model_discovery import get_discovery
+            discovery = get_discovery()
+            discovery.invalidate_cache()
+            result = discovery.discover_all(force=True)
+            total = sum(len(v) for v in result.values())
+            return {"status": "refreshed", "total_models": total, "providers": result}
+        except Exception as e:
+            return {"status": "error", "error": str(e)}
 
     @app.post("/api/v1/auth/request-pairing")
     async def request_pairing(body: PairingRequest, request: Request):
