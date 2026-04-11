@@ -301,6 +301,46 @@ class TestCaching(unittest.TestCase):
         self.assertEqual(len(d._cache), 0)
         self.assertEqual(len(d._cache_status), 0)
 
+    def test_offline_fallback_returns_cached_models(self):
+        """Regression: host online → TTL expires → host goes offline → result has cached models.
+
+        Verifies that the offline fallback actually returns previously-seen models
+        rather than an empty offline indicator. Bug: cache was overwritten before
+        the old value was read, so fallback always returned [].
+        """
+        from wee_model_discovery import WeeModelDiscovery
+        d = WeeModelDiscovery(ttl=1, timeout=5)  # 1-second TTL
+
+        hosts = [{"name": "h", "type": "ollama", "url": "http://h:11434", "prefix": "ollama"}]
+        online_response = {"models": [{"name": "gemma4:latest"}]}
+
+        with patch("wee_model_discovery._load_hosts", return_value=hosts):
+            # First call: host is online — models are fetched and cached
+            with patch.object(d, "_fetch_json", return_value=online_response):
+                result1 = d.discover_all()
+            self.assertIn("h (ollama)", result1)
+            self.assertIn("ollama/gemma4:latest", result1["h (ollama)"])
+
+            # Wait for TTL to expire
+            time.sleep(1.1)
+
+            # Second call: host goes offline — should fall back to cached models
+            with patch.object(d, "_fetch_json", return_value=None):
+                result2 = d.discover_all()
+
+        # Must NOT show empty offline indicator
+        self.assertFalse(
+            any("offline" in k for k in result2.keys()),
+            f"Expected cached fallback, got offline indicator. Keys: {list(result2.keys())}",
+        )
+        # Must show the cached group with the previously-discovered models
+        cached_key = "h (ollama) (cached)"
+        self.assertIn(
+            cached_key, result2,
+            f"Expected '{cached_key}' in result. Got: {list(result2.keys())}",
+        )
+        self.assertIn("ollama/gemma4:latest", result2[cached_key])
+
 
 class TestHostStatus(unittest.TestCase):
     """Test host status tracking."""

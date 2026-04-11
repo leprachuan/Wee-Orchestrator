@@ -149,6 +149,9 @@ class WeeModelDiscovery:
                             result[f"{label} ⚠️ offline"] = []
                         continue
 
+                # Save previous cache entry BEFORE overwriting (for offline fallback)
+                old_cached = self._cache.get(cache_key)
+
                 # Discover fresh
                 label, models, status = self._discover_host(host)
                 self._cache[cache_key] = (now, models)
@@ -158,11 +161,9 @@ class WeeModelDiscovery:
                     result[label] = models
                 elif status == "offline":
                     # Fall back to last known models if available
-                    if cache_key in self._cache:
-                        _, old_models = self._cache[cache_key]
-                        if old_models:
-                            result[f"{label} (cached)"] = old_models
-                            continue
+                    if old_cached and old_cached[1]:
+                        result[f"{label} (cached)"] = old_cached[1]
+                        continue
                     result[f"{label} ⚠️ offline"] = []
 
         return result
@@ -171,6 +172,11 @@ class WeeModelDiscovery:
         """Discover with enriched metadata (sizes, timestamps).
 
         Returns {group_label: [{id, name, size, modified_at, provider, status}]}.
+
+        Note: This method always makes live HTTP requests to include up-to-date
+        metadata (sizes, modified_at). The ``force`` parameter is accepted for
+        API compatibility but has no effect — results are never served from cache.
+        Use ``discover_all()`` when TTL-cached results are acceptable.
         """
         hosts = _load_hosts()
         result: Dict[str, List[Dict[str, Any]]] = {}
