@@ -7513,3 +7513,162 @@ html, body {
   25% { transform: translateX(-4px); }
   75% { transform: translateX(4px); }
 }
+
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Keyring Status Banner & Unlock Dialog (Issue #93)
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* --- Keyring status banner --- */
+.keyring-banner {
+  display: flex;
+  align-items: center;
+  padding: 10px 16px;
+  border-radius: 10px;
+  margin: 0 16px 12px;
+  font-size: 13px;
+  animation: keyring-slide-in 0.3s ease;
+}
+@keyframes keyring-slide-in {
+  from { opacity: 0; transform: translateY(-8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.keyring-banner--locked {
+  background: rgba(255, 165, 0, 0.12);
+  border: 1px solid rgba(255, 165, 0, 0.3);
+  color: var(--text-primary, #e0e0e0);
+}
+.keyring-banner--warn {
+  background: rgba(255, 200, 50, 0.08);
+  border: 1px solid rgba(255, 200, 50, 0.2);
+  color: var(--text-secondary, #aaa);
+}
+.keyring-banner-content {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+}
+.keyring-banner-icon {
+  font-size: 20px;
+  flex-shrink: 0;
+}
+.keyring-banner-text {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.keyring-banner-text strong {
+  font-weight: 600;
+  font-size: 13px;
+}
+.keyring-banner-text span {
+  font-size: 12px;
+  opacity: 0.8;
+}
+.keyring-unlock-btn {
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+/* --- Keyring unlock dialog overlay --- */
+.keyring-dialog-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  backdrop-filter: blur(4px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 9999;
+  animation: keyring-fade-in 0.2s ease;
+}
+@keyframes keyring-fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+/* --- Keyring unlock dialog panel --- */
+.keyring-dialog {
+  width: min(420px, 90vw);
+  padding: 28px 24px 24px;
+  border-radius: 16px;
+  animation: keyring-dialog-pop 0.25s ease;
+}
+@keyframes keyring-dialog-pop {
+  from { opacity: 0; transform: scale(0.95) translateY(8px); }
+  to { opacity: 1; transform: scale(1) translateY(0); }
+}
+.keyring-dialog-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+.keyring-dialog-icon {
+  font-size: 24px;
+}
+.keyring-dialog-title {
+  font-size: 18px;
+  font-weight: 600;
+  margin: 0;
+  color: var(--text-primary, #fff);
+}
+.keyring-dialog-hint {
+  font-size: 13px;
+  color: var(--text-secondary, #aaa);
+  margin: 0 0 16px;
+  line-height: 1.4;
+}
+.keyring-dialog-field {
+  margin-bottom: 12px;
+}
+.keyring-dialog-field input {
+  width: 100%;
+  box-sizing: border-box;
+}
+.keyring-dialog-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+}
+.keyring-dialog-actions .btn {
+  flex: 1;
+}
+.keyring-dialog-alt {
+  font-size: 11px;
+  color: var(--text-muted, #777);
+  margin: 14px 0 0;
+  text-align: center;
+}
+.keyring-dialog-alt code {
+  font-size: 10px;
+  background: rgba(255, 255, 255, 0.06);
+  padding: 2px 5px;
+  border-radius: 4px;
+}
+
+/* --- Keyring feedback messages --- */
+.keyring-dialog-feedback {
+  font-size: 12px;
+  padding: 6px 10px;
+  border-radius: 6px;
+  margin-bottom: 8px;
+  line-height: 1.4;
+}
+.keyring-dialog-feedback--error {
+  background: rgba(255, 80, 80, 0.12);
+  color: #ff6b6b;
+  border: 1px solid rgba(255, 80, 80, 0.2);
+}
+.keyring-dialog-feedback--success {
+  background: rgba(80, 200, 120, 0.12);
+  color: #50c878;
+  border: 1px solid rgba(80, 200, 120, 0.2);
+}
+.keyring-dialog-feedback--info {
+  background: rgba(80, 160, 255, 0.12);
+  color: #6cb4ff;
+  border: 1px solid rgba(80, 160, 255, 0.2);
+}

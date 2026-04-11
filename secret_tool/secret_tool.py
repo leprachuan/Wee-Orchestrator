@@ -14,6 +14,8 @@ secrets with a Fernet key stored in the user's keyring.
 import argparse
 import json
 import os
+import shutil
+import subprocess
 import sys
 from pathlib import Path
 
@@ -244,6 +246,9 @@ def parse_args(argv=None):
     p_del.add_argument("--name", required=True, help="Secret name to delete")
     p_del.add_argument("--backend", choices=["keyring", "file"], default="keyring")
 
+    sub.add_parser("status", help="Check if the secret store is accessible")
+    sub.add_parser("unlock", help="Unlock the keyring (password from stdin)")
+
     return parser.parse_args(argv)
 
 
@@ -260,14 +265,127 @@ def _resolve_value(args) -> str:
     return args.value
 
 
+
+def _check_keyring_status() -> dict:
+    """Check if the system keyring / secret store is accessible."""
+    # Strategy 1: secretstorage (D-Bus Secret Service API)
+    try:
+        import secretstorage
+        conn = secretstorage.dbus_init()
+        coll = secretstorage.get_default_collection(conn)
+        if coll.is_locked():
+            return {"status": "locked", "backend": "gnome-keyring",
+                    "message": "GNOME Keyring is locked"}
+        return {"status": "unlocked", "backend": "gnome-keyring"}
+    except Exception:
+        pass
+
+    # Strategy 2: python-keyring probe
+    try:
+        import keyring
+        keyring.get_password("secret-tool-status-probe", "__probe__")
+        return {"status": "unlocked", "backend": "python-keyring"}
+    except Exception as exc:
+        err = str(exc).lower()
+        if any(kw in err for kw in ("locked", "prompt", "dismissed")):
+            return {"status": "locked", "backend": "python-keyring",
+                    "message": "Keyring is locked"}
+        if "no recommended backend" in err:
+            return {"status": "unavailable",
+                    "message": "No keyring backend available"}
+
+    # Strategy 3: secret-tool CLI probe (timeout = locked)
+    try:
+        proc = subprocess.run(
+            ["secret-tool", "lookup", "wee-status-probe", "test"],
+            capture_output=True, text=True, timeout=3,
+        )
+        return {"status": "unlocked", "backend": "secret-tool"}
+    except subprocess.TimeoutExpired:
+        return {"status": "locked", "backend": "secret-tool",
+                "message": "secret-tool timed out (keyring likely locked)"}
+    except FileNotFoundError:
+        pass
+
+    return {"status": "unavailable",
+            "message": "No secret store backend detected"}
+
+
+def _find_gnome_keyring_daemon():
+    path = shutil.which("gnome-keyring-daemon")
+    if path:
+        return path
+    for candidate in ("/usr/bin/gnome-keyring-daemon",
+                      "/usr/local/bin/gnome-keyring-daemon"):
+        if os.path.isfile(candidate):
+            return candidate
+    return None
+
+
+def _unlock_keyring(password: str) -> dict:
+    """Attempt to unlock the system keyring with *password*."""
+    if not password:
+        return {"status": "error", "message": "Password is required"}
+
+    # Strategy 1: gnome-keyring-daemon --unlock
+    daemon = _find_gnome_keyring_daemon()
+    if daemon:
+        try:
+            proc = subprocess.run(
+                [daemon, "--unlock"],
+                input=password.encode(),
+                capture_output=True,
+                timeout=10,
+            )
+            if proc.returncode == 0:
+                return {"status": "success", "method": "gnome-keyring-daemon"}
+        except Exception:
+            pass
+
+    # Strategy 2: secretstorage unlock
+    try:
+        import secretstorage
+        conn = secretstorage.dbus_init()
+        coll = secretstorage.get_default_collection(conn)
+        if coll.is_locked():
+            coll.unlock()
+            if not coll.is_locked():
+                return {"status": "success", "method": "secretstorage"}
+            return {"status": "error",
+                    "message": "Unlock requires interactive prompt"}
+        return {"status": "success", "message": "Keyring was already unlocked"}
+    except Exception:
+        pass
+
+    return {
+        "status": "error",
+        "message": (
+            "Could not unlock keyring automatically. "
+            "Try: echo PASSWORD | gnome-keyring-daemon --unlock via SSH, "
+            "or log in to the desktop session."
+        ),
+    }
+
 def main(argv=None):
     args = parse_args(argv)
     if args.cmd is None:
         print(
-            "Usage: secret-tool {set|add|get|list|delete} --name NAME "
+            "Usage: secret-tool {set|add|get|list|delete|status|unlock} --name NAME "
             "[--value VALUE | --value-stdin] [--backend keyring|file]"
         )
         return 2
+
+    # Handle status/unlock before backend init (they don't need a backend)
+    if args.cmd == "status":
+        res = _check_keyring_status()
+        print(json.dumps(res))
+        return 0 if res.get("status") == "unlocked" else 1
+
+    if args.cmd == "unlock":
+        password = sys.stdin.readline().rstrip("\n")
+        res = _unlock_keyring(password)
+        print(json.dumps(res))
+        return 0 if res.get("status") == "success" else 1
 
     backend = None
     try:
