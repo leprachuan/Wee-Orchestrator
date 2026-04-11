@@ -1,5 +1,53 @@
 # Changelog
 
+## [Issue #107] Bug: Wee runtime tool calling returns no response
+**Status:** ✅ QA Approved (Commit: 000bda8)
+
+### Summary
+Fixed critical bug in wee native runtime where tool-calling agentic loops returned empty responses. Root cause: Ollama port misconfiguration (11436 instead of standard 11434) caused connection timeouts appearing as "no response". Additionally improved safety handling when tool calls exhaust max rounds and added full tool-calling support to standalone CLI mode.
+
+### Root Cause & Fixes
+
+1. **Wrong Ollama Port (11436 → 11434)**
+   - Ollama on kubuntu (192.168.1.101) runs on standard port 11434
+   - agent_manager.py and wee_runtime.py had hardcoded port 11436
+   - Now correctly points to port 11434 in both PRESETS configurations
+   - Fixed in agent_manager.py:7630 and wee_runtime.py:20 (2 locations each)
+
+2. **Tool-Call Agentic Loop Safety Net**
+   - When all MAX_TOOL_ROUNDS produce tool calls without final text response, now returns last tool result instead of empty string
+   - Prevents empty response output while maintaining agentic flow
+
+3. **Full Tool-Calling Support in Standalone CLI**
+   - Added complete agentic loop to wee_runtime.py standalone CLI mode (--tools flag)
+   - Supports tool detection, execution (bash/python), follow-up requests
+   - Enables background task support with proper tool call handling
+
+### Changes
+- **agent_manager.py** — Fixed Ollama port 11436→11434 (2 locations in PRESETS)
+- **wee_runtime.py** — Fixed port, enhanced tool-call loop with max-rounds safety net, added full agentic loop to CLI mode
+- **tests/test_issue107_tool_calling.py** — 21 new comprehensive regression tests
+
+### Test Coverage
+- **1186 total tests pass**, 9 skipped, 0 failures
+- **21 new regression tests** covering:
+  - Port correctness validation
+  - Tool call delta detection
+  - Tool execution (bash/python)
+  - Full agentic loop with mocked OpenAI
+  - Max-rounds fallback behavior
+  - Tools-not-supported retry logic
+  - Standalone CLI tool execution
+
+### QA Notes
+- wee-qa verified complete tool-calling workflows
+- Tested with Ollama and LM Studio endpoints on correct ports
+- Agentic loops tested with multi-step workflows
+- All edge cases validated: max-rounds, empty responses, tool execution failures
+
+---
+
+
 ## [Issue #100] Feature: GitHub Issues Integration for TODO Endpoints
 **Status:** ✅ QA Approved (Commit: ca21379)
 
