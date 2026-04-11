@@ -537,97 +537,207 @@ class TestSourceTagging:
 class TestInvalidLabelHandling:
     """Test that invalid labels are stripped and issue creation succeeds."""
 
+    @classmethod
+    def setup_class(cls):
+        """Create shared TestClient for all tests in this class."""
+        import os
+        import sys
+
+        sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+        os.environ.setdefault("API_SHARED_KEY", "test_key_123")
+        os.environ.setdefault("APP_ENV", "DEV")
+        os.environ.setdefault("API_PORT", "8099")
+
+        from unittest.mock import patch as _patch
+
+        from fastapi.testclient import TestClient
+
+        import agent_manager
+
+        cls._telegram_patch = _patch.object(
+            agent_manager,
+            "_resolve_telegram_identity",
+            side_effect=lambda identity: identity,
+        )
+        cls._telegram_patch.start()
+        cls._send_pairing_patch = _patch.object(
+            agent_manager,
+            "_send_pairing_code",
+            return_value=True,
+        )
+        cls._send_pairing_patch.start()
+        cls.app = agent_manager.create_api_app()
+        cls.client = TestClient(cls.app)
+        cls.headers = {"Authorization": "Bearer shared_test_key_123"}
+
+    @classmethod
+    def teardown_class(cls):
+        cls._telegram_patch.stop()
+        cls._send_pairing_patch.stop()
+
+    def setup_method(self):
+        """Create a fresh temp TODO directory for each test."""
+        import os
+        import tempfile
+        from pathlib import Path
+
+        self.tmp_base = tempfile.mkdtemp(prefix="label_test_", dir="/opt")
+        self.agent_name = os.path.basename(self.tmp_base)
+        self.active_dir = Path(self.tmp_base) / "TODOs" / "ACTIVE"
+        self.active_dir.mkdir(parents=True)
+
+    def teardown_method(self):
+        import shutil
+
+        shutil.rmtree(self.tmp_base, ignore_errors=True)
+
+    def _post_todo(self, title, labels=None, **kwargs):
+        body = {"title": title, "agent": self.agent_name}
+        if labels is not None:
+            body["labels"] = labels
+        body.update(kwargs)
+        return self.client.post("/api/v1/todos", json=body, headers=self.headers)
+
     def test_invalid_label_stripped_and_retried(self):
-        """When gh fails due to invalid label, strips it and retries."""
-        import subprocess
-        from unittest.mock import MagicMock, patch, call
+        """When gh fails due to invalid label, strips it and retries without it."""
+        from unittest.mock import MagicMock, patch
 
-        fail_result = MagicMock()
-        fail_result.returncode = 1
-        fail_result.stderr = "could not add label: qa-test not found"
-        fail_result.stdout = ""
+        # First call: gh issue create fails because "qa-test" label doesn't exist
+        fail_result = MagicMock(
+            returncode=1,
+            stderr="could not add label: qa-test not found",
+            stdout="",
+        )
+        # Second call: gh label list returns only "todo" and "bug" as valid labels
+        label_list_result = MagicMock(
+            returncode=0,
+            stdout='[{"name": "todo"}, {"name": "bug"}]',
+            stderr="",
+        )
+        # Third call: gh issue create without "qa-test" succeeds
+        success_result = MagicMock(
+            returncode=0,
+            stdout="https://github.com/leprachuan/fosterbot-home/issues/42\n",
+            stderr="",
+        )
 
-        success_result = MagicMock()
-        success_result.returncode = 0
-        success_result.stdout = "https://github.com/leprachuan/fosterbot-home/issues/42\n"
-        success_result.stderr = ""
+        with patch("subprocess.run", side_effect=[fail_result, label_list_result, success_result]):
+            resp = self._post_todo("Buy test item", labels=["qa-test"])
 
-        label_list_result = MagicMock()
-        label_list_result.returncode = 0
-        label_list_result.stdout = '[{"name": "todo"}, {"name": "bug"}]'
-
-        call_results = [fail_result, label_list_result, success_result]
-        with patch("subprocess.run", side_effect=call_results) as mock_run:
-            # Import app to get the inner function
-            import importlib
-            import sys as _sys
-            # We test via the API endpoint directly using httpx
-            pass  # structural test — actual behavior verified via integration
-
-        # Verify the pattern: first call fails, second fetches labels, third retries
-        assert fail_result.returncode == 1
-        assert "could not add label" in fail_result.stderr
-        assert success_result.returncode == 0
+        data = resp.json()
+        assert data["success"] is True
+        gh = data["github_issue"]
+        assert gh is not None
+        assert gh["issue_number"] == 42
+        assert gh["labels_stripped"] == ["qa-test"]
 
     def test_all_labels_invalid_creates_without_labels(self):
-        """When ALL labels are invalid (no valid labels), issue is created without --label."""
-        fail_result = MagicMock()
-        fail_result.returncode = 1
-        fail_result.stderr = "could not add label: qa-test not found"
-        fail_result.stdout = ""
+        """When ALL labels are invalid, issue is still created without --label flag."""
+        from unittest.mock import MagicMock, patch
 
-        # _fetch_valid_github_labels returns only 'bug' (not 'qa-test' or 'todo')
-        label_list_result = MagicMock()
-        label_list_result.returncode = 0
-        label_list_result.stdout = '[{"name": "bug"}]'
+        # First call: gh issue create fails (qa-test not found)
+        fail_result = MagicMock(
+            returncode=1,
+            stderr="could not add label: qa-test not found",
+            stdout="",
+        )
+        # Second call: gh label list returns only "bug" — neither "todo" nor "qa-test" are valid
+        label_list_result = MagicMock(
+            returncode=0,
+            stdout='[{"name": "bug"}]',
+            stderr="",
+        )
+        # Third call: gh issue create without --label flag succeeds
+        success_result = MagicMock(
+            returncode=0,
+            stdout="https://github.com/leprachuan/fosterbot-home/issues/99\n",
+            stderr="",
+        )
 
-        # The fallback create (without labels) succeeds
-        success_result = MagicMock()
-        success_result.returncode = 0
-        success_result.stdout = "https://github.com/leprachuan/fosterbot-home/issues/99\n"
-        success_result.stderr = ""
+        with patch("subprocess.run", side_effect=[fail_result, label_list_result, success_result]):
+            resp = self._post_todo("All invalid labels task", labels=["qa-test"])
 
-        call_count = {"n": 0}
-        results = [fail_result, label_list_result, success_result]
-
-        def side_effect(*args, **kwargs):
-            r = results[call_count["n"]]
-            call_count["n"] += 1
-            return r
-
-        from unittest.mock import patch
-        with patch("subprocess.run", side_effect=side_effect):
-            pass  # structural test
-
-        # Confirm flow: fail → fetch labels → create without label
-        assert fail_result.returncode == 1
-        assert success_result.returncode == 0
+        data = resp.json()
+        assert data["success"] is True
+        gh = data["github_issue"]
+        assert gh is not None
+        assert "issue_number" in gh
+        assert gh["issue_number"] == 99
 
     def test_non_label_failure_is_logged_and_returns_none(self):
-        """Non-label failures (e.g., network error) log error and return None."""
-        fail_result = MagicMock()
-        fail_result.returncode = 1
-        fail_result.stderr = "Could not resolve hostname api.github.com"
-        fail_result.stdout = ""
+        """Non-label failures (e.g., network error) return github_issue=None with no retry."""
+        from unittest.mock import MagicMock, patch
 
-        # Non-label failure — should NOT fetch labels, just log and return None
-        assert "label" not in fail_result.stderr.lower()
-        assert fail_result.returncode != 0
+        # gh issue create fails with a network error (not a label error)
+        network_fail = MagicMock(
+            returncode=1,
+            stderr="Could not resolve hostname api.github.com",
+            stdout="",
+        )
+
+        with patch("subprocess.run", return_value=network_fail) as mock_run:
+            resp = self._post_todo("Network fail task")
+
+        data = resp.json()
+        # The TODO file itself was created successfully
+        assert data["success"] is True
+        # But the GitHub issue creation returned None (no retry for non-label errors)
+        assert data["github_issue"] is None
+        # Only one subprocess call was made (no label-list retry)
+        assert mock_run.call_count == 1
 
     def test_labels_stripped_field_in_response(self):
-        """Response includes labels_stripped when invalid labels were removed."""
-        result_info = {
-            "issue_number": 42,
-            "url": "https://github.com/leprachuan/fosterbot-home/issues/42",
-            "labels_stripped": ["qa-test"],
-        }
-        assert "labels_stripped" in result_info
-        assert result_info["labels_stripped"] == ["qa-test"]
+        """Response dict contains labels_stripped field when invalid labels were removed."""
+        from unittest.mock import MagicMock, patch
+
+        # First call: create fails because "nonexistent-label" is invalid
+        fail_result = MagicMock(
+            returncode=1,
+            stderr="could not add label: nonexistent-label not found",
+            stdout="",
+        )
+        # Second call: label list returns "todo" and "FAMILY" as valid
+        label_list_result = MagicMock(
+            returncode=0,
+            stdout='[{"name": "todo"}, {"name": "FAMILY"}]',
+            stderr="",
+        )
+        # Third call: create with only valid labels succeeds
+        success_result = MagicMock(
+            returncode=0,
+            stdout="https://github.com/leprachuan/fosterbot-home/issues/77\n",
+            stderr="",
+        )
+
+        with patch("subprocess.run", side_effect=[fail_result, label_list_result, success_result]):
+            resp = self._post_todo("Label strip verify", labels=["nonexistent-label", "FAMILY"])
+
+        data = resp.json()
+        assert data["success"] is True
+        gh = data["github_issue"]
+        assert gh is not None
+        assert "labels_stripped" in gh
+        assert "nonexistent-label" in gh["labels_stripped"]
+        assert gh["issue_number"] == 77
 
     def test_no_labels_stripped_field_when_all_valid(self):
-        """Response does NOT include labels_stripped when all labels were valid."""
-        result_info = {
-            "issue_number": 42,
-            "url": "https://github.com/leprachuan/fosterbot-home/issues/42",
-        }
-        assert "labels_stripped" not in result_info
+        """Response does NOT contain labels_stripped when first gh call succeeds."""
+        from unittest.mock import MagicMock, patch
+
+        # gh issue create succeeds on first try (label is valid)
+        success_result = MagicMock(
+            returncode=0,
+            stdout="https://github.com/leprachuan/fosterbot-home/issues/55\n",
+            stderr="",
+        )
+
+        with patch("subprocess.run", return_value=success_result):
+            resp = self._post_todo("Valid labels task", labels=["FAMILY"])
+
+        data = resp.json()
+        assert data["success"] is True
+        gh = data["github_issue"]
+        assert gh is not None
+        assert gh["issue_number"] == 55
+        assert "labels_stripped" not in gh
