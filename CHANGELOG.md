@@ -1,5 +1,30 @@
 # Changelog
 
+## [Issue #114] Feature: Wee runtime auto-discover models from API hosts
+**Status:** ❌ QA Rejected — Offline fallback bug (Commit: 4a8b587)
+**Verdict Date:** 2026-04-11  
+**Next State:** wee-dev fixing cache-write ordering bug, will re-dispatch for QA approval
+
+### Summary
+Feature adds dynamic model discovery for `wee` runtime via new `wee_model_discovery.py` module. Core functionality works — Ollama discovery, enriched `/api/v1/wee/models` endpoint, refresh endpoint, TTL cache all verified. **Offline fallback to cached models is broken** due to cache being overwritten before reading old value.
+
+### QA Finding — MAJOR Bug
+**File:** `wee_model_discovery.py`, lines 151–166  
+Root cause: `self._cache[cache_key]` overwritten with empty list *before* reading old cached value. When a host goes offline after being online, the fallback never triggers because the old cache is already replaced with `(now, [])`.
+
+**Required Fixes (wee-dev):**
+1. Save old cache entry before overwriting it
+2. Add regression test: host online → goes offline → verify cached models returned
+3. (MINOR) `discover_all_enriched()` ignores TTL / `force` parameter
+
+### Test Results
+- ✅ 29/29 new tests pass (test_issue114_model_discovery.py)
+- ✅ 1171/1171 full suite pass
+- ✅ 0 failures, 0 regressions
+- ✅ Live API tests: discovery, enriched endpoint, refresh, TTL cache, force bypass all working
+
+---
+
 ## [Issue #111] Bug: Wee runtime tool/skill execution audit
 **Status:** ✅ QA Approved (Commit: 502f267)
 
