@@ -8587,6 +8587,13 @@ User Request:
                     "", current_runtime, n8n_session_id=n8n_session_id
                 )
             )
+        elif current_runtime == "wee":
+            # Issue #108 fix: Wee has no external session_id — history is keyed
+            # by n8n_session_id in session_map.  Must pass n8n_session_id so
+            # session_exists() finds wee_messages regardless of session_id.
+            can_resume = self.session_exists(
+                session_id, current_runtime, n8n_session_id=n8n_session_id
+            )
         else:
             can_resume = (
                 self.session_exists(session_id, current_runtime)
