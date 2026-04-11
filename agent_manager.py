@@ -7482,7 +7482,7 @@ User Request:
 
         # Build context prompt with agent identity
         context_prompt = self.build_agent_context_prompt(
-            prompt, agent, channel, n8n_session_id
+            agent, prompt, n8n_session_id, channel=channel
         )
 
         # Add elevated mode instructions for unrestricted privileged access
@@ -7615,11 +7615,6 @@ User Request:
         effective_timeout = timeout if timeout is not None else self.command_timeout
         channel = session_data.get("channel", "webui")
 
-        # Build context prompt with agent identity
-        context_prompt = self.build_agent_context_prompt(
-            prompt, agent, channel, n8n_session_id
-        )
-
         # -- Resolve model, endpoint, and API key --
         api_base = session_data.get("api_base") or os.environ.get(
             "WEE_API_BASE"
@@ -7663,6 +7658,22 @@ User Request:
             f"session={n8n_session_id[:8]}...",
             file=sys.stderr,
         )
+
+        # Issue #111: Build context prompt with correct args (after model resolution)
+        base_context_prompt = self.build_agent_context_prompt(
+            agent,
+            prompt,
+            n8n_session_id,
+            render_type=render_type,
+            timeout=effective_timeout,
+            runtime="wee",
+            model=resolved_model,
+            channel=channel,
+        )
+        # Issue #111: Augment system prompt with explicit tool capability section
+        # so models that ignore JSON schemas still know tools are available.
+        context_prompt = self._wee_augment_system_prompt_with_tools(base_context_prompt)
+
 
         # -- Streaming infrastructure --
         stream_buffer = getattr(self, "_stream_buffers", {}).get(n8n_session_id)
@@ -7973,6 +7984,32 @@ User Request:
                         clean.append(m)
                 session_map[n8n_session_id]["wee_messages"] = clean
                 self.save_session_map(session_map)
+
+    def _wee_augment_system_prompt_with_tools(self, system_prompt: str) -> str:
+        """Issue #111: Append explicit tool capability declaration to system prompt.
+
+        Many Ollama models ignore JSON tool schemas entirely and respond as if
+        no tools exist. Explicitly stating tool availability in the system
+        prompt text reliably fixes this across all models.
+        """
+        tool_section = (
+            "\n[Available Tools]\n"
+            "You have access to the following tools. ALWAYS use them when the user asks you to\n"
+            "perform any action -- do NOT say you cannot do something that these tools enable.\n"
+            "\n"
+            "**bash** -- Execute a bash shell command and return its output.\n"
+            "  Call: bash tool with {\"command\": \"your shell command here\"}\n"
+            "  Use for: running commands, SSH, file operations, checking system state\n"
+            "\n"
+            "**python** -- Execute Python 3 code and return its output.\n"
+            "  Call: python tool with {\"code\": \"your python code here\"}\n"
+            "  Use for: data processing, calculations, scripting, file parsing\n"
+            "\n"
+            "CRITICAL: When asked to run a command, SSH somewhere, check system status,\n"
+            "list files, or perform any shell action -- call the bash tool immediately.\n"
+            "NEVER refuse or claim you lack capability. The tools are active and functional."
+        )
+        return system_prompt + tool_section
 
     def _wee_execute_tool(self, func_name: str, func_args: dict, agent: str) -> str:
         """Execute a tool call from the wee runtime agentic loop.
