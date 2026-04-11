@@ -62,6 +62,7 @@ Wee-Orchestrator is a unified AI agent platform that lets you chat with **any AI
 - **📜 Session History** — Full conversation persistence with search and resume
 - **⚡ Background Tasks** — Delegate long-running work to background agents with in-thread status updates
 - **🔔 In-Thread Notifications** — Real-time task lifecycle updates (queued → running → complete) in your conversation
+- **📋 Dual-Source TODOs** — Sync TODOs between GitHub Issues (primary) and flat files (fallback) with auto-deduplication
 - **🔌 Extensible Skills** — Plugin architecture for adding capabilities (Cisco Meraki, Home Assistant, etc.)
 - **⚙️ Slash Command Registry — Pure-server commands that bypass the LLM for reduced latency; auto-registers with Telegram BotFather for autocomplete; built-in `/secret` command for secure credential management
 
@@ -1672,16 +1673,56 @@ The scheduler is resilient to system clock adjustments (NTP corrections, manual 
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `POST` | `/api/v1/todos` | Create a new TODO with optional due_date, labels, details |
+| `GET` | `/api/v1/todos` | Fetch TODOs from both GitHub Issues and flat files (deduplicated) |
+| `POST` | `/api/v1/todos` | Create a new TODO in both GitHub Issues and flat file |
+| `POST` | `/api/v1/todos/{title}/complete` | Complete/close a TODO in both sources |
 
-**POST /api/v1/todos** — Create a new TODO
+**Dual-Source TODOs** — Fetches from GitHub Issues (primary, labeled with `todo`) and flat files (fallback), automatically merged with deduplication by title. GitHub Issues take precedence on conflicts.
+
+**GET /api/v1/todos** — Fetch all TODOs from GitHub Issues + flat files
+
+Request parameters (query string):
+```
+?limit=50          # Number of TODOs to return (default: 100)
+?offset=0          # Pagination offset (default: 0)
+?source=all|github|flat    # Filter by source (default: all)
+```
+
+Response (200 OK):
+```json
+{
+  "todos": [
+    {
+      "id": "To1a2b3",
+      "title": "Fix auth bug",
+      "status": "open",
+      "source": "github",
+      "issue_number": 42,
+      "labels": ["bug", "urgent"],
+      "created_at": "2026-04-01T10:00:00Z"
+    },
+    {
+      "id": "Ta4b5c6",
+      "title": "Refactor database layer",
+      "status": "open",
+      "source": "flat",
+      "created_at": "2026-04-02T14:30:00Z"
+    }
+  ],
+  "total": 2,
+  "offset": 0,
+  "limit": 50
+}
+```
+
+**POST /api/v1/todos** — Create a new TODO in both sources
 
 Request body:
 ```json
 {
   "title": "Complete user auth flow",
   "due_date": "2026-04-15",
-  "labels": "backend,security",
+  "labels": ["backend", "security"],
   "details": "Implement JWT tokens and refresh logic"
 }
 ```
@@ -1692,22 +1733,53 @@ Response (201 Created):
   "id": "To1a2b3",
   "title": "Complete user auth flow",
   "due_date": "2026-04-15",
-  "labels": "backend,security",
+  "labels": ["backend", "security"],
+  "labels_stripped": [],
+  "issue_number": 43,
+  "source": "github+flat",
   "details": "Implement JWT tokens and refresh logic",
   "created_at": "2026-04-01T00:26:27Z"
 }
 ```
 
+**Label Validation & Retry:**
+- If provided labels don't exist in the GitHub repo, invalid labels are automatically stripped
+- Issue creation is retried without the invalid labels
+- `labels_stripped` field in response shows which labels were removed
+- If all labels are invalid, issue is created without the --label flag
+
 Errors:
 - `400 Bad Request` — Missing required `title` field or invalid JSON
 - `401 Unauthorized` — Missing or invalid Bearer token
-- `409 Conflict` — TODO with this title already exists
+- `409 Conflict` — TODO with this title already exists (in either source)
 - `422 Unprocessable Entity` — Path traversal detected (invalid characters in title)
+
+**POST /api/v1/todos/{title}/complete** — Mark TODO as complete in both sources
+
+Request: `POST /api/v1/todos/Complete%20user%20auth%20flow/complete`
+
+Response (200 OK):
+```json
+{
+  "id": "To1a2b3",
+  "title": "Complete user auth flow",
+  "status": "closed",
+  "github_issue_closed": 43,
+  "flat_file_marked_done": true,
+  "completed_at": "2026-04-05T15:45:00Z"
+}
+```
+
+Errors:
+- `401 Unauthorized` — Missing or invalid Bearer token
+- `404 Not Found` — TODO with this title not found in either source
+- `500 Internal Server Error` — Subprocess error closing GitHub Issue or updating flat file
 
 **Security:**
 - Path traversal protection: rejects `/`, `\`, `..`, and control characters in the title
 - Duplicate title detection prevents accidental overwrites
 - Authentication required: Bearer token or shared-key validation
+- Invalid label detection prevents API errors on malformed label names
 
 ---
 

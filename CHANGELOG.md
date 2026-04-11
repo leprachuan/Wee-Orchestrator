@@ -1,5 +1,84 @@
 # Changelog
 
+## [Issue #100] Feature: GitHub Issues Integration for TODO Endpoints
+**Status:** ✅ QA Approved (Commit: ca21379)
+
+### Summary
+Integrated GitHub Issues as a primary TODO data source alongside flat-file TODOs. The `/api/v1/todos` endpoints now fetch from both GitHub Issues (with `todo` label) and flat files, merging results with deduplication by title. Adds robust label validation when creating GitHub Issues, with automatic retry and graceful degradation.
+
+### Changes
+- **GET /api/v1/todos** — Fetches from both GitHub Issues and flat files
+  - GitHub Issues (primary) labeled with `todo` from configured repository
+  - Flat files (fallback) from configured TODO directory
+  - Automatic deduplication by title
+  - All tests passing (26 new tests added to test suite)
+
+- **POST /api/v1/todos** — Creates TODO in both GitHub Issues and flat file
+  - Creates GitHub Issue with `todo` label (if labels provided)
+  - Also creates flat-file backup for offline access
+  - Label validation: invalid labels are stripped and issue creation is retried
+  - If all labels invalid, issue created without --label flag
+  - Response includes `labels_stripped` field when labels removed
+
+- **POST /api/v1/todos/{title}/complete** — Closes matching GitHub Issue
+  - Searches GitHub Issues by title and closes matching issue
+  - Also marks flat file as complete
+  - Works with both dual-source TODOs
+
+- **Helper Functions**
+  - `_fetch_github_todos()` — Fetch issues with `todo` label using `gh` CLI
+  - `_create_github_todo()` — Create issue with label validation and retry logic
+  - `_close_github_todo()` — Close matching GitHub Issue by title
+  - `_fetch_valid_github_labels()` — Query valid repo labels for validation
+  - `_merge_todos()` — Deduplicate by title, GitHub Issues primary
+  - Added logging to 4 bare except blocks in TODO functions
+
+### Tests
+- **26 new tests** in `tests/test_issue100_github_todos.py` (1129 total pass)
+  - `TestGitHubTodoCreation` — GitHub Issue creation and validation
+  - `TestSourceTagging` — Track GitHub vs flat-file source
+  - `TestInvalidLabelHandling` — Rewritten with FastAPI TestClient
+    - test_invalid_label_stripped_and_retried
+    - test_all_labels_invalid_creates_without_labels
+    - test_non_label_failure_is_logged_and_returns_none
+    - test_labels_stripped_field_in_response
+    - test_no_labels_stripped_field_when_all_valid
+  - TestClient-based mocking for subprocess.run calls
+
+### Test Results
+- **1129 total tests pass**, 9 skipped, 0 failures
+- All 26 Issue #100 tests pass (100%)
+- No BLOCKERs or MAJORs
+- Full backwards compatibility maintained
+
+### QA Notes
+- Round 1 MINOR (test rewrite) — **RESOLVED** in commit ca21379
+- All 5 hollow TestInvalidLabelHandling tests rewritten using FastAPI TestClient + subprocess mocks
+- Each test now calls POST /api/v1/todos via TestClient with controlled mock responses
+- Full feature verified for dual-source TODO retrieval and GitHub Issue integration
+
+### Use Cases
+```bash
+# Get TODOs from both GitHub Issues and flat files (deduplicated by title)
+curl -H "Authorization: Bearer <token>" https://127.0.0.1:8000/api/v1/todos
+
+# Create TODO (creates both GitHub Issue + flat file)
+curl -X POST -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{"title": "Fix auth bug", "labels": ["bug", "urgent"]}' \
+  https://127.0.0.1:8000/api/v1/todos
+
+# Complete TODO (closes GitHub Issue + marks flat file done)
+curl -X POST -H "Authorization: Bearer <token>" \
+  https://127.0.0.1:8000/api/v1/todos/Fix%20auth%20bug/complete
+```
+
+### PR Status
+- Issue #100 approved by QA (commit ca21379)
+- Ready for PR: `issue/100` → `dev`
+
+---
+
 ## [Issue #94] Bug: claude-sdk elevated mode broken — args swapped
 **Status:** ✅ QA Approved (Commit: ea8495d)
 
