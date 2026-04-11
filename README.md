@@ -561,6 +561,42 @@ All AI runtimes in this system are configured with **full tool access** to enabl
 - **Usage:** `/runtime set copilot-sdk`
 - **Issues:** [#76](../../issues/76), [#87](../../issues/87), [#91](../../issues/91)
 
+#### Wee Native Runtime
+- **Also Known As:** `wee` — OpenAI-compatible API backend runtime
+- **Description:** Connects to any OpenAI-compatible API endpoint (Ollama, OpenRouter, LM Studio, etc.) without depending on external CLI tools like GitHub Copilot CLI, Claude Code, or OpenCode.
+- **Supported Backends:**
+  - **Ollama** at `http://192.168.1.101:11434/v1` — local, free (Kubuntu)
+  - **OpenRouter** at `https://openrouter.ai/api/v1` — cloud fallback, 100+ models
+  - **LM Studio** at `http://localhost:1234/v1` — local alternative
+- **Model Format:** Uses `provider/model_name` prefix syntax for auto-resolving API base URL and API key:
+  - `ollama/gemma4:e4b` — Ollama on Kubuntu (default)
+  - `openrouter/meta-llama/llama-4-scout` — OpenRouter cloud
+  - `lmstudio/qwen2.5-7b` — LM Studio local
+- **Configuration Example:**
+  ```json
+  {
+    "runtime": "wee",
+    "model": "ollama/gemma4:e4b"
+  }
+  ```
+- **Environment Variables:**
+  - `WEE_API_BASE` — Override API base URL (e.g., `http://192.168.1.101:11434/v1`)
+  - `WEE_API_KEY` — API key for authenticated endpoints (OpenRouter, etc.)
+  - `WEE_DEFAULT_MODEL` — Default model when model not specified in config
+- **Features:**
+  - In-process execution using OpenAI Python SDK
+  - Real-time SSE streaming to WebUI
+  - Provider presets auto-resolve API base URLs and API keys
+  - Graceful error handling with informative messages
+  - Background task subprocess execution via `wee_runtime.py`
+- **Implementation:** `run_wee_native()` in `agent_manager.py`; `wee_runtime.py` standalone CLI for background tasks
+- **Usage:** `/runtime set wee`
+- **Bug Fixes:**
+  - Wrong Ollama port corrected: `11436` → `11434` (Issue #105)
+  - `httpx.Timeout(connect=15s)` and `max_retries=0` added to OpenAI client for fast-fail on bad endpoints (Issue #105)
+  - Model resolution fixed: `get_models_for_runtime('wee')` returns flat strings; `get_model_from_name()` strips provider prefix (`ollama/`) and prefers exact/shortest match (Issue #105)
+- **Issues:** [#88](../../issues/88), [#105](../../issues/105)
+
 ### Security Considerations
 
 ⚠️ **Warning:** These configurations grant AI agents extensive system access:

@@ -1,5 +1,41 @@
 # Changelog
 
+## [Issue #105] Bug: Wee Runtime Stalls with Ollama gemma4:e4b
+**Status:** QA Approved — Commit 07733dc on `issue/105` branch — 15 new tests, 1157 total pass
+
+### Problem
+The `wee` runtime stalled indefinitely when routing to Ollama. Three root causes identified:
+
+1. **Wrong Ollama port** — `agent_manager.py` and `wee_runtime.py` used port `11436` instead of the standard `11434`, causing all Ollama requests to silently fail.
+2. **Missing connect timeout** — OpenAI client had no `httpx.Timeout(connect=...)` and `max_retries` defaulted to 2, causing long stalls (retry backoff) instead of fast-fail when connecting to a wrong/unavailable endpoint.
+3. **Broken model resolution** — `get_models_for_runtime('wee')` returned tuples instead of flat strings; `get_model_from_name()` used longest-match instead of exact-match after stripping provider prefix (`ollama/`), causing model names to resolve incorrectly.
+
+### Solution
+
+#### Fix 1 — Correct Ollama Port
+- `agent_manager.py` PRESETS: `http://192.168.1.101:11434/v1` (was `11436`)
+- `wee_runtime.py` PRESETS: `http://192.168.1.101:11434/v1` (was `11436`)
+
+#### Fix 2 — httpx Timeout + max_retries=0
+- OpenAI client now initialized with `httpx.Timeout(connect=15.0, read=300.0, write=30.0, pool=10.0)`
+- `max_retries=0` prevents retry backoff masking connection errors
+
+#### Fix 3 — Model Resolution
+- `get_models_for_runtime('wee')` returns flat strings (not tuples)
+- `get_model_from_name()` Step 2 strips provider prefix (`ollama/`, `openrouter/`, `lmstudio/`) before matching; prefers exact match, then shortest match — not longest
+- E2E test confirms `ollama/gemma4:e4b` routes to Ollama at `192.168.1.101:11434` correctly
+
+### Files Changed
+- `agent_manager.py` — port fix, timeout/retries, model resolution (3 locations)
+- `wee_runtime.py` — port fix, timeout/retries
+- `tests/test_issue105_wee_ollama_stall.py` — 15 new tests
+
+### Known Gap (Pre-existing, not introduced by this fix)
+- `GET /api/v1/models?runtime=wee` returns an "unknown runtime" error — unrelated to this fix, tracked separately
+
+
+## [Issue #93] Bug: No way to unlock secret store via WebUI
+**Status:** QA Pending — Commit 423668a on `issue/93` branch — 26 new tests, 1129 total pass
 ### [Issue #128] Feature: Token Usage Tracking + Cost Estimation + WebUI Footer
 **Status:** ✅ Implemented
 
