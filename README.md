@@ -62,6 +62,7 @@ Wee-Orchestrator is a unified AI agent platform that lets you chat with **any AI
 - **📜 Session History** — Full conversation persistence with search and resume
 - **⚡ Background Tasks** — Delegate long-running work to background agents with in-thread status updates
 - **🔔 In-Thread Notifications** — Real-time task lifecycle updates (queued → running → complete) in your conversation
+- **📋 Dual-Source TODOs** — Sync TODOs between GitHub Issues (primary) and flat files (fallback) with auto-deduplication
 - **🔌 Extensible Skills** — Plugin architecture for adding capabilities (Cisco Meraki, Home Assistant, etc.)
 - **⚙️ Slash Command Registry — Pure-server commands that bypass the LLM for reduced latency; auto-registers with Telegram BotFather for autocomplete; built-in `/secret` command for secure credential management
 
@@ -137,7 +138,7 @@ Then open `http://localhost:8000/ui` in your browser and pair via Telegram or We
 |---------|-------------|
 | `/agent <name>` | Switch to a different agent |
 | `/model <model>` | Change AI model mid-conversation |
-| `/runtime <runtime>` | Switch AI runtime (copilot, claude, claude-agent-sdk, gemini, opencode, copilot-sdk, wee, codex, devin) |
+| `/runtime <runtime>` | Switch AI runtime (copilot, claude, claude-agent-sdk, gemini, opencode, copilot-sdk, codex, devin) |
 | `/timeout <seconds>` | Adjust execution timeout |
 | `/status` | Check running task status |
 | `/cancel` | Cancel the current running task |
@@ -547,10 +548,8 @@ All AI runtimes in this system are configured with **full tool access** to enabl
   - `restricted` → `default` (standard safety checks)
 - **Streaming:** Real-time text chunks pushed to WebUI SSE consumers via `_StreamBuffer`
 - **Tool Calls:** `ToolUseBlock`/`ToolResultBlock` detection emits standardized tool_call events
-- **Permissions Fix:** Session templates with `permissions: None` now correctly coalesce to restricted mode; `elevated` sessions pass `bypassPermissions` through the full call chain (Issue #91)
-- **Background Tasks:** Unattended background tasks automatically run with elevated permissions (Issue #91)
 - **Usage:** `/runtime set claude-agent-sdk`
-- **Issues:** [#77](../../issues/77), [#87](../../issues/87), [#91](../../issues/91)
+- **Issues:** [#77](../../issues/77), [#87](../../issues/87), [#91](../../issues/91), [#94](../../issues/94)
 
 #### GitHub Copilot SDK (Python)
 - **Package:** `github-copilot-sdk>=0.1.0` (install via `pip install github-copilot-sdk`)
@@ -559,45 +558,8 @@ All AI runtimes in this system are configured with **full tool access** to enabl
   - Real-time streaming via `ASSISTANT_STREAMING_DELTA`/`ASSISTANT_MESSAGE_DELTA` events
   - Tool call tracking via `TOOL_EXECUTION_START`/`COMPLETE` and `COMMAND_EXECUTE` events
   - Session resumption and structured error handling
-- **Permission Modes:**
-  - `elevated` -- passes `mode` from dispatcher, sends `elevated` through full call chain (Issue #91)
-  - `restricted` -- default mode; standard safety checks apply
-- **Permissions Fix:** Added `mode` parameter parity with `claude-sdk`; dispatcher now forwards mode to `run_copilot_sdk` (Issue #91)
-- **Background Tasks:** Unattended background tasks automatically run with elevated permissions (Issue #91)
 - **Usage:** `/runtime set copilot-sdk`
 - **Issues:** [#76](../../issues/76), [#87](../../issues/87), [#91](../../issues/91)
-
-#### Wee Native Runtime
-- **Also Known As:** `wee` — OpenAI-compatible API backend runtime
-- **Description:** Connects to any OpenAI-compatible API endpoint (Ollama, OpenRouter, LM Studio, etc.) without depending on external CLI tools like GitHub Copilot CLI, Claude Code, or OpenCode.
-- **Supported Backends:**
-  - **Ollama** at `http://192.168.1.101:11436/v1` — local, free (Kubuntu)
-  - **OpenRouter** at `https://openrouter.ai/api/v1` — cloud fallback, 100+ models
-  - **LM Studio** at `http://localhost:1234/v1` — local alternative
-- **Model Format:** Uses `provider/model_name` prefix syntax for auto-resolving API base URL and API key:
-  - `ollama/gemma4:e4b` — Ollama on Kubuntu (default)
-  - `openrouter/meta-llama/llama-4-scout` — OpenRouter cloud
-  - `lmstudio/qwen2.5-7b` — LM Studio local
-- **Configuration Example:**
-  ```json
-  {
-    "runtime": "wee",
-    "model": "ollama/gemma4:e4b"
-  }
-  ```
-- **Environment Variables:**
-  - `WEE_API_BASE` — Override API base URL (e.g., `http://192.168.1.101:11436/v1`)
-  - `WEE_API_KEY` — API key for authenticated endpoints (OpenRouter, etc.)
-  - `WEE_DEFAULT_MODEL` — Default model when model not specified in config
-- **Features:**
-  - In-process execution using OpenAI Python SDK
-  - Real-time SSE streaming to WebUI
-  - Provider presets auto-resolve API base URLs and API keys
-  - Graceful error handling with informative messages
-  - Background task subprocess execution via `wee_runtime.py`
-- **Implementation:** `run_wee_native()` in `agent_manager.py`; `wee_runtime.py` standalone CLI for background tasks
-- **Usage:** `/runtime set wee`
-- **Issue:** [#88](../../issues/88)
 
 ### Security Considerations
 
@@ -849,7 +811,7 @@ Interact with the agent manager using slash commands:
 
 #### Runtime Management
 ```
-/runtime list              # Show available runtimes (copilot, opencode, claude, gemini, wee)
+/runtime list              # Show available runtimes (copilot, opencode, claude, gemini)
 /runtime set <runtime>     # Switch runtime (e.g., /runtime set gemini)
 /runtime current           # Show current runtime
 ```
@@ -963,70 +925,6 @@ Agent (with WEE_ELEVATED=true):
 - `file`: Encrypted JSON store (requires `cryptography` + `python-keyring`)
 
 See **[docs/secret-tool.md](./docs/secret-tool.md)** for CLI and storage backend details.
-
-
-#### Secrets Management API Endpoints
-
-The keyring lock status and unlock operations are also available as REST API endpoints.
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| `GET` | `/api/v1/secrets/keyring-status` | Returns keyring lock status |
-| `POST` | `/api/v1/secrets/keyring-unlock` | Unlock keyring with password |
-
-**GET /api/v1/secrets/keyring-status** — Returns the current lock state of the system keyring.
-
-| Status Code | Description |
-|-------------|-------------|
-| `200` | Status returned (check `status` field) |
-| `401` | Unauthorized — missing or invalid bearer token |
-
-**Response fields:**
-- `status` *(string)*: One of `unlocked`, `locked`, `unavailable`, `error`
-- `backend` *(string, optional)*: Backend name (e.g., `keyring`)
-- `message` *(string, optional)*: Human-readable detail on non-`unlocked` statuses
-
-**Example:**
-```bash
-curl -s http://localhost:8000/api/v1/secrets/keyring-status \\
-  -H "Authorization: Bearer <token>"
-# -> {"status": "unlocked", "backend": "keyring"}
-# -> {"status": "locked", "message": "Keyring is locked"}
-# -> {"status": "unavailable", "message": "secret_tool not found"}
-```
-
----
-
-**POST /api/v1/secrets/keyring-unlock** — Attempt to unlock the system keyring with a password.
-
-| Status Code | Description |
-|-------------|-------------|
-| `200` | Keyring successfully unlocked |
-| `400` | Bad request — `password` field missing or empty |
-| `401` | Unauthorized — missing or invalid bearer token |
-| `422` | Unprocessable — password incorrect or unlock failed |
-
-**Request body:**
-```json
-{"password": "string"}
-```
-
-**Response fields:**
-- `status` *(string)*: `success` on unlock; error detail on failure
-- `method` *(string, optional)*: Unlock method used (e.g., `dbus`)
-- `message` *(string, optional)*: Human-readable result
-
-**Example:**
-```bash
-curl -s -X POST http://localhost:8000/api/v1/secrets/keyring-unlock \\
-  -H "Authorization: Bearer <token>" \\
-  -H "Content-Type: application/json" \\
-  -d '{"password": "my-keyring-password"}'
-# -> {"status": "success", "method": "dbus"}
-# -> HTTP 422: {"detail": "Incorrect password"}
-```
-
-> **Security note:** The password is passed to the `secret_tool` subprocess via stdin and is **never logged or stored** by the API server.
 
 ### N8N Integration
 
@@ -1176,6 +1074,63 @@ This unified approach ensures all agents have access to relevant context without
 A comprehensive test suite is included to ensure code quality and prevent regressions when making changes.
 
 ### Running Tests
+
+#### Stateless Query Endpoint
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `POST` | `/api/v1/query` | One-shot stateless query endpoint |
+
+**POST /api/v1/query** — Execute a single query without session management
+
+A lightweight, ephemeral-session endpoint for programmatic AI queries. Perfect for CI/CD pipelines, scripts, and integrations that don't need persistent session state.
+
+Request body (JSON):
+```json
+{
+  "prompt": "What is 2 + 2?",
+  "runtime": "copilot",
+  "model": "claude-haiku-4.5",
+  "agent": "orchestrator",
+  "timeout": 60
+}
+```
+
+Response (200 OK):
+```json
+{
+  "response": "2 + 2 = 4",
+  "runtime": "copilot",
+  "model": "claude-haiku-4.5",
+  "elapsed_ms": 2150
+}
+```
+
+**Parameters:**
+- `prompt` (string, required) — The query or command to send to the AI runtime
+- `runtime` (string, required) — AI runtime: `copilot`, `opencode`, `claude`, `gemini`, or `codex`
+- `model` (string, required) — Model name or alias (e.g., `claude-haiku-4.5`, `gpt-5-mini`)
+- `agent` (string, optional) — Agent context to use (default: `orchestrator`)
+- `timeout` (integer, optional) — Query timeout in seconds (default: 60)
+
+**Error responses:**
+- `400 Bad Request` — Missing required fields (`prompt`, `runtime`, `model`) or invalid JSON
+- `401 Unauthorized` — Missing or invalid Bearer token
+- `404 Not Found` — Unknown runtime, model, or agent
+- `429 Too Many Requests` — Rate limit exceeded (30 requests per minute per IP)
+- `504 Gateway Timeout` — Query exceeded specified timeout
+
+**Features:**
+- **Stateless** — No session created; ephemeral context cleaned up automatically after response
+- **Rate Limited** — 30 requests/minute per IP address (sliding window)
+- **Full Control** — Choose runtime, model, and agent per request
+- **Security** — Requires API authentication; executes with the authority of the calling user/token
+
+**Security:**
+- Requires API authentication (Bearer token or shared-key validation)
+- Runs with the authority of the calling API user (rate-limited by IP)
+- Ephemeral sessions are not persisted or visible in session history
+- Input validation prevents agent/model traversal attacks
 
 #### Memory Promotion
 
@@ -1718,16 +1673,56 @@ The scheduler is resilient to system clock adjustments (NTP corrections, manual 
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `POST` | `/api/v1/todos` | Create a new TODO with optional due_date, labels, details |
+| `GET` | `/api/v1/todos` | Fetch TODOs from both GitHub Issues and flat files (deduplicated) |
+| `POST` | `/api/v1/todos` | Create a new TODO in both GitHub Issues and flat file |
+| `POST` | `/api/v1/todos/{title}/complete` | Complete/close a TODO in both sources |
 
-**POST /api/v1/todos** — Create a new TODO
+**Dual-Source TODOs** — Fetches from GitHub Issues (primary, labeled with `todo`) and flat files (fallback), automatically merged with deduplication by title. GitHub Issues take precedence on conflicts.
+
+**GET /api/v1/todos** — Fetch all TODOs from GitHub Issues + flat files
+
+Request parameters (query string):
+```
+?limit=50          # Number of TODOs to return (default: 100)
+?offset=0          # Pagination offset (default: 0)
+?source=all|github|flat    # Filter by source (default: all)
+```
+
+Response (200 OK):
+```json
+{
+  "todos": [
+    {
+      "id": "To1a2b3",
+      "title": "Fix auth bug",
+      "status": "open",
+      "source": "github",
+      "issue_number": 42,
+      "labels": ["bug", "urgent"],
+      "created_at": "2026-04-01T10:00:00Z"
+    },
+    {
+      "id": "Ta4b5c6",
+      "title": "Refactor database layer",
+      "status": "open",
+      "source": "flat",
+      "created_at": "2026-04-02T14:30:00Z"
+    }
+  ],
+  "total": 2,
+  "offset": 0,
+  "limit": 50
+}
+```
+
+**POST /api/v1/todos** — Create a new TODO in both sources
 
 Request body:
 ```json
 {
   "title": "Complete user auth flow",
   "due_date": "2026-04-15",
-  "labels": "backend,security",
+  "labels": ["backend", "security"],
   "details": "Implement JWT tokens and refresh logic"
 }
 ```
@@ -1738,22 +1733,53 @@ Response (201 Created):
   "id": "To1a2b3",
   "title": "Complete user auth flow",
   "due_date": "2026-04-15",
-  "labels": "backend,security",
+  "labels": ["backend", "security"],
+  "labels_stripped": [],
+  "issue_number": 43,
+  "source": "github+flat",
   "details": "Implement JWT tokens and refresh logic",
   "created_at": "2026-04-01T00:26:27Z"
 }
 ```
 
+**Label Validation & Retry:**
+- If provided labels don't exist in the GitHub repo, invalid labels are automatically stripped
+- Issue creation is retried without the invalid labels
+- `labels_stripped` field in response shows which labels were removed
+- If all labels are invalid, issue is created without the --label flag
+
 Errors:
 - `400 Bad Request` — Missing required `title` field or invalid JSON
 - `401 Unauthorized` — Missing or invalid Bearer token
-- `409 Conflict` — TODO with this title already exists
+- `409 Conflict` — TODO with this title already exists (in either source)
 - `422 Unprocessable Entity` — Path traversal detected (invalid characters in title)
+
+**POST /api/v1/todos/{title}/complete** — Mark TODO as complete in both sources
+
+Request: `POST /api/v1/todos/Complete%20user%20auth%20flow/complete`
+
+Response (200 OK):
+```json
+{
+  "id": "To1a2b3",
+  "title": "Complete user auth flow",
+  "status": "closed",
+  "github_issue_closed": 43,
+  "flat_file_marked_done": true,
+  "completed_at": "2026-04-05T15:45:00Z"
+}
+```
+
+Errors:
+- `401 Unauthorized` — Missing or invalid Bearer token
+- `404 Not Found` — TODO with this title not found in either source
+- `500 Internal Server Error` — Subprocess error closing GitHub Issue or updating flat file
 
 **Security:**
 - Path traversal protection: rejects `/`, `\`, `..`, and control characters in the title
 - Duplicate title detection prevents accidental overwrites
 - Authentication required: Bearer token or shared-key validation
+- Invalid label detection prevents API errors on malformed label names
 
 ---
 

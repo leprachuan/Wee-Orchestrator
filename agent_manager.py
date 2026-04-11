@@ -772,8 +772,12 @@ def check_runtime_available(runtime: str) -> bool:
     # For Python packages (SDK runtimes), try importing
     if runtime in ('copilot-sdk', 'claude-sdk', 'wee'):
         try:
-            module_name = executable_name.replace('-', '_')
-            __import__(module_name)
+            if runtime == 'claude-sdk':
+                # Package is installed as claude_agent_sdk
+                __import__('claude_agent_sdk')
+            else:
+                module_name = executable_name.replace('-', '_')
+                __import__(module_name)
             return True
         except ImportError:
             return False
