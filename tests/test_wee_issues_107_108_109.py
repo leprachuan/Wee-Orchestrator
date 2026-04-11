@@ -741,7 +741,11 @@ class TestWeeIntegration(unittest.TestCase):
         call_kwargs = mock_client.chat.completions.create.call_args[1]
         api_messages = call_kwargs["messages"]
         # System prompt should be refreshed to the current one
-        self.assertEqual(api_messages[0]["content"], "You are a helpful assistant.")
+        # Issue #111: System prompt is augmented with tool section; check prefix only
+        self.assertTrue(
+            api_messages[0]["content"].startswith("You are a helpful assistant."),
+            "System prompt must begin with base context after refresh",
+        )
 
 
 
