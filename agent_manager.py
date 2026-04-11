@@ -135,6 +135,10 @@ def _sanitize_tool_call_for_display(data: dict) -> dict:
             if field in new_inp and isinstance(new_inp[field], str):
                 new_inp[field] = _sanitize_command_for_display(new_inp[field])
         sanitized["input"] = new_inp
+    # Also sanitize output field (Issue #115 — expandable tool output)
+    out = sanitized.get("output")
+    if out and isinstance(out, str):
+        sanitized["output"] = _sanitize_command_for_display(out)
     return sanitized
 
 

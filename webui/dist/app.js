@@ -1982,29 +1982,59 @@ function getToolInputSummary(toolName, input) {
  * Insert an interleaved tool-call block row into the messages container.
  */
 function insertToolCallBlock(streamBubble, toolId, toolName, inputSummary) {
-  if (!streamBubble) return;
+  const wrapper = document.createElement('div');
+  wrapper.className = 'tc-block';
+  wrapper.id = 'tc-block-' + toolId;
   const line = document.createElement('div');
   line.className = 'tc-line';
   line.id = 'tc-' + toolId;
   line.innerHTML =
-    '<span class="tc-spinner spinning">⚙️</span>' +
-    '<span class="tc-name">' + escHtml(toolName) + '</span>' +
-    (inputSummary ? '<code class="tc-input">' + escHtml(inputSummary) + '</code>' : '') +
-    '<span class="tc-status running">running…</span>';
-  streamBubble.appendChild(line);
-  line.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    '<span class=tc-toggle title=Expand output>▶</span>' +
+    '<span class=tc-spinner spinning>⚙️</span>' +
+    '<span class=tc-name>' + escHtml(toolName) + '</span>' +
+    (inputSummary ? '<code class=tc-input>' + escHtml(inputSummary) + '</code>' : '') +
+    '<span class=tc-status running>running…</span>';
+  wrapper.appendChild(line);
+  // Output container (hidden by default)
+  const outputEl = document.createElement('div');
+  outputEl.className = 'tc-output';
+  outputEl.id = 'tc-output-' + toolId;
+  wrapper.appendChild(outputEl);
+  // Click handler for expand/collapse
+  line.addEventListener('click', () => {
+    wrapper.classList.toggle('tc-expanded');
+    const toggle = line.querySelector('.tc-toggle');
+    if (toggle) toggle.textContent = wrapper.classList.contains('tc-expanded') ? '▼' : '▶';
+  });
+  streamBubble.appendChild(wrapper);
+  wrapper.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 }
 
 /**
  * Mark a tool-call block as complete (stop spinner, show checkmark).
  */
-function completeToolCallBlock(toolId) {
+function completeToolCallBlock(toolId, output, isError) {
   const row = document.getElementById('tc-' + toolId);
-  if (!row) return;
   const spinner = row.querySelector('.tc-spinner');
   if (spinner) spinner.classList.remove('spinning');
   const status = row.querySelector('.tc-status');
-  if (status) { status.textContent = '✓'; status.className = 'tc-status done'; }
+  if (isError) {
+    if (status) { status.textContent = '✗ failed'; status.className = 'tc-status error'; }
+    const wrapper = row.closest('.tc-block');
+    if (wrapper) wrapper.classList.add('tc-error');
+  } else {
+    if (status) { status.textContent = '✓'; status.className = 'tc-status done'; }
+  }
+  // Store output if provided
+  if (output) {
+    const outputEl = document.getElementById('tc-output-' + toolId);
+    if (outputEl) {
+      outputEl.textContent = output;
+      // Show toggle indicator that output is available
+      const toggle = row.querySelector('.tc-toggle');
+      if (toggle) toggle.classList.add('has-output');
+    }
+  }
 }
 
 /**
@@ -2013,8 +2043,11 @@ function completeToolCallBlock(toolId) {
 function cleanupAllToolSpinners() {
   document.querySelectorAll('.tc-spinner.spinning').forEach(el => {
     el.classList.remove('spinning');
-    const status = el.closest('.tool-call-block')?.querySelector('.tc-status');
-    if (status) { status.textContent = '✓'; status.className = 'tc-status done'; }
+    const status = el.closest('.tc-block')?.querySelector('.tc-status') ||
+                   el.closest('.tc-line')?.querySelector('.tc-status');
+    if (status && status.classList.contains('running')) {
+      status.textContent = '✓'; status.className = 'tc-status done';
+    }
   });
 }
 
@@ -2143,9 +2176,14 @@ async function sendMessageStreaming(query, sessionId) {
             } else if (evtKind === 'detected' && !activeStreamTools[key]) {
               activeStreamTools[key] = toolName;
               insertToolCallBlock(streamBubble, key, toolName, getToolInputSummary(toolName, evt.input));
-            } else if (evtKind === 'result') {
+            } else if (evtKind === 'result' || evtKind === 'completed') {
               delete activeStreamTools[key];
-              completeToolCallBlock(key);
+              completeToolCallBlock(key, evt.output || '', evt.is_error || false);
+            } else if (evtKind === 'started') {
+              if (!activeStreamTools[key]) {
+                activeStreamTools[key] = toolName;
+                insertToolCallBlock(streamBubble, key, toolName, getToolInputSummary(toolName, evt.input));
+              }
             }
 
           } else if (evt.type === 'done') {
@@ -2313,9 +2351,14 @@ async function reconnectToStream(sessionId) {
               } else if (evtKind === 'detected' && !activeStreamTools[key]) {
                 activeStreamTools[key] = toolName;
                 insertToolCallBlock(streamBubble, key, toolName, getToolInputSummary(toolName, evt.input));
-              } else if (evtKind === 'result') {
+              } else if (evtKind === 'result' || evtKind === 'completed') {
                 delete activeStreamTools[key];
-                completeToolCallBlock(key);
+                completeToolCallBlock(key, evt.output || '', evt.is_error || false);
+              } else if (evtKind === 'started') {
+                if (!activeStreamTools[key]) {
+                  activeStreamTools[key] = toolName;
+                  insertToolCallBlock(streamBubble, key, toolName, getToolInputSummary(toolName, evt.input));
+                }
               }
 
             } else if (evt.type === 'done') {
@@ -2387,6 +2430,9 @@ async function reconnectToStream(sessionId) {
 
 /** Inject markdown+highlight into an existing bubble element. */
 function applyMarkdownToBubble(bubble, content) {
+  // Preserve tool call blocks before replacing innerHTML (Issue #115)
+  const toolBlocks = Array.from(bubble.querySelectorAll('.tc-block'));
+  const timingDiv = bubble.querySelector('.message-timing');
   try {
     bubble.innerHTML = marked.parse(content, { breaks: true });
     bubble.querySelectorAll('pre code').forEach(block => {
@@ -2395,6 +2441,9 @@ function applyMarkdownToBubble(bubble, content) {
   } catch (_) {
     bubble.textContent = content;
   }
+  // Re-append preserved tool call blocks
+  toolBlocks.forEach(block => bubble.appendChild(block));
+  if (timingDiv) bubble.appendChild(timingDiv);
   // Make file paths clickable after markdown render
   if (typeof linkifyFilePaths === 'function') linkifyFilePaths(bubble);
 }
