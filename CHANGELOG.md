@@ -1,5 +1,66 @@
 # Changelog
 
+## [Issue #105] Bug: Wee runtime stall with Ollama gemma4:e4b
+**Status:** ✅ QA Approved (Commit: 07733dc)
+
+### Summary
+Fixed critical wee runtime stall issue when using Ollama models. Identified and resolved three root causes: incorrect Ollama port configuration, missing connection timeout and retry limits causing infinite hangs, and model list format incompatibility with substring matching logic.
+
+### Root Causes & Fixes
+
+1. **Wrong Ollama Port (11436 → 11434)**
+   - Ollama on kubuntu (192.168.1.101) runs on standard port 11434
+   - agent_manager.py and wee_runtime.py had hardcoded port 11436
+   - Now correctly points to port 11434 in both PRESETS configurations
+   - Fixed in agent_manager.py:7630 and wee_runtime.py:20
+
+2. **Missing Connection Timeout & Retry Limits**
+   - OpenAI client had no timeout constraint on hanging connections
+   - Unlimited retries could cause indefinite stalls on connection failures
+   - Now enforced: `httpx.Timeout(connect=15s)` and `max_retries=0`
+   - Enables fail-fast behavior on wrong/unreachable endpoints
+   - Applied to wee_runtime.py initialization
+
+3. **Model List Format & Matching Logic**
+   - `get_models_for_runtime('wee')` was returning tuples instead of flat strings
+   - `get_model_from_name()` Step 2 expected flat strings (line 4095-4108)
+   - Substring matching now prefers exact match over longest match
+   - Fixed in agent_manager.py model resolution functions
+
+### Changes
+- **agent_manager.py:7630** — Updated PRESETS with correct Ollama port 11434
+- **wee_runtime.py:20** — Updated PRESETS with correct Ollama port 11434
+- **wee_runtime.py initialization** — Added httpx.Timeout(connect=15s) and max_retries=0
+- **agent_manager.py model functions** — Fixed model list return format (flat strings) and matching preference (exact > shortest)
+
+### Tests
+- **1157 total tests pass**, 9 skipped, 0 failures
+- **15 new regression tests** specifically for wee runtime Ollama integration
+- Live integration test passed with Ollama gemma4:e4b model
+- All existing tests continue to pass with new fixes
+
+### QA Notes
+- wee-qa completed comprehensive verification of all three fixes
+- Tested with actual Ollama gemma4:e4b model on kubuntu
+- Connection timeout and retry limits validated in isolation
+- Model resolution tested with various model name formats and providers
+
+### Use Cases
+```bash
+# Wee runtime now reliably handles Ollama models
+# Connection fails fast (15s timeout) instead of hanging indefinitely
+curl -X POST -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{"agent": "orchestrator", "runtime": "wee", "model": "ollama/gemma4:e4b", "prompt": "..."}' \
+  https://127.0.0.1:8000/api/v1/background-tasks
+```
+
+### PR Status
+- Issue #105 approved by QA (commit 07733dc on branch issue/105)
+- Ready for PR: `issue/105` → `dev`
+
+---
+
 ## [Issue #100] Feature: GitHub Issues Integration for TODO Endpoints
 **Status:** ✅ QA Approved (Commit: ca21379)
 
