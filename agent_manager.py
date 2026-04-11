@@ -8070,15 +8070,21 @@ User Request:
 
     _SSH_BIN_RE = re.compile(r"\b(ssh|scp|sftp)\b")
 
+    # TODO(#113): Wire _wee_sanitize_bash_command into the tool execution loop
+    # when wee runtime gains bash/shell tool calling support. Currently run_wee_native()
+    # has no tool execution loop, so this function is defined but never called.
     @staticmethod
     def _wee_sanitize_bash_command(command: str) -> str:
-        """Issue #113: Auto-inject SSH flags to prevent host key verification failures.
+        """Auto-inject SSH flags to prevent host key verification failures.
 
         When a bash command contains an ssh/scp/sftp invocation without
         StrictHostKeyChecking already set, inject
         ``-o StrictHostKeyChecking=accept-new`` so first-connect succeeds
         without manual intervention.  ``accept-new`` is safer than ``no``
         because it still rejects CHANGED keys (potential MITM).
+
+        NOTE: Not yet wired in. Call this on every bash tool input before
+        execution once wee runtime gains a tool execution loop.
         """
         if not command:
             return command
