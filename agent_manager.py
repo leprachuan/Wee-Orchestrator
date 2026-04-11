@@ -12128,7 +12128,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                     # No TODOs found — return non-existent path so UI shows empty
                     return agent_path / "TODOs"
         except Exception:
-            pass
+            logger.error("Failed to resolve TODO dir for agent %r", agent_name)
         return Path(f"/opt/{agent_name}/TODOs")
 
     def _resolve_todo_file(agent_name: str | None) -> Path:
@@ -12152,6 +12152,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         try:
             lines = todo_path.read_text().splitlines()
         except Exception:
+            logger.error("Failed to read TODO file %s", todo_path)
             return None
 
         due = None
@@ -12236,6 +12237,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 _json.loads(result.stdout) if result.stdout.strip() else []
             )
         except Exception:
+            logger.error("Failed to fetch GitHub TODO issues")
             return []
 
         todos = []
@@ -12268,13 +12270,41 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
 
         return todos
 
+    def _fetch_valid_github_labels() -> set:
+        """Fetch all label names from the GitHub TODO repo."""
+        import subprocess as _sp
+        import json as _json
+
+        try:
+            result = _sp.run(
+                [
+                    "gh", "label", "list",
+                    "--repo", GH_TODO_REPO,
+                    "--json", "name",
+                    "--limit", "100",
+                ],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            if result.returncode == 0 and result.stdout.strip():
+                return {lbl["name"] for lbl in _json.loads(result.stdout)}
+        except Exception:
+            logger.error("Failed to fetch GitHub labels for validation")
+        return set()
+
     def _create_github_todo(
         title: str,
         body: str = "",
         labels: list | None = None,
         due: str | None = None,
     ) -> dict | None:
-        """Create a GitHub Issue as a TODO. Returns issue info or None."""
+        """Create a GitHub Issue as a TODO. Returns issue info or None.
+
+        If any requested labels don't exist in the repo, they are stripped
+        and the issue is created with only the valid labels. A warning is
+        logged so the caller can surface it to the user.
+        """
         import subprocess as _sp
         import re as _re
 
@@ -12289,30 +12319,69 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             body_parts.append(body)
         full_body = "\n\n".join(body_parts) if body_parts else ""
 
-        try:
+        def _run_create(lbl_list: list) -> "_sp.CompletedProcess":
             cmd = [
                 "gh", "issue", "create",
                 "--repo", GH_TODO_REPO,
                 "--title", title,
-                "--label", ",".join(issue_labels),
+                "--label", ",".join(lbl_list),
             ]
             if full_body:
                 cmd.extend(["--body", full_body])
+            return _sp.run(cmd, capture_output=True, text=True, timeout=15)
 
-            result = _sp.run(
-                cmd, capture_output=True, text=True, timeout=15
-            )
+        stripped_labels: list = []
+        try:
+            result = _run_create(issue_labels)
             if result.returncode != 0:
-                return None
+                # Check if failure is due to missing labels
+                stderr = result.stderr or ""
+                if "could not add label" in stderr or "label" in stderr.lower():
+                    valid = _fetch_valid_github_labels()
+                    if valid:
+                        valid_labels = [lb for lb in issue_labels if lb in valid]
+                        stripped_labels = [lb for lb in issue_labels if lb not in valid]
+                        # Exclude the base todo label from the stripped report
+                        stripped_labels = [lb for lb in stripped_labels if lb != GH_TODO_LABEL]
+                        if stripped_labels:
+                            logger.warning(
+                                "GitHub TODO: stripped invalid labels %s for issue %r",
+                                stripped_labels, title
+                            )
+                        if valid_labels != issue_labels:
+                            if valid_labels:
+                                result = _run_create(valid_labels)
+                            else:
+                                # No valid labels at all — create without --label flag
+                                no_label_cmd = [
+                                    "gh", "issue", "create",
+                                    "--repo", GH_TODO_REPO,
+                                    "--title", title,
+                                ]
+                                if full_body:
+                                    no_label_cmd.extend(["--body", full_body])
+                                result = _sp.run(
+                                    no_label_cmd,
+                                    capture_output=True, text=True, timeout=15
+                                )
+                if result.returncode != 0:
+                    logger.error(
+                        "GitHub TODO creation failed for %r: %s",
+                        title, result.stderr.strip()
+                    )
+                    return None
 
             m = _re.search(r"/issues/(\d+)", result.stdout)
             if m:
-                return {
+                issue_info: dict = {
                     "issue_number": int(m.group(1)),
                     "url": result.stdout.strip(),
                 }
+                if stripped_labels:
+                    issue_info["labels_stripped"] = stripped_labels
+                return issue_info
         except Exception:
-            pass
+            logger.error("Unexpected error creating GitHub TODO for %r", title)
         return None
 
     def _close_github_todo(title: str) -> dict | None:
@@ -12372,7 +12441,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                     "title": match["title"],
                 }
         except Exception:
-            pass
+            logger.error("Failed to close GitHub TODO issue for title %r", title)
         return None
 
     def _merge_todos(
