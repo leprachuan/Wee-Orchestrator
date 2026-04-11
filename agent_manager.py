@@ -7630,7 +7630,7 @@ User Request:
 
         # Provider presets
         _PRESETS = {
-            "ollama": ("http://192.168.1.101:11436/v1", "ollama"),
+            "ollama": ("http://192.168.1.101:11434/v1", "ollama"),
             "openrouter": ("https://openrouter.ai/api/v1", None),
             "lmstudio": ("http://localhost:1234/v1", "lm-studio"),
         }
@@ -7646,7 +7646,7 @@ User Request:
                 break
 
         if not api_base:
-            api_base = "http://192.168.1.101:11436/v1"
+            api_base = "http://192.168.1.101:11434/v1"
         if not api_key:
             # Try keyring for OpenRouter
             if "openrouter" in api_base.lower():
@@ -7863,6 +7863,16 @@ User Request:
                         "tool_call_id": tc_id,
                         "content": tool_result or "No output",
                     })
+
+            else:
+                # All MAX_TOOL_ROUNDS had tool calls with no final text
+                last_tool_results = [m["content"] for m in messages if m.get("role") == "tool"]
+                if last_tool_results:
+                    collected_output.append(
+                        "Tool execution completed. Last result:\n" + last_tool_results[-1][:2000]
+                    )
+                else:
+                    collected_output.append("Max tool rounds reached without final response.")
 
             output = "".join(collected_output)
 
