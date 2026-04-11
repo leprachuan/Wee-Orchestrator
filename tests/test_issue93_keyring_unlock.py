@@ -226,3 +226,22 @@ class TestKeyringStatusCheck(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestWebUIJSSyntax(unittest.TestCase):
+    """Validate that WebUI JavaScript files have no syntax errors."""
+
+    def test_app_js_syntax_valid(self):
+        """Ensure webui/dist/app.js passes Node.js syntax check (node --check)."""
+        import subprocess
+        app_js = os.path.join(os.path.dirname(__file__), "..", "webui", "dist", "app.js")
+        if not os.path.exists(app_js):
+            self.skipTest("webui/dist/app.js not found")
+        result = subprocess.run(
+            ["node", "--check", app_js],
+            capture_output=True, text=True, timeout=10
+        )
+        self.assertEqual(
+            result.returncode, 0,
+            f"JavaScript syntax error in app.js:\n{result.stderr}"
+        )
