@@ -2832,6 +2832,9 @@ document.addEventListener('DOMContentLoaded', () => {
     bar.classList.toggle('hidden');
   });
 
+  // --- Keyring unlock listeners (Issue #93) ---
+  _initKeyringListeners();
+
   // --- Secrets panel listeners (F019) ---
   if ($('btn-nav-secrets')) $('btn-nav-secrets').addEventListener('click', showSecretsPanel);
   if ($('btn-secrets-open-sidebar')) $('btn-secrets-open-sidebar').addEventListener('click', () => toggleSidebar(true));
@@ -3156,6 +3159,7 @@ function showSecretsPanel() {
   $('btn-nav-scheduler').classList.remove('active');
   $('btn-nav-notifications').classList.remove('active');
   hideNotificationPanel();
+  checkKeyringStatus();
   loadSecrets();
   if (isMobileViewport()) toggleSidebar(false);
 }
@@ -3198,7 +3202,13 @@ async function loadSecrets() {
       btn.addEventListener('click', () => editSecret(btn.dataset.name));
     });
   } catch (err) {
-    listEl.innerHTML = `<div class="secrets-empty-state"><p class="secrets-empty-text secrets-error">⚠ ${escapeHtml(err.message)}</p></div>`;
+    const msg = err.message || '';
+    if (/locked|keyring|unlock/i.test(msg)) {
+      listEl.innerHTML = `<div class="secrets-empty-state"><div class="secrets-empty-icon">🔒</div><p class="secrets-empty-text secrets-error">Secret store is locked</p><p class="secrets-empty-hint">Click <strong>Unlock</strong> above to enter the keyring password.</p></div>`;
+      checkKeyringStatus();
+    } else {
+      listEl.innerHTML = `<div class="secrets-empty-state"><p class="secrets-empty-text secrets-error">⚠ ${escapeHtml(msg)}</p></div>`;
+    }
   }
 }
 
@@ -3304,6 +3314,109 @@ function escapeHtml(str) {
   const div = document.createElement('div');
   div.textContent = str;
   return div.innerHTML;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// ─── Keyring Status & Unlock (Issue #93) ─────────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════════════════════
+
+let _keyringStatus = null;
+
+async function checkKeyringStatus() {
+  const banner = $('keyring-status-banner');
+  if (!banner) return;
+  try {
+    const data = await apiRequest('GET', '/secrets/keyring-status');
+    _keyringStatus = data.status;
+    if (data.status === 'locked') {
+      $('keyring-banner-title').textContent = 'Secret store is locked';
+      $('keyring-banner-detail').textContent = data.message || 'Unlock the keyring to access secrets.';
+      banner.className = 'keyring-banner keyring-banner--locked';
+      show(banner);
+    } else if (data.status === 'unavailable') {
+      $('keyring-banner-title').textContent = 'Secret store unavailable';
+      $('keyring-banner-detail').textContent = data.message || 'No keyring service detected.';
+      banner.className = 'keyring-banner keyring-banner--warn';
+      const ub = banner.querySelector('.keyring-unlock-btn');
+      if (ub) ub.style.display = 'none';
+      show(banner);
+    } else {
+      hide(banner);
+    }
+  } catch (_) {
+    hide(banner);
+  }
+}
+
+function showKeyringUnlockDialog() {
+  const dialog = $('keyring-unlock-dialog');
+  if (!dialog) return;
+  show(dialog);
+  const inp = $('keyring-password-input');
+  inp.value = '';
+  hide($('keyring-unlock-feedback'));
+  setTimeout(() => inp.focus(), 100);
+}
+
+function hideKeyringUnlockDialog() {
+  const dialog = $('keyring-unlock-dialog');
+  if (dialog) hide(dialog);
+}
+
+function showKeyringFeedback(msg, type) {
+  const fb = $('keyring-unlock-feedback');
+  if (!fb) return;
+  fb.textContent = msg;
+  fb.className = 'keyring-dialog-feedback keyring-dialog-feedback--' + type;
+  show(fb);
+}
+
+async function submitKeyringUnlock() {
+  const password = ($('keyring-password-input').value || '').trim();
+  if (!password) {
+    showKeyringFeedback('Password is required', 'error');
+    return;
+  }
+  const btn = $('btn-keyring-submit');
+  btn.disabled = true;
+  btn.textContent = 'Unlocking…';
+  showKeyringFeedback('Attempting to unlock…', 'info');
+  try {
+    await apiRequest('POST', '/secrets/keyring-unlock', { password });
+    showKeyringFeedback('✅ Keyring unlocked successfully!', 'success');
+    setTimeout(() => {
+      hideKeyringUnlockDialog();
+      checkKeyringStatus();
+      loadSecrets();
+    }, 800);
+  } catch (err) {
+    showKeyringFeedback('❌ ' + (err.message || 'Unlock failed'), 'error');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Unlock';
+  }
+}
+
+function _initKeyringListeners() {
+  const unlockBtn = $('btn-keyring-unlock');
+  if (unlockBtn) unlockBtn.addEventListener('click', showKeyringUnlockDialog);
+  const submitBtn = $('btn-keyring-submit');
+  if (submitBtn) submitBtn.addEventListener('click', submitKeyringUnlock);
+  const cancelBtn = $('btn-keyring-cancel');
+  if (cancelBtn) cancelBtn.addEventListener('click', hideKeyringUnlockDialog);
+  const pwdInput = $('keyring-password-input');
+  if (pwdInput) {
+    pwdInput.addEventListener('keydown', e => {
+      if (e.key === 'Enter') submitKeyringUnlock();
+      if (e.key === 'Escape') hideKeyringUnlockDialog();
+    });
+  }
+  const overlay = $('keyring-unlock-dialog');
+  if (overlay) {
+    overlay.addEventListener('click', e => {
+      if (e.target === overlay) hideKeyringUnlockDialog();
+    });
+  }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════

@@ -762,6 +762,7 @@ def check_runtime_available(runtime: str) -> bool:
         'devin': 'devin',
         'cursor': 'agent',  # Cursor uses 'agent' binary
         'opencode': 'opencode',
+        'wee': 'openai',  # OpenAI-compatible API (no binary needed),
     }
     
     executable_name = runtime_map.get(runtime)
@@ -769,7 +770,7 @@ def check_runtime_available(runtime: str) -> bool:
         return False
     
     # For Python packages (SDK runtimes), try importing
-    if runtime in ('copilot-sdk', 'claude-sdk'):
+    if runtime in ('copilot-sdk', 'claude-sdk', 'wee'):
         try:
             if runtime == 'claude-sdk':
                 # Package is installed as claude_agent_sdk
@@ -816,6 +817,7 @@ def get_available_runtimes() -> List[Dict[str, str]]:
         {"id": "codex", "label": "codex"},
         {"id": "devin", "label": "devin"},
         {"id": "cursor", "label": "cursor", "icon": "🖱️"},
+        {"id": "wee", "label": "wee", "icon": "🌿"},
     ]
     
     available = [rt for rt in all_runtimes if check_runtime_available(rt['id'])]
@@ -1810,7 +1812,7 @@ class SessionManager:
 
 **Runtime Management:**
    • /runtime list - Show available runtimes
-   • /runtime set (copilot|copilot-sdk|opencode|claude|claude-sdk|gemini|codex|devin|cursor) - Switch runtime
+   • /runtime set (copilot|copilot-sdk|opencode|claude|claude-sdk|gemini|codex|devin|cursor|wee) - Switch runtime
    • /runtime current - Show current runtime
 
 **Model Management:**
@@ -1970,7 +1972,8 @@ You can mention an agent in your prompt and it will auto-delegate:
                 "• `codex` (Codex CLI)\n"
                 "• `devin` (Devin CLI)\n"
                 "• `cursor` (Cursor Agent CLI)\n"
-                "• `claude-sdk` (Claude Agent SDK — native Python, in-process tools)"
+                "• `claude-sdk` (Claude Agent SDK — native Python, in-process tools)\n"
+                "• `wee` (Wee Native — OpenAI-compatible API: Ollama, OpenRouter, LM Studio)"
             )
         elif argument == "current":
             return f"🤖 **Current Runtime:** `{current_runtime}`"
@@ -1986,11 +1989,12 @@ You can mention an agent in your prompt and it will auto-delegate:
                 "codex",
                 "devin",
                 "cursor",
+                "wee",
             ]:
                 return (
                     f"Unknown runtime: '{new_runtime}'. Use "
                     "copilot, copilot-sdk, opencode, claude, claude-sdk, "
-                    "gemini, codex, devin, or cursor."
+                    "gemini, codex, devin, cursor, or wee."
                 )
 
             # Capture previous session state before any updates
@@ -2069,6 +2073,8 @@ You can mention an agent in your prompt and it will auto-delegate:
                 default_model = os.getenv("DEVIN_DEFAULT_MODEL", "claude-sonnet-4")
             elif new_runtime == "cursor":
                 default_model = os.getenv("CURSOR_DEFAULT_MODEL", "auto")
+            elif new_runtime == "wee":
+                default_model = os.getenv("WEE_DEFAULT_MODEL", "ollama/gemma4:e4b")
 
             self.update_session_field(n8n_session_id, "model", default_model)
             return f"✓ Switched runtime to **{new_runtime}**. Model set to `{default_model}`. Session reset."
@@ -2391,7 +2397,7 @@ You can mention an agent in your prompt and it will auto-delegate:
             argument = "current"  # Default to showing current mode
 
         if argument == "current":
-            _perms = session_data.get("permissions", {})
+            _perms = session_data.get("permissions") or {}
             _pm = (
                 _perms.get("mode", "restricted")
                 if isinstance(_perms, dict)
@@ -3309,6 +3315,7 @@ You can mention an agent in your prompt and it will auto-delegate:
             "codex": self._env_codex_models,
             "devin": self._env_devin_models,
             "cursor": self._env_cursor_models,
+            "wee": {},
         }
         env_models = env_models_map.get(runtime)
         if env_models:
@@ -3326,6 +3333,7 @@ You can mention an agent in your prompt and it will auto-delegate:
             "opencode": self.OPENCODE_MODELS,
             "devin": self.DEVIN_MODELS,
             "cursor": self.CURSOR_MODELS,
+            "wee": {},
         }
         models_dict = static_map.get(runtime)
         if not models_dict:
@@ -3531,6 +3539,7 @@ You can mention an agent in your prompt and it will auto-delegate:
             "codex": self.fetch_codex_models,
             "devin": self.fetch_devin_models,
             "cursor": self.fetch_cursor_models,
+            "wee": lambda: {"Wee Native": [("ollama/gemma4:e4b", "Ollama Gemma 4 E4B (local)", []), ("openrouter/meta-llama/llama-4-scout", "Llama 4 Scout via OpenRouter", [])]},
         }
         fetcher = dispatch.get(runtime)
         if fetcher is None:
@@ -3699,10 +3708,13 @@ You can mention an agent in your prompt and it will auto-delegate:
                     current_model, "cursor"
                 ):
                     merged["model"] = os.getenv("CURSOR_DEFAULT_MODEL", "auto")
+            elif runtime == "wee":
+                if not merged.get("model"):
+                    merged["model"] = os.getenv("WEE_DEFAULT_MODEL", "ollama/gemma4:e4b")
 
             # Validate and fix session_id if corrupted
             session_id = merged.get("session_id", "")
-            if runtime in ["claude", "claude-sdk", "gemini", "codex", "copilot", "copilot-sdk", "devin", "cursor"]:
+            if runtime in ["claude", "claude-sdk", "gemini", "codex", "copilot", "copilot-sdk", "devin", "cursor", "wee"]:
                 if not session_id or not (len(session_id) == 36 and "-" in session_id):
                     merged["session_id"] = str(uuid4())
             elif runtime == "opencode":
@@ -4134,7 +4146,7 @@ You can mention an agent in your prompt and it will auto-delegate:
         """
         if prompt_mode != "restricted":
             return prompt_mode
-        perms = session_data.get("permissions", {})
+        perms = session_data.get("permissions") or {}  # Handle None from session template
         if isinstance(perms, dict) and perms.get("mode") in (
             "elevated",
             "restricted",
@@ -4414,6 +4426,13 @@ You can mention an agent in your prompt and it will auto-delegate:
                 if re.match(r"^(Thinking|Working|\[cursor\])", clean_line.strip()):
                     continue
                 result.append(clean_line)
+
+        elif runtime == "wee":
+            # Wee native runtime outputs clean text - pass through directly
+            for line in lines:
+                if not line.strip() and not result:
+                    continue
+                result.append(line)
 
         # Remove trailing empty lines
         while result and not result[-1].strip():
@@ -5915,7 +5934,7 @@ User Request:
                                                 "name": "shell",
                                                 "input": _oc_run.group(1).strip(),
                                             }
-                                elif runtime in ("copilot", "copilot-sdk", "claude-sdk"):
+                                elif runtime in ("copilot", "copilot-sdk", "claude-sdk", "wee"):
                                     # Copilot shows tool calls as "● Description" and shell cmds as "  $ cmd"
                                     import re as _re_tc
 
@@ -6390,6 +6409,7 @@ User Request:
         n8n_session_id: str,
         timeout: Optional[int] = None,
         render_type: str = "text",
+        mode: Optional[str] = None,
     ) -> str:
         """Execute via Copilot SDK (native Python, no CLI subprocess).
 
@@ -6401,11 +6421,15 @@ User Request:
         tracking for background task progress (Issue #87).
         """
         try:
-            from copilot import CopilotClient
+            from copilot import CopilotClient, SubprocessConfig
             from copilot.session import (
                 CopilotSession,
+                ElicitationContext,
+                ElicitationResult,
                 PermissionHandler,
                 SessionEventType,
+                UserInputRequest,
+                UserInputResponse,
             )
         except ImportError:
             return (
@@ -6415,10 +6439,13 @@ User Request:
 
         import asyncio
 
-        # Parse mode
-        prompt_parsed, mode = self._parse_mode_command(prompt)
+        # Parse mode — prefer explicit mode from dispatcher, then /mode in prompt
         if mode is None:
-            mode = self.mode or "restricted"
+            prompt_parsed, mode = self._parse_mode_command(prompt)
+            if mode is None:
+                mode = self.mode or "restricted"
+        else:
+            prompt_parsed = prompt
 
         session_data = self.get_or_create_session_data(n8n_session_id)
         mode = self._resolve_permission_mode(session_data, mode)
@@ -6464,10 +6491,31 @@ User Request:
         # Store session_id for resumption tracking
         sdk_session_id = session_id if resume and session_id else None
 
+        # For elevated mode, pass --allow-all-paths and --yolo via SubprocessConfig
+        # so the underlying Copilot CLI grants full filesystem access and
+        # auto-approves command execution (equivalent to the standard runtime flags).
+        sdk_cli_args = ["--allow-all-paths", "--yolo"] if mode == "elevated" else []
+
+        def _auto_approve_user_input(
+            request: UserInputRequest, invocation: dict
+        ) -> UserInputResponse:
+            # Auto-approve user input requests so unattended tasks never block
+            if request.get("choices"):
+                answer = request["choices"][0]
+            else:
+                answer = "yes"
+            return UserInputResponse(answer=answer, wasFreeform=True)
+
+        def _auto_approve_elicitation(context: ElicitationContext) -> ElicitationResult:
+            # Auto-accept elicitation prompts (approval gates) for elevated mode
+            return ElicitationResult(action="accept")
+
         async def _run_sdk() -> str:
             collected_messages: list = []
 
-            async with CopilotClient() as client:
+            _sdk_config = SubprocessConfig(cli_args=sdk_cli_args) if sdk_cli_args else None
+            _client = CopilotClient(_sdk_config) if _sdk_config else CopilotClient()
+            async with _client as client:
                 # Event handler — streams chunks and detects tool calls
                 def on_event(event):
                     # ── Streaming deltas ──
@@ -6556,6 +6604,11 @@ User Request:
                     "working_directory": agent_dir,
                     "on_event": on_event,
                 }
+                # For elevated mode, auto-approve user input and elicitation
+                # requests so unattended tasks are never blocked by approval gates
+                if mode == "elevated":
+                    session_kwargs["on_user_input_request"] = _auto_approve_user_input
+                    session_kwargs["on_elicitation_request"] = _auto_approve_elicitation
 
                 mcp_config_path = os.path.expanduser("~/.copilot/mcp-config.json")
                 if os.path.exists(mcp_config_path):
@@ -6696,7 +6749,7 @@ User Request:
             mode = self.mode or "restricted"
 
         session_data = self.get_or_create_session_data(n8n_session_id)
-        mode = self._resolve_permission_mode(mode, session_data)
+        mode = self._resolve_permission_mode(session_data, mode)
 
         agent_dir = self.AGENTS.get(agent, self.AGENTS["orchestrator"])["path"]
         effective_timeout = timeout if timeout is not None else self.command_timeout
@@ -7518,6 +7571,151 @@ User Request:
 
         return self.strip_metadata(output, "cursor")
 
+    def run_wee_native(
+        self,
+        prompt: str,
+        model: str,
+        agent: str,
+        session_id: Optional[str],
+        resume: bool,
+        n8n_session_id: str,
+        timeout: Optional[int] = None,
+        render_type: str = "text",
+    ) -> str:
+        """Execute via Wee Native runtime - OpenAI-compatible chat completions.
+
+        Connects to any OpenAI-compatible API endpoint (Ollama, OpenRouter,
+        LM Studio, etc.) using the openai Python package. No external CLI
+        binary required.
+
+        Model format: [provider/]model_name
+        Examples:
+            ollama/gemma4:e4b         - Ollama on Kubuntu
+            openrouter/meta-llama/llama-4-scout - OpenRouter cloud
+            gemma4:e4b                - Default endpoint (Ollama)
+
+        Supports real-time streaming to WebUI SSE consumers.
+        """
+        import json as _json
+
+        try:
+            from openai import OpenAI
+        except ImportError:
+            return (
+                "Error: openai package not installed. "
+                "Run: pip install openai"
+            )
+
+        session_data = self.get_or_create_session_data(n8n_session_id)
+        agent_dir = self.AGENTS.get(agent, self.AGENTS["orchestrator"])["path"]
+        effective_timeout = timeout if timeout is not None else self.command_timeout
+        channel = session_data.get("channel", "webui")
+
+        # Build context prompt with agent identity
+        context_prompt = self.build_agent_context_prompt(
+            prompt, agent, channel, n8n_session_id
+        )
+
+        # -- Resolve model, endpoint, and API key --
+        api_base = session_data.get("api_base") or os.environ.get(
+            "WEE_API_BASE"
+        )
+        api_key = session_data.get("api_key") or os.environ.get(
+            "WEE_API_KEY"
+        )
+
+        # Provider presets
+        _PRESETS = {
+            "ollama": ("http://192.168.1.101:11436/v1", "ollama"),
+            "openrouter": ("https://openrouter.ai/api/v1", None),
+            "lmstudio": ("http://localhost:1234/v1", "lm-studio"),
+        }
+
+        resolved_model = model
+        for prefix, (preset_base, preset_key) in _PRESETS.items():
+            if model.lower().startswith(f"{prefix}/"):
+                resolved_model = model[len(prefix) + 1:]
+                if not api_base:
+                    api_base = preset_base
+                if not api_key and preset_key:
+                    api_key = preset_key
+                break
+
+        if not api_base:
+            api_base = "http://192.168.1.101:11436/v1"
+        if not api_key:
+            # Try keyring for OpenRouter
+            if "openrouter" in api_base.lower():
+                try:
+                    import keyring
+                    api_key = keyring.get_password("openrouter", "api_key")
+                except Exception:
+                    pass
+            if not api_key:
+                api_key = "ollama"
+
+        print(
+            f"[Wee Native] model={resolved_model} api_base={api_base} "
+            f"session={n8n_session_id[:8]}...",
+            file=sys.stderr,
+        )
+
+        # -- Streaming infrastructure --
+        stream_buffer = getattr(self, "_stream_buffers", {}).get(n8n_session_id)
+
+        # -- Create OpenAI client and call API --
+        client = OpenAI(
+            base_url=api_base,
+            api_key=api_key,
+            timeout=effective_timeout,
+        )
+
+        messages = []
+        # System prompt from agent context
+        if context_prompt:
+            messages.append({"role": "system", "content": context_prompt})
+        messages.append({"role": "user", "content": prompt})
+
+        collected_output = []
+
+        try:
+            stream = client.chat.completions.create(
+                model=resolved_model,
+                messages=messages,
+                stream=True,
+            )
+
+            for chunk in stream:
+                if chunk.choices and chunk.choices[0].delta.content:
+                    token = chunk.choices[0].delta.content
+                    collected_output.append(token)
+
+                    # Push to SSE stream buffer for WebUI
+                    if stream_buffer:
+                        stream_buffer.push("chunk", {"text": token})
+
+            output = "".join(collected_output)
+
+            # Push done sentinel
+            if stream_buffer:
+                stream_buffer.push("done", output)
+
+            print(
+                f"[Wee Native] Completed. Output length: {len(output)} chars",
+                file=sys.stderr,
+            )
+            return output
+
+        except Exception as e:
+            error_msg = f"Error: Wee native runtime failed: {e}"
+            print(f"[Wee Native] {error_msg}", file=sys.stderr)
+
+            # Push error as done sentinel
+            if stream_buffer:
+                stream_buffer.push("done", error_msg)
+
+            return error_msg
+
     def _get_cursor_session_id(self, n8n_session_id: str) -> Optional[str]:
         """Return the stored cursor session flag for this n8n session, or None."""
         mapping_file = self.cursor_session_dir / f"{n8n_session_id}.json"
@@ -7795,6 +7993,9 @@ User Request:
         self.update_session_field(session_id, "runtime", runtime)
         self.update_session_field(session_id, "channel", channel)
         self.update_session_field(session_id, "render_type", "text")
+        # Background tasks run unattended — grant elevated permissions so
+        # SDK runtimes (copilot-sdk, claude-sdk) don't block on approval gates
+        self.update_session_field(session_id, "permissions", {"mode": "elevated"})
         if timeout is not None:
             self.update_session_field(session_id, "timeout", timeout)
         try:
@@ -7884,6 +8085,7 @@ User Request:
                 n8n_session_id,
                 effective_timeout,
                 render_type,
+                mode,
             )
         elif runtime == "opencode":
             result = self.run_opencode(
@@ -7964,6 +8166,17 @@ User Request:
                 effective_timeout,
                 render_type,
             )
+        elif runtime == "wee":
+            result = self.run_wee_native(
+                prompt,
+                model,
+                agent,
+                session_id if can_resume else None,
+                can_resume,
+                n8n_session_id,
+                effective_timeout,
+                render_type,
+            )
         else:
             return f"Error: Unknown runtime '{runtime}'"
 
@@ -8030,7 +8243,7 @@ User Request:
         effective_timeout = self.get_effective_timeout(session_data)
         render_type = self.get_render_type(session_data)
         # Get permission mode from session (backward compat with yolo_mode)
-        _perms = session_data.get("permissions", {})
+        _perms = session_data.get("permissions") or {}  # Handle None from session template
         if isinstance(_perms, dict) and _perms.get("mode") in (
             "elevated",
             "restricted",
@@ -10378,6 +10591,88 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 f"[API] Notification emit failed for {task_id}: {exc}", file=sys.stderr
             )
 
+    def _run_command_task(
+        task_id: str,
+        command: str,
+        working_dir: str,
+        timeout: int,
+        job_id: str,
+        job_name: str,
+        notify: bool = False,
+    ):
+        """Blocking function that runs a command-mode scheduled task directly via
+        subprocess.  Called from a thread pool executor — no LLM involved.
+
+        Mirrors the logic of scheduler/executor.py _execute_command_mode() but
+        integrates with the background-task manager so the result appears in
+        the Tasks panel with stdout/stderr output.
+        """
+        import subprocess as _sp
+
+        logger.info(
+            f"[Command Mode] Run Now executing job {job_id}: cmd={command[:80]}..."
+        )
+
+        try:
+            result = _sp.run(
+                command,
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+                shell=True,
+                cwd=working_dir,
+            )
+
+            if result.returncode == 0:
+                output = result.stdout.strip() or "(no output)"
+                bg_task_mgr.complete_task(task_id, output)
+                logger.info(
+                    f"[Command Mode] Run Now job {job_id} completed successfully"
+                )
+            else:
+                error_msg = (
+                    result.stderr
+                    or result.stdout
+                    or f"Command failed with exit code {result.returncode}"
+                )
+                bg_task_mgr.fail_task(task_id, error_msg)
+                logger.error(
+                    f"[Command Mode] Run Now job {job_id} failed: exit code {result.returncode}"
+                )
+        except _sp.TimeoutExpired:
+            bg_task_mgr.fail_task(
+                task_id, f"Command timed out after {timeout}s"
+            )
+            logger.error(
+                f"[Command Mode] Run Now job {job_id} timed out after {timeout}s"
+            )
+        except Exception as e:
+            bg_task_mgr.fail_task(task_id, str(e))
+            logger.error(
+                f"[Command Mode] Run Now job {job_id} exception: {e}"
+            )
+
+        # Save result to scheduler logs/results for consistency
+        try:
+            sched = _get_scheduler()
+            task_rec = bg_task_mgr.get_task(task_id)
+            success = task_rec and task_rec.get("status") == "completed"
+            sched._save_result(
+                job_id,
+                job_name,
+                success=success,
+                output=(task_rec or {}).get("final_response", ""),
+                error=(task_rec or {}).get("error", ""),
+            )
+            status_label = "succeeded" if success else "failed"
+            sched._log_job(
+                job_id, f"Run Now (command mode) {status_label}"
+            )
+        except Exception as exc:
+            logger.warning(
+                f"[Command Mode] Could not save scheduler result for {job_id}: {exc}"
+            )
+
     def _run_background_task(
         task_id: str,
         session_id: str,
@@ -10753,6 +11048,26 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 cmd.extend(["--model", _cursor_model])
                 cmd.extend(["--workspace", agent_dir])
                 cmd.extend(["--", context_prompt])
+            elif runtime == "wee":
+                # Wee native runtime - uses standalone script with OpenAI SDK
+                _wee_script = os.path.join(
+                    os.path.dirname(os.path.abspath(__file__)),
+                    "wee_runtime.py",
+                )
+                cmd = [
+                    sys.executable, _wee_script,
+                    "--model", model,
+                    "--timeout", str(timeout or 300),
+                ]
+                # Resolve api_base and api_key from session/env
+                _wee_api_base = os.environ.get("WEE_API_BASE", "")
+                _wee_api_key = os.environ.get("WEE_API_KEY", "")
+                if _wee_api_base:
+                    cmd.extend(["--api-base", _wee_api_base])
+                if _wee_api_key:
+                    cmd.extend(["--api-key", _wee_api_key])
+                cmd.extend(["--system-prompt", context_prompt])
+                cmd.append(prompt)
             else:
                 # Default: copilot runtime
                 copilot_bin = (
@@ -11782,17 +12097,6 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             timeout = int(job.get("timeout") or 300)
             mode = job.get("mode", "ai")
 
-            if mode == "command":
-                # Command mode: wrap the shell command as the task text
-                prompt = f"[Scheduled command] {task}"
-            else:
-                prompt = task or f"Run scheduled job: {job.get('name', job_id)}"
-
-            # Resolve permission mode from job config
-            perm_mode = job.get("permission_mode", "restricted")
-            if perm_mode not in ("elevated", "restricted", "sandboxed"):
-                perm_mode = "restricted"
-
             # Use the triggering user's identity/channel for the bg task
             channel = user.get("channel", "api")
             identity = user.get("identity", "scheduler")
@@ -11800,47 +12104,95 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             task_id = f"sched_{job_id}_{str(uuid4())[:6]}"
             session_id = str(uuid4())
 
-            bg_task_mgr.create_task(
-                task_id=task_id,
-                session_id=session_id,
-                user_identity=identity,
-                channel=channel,
-                agent=agent,
-                runtime=runtime,
-                model=model,
-                prompt=prompt,
-                status="running",
-                timeout=timeout,
-                notify=job.get("notify", False),
-            )
+            if mode == "command":
+                # ---- Command mode: execute shell command directly (no LLM) ----
+                working_dir = job.get("working_dir", "/opt")
 
-            loop = asyncio.get_running_loop()
-            loop.run_in_executor(
-                bg_executor,
-                _run_background_task,
-                task_id,
-                session_id,
-                prompt,
-                agent,
-                runtime,
-                model,
-                channel,
-                identity,
-                timeout,
-                job.get("notify", False),
-                perm_mode,
-            )
+                bg_task_mgr.create_task(
+                    task_id=task_id,
+                    session_id=session_id,
+                    user_identity=identity,
+                    channel=channel,
+                    agent="command",
+                    runtime="shell",
+                    model="n/a",
+                    prompt=task,
+                    status="running",
+                    timeout=timeout,
+                    notify=job.get("notify", False),
+                )
 
-            return {
-                "success": True,
-                "task_id": task_id,
-                "job_id": job_id,
-                "agent": agent,
-                "runtime": runtime,
-                "permission_mode": perm_mode,
-                "status": "running",
-                "message": f"Job '{job.get('name', job_id)}' is now running",
-            }
+                loop = asyncio.get_running_loop()
+                loop.run_in_executor(
+                    bg_executor,
+                    _run_command_task,
+                    task_id,
+                    task,
+                    working_dir,
+                    timeout,
+                    job_id,
+                    job.get("name", job_id),
+                    job.get("notify", False),
+                )
+
+                return {
+                    "success": True,
+                    "task_id": task_id,
+                    "job_id": job_id,
+                    "mode": "command",
+                    "status": "running",
+                    "message": f"Command job '{job.get('name', job_id)}' is now running (direct shell execution)",
+                }
+            else:
+                # ---- AI mode: dispatch to LLM background task ----
+                prompt = task or f"Run scheduled job: {job.get('name', job_id)}"
+
+                # Resolve permission mode from job config
+                perm_mode = job.get("permission_mode", "restricted")
+                if perm_mode not in ("elevated", "restricted", "sandboxed"):
+                    perm_mode = "restricted"
+
+                bg_task_mgr.create_task(
+                    task_id=task_id,
+                    session_id=session_id,
+                    user_identity=identity,
+                    channel=channel,
+                    agent=agent,
+                    runtime=runtime,
+                    model=model,
+                    prompt=prompt,
+                    status="running",
+                    timeout=timeout,
+                    notify=job.get("notify", False),
+                )
+
+                loop = asyncio.get_running_loop()
+                loop.run_in_executor(
+                    bg_executor,
+                    _run_background_task,
+                    task_id,
+                    session_id,
+                    prompt,
+                    agent,
+                    runtime,
+                    model,
+                    channel,
+                    identity,
+                    timeout,
+                    job.get("notify", False),
+                    perm_mode,
+                )
+
+                return {
+                    "success": True,
+                    "task_id": task_id,
+                    "job_id": job_id,
+                    "agent": agent,
+                    "runtime": runtime,
+                    "permission_mode": perm_mode,
+                    "status": "running",
+                    "message": f"Job '{job.get('name', job_id)}' is now running",
+                }
 
         @app.get("/api/v1/scheduler/jobs/{job_id}/results")
         async def get_scheduler_job_results(
@@ -13076,6 +13428,82 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 "action": result.get("action", "deleted"),
                 "name": name,
             }
+        except HTTPException:
+            raise
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
+
+    # --- Keyring Status & Unlock API (Issue #93) ---
+
+    @app.get("/api/v1/secrets/keyring-status")
+    async def keyring_status(request: Request):
+        """Return the current keyring / secret-store lock status."""
+        await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                sys.executable, _SECRET_TOOL_PATH, "status",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, stderr = await proc.communicate()
+            output = stdout.decode().strip()
+            if output:
+                try:
+                    return json.loads(output)
+                except json.JSONDecodeError:
+                    pass
+            return {"status": "unavailable",
+                    "message": output or stderr.decode().strip() or "Unknown error"}
+        except Exception as e:
+            return {"status": "error", "message": str(e)}
+
+    @app.post("/api/v1/secrets/keyring-unlock")
+    async def keyring_unlock(request: Request):
+        """Attempt to unlock the keyring with a user-supplied password.
+
+        The password is passed to the secret_tool subprocess via stdin
+        and is never logged or stored.
+        """
+        await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        body = await request.json()
+        password = body.get("password", "")
+        if not password:
+            raise HTTPException(status_code=400, detail="password is required")
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                sys.executable, _SECRET_TOOL_PATH, "unlock",
+                stdin=asyncio.subprocess.PIPE,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, stderr = await proc.communicate(
+                input=f"{password}\n".encode()
+            )
+            output = stdout.decode().strip()
+            if proc.returncode == 0 and output:
+                try:
+                    result = json.loads(output)
+                    return result
+                except json.JSONDecodeError:
+                    pass
+                return {"status": "success"}
+            detail = output or stderr.decode().strip() or "Unlock failed"
+            try:
+                err = json.loads(detail)
+                detail = err.get("message", detail)
+            except Exception:
+                pass
+            raise HTTPException(status_code=422, detail=detail)
         except HTTPException:
             raise
         except Exception as e:
