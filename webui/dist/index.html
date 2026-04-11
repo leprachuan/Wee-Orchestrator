@@ -360,6 +360,37 @@
         </div>
       </header>
 
+      <div id="keyring-status-banner" class="keyring-banner hidden" role="alert">
+        <div class="keyring-banner-content">
+          <span class="keyring-banner-icon">🔒</span>
+          <div class="keyring-banner-text">
+            <strong id="keyring-banner-title">Secret store is locked</strong>
+            <span id="keyring-banner-detail">Unlock the keyring to access secrets.</span>
+          </div>
+          <button id="btn-keyring-unlock" class="btn btn-primary btn-sm keyring-unlock-btn">Unlock</button>
+        </div>
+      </div>
+
+      <!-- Keyring unlock dialog (modal) -->
+      <div id="keyring-unlock-dialog" class="keyring-dialog-overlay hidden">
+        <div class="keyring-dialog glass-panel">
+          <div class="keyring-dialog-header">
+            <span class="keyring-dialog-icon">🔐</span>
+            <h3 class="keyring-dialog-title">Unlock Secret Store</h3>
+          </div>
+          <p class="keyring-dialog-hint">Enter the keyring password to unlock the secret store.</p>
+          <div class="keyring-dialog-field">
+            <input id="keyring-password-input" type="password" class="glass-input secrets-input" placeholder="Keyring password…" autocomplete="off" />
+          </div>
+          <div id="keyring-unlock-feedback" class="keyring-dialog-feedback hidden"></div>
+          <div class="keyring-dialog-actions">
+            <button id="btn-keyring-submit" class="btn btn-primary">Unlock</button>
+            <button id="btn-keyring-cancel" class="btn btn-ghost">Cancel</button>
+          </div>
+          <p class="keyring-dialog-alt">Or via SSH: <code>echo PASSWORD | gnome-keyring-daemon --unlock</code></p>
+        </div>
+      </div>
+
       <div class="secrets-body">
         <div class="secrets-grid">
           <!-- Store a Secret section -->
