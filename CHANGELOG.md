@@ -1,5 +1,21 @@
 # Changelog
 
+## [Issue #93] Bug: No way to unlock secret store via WebUI
+**Status:** QA Pending — Commit 423668a on `issue/93` branch — 26 new tests, 1129 total pass
+
+### Problem
+When the GNOME Keyring secret store is locked, the WebUI had no mechanism to detect or unlock it.
+
+### Solution
+- `secret_tool.py`: Added `status`/`unlock` subcommands with multi-strategy detection
+- `agent_manager.py`: `GET /api/v1/secrets/keyring-status`, `POST /api/v1/secrets/keyring-unlock`
+- WebUI: Keyring status banner + unlock dialog with password input
+
+### Files Changed
+- `secret_tool/secret_tool.py`, `agent_manager.py`, `webui/dist/{index.html,app.js,app.css}`
+- `tests/test_issue93_keyring_unlock.py` — 26 tests
+
+
 ## [Issue #88] Feature: Wee Native Runtime — OpenAI-compatible API backend
 **Status:** Implementation Complete — 19 new tests, 1087 total pass
 

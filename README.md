@@ -964,6 +964,70 @@ Agent (with WEE_ELEVATED=true):
 
 See **[docs/secret-tool.md](./docs/secret-tool.md)** for CLI and storage backend details.
 
+
+#### Secrets Management API Endpoints
+
+The keyring lock status and unlock operations are also available as REST API endpoints.
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `GET` | `/api/v1/secrets/keyring-status` | Returns keyring lock status |
+| `POST` | `/api/v1/secrets/keyring-unlock` | Unlock keyring with password |
+
+**GET /api/v1/secrets/keyring-status** — Returns the current lock state of the system keyring.
+
+| Status Code | Description |
+|-------------|-------------|
+| `200` | Status returned (check `status` field) |
+| `401` | Unauthorized — missing or invalid bearer token |
+
+**Response fields:**
+- `status` *(string)*: One of `unlocked`, `locked`, `unavailable`, `error`
+- `backend` *(string, optional)*: Backend name (e.g., `keyring`)
+- `message` *(string, optional)*: Human-readable detail on non-`unlocked` statuses
+
+**Example:**
+```bash
+curl -s http://localhost:8000/api/v1/secrets/keyring-status \\
+  -H "Authorization: Bearer <token>"
+# -> {"status": "unlocked", "backend": "keyring"}
+# -> {"status": "locked", "message": "Keyring is locked"}
+# -> {"status": "unavailable", "message": "secret_tool not found"}
+```
+
+---
+
+**POST /api/v1/secrets/keyring-unlock** — Attempt to unlock the system keyring with a password.
+
+| Status Code | Description |
+|-------------|-------------|
+| `200` | Keyring successfully unlocked |
+| `400` | Bad request — `password` field missing or empty |
+| `401` | Unauthorized — missing or invalid bearer token |
+| `422` | Unprocessable — password incorrect or unlock failed |
+
+**Request body:**
+```json
+{"password": "string"}
+```
+
+**Response fields:**
+- `status` *(string)*: `success` on unlock; error detail on failure
+- `method` *(string, optional)*: Unlock method used (e.g., `dbus`)
+- `message` *(string, optional)*: Human-readable result
+
+**Example:**
+```bash
+curl -s -X POST http://localhost:8000/api/v1/secrets/keyring-unlock \\
+  -H "Authorization: Bearer <token>" \\
+  -H "Content-Type: application/json" \\
+  -d '{"password": "my-keyring-password"}'
+# -> {"status": "success", "method": "dbus"}
+# -> HTTP 422: {"detail": "Incorrect password"}
+```
+
+> **Security note:** The password is passed to the `secret_tool` subprocess via stdin and is **never logged or stored** by the API server.
+
 ### N8N Integration
 
 Use in an N8N workflow:
