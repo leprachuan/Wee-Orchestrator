@@ -3539,7 +3539,7 @@ You can mention an agent in your prompt and it will auto-delegate:
             "codex": self.fetch_codex_models,
             "devin": self.fetch_devin_models,
             "cursor": self.fetch_cursor_models,
-            "wee": lambda: {"Wee Native": [("ollama/gemma4:e4b", "Ollama Gemma 4 E4B (local)", []), ("openrouter/meta-llama/llama-4-scout", "Llama 4 Scout via OpenRouter", [])]},
+            "wee": lambda: {"Wee Native": ["ollama/gemma4:e4b", "ollama/gemma4:e2b", "ollama/gemma4:e4b-nothinker", "ollama/gemma4:e2b-nothinker", "openrouter/meta-llama/llama-4-scout"]},
         }
         fetcher = dispatch.get(runtime)
         if fetcher is None:
@@ -4099,12 +4099,20 @@ You can mention an agent in your prompt and it will auto-delegate:
             if m.lower() == name_lower:
                 return m
 
-        # Substring matching with longest-match preference
+        # Exact match with provider prefix stripped (e.g., "gemma4:e4b" matches "ollama/gemma4:e4b")
+        for m in all_models:
+            model_lower = m.lower()
+            if "/" in model_lower:
+                suffix = model_lower.split("/", 1)[1]
+                if suffix == name_lower:
+                    return m
+
+        # Substring matching with shortest-match preference
         matches = [m for m in all_models if name_lower in m.lower()]
         if len(matches) == 1:
             return matches[0]
         if matches:
-            matches.sort(reverse=True)
+            matches.sort(key=len)
             return matches[0]
 
         return None
@@ -7679,10 +7687,17 @@ User Request:
         stream_buffer = getattr(self, "_stream_buffers", {}).get(n8n_session_id)
 
         # -- Create OpenAI client and call API --
+        # Use httpx.Timeout for granular control: fast connect failure,
+        # generous read timeout for streaming
+        import httpx
         client = OpenAI(
             base_url=api_base,
             api_key=api_key,
-            timeout=effective_timeout,
+            timeout=httpx.Timeout(
+                timeout=effective_timeout,
+                connect=15.0,
+            ),
+            max_retries=0,
         )
 
         # -- Issue #108: Load conversation history --

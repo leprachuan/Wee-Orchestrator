@@ -178,10 +178,15 @@ def main():
         print("Error: openai package not installed. Run: pip install openai", file=sys.stderr)
         sys.exit(1)
 
+    import httpx
     client = OpenAI(
         base_url=api_base,
         api_key=api_key,
-        timeout=args.timeout,
+        timeout=httpx.Timeout(
+            timeout=float(args.timeout),
+            connect=15.0,
+        ),
+        max_retries=0,
     )
 
     messages = []
