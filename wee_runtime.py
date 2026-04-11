@@ -4,19 +4,20 @@
 Standalone CLI for use in background tasks. Streams response tokens to stdout.
 Supports Ollama, OpenRouter, LM Studio, and any OpenAI-compatible API.
 
-Issue #128: Adds token usage tracking, OpenRouter cost estimation,
-__WEE_META__ output line, and JSONL logging to ~/.copilot/logs/token_usage.jsonl.
+Issue #107: Tool-calling agentic loop — detects tool calls, executes bash/python,
+re-sends results to model, and streams the final response.
 
 Usage:
     python3 wee_runtime.py --model MODEL --api-base URL [--api-key KEY] "PROMPT"
+    python3 wee_runtime.py --model ollama/qwen3:8b --tools "ask what day it is"
 """
 
 import argparse
 import json
 import os
+import subprocess
 import sys
 import time
-from pathlib import Path
 
 
 # Provider presets: prefix → (api_base, default_api_key)
@@ -26,8 +27,46 @@ PROVIDER_PRESETS = {
     "lmstudio": ("http://localhost:1234/v1", "lm-studio"),
 }
 
-# Log file for token usage
-LOG_FILE = Path.home() / ".copilot" / "logs" / "token_usage.jsonl"
+# Tool definitions (Issue #107)
+_WEE_TOOLS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "bash",
+            "description": "Execute a bash shell command and return its output.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "command": {
+                        "type": "string",
+                        "description": "The bash command to execute",
+                    }
+                },
+                "required": ["command"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "python",
+            "description": "Execute Python 3 code and return the output.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "code": {
+                        "type": "string",
+                        "description": "The Python code to execute",
+                    }
+                },
+                "required": ["code"],
+            },
+        },
+    },
+]
+
+MAX_TOOL_ROUNDS = 10
+TOOL_TIMEOUT = 120  # seconds per tool execution
 
 
 def resolve_model_and_endpoint(model: str, api_base: str = None, api_key: str = None):
@@ -43,6 +82,7 @@ def resolve_model_and_endpoint(model: str, api_base: str = None, api_key: str = 
     resolved_base = api_base
     resolved_key = api_key
 
+    # Check for provider prefix
     for prefix, (preset_base, preset_key) in PROVIDER_PRESETS.items():
         if model.lower().startswith(f"{prefix}/"):
             resolved_model = model[len(prefix) + 1:]
@@ -52,6 +92,7 @@ def resolve_model_and_endpoint(model: str, api_base: str = None, api_key: str = 
                 resolved_key = preset_key
             break
 
+    # Defaults
     if not resolved_base:
         resolved_base = os.environ.get(
             "WEE_API_BASE", "http://192.168.1.101:11434/v1"
@@ -73,116 +114,43 @@ def resolve_model_and_endpoint(model: str, api_base: str = None, api_key: str = 
     return resolved_model, resolved_base, resolved_key
 
 
-def fetch_openrouter_pricing() -> dict:
-    """Fetch and cache OpenRouter model pricing (1h TTL).
-
-    Returns dict of {model_id: {prompt: float, completion: float}} per-token prices.
-    """
-    import urllib.request
-
-    cache_path = Path("/tmp/openrouter_pricing.json")
-    now = time.time()
-
-    if cache_path.exists() and (now - cache_path.stat().st_mtime) < 3600:
-        try:
-            with open(cache_path) as f:
-                return json.load(f)
-        except Exception:
-            pass
-
+def execute_tool(func_name: str, func_args: dict) -> str:
+    """Execute a tool call and return its output (Issue #107)."""
     try:
-        with urllib.request.urlopen(
-            "https://openrouter.ai/api/v1/models", timeout=10
-        ) as resp:
-            data = json.loads(resp.read().decode())
-
-        pricing = {}
-        for model_info in data.get("data", []):
-            mid = model_info.get("id", "")
-            p = model_info.get("pricing", {})
-            try:
-                pricing[mid] = {
-                    "prompt": float(p.get("prompt", 0) or 0),
-                    "completion": float(p.get("completion", 0) or 0),
-                }
-            except (ValueError, TypeError):
-                pass
-
-        with open(cache_path, "w") as f:
-            json.dump(pricing, f)
-        return pricing
+        if func_name == "bash":
+            command = func_args.get("command", "")
+            if not command:
+                return "Error: No command provided"
+            result = subprocess.run(
+                ["bash", "-c", command],
+                capture_output=True,
+                text=True,
+                timeout=TOOL_TIMEOUT,
+            )
+            output = result.stdout
+            if result.returncode != 0 and result.stderr:
+                output += f"\nSTDERR: {result.stderr}"
+            return output.strip() or "(no output)"
+        elif func_name == "python":
+            code = func_args.get("code", "")
+            if not code:
+                return "Error: No code provided"
+            result = subprocess.run(
+                [sys.executable, "-c", code],
+                capture_output=True,
+                text=True,
+                timeout=TOOL_TIMEOUT,
+            )
+            output = result.stdout
+            if result.returncode != 0 and result.stderr:
+                output += f"\nSTDERR: {result.stderr}"
+            return output.strip() or "(no output)"
+        else:
+            return f"Error: Unknown tool {func_name}"
+    except subprocess.TimeoutExpired:
+        return f"Error: Tool {func_name} timed out after {TOOL_TIMEOUT}s"
     except Exception as e:
-        print(f"[wee_runtime] Could not fetch OpenRouter pricing: {e}", file=sys.stderr)
-        return {}
-
-
-def calculate_cost(model: str, prompt_tokens: int, completion_tokens: int, pricing: dict):
-    """Calculate USD cost and a display label for the given model and token counts.
-
-    Returns (cost_usd: float, label: str) where label is one of:
-        'local'    — Ollama or local endpoint
-        'free'     — OpenRouter free model
-        '$0.0001'  — paid model with calculated cost
-    """
-    model_lower = model.lower()
-
-    # Local/Ollama = free
-    if model_lower.startswith("ollama/") or "192.168" in model_lower:
-        return 0.0, "local"
-
-    # Strip provider prefix for pricing lookup
-    bare_model = model
-    for prefix in ("openrouter/", "lmstudio/", "wee/"):
-        if model_lower.startswith(prefix):
-            bare_model = model[len(prefix):]
-            break
-
-    if bare_model not in pricing:
-        return 0.0, "free"
-
-    p = pricing[bare_model]
-    cost = (prompt_tokens * p["prompt"]) + (completion_tokens * p["completion"])
-
-    if cost == 0.0:
-        return 0.0, "free"
-    if cost < 0.00001:
-        label = f"${cost:.8f}".rstrip("0")
-    elif cost < 0.001:
-        label = f"${cost:.6f}".rstrip("0")
-    else:
-        label = f"${cost:.4f}".rstrip("0").rstrip(".")
-    return cost, label
-
-
-def log_token_usage(
-    session_id: str,
-    model: str,
-    provider: str,
-    prompt_tokens: int,
-    completion_tokens: int,
-    total_tokens: int,
-    cost_usd: float,
-    duration_ms: int,
-):
-    """Append a usage entry to ~/.copilot/logs/token_usage.jsonl."""
-    try:
-        LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
-        entry = {
-            "timestamp": time.time(),
-            "session_id": session_id,
-            "model": model,
-            "runtime": "wee",
-            "provider": provider,
-            "prompt_tokens": prompt_tokens,
-            "completion_tokens": completion_tokens,
-            "total_tokens": total_tokens,
-            "cost_usd": cost_usd,
-            "duration_ms": duration_ms,
-        }
-        with open(LOG_FILE, "a") as f:
-            f.write(json.dumps(entry) + "\n")
-    except Exception as e:
-        print(f"[wee_runtime] Failed to log usage: {e}", file=sys.stderr)
+        return f"Error executing tool {func_name}: {e}"
 
 
 def main():
@@ -195,7 +163,8 @@ def main():
     parser.add_argument("--system-prompt", default="", help="System prompt")
     parser.add_argument("--timeout", type=int, default=300, help="Request timeout in seconds")
     parser.add_argument("--temperature", type=float, default=None, help="Sampling temperature")
-    parser.add_argument("--session-id", default="", help="Session ID for usage logging")
+    parser.add_argument("--tools", action="store_true", default=False,
+                        help="Enable tool calling (bash, python)")
     parser.add_argument("prompt", help="User prompt")
     args = parser.parse_args()
 
@@ -220,69 +189,150 @@ def main():
         messages.append({"role": "system", "content": args.system_prompt})
     messages.append({"role": "user", "content": args.prompt})
 
-    create_kwargs = {
-        "model": model,
-        "messages": messages,
-        "stream": True,
-        "stream_options": {"include_usage": True},
-    }
-    if args.temperature is not None:
-        create_kwargs["temperature"] = args.temperature
+    if not args.tools:
+        # Simple streaming (no tool calling)
+        create_kwargs = {
+            "model": model,
+            "messages": messages,
+            "stream": True,
+        }
+        if args.temperature is not None:
+            create_kwargs["temperature"] = args.temperature
 
-    start_time = time.time()
-    last_usage = None
+        try:
+            stream = client.chat.completions.create(**create_kwargs)
+            for chunk in stream:
+                if chunk.choices and chunk.choices[0].delta.content:
+                    sys.stdout.write(chunk.choices[0].delta.content)
+                    sys.stdout.flush()
+            sys.stdout.write("\n")
+            sys.stdout.flush()
+        except KeyboardInterrupt:
+            sys.exit(130)
+        except Exception as e:
+            print(f"\nError: Wee native runtime failed: {e}", file=sys.stderr)
+            sys.exit(1)
+        return
+
+    # -- Tool-calling agentic loop (Issue #107) --
+    collected_output = []
+    tool_call_counter = 0
 
     try:
-        stream = client.chat.completions.create(**create_kwargs)
+        for round_num in range(MAX_TOOL_ROUNDS + 1):
+            create_kwargs = {
+                "model": model,
+                "messages": messages,
+                "stream": True,
+            }
+            if args.temperature is not None:
+                create_kwargs["temperature"] = args.temperature
+            if round_num < MAX_TOOL_ROUNDS:
+                create_kwargs["tools"] = _WEE_TOOLS
 
-        for chunk in stream:
-            if chunk.choices and chunk.choices[0].delta.content:
-                token = chunk.choices[0].delta.content
-                sys.stdout.write(token)
-                sys.stdout.flush()
-            # Capture usage from final chunk
-            if hasattr(chunk, "usage") and chunk.usage is not None:
-                last_usage = chunk.usage
+            try:
+                stream = client.chat.completions.create(**create_kwargs)
+            except Exception as tools_err:
+                if "tools" in create_kwargs:
+                    print(
+                        f"[Wee] Tools not supported, retrying without: {tools_err}",
+                        file=sys.stderr,
+                    )
+                    create_kwargs.pop("tools", None)
+                    stream = client.chat.completions.create(**create_kwargs)
+                else:
+                    raise
+
+            round_content = []
+            tool_calls_acc = {}
+
+            for chunk in stream:
+                if not chunk.choices:
+                    continue
+                delta = chunk.choices[0].delta
+
+                if delta.content:
+                    token = delta.content
+                    round_content.append(token)
+                    sys.stdout.write(token)
+                    sys.stdout.flush()
+
+                if getattr(delta, "tool_calls", None):
+                    for tc_delta in delta.tool_calls:
+                        idx = tc_delta.index
+                        if idx not in tool_calls_acc:
+                            tool_call_counter += 1
+                            tool_calls_acc[idx] = {
+                                "id": getattr(tc_delta, "id", None) or f"tc_wee_{tool_call_counter}",
+                                "name": "",
+                                "arguments": "",
+                            }
+                        if tc_delta.id:
+                            tool_calls_acc[idx]["id"] = tc_delta.id
+                        if tc_delta.function:
+                            if tc_delta.function.name:
+                                tool_calls_acc[idx]["name"] = tc_delta.function.name
+                            if tc_delta.function.arguments:
+                                tool_calls_acc[idx]["arguments"] += tc_delta.function.arguments
+
+            content_text = "".join(round_content)
+
+            if not tool_calls_acc:
+                collected_output.append(content_text)
+                break
+
+            # Tool calls detected
+            print(
+                f"\n[Wee] Round {round_num + 1}: {len(tool_calls_acc)} tool call(s)",
+                file=sys.stderr,
+            )
+
+            assistant_tool_calls = []
+            for idx in sorted(tool_calls_acc.keys()):
+                tc = tool_calls_acc[idx]
+                assistant_tool_calls.append({
+                    "id": tc["id"],
+                    "type": "function",
+                    "function": {"name": tc["name"], "arguments": tc["arguments"]},
+                })
+
+            messages.append({
+                "role": "assistant",
+                "content": content_text or None,
+                "tool_calls": assistant_tool_calls,
+            })
+
+            for tc_entry in assistant_tool_calls:
+                tc_id = tc_entry["id"]
+                func_name = tc_entry["function"]["name"]
+                func_args_str = tc_entry["function"]["arguments"]
+
+                try:
+                    func_args = json.loads(func_args_str)
+                except (ValueError, json.JSONDecodeError):
+                    func_args = {"raw": func_args_str}
+
+                print(f"[Wee] Tool: {func_name}({json.dumps(func_args)[:200]})", file=sys.stderr)
+
+                tool_result = execute_tool(func_name, func_args)
+
+                messages.append({
+                    "role": "tool",
+                    "tool_call_id": tc_id,
+                    "content": tool_result or "No output",
+                })
+        else:
+            # All rounds had tool calls with no final text
+            last_results = [m["content"] for m in messages if m.get("role") == "tool"]
+            if last_results:
+                fallback = "Tool execution completed. Last result:\n" + last_results[-1][:2000]
+            else:
+                fallback = "Max tool rounds reached without final response."
+            collected_output.append(fallback)
+            sys.stdout.write(fallback)
 
         sys.stdout.write("\n")
         sys.stdout.flush()
-
-        # Compute token usage and cost (Issue #128)
-        duration_ms = int((time.time() - start_time) * 1000)
-
-        if last_usage is not None:
-            prompt_tokens = getattr(last_usage, "prompt_tokens", 0) or 0
-            completion_tokens = getattr(last_usage, "completion_tokens", 0) or 0
-            total_tokens = getattr(last_usage, "total_tokens", prompt_tokens + completion_tokens)
-
-            provider = "ollama" if "192.168" in api_base else ("openrouter" if "openrouter" in api_base else "wee")
-            pricing = fetch_openrouter_pricing() if provider == "openrouter" else {}
-            cost_usd, cost_label = calculate_cost(args.model, prompt_tokens, completion_tokens, pricing)
-
-            meta = {
-                "tokens": total_tokens,
-                "prompt_tokens": prompt_tokens,
-                "completion_tokens": completion_tokens,
-                "cost_usd": cost_usd,
-                "cost_label": cost_label,
-                "model": args.model,
-                "runtime": "wee",
-            }
-
-            # Output metadata line for backend to parse
-            print(f"__WEE_META__ {json.dumps(meta)}", flush=True)
-
-            # Log to JSONL
-            log_token_usage(
-                session_id=args.session_id or "cli",
-                model=args.model,
-                provider=provider,
-                prompt_tokens=prompt_tokens,
-                completion_tokens=completion_tokens,
-                total_tokens=total_tokens,
-                cost_usd=cost_usd,
-                duration_ms=duration_ms,
-            )
 
     except KeyboardInterrupt:
         sys.exit(130)

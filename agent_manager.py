@@ -7907,6 +7907,16 @@ User Request:
                 if hasattr(chunk, "usage") and chunk.usage is not None:
                     _last_usage[0] = chunk.usage
 
+            else:
+                # All MAX_TOOL_ROUNDS had tool calls with no final text
+                last_tool_results = [m["content"] for m in messages if m.get("role") == "tool"]
+                if last_tool_results:
+                    collected_output.append(
+                        "Tool execution completed. Last result:\n" + last_tool_results[-1][:2000]
+                    )
+                else:
+                    collected_output.append("Max tool rounds reached without final response.")
+
             output = "".join(collected_output)
 
             # Compute cost + attach wee_meta (Issue #128)
