@@ -8066,7 +8066,51 @@ User Request:
             return f"Error: Tool '{func_name}' timed out"
         except Exception as e:
             return f"Error executing {func_name}: {e}"
+    # -- Issue #113: SSH command sanitisation and anti-hallucination --
 
+    _SSH_BIN_RE = re.compile(r"\b(ssh|scp|sftp)\b")
+
+    @staticmethod
+    def _wee_sanitize_bash_command(command: str) -> str:
+        """Issue #113: Auto-inject SSH flags to prevent host key verification failures.
+
+        When a bash command contains an ssh/scp/sftp invocation without
+        StrictHostKeyChecking already set, inject
+        ``-o StrictHostKeyChecking=accept-new`` so first-connect succeeds
+        without manual intervention.  ``accept-new`` is safer than ``no``
+        because it still rejects CHANGED keys (potential MITM).
+        """
+        if not command:
+            return command
+        # Quick check — does the command even mention ssh/scp/sftp?
+        if not SessionManager._SSH_BIN_RE.search(command):
+            return command
+        # Already has StrictHostKeyChecking set — leave it alone
+        if "StrictHostKeyChecking" in command:
+            return command
+        # Inject -o StrictHostKeyChecking=accept-new after each ssh/scp/sftp binary
+        def _inject(m):
+            return m.group(0) + " -o StrictHostKeyChecking=accept-new"
+        return SessionManager._SSH_BIN_RE.sub(_inject, command, count=0)
+
+    @staticmethod
+    def _wee_anti_hallucination_prompt() -> str:
+        """Issue #113: Return system-prompt section that prevents hallucinated tool output.
+
+        Smaller Ollama models tend to fabricate command output when a tool
+        call fails.  This prompt section explicitly forbids that.
+        """
+        return (
+            "\n\n[CRITICAL — Output Integrity Rules]\n"
+            "1. NEVER fabricate, invent, or hallucinate command output. If a command "
+            "fails or you cannot execute it, report the EXACT error message.\n"
+            "2. NEVER provide example or placeholder output and present it as real. "
+            'If you show an example, clearly label it as "EXAMPLE (not real output)".\n'
+            "3. When a tool call returns an error, relay the error verbatim to the user. "
+            "Do NOT attempt to guess what the successful output would have looked like.\n"
+            "4. For SSH commands: ALWAYS use ``-o StrictHostKeyChecking=accept-new`` to "
+            "avoid host-key verification failures on first connect.\n"
+        )
     def _get_cursor_session_id(self, n8n_session_id: str) -> Optional[str]:
         """Return the stored cursor session flag for this n8n session, or None."""
         mapping_file = self.cursor_session_dir / f"{n8n_session_id}.json"
