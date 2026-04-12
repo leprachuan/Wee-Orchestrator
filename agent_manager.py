@@ -135,10 +135,6 @@ def _sanitize_tool_call_for_display(data: dict) -> dict:
             if field in new_inp and isinstance(new_inp[field], str):
                 new_inp[field] = _sanitize_command_for_display(new_inp[field])
         sanitized["input"] = new_inp
-    # Also sanitize output field (Issue #115 — expandable tool output)
-    out = sanitized.get("output")
-    if out and isinstance(out, str):
-        sanitized["output"] = _sanitize_command_for_display(out)
     return sanitized
 
 
@@ -1473,23 +1469,6 @@ class SessionManager:
         ],
     }
 
-
-    # WEE native runtime models configuration
-    WEE_MODELS = {
-        "Ollama (local)": [
-            ("ollama/gemma4:e4b", "Gemma 4 E4B (local)", ["gemma4-e4b", "gemma4"]),
-            ("ollama/gemma4:e2b", "Gemma 4 E2B (local)", ["gemma4-e2b"]),
-        ],
-        "OpenRouter": [
-            ("openrouter/meta-llama/llama-4-scout", "Llama 4 Scout via OpenRouter", ["llama-4-scout"]),
-            ("openrouter/meta-llama/llama-4-maverick", "Llama 4 Maverick via OpenRouter", ["llama-4-maverick"]),
-            ("openrouter/google/gemma-3-27b-it", "Gemma 3 27B via OpenRouter", ["gemma-3-27b"]),
-        ],
-        "LM Studio": [
-            ("lmstudio/default", "LM Studio Default Model", ["lmstudio"]),
-        ],
-    }
-
     def __init__(self, config_file: Optional[str] = None, app_env: str = "PROD"):
         # Copilot Paths
         self.copilot_home = Path.home() / ".copilot"
@@ -1578,7 +1557,6 @@ class SessionManager:
         self._env_codex_models = None
         self._env_devin_models = None
         self._env_cursor_models = None
-        self._env_wee_models = None
 
         # Load command timeout from environment
         self.command_timeout = get_command_timeout()
@@ -3337,7 +3315,7 @@ You can mention an agent in your prompt and it will auto-delegate:
             "codex": self._env_codex_models,
             "devin": self._env_devin_models,
             "cursor": self._env_cursor_models,
-            "wee": self._env_wee_models,
+            "wee": {},
         }
         env_models = env_models_map.get(runtime)
         if env_models:
@@ -3355,7 +3333,7 @@ You can mention an agent in your prompt and it will auto-delegate:
             "opencode": self.OPENCODE_MODELS,
             "devin": self.DEVIN_MODELS,
             "cursor": self.CURSOR_MODELS,
-            "wee": self.WEE_MODELS,
+            "wee": {},
         }
         models_dict = static_map.get(runtime)
         if not models_dict:
@@ -3544,31 +3522,6 @@ You can mention an agent in your prompt and it will auto-delegate:
 
         return self._static_models_to_dict(self.CURSOR_MODELS)
 
-    def fetch_wee_models(self) -> Dict:
-        """Return available Wee native runtime models from environment or fallback to static list.
-
-        Models are read from WEE_MODELS_JSON environment variable, with
-        static WEE_MODELS as fallback.
-        """
-        # Try to load from environment variable first
-        env_models = os.getenv("WEE_MODELS_JSON")
-        if env_models:
-            try:
-                import json
-
-                models_dict = json.loads(env_models)
-                # Cache the full model dict with descriptions for lookup later
-                self._env_wee_models = models_dict
-                # Convert to the expected format {category: [model_ids]}
-                return self._static_models_to_dict(models_dict)
-            except (json.JSONDecodeError, ValueError) as e:
-                print(
-                    f"Warning: Failed to parse WEE_MODELS_JSON: {e}", file=sys.stderr
-                )
-
-        # Fallback to static configuration
-        return self._static_models_to_dict(self.WEE_MODELS)
-
     def get_models_for_runtime(self, runtime: str) -> Dict:
         """Fetch available models for a runtime, using CLI discovery where possible.
 
@@ -3586,7 +3539,7 @@ You can mention an agent in your prompt and it will auto-delegate:
             "codex": self.fetch_codex_models,
             "devin": self.fetch_devin_models,
             "cursor": self.fetch_cursor_models,
-            "wee": self.fetch_wee_models,
+            "wee": lambda: {"Wee Native": ["ollama/gemma4:e4b", "ollama/gemma4:e2b", "ollama/gemma4:e4b-nothinker", "ollama/gemma4:e2b-nothinker", "openrouter/meta-llama/llama-4-scout"]},
         }
         fetcher = dispatch.get(runtime)
         if fetcher is None:
@@ -4103,7 +4056,7 @@ You can mention an agent in your prompt and it will auto-delegate:
         name_lower = name.lower().strip("\"'")
 
         # Ensure env models are loaded/cached by triggering fetch for this runtime
-        if runtime in ("claude", "gemini", "codex", "devin", "cursor", "wee"):
+        if runtime in ("claude", "gemini", "codex", "devin", "cursor"):
             self.get_models_for_runtime(runtime)
 
         # Step 1: check env-loaded or static alias tables for all runtimes that have them.
@@ -4113,7 +4066,6 @@ You can mention an agent in your prompt and it will auto-delegate:
             "codex": self._env_codex_models,
             "devin": self._env_devin_models,
             "cursor": self._env_cursor_models,
-            "wee": self._env_wee_models,
         }
         static_alias_map = {
             "claude": self.CLAUDE_MODELS,
@@ -4122,7 +4074,6 @@ You can mention an agent in your prompt and it will auto-delegate:
             "opencode": self.OPENCODE_MODELS,
             "devin": self.DEVIN_MODELS,
             "cursor": self.CURSOR_MODELS,
-            "wee": self.WEE_MODELS,
         }
 
         # Try env-loaded models first, fall back to static
@@ -4148,12 +4099,20 @@ You can mention an agent in your prompt and it will auto-delegate:
             if m.lower() == name_lower:
                 return m
 
-        # Substring matching with longest-match preference
+        # Exact match with provider prefix stripped (e.g., "gemma4:e4b" matches "ollama/gemma4:e4b")
+        for m in all_models:
+            model_lower = m.lower()
+            if "/" in model_lower:
+                suffix = model_lower.split("/", 1)[1]
+                if suffix == name_lower:
+                    return m
+
+        # Substring matching with shortest-match preference
         matches = [m for m in all_models if name_lower in m.lower()]
         if len(matches) == 1:
             return matches[0]
         if matches:
-            matches.sort(reverse=True)
+            matches.sort(key=len)
             return matches[0]
 
         return None
@@ -4480,9 +4439,6 @@ You can mention an agent in your prompt and it will auto-delegate:
             # Wee native runtime outputs clean text - pass through directly
             for line in lines:
                 if not line.strip() and not result:
-                    continue
-                # Strip __WEE_META__ markers to keep internal metadata out of user output
-                if line.strip().startswith("__WEE_META__"):
                     continue
                 result.append(line)
 
@@ -5826,13 +5782,9 @@ User Request:
                                         msg = obj.get("message") or {}
                                         for block in msg.get("content") or []:
                                             if block.get("type") == "tool_result":
-                                                _tr_content = block.get("content", "")
-                                                if isinstance(_tr_content, list):
-                                                    _tr_content = " ".join(b.get("text", str(b)) if isinstance(b, dict) else str(b) for b in _tr_content)
                                                 tc_event = {
                                                     "event": "result",
                                                     "id": block.get("tool_use_id", ""),
-                                                    "output": str(_tr_content)[:2000],
                                                     "is_error": block.get(
                                                         "is_error", False
                                                     ),
@@ -5919,7 +5871,7 @@ User Request:
                                                 "status": _gobj.get(
                                                     "status", "completed"
                                                 ),
-                                                "output": _gobj.get("output", "")[:2000],
+                                                "output": _gobj.get("output", "")[:500],
                                             }
                                             if stream_buffer:
                                                 stream_buffer.push(
@@ -6620,13 +6572,11 @@ User Request:
                         tool_name = "tool"
                         if hasattr(event, "data"):
                             tool_name = getattr(event.data, "name", None) or getattr(event.data, "tool_name", None) or "tool"
-                        tool_output = str(getattr(event.data, "output", "") or getattr(event.data, "result", "") or getattr(event.data, "content", "") or "")[:2000] if hasattr(event, "data") else ""
                         tc_evt = {
                             "event": "completed",
                             "id": f"tc_copilot-sdk_{_tool_call_counter[0]}",
                             "name": str(tool_name),
                             "input": "",
-                            "output": tool_output,
                             "runtime": "copilot-sdk",
                             "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
                         }
@@ -6903,15 +6853,11 @@ User Request:
                                 if stream_buffer:
                                     stream_buffer.push("tool_call", tc_evt)
                             elif isinstance(block, ToolResultBlock):
-                                _block_content = block.content
-                                if isinstance(_block_content, list):
-                                    _block_content = " ".join(getattr(b, "text", str(b)) for b in _block_content)
                                 tc_evt = {
                                     "event": "completed",
                                     "id": block.tool_use_id or f"tc_claude-sdk_{_tool_call_counter[0]}",
                                     "name": "tool",
-                                    "input": "",
-                                    "output": str(_block_content)[:2000] if _block_content else "",
+                                    "input": str(block.content)[:200] if block.content else "",
                                     "is_error": getattr(block, "is_error", False),
                                     "runtime": "claude-sdk",
                                     "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
@@ -6921,27 +6867,6 @@ User Request:
                     elif isinstance(message, ResultMessage):
                         if message.session_id:
                             self.update_session_field(n8n_session_id, "session_id", message.session_id)
-                        # Issue #128: capture token usage
-                        if hasattr(message, "usage") and message.usage is not None:
-                            try:
-                                _u = message.usage
-                                _pt = _u.get("input_tokens", 0) if isinstance(_u, dict) else getattr(_u, "input_tokens", 0)
-                                _ct = _u.get("output_tokens", 0) if isinstance(_u, dict) else getattr(_u, "output_tokens", 0)
-                                _pt = _pt or 0; _ct = _ct or 0
-                                _cost, _label = self._calculate_anthropic_cost(model or "", _pt, _ct)
-                                self.update_session_field(n8n_session_id, "wee_meta", {
-                                    "tokens": _pt + _ct, "prompt_tokens": _pt,
-                                    "completion_tokens": _ct, "cost_usd": _cost,
-                                    "cost_label": _label, "model": model or "", "runtime": "claude-sdk",
-                                })
-                                self._log_token_usage(
-                                    session_id=n8n_session_id, model=model or "claude",
-                                    runtime="claude-sdk", provider="anthropic",
-                                    prompt_tokens=_pt, completion_tokens=_ct,
-                                    total_tokens=_pt + _ct, cost_usd=_cost, duration_ms=0,
-                                )
-                            except Exception as _ue:
-                                print(f"[claude-sdk] usage capture error: {_ue}", file=sys.stderr)
                     elif hasattr(message, "content"):
                         for block in getattr(message, "content", []):
                             if hasattr(block, "text"):
@@ -7565,7 +7490,7 @@ User Request:
 
         # Build context prompt with agent identity
         context_prompt = self.build_agent_context_prompt(
-            prompt, agent, channel, n8n_session_id
+            agent, prompt, n8n_session_id, channel=channel
         )
 
         # Add elevated mode instructions for unrestricted privileged access
@@ -7654,131 +7579,6 @@ User Request:
 
         return self.strip_metadata(output, "cursor")
 
-    # ── Issue #128: Token usage tracking helpers ─────────────────────────────
-
-    def _fetch_openrouter_pricing(self) -> dict:
-        """Fetch and cache OpenRouter model pricing (1h TTL)."""
-        import time as _time
-        import json as _json
-        import urllib.request
-
-        cache_path = Path('/tmp/openrouter_pricing.json')
-        now = _time.time()
-        if cache_path.exists() and (now - cache_path.stat().st_mtime) < 3600:
-            try:
-                with open(cache_path) as f:
-                    return _json.load(f)
-            except Exception:
-                pass
-        try:
-            with urllib.request.urlopen(
-                'https://openrouter.ai/api/v1/models', timeout=10
-            ) as resp:
-                data = _json.loads(resp.read().decode())
-            pricing = {}
-            for model_info in data.get('data', []):
-                mid = model_info.get('id', '')
-                p = model_info.get('pricing', {})
-                try:
-                    pricing[mid] = {
-                        'prompt': float(p.get('prompt', 0) or 0),
-                        'completion': float(p.get('completion', 0) or 0),
-                    }
-                except (ValueError, TypeError):
-                    pass
-            with open(cache_path, 'w') as f:
-                _json.dump(pricing, f)
-            return pricing
-        except Exception as e:
-            print(f'[TokenUsage] Could not fetch OpenRouter pricing: {e}', file=sys.stderr)
-            return {}
-
-    def _calculate_wee_cost(
-        self, model: str, prompt_tokens: int, completion_tokens: int, pricing: dict
-    ):
-        """Calculate cost and label for wee runtime (Ollama/OpenRouter)."""
-        model_lower = model.lower()
-        if model_lower.startswith('ollama/') or '192.168' in model_lower:
-            return 0.0, 'local'
-        bare_model = model
-        for prefix in ('openrouter/', 'lmstudio/', 'wee/'):
-            if model_lower.startswith(prefix):
-                bare_model = model[len(prefix):]
-                break
-        if bare_model not in pricing:
-            return 0.0, 'free'
-        p = pricing[bare_model]
-        cost = (prompt_tokens * p['prompt']) + (completion_tokens * p['completion'])
-        return cost, self._get_cost_label(cost)
-
-    def _calculate_anthropic_cost(self, model: str, prompt_tokens: int, completion_tokens: int):
-        """Calculate cost for Anthropic / claude-sdk models."""
-        ANTHROPIC_PRICING = {
-            'claude-haiku-4-5':  (0.80, 4.00),
-            'claude-haiku-4':    (0.80, 4.00),
-            'claude-haiku':      (0.80, 4.00),
-            'claude-sonnet-4-5': (3.00, 15.00),
-            'claude-sonnet-4':   (3.00, 15.00),
-            'claude-sonnet':     (3.00, 15.00),
-            'claude-opus-4-5':   (15.00, 75.00),
-            'claude-opus-4':     (15.00, 75.00),
-            'claude-opus':       (15.00, 75.00),
-        }
-        model_lower = model.lower()
-        input_price, output_price = 3.00, 15.00
-        for key, (inp, out) in ANTHROPIC_PRICING.items():
-            if key in model_lower:
-                input_price, output_price = inp, out
-                break
-        cost = (prompt_tokens * input_price / 1_000_000) + (completion_tokens * output_price / 1_000_000)
-        return cost, self._get_cost_label(cost)
-
-    def _get_cost_label(self, cost_usd: float) -> str:
-        """Format cost as display label."""
-        if cost_usd == 0.0:
-            return 'free'
-        if cost_usd < 0.00001:
-            return f'${cost_usd:.8f}'.rstrip('0')
-        if cost_usd < 0.001:
-            return f'${cost_usd:.6f}'.rstrip('0')
-        return f'${cost_usd:.4f}'.rstrip('0').rstrip('.')
-
-    def _log_token_usage(
-        self,
-        session_id: str,
-        model: str,
-        runtime: str,
-        provider: str,
-        prompt_tokens: int,
-        completion_tokens: int,
-        total_tokens: int,
-        cost_usd: float,
-        duration_ms: int,
-    ):
-        """Append a usage entry to logs/token_usage.jsonl."""
-        import time as _time
-        import json as _json
-        try:
-            self.logs_dir.mkdir(parents=True, exist_ok=True)
-            entry = {
-                'timestamp': _time.time(),
-                'session_id': session_id,
-                'model': model,
-                'runtime': runtime,
-                'provider': provider,
-                'prompt_tokens': prompt_tokens,
-                'completion_tokens': completion_tokens,
-                'total_tokens': total_tokens,
-                'cost_usd': cost_usd,
-                'duration_ms': duration_ms,
-            }
-            with open(self.logs_dir / 'token_usage.jsonl', 'a') as f:
-                f.write(_json.dumps(entry) + '\n')
-        except Exception as e:
-            print(f'[TokenUsage] Failed to log usage: {e}', file=sys.stderr)
-
-    # ── End Issue #128 helpers ─────────────────────────────────────────────────
-
     def run_wee_native(
         self,
         prompt: str,
@@ -7802,7 +7602,11 @@ User Request:
             openrouter/meta-llama/llama-4-scout - OpenRouter cloud
             gemma4:e4b                - Default endpoint (Ollama)
 
-        Supports real-time streaming to WebUI SSE consumers.
+        Supports:
+            - Real-time streaming to WebUI SSE consumers
+            - Multi-turn conversation history (#108)
+            - Tool-call agentic loop (#107)
+            - SSE streaming of tool execution (#109)
         """
         import json as _json
 
@@ -7818,11 +7622,6 @@ User Request:
         agent_dir = self.AGENTS.get(agent, self.AGENTS["orchestrator"])["path"]
         effective_timeout = timeout if timeout is not None else self.command_timeout
         channel = session_data.get("channel", "webui")
-
-        # Build context prompt with agent identity
-        context_prompt = self.build_agent_context_prompt(
-            prompt, agent, channel, n8n_session_id
-        )
 
         # -- Resolve model, endpoint, and API key --
         api_base = session_data.get("api_base") or os.environ.get(
@@ -7868,77 +7667,245 @@ User Request:
             file=sys.stderr,
         )
 
+        # Issue #111: Build context prompt with correct args (after model resolution)
+        base_context_prompt = self.build_agent_context_prompt(
+            agent,
+            prompt,
+            n8n_session_id,
+            render_type=render_type,
+            timeout=effective_timeout,
+            runtime="wee",
+            model=resolved_model,
+            channel=channel,
+        )
+        # Issue #111: Augment system prompt with explicit tool capability section
+        # so models that ignore JSON schemas still know tools are available.
+        context_prompt = self._wee_augment_system_prompt_with_tools(base_context_prompt)
+
+
         # -- Streaming infrastructure --
         stream_buffer = getattr(self, "_stream_buffers", {}).get(n8n_session_id)
 
         # -- Create OpenAI client and call API --
+        # Use httpx.Timeout for granular control: fast connect failure,
+        # generous read timeout for streaming
+        import httpx
         client = OpenAI(
             base_url=api_base,
             api_key=api_key,
-            timeout=effective_timeout,
+            timeout=httpx.Timeout(
+                timeout=effective_timeout,
+                connect=15.0,
+            ),
+            max_retries=0,
         )
 
-        messages = []
-        # System prompt from agent context
-        if context_prompt:
-            messages.append({"role": "system", "content": context_prompt})
+        # -- Issue #108: Load conversation history --
+        messages = self._wee_load_messages(n8n_session_id, context_prompt, resume)
         messages.append({"role": "user", "content": prompt})
 
+        # -- Tool definitions for agentic loop (Issue #107) --
+        _WEE_TOOLS = [
+            {
+                "type": "function",
+                "function": {
+                    "name": "bash",
+                    "description": "Execute a bash shell command and return its output.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "command": {
+                                "type": "string",
+                                "description": "The bash command to execute",
+                            }
+                        },
+                        "required": ["command"],
+                    },
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "python",
+                    "description": "Execute Python 3 code and return the output.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "code": {
+                                "type": "string",
+                                "description": "The Python code to execute",
+                            }
+                        },
+                        "required": ["code"],
+                    },
+                },
+            },
+        ]
+
         collected_output = []
+        _tool_call_counter = 0
+        MAX_TOOL_ROUNDS = 10
 
         try:
-            import time as _time
-            _wee_start = _time.time()
-            _last_usage = [None]
+            for round_num in range(MAX_TOOL_ROUNDS + 1):
+                # Build create kwargs — include tools unless on final safety round
+                create_kwargs = {
+                    "model": resolved_model,
+                    "messages": messages,
+                    "stream": True,
+                }
+                if round_num < MAX_TOOL_ROUNDS:
+                    create_kwargs["tools"] = _WEE_TOOLS
 
-            stream = client.chat.completions.create(
-                model=resolved_model,
-                messages=messages,
-                stream=True,
-                stream_options={"include_usage": True},
-            )
+                try:
+                    stream = client.chat.completions.create(**create_kwargs)
+                except Exception as tools_err:
+                    # Some models/endpoints may not support tools — retry without
+                    if "tools" in create_kwargs:
+                        print(
+                            f"[Wee Native] Tools not supported, retrying without: {tools_err}",
+                            file=sys.stderr,
+                        )
+                        create_kwargs.pop("tools", None)
+                        stream = client.chat.completions.create(**create_kwargs)
+                    else:
+                        raise
 
-            for chunk in stream:
-                if chunk.choices and chunk.choices[0].delta.content:
-                    token = chunk.choices[0].delta.content
-                    collected_output.append(token)
+                # Accumulate content and tool calls from streaming response
+                round_content = []
+                tool_calls_acc = {}  # index -> {id, name, arguments}
+
+                for chunk in stream:
+                    if not chunk.choices:
+                        continue
+                    delta = chunk.choices[0].delta
+
+                    # Content tokens — stream to user
+                    if delta.content:
+                        token = delta.content
+                        round_content.append(token)
+                        if stream_buffer:
+                            stream_buffer.push("chunk", {"text": token})
+
+                    # Tool call deltas (Issue #107)
+                    if getattr(delta, "tool_calls", None):
+                        for tc_delta in delta.tool_calls:
+                            idx = tc_delta.index
+                            if idx not in tool_calls_acc:
+                                _tool_call_counter += 1
+                                tool_calls_acc[idx] = {
+                                    "id": getattr(tc_delta, "id", None) or f"tc_wee_{_tool_call_counter}",
+                                    "name": "",
+                                    "arguments": "",
+                                }
+                            if tc_delta.id and not tool_calls_acc[idx]["id"].startswith("tc_wee_"):
+                                pass  # keep first real id
+                            elif tc_delta.id:
+                                tool_calls_acc[idx]["id"] = tc_delta.id
+                            if tc_delta.function:
+                                if tc_delta.function.name:
+                                    tool_calls_acc[idx]["name"] = tc_delta.function.name
+                                if tc_delta.function.arguments:
+                                    tool_calls_acc[idx]["arguments"] += tc_delta.function.arguments
+
+                content_text = "".join(round_content)
+
+                # No tool calls — we have the final answer
+                if not tool_calls_acc:
+                    collected_output.append(content_text)
+                    messages.append({"role": "assistant", "content": content_text})
+                    break
+
+                # -- Tool calls detected (Issues #107 + #109) --
+                print(
+                    f"[Wee Native] Round {round_num + 1}: {len(tool_calls_acc)} tool call(s) detected",
+                    file=sys.stderr,
+                )
+
+                # Build assistant message with tool_calls for conversation history
+                assistant_tool_calls = []
+                for idx in sorted(tool_calls_acc.keys()):
+                    tc = tool_calls_acc[idx]
+                    assistant_tool_calls.append({
+                        "id": tc["id"],
+                        "type": "function",
+                        "function": {
+                            "name": tc["name"],
+                            "arguments": tc["arguments"],
+                        },
+                    })
+
+                assistant_msg = {
+                    "role": "assistant",
+                    "content": content_text or None,
+                    "tool_calls": assistant_tool_calls,
+                }
+                messages.append(assistant_msg)
+
+                # Execute each tool call and emit SSE events (Issue #109)
+                for tc_entry in assistant_tool_calls:
+                    tc_id = tc_entry["id"]
+                    func_name = tc_entry["function"]["name"]
+                    func_args_str = tc_entry["function"]["arguments"]
+
+                    # Parse arguments
+                    try:
+                        func_args = _json.loads(func_args_str)
+                    except (ValueError, _json.JSONDecodeError):
+                        func_args = {"raw": func_args_str}
+
+                    # Issue #109: Emit tool start event to SSE stream
+                    tc_start_event = {
+                        "id": tc_id,
+                        "name": func_name,
+                        "arguments": func_args,
+                        "status": "running",
+                    }
                     if stream_buffer:
-                        stream_buffer.push("chunk", {"text": token})
-                if hasattr(chunk, "usage") and chunk.usage is not None:
-                    _last_usage[0] = chunk.usage
+                        stream_buffer.push("tool_call", tc_start_event)
+
+                    print(
+                        f"[Wee Native] Tool: {func_name}({_json.dumps(func_args)[:200]})",
+                        file=sys.stderr,
+                    )
+
+                    # Execute the tool
+                    tool_result = self._wee_execute_tool(func_name, func_args, agent)
+
+                    # Issue #109: Emit tool complete event to SSE stream
+                    tc_done_event = {
+                        "id": tc_id,
+                        "name": func_name,
+                        "arguments": func_args,
+                        "result": tool_result[:2000] if tool_result else "",
+                        "status": "complete",
+                    }
+                    if stream_buffer:
+                        stream_buffer.push("tool_call", tc_done_event)
+
+                    # Append tool result to conversation for next round
+                    messages.append({
+                        "role": "tool",
+                        "tool_call_id": tc_id,
+                        "content": tool_result or "No output",
+                    })
+
+            else:
+                # All MAX_TOOL_ROUNDS had tool calls with no final text
+                last_tool_results = [m["content"] for m in messages if m.get("role") == "tool"]
+                if last_tool_results:
+                    collected_output.append(
+                        "Tool execution completed. Last result:\n" + last_tool_results[-1][:2000]
+                    )
+                else:
+                    collected_output.append("Max tool rounds reached without final response.")
 
             output = "".join(collected_output)
 
-            # Compute cost + attach wee_meta (Issue #128)
-            try:
-                _duration_ms = int((_time.time() - _wee_start) * 1000)
-                if _last_usage[0] is not None:
-                    _u = _last_usage[0]
-                    _prompt_tokens = getattr(_u, "prompt_tokens", 0) or 0
-                    _completion_tokens = getattr(_u, "completion_tokens", 0) or 0
-                    _total = getattr(_u, "total_tokens", _prompt_tokens + _completion_tokens)
-                    _provider = "ollama" if "192.168" in api_base else ("openrouter" if "openrouter" in api_base else "wee")
-                    _pricing = self._fetch_openrouter_pricing() if _provider == "openrouter" else {}
-                    _cost_usd, _cost_label = self._calculate_wee_cost(model, _prompt_tokens, _completion_tokens, _pricing)
-                    _wee_meta = {
-                        "tokens": _total,
-                        "prompt_tokens": _prompt_tokens,
-                        "completion_tokens": _completion_tokens,
-                        "cost_usd": _cost_usd,
-                        "cost_label": _cost_label,
-                        "model": model,
-                        "runtime": "wee",
-                    }
-                    self.update_session_field(n8n_session_id, "wee_meta", _wee_meta)
-                    self._log_token_usage(
-                        session_id=n8n_session_id, model=model, runtime="wee",
-                        provider=_provider, prompt_tokens=_prompt_tokens,
-                        completion_tokens=_completion_tokens, total_tokens=_total,
-                        cost_usd=_cost_usd, duration_ms=_duration_ms,
-                    )
-            except Exception as _meta_err:
-                print(f"[Wee Native] wee_meta error: {_meta_err}", file=sys.stderr)
+            # Issue #108: Persist conversation history
+            self._wee_save_messages(n8n_session_id, messages)
 
+            # Push done sentinel
             if stream_buffer:
                 stream_buffer.push("done", output)
 
@@ -7957,6 +7924,148 @@ User Request:
                 stream_buffer.push("done", error_msg)
 
             return error_msg
+
+    # -- Wee runtime helper methods (Issues #107, #108, #109) --
+
+    def _wee_load_messages(
+        self,
+        n8n_session_id: str,
+        context_prompt: str,
+        resume: bool = True,
+    ) -> list:
+        """Load wee conversation history from session map.
+
+        Issue #108: Ollama is stateless — the full conversation must be
+        included in every request.  This loads persisted messages from the
+        session_map so multi-turn context is preserved.
+        """
+        if resume:
+            session_data = self.load_session_data(n8n_session_id)
+            if session_data and session_data.get("wee_messages"):
+                msgs = list(session_data["wee_messages"])
+                # Always refresh the system prompt to pick up context changes
+                if msgs and msgs[0].get("role") == "system":
+                    msgs[0]["content"] = context_prompt
+                elif context_prompt:
+                    msgs.insert(0, {"role": "system", "content": context_prompt})
+                return msgs
+
+        # Fresh conversation — start with system prompt
+        messages = []
+        if context_prompt:
+            messages.append({"role": "system", "content": context_prompt})
+        return messages
+
+    def _wee_save_messages(self, n8n_session_id: str, messages: list) -> None:
+        """Persist wee conversation history to session map.
+
+        Issue #108: Saves the full message array (system + user + assistant +
+        tool) so the next turn can reconstruct the conversation.
+        Caps at MAX_WEE_MESSAGES to prevent unbounded growth.
+        """
+        MAX_WEE_MESSAGES = 100
+        with self._session_map_lock:
+            session_map = self.load_session_map()
+            if n8n_session_id in session_map:
+                # Keep system prompt + last N messages
+                if len(messages) > MAX_WEE_MESSAGES:
+                    system_msgs = [m for m in messages if m.get("role") == "system"]
+                    non_system = [m for m in messages if m.get("role") != "system"]
+                    saved = system_msgs + non_system[-(MAX_WEE_MESSAGES - len(system_msgs)):]
+                else:
+                    saved = list(messages)
+                # Strip tool_calls from assistant messages for JSON serialization
+                clean = []
+                for m in saved:
+                    if m.get("tool_calls"):
+                        mc = dict(m)
+                        mc["tool_calls"] = [
+                            {
+                                "id": tc.get("id", "") if isinstance(tc, dict) else getattr(tc, "id", ""),
+                                "type": "function",
+                                "function": {
+                                    "name": (tc.get("function", {}).get("name", "")
+                                             if isinstance(tc, dict)
+                                             else getattr(getattr(tc, "function", None), "name", "")),
+                                    "arguments": (tc.get("function", {}).get("arguments", "")
+                                                  if isinstance(tc, dict)
+                                                  else getattr(getattr(tc, "function", None), "arguments", "")),
+                                },
+                            }
+                            for tc in m["tool_calls"]
+                        ]
+                        clean.append(mc)
+                    else:
+                        clean.append(m)
+                session_map[n8n_session_id]["wee_messages"] = clean
+                self.save_session_map(session_map)
+
+    def _wee_augment_system_prompt_with_tools(self, system_prompt: str) -> str:
+        """Issue #111: Append explicit tool capability declaration to system prompt.
+
+        Many Ollama models ignore JSON tool schemas entirely and respond as if
+        no tools exist. Explicitly stating tool availability in the system
+        prompt text reliably fixes this across all models.
+        """
+        tool_section = (
+            "\n[Available Tools]\n"
+            "You have access to the following tools. ALWAYS use them when the user asks you to\n"
+            "perform any action -- do NOT say you cannot do something that these tools enable.\n"
+            "\n"
+            "**bash** -- Execute a bash shell command and return its output.\n"
+            "  Call: bash tool with {\"command\": \"your shell command here\"}\n"
+            "  Use for: running commands, SSH, file operations, checking system state\n"
+            "\n"
+            "**python** -- Execute Python 3 code and return its output.\n"
+            "  Call: python tool with {\"code\": \"your python code here\"}\n"
+            "  Use for: data processing, calculations, scripting, file parsing\n"
+            "\n"
+            "CRITICAL: When asked to run a command, SSH somewhere, check system status,\n"
+            "list files, or perform any shell action -- call the bash tool immediately.\n"
+            "NEVER refuse or claim you lack capability. The tools are active and functional."
+        )
+        return system_prompt + tool_section
+
+    def _wee_execute_tool(self, func_name: str, func_args: dict, agent: str) -> str:
+        """Execute a tool call from the wee runtime agentic loop.
+
+        Issue #107: Supports bash and python tools.  Uses the same
+        _execute_bash_command infrastructure as other runtimes.
+        """
+        try:
+            if func_name == "bash":
+                command = func_args.get("command", "")
+                if not command:
+                    return "Error: No command provided"
+                return self._execute_bash_command(command, agent)
+            elif func_name == "python":
+                code = func_args.get("code", "")
+                if not code:
+                    return "Error: No code provided"
+                agent_info = self.AGENTS.get(agent, self.AGENTS.get("orchestrator"))
+                cwd = agent_info["path"] if agent_info else str(Path.cwd())
+                result = subprocess.run(
+                    [sys.executable, "-c", code],
+                    capture_output=True,
+                    text=True,
+                    timeout=min(self.command_timeout, 120),
+                    cwd=cwd,
+                )
+                output = result.stdout
+                if result.stderr:
+                    output += ("\n" if output else "") + result.stderr
+                if not output.strip():
+                    if result.returncode == 0:
+                        return "✓ Executed successfully (exit code: 0)"
+                    else:
+                        return f"✗ Failed with exit code: {result.returncode}"
+                return output.strip()
+            else:
+                return f"Error: Unknown tool '{func_name}'. Available: bash, python"
+        except subprocess.TimeoutExpired:
+            return f"Error: Tool '{func_name}' timed out"
+        except Exception as e:
+            return f"Error executing {func_name}: {e}"
 
     def _get_cursor_session_id(self, n8n_session_id: str) -> Optional[str]:
         """Return the stored cursor session flag for this n8n session, or None."""
@@ -8095,6 +8204,10 @@ User Request:
             # Cursor session mappings are keyed by n8n_session_id
             key = n8n_session_id if n8n_session_id else session_id
             return (self.cursor_session_dir / f"{key}.json").exists()
+        elif runtime == "wee":
+            # Issue #108: Wee stores conversation history in session_map
+            data = self.load_session_data(n8n_session_id or session_id)
+            return bool(data and data.get("wee_messages"))
         return False
 
     def get_most_recent_session_id(
@@ -8525,6 +8638,13 @@ User Request:
                 else self.session_exists(
                     "", current_runtime, n8n_session_id=n8n_session_id
                 )
+            )
+        elif current_runtime == "wee":
+            # Issue #108 fix: Wee has no external session_id — history is keyed
+            # by n8n_session_id in session_map.  Must pass n8n_session_id so
+            # session_exists() finds wee_messages regardless of session_id.
+            can_resume = self.session_exists(
+                session_id, current_runtime, n8n_session_id=n8n_session_id
             )
         else:
             can_resume = (
@@ -9416,7 +9536,6 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             "codex",
             "devin",
             "cursor",
-            "wee",
         }
         if runtime not in known_runtimes:
             return {
@@ -9944,12 +10063,14 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
 
                 session_data = session_mgr.get_or_create_session_data(session_id)
                 runtime = session_data.get("runtime", "copilot")
-                _wm = session_data.get("wee_meta")
-                _done_obj = {"type": "done", "response": result, "runtime": runtime, "model": session_data.get("model")}
-                if _wm:
-                    _done_obj["wee_meta"] = _wm
-                    session_mgr.update_session_field(session_id, "wee_meta", None)
-                done_payload = _json.dumps(_done_obj)
+                done_payload = _json.dumps(
+                    {
+                        "type": "done",
+                        "response": result,
+                        "runtime": runtime,
+                        "model": session_data.get("model"),
+                    }
+                )
                 yield f"data: {done_payload}\n\n"
                 done_delivered = True
             finally:
@@ -10237,84 +10358,6 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 "cancelled": False,
                 "message": f"Failed to cancel query (PID: {pid})",
             }
-
-    # --- Token usage analytics endpoint (Issue #128) ---
-
-    @app.get("/api/v1/usage")
-    async def get_token_usage(request: Request, period: str = "all_time"):
-        """Return token usage and cost analytics.
-
-        Query params:
-            period: today | 7d | 30d | all_time (default)
-        """
-        import time as _time
-        import json as _json
-        import datetime as _datetime
-        await authenticate(
-            request,
-            authorization=request.headers.get("authorization"),
-            x_user_identity=request.headers.get("x-user-identity"),
-            x_auth_channel=request.headers.get("x-auth-channel"),
-        )
-        log_file = session_mgr.logs_dir / "token_usage.jsonl"
-
-        now = _time.time()
-        if period == "today":
-            cutoff = _datetime.datetime.now().replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
-        elif period == "7d":
-            cutoff = now - 7 * 86400
-        elif period == "30d":
-            cutoff = now - 30 * 86400
-        else:
-            cutoff = 0
-
-        entries = []
-        if log_file.exists():
-            try:
-                with open(log_file) as f:
-                    for line in f:
-                        line = line.strip()
-                        if not line:
-                            continue
-                        try:
-                            e = _json.loads(line)
-                            if e.get("timestamp", 0) >= cutoff:
-                                entries.append(e)
-                        except Exception:
-                            pass
-            except Exception:
-                pass
-
-        total_cost = sum(e.get("cost_usd", 0) or 0 for e in entries)
-        total_tokens = sum(e.get("total_tokens", 0) or 0 for e in entries)
-
-        by_model_map = {}
-        for e in entries:
-            m = e.get("model", "unknown")
-            if m not in by_model_map:
-                by_model_map[m] = {
-                    "model": m,
-                    "runtime": e.get("runtime", "unknown"),
-                    "total_tokens": 0,
-                    "prompt_tokens": 0,
-                    "completion_tokens": 0,
-                    "cost_usd": 0.0,
-                    "requests": 0,
-                }
-            bm = by_model_map[m]
-            bm["total_tokens"] += e.get("total_tokens", 0) or 0
-            bm["prompt_tokens"] += e.get("prompt_tokens", 0) or 0
-            bm["completion_tokens"] += e.get("completion_tokens", 0) or 0
-            bm["cost_usd"] += e.get("cost_usd", 0) or 0
-            bm["requests"] += 1
-
-        return {
-            "period": period,
-            "total_cost_usd": round(total_cost, 8),
-            "total_tokens": total_tokens,
-            "total_requests": len(entries),
-            "by_model": sorted(by_model_map.values(), key=lambda x: x["cost_usd"], reverse=True),
-        }
 
     # --- Runtime usage endpoint ---
 
@@ -11377,7 +11420,6 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                     sys.executable, _wee_script,
                     "--model", model,
                     "--timeout", str(timeout or 300),
-                    "--session-id", session_id,
                 ]
                 # Resolve api_base and api_key from session/env
                 _wee_api_base = os.environ.get("WEE_API_BASE", "")
@@ -12571,7 +12613,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                     # No TODOs found — return non-existent path so UI shows empty
                     return agent_path / "TODOs"
         except Exception:
-            logger.error("Failed to resolve TODO dir for agent %r", agent_name)
+            pass
         return Path(f"/opt/{agent_name}/TODOs")
 
     def _resolve_todo_file(agent_name: str | None) -> Path:
@@ -12595,7 +12637,6 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         try:
             lines = todo_path.read_text().splitlines()
         except Exception:
-            logger.error("Failed to read TODO file %s", todo_path)
             return None
 
         due = None
@@ -12647,271 +12688,6 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                     if len(todos) >= limit:
                         break
         return todos
-
-
-    # ── GitHub Issues TODO integration (Issue #100) ──────────────────
-
-    GH_TODO_REPO = "leprachuan/fosterbot-home"
-    GH_TODO_LABEL = "todo"
-
-    def _fetch_github_todos(limit: int = 100) -> list:
-        """Fetch TODOs from GitHub Issues labeled 'todo' in fosterbot-home."""
-        import subprocess as _sp
-        import json as _json
-        import re as _re
-
-        try:
-            result = _sp.run(
-                [
-                    "gh", "issue", "list",
-                    "--repo", GH_TODO_REPO,
-                    "--label", GH_TODO_LABEL,
-                    "--state", "open",
-                    "--json", "number,title,body,labels,createdAt,updatedAt",
-                    "--limit", str(limit),
-                ],
-                capture_output=True,
-                text=True,
-                timeout=15,
-            )
-            if result.returncode != 0:
-                return []
-            issues = (
-                _json.loads(result.stdout) if result.stdout.strip() else []
-            )
-        except Exception:
-            logger.error("Failed to fetch GitHub TODO issues")
-            return []
-
-        todos = []
-        for issue in issues:
-            body = issue.get("body", "") or ""
-            due = None
-            due_match = _re.search(
-                r"📅\s*\*\*Due:\*\*\s*(.+)", body
-            )
-            if due_match:
-                due = due_match.group(1).strip()
-
-            issue_labels = [
-                lbl["name"]
-                for lbl in issue.get("labels", [])
-                if lbl["name"] != GH_TODO_LABEL
-            ]
-
-            todos.append(
-                {
-                    "description": issue["title"],
-                    "due": due,
-                    "labels": issue_labels,
-                    "notes": [],
-                    "details": body,
-                    "source": "github",
-                    "github_issue_number": issue["number"],
-                }
-            )
-
-        return todos
-
-    def _fetch_valid_github_labels() -> set:
-        """Fetch all label names from the GitHub TODO repo."""
-        import subprocess as _sp
-        import json as _json
-
-        try:
-            result = _sp.run(
-                [
-                    "gh", "label", "list",
-                    "--repo", GH_TODO_REPO,
-                    "--json", "name",
-                    "--limit", "100",
-                ],
-                capture_output=True,
-                text=True,
-                timeout=10,
-            )
-            if result.returncode == 0 and result.stdout.strip():
-                return {lbl["name"] for lbl in _json.loads(result.stdout)}
-        except Exception:
-            logger.error("Failed to fetch GitHub labels for validation")
-        return set()
-
-    def _create_github_todo(
-        title: str,
-        body: str = "",
-        labels: list | None = None,
-        due: str | None = None,
-    ) -> dict | None:
-        """Create a GitHub Issue as a TODO. Returns issue info or None.
-
-        If any requested labels don't exist in the repo, they are stripped
-        and the issue is created with only the valid labels. A warning is
-        logged so the caller can surface it to the user.
-        """
-        import subprocess as _sp
-        import re as _re
-
-        issue_labels = list(labels) if labels else []
-        if GH_TODO_LABEL not in issue_labels:
-            issue_labels.append(GH_TODO_LABEL)
-
-        body_parts = []
-        if due:
-            body_parts.append(f"📅 **Due:** {due}")
-        if body:
-            body_parts.append(body)
-        full_body = "\n\n".join(body_parts) if body_parts else ""
-
-        def _run_create(lbl_list: list) -> "_sp.CompletedProcess":
-            cmd = [
-                "gh", "issue", "create",
-                "--repo", GH_TODO_REPO,
-                "--title", title,
-                "--label", ",".join(lbl_list),
-            ]
-            if full_body:
-                cmd.extend(["--body", full_body])
-            return _sp.run(cmd, capture_output=True, text=True, timeout=15)
-
-        stripped_labels: list = []
-        try:
-            result = _run_create(issue_labels)
-            if result.returncode != 0:
-                # Check if failure is due to missing labels
-                stderr = result.stderr or ""
-                if "could not add label" in stderr or "label" in stderr.lower():
-                    valid = _fetch_valid_github_labels()
-                    if valid:
-                        valid_labels = [lb for lb in issue_labels if lb in valid]
-                        stripped_labels = [lb for lb in issue_labels if lb not in valid]
-                        # Exclude the base todo label from the stripped report
-                        stripped_labels = [lb for lb in stripped_labels if lb != GH_TODO_LABEL]
-                        if stripped_labels:
-                            logger.warning(
-                                "GitHub TODO: stripped invalid labels %s for issue %r",
-                                stripped_labels, title
-                            )
-                        if valid_labels != issue_labels:
-                            if valid_labels:
-                                result = _run_create(valid_labels)
-                            else:
-                                # No valid labels at all — create without --label flag
-                                no_label_cmd = [
-                                    "gh", "issue", "create",
-                                    "--repo", GH_TODO_REPO,
-                                    "--title", title,
-                                ]
-                                if full_body:
-                                    no_label_cmd.extend(["--body", full_body])
-                                result = _sp.run(
-                                    no_label_cmd,
-                                    capture_output=True, text=True, timeout=15
-                                )
-                if result.returncode != 0:
-                    logger.error(
-                        "GitHub TODO creation failed for %r: %s",
-                        title, result.stderr.strip()
-                    )
-                    return None
-
-            m = _re.search(r"/issues/(\d+)", result.stdout)
-            if m:
-                issue_info: dict = {
-                    "issue_number": int(m.group(1)),
-                    "url": result.stdout.strip(),
-                }
-                if stripped_labels:
-                    issue_info["labels_stripped"] = stripped_labels
-                return issue_info
-        except Exception:
-            logger.error("Unexpected error creating GitHub TODO for %r", title)
-        return None
-
-    def _close_github_todo(title: str) -> dict | None:
-        """Find and close a GitHub Issue by title match."""
-        import subprocess as _sp
-        import json as _json
-
-        try:
-            result = _sp.run(
-                [
-                    "gh", "issue", "list",
-                    "--repo", GH_TODO_REPO,
-                    "--label", GH_TODO_LABEL,
-                    "--state", "open",
-                    "--json", "number,title",
-                    "--limit", "200",
-                ],
-                capture_output=True,
-                text=True,
-                timeout=15,
-            )
-            if result.returncode != 0:
-                return None
-
-            issues = (
-                _json.loads(result.stdout) if result.stdout.strip() else []
-            )
-
-            match = None
-            title_lower = title.lower().strip()
-            for issue in issues:
-                if issue["title"].lower().strip() == title_lower:
-                    match = issue
-                    break
-            if not match:
-                for issue in issues:
-                    if title_lower in issue["title"].lower().strip():
-                        match = issue
-                        break
-
-            if not match:
-                return None
-
-            close_result = _sp.run(
-                [
-                    "gh", "issue", "close",
-                    "--repo", GH_TODO_REPO,
-                    str(match["number"]),
-                ],
-                capture_output=True,
-                text=True,
-                timeout=15,
-            )
-            if close_result.returncode == 0:
-                return {
-                    "issue_number": match["number"],
-                    "title": match["title"],
-                }
-        except Exception:
-            logger.error("Failed to close GitHub TODO issue for title %r", title)
-        return None
-
-    def _merge_todos(
-        gh_todos: list, flat_todos: list, limit: int = 100
-    ) -> list:
-        """Merge GitHub and flat-file TODOs, deduplicated by title.
-
-        GitHub Issues are the primary source and take precedence on
-        title collisions.
-        """
-        seen_titles: set = set()
-        merged = []
-
-        for todo in gh_todos:
-            key = todo["description"].lower().strip()
-            if key not in seen_titles:
-                seen_titles.add(key)
-                merged.append(todo)
-
-        for todo in flat_todos:
-            key = todo["description"].lower().strip()
-            if key not in seen_titles:
-                seen_titles.add(key)
-                todo["source"] = "flatfile"
-                merged.append(todo)
-
-        return merged[:limit]
 
     def _parse_todos_from_md(todo_file: Path, limit: int = 100) -> list:
         """Parse active TODOs from the markdown file, return up to `limit`.
@@ -13024,16 +12800,13 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             x_auth_channel=request.headers.get("x-auth-channel"),
         )
         limit = min(max(1, limit), 200)
-        # Issue #100: Dual-source — GitHub Issues (primary) + flat files
-        gh_todos = _fetch_github_todos(limit)
         todo_path = _resolve_todo_file(agent)
-        flat_todos = _parse_todos_from_md(todo_path, limit)
-        todos = _merge_todos(gh_todos, flat_todos, limit)
+        todos = _parse_todos_from_md(todo_path, limit)
         return {
             "todos": todos,
             "count": len(todos),
             "agent": agent or "default",
-            "sources": ["github", "flatfile"],
+            "file": str(todo_path),
         }
 
     @app.post("/api/v1/todos")
@@ -13118,19 +12891,10 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         file_content = "\n".join(lines) + "\n" if lines else ""
         target.write_text(file_content)
 
-        # Issue #100: Also create a GitHub Issue (primary source)
-        gh_result = _create_github_todo(
-            title=title,
-            body=details or "",
-            labels=labels if labels else None,
-            due=due_date,
-        )
-
         return {
             "success": True,
             "todo": title,
             "file": str(target),
-            "github_issue": gh_result,
         }
 
     @app.post("/api/v1/todos/{todo_title}/complete")
@@ -13165,30 +12929,15 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 match = entry
                 break
 
-        # Issue #100: Also close the matching GitHub Issue
-        gh_closed = _close_github_todo(todo_title)
-
         if not match:
-            if gh_closed:
-                return {
-                    "success": True,
-                    "todo": todo_title,
-                    "github_issue_closed": gh_closed,
-                    "flat_file": None,
-                }
             return {
                 "success": False,
-                "error": f"TODO '{todo_title}' not found in ACTIVE/ or GitHub Issues",
+                "error": f"TODO '{todo_title}' not found in ACTIVE/",
             }
 
         dest = completed_dir / match.name
         match.rename(dest)
-        return {
-            "success": True,
-            "moved": str(dest),
-            "todo": match.name,
-            "github_issue_closed": gh_closed,
-        }
+        return {"success": True, "moved": str(dest), "todo": match.name}
 
     @app.patch("/api/v1/todos/{todo_title}")
     async def update_todo_details(request: Request, todo_title: str):
