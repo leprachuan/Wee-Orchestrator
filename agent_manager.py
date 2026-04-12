@@ -8106,14 +8106,16 @@ User Request:
     def _wee_execute_tool(self, func_name: str, func_args: dict, agent: str) -> str:
         """Execute a tool call from the wee runtime agentic loop.
 
-        Issue #107: Supports bash and python tools.  Uses the same
-        _execute_bash_command infrastructure as other runtimes.
+        Issue #107: Supports bash and python tools. Issue #111: SSH sanitization wired in.
+        Uses the same _execute_bash_command infrastructure as other runtimes.
         """
         try:
             if func_name == "bash":
                 command = func_args.get("command", "")
                 if not command:
                     return "Error: No command provided"
+                # Issue #111: Sanitize SSH commands (wire #113 fix)
+                command = self._wee_sanitize_bash_command(command)
                 return self._execute_bash_command(command, agent)
             elif func_name == "python":
                 code = func_args.get("code", "")
@@ -8147,9 +8149,8 @@ User Request:
 
     _SSH_BIN_RE = re.compile(r"\b(ssh|scp|sftp)\b")
 
-    # TODO(#113): Wire _wee_sanitize_bash_command into the tool execution loop
-    # when wee runtime gains bash/shell tool calling support. Currently run_wee_native()
-    # has no tool execution loop, so this function is defined but never called.
+    # Issue #111: SSH sanitization wired into _wee_execute_tool (resolves #113 TODO).
+    # The wee runtime now has a full tool execution loop.
     @staticmethod
     def _wee_sanitize_bash_command(command: str) -> str:
         """Auto-inject SSH flags to prevent host key verification failures.
@@ -8160,8 +8161,8 @@ User Request:
         without manual intervention.  ``accept-new`` is safer than ``no``
         because it still rejects CHANGED keys (potential MITM).
 
-        NOTE: Not yet wired in. Call this on every bash tool input before
-        execution once wee runtime gains a tool execution loop.
+        Wired into _wee_execute_tool by Issue #111. Called on every bash tool input before
+        execution in the wee runtime tool execution loop.
         """
         if not command:
             return command
