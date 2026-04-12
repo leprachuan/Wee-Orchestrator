@@ -47,6 +47,33 @@ Fixed critical bug in wee native runtime where tool-calling agentic loops return
 
 ---
 
+## [Issue #119] Feature: Wire up OpenRouter in wee runtime UI
+**Status:** In QA Review
+
+### Summary
+Wired up OpenRouter as a cloud model provider in the wee runtime UI. Users can now select
+OpenRouter models (Llama 4, Claude, Gemini, GPT-4.1, DeepSeek, etc.) from the WebUI model
+switcher when using the wee runtime, alongside local Ollama models.
+
+### Changes
+- **Backend (agent_manager.py)**
+  - Added OPENROUTER_POPULAR_MODELS set with 12 curated popular model IDs
+  - Added WEE_MODELS dict constant with static Ollama + OpenRouter model groups
+  - Added fetch_wee_models() method with OpenRouter API discovery, 300s TTL cache, static fallback
+  - Fixed pre-existing bug: wee dispatch was returning raw tuples instead of flat IDs
+  - Updated /api/v1/models endpoint with group field for UI grouping
+  - Updated _get_model_description() and get_model_from_name() with wee model entries
+  - Added wee to known_runtimes in /api/v1/models endpoint
+
+- **WebUI (webui/dist/app.js)**
+  - populateModelDropdown: renders optgroup elements when models have group info
+  - meta-model dynamic load: adds group separator headers between model groups
+
+- **Keyring**
+  - OpenRouter API key stored in keyring-vault on both dev and prod hosts
+  - fetch_wee_models() reads key from keyring first, falls back to env var
+
+- **Tests** (34 new tests in tests/test_issue119_openrouter.py)
 
 ## [Issue #100] Feature: GitHub Issues Integration for TODO Endpoints
 **Status:** ✅ QA Approved (Commit: ca21379)
