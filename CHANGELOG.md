@@ -1,5 +1,52 @@
 # Changelog
 
+## [Issue #118] Bug: Wee Runtime Ignores Selected Ollama Model
+**Status:** Implementation complete — 30 new tests, 1324 total pass (0 new regressions)
+
+### Problem
+When using the wee runtime, selecting any model (e.g., gemma4, qwen) in the UI model switcher had no effect — Ollama always ran `granite3.3-tuned` (the default). The selected model was dropped because "wee" was missing from multiple model dispatch/validation/resolution paths in `agent_manager.py`.
+
+### Root Causes (8 bugs)
+1. **No WEE_MODELS constant** — Unlike other runtimes (claude, gemini, codex, etc.), `wee` had no static model catalog. The dispatch table used an inline lambda with a hardcoded subset.
+2. **"wee" not in `known_runtimes`** — `/api/v1/models?runtime=wee` returned "Unknown runtime" error, so the UI model picker was empty.
+3. **"wee" not in `static_alias_map`** — `get_model_from_name()` couldn't resolve wee model aliases (gemma, granite, qwen) to full model IDs.
+4. **`_get_model_description` had empty dict for "wee"** — All wee models showed raw IDs instead of human-readable labels.
+5. **No `fetch_wee_models()` method** — No live Ollama discovery; models were hardcoded in a lambda.
+6. **Session validation didn't check model validity** — When switching to wee, stale copilot models (e.g., gpt-5-mini) persisted without validation.
+7. **No `WEE_MODELS_JSON` env var support** — Unlike other runtimes, wee had no env override for custom model lists.
+8. **No `_env_wee_models` caching** — Env-provided models weren't cached for alias/description resolution.
+
+### Solution
+
+#### WEE_MODELS Constant
+- Added `WEE_MODELS` class constant with 16 models across 2 categories:
+  - **Ollama Models** (10): gemma4 variants, granite3.3, qwen, llama-scout, hermes3
+  - **OpenRouter Models** (6): llama-4-scout/maverick, gemma-3, qwen3, deepseek-r1, phi-4
+
+#### fetch_wee_models() Method
+- Resolution order: `WEE_MODELS_JSON` env var → live Ollama discovery → static fallback
+- Live discovery via `httpx.get("http://192.168.1.101:11434/api/tags")`
+- Env models cached in `_env_wee_models` for alias/description resolution
+
+#### Model Dispatch Wiring
+- "wee" added to `known_runtimes` set (enables `/api/v1/models?runtime=wee`)
+- "wee" added to `static_alias_map` (enables alias resolution)
+- "wee" added to `env_alias_map` (enables env-override resolution)
+- `_get_model_description` references `WEE_MODELS` (enables human labels)
+- Session validation uses `get_model_from_name()` check (replaces empty-string check)
+- Debug logging added to `run_wee_native()` for model tracing
+
+### Files Changed
+- `agent_manager.py`: WEE_MODELS constant, fetch_wee_models(), 6 wiring fixes, debug logging
+- `tests/test_issue118_model_selection.py`: 30 new regression tests
+- `tests/test_issue105_wee_runtime_stall.py`: Updated model category assertions for new structure
+
+### Tests
+- 30 new tests covering all 8 bug fixes
+- Also fixes 19 previously-failing issue97 tests
+- Full suite: 1324 passed, 33 failed (all pre-existing), 9 skipped
+
+
 ## [Issue #105] Bug: Wee Runtime Stalls with Ollama gemma4:e4b
 **Status:** QA Approved — Commit 07733dc on `issue/105` branch — 15 new tests, 1157 total pass
 
