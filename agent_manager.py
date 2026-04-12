@@ -1469,6 +1469,29 @@ class SessionManager:
         ],
     }
 
+    WEE_MODELS = {
+        "Ollama Models": [
+            ("ollama/granite3.3-tuned", "Granite 3.3 Tuned", ["granite", "granite3.3"]),
+            ("ollama/gemma4:e4b", "Gemma 4 E4B (local)", ["gemma4", "gemma", "gemma4-e4b"]),
+            ("ollama/gemma4:e2b", "Gemma 4 E2B", ["gemma4-e2b"]),
+            ("ollama/gemma4:e4b-nothinker", "Gemma 4 E4B (No Thinker)", ["gemma4-nothinker"]),
+            ("ollama/gemma4:e2b-nothinker", "Gemma 4 E2B (No Thinker)", []),
+            ("ollama/qwen3:32b", "Qwen 3 32B", ["qwen", "qwen3"]),
+            ("ollama/llama4:scout", "Llama 4 Scout", ["scout", "llama4"]),
+            ("ollama/phi4:14b", "Phi 4 14B", ["phi4", "phi"]),
+            ("ollama/deepseek-r1:32b", "DeepSeek R1 32B", ["deepseek", "deepseek-r1"]),
+            ("ollama/command-r:35b", "Command R 35B", ["command-r"]),
+        ],
+        "OpenRouter Models": [
+            ("openrouter/meta-llama/llama-4-scout", "Llama 4 Scout (OpenRouter)", ["or-scout"]),
+            ("openrouter/meta-llama/llama-4-maverick", "Llama 4 Maverick (OpenRouter)", ["or-maverick"]),
+            ("openrouter/google/gemma-3-27b-it:free", "Gemma 3 27B (OpenRouter Free)", ["or-gemma"]),
+            ("openrouter/qwen/qwen3-32b:free", "Qwen 3 32B (OpenRouter Free)", ["or-qwen"]),
+            ("openrouter/deepseek/deepseek-r1:free", "DeepSeek R1 (OpenRouter Free)", ["or-deepseek"]),
+            ("openrouter/microsoft/phi-4-reasoning-plus:free", "Phi 4 Reasoning Plus (OpenRouter Free)", ["or-phi"]),
+        ],
+    }
+
     def __init__(self, config_file: Optional[str] = None, app_env: str = "PROD"):
         # Copilot Paths
         self.copilot_home = Path.home() / ".copilot"
@@ -1557,6 +1580,7 @@ class SessionManager:
         self._env_codex_models = None
         self._env_devin_models = None
         self._env_cursor_models = None
+        self._env_wee_models = None
 
         # Load command timeout from environment
         self.command_timeout = get_command_timeout()
@@ -3315,7 +3339,7 @@ You can mention an agent in your prompt and it will auto-delegate:
             "codex": self._env_codex_models,
             "devin": self._env_devin_models,
             "cursor": self._env_cursor_models,
-            "wee": {},
+            "wee": self._env_wee_models,
         }
         env_models = env_models_map.get(runtime)
         if env_models:
@@ -3333,7 +3357,7 @@ You can mention an agent in your prompt and it will auto-delegate:
             "opencode": self.OPENCODE_MODELS,
             "devin": self.DEVIN_MODELS,
             "cursor": self.CURSOR_MODELS,
-            "wee": {},
+            "wee": self.WEE_MODELS,
         }
         models_dict = static_map.get(runtime)
         if not models_dict:
@@ -3522,6 +3546,52 @@ You can mention an agent in your prompt and it will auto-delegate:
 
         return self._static_models_to_dict(self.CURSOR_MODELS)
 
+    def fetch_wee_models(self) -> Dict:
+        """Return available models for the wee native runtime.
+
+        Resolution order:
+          1. WEE_MODELS_JSON env var (custom model list)
+          2. Live Ollama discovery + static OpenRouter models
+          3. Static WEE_MODELS fallback
+        """
+        # Check for env var override first
+        env_models = os.getenv("WEE_MODELS_JSON")
+        if env_models:
+            try:
+                models_dict = json.loads(env_models)
+                normalized = {}
+                for cat, entries in models_dict.items():
+                    normalized[cat] = [
+                        tuple(e) if isinstance(e, list) else e for e in entries
+                    ]
+                self._env_wee_models = normalized
+                return self._static_models_to_dict(normalized)
+            except (json.JSONDecodeError, ValueError):
+                pass
+
+        # Try live discovery from Ollama
+        try:
+            import httpx
+
+            resp = httpx.get(
+                "http://192.168.1.101:11434/api/tags",
+                timeout=httpx.Timeout(connect=5.0, read=10.0, write=10.0, pool=10.0),
+            )
+            if resp.status_code == 200:
+                tags = resp.json().get("models", [])
+                ollama_models = [f"ollama/{t['name']}" for t in tags]
+                if ollama_models:
+                    result = {"Ollama Models": ollama_models}
+                    static = self._static_models_to_dict(self.WEE_MODELS)
+                    if "OpenRouter Models" in static:
+                        result["OpenRouter Models"] = static["OpenRouter Models"]
+                    return result
+        except Exception:
+            pass
+
+        return self._static_models_to_dict(self.WEE_MODELS)
+
+
     def get_models_for_runtime(self, runtime: str) -> Dict:
         """Fetch available models for a runtime, using CLI discovery where possible.
 
@@ -3539,7 +3609,7 @@ You can mention an agent in your prompt and it will auto-delegate:
             "codex": self.fetch_codex_models,
             "devin": self.fetch_devin_models,
             "cursor": self.fetch_cursor_models,
-            "wee": lambda: {"Wee Native": ["ollama/gemma4:e4b", "ollama/gemma4:e2b", "ollama/gemma4:e4b-nothinker", "ollama/gemma4:e2b-nothinker", "openrouter/meta-llama/llama-4-scout"]},
+            "wee": self.fetch_wee_models,
         }
         fetcher = dispatch.get(runtime)
         if fetcher is None:
@@ -3709,7 +3779,10 @@ You can mention an agent in your prompt and it will auto-delegate:
                 ):
                     merged["model"] = os.getenv("CURSOR_DEFAULT_MODEL", "auto")
             elif runtime == "wee":
-                if not merged.get("model"):
+                current_model = merged.get("model", "")
+                if not current_model or not self.get_model_from_name(
+                    current_model, "wee"
+                ):
                     merged["model"] = os.getenv("WEE_DEFAULT_MODEL", "ollama/gemma4:e4b")
 
             # Validate and fix session_id if corrupted
@@ -4056,7 +4129,7 @@ You can mention an agent in your prompt and it will auto-delegate:
         name_lower = name.lower().strip("\"'")
 
         # Ensure env models are loaded/cached by triggering fetch for this runtime
-        if runtime in ("claude", "gemini", "codex", "devin", "cursor"):
+        if runtime in ("claude", "gemini", "codex", "devin", "cursor", "wee"):
             self.get_models_for_runtime(runtime)
 
         # Step 1: check env-loaded or static alias tables for all runtimes that have them.
@@ -4066,6 +4139,7 @@ You can mention an agent in your prompt and it will auto-delegate:
             "codex": self._env_codex_models,
             "devin": self._env_devin_models,
             "cursor": self._env_cursor_models,
+            "wee": self._env_wee_models,
         }
         static_alias_map = {
             "claude": self.CLAUDE_MODELS,
@@ -4074,6 +4148,7 @@ You can mention an agent in your prompt and it will auto-delegate:
             "opencode": self.OPENCODE_MODELS,
             "devin": self.DEVIN_MODELS,
             "cursor": self.CURSOR_MODELS,
+            "wee": self.WEE_MODELS,
         }
 
         # Try env-loaded models first, fall back to static
@@ -7639,6 +7714,7 @@ User Request:
         }
 
         resolved_model = model
+        print(f"[wee-runtime] Session model: {model}", file=sys.stderr)
         for prefix, (preset_base, preset_key) in _PRESETS.items():
             if model.lower().startswith(f"{prefix}/"):
                 resolved_model = model[len(prefix) + 1:]
@@ -9536,6 +9612,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             "codex",
             "devin",
             "cursor",
+            "wee",
         }
         if runtime not in known_runtimes:
             return {

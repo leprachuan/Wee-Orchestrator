@@ -72,8 +72,11 @@ class TestIssue105ModelResolution(unittest.TestCase):
         from agent_manager import SessionManager
         mgr = SessionManager()
         models = mgr.get_models_for_runtime("wee")
-        self.assertIn("Wee Native", models)
-        for m in models["Wee Native"]:
+        # Check has model categories (Ollama Models or OpenRouter Models)
+        self.assertTrue(len(models) > 0, "Should have at least one category")
+        all_str = [m for vals in models.values() for m in vals]
+        self.assertTrue(all(isinstance(m, str) for m in all_str))
+        for m in [m for vals in models.values() for m in vals]:
             self.assertIsInstance(m, str,
                                   f"Model should be a string, got {type(m)}: {m}")
 
@@ -82,7 +85,7 @@ class TestIssue105ModelResolution(unittest.TestCase):
         from agent_manager import SessionManager
         mgr = SessionManager()
         models = mgr.get_models_for_runtime("wee")
-        all_models = models.get("Wee Native", [])
+        all_models = [m for vals in models.values() for m in vals]
         self.assertTrue(any("gemma4:e4b" in m for m in all_models),
                         "Should include gemma4:e4b")
 
