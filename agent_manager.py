@@ -7734,66 +7734,36 @@ User Request:
 
     # ── End Issue #128 helpers ─────────────────────────────────────────────────
 
-    def run_wee_native(
-        self,
-        prompt: str,
-        model: str,
-        agent: str,
-        session_id: Optional[str],
-        resume: bool,
-        n8n_session_id: str,
-        timeout: Optional[int] = None,
-        render_type: str = "text",
-    ) -> str:
-        """Execute via Wee Native runtime - OpenAI-compatible chat completions.
 
-        Connects to any OpenAI-compatible API endpoint (Ollama, OpenRouter,
-        LM Studio, etc.) using the openai Python package. No external CLI
-        binary required.
+    # ---- Issue #125 helpers ------------------------------------------------
 
-        Model format: [provider/]model_name
-        Examples:
-            ollama/gemma4:e4b         - Ollama on Kubuntu
-            openrouter/meta-llama/llama-4-scout - OpenRouter cloud
-            gemma4:e4b                - Default endpoint (Ollama)
-
-        Supports real-time streaming to WebUI SSE consumers.
-        """
+    def _wee_load_free_config(self) -> dict:
+        """Load wee_free_models.json config. Returns defaults if file missing."""
         import json as _json
-
+        config_path = Path(__file__).parent / "wee_free_models.json"
         try:
-            from openai import OpenAI
-        except ImportError:
-            return (
-                "Error: openai package not installed. "
-                "Run: pip install openai"
-            )
+            with open(config_path) as f:
+                return _json.load(f)
+        except (FileNotFoundError, _json.JSONDecodeError):
+            return {
+                "max_retries_per_model": 3,
+                "retry_backoff_seconds": [2, 5, 10],
+                "free_model_fallback_chain": [],
+            }
 
-        session_data = self.get_or_create_session_data(n8n_session_id)
-        agent_dir = self.AGENTS.get(agent, self.AGENTS["orchestrator"])["path"]
-        effective_timeout = timeout if timeout is not None else self.command_timeout
-        channel = session_data.get("channel", "webui")
+    def _wee_is_free_model(self, model: str) -> bool:
+        """Return True if model is an OpenRouter :free model."""
+        return ":free" in model.lower() and "openrouter" in model.lower()
 
-        # Build context prompt with agent identity
-        context_prompt = self.build_agent_context_prompt(
-            prompt, agent, channel, n8n_session_id
-        )
-
-        # -- Resolve model, endpoint, and API key --
-        api_base = session_data.get("api_base") or os.environ.get(
-            "WEE_API_BASE"
-        )
-        api_key = session_data.get("api_key") or os.environ.get(
-            "WEE_API_KEY"
-        )
-
-        # Provider presets
+    def _wee_resolve_endpoint(self, model, session_api_base, session_api_key):
+        """Resolve (api_base, api_key, resolved_model) for a wee model string."""
         _PRESETS = {
             "ollama": ("http://192.168.1.101:11434/v1", "ollama"),
             "openrouter": ("https://openrouter.ai/api/v1", None),
             "lmstudio": ("http://localhost:1234/v1", "lm-studio"),
         }
-
+        api_base = session_api_base or os.environ.get("WEE_API_BASE")
+        api_key = session_api_key or os.environ.get("WEE_API_KEY")
         resolved_model = model
         for prefix, (preset_base, preset_key) in _PRESETS.items():
             if model.lower().startswith(f"{prefix}/"):
@@ -7803,11 +7773,9 @@ User Request:
                 if not api_key and preset_key:
                     api_key = preset_key
                 break
-
         if not api_base:
-            api_base = "http://192.168.1.101:11436/v1"
+            api_base = "http://192.168.1.101:11434/v1"
         if not api_key:
-            # Try keyring for OpenRouter
             if "openrouter" in api_base.lower():
                 try:
                     import keyring
@@ -7816,102 +7784,253 @@ User Request:
                     pass
             if not api_key:
                 api_key = "ollama"
+        return api_base, api_key, resolved_model
 
-        print(
-            f"[Wee Native] model={resolved_model} api_base={api_base} "
-            f"session={n8n_session_id[:8]}...",
-            file=sys.stderr,
-        )
+    # ---- End Issue #125 helpers ---------------------------------------------
 
-        # -- Streaming infrastructure --
-        stream_buffer = getattr(self, "_stream_buffers", {}).get(n8n_session_id)
 
-        # -- Create OpenAI client and call API --
-        client = OpenAI(
-            base_url=api_base,
-            api_key=api_key,
-            timeout=effective_timeout,
-        )
+    # ---- Issue #125 helpers ------------------------------------------------
 
-        messages = []
-        # System prompt from agent context
-        if context_prompt:
-            messages.append({"role": "system", "content": context_prompt})
-        messages.append({"role": "user", "content": prompt})
+    def _wee_load_free_config(self) -> dict:
+        """Load wee_free_models.json config. Returns defaults if file missing."""
+        import json as _json
+        config_path = Path(__file__).parent / "wee_free_models.json"
+        try:
+            with open(config_path) as f:
+                return _json.load(f)
+        except (FileNotFoundError, _json.JSONDecodeError):
+            return {
+                "max_retries_per_model": 3,
+                "retry_backoff_seconds": [2, 5, 10],
+                "free_model_fallback_chain": [],
+            }
 
-        collected_output = []
+    def _wee_is_free_model(self, model: str) -> bool:
+        """Return True if model is an OpenRouter :free model."""
+        return ":free" in model.lower() and "openrouter" in model.lower()
+
+    def _wee_resolve_endpoint(self, model, session_api_base, session_api_key):
+        """Resolve (api_base, api_key, resolved_model) for a wee model string."""
+        _PRESETS = {
+            "ollama": ("http://192.168.1.101:11434/v1", "ollama"),
+            "openrouter": ("https://openrouter.ai/api/v1", None),
+            "lmstudio": ("http://localhost:1234/v1", "lm-studio"),
+        }
+        api_base = session_api_base or os.environ.get("WEE_API_BASE")
+        api_key = session_api_key or os.environ.get("WEE_API_KEY")
+        resolved_model = model
+        for prefix, (preset_base, preset_key) in _PRESETS.items():
+            if model.lower().startswith(f"{prefix}/"):
+                resolved_model = model[len(prefix) + 1:]
+                if not api_base:
+                    api_base = preset_base
+                if not api_key and preset_key:
+                    api_key = preset_key
+                break
+        if not api_base:
+            api_base = "http://192.168.1.101:11434/v1"
+        if not api_key:
+            if "openrouter" in api_base.lower():
+                try:
+                    import keyring
+                    api_key = keyring.get_password("openrouter", "api_key")
+                except Exception:
+                    pass
+            if not api_key:
+                api_key = "ollama"
+        return api_base, api_key, resolved_model
+
+    # ---- End Issue #125 helpers ---------------------------------------------
+
+    def run_wee_native(
+        self,
+        prompt: str,
+        model: str,
+        agent: str,
+        session_id,
+        resume: bool,
+        n8n_session_id: str,
+        timeout=None,
+        render_type: str = "text",
+    ) -> str:
+        """Execute via Wee Native runtime - OpenAI-compatible chat completions.
+
+        Issue #125: 429 retry with backoff + iterative model fallback chain.
+        Uses a for-loop over fallback models — no recursion (fixes B01).
+        Fallback switches are streamed to user for visibility (fixes B02).
+        time.sleep is safe: sync function runs in thread-pool worker (M01).
+        """
+        import json as _json
+        import time as _time
 
         try:
-            import time as _time
-            _wee_start = _time.time()
-            _last_usage = [None]
+            from openai import OpenAI
+        except ImportError:
+            return "Error: openai package not installed. Run: pip install openai"
 
-            stream = client.chat.completions.create(
-                model=resolved_model,
-                messages=messages,
-                stream=True,
-                stream_options={"include_usage": True},
+        session_data = self.get_or_create_session_data(n8n_session_id)
+        effective_timeout = timeout if timeout is not None else self.command_timeout
+        channel = session_data.get("channel", "webui")
+        context_prompt = self.build_agent_context_prompt(prompt, agent, channel, n8n_session_id)
+        _sess_api_base = session_data.get("api_base")
+        _sess_api_key = session_data.get("api_key")
+
+        # Issue #125: build iterative fallback chain (B01: no recursion)
+        _free_cfg = self._wee_load_free_config()
+        _max_retries = _free_cfg.get("max_retries_per_model", 3)
+        _backoff = _free_cfg.get("retry_backoff_seconds", [2, 5, 10])
+        _is_free = self._wee_is_free_model(model)
+        if _is_free:
+            _chain_raw = _free_cfg.get("free_model_fallback_chain", [])
+            _chain = [model] + [m for m in _chain_raw if m.lower() != model.lower()]
+        else:
+            _chain = [model]
+
+        stream_buffer = getattr(self, "_stream_buffers", {}).get(n8n_session_id)
+
+        for _chain_idx, _attempt_model in enumerate(_chain):
+            if _chain_idx > 0:
+                # B02: surface fallback model switch to user
+                _fb_short = _attempt_model.split("/")[-1]
+                _fb_msg = (
+                    "\n\u26a0\ufe0f Rate limited \u2014 switching to fallback model "
+                    + _fb_short
+                    + " ("
+                    + str(_chain_idx)
+                    + "/"
+                    + str(len(_chain) - 1)
+                    + ")...\n"
+                )
+                print("[Wee Native] " + _fb_msg.strip(), file=sys.stderr)
+                if stream_buffer:
+                    stream_buffer.push("chunk", {"text": _fb_msg})
+
+            api_base, api_key, resolved_model = self._wee_resolve_endpoint(
+                _attempt_model, _sess_api_base, _sess_api_key
             )
-
-            for chunk in stream:
-                if chunk.choices and chunk.choices[0].delta.content:
-                    token = chunk.choices[0].delta.content
-                    collected_output.append(token)
-                    if stream_buffer:
-                        stream_buffer.push("chunk", {"text": token})
-                if hasattr(chunk, "usage") and chunk.usage is not None:
-                    _last_usage[0] = chunk.usage
-
-            output = "".join(collected_output)
-
-            # Compute cost + attach wee_meta (Issue #128)
-            try:
-                _duration_ms = int((_time.time() - _wee_start) * 1000)
-                if _last_usage[0] is not None:
-                    _u = _last_usage[0]
-                    _prompt_tokens = getattr(_u, "prompt_tokens", 0) or 0
-                    _completion_tokens = getattr(_u, "completion_tokens", 0) or 0
-                    _total = getattr(_u, "total_tokens", _prompt_tokens + _completion_tokens)
-                    _provider = "ollama" if "192.168" in api_base else ("openrouter" if "openrouter" in api_base else "wee")
-                    _pricing = self._fetch_openrouter_pricing() if _provider == "openrouter" else {}
-                    _cost_usd, _cost_label = self._calculate_wee_cost(model, _prompt_tokens, _completion_tokens, _pricing)
-                    _wee_meta = {
-                        "tokens": _total,
-                        "prompt_tokens": _prompt_tokens,
-                        "completion_tokens": _completion_tokens,
-                        "cost_usd": _cost_usd,
-                        "cost_label": _cost_label,
-                        "model": model,
-                        "runtime": "wee",
-                    }
-                    self.update_session_field(n8n_session_id, "wee_meta", _wee_meta)
-                    self._log_token_usage(
-                        session_id=n8n_session_id, model=model, runtime="wee",
-                        provider=_provider, prompt_tokens=_prompt_tokens,
-                        completion_tokens=_completion_tokens, total_tokens=_total,
-                        cost_usd=_cost_usd, duration_ms=_duration_ms,
-                    )
-            except Exception as _meta_err:
-                print(f"[Wee Native] wee_meta error: {_meta_err}", file=sys.stderr)
-
-            if stream_buffer:
-                stream_buffer.push("done", output)
-
             print(
-                f"[Wee Native] Completed. Output length: {len(output)} chars",
+                "[Wee Native] model=" + resolved_model + " api_base=" + api_base
+                + " session=" + n8n_session_id[:8] + "..."
+                + " (chain " + str(_chain_idx + 1) + "/" + str(len(_chain)) + ")",
                 file=sys.stderr,
             )
-            return output
 
-        except Exception as e:
-            error_msg = f"Error: Wee native runtime failed: {e}"
-            print(f"[Wee Native] {error_msg}", file=sys.stderr)
+            import httpx as _httpx_wee
+            client = OpenAI(
+                base_url=api_base,
+                api_key=api_key,
+                timeout=_httpx_wee.Timeout(
+                    connect=15.0, read=float(effective_timeout), write=30.0, pool=15.0
+                ),
+                max_retries=0,
+            )
+            messages = []
+            if context_prompt:
+                messages.append({"role": "system", "content": context_prompt})
+            messages.append({"role": "user", "content": prompt})
 
-            # Push error as done sentinel
-            if stream_buffer:
-                stream_buffer.push("done", error_msg)
+            collected_output = []
+            _got_429 = False
+            _wee_start = _time.time()
+            _last_usage = [None]
+            _max_attempts = _max_retries if _is_free else 1
 
-            return error_msg
+            for _retry in range(_max_attempts):
+                try:
+                    stream = client.chat.completions.create(
+                        model=resolved_model,
+                        messages=messages,
+                        stream=True,
+                        stream_options={"include_usage": True},
+                    )
+                    for chunk in stream:
+                        if chunk.choices and chunk.choices[0].delta.content:
+                            token = chunk.choices[0].delta.content
+                            collected_output.append(token)
+                            if stream_buffer:
+                                stream_buffer.push("chunk", {"text": token})
+                        if hasattr(chunk, "usage") and chunk.usage is not None:
+                            _last_usage[0] = chunk.usage
+                    _got_429 = False
+                    break  # success
+
+                except Exception as _e:
+                    _e_str = str(_e)
+                    _is_rate_limit = "429" in _e_str or "rate limit" in _e_str.lower()
+                    if _is_rate_limit and _is_free:
+                        _got_429 = True
+                        if _retry < _max_attempts - 1:
+                            _wait = (
+                                _backoff[_retry] if _retry < len(_backoff)
+                                else (_backoff[-1] if _backoff else 5)
+                            )
+                            _retry_msg = (
+                                "\n\u26a0\ufe0f Rate limited, retrying in "
+                                + str(_wait)
+                                + "s ("
+                                + str(_retry + 1)
+                                + "/"
+                                + str(_max_attempts)
+                                + ")...\n"
+                            )
+                            print("[Wee Native] " + _retry_msg.strip(), file=sys.stderr)
+                            if stream_buffer:
+                                stream_buffer.push("chunk", {"text": _retry_msg})
+                            # M01: time.sleep is correct here — sync function in thread-pool worker
+                            _time.sleep(_wait)
+                    else:
+                        error_msg = "Error: Wee native runtime failed: " + str(_e)
+                        print("[Wee Native] " + error_msg, file=sys.stderr)
+                        if stream_buffer:
+                            stream_buffer.push("done", error_msg)
+                        return error_msg
+
+            if not _got_429:
+                output = "".join(collected_output)
+                try:
+                    _duration_ms = int((_time.time() - _wee_start) * 1000)
+                    if _last_usage[0] is not None:
+                        _u = _last_usage[0]
+                        _pt = getattr(_u, "prompt_tokens", 0) or 0
+                        _ct = getattr(_u, "completion_tokens", 0) or 0
+                        _total = getattr(_u, "total_tokens", _pt + _ct)
+                        _provider = (
+                            "ollama" if "192.168" in api_base else
+                            "openrouter" if "openrouter" in api_base else "wee"
+                        )
+                        _pricing = self._fetch_openrouter_pricing() if _provider == "openrouter" else {}
+                        _cost_usd, _cost_label = self._calculate_wee_cost(
+                            _attempt_model, _pt, _ct, _pricing
+                        )
+                        self.update_session_field(n8n_session_id, "wee_meta", {
+                            "tokens": _total, "prompt_tokens": _pt,
+                            "completion_tokens": _ct, "cost_usd": _cost_usd,
+                            "cost_label": _cost_label, "model": _attempt_model, "runtime": "wee",
+                        })
+                        self._log_token_usage(
+                            session_id=n8n_session_id, model=_attempt_model, runtime="wee",
+                            provider=_provider, prompt_tokens=_pt, completion_tokens=_ct,
+                            total_tokens=_total, cost_usd=_cost_usd, duration_ms=_duration_ms,
+                        )
+                except Exception as _meta_err:
+                    print("[Wee Native] wee_meta error: " + str(_meta_err), file=sys.stderr)
+
+                if stream_buffer:
+                    stream_buffer.push("done", output)
+                print("[Wee Native] Completed. Output length: " + str(len(output)) + " chars", file=sys.stderr)
+                return output
+            # _got_429=True — continue outer loop to next fallback model
+
+        # B01: all models exhausted — iterative approach, no stack overflow
+        exhausted_msg = (
+            "\n\u274c All free model fallbacks exhausted. "
+            "Please try again later or switch to a paid model.\n"
+        )
+        print("[Wee Native] " + exhausted_msg.strip(), file=sys.stderr)
+        if stream_buffer:
+            stream_buffer.push("done", exhausted_msg)
+        return exhausted_msg
+
 
     def _get_cursor_session_id(self, n8n_session_id: str) -> Optional[str]:
         """Return the stored cursor session flag for this n8n session, or None."""
