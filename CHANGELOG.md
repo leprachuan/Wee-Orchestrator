@@ -24,6 +24,82 @@ Comprehensive token usage tracking across all runtimes (copilot-sdk, claude-sdk,
 
 ---
 
+## [Issue #119] Feature: Wire Up OpenRouter in Wee Runtime UI
+**Status:** ✅ QA Approved  
+**Commits:** 9498a4f  
+**Verdict Date:** 2026-04-12  
+**PR:** #121 (issue/119 → dev)  
+**Next State:** Ready for merge (dev → main)
+
+### Summary
+Complete OpenRouter integration in wee runtime with UI model selection. Adds `OPENROUTER_POPULAR_MODELS` constant (12 curated models), `WEE_MODELS` dict with grouping, `fetch_wee_models()` with 300s TTL cache and keyring API key retrieval, `/api/v1/models` endpoint `group` field, and frontend optgroup rendering for model dropdown.
+
+### Features
+- **Backend:** OpenRouter API key lookup via keyring, 300s cache, graceful fallback to static models
+- **API:** `GET /api/v1/models?runtime=wee` returns 15 models across 2 groups (Ollama + OpenRouter)
+- **Frontend:** Grouped model dropdown with `<optgroup>` headers
+- **Models:** 12 popular OpenRouter models + 3 local Ollama models available
+
+### Test Results
+- ✅ 34/34 Issue #119 specific tests pass
+- ✅ 1176/1176 full suite pass (9 skipped)
+- ✅ 0 failures, 0 regressions
+- ✅ API grouping verified, keyring integration validated
+
+### Files Modified
+- agent_manager.py: `OPENROUTER_POPULAR_MODELS`, `WEE_MODELS`, `fetch_wee_models()`, model endpoint, session dispatch
+- app.js: optgroup rendering for grouped models
+- tests/test_issue119_openrouter.py: 34 comprehensive tests
+
+---
+
+## [Issue #118] Bug Fix: Wee Runtime Model Selection & Ollama Port
+**Status:** ✅ QA Approved  
+**Commits:** fbd6c10  
+**Verdict Date:** 2026-04-12  
+**PR:** #120 (issue/118-119 → dev) — **Note:** PR #121 superset includes this fix  
+**Next State:** Ready for merge (dev → main via PR #121)
+
+### Summary
+Fixed 8 critical bugs in wee runtime model dispatch pipeline:
+1. `get_models_for_runtime('wee')` returned tuples instead of flat strings
+2. `wee` missing from `known_runtimes` in `/api/v1/models`
+3. `get_model_from_name()` crashed on tuple inputs
+4. Session validation allowed stale copilot models on wee runtime
+5. Ollama port 11436→11434 in agent_manager.py
+6. Ollama port 11436→11434 in wee_runtime.py
+7. `static_alias_map` missing `wee` entry
+8. `_get_model_description()` missing wee model mapping
+
+### Root Cause
+Ollama runs on port 11434 (standard), not 11436. Model resolution pipeline had incomplete wee runtime support — missing constants in multiple locations, incorrect port configuration, and incomplete static model mapping.
+
+### Fixes Applied
+- Added `WEE_MODELS` constant with proper structure
+- Corrected Ollama port in both agent_manager.py and wee_runtime.py
+- Fixed `get_models_for_runtime()` to return flat strings via `_static_models_to_dict()`
+- Added `wee` to `known_runtimes`, `static_alias_map`, and `_get_model_description()`
+- Session validation now uses `get_model_from_name()` for wee model verification
+
+### Test Results
+- ✅ 29/29 Issue #118 specific tests pass
+- ✅ 1171/1171 full suite pass (9 skipped)
+- ✅ 0 failures, 0 regressions
+- ✅ All 8 bugs verified fixed, port configuration validated
+
+### API Verification
+`GET /api/v1/models?runtime=wee` returns all 4 models with correct labels:
+- `ollama/gemma4:e4b` — Ollama Gemma 4 E4B (local)
+- `ollama/qwen3` — Ollama Qwen 3 (local)
+- `ollama/granite3.3-tuned` — Ollama Granite 3.3 Tuned (local)
+- `openrouter/meta-llama/llama-4-scout` — Llama 4 Scout via OpenRouter
+
+### Minor Notes
+- `get_model_from_name('', 'wee')` returns truthy for empty string (latent bug, not triggered in production due to short-circuit guard)
+- Debug logging uses `print(..., file=sys.stderr)` on every wee call (adds journal noise, not blocking)
+
+---
+
 ## [Issue #115] Feature: Inline Expandable Tool Call Blocks
 **Status:** ✅ QA Approved — Pass 2 (Commit: a85e5b5)  
 **Verdict Date:** 2026-04-12  
