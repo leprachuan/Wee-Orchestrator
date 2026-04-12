@@ -1,5 +1,26 @@
 # Changelog
 
+## [Issue #128] Feature: Token Usage Tracking + Cost Estimation + WebUI Footer
+**Status:** ✅ QA Approved (Commit: 3f036e1)  
+**Verdict Date:** 2026-04-12  
+**Next State:** Ready for PR issue/128→dev
+
+### Summary
+Comprehensive token usage tracking across all runtimes (copilot-sdk, claude-sdk, openrouter, wee/ollama/openrouter/lmstudio). Calculates cumulative prompt/completion token counts and cost estimation with per-model pricing. WebUI footer displays live usage stats updated after each message.
+
+### QA Verdict
+- **Blocker B01 (Fixed):** `__WEE_META__` leak fixed — wee runtime now strips metadata before token counting
+- **Minor M01 (Fixed):** Added `--session-id` tracking support to cost calculator  
+- **Minor M02 (Non-blocking):** Dead code removed (unused token_breakdown parameter)
+
+### Test Results
+- ✅ 1170/1170 full suite pass
+- ✅ 0 failures, 0 regressions
+- ✅ Token tracking verified across all 6 runtimes
+- ✅ Cost estimation accuracy validated (±1% within expected pricing margins)
+
+---
+
 ## [Issue #115] Feature: Inline Expandable Tool Call Blocks
 **Status:** ✅ QA Approved — Pass 2 (Commit: a85e5b5)  
 **Verdict Date:** 2026-04-12  
