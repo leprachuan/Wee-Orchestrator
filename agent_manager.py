@@ -12571,7 +12571,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                     # No TODOs found — return non-existent path so UI shows empty
                     return agent_path / "TODOs"
         except Exception:
-            pass
+            logger.error("Failed to resolve TODO dir for agent %r", agent_name)
         return Path(f"/opt/{agent_name}/TODOs")
 
     def _resolve_todo_file(agent_name: str | None) -> Path:
@@ -12595,6 +12595,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         try:
             lines = todo_path.read_text().splitlines()
         except Exception:
+            logger.error("Failed to read TODO file %s", todo_path)
             return None
 
         due = None
@@ -12646,6 +12647,271 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                     if len(todos) >= limit:
                         break
         return todos
+
+
+    # ── GitHub Issues TODO integration (Issue #100) ──────────────────
+
+    GH_TODO_REPO = "leprachuan/fosterbot-home"
+    GH_TODO_LABEL = "todo"
+
+    def _fetch_github_todos(limit: int = 100) -> list:
+        """Fetch TODOs from GitHub Issues labeled 'todo' in fosterbot-home."""
+        import subprocess as _sp
+        import json as _json
+        import re as _re
+
+        try:
+            result = _sp.run(
+                [
+                    "gh", "issue", "list",
+                    "--repo", GH_TODO_REPO,
+                    "--label", GH_TODO_LABEL,
+                    "--state", "open",
+                    "--json", "number,title,body,labels,createdAt,updatedAt",
+                    "--limit", str(limit),
+                ],
+                capture_output=True,
+                text=True,
+                timeout=15,
+            )
+            if result.returncode != 0:
+                return []
+            issues = (
+                _json.loads(result.stdout) if result.stdout.strip() else []
+            )
+        except Exception:
+            logger.error("Failed to fetch GitHub TODO issues")
+            return []
+
+        todos = []
+        for issue in issues:
+            body = issue.get("body", "") or ""
+            due = None
+            due_match = _re.search(
+                r"📅\s*\*\*Due:\*\*\s*(.+)", body
+            )
+            if due_match:
+                due = due_match.group(1).strip()
+
+            issue_labels = [
+                lbl["name"]
+                for lbl in issue.get("labels", [])
+                if lbl["name"] != GH_TODO_LABEL
+            ]
+
+            todos.append(
+                {
+                    "description": issue["title"],
+                    "due": due,
+                    "labels": issue_labels,
+                    "notes": [],
+                    "details": body,
+                    "source": "github",
+                    "github_issue_number": issue["number"],
+                }
+            )
+
+        return todos
+
+    def _fetch_valid_github_labels() -> set:
+        """Fetch all label names from the GitHub TODO repo."""
+        import subprocess as _sp
+        import json as _json
+
+        try:
+            result = _sp.run(
+                [
+                    "gh", "label", "list",
+                    "--repo", GH_TODO_REPO,
+                    "--json", "name",
+                    "--limit", "100",
+                ],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            if result.returncode == 0 and result.stdout.strip():
+                return {lbl["name"] for lbl in _json.loads(result.stdout)}
+        except Exception:
+            logger.error("Failed to fetch GitHub labels for validation")
+        return set()
+
+    def _create_github_todo(
+        title: str,
+        body: str = "",
+        labels: list | None = None,
+        due: str | None = None,
+    ) -> dict | None:
+        """Create a GitHub Issue as a TODO. Returns issue info or None.
+
+        If any requested labels don't exist in the repo, they are stripped
+        and the issue is created with only the valid labels. A warning is
+        logged so the caller can surface it to the user.
+        """
+        import subprocess as _sp
+        import re as _re
+
+        issue_labels = list(labels) if labels else []
+        if GH_TODO_LABEL not in issue_labels:
+            issue_labels.append(GH_TODO_LABEL)
+
+        body_parts = []
+        if due:
+            body_parts.append(f"📅 **Due:** {due}")
+        if body:
+            body_parts.append(body)
+        full_body = "\n\n".join(body_parts) if body_parts else ""
+
+        def _run_create(lbl_list: list) -> "_sp.CompletedProcess":
+            cmd = [
+                "gh", "issue", "create",
+                "--repo", GH_TODO_REPO,
+                "--title", title,
+                "--label", ",".join(lbl_list),
+            ]
+            if full_body:
+                cmd.extend(["--body", full_body])
+            return _sp.run(cmd, capture_output=True, text=True, timeout=15)
+
+        stripped_labels: list = []
+        try:
+            result = _run_create(issue_labels)
+            if result.returncode != 0:
+                # Check if failure is due to missing labels
+                stderr = result.stderr or ""
+                if "could not add label" in stderr or "label" in stderr.lower():
+                    valid = _fetch_valid_github_labels()
+                    if valid:
+                        valid_labels = [lb for lb in issue_labels if lb in valid]
+                        stripped_labels = [lb for lb in issue_labels if lb not in valid]
+                        # Exclude the base todo label from the stripped report
+                        stripped_labels = [lb for lb in stripped_labels if lb != GH_TODO_LABEL]
+                        if stripped_labels:
+                            logger.warning(
+                                "GitHub TODO: stripped invalid labels %s for issue %r",
+                                stripped_labels, title
+                            )
+                        if valid_labels != issue_labels:
+                            if valid_labels:
+                                result = _run_create(valid_labels)
+                            else:
+                                # No valid labels at all — create without --label flag
+                                no_label_cmd = [
+                                    "gh", "issue", "create",
+                                    "--repo", GH_TODO_REPO,
+                                    "--title", title,
+                                ]
+                                if full_body:
+                                    no_label_cmd.extend(["--body", full_body])
+                                result = _sp.run(
+                                    no_label_cmd,
+                                    capture_output=True, text=True, timeout=15
+                                )
+                if result.returncode != 0:
+                    logger.error(
+                        "GitHub TODO creation failed for %r: %s",
+                        title, result.stderr.strip()
+                    )
+                    return None
+
+            m = _re.search(r"/issues/(\d+)", result.stdout)
+            if m:
+                issue_info: dict = {
+                    "issue_number": int(m.group(1)),
+                    "url": result.stdout.strip(),
+                }
+                if stripped_labels:
+                    issue_info["labels_stripped"] = stripped_labels
+                return issue_info
+        except Exception:
+            logger.error("Unexpected error creating GitHub TODO for %r", title)
+        return None
+
+    def _close_github_todo(title: str) -> dict | None:
+        """Find and close a GitHub Issue by title match."""
+        import subprocess as _sp
+        import json as _json
+
+        try:
+            result = _sp.run(
+                [
+                    "gh", "issue", "list",
+                    "--repo", GH_TODO_REPO,
+                    "--label", GH_TODO_LABEL,
+                    "--state", "open",
+                    "--json", "number,title",
+                    "--limit", "200",
+                ],
+                capture_output=True,
+                text=True,
+                timeout=15,
+            )
+            if result.returncode != 0:
+                return None
+
+            issues = (
+                _json.loads(result.stdout) if result.stdout.strip() else []
+            )
+
+            match = None
+            title_lower = title.lower().strip()
+            for issue in issues:
+                if issue["title"].lower().strip() == title_lower:
+                    match = issue
+                    break
+            if not match:
+                for issue in issues:
+                    if title_lower in issue["title"].lower().strip():
+                        match = issue
+                        break
+
+            if not match:
+                return None
+
+            close_result = _sp.run(
+                [
+                    "gh", "issue", "close",
+                    "--repo", GH_TODO_REPO,
+                    str(match["number"]),
+                ],
+                capture_output=True,
+                text=True,
+                timeout=15,
+            )
+            if close_result.returncode == 0:
+                return {
+                    "issue_number": match["number"],
+                    "title": match["title"],
+                }
+        except Exception:
+            logger.error("Failed to close GitHub TODO issue for title %r", title)
+        return None
+
+    def _merge_todos(
+        gh_todos: list, flat_todos: list, limit: int = 100
+    ) -> list:
+        """Merge GitHub and flat-file TODOs, deduplicated by title.
+
+        GitHub Issues are the primary source and take precedence on
+        title collisions.
+        """
+        seen_titles: set = set()
+        merged = []
+
+        for todo in gh_todos:
+            key = todo["description"].lower().strip()
+            if key not in seen_titles:
+                seen_titles.add(key)
+                merged.append(todo)
+
+        for todo in flat_todos:
+            key = todo["description"].lower().strip()
+            if key not in seen_titles:
+                seen_titles.add(key)
+                todo["source"] = "flatfile"
+                merged.append(todo)
+
+        return merged[:limit]
 
     def _parse_todos_from_md(todo_file: Path, limit: int = 100) -> list:
         """Parse active TODOs from the markdown file, return up to `limit`.
@@ -12758,13 +13024,16 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             x_auth_channel=request.headers.get("x-auth-channel"),
         )
         limit = min(max(1, limit), 200)
+        # Issue #100: Dual-source — GitHub Issues (primary) + flat files
+        gh_todos = _fetch_github_todos(limit)
         todo_path = _resolve_todo_file(agent)
-        todos = _parse_todos_from_md(todo_path, limit)
+        flat_todos = _parse_todos_from_md(todo_path, limit)
+        todos = _merge_todos(gh_todos, flat_todos, limit)
         return {
             "todos": todos,
             "count": len(todos),
             "agent": agent or "default",
-            "file": str(todo_path),
+            "sources": ["github", "flatfile"],
         }
 
     @app.post("/api/v1/todos")
@@ -12849,10 +13118,19 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         file_content = "\n".join(lines) + "\n" if lines else ""
         target.write_text(file_content)
 
+        # Issue #100: Also create a GitHub Issue (primary source)
+        gh_result = _create_github_todo(
+            title=title,
+            body=details or "",
+            labels=labels if labels else None,
+            due=due_date,
+        )
+
         return {
             "success": True,
             "todo": title,
             "file": str(target),
+            "github_issue": gh_result,
         }
 
     @app.post("/api/v1/todos/{todo_title}/complete")
@@ -12887,15 +13165,30 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 match = entry
                 break
 
+        # Issue #100: Also close the matching GitHub Issue
+        gh_closed = _close_github_todo(todo_title)
+
         if not match:
+            if gh_closed:
+                return {
+                    "success": True,
+                    "todo": todo_title,
+                    "github_issue_closed": gh_closed,
+                    "flat_file": None,
+                }
             return {
                 "success": False,
-                "error": f"TODO '{todo_title}' not found in ACTIVE/",
+                "error": f"TODO '{todo_title}' not found in ACTIVE/ or GitHub Issues",
             }
 
         dest = completed_dir / match.name
         match.rename(dest)
-        return {"success": True, "moved": str(dest), "todo": match.name}
+        return {
+            "success": True,
+            "moved": str(dest),
+            "todo": match.name,
+            "github_issue_closed": gh_closed,
+        }
 
     @app.patch("/api/v1/todos/{todo_title}")
     async def update_todo_details(request: Request, todo_title: str):
