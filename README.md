@@ -63,6 +63,7 @@ Wee-Orchestrator is a unified AI agent platform that lets you chat with **any AI
 - **⚡ Background Tasks** — Delegate long-running work to background agents with in-thread status updates
 - **🔔 In-Thread Notifications** — Real-time task lifecycle updates (queued → running → complete) in your conversation
 - **📋 Dual-Source TODOs** — Sync TODOs between GitHub Issues (primary) and flat files (fallback) with auto-deduplication
+- **🔧 Expandable Tool Calls** — View tool invocations with collapsible output panels in WebUI; markdown rendering, error highlighting, silent mode support
 - **🔌 Extensible Skills** — Plugin architecture for adding capabilities (Cisco Meraki, Home Assistant, etc.)
 - **⚙️ Slash Command Registry — Pure-server commands that bypass the LLM for reduced latency; auto-registers with Telegram BotFather for autocomplete; built-in `/secret` command for secure credential management
 
@@ -1249,7 +1250,40 @@ Error responses:
 - Requires API authentication (Bearer token)
 - Per-session settings — each user session has independent configuration
 
+---
 
+### 🔧 Tool Call Visualization
+
+**Issue #115: Inline Expandable Tool Call Blocks**
+
+The WebUI now displays tool invocations with inline expandable blocks in the streaming panel. Each tool call shows a disclosure triangle (▶); clicking expands a scrollable output pane with the full tool result, markdown formatting preserved.
+
+**Features:**
+- ✅ **Expandable blocks** — Click ▶ to expand/collapse tool output
+- ✅ **Markdown rendering** — Tool results support markdown (code blocks, lists, tables)
+- ✅ **Error highlighting** — Failed tool calls shown in red
+- ✅ **Dark/light themes** — CSS automatically adapts to UI theme
+- ✅ **Silent mode integration** — Tool blocks hidden when `silent_mode=true`
+- ✅ **All runtimes supported** — Works with copilot-sdk, claude-sdk, claude, and gemini
+
+**UI Behavior:**
+- Tool started: Shows block with "Running ⌛" spinner
+- Tool completed: Output filled in, user can expand to view result
+- Tool error: Red highlight, error message displayed
+- Silent mode on: Blocks completely hidden from view
+
+**CSS Classes:**
+- `.tc-block` — Container for tool call block
+- `.tc-toggle` — Expand/collapse button (▶)
+- `.tc-output` — Scrollable output pane
+- `.tc-error` — Error state styling
+- `.tc-expanded` — Expanded state
+
+**Related Issues:**
+- [#115](../../issues/115) — Inline Expandable Tool Call Blocks (QA Approved)
+- [#87](../../issues/87) — Streaming + Tool Call support for copilot-sdk and claude-sdk
+
+---
 
 **POST /api/v1/query** — Stateless one-shot query endpoint
 
