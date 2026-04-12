@@ -7681,7 +7681,8 @@ User Request:
         # Issue #111: Augment system prompt with explicit tool capability section
         # so models that ignore JSON schemas still know tools are available.
         context_prompt = self._wee_augment_system_prompt_with_tools(base_context_prompt)
-
+        # Issue #113: Augment system prompt with anti-hallucination rules
+        context_prompt += self._wee_anti_hallucination_prompt()
 
         # -- Streaming infrastructure --
         stream_buffer = getattr(self, "_stream_buffers", {}).get(n8n_session_id)
