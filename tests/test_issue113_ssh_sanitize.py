@@ -6,6 +6,7 @@ Tests cover:
 3. Known_hosts infrastructure (informational)
 """
 
+import os
 import re
 import sys
 import unittest
@@ -15,7 +16,7 @@ from unittest.mock import MagicMock, patch
 # Standalone wee_runtime tests
 # ---------------------------------------------------------------------------
 
-sys.path.insert(0, "/opt/n8n-copilot-shim-dev")
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from wee_runtime import (
     _ANTI_HALLUCINATION_PROMPT,
