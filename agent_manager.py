@@ -7594,7 +7594,11 @@ User Request:
             openrouter/meta-llama/llama-4-scout - OpenRouter cloud
             gemma4:e4b                - Default endpoint (Ollama)
 
-        Supports real-time streaming to WebUI SSE consumers.
+        Supports:
+            - Real-time streaming to WebUI SSE consumers
+            - Multi-turn conversation history (Issue #123)
+            - Tool-call agentic loop (Issue #123)
+            - SSE streaming of tool execution (Issue #123)
         """
         import json as _json
 
@@ -7611,11 +7615,6 @@ User Request:
         effective_timeout = timeout if timeout is not None else self.command_timeout
         channel = session_data.get("channel", "webui")
 
-        # Build context prompt with agent identity
-        context_prompt = self.build_agent_context_prompt(
-            prompt, agent, channel, n8n_session_id
-        )
-
         # -- Resolve model, endpoint, and API key --
         api_base = session_data.get("api_base") or os.environ.get(
             "WEE_API_BASE"
@@ -7626,7 +7625,7 @@ User Request:
 
         # Provider presets
         _PRESETS = {
-            "ollama": ("http://192.168.1.101:11436/v1", "ollama"),
+            "ollama": ("http://192.168.1.101:11434/v1", "ollama"),
             "openrouter": ("https://openrouter.ai/api/v1", None),
             "lmstudio": ("http://localhost:1234/v1", "lm-studio"),
         }
@@ -7642,7 +7641,7 @@ User Request:
                 break
 
         if not api_base:
-            api_base = "http://192.168.1.101:11436/v1"
+            api_base = "http://192.168.1.101:11434/v1"
         if not api_key:
             # Try keyring for OpenRouter
             if "openrouter" in api_base.lower():
@@ -7651,6 +7650,8 @@ User Request:
                     api_key = keyring.get_password("openrouter", "api_key")
                 except Exception:
                     pass
+                if not api_key:
+                    api_key = os.environ.get("OPENROUTER_API_KEY")
             if not api_key:
                 api_key = "ollama"
 
@@ -7659,6 +7660,20 @@ User Request:
             f"session={n8n_session_id[:8]}...",
             file=sys.stderr,
         )
+
+        # Issue #123: Build context prompt with correct arg order
+        base_context_prompt = self.build_agent_context_prompt(
+            agent,
+            prompt,
+            n8n_session_id,
+            render_type=render_type,
+            timeout=effective_timeout,
+            runtime="wee",
+            model=resolved_model,
+            channel=channel,
+        )
+        # Augment system prompt with explicit tool capability section
+        context_prompt = self._wee_augment_system_prompt_with_tools(base_context_prompt)
 
         # -- Streaming infrastructure --
         stream_buffer = getattr(self, "_stream_buffers", {}).get(n8n_session_id)
@@ -7670,31 +7685,210 @@ User Request:
             timeout=effective_timeout,
         )
 
-        messages = []
-        # System prompt from agent context
-        if context_prompt:
-            messages.append({"role": "system", "content": context_prompt})
+        # -- Load conversation history for multi-turn --
+        messages = self._wee_load_messages(n8n_session_id, context_prompt, resume)
         messages.append({"role": "user", "content": prompt})
 
+        # -- Tool definitions for agentic loop (Issue #123) --
+        _WEE_TOOLS = [
+            {
+                "type": "function",
+                "function": {
+                    "name": "bash",
+                    "description": "Execute a bash shell command and return its output.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "command": {
+                                "type": "string",
+                                "description": "The bash command to execute",
+                            }
+                        },
+                        "required": ["command"],
+                    },
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "python",
+                    "description": "Execute Python 3 code and return the output.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "code": {
+                                "type": "string",
+                                "description": "The Python code to execute",
+                            }
+                        },
+                        "required": ["code"],
+                    },
+                },
+            },
+        ]
+
         collected_output = []
+        _tool_call_counter = 0
+        MAX_TOOL_ROUNDS = 10
 
         try:
-            stream = client.chat.completions.create(
-                model=resolved_model,
-                messages=messages,
-                stream=True,
-            )
+            for round_num in range(MAX_TOOL_ROUNDS + 1):
+                # Build create kwargs — include tools unless on final safety round
+                create_kwargs = {
+                    "model": resolved_model,
+                    "messages": messages,
+                    "stream": True,
+                }
+                if round_num < MAX_TOOL_ROUNDS:
+                    create_kwargs["tools"] = _WEE_TOOLS
 
-            for chunk in stream:
-                if chunk.choices and chunk.choices[0].delta.content:
-                    token = chunk.choices[0].delta.content
-                    collected_output.append(token)
+                try:
+                    stream = client.chat.completions.create(**create_kwargs)
+                except Exception as tools_err:
+                    # Some models/endpoints may not support tools — retry without
+                    if "tools" in create_kwargs:
+                        print(
+                            f"[Wee Native] Tools not supported, retrying without: {tools_err}",
+                            file=sys.stderr,
+                        )
+                        create_kwargs.pop("tools", None)
+                        stream = client.chat.completions.create(**create_kwargs)
+                    else:
+                        raise
 
-                    # Push to SSE stream buffer for WebUI
+                # Accumulate content and tool calls from streaming response
+                round_content = []
+                tool_calls_acc = {}  # index -> {id, name, arguments}
+
+                for chunk in stream:
+                    if not chunk.choices:
+                        continue
+                    delta = chunk.choices[0].delta
+
+                    # Content tokens — stream to user
+                    if delta.content:
+                        token = delta.content
+                        round_content.append(token)
+                        if stream_buffer:
+                            stream_buffer.push("chunk", {"text": token})
+
+                    # Tool call deltas
+                    if getattr(delta, "tool_calls", None):
+                        for tc_delta in delta.tool_calls:
+                            idx = tc_delta.index
+                            if idx not in tool_calls_acc:
+                                _tool_call_counter += 1
+                                tool_calls_acc[idx] = {
+                                    "id": getattr(tc_delta, "id", None) or f"tc_wee_{_tool_call_counter}",
+                                    "name": "",
+                                    "arguments": "",
+                                }
+                            if tc_delta.id and not tool_calls_acc[idx]["id"].startswith("tc_wee_"):
+                                pass  # keep first real id
+                            elif tc_delta.id:
+                                tool_calls_acc[idx]["id"] = tc_delta.id
+                            if tc_delta.function:
+                                if tc_delta.function.name:
+                                    tool_calls_acc[idx]["name"] = tc_delta.function.name
+                                if tc_delta.function.arguments:
+                                    tool_calls_acc[idx]["arguments"] += tc_delta.function.arguments
+
+                content_text = "".join(round_content)
+
+                # No tool calls — we have the final answer
+                if not tool_calls_acc:
+                    collected_output.append(content_text)
+                    messages.append({"role": "assistant", "content": content_text})
+                    break
+
+                # -- Tool calls detected --
+                print(
+                    f"[Wee Native] Round {round_num + 1}: {len(tool_calls_acc)} tool call(s) detected",
+                    file=sys.stderr,
+                )
+
+                # Build assistant message with tool_calls for conversation history
+                assistant_tool_calls = []
+                for idx in sorted(tool_calls_acc.keys()):
+                    tc = tool_calls_acc[idx]
+                    assistant_tool_calls.append({
+                        "id": tc["id"],
+                        "type": "function",
+                        "function": {
+                            "name": tc["name"],
+                            "arguments": tc["arguments"],
+                        },
+                    })
+
+                assistant_msg = {
+                    "role": "assistant",
+                    "content": content_text or None,
+                    "tool_calls": assistant_tool_calls,
+                }
+                messages.append(assistant_msg)
+
+                # Execute each tool call and emit SSE events
+                for tc_entry in assistant_tool_calls:
+                    tc_id = tc_entry["id"]
+                    func_name = tc_entry["function"]["name"]
+                    func_args_str = tc_entry["function"]["arguments"]
+
+                    # Parse arguments
+                    try:
+                        func_args = _json.loads(func_args_str)
+                    except (ValueError, _json.JSONDecodeError):
+                        func_args = {"raw": func_args_str}
+
+                    # Emit tool start event to SSE stream
+                    tc_start_event = {
+                        "id": tc_id,
+                        "name": func_name,
+                        "arguments": func_args,
+                        "status": "running",
+                    }
                     if stream_buffer:
-                        stream_buffer.push("chunk", {"text": token})
+                        stream_buffer.push("tool_call", tc_start_event)
+
+                    print(
+                        f"[Wee Native] Tool: {func_name}({_json.dumps(func_args)[:200]})",
+                        file=sys.stderr,
+                    )
+
+                    # Execute the tool
+                    tool_result = self._wee_execute_tool(func_name, func_args, agent)
+
+                    # Emit tool complete event to SSE stream
+                    tc_done_event = {
+                        "id": tc_id,
+                        "name": func_name,
+                        "arguments": func_args,
+                        "result": tool_result[:2000] if tool_result else "",
+                        "status": "complete",
+                    }
+                    if stream_buffer:
+                        stream_buffer.push("tool_call", tc_done_event)
+
+                    # Append tool result to conversation for next round
+                    messages.append({
+                        "role": "tool",
+                        "tool_call_id": tc_id,
+                        "content": tool_result or "No output",
+                    })
+
+            else:
+                # All MAX_TOOL_ROUNDS had tool calls with no final text
+                last_tool_results = [m["content"] for m in messages if m.get("role") == "tool"]
+                if last_tool_results:
+                    collected_output.append(
+                        "Tool execution completed. Last result:\n" + last_tool_results[-1][:2000]
+                    )
+                else:
+                    collected_output.append("Max tool rounds reached without final response.")
 
             output = "".join(collected_output)
+
+            # Persist conversation history
+            self._wee_save_messages(n8n_session_id, messages)
 
             # Push done sentinel
             if stream_buffer:
@@ -7715,6 +7909,290 @@ User Request:
                 stream_buffer.push("done", error_msg)
 
             return error_msg
+
+    # -- Wee runtime helper methods (Issue #123) --
+
+    def _wee_load_messages(
+        self,
+        n8n_session_id: str,
+        context_prompt: str,
+        resume: bool = True,
+    ) -> list:
+        """Load wee conversation history from session map.
+
+        Ollama is stateless — the full conversation must be included in every
+        request. This loads persisted messages from the session_map so
+        multi-turn context is preserved.
+        """
+        if resume:
+            session_data = self.load_session_data(n8n_session_id)
+            if session_data and session_data.get("wee_messages"):
+                msgs = list(session_data["wee_messages"])
+                # Always refresh the system prompt to pick up context changes
+                if msgs and msgs[0].get("role") == "system":
+                    msgs[0]["content"] = context_prompt
+                elif context_prompt:
+                    msgs.insert(0, {"role": "system", "content": context_prompt})
+                return msgs
+
+        # Fresh conversation — start with system prompt
+        messages = []
+        if context_prompt:
+            messages.append({"role": "system", "content": context_prompt})
+        return messages
+
+    def _wee_save_messages(self, n8n_session_id: str, messages: list) -> None:
+        """Persist wee conversation history to session map.
+
+        Saves the full message array (system + user + assistant + tool)
+        so the next turn can reconstruct the conversation.
+        Caps at MAX_WEE_MESSAGES to prevent unbounded growth.
+        """
+        MAX_WEE_MESSAGES = 100
+        with self._session_map_lock:
+            session_map = self.load_session_map()
+            if n8n_session_id in session_map:
+                # Keep system prompt + last N messages
+                if len(messages) > MAX_WEE_MESSAGES:
+                    system_msgs = [m for m in messages if m.get("role") == "system"]
+                    non_system = [m for m in messages if m.get("role") != "system"]
+                    saved = system_msgs + non_system[-(MAX_WEE_MESSAGES - len(system_msgs)):]
+                else:
+                    saved = list(messages)
+                # Strip tool_calls from assistant messages for JSON serialization
+                clean = []
+                for m in saved:
+                    if m.get("tool_calls"):
+                        mc = dict(m)
+                        mc["tool_calls"] = [
+                            {
+                                "id": tc.get("id", "") if isinstance(tc, dict) else getattr(tc, "id", ""),
+                                "type": "function",
+                                "function": {
+                                    "name": (tc.get("function", {}).get("name", "")
+                                             if isinstance(tc, dict)
+                                             else getattr(getattr(tc, "function", None), "name", "")),
+                                    "arguments": (tc.get("function", {}).get("arguments", "")
+                                                  if isinstance(tc, dict)
+                                                  else getattr(getattr(tc, "function", None), "arguments", "")),
+                                },
+                            }
+                            for tc in m["tool_calls"]
+                        ]
+                        clean.append(mc)
+                    else:
+                        clean.append(m)
+                session_map[n8n_session_id]["wee_messages"] = clean
+                self.save_session_map(session_map)
+
+    def _wee_augment_system_prompt_with_tools(self, system_prompt: str) -> str:
+        """Append explicit tool capability declaration to system prompt.
+
+        Many Ollama models ignore JSON tool schemas entirely and respond as if
+        no tools exist. Explicitly stating tool availability in the system
+        prompt text reliably fixes this across all models.
+        """
+        tool_section = (
+            "\n[Available Tools]\n"
+            "You have access to the following tools. ALWAYS use them when the user asks you to\n"
+            "perform any action -- do NOT say you cannot do something that these tools enable.\n"
+            "\n"
+            "**bash** -- Execute a bash shell command and return its output.\n"
+            "  Call: bash tool with {\"command\": \"your shell command here\"}\n"
+            "  Use for: running commands, SSH, file operations, checking system state\n"
+            "\n"
+            "**python** -- Execute Python 3 code and return its output.\n"
+            "  Call: python tool with {\"code\": \"your python code here\"}\n"
+            "  Use for: data processing, calculations, scripting, file parsing\n"
+            "\n"
+            "CRITICAL: When asked to run a command, SSH somewhere, check system status,\n"
+            "list files, or perform any shell action -- call the bash tool immediately.\n"
+            "NEVER refuse or claim you lack capability. The tools are active and functional."
+        )
+        return system_prompt + tool_section
+
+    def _wee_execute_tool(self, func_name: str, func_args: dict, agent: str) -> str:
+        """Execute a tool call from the wee runtime agentic loop.
+
+        Supports bash and python tools. Uses the same _execute_bash_command
+        infrastructure as other runtimes.
+        """
+        try:
+            if func_name == "bash":
+                command = func_args.get("command", "")
+                if not command:
+                    return "Error: No command provided"
+                return self._execute_bash_command(command, agent)
+            elif func_name == "python":
+                code = func_args.get("code", "")
+                if not code:
+                    return "Error: No code provided"
+                agent_info = self.AGENTS.get(agent, self.AGENTS.get("orchestrator"))
+                cwd = agent_info["path"] if agent_info else str(Path.cwd())
+                result = subprocess.run(
+                    [sys.executable, "-c", code],
+                    capture_output=True,
+                    text=True,
+                    timeout=min(self.command_timeout, 120),
+                    cwd=cwd,
+                )
+                output = result.stdout
+                if result.stderr:
+                    output += ("\n" if output else "") + result.stderr
+                if not output.strip():
+                    if result.returncode == 0:
+                        return "\u2713 Executed successfully (exit code: 0)"
+                    else:
+                        return f"\u2717 Failed with exit code: {result.returncode}"
+                return output.strip()
+            else:
+                return f"Error: Unknown tool '{func_name}'. Available: bash, python"
+        except subprocess.TimeoutExpired:
+            return f"Error: Tool '{func_name}' timed out"
+        except Exception as e:
+            return f"Error executing {func_name}: {e}"
+
+
+    def _wee_load_messages(
+        self,
+        n8n_session_id: str,
+        context_prompt: str,
+        resume: bool = True,
+    ) -> list:
+        """Load wee conversation history from session map.
+
+        Ollama is stateless — the full conversation must be included in every
+        request. This loads persisted messages from the session_map so
+        multi-turn context is preserved.
+        """
+        if resume:
+            session_data = self.load_session_data(n8n_session_id)
+            if session_data and session_data.get("wee_messages"):
+                msgs = list(session_data["wee_messages"])
+                # Always refresh the system prompt to pick up context changes
+                if msgs and msgs[0].get("role") == "system":
+                    msgs[0]["content"] = context_prompt
+                elif context_prompt:
+                    msgs.insert(0, {"role": "system", "content": context_prompt})
+                return msgs
+
+        # Fresh conversation — start with system prompt
+        messages = []
+        if context_prompt:
+            messages.append({"role": "system", "content": context_prompt})
+        return messages
+
+    def _wee_save_messages(self, n8n_session_id: str, messages: list) -> None:
+        """Persist wee conversation history to session map.
+
+        Saves the full message array (system + user + assistant + tool)
+        so the next turn can reconstruct the conversation.
+        Caps at MAX_WEE_MESSAGES to prevent unbounded growth.
+        """
+        MAX_WEE_MESSAGES = 100
+        with self._session_map_lock:
+            session_map = self.load_session_map()
+            if n8n_session_id in session_map:
+                # Keep system prompt + last N messages
+                if len(messages) > MAX_WEE_MESSAGES:
+                    system_msgs = [m for m in messages if m.get("role") == "system"]
+                    non_system = [m for m in messages if m.get("role") != "system"]
+                    saved = system_msgs + non_system[-(MAX_WEE_MESSAGES - len(system_msgs)):]
+                else:
+                    saved = list(messages)
+                # Strip tool_calls from assistant messages for JSON serialization
+                clean = []
+                for m in saved:
+                    if m.get("tool_calls"):
+                        mc = dict(m)
+                        mc["tool_calls"] = [
+                            {
+                                "id": tc.get("id", "") if isinstance(tc, dict) else getattr(tc, "id", ""),
+                                "type": "function",
+                                "function": {
+                                    "name": (tc.get("function", {}).get("name", "")
+                                             if isinstance(tc, dict)
+                                             else getattr(getattr(tc, "function", None), "name", "")),
+                                    "arguments": (tc.get("function", {}).get("arguments", "")
+                                                  if isinstance(tc, dict)
+                                                  else getattr(getattr(tc, "function", None), "arguments", "")),
+                                },
+                            }
+                            for tc in m["tool_calls"]
+                        ]
+                        clean.append(mc)
+                    else:
+                        clean.append(m)
+                session_map[n8n_session_id]["wee_messages"] = clean
+                self.save_session_map(session_map)
+
+    def _wee_augment_system_prompt_with_tools(self, system_prompt: str) -> str:
+        """Append explicit tool capability declaration to system prompt.
+
+        Many Ollama models ignore JSON tool schemas entirely and respond as if
+        no tools exist. Explicitly stating tool availability in the system
+        prompt text reliably fixes this across all models.
+        """
+        tool_section = (
+            "\n[Available Tools]\n"
+            "You have access to the following tools. ALWAYS use them when the user asks you to\n"
+            "perform any action -- do NOT say you cannot do something that these tools enable.\n"
+            "\n"
+            "**bash** -- Execute a bash shell command and return its output.\n"
+            "  Call: bash tool with {\"command\": \"your shell command here\"}\n"
+            "  Use for: running commands, SSH, file operations, checking system state\n"
+            "\n"
+            "**python** -- Execute Python 3 code and return its output.\n"
+            "  Call: python tool with {\"code\": \"your python code here\"}\n"
+            "  Use for: data processing, calculations, scripting, file parsing\n"
+            "\n"
+            "CRITICAL: When asked to run a command, SSH somewhere, check system status,\n"
+            "list files, or perform any shell action -- call the bash tool immediately.\n"
+            "NEVER refuse or claim you lack capability. The tools are active and functional."
+        )
+        return system_prompt + tool_section
+
+    def _wee_execute_tool(self, func_name: str, func_args: dict, agent: str) -> str:
+        """Execute a tool call from the wee runtime agentic loop.
+
+        Supports bash and python tools. Uses the same _execute_bash_command
+        infrastructure as other runtimes.
+        """
+        try:
+            if func_name == "bash":
+                command = func_args.get("command", "")
+                if not command:
+                    return "Error: No command provided"
+                return self._execute_bash_command(command, agent)
+            elif func_name == "python":
+                code = func_args.get("code", "")
+                if not code:
+                    return "Error: No code provided"
+                agent_info = self.AGENTS.get(agent, self.AGENTS.get("orchestrator"))
+                cwd = agent_info["path"] if agent_info else str(Path.cwd())
+                result = subprocess.run(
+                    [sys.executable, "-c", code],
+                    capture_output=True,
+                    text=True,
+                    timeout=min(self.command_timeout, 120),
+                    cwd=cwd,
+                )
+                output = result.stdout
+                if result.stderr:
+                    output += ("\n" if output else "") + result.stderr
+                if not output.strip():
+                    if result.returncode == 0:
+                        return "\u2713 Executed successfully (exit code: 0)"
+                    else:
+                        return f"\u2717 Failed with exit code: {result.returncode}"
+                return output.strip()
+            else:
+                return f"Error: Unknown tool '{func_name}'. Available: bash, python"
+        except subprocess.TimeoutExpired:
+            return f"Error: Tool '{func_name}' timed out"
+        except Exception as e:
+            return f"Error executing {func_name}: {e}"
+
 
     def _get_cursor_session_id(self, n8n_session_id: str) -> Optional[str]:
         """Return the stored cursor session flag for this n8n session, or None."""
@@ -7853,6 +8331,10 @@ User Request:
             # Cursor session mappings are keyed by n8n_session_id
             key = n8n_session_id if n8n_session_id else session_id
             return (self.cursor_session_dir / f"{key}.json").exists()
+        elif runtime == "wee":
+            # Issue #123: Wee stores conversation history in session_map
+            data = self.load_session_data(n8n_session_id or session_id)
+            return bool(data and data.get("wee_messages"))
         return False
 
     def get_most_recent_session_id(

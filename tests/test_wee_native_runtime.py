@@ -43,6 +43,11 @@ def _make_mgr():
         }
     }
     mgr._stream_buffers = {}
+    # Issue #123: new run_wee_native needs session_map_file for message persistence
+    import tempfile
+    tmp = tempfile.mkdtemp()
+    mgr.copilot_home = Path(tmp)
+    mgr.session_map_file = Path(tmp) / "session-map.json"
     return mgr
 
 
@@ -67,7 +72,9 @@ def _run_wee_native_test(mgr, test_session, model="ollama/gemma4:e4b", **kwargs)
     })
     with patch.object(mgr, "get_or_create_session_data", return_value=session_data):
         with patch.object(mgr, "build_agent_context_prompt", return_value="You are a helpful assistant."):
-            return mgr.run_wee_native(**defaults)
+            with patch.object(mgr, "load_session_data", return_value=session_data):
+                with patch.object(mgr, "save_session_map"):
+                    return mgr.run_wee_native(**defaults)
 
 
 class TestWeeRuntimeRegistration(unittest.TestCase):
@@ -180,7 +187,7 @@ class TestWeeRuntimeDispatch(unittest.TestCase):
         _run_wee_native_test(mgr, test_session, model="ollama/gemma4:e4b")
 
         init_kwargs = mock_openai_cls.call_args[1]
-        self.assertEqual(init_kwargs["base_url"], "http://192.168.1.101:11436/v1")
+        self.assertEqual(init_kwargs["base_url"], "http://192.168.1.101:11434/v1")
         self.assertEqual(init_kwargs["api_key"], "ollama")
 
     @patch("openai.OpenAI")
