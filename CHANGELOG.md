@@ -1,3 +1,11 @@
+## [Issue #118] Fix: wee runtime model selection
+## [Issue #119] Feature: OpenRouter models in wee runtime
+**Status:** Implemented (Commit: 50e874f) - PR #120
+
+Root causes fixed: Ollama port 11436->11434, empty model list (wee not in known_runtimes),
+tuple entries in model list breaking model resolution. Added fetch_wee_models() with dynamic
+Ollama discovery and curated OpenRouter models. 21 new tests, 1163 total pass.
+
 # Changelog
 
 ## [Issue #100] Feature: GitHub Issues Integration for TODO Endpoints
