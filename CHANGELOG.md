@@ -1,5 +1,74 @@
 # Changelog
 
+## [Issue #113] Bug: Wee runtime synthesis caching + tool execution ordering
+**Status:** ❌ QA Rejected  
+**Rejection Date:** 2026-04-12  
+**Blockers:** 2 MAJOR
+**Dispatch:** wee-dev task bg_b1354034 (in progress)
+
+### QA Findings
+
+**BLOCKER #1: Hardcoded Test Path**
+- File: `tests/test_issue113_synthesis.py`
+- Issue: Test uses absolute hardcoded path instead of relative path
+- Impact: Tests fail on any development system outside the primary dev host
+- Fix: Replace hardcoded path with relative path or env var
+
+**BLOCKER #2: Merge Conflict in wee_runtime.py**
+- File: `wee_runtime.py`
+- Issue: Unresolved merge conflict from Issue #128 integration (Token Usage Tracking)
+- Impact: Branch cannot be rebased onto dev without manual conflict resolution
+- Fix: Rebase onto current dev branch and manually resolve conflict
+
+### Test Results
+- ❌ 1207 tests pass (regression suite clean)
+- ❌ 2 blockers prevent QA approval
+
+### Next State
+- wee-dev assigned to fix both blockers (task bg_b1354034)
+- Re-dispatch to wee-qa for approval after fixes merged to dev
+
+---
+
+## [Issue #112] Bug: Wee runtime empty synthesis fallback
+**Status:** ✅ QA Approved (Conditional)  
+**Verdict Date:** 2026-04-12  
+**Blockers:** 0 (Ready for merge)
+**Note:** PR requires rebase onto current dev before merge
+
+### Summary
+Fixed wee runtime handling of empty synthesis responses. When Ollama returns empty `synthesis`, wee runtime now gracefully falls back to last valid response message instead of crashing.
+
+### Test Results
+- ✅ 1207 tests pass
+- ✅ 0 failures, 0 regressions
+- ✅ Empty synthesis fallback verified end-to-end
+
+### QA Verdict
+- **APPROVED** — All functionality correct, no bugs found
+- **ACTION REQUIRED:** Branch needs rebase onto current `dev` before PR merge (Issue #113 conflict resolution will be in dev history)
+
+### Next State
+- After rebase, ready for PR: branch → `dev` → `main`
+
+---
+
+## [Issue #111] Bug: Wee runtime tool/skill execution audit (Label Sync)
+**Status:** ✅ QA Approved  
+**Verdict Date:** 2026-04-12  
+**PR Status:** Already merged/approved in prior QA pass
+**Label Update:** Added `wee-dev:qa-approved` label
+
+### Summary
+QA pass completed. Prior approval confirmed — label sync only. Issue #111 was already merged and approved in earlier QA pass. No new code changes.
+
+### Note
+- This was a label/tracking sync to ensure GitHub issue reflects current QA status
+- All underlying code was previously verified and approved
+- No re-QA of code required
+
+---
+
 ## [Issue #128] Feature: Token Usage Tracking + Cost Estimation + WebUI Footer
 **Status:** ✅ QA Approved — Round 2  
 **Commits:** 3f036e1 (fixes), 9d6ecf5 (regression tests)  
