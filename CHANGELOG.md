@@ -82,6 +82,27 @@ Tool call events (started/completed) from all runtimes (copilot-sdk, claude-sdk,
 - All 39 Issue #115 tests pass (100%)
 - No BLOCKERs, no MAJORs, no MINORs
 
+
+## [Issue #126] Feature: Wee Runtime Icon (Robot Leprechaun SVG)
+**Status:** ✅ Implemented (Commits: b772237, d0cb1d1)
+
+### Summary
+Added a custom robot leprechaun SVG icon for the wee runtime in the WebUI runtime switcher. The icon features a tall top hat with wide brim, rounded robot head with circular eye cutouts, and a pill-shaped mouth — all using the evenodd fill rule for clean transparency.
+
+### Changes
+- **webui/dist/assets/runtime-icons/wee.svg** — New 430-byte SVG icon
+  - Tall top hat crown (9x6.5) + wide brim (18x2)
+  - Rounded robot head (14x13, rx=3) with circular eye cutouts (r=2)
+  - Pill-shaped mouth using evenodd path rule
+  - No hardcoded colors — inherits from CSS filters like other runtime icons
+- **webui/dist/app.js** — Already registered in RUNTIME_ICONS map and fallback list (prior commit)
+- **agent_manager.py** — Wee already included in get_available_runtimes() with leaf icon emoji
+- **tests/test_issue126_wee_icon.py** — 10 new regression tests
+  - SVG existence, validity, viewBox, size, no hardcoded fills
+  - App.js RUNTIME_ICONS map, fallback list, runtimeIconHTML function
+  - Backend API includes wee with icon field
+
+
 ## [Issue #100] Feature: GitHub Issues Integration for TODO Endpoints
 **Status:** ✅ QA Approved (Commit: ca21379)
 
