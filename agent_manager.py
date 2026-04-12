@@ -7979,6 +7979,32 @@ User Request:
 
             output = "".join(collected_output)
 
+            # Issue #112: Fallback when LLM generates empty synthesis after tool execution.
+            # Some models (e.g. qwen3:8b) return zero text tokens after processing
+            # tool results, yielding output=''. Surface the last tool result instead.
+            if not output.strip():
+                tool_results = [
+                    m["content"] for m in messages
+                    if m.get("role") == "tool" and m.get("content")
+                ]
+                if tool_results:
+                    last_result = tool_results[-1]
+                    output = f"Tool execution result:\n{last_result[:4000]}"
+                    print(
+                        f"[Wee Native] Empty synthesis fallback: surfacing last tool result ({len(last_result)} chars)",
+                        file=sys.stderr,
+                    )
+                    if stream_buffer:
+                        stream_buffer.push("chunk", {"text": output})
+                elif any(m.get("role") == "tool" for m in messages):
+                    output = "(Tool executed but produced no output)"
+                    print(
+                        "[Wee Native] Empty synthesis fallback: tool produced no output",
+                        file=sys.stderr,
+                    )
+                    if stream_buffer:
+                        stream_buffer.push("chunk", {"text": output})
+
             # Issue #108: Persist conversation history
             self._wee_save_messages(n8n_session_id, messages)
 
