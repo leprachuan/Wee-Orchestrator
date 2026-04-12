@@ -2164,16 +2164,19 @@ async function sendMessageStreaming(query, sessionId) {
             if (streamBubble) {
               streamBubble.classList.remove('streaming');
               applyMarkdownToBubble(streamBubble, finalContent);
-              // Add timing indicator
-              const timingDiv = document.createElement('div');
-              timingDiv.className = 'message-timing';
-              timingDiv.textContent = `⏱️ Generated in ${elapsedSec.toFixed(1)}s`;
-              streamBubble.appendChild(timingDiv);
+              // Add timing/token info (Issue #128)
+              const _timingText = buildTimingText(elapsedSec, evt.wee_meta || null);
+              if (_timingText) {
+                const timingDiv = document.createElement('div');
+                timingDiv.className = 'message-timing';
+                timingDiv.textContent = _timingText;
+                streamBubble.appendChild(timingDiv);
+              }
               streamBubble.appendChild(createTtsButton(streamBubble));
               scrollToBottom();
             } else {
               // Command/no-chunk path: render fresh bubble
-              await renderMessage('assistant', finalContent, [], elapsedSec);
+              await renderMessage('assistant', finalContent, [], elapsedSec, evt.wee_meta || null);
             }
             return evt;  // caller can read runtime/model
 
@@ -2514,7 +2517,30 @@ async function loadEarlierMessages() {
   }
 }
 
-async function renderMessage(role, content, files = [], timing = null) {
+/**
+ * Build timing/token footer text for assistant messages (Issue #128).
+ */
+function buildTimingText(elapsedSec, weeMeta) {
+  const base = elapsedSec != null ? `Generated in ${elapsedSec.toFixed(1)}s` : null;
+  if (!weeMeta) return base ? `⏱️ ${base}` : '';
+  const runtime = weeMeta.runtime || '';
+  const tokens = weeMeta.tokens;
+  const costLabel = weeMeta.cost_label || '';
+  if (runtime === 'copilot-sdk' || costLabel === 'copilot') {
+    return base ? `⏱️ ${base} · copilot request` : 'copilot request';
+  }
+  if (tokens != null) {
+    const tokenStr = tokens.toLocaleString();
+    let costStr = '';
+    if (costLabel === 'local') costStr = ' · local';
+    else if (costLabel === 'free') costStr = ' · free';
+    else if (costLabel && costLabel.startsWith('$')) costStr = ` · ${costLabel}`;
+    return base ? `⏱️ ${base} · ${tokenStr} tokens${costStr}` : `${tokenStr} tokens${costStr}`;
+  }
+  return base ? `⏱️ ${base}` : '';
+}
+
+async function renderMessage(role, content, files = [], timing = null, weeMeta = null) {
   hide($('empty-state'));
 
   const container = $('messages');
@@ -2569,12 +2595,15 @@ async function renderMessage(role, content, files = [], timing = null) {
   // Make file paths clickable in all messages
   if (typeof linkifyFilePaths === 'function') linkifyFilePaths(bubble);
 
-  // Add timing indicator for assistant messages
-  if (role === 'assistant' && timing) {
-    const timingDiv = document.createElement('div');
-    timingDiv.className = 'message-timing';
-    timingDiv.textContent = `⏱️ Generated in ${timing.toFixed(1)}s`;
-    bubble.appendChild(timingDiv);
+  // Add timing/token info (Issue #128)
+  if (role === 'assistant' && (timing || weeMeta)) {
+    const _rmTimingText = buildTimingText(timing, weeMeta);
+    if (_rmTimingText) {
+      const timingDiv = document.createElement('div');
+      timingDiv.className = 'message-timing';
+      timingDiv.textContent = _rmTimingText;
+      bubble.appendChild(timingDiv);
+    }
   }
 
   // Add TTS play button for assistant messages

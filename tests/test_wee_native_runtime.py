@@ -180,7 +180,7 @@ class TestWeeRuntimeDispatch(unittest.TestCase):
         _run_wee_native_test(mgr, test_session, model="ollama/gemma4:e4b")
 
         init_kwargs = mock_openai_cls.call_args[1]
-        self.assertEqual(init_kwargs["base_url"], "http://192.168.1.101:11436/v1")
+        self.assertEqual(init_kwargs["base_url"], "http://192.168.1.101:11434/v1")
         self.assertEqual(init_kwargs["api_key"], "ollama")
 
     @patch("openai.OpenAI")

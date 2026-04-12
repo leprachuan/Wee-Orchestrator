@@ -6859,6 +6859,27 @@ User Request:
                     elif isinstance(message, ResultMessage):
                         if message.session_id:
                             self.update_session_field(n8n_session_id, "session_id", message.session_id)
+                        # Issue #128: capture token usage
+                        if hasattr(message, "usage") and message.usage is not None:
+                            try:
+                                _u = message.usage
+                                _pt = _u.get("input_tokens", 0) if isinstance(_u, dict) else getattr(_u, "input_tokens", 0)
+                                _ct = _u.get("output_tokens", 0) if isinstance(_u, dict) else getattr(_u, "output_tokens", 0)
+                                _pt = _pt or 0; _ct = _ct or 0
+                                _cost, _label = self._calculate_anthropic_cost(model or "", _pt, _ct)
+                                self.update_session_field(n8n_session_id, "wee_meta", {
+                                    "tokens": _pt + _ct, "prompt_tokens": _pt,
+                                    "completion_tokens": _ct, "cost_usd": _cost,
+                                    "cost_label": _label, "model": model or "", "runtime": "claude-sdk",
+                                })
+                                self._log_token_usage(
+                                    session_id=n8n_session_id, model=model or "claude",
+                                    runtime="claude-sdk", provider="anthropic",
+                                    prompt_tokens=_pt, completion_tokens=_ct,
+                                    total_tokens=_pt + _ct, cost_usd=_cost, duration_ms=0,
+                                )
+                            except Exception as _ue:
+                                print(f"[claude-sdk] usage capture error: {_ue}", file=sys.stderr)
                     elif hasattr(message, "content"):
                         for block in getattr(message, "content", []):
                             if hasattr(block, "text"):
@@ -7571,6 +7592,131 @@ User Request:
 
         return self.strip_metadata(output, "cursor")
 
+    # ── Issue #128: Token usage tracking helpers ─────────────────────────────
+
+    def _fetch_openrouter_pricing(self) -> dict:
+        """Fetch and cache OpenRouter model pricing (1h TTL)."""
+        import time as _time
+        import json as _json
+        import urllib.request
+
+        cache_path = Path('/tmp/openrouter_pricing.json')
+        now = _time.time()
+        if cache_path.exists() and (now - cache_path.stat().st_mtime) < 3600:
+            try:
+                with open(cache_path) as f:
+                    return _json.load(f)
+            except Exception:
+                pass
+        try:
+            with urllib.request.urlopen(
+                'https://openrouter.ai/api/v1/models', timeout=10
+            ) as resp:
+                data = _json.loads(resp.read().decode())
+            pricing = {}
+            for model_info in data.get('data', []):
+                mid = model_info.get('id', '')
+                p = model_info.get('pricing', {})
+                try:
+                    pricing[mid] = {
+                        'prompt': float(p.get('prompt', 0) or 0),
+                        'completion': float(p.get('completion', 0) or 0),
+                    }
+                except (ValueError, TypeError):
+                    pass
+            with open(cache_path, 'w') as f:
+                _json.dump(pricing, f)
+            return pricing
+        except Exception as e:
+            print(f'[TokenUsage] Could not fetch OpenRouter pricing: {e}', file=sys.stderr)
+            return {}
+
+    def _calculate_wee_cost(
+        self, model: str, prompt_tokens: int, completion_tokens: int, pricing: dict
+    ):
+        """Calculate cost and label for wee runtime (Ollama/OpenRouter)."""
+        model_lower = model.lower()
+        if model_lower.startswith('ollama/') or '192.168' in model_lower:
+            return 0.0, 'local'
+        bare_model = model
+        for prefix in ('openrouter/', 'lmstudio/', 'wee/'):
+            if model_lower.startswith(prefix):
+                bare_model = model[len(prefix):]
+                break
+        if bare_model not in pricing:
+            return 0.0, 'free'
+        p = pricing[bare_model]
+        cost = (prompt_tokens * p['prompt']) + (completion_tokens * p['completion'])
+        return cost, self._get_cost_label(cost)
+
+    def _calculate_anthropic_cost(self, model: str, prompt_tokens: int, completion_tokens: int):
+        """Calculate cost for Anthropic / claude-sdk models."""
+        ANTHROPIC_PRICING = {
+            'claude-haiku-4-5':  (0.80, 4.00),
+            'claude-haiku-4':    (0.80, 4.00),
+            'claude-haiku':      (0.80, 4.00),
+            'claude-sonnet-4-5': (3.00, 15.00),
+            'claude-sonnet-4':   (3.00, 15.00),
+            'claude-sonnet':     (3.00, 15.00),
+            'claude-opus-4-5':   (15.00, 75.00),
+            'claude-opus-4':     (15.00, 75.00),
+            'claude-opus':       (15.00, 75.00),
+        }
+        model_lower = model.lower()
+        input_price, output_price = 3.00, 15.00
+        for key, (inp, out) in ANTHROPIC_PRICING.items():
+            if key in model_lower:
+                input_price, output_price = inp, out
+                break
+        cost = (prompt_tokens * input_price / 1_000_000) + (completion_tokens * output_price / 1_000_000)
+        return cost, self._get_cost_label(cost)
+
+    def _get_cost_label(self, cost_usd: float) -> str:
+        """Format cost as display label."""
+        if cost_usd == 0.0:
+            return 'free'
+        if cost_usd < 0.00001:
+            return f'${cost_usd:.8f}'.rstrip('0')
+        if cost_usd < 0.001:
+            return f'${cost_usd:.6f}'.rstrip('0')
+        return f'${cost_usd:.4f}'.rstrip('0').rstrip('.')
+
+    def _log_token_usage(
+        self,
+        session_id: str,
+        model: str,
+        runtime: str,
+        provider: str,
+        prompt_tokens: int,
+        completion_tokens: int,
+        total_tokens: int,
+        cost_usd: float,
+        duration_ms: int,
+    ):
+        """Append a usage entry to logs/token_usage.jsonl."""
+        import time as _time
+        import json as _json
+        try:
+            self.logs_dir.mkdir(parents=True, exist_ok=True)
+            entry = {
+                'timestamp': _time.time(),
+                'session_id': session_id,
+                'model': model,
+                'runtime': runtime,
+                'provider': provider,
+                'prompt_tokens': prompt_tokens,
+                'completion_tokens': completion_tokens,
+                'total_tokens': total_tokens,
+                'cost_usd': cost_usd,
+                'duration_ms': duration_ms,
+            }
+            with open(self.logs_dir / 'token_usage.jsonl', 'a') as f:
+                f.write(_json.dumps(entry) + '\n')
+        except Exception as e:
+            print(f'[TokenUsage] Failed to log usage: {e}', file=sys.stderr)
+
+    # ── End Issue #128 helpers ─────────────────────────────────────────────────
+
     def run_wee_native(
         self,
         prompt: str,
@@ -7626,7 +7772,7 @@ User Request:
 
         # Provider presets
         _PRESETS = {
-            "ollama": ("http://192.168.1.101:11436/v1", "ollama"),
+            "ollama": ("http://192.168.1.101:11434/v1", "ollama"),
             "openrouter": ("https://openrouter.ai/api/v1", None),
             "lmstudio": ("http://localhost:1234/v1", "lm-studio"),
         }
@@ -7679,24 +7825,58 @@ User Request:
         collected_output = []
 
         try:
+            import time as _time
+            _wee_start = _time.time()
+            _last_usage = [None]
+
             stream = client.chat.completions.create(
                 model=resolved_model,
                 messages=messages,
                 stream=True,
+                stream_options={"include_usage": True},
             )
 
             for chunk in stream:
                 if chunk.choices and chunk.choices[0].delta.content:
                     token = chunk.choices[0].delta.content
                     collected_output.append(token)
-
-                    # Push to SSE stream buffer for WebUI
                     if stream_buffer:
                         stream_buffer.push("chunk", {"text": token})
+                if hasattr(chunk, "usage") and chunk.usage is not None:
+                    _last_usage[0] = chunk.usage
 
             output = "".join(collected_output)
 
-            # Push done sentinel
+            # Compute cost + attach wee_meta (Issue #128)
+            try:
+                _duration_ms = int((_time.time() - _wee_start) * 1000)
+                if _last_usage[0] is not None:
+                    _u = _last_usage[0]
+                    _prompt_tokens = getattr(_u, "prompt_tokens", 0) or 0
+                    _completion_tokens = getattr(_u, "completion_tokens", 0) or 0
+                    _total = getattr(_u, "total_tokens", _prompt_tokens + _completion_tokens)
+                    _provider = "ollama" if "192.168" in api_base else ("openrouter" if "openrouter" in api_base else "wee")
+                    _pricing = self._fetch_openrouter_pricing() if _provider == "openrouter" else {}
+                    _cost_usd, _cost_label = self._calculate_wee_cost(model, _prompt_tokens, _completion_tokens, _pricing)
+                    _wee_meta = {
+                        "tokens": _total,
+                        "prompt_tokens": _prompt_tokens,
+                        "completion_tokens": _completion_tokens,
+                        "cost_usd": _cost_usd,
+                        "cost_label": _cost_label,
+                        "model": model,
+                        "runtime": "wee",
+                    }
+                    self.update_session_field(n8n_session_id, "wee_meta", _wee_meta)
+                    self._log_token_usage(
+                        session_id=n8n_session_id, model=model, runtime="wee",
+                        provider=_provider, prompt_tokens=_prompt_tokens,
+                        completion_tokens=_completion_tokens, total_tokens=_total,
+                        cost_usd=_cost_usd, duration_ms=_duration_ms,
+                    )
+            except Exception as _meta_err:
+                print(f"[Wee Native] wee_meta error: {_meta_err}", file=sys.stderr)
+
             if stream_buffer:
                 stream_buffer.push("done", output)
 
@@ -9701,14 +9881,12 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
 
                 session_data = session_mgr.get_or_create_session_data(session_id)
                 runtime = session_data.get("runtime", "copilot")
-                done_payload = _json.dumps(
-                    {
-                        "type": "done",
-                        "response": result,
-                        "runtime": runtime,
-                        "model": session_data.get("model"),
-                    }
-                )
+                _wm = session_data.get("wee_meta")
+                _done_obj = {"type": "done", "response": result, "runtime": runtime, "model": session_data.get("model")}
+                if _wm:
+                    _done_obj["wee_meta"] = _wm
+                    session_mgr.update_session_field(session_id, "wee_meta", None)
+                done_payload = _json.dumps(_done_obj)
                 yield f"data: {done_payload}\n\n"
                 done_delivered = True
             finally:
@@ -9996,6 +10174,84 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 "cancelled": False,
                 "message": f"Failed to cancel query (PID: {pid})",
             }
+
+    # --- Token usage analytics endpoint (Issue #128) ---
+
+    @app.get("/api/v1/usage")
+    async def get_token_usage(request: Request, period: str = "all_time"):
+        """Return token usage and cost analytics.
+
+        Query params:
+            period: today | 7d | 30d | all_time (default)
+        """
+        import time as _time
+        import json as _json
+        import datetime as _datetime
+        await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        log_file = session_mgr.logs_dir / "token_usage.jsonl"
+
+        now = _time.time()
+        if period == "today":
+            cutoff = _datetime.datetime.now().replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
+        elif period == "7d":
+            cutoff = now - 7 * 86400
+        elif period == "30d":
+            cutoff = now - 30 * 86400
+        else:
+            cutoff = 0
+
+        entries = []
+        if log_file.exists():
+            try:
+                with open(log_file) as f:
+                    for line in f:
+                        line = line.strip()
+                        if not line:
+                            continue
+                        try:
+                            e = _json.loads(line)
+                            if e.get("timestamp", 0) >= cutoff:
+                                entries.append(e)
+                        except Exception:
+                            pass
+            except Exception:
+                pass
+
+        total_cost = sum(e.get("cost_usd", 0) or 0 for e in entries)
+        total_tokens = sum(e.get("total_tokens", 0) or 0 for e in entries)
+
+        by_model_map = {}
+        for e in entries:
+            m = e.get("model", "unknown")
+            if m not in by_model_map:
+                by_model_map[m] = {
+                    "model": m,
+                    "runtime": e.get("runtime", "unknown"),
+                    "total_tokens": 0,
+                    "prompt_tokens": 0,
+                    "completion_tokens": 0,
+                    "cost_usd": 0.0,
+                    "requests": 0,
+                }
+            bm = by_model_map[m]
+            bm["total_tokens"] += e.get("total_tokens", 0) or 0
+            bm["prompt_tokens"] += e.get("prompt_tokens", 0) or 0
+            bm["completion_tokens"] += e.get("completion_tokens", 0) or 0
+            bm["cost_usd"] += e.get("cost_usd", 0) or 0
+            bm["requests"] += 1
+
+        return {
+            "period": period,
+            "total_cost_usd": round(total_cost, 8),
+            "total_tokens": total_tokens,
+            "total_requests": len(entries),
+            "by_model": sorted(by_model_map.values(), key=lambda x: x["cost_usd"], reverse=True),
+        }
 
     # --- Runtime usage endpoint ---
 
