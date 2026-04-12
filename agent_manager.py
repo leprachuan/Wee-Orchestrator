@@ -1473,6 +1473,23 @@ class SessionManager:
         ],
     }
 
+
+    # WEE native runtime models configuration
+    WEE_MODELS = {
+        "Ollama (local)": [
+            ("ollama/gemma4:e4b", "Gemma 4 E4B (local)", ["gemma4-e4b", "gemma4"]),
+            ("ollama/gemma4:e2b", "Gemma 4 E2B (local)", ["gemma4-e2b"]),
+        ],
+        "OpenRouter": [
+            ("openrouter/meta-llama/llama-4-scout", "Llama 4 Scout via OpenRouter", ["llama-4-scout"]),
+            ("openrouter/meta-llama/llama-4-maverick", "Llama 4 Maverick via OpenRouter", ["llama-4-maverick"]),
+            ("openrouter/google/gemma-3-27b-it", "Gemma 3 27B via OpenRouter", ["gemma-3-27b"]),
+        ],
+        "LM Studio": [
+            ("lmstudio/default", "LM Studio Default Model", ["lmstudio"]),
+        ],
+    }
+
     def __init__(self, config_file: Optional[str] = None, app_env: str = "PROD"):
         # Copilot Paths
         self.copilot_home = Path.home() / ".copilot"
@@ -1561,6 +1578,7 @@ class SessionManager:
         self._env_codex_models = None
         self._env_devin_models = None
         self._env_cursor_models = None
+        self._env_wee_models = None
 
         # Load command timeout from environment
         self.command_timeout = get_command_timeout()
@@ -3319,7 +3337,7 @@ You can mention an agent in your prompt and it will auto-delegate:
             "codex": self._env_codex_models,
             "devin": self._env_devin_models,
             "cursor": self._env_cursor_models,
-            "wee": {},
+            "wee": self._env_wee_models,
         }
         env_models = env_models_map.get(runtime)
         if env_models:
@@ -3337,7 +3355,7 @@ You can mention an agent in your prompt and it will auto-delegate:
             "opencode": self.OPENCODE_MODELS,
             "devin": self.DEVIN_MODELS,
             "cursor": self.CURSOR_MODELS,
-            "wee": {},
+            "wee": self.WEE_MODELS,
         }
         models_dict = static_map.get(runtime)
         if not models_dict:
@@ -3526,6 +3544,31 @@ You can mention an agent in your prompt and it will auto-delegate:
 
         return self._static_models_to_dict(self.CURSOR_MODELS)
 
+    def fetch_wee_models(self) -> Dict:
+        """Return available Wee native runtime models from environment or fallback to static list.
+
+        Models are read from WEE_MODELS_JSON environment variable, with
+        static WEE_MODELS as fallback.
+        """
+        # Try to load from environment variable first
+        env_models = os.getenv("WEE_MODELS_JSON")
+        if env_models:
+            try:
+                import json
+
+                models_dict = json.loads(env_models)
+                # Cache the full model dict with descriptions for lookup later
+                self._env_wee_models = models_dict
+                # Convert to the expected format {category: [model_ids]}
+                return self._static_models_to_dict(models_dict)
+            except (json.JSONDecodeError, ValueError) as e:
+                print(
+                    f"Warning: Failed to parse WEE_MODELS_JSON: {e}", file=sys.stderr
+                )
+
+        # Fallback to static configuration
+        return self._static_models_to_dict(self.WEE_MODELS)
+
     def get_models_for_runtime(self, runtime: str) -> Dict:
         """Fetch available models for a runtime, using CLI discovery where possible.
 
@@ -3543,7 +3586,7 @@ You can mention an agent in your prompt and it will auto-delegate:
             "codex": self.fetch_codex_models,
             "devin": self.fetch_devin_models,
             "cursor": self.fetch_cursor_models,
-            "wee": lambda: {"Wee Native": [("ollama/gemma4:e4b", "Ollama Gemma 4 E4B (local)", []), ("openrouter/meta-llama/llama-4-scout", "Llama 4 Scout via OpenRouter", [])]},
+            "wee": self.fetch_wee_models,
         }
         fetcher = dispatch.get(runtime)
         if fetcher is None:
@@ -4060,7 +4103,7 @@ You can mention an agent in your prompt and it will auto-delegate:
         name_lower = name.lower().strip("\"'")
 
         # Ensure env models are loaded/cached by triggering fetch for this runtime
-        if runtime in ("claude", "gemini", "codex", "devin", "cursor"):
+        if runtime in ("claude", "gemini", "codex", "devin", "cursor", "wee"):
             self.get_models_for_runtime(runtime)
 
         # Step 1: check env-loaded or static alias tables for all runtimes that have them.
@@ -4070,6 +4113,7 @@ You can mention an agent in your prompt and it will auto-delegate:
             "codex": self._env_codex_models,
             "devin": self._env_devin_models,
             "cursor": self._env_cursor_models,
+            "wee": self._env_wee_models,
         }
         static_alias_map = {
             "claude": self.CLAUDE_MODELS,
@@ -4078,6 +4122,7 @@ You can mention an agent in your prompt and it will auto-delegate:
             "opencode": self.OPENCODE_MODELS,
             "devin": self.DEVIN_MODELS,
             "cursor": self.CURSOR_MODELS,
+            "wee": self.WEE_MODELS,
         }
 
         # Try env-loaded models first, fall back to static
@@ -9371,6 +9416,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             "codex",
             "devin",
             "cursor",
+            "wee",
         }
         if runtime not in known_runtimes:
             return {
