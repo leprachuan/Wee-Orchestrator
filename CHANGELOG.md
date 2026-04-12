@@ -1,5 +1,25 @@
 # Changelog
 
+## [Wee Runtime Fix] End-to-end Ollama + OpenRouter + Tool Calling
+**Status:** ✅ Verified (Branch: issue/wee-runtime-fix, PR #122)
+
+### Summary
+Fixed the Wee Runtime to work end-to-end through the WebUI with both Ollama and OpenRouter providers, including streaming tool calls. Merged QA-approved feature branches and fixed remaining integration gaps.
+
+### Fixes
+1. **Ollama port 11436→11434** — Fixed in wee_runtime.py and agent_manager.py PROVIDER_PRESETS
+2. **Merged tool calling support** — From QA-approved #107/#108/#109 (multi-turn tool loop, conversation history, SSE streaming)
+3. **Merged OpenRouter UI integration** — From QA-approved #119 (model switcher groups, live discovery with TTL cache)
+4. **Added 6 free OpenRouter models** — gemma-3-27b:free, gemma-4-31b:free, llama-3.3-70b:free, nemotron-120b:free, nemotron-nano-9b:free, qwen3-coder:free
+5. **Fixed OpenRouter API key propagation** — Added OPENROUTER_API_KEY env var fallback when keyring lookup fails
+
+### Verification
+- Ollama gemma4:e4b: CLI ✅ API ✅ SSE streaming ✅ Tool calls ✅
+- OpenRouter nemotron free: CLI ✅ API ✅ SSE streaming ✅ Tool calls ✅
+- Model switcher shows 3 groups (Ollama, OpenRouter, OpenRouter Free) ✅
+- 1231 tests pass, 9 skipped ✅
+
+
 ## [Issue #107] Bug: Wee runtime tool calling returns no response
 **Status:** ✅ QA Approved (Commit: 000bda8)
 
