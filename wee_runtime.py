@@ -4,13 +4,18 @@
 Standalone CLI for use in background tasks. Streams response tokens to stdout.
 Supports Ollama, OpenRouter, LM Studio, and any OpenAI-compatible API.
 
+Issue #107: Tool-calling agentic loop — detects tool calls, executes bash/python,
+re-sends results to model, and streams the final response.
+
 Usage:
     python3 wee_runtime.py --model MODEL --api-base URL [--api-key KEY] "PROMPT"
+    python3 wee_runtime.py --model ollama/qwen3:8b --tools "ask what day it is"
 """
 
 import argparse
 import json
 import os
+import subprocess
 import sys
 import time
 
@@ -21,6 +26,47 @@ PROVIDER_PRESETS = {
     "openrouter": ("https://openrouter.ai/api/v1", None),
     "lmstudio": ("http://localhost:1234/v1", "lm-studio"),
 }
+
+# Tool definitions (Issue #107)
+_WEE_TOOLS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "bash",
+            "description": "Execute a bash shell command and return its output.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "command": {
+                        "type": "string",
+                        "description": "The bash command to execute",
+                    }
+                },
+                "required": ["command"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "python",
+            "description": "Execute Python 3 code and return the output.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "code": {
+                        "type": "string",
+                        "description": "The Python code to execute",
+                    }
+                },
+                "required": ["code"],
+            },
+        },
+    },
+]
+
+MAX_TOOL_ROUNDS = 10
+TOOL_TIMEOUT = 120  # seconds per tool execution
 
 
 def resolve_model_and_endpoint(model: str, api_base: str = None, api_key: str = None):
@@ -52,12 +98,10 @@ def resolve_model_and_endpoint(model: str, api_base: str = None, api_key: str = 
             "WEE_API_BASE", "http://192.168.1.101:11434/v1"
         )
     if not resolved_key:
-        # Try environment variables
         resolved_key = os.environ.get("WEE_API_KEY") or os.environ.get(
             "OPENROUTER_API_KEY"
         )
         if not resolved_key:
-            # Try keyring for OpenRouter
             if "openrouter" in (resolved_base or "").lower():
                 try:
                     import keyring
@@ -65,9 +109,48 @@ def resolve_model_and_endpoint(model: str, api_base: str = None, api_key: str = 
                 except Exception:
                     pass
             if not resolved_key:
-                resolved_key = "ollama"  # Safe default for local endpoints
+                resolved_key = "ollama"
 
     return resolved_model, resolved_base, resolved_key
+
+
+def execute_tool(func_name: str, func_args: dict) -> str:
+    """Execute a tool call and return its output (Issue #107)."""
+    try:
+        if func_name == "bash":
+            command = func_args.get("command", "")
+            if not command:
+                return "Error: No command provided"
+            result = subprocess.run(
+                ["bash", "-c", command],
+                capture_output=True,
+                text=True,
+                timeout=TOOL_TIMEOUT,
+            )
+            output = result.stdout
+            if result.returncode != 0 and result.stderr:
+                output += f"\nSTDERR: {result.stderr}"
+            return output.strip() or "(no output)"
+        elif func_name == "python":
+            code = func_args.get("code", "")
+            if not code:
+                return "Error: No code provided"
+            result = subprocess.run(
+                [sys.executable, "-c", code],
+                capture_output=True,
+                text=True,
+                timeout=TOOL_TIMEOUT,
+            )
+            output = result.stdout
+            if result.returncode != 0 and result.stderr:
+                output += f"\nSTDERR: {result.stderr}"
+            return output.strip() or "(no output)"
+        else:
+            return f"Error: Unknown tool {func_name}"
+    except subprocess.TimeoutExpired:
+        return f"Error: Tool {func_name} timed out after {TOOL_TIMEOUT}s"
+    except Exception as e:
+        return f"Error executing tool {func_name}: {e}"
 
 
 def main():
@@ -80,6 +163,8 @@ def main():
     parser.add_argument("--system-prompt", default="", help="System prompt")
     parser.add_argument("--timeout", type=int, default=300, help="Request timeout in seconds")
     parser.add_argument("--temperature", type=float, default=None, help="Sampling temperature")
+    parser.add_argument("--tools", action="store_true", default=False,
+                        help="Enable tool calling (bash, python)")
     parser.add_argument("prompt", help="User prompt")
     args = parser.parse_args()
 
@@ -104,26 +189,151 @@ def main():
         messages.append({"role": "system", "content": args.system_prompt})
     messages.append({"role": "user", "content": args.prompt})
 
-    create_kwargs = {
-        "model": model,
-        "messages": messages,
-        "stream": True,
-    }
-    if args.temperature is not None:
-        create_kwargs["temperature"] = args.temperature
+    if not args.tools:
+        # Simple streaming (no tool calling)
+        create_kwargs = {
+            "model": model,
+            "messages": messages,
+            "stream": True,
+        }
+        if args.temperature is not None:
+            create_kwargs["temperature"] = args.temperature
+
+        try:
+            stream = client.chat.completions.create(**create_kwargs)
+            for chunk in stream:
+                if chunk.choices and chunk.choices[0].delta.content:
+                    sys.stdout.write(chunk.choices[0].delta.content)
+                    sys.stdout.flush()
+            sys.stdout.write("\n")
+            sys.stdout.flush()
+        except KeyboardInterrupt:
+            sys.exit(130)
+        except Exception as e:
+            print(f"\nError: Wee native runtime failed: {e}", file=sys.stderr)
+            sys.exit(1)
+        return
+
+    # -- Tool-calling agentic loop (Issue #107) --
+    collected_output = []
+    tool_call_counter = 0
 
     try:
-        stream = client.chat.completions.create(**create_kwargs)
+        for round_num in range(MAX_TOOL_ROUNDS + 1):
+            create_kwargs = {
+                "model": model,
+                "messages": messages,
+                "stream": True,
+            }
+            if args.temperature is not None:
+                create_kwargs["temperature"] = args.temperature
+            if round_num < MAX_TOOL_ROUNDS:
+                create_kwargs["tools"] = _WEE_TOOLS
 
-        for chunk in stream:
-            if chunk.choices and chunk.choices[0].delta.content:
-                token = chunk.choices[0].delta.content
-                sys.stdout.write(token)
-                sys.stdout.flush()
+            try:
+                stream = client.chat.completions.create(**create_kwargs)
+            except Exception as tools_err:
+                if "tools" in create_kwargs:
+                    print(
+                        f"[Wee] Tools not supported, retrying without: {tools_err}",
+                        file=sys.stderr,
+                    )
+                    create_kwargs.pop("tools", None)
+                    stream = client.chat.completions.create(**create_kwargs)
+                else:
+                    raise
 
-        # Final newline
+            round_content = []
+            tool_calls_acc = {}
+
+            for chunk in stream:
+                if not chunk.choices:
+                    continue
+                delta = chunk.choices[0].delta
+
+                if delta.content:
+                    token = delta.content
+                    round_content.append(token)
+                    sys.stdout.write(token)
+                    sys.stdout.flush()
+
+                if getattr(delta, "tool_calls", None):
+                    for tc_delta in delta.tool_calls:
+                        idx = tc_delta.index
+                        if idx not in tool_calls_acc:
+                            tool_call_counter += 1
+                            tool_calls_acc[idx] = {
+                                "id": getattr(tc_delta, "id", None) or f"tc_wee_{tool_call_counter}",
+                                "name": "",
+                                "arguments": "",
+                            }
+                        if tc_delta.id:
+                            tool_calls_acc[idx]["id"] = tc_delta.id
+                        if tc_delta.function:
+                            if tc_delta.function.name:
+                                tool_calls_acc[idx]["name"] = tc_delta.function.name
+                            if tc_delta.function.arguments:
+                                tool_calls_acc[idx]["arguments"] += tc_delta.function.arguments
+
+            content_text = "".join(round_content)
+
+            if not tool_calls_acc:
+                collected_output.append(content_text)
+                break
+
+            # Tool calls detected
+            print(
+                f"\n[Wee] Round {round_num + 1}: {len(tool_calls_acc)} tool call(s)",
+                file=sys.stderr,
+            )
+
+            assistant_tool_calls = []
+            for idx in sorted(tool_calls_acc.keys()):
+                tc = tool_calls_acc[idx]
+                assistant_tool_calls.append({
+                    "id": tc["id"],
+                    "type": "function",
+                    "function": {"name": tc["name"], "arguments": tc["arguments"]},
+                })
+
+            messages.append({
+                "role": "assistant",
+                "content": content_text or None,
+                "tool_calls": assistant_tool_calls,
+            })
+
+            for tc_entry in assistant_tool_calls:
+                tc_id = tc_entry["id"]
+                func_name = tc_entry["function"]["name"]
+                func_args_str = tc_entry["function"]["arguments"]
+
+                try:
+                    func_args = json.loads(func_args_str)
+                except (ValueError, json.JSONDecodeError):
+                    func_args = {"raw": func_args_str}
+
+                print(f"[Wee] Tool: {func_name}({json.dumps(func_args)[:200]})", file=sys.stderr)
+
+                tool_result = execute_tool(func_name, func_args)
+
+                messages.append({
+                    "role": "tool",
+                    "tool_call_id": tc_id,
+                    "content": tool_result or "No output",
+                })
+        else:
+            # All rounds had tool calls with no final text
+            last_results = [m["content"] for m in messages if m.get("role") == "tool"]
+            if last_results:
+                fallback = "Tool execution completed. Last result:\n" + last_results[-1][:2000]
+            else:
+                fallback = "Max tool rounds reached without final response."
+            collected_output.append(fallback)
+            sys.stdout.write(fallback)
+
         sys.stdout.write("\n")
         sys.stdout.flush()
+
     except KeyboardInterrupt:
         sys.exit(130)
     except Exception as e:
