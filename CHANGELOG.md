@@ -1,6 +1,49 @@
 # Changelog
 
-## [Issue #100] Feature: GitHub Issues Integration for TODO Endpoints
+### [Issue #128] Feature: Token Usage Tracking + Cost Estimation + WebUI Footer
+**Status:** ✅ Implemented
+
+### Summary
+Adds end-to-end token usage tracking for the wee runtime: token counts are captured from the OpenAI streaming API, costs are calculated using OpenRouter pricing (with 1h cache), and displayed in the WebUI message footer. Usage is logged to a JSONL file and exposed via a new `/api/v1/usage` endpoint.
+
+### Changes
+
+**wee_runtime.py (standalone CLI)**
+- Added `stream_options={"include_usage": True}` to OpenAI streaming calls
+- Parses `chunk.usage` from final streaming chunk (prompt/completion/total tokens)
+- `fetch_openrouter_pricing()` — fetches model pricing from OpenRouter API, caches 1h in `/tmp/openrouter_pricing.json`
+- `calculate_cost()` — returns `(cost_usd, label)` where label is `local`, `free`, or `$X.XXXX`
+- `log_token_usage()` — appends entry to `~/.copilot/logs/token_usage.jsonl`
+- Outputs `__WEE_META__ {...}` line at end of stream (stripped by backend before sending to UI)
+- Fixed Ollama port: 11436 → 11434
+
+**agent_manager.py (backend)**
+- `_fetch_openrouter_pricing()` — same 1h-cached pricing fetch (for interactive sessions)
+- `_calculate_wee_cost()` — cost+label for wee/ollama/openrouter models
+- `_calculate_anthropic_cost()` — cost+label for claude-sdk models
+- `_get_cost_label()` — formats cost as `$0.0001` or `free`
+- `_log_token_usage()` — appends to `logs/token_usage.jsonl`
+- `run_wee_native()` — captures usage from final streaming chunk, stores `wee_meta` in session
+- `run_claude_sdk()` — captures usage from `ResultMessage`, stores `wee_meta` in session
+- SSE `done_payload` — includes `wee_meta` (tokens, cost, model), cleared after send
+- **GET /api/v1/usage** — aggregates JSONL log by model; supports `?period=today|7d|30d`
+
+**webui/dist/app.js (frontend)**
+- `buildTimingText(elapsedSec, weeMeta)` helper — returns footer string:
+  - Paid: `Generated in 3.4s · 229 tokens · $0.0001`
+  - Free: `Generated in 3.4s · 229 tokens · free`
+  - Local (Ollama): `Generated in 3.4s · 229 tokens · local`
+  - No data: `Generated in 3.4s`
+- Streaming done path updated to pass `evt.wee_meta` to `buildTimingText`
+- `renderMessage()` signature updated with `weeMeta` param; timing block uses `buildTimingText`
+
+**Tests**
+- `tests/test_issue128_token_usage.py` — 28 new tests
+- `tests/test_wee_native_runtime.py` — fixed Ollama port assertion (11436 → 11434)
+- Total: 1170 passed, 9 skipped (no regressions)
+
+
+# [Issue #100] Feature: GitHub Issues Integration for TODO Endpoints
 **Status:** ✅ QA Approved (Commit: ca21379)
 
 ### Summary
