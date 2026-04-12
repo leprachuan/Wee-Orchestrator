@@ -516,10 +516,16 @@ const PILL_OPTIONS = {
       const runtime = $('meta-runtime')?.dataset?.runtime || $('meta-runtime')?.textContent?.trim() || 'copilot';
       try {
         const data = await apiRequest('GET', `/models?runtime=${encodeURIComponent(runtime)}`);
-        const opts = (data.models || []).map(m => ({
-          label: m.label,
-          cmd: `/model set ${m.id}`,
-        }));
+        const models = data.models || [];
+        const opts = [];
+        let lastGroup = null;
+        models.forEach(m => {
+          if (m.group && m.group !== lastGroup) {
+            opts.push({ label: '── ' + m.group + ' ──', cmd: null, disabled: true });
+            lastGroup = m.group;
+          }
+          opts.push({ label: m.label, cmd: `/model set ${m.id}` });
+        });
         opts.push({ label: '📋 list models', cmd: '/model list' });
         return opts;
       } catch (e) {
@@ -3824,10 +3830,30 @@ async function populateModelDropdown(container, runtime) {
     const data = await apiRequest('GET', `/models?runtime=${encodeURIComponent(runtime)}`);
     const models = data.models || [];
     let opts = '<option value="">(runtime default)</option>';
-    opts += models.map(m => {
-      const sel = m.id === current ? ' selected' : '';
-      return `<option value="${escHtml(m.id)}"${sel}>${escHtml(m.label)}</option>`;
-    }).join('');
+    // Group models by their group field for optgroup rendering
+    const groups = {};
+    let hasGroups = false;
+    models.forEach(m => {
+      const g = m.group || '';
+      if (g) hasGroups = true;
+      if (!groups[g]) groups[g] = [];
+      groups[g].push(m);
+    });
+    if (hasGroups) {
+      for (const [gName, gModels] of Object.entries(groups)) {
+        if (gName) opts += `<optgroup label="${escHtml(gName)}">`;
+        opts += gModels.map(m => {
+          const sel = m.id === current ? ' selected' : '';
+          return `<option value="${escHtml(m.id)}"${sel}>${escHtml(m.label)}</option>`;
+        }).join('');
+        if (gName) opts += '</optgroup>';
+      }
+    } else {
+      opts += models.map(m => {
+        const sel = m.id === current ? ' selected' : '';
+        return `<option value="${escHtml(m.id)}"${sel}>${escHtml(m.label)}</option>`;
+      }).join('');
+    }
     select.innerHTML = opts;
   } catch (e) {
     let opts = '<option value="">(runtime default)</option>';

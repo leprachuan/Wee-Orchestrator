@@ -1557,6 +1557,8 @@ class SessionManager:
         self._env_codex_models = None
         self._env_devin_models = None
         self._env_cursor_models = None
+        self._env_wee_models = None  # Cache for dynamically-discovered wee models
+        self._openrouter_cache_ts = 0  # TTL timestamp for OpenRouter discovery cache
 
         # Load command timeout from environment
         self.command_timeout = get_command_timeout()
@@ -3298,6 +3300,39 @@ You can mention an agent in your prompt and it will auto-delegate:
             print(f"Error fetching opencode models: {e}", file=sys.stderr)
             return self._static_models_to_dict(self.OPENCODE_MODELS)
 
+
+    # Curated popular OpenRouter model IDs for auto-discovery filtering
+    OPENROUTER_POPULAR_MODELS = {
+        "meta-llama/llama-4-maverick",
+        "meta-llama/llama-4-scout",
+        "anthropic/claude-sonnet-4.6",
+        "anthropic/claude-opus-4.6",
+        "google/gemini-3.1-flash-lite-preview",
+        "google/gemini-3.1-pro-preview-customtools",
+        "openai/gpt-4.1",
+        "openai/gpt-4.1-mini",
+        "deepseek/deepseek-v3.2",
+        "qwen/qwen3.6-plus",
+        "mistralai/mistral-small-2603",
+        "cohere/command-r-plus-08-2024",
+    }
+
+    WEE_MODELS = {
+        "Wee Native (Ollama)": [
+            ("ollama/gemma4:e4b", "Ollama Gemma 4 E4B (local)", ["gemma4", "gemma"]),
+            ("ollama/qwen3", "Ollama Qwen 3 (local)", ["qwen3", "qwen"]),
+            ("ollama/granite3.3-tuned", "Ollama Granite 3.3 Tuned (local)", ["granite", "granite3.3"]),
+        ],
+        "Wee Native (OpenRouter)": [
+            ("openrouter/meta-llama/llama-4-maverick", "Llama 4 Maverick via OpenRouter", ["llama-4-maverick", "maverick"]),
+            ("openrouter/meta-llama/llama-4-scout", "Llama 4 Scout via OpenRouter", ["llama-4-scout", "scout"]),
+            ("openrouter/anthropic/claude-sonnet-4.6", "Claude Sonnet 4.6 via OpenRouter", ["or-claude-sonnet"]),
+            ("openrouter/google/gemini-3.1-flash-lite-preview", "Gemini 3.1 Flash Lite via OpenRouter", ["or-gemini-flash"]),
+            ("openrouter/openai/gpt-4.1", "GPT-4.1 via OpenRouter", ["or-gpt-4.1"]),
+            ("openrouter/deepseek/deepseek-v3.2", "DeepSeek V3.2 via OpenRouter", ["or-deepseek"]),
+        ],
+    }
+
     def _static_models_to_dict(self, static_dict: Dict) -> Dict:
         """Convert static model config {cat: [(id, desc, aliases)...]} to {cat: [id,...]}."""
         return {
@@ -3315,7 +3350,7 @@ You can mention an agent in your prompt and it will auto-delegate:
             "codex": self._env_codex_models,
             "devin": self._env_devin_models,
             "cursor": self._env_cursor_models,
-            "wee": {},
+            "wee": self._env_wee_models,
         }
         env_models = env_models_map.get(runtime)
         if env_models:
@@ -3333,7 +3368,7 @@ You can mention an agent in your prompt and it will auto-delegate:
             "opencode": self.OPENCODE_MODELS,
             "devin": self.DEVIN_MODELS,
             "cursor": self.CURSOR_MODELS,
-            "wee": {},
+            "wee": self.WEE_MODELS,
         }
         models_dict = static_map.get(runtime)
         if not models_dict:
@@ -3522,6 +3557,81 @@ You can mention an agent in your prompt and it will auto-delegate:
 
         return self._static_models_to_dict(self.CURSOR_MODELS)
 
+
+    def fetch_wee_models(self) -> Dict:
+        """Return available wee models: local Ollama + OpenRouter cloud models.
+
+        Queries OpenRouter GET /api/v1/models, filters to
+        OPENROUTER_POPULAR_MODELS, and caches for 300s. Falls back
+        to the static WEE_MODELS list on any error.
+        """
+        import time as _time
+
+        cache_ttl = 300  # 5 minutes
+
+        # Return cache if still valid
+        if (
+            self._env_wee_models is not None
+            and _time.time() - self._openrouter_cache_ts < cache_ttl
+        ):
+            return self._static_models_to_dict(self._env_wee_models)
+
+        # Start with static Ollama models
+        result = {}
+        for cat, entries in self.WEE_MODELS.items():
+            result[cat] = list(entries)
+
+        # Try live OpenRouter discovery
+        try:
+            api_key = None
+            try:
+                import keyring
+                api_key = keyring.get_password("openrouter", "api_key")
+            except Exception:
+                pass
+            if not api_key:
+                api_key = os.environ.get("OPENROUTER_API_KEY")
+
+            if not api_key:
+                print("[wee] No OpenRouter API key -- using static list", file=sys.stderr)
+                return self._static_models_to_dict(self.WEE_MODELS)
+
+            import urllib.request
+            req = urllib.request.Request(
+                "https://openrouter.ai/api/v1/models",
+                headers={"Authorization": "Bearer " + api_key},
+            )
+            resp = urllib.request.urlopen(req, timeout=10)
+            data = json.loads(resp.read())
+            all_models = data.get("data", [])
+
+            discovered = []
+            for m in all_models:
+                mid = m.get("id", "")
+                if mid in self.OPENROUTER_POPULAR_MODELS:
+                    name = m.get("name", mid)
+                    or_id = "openrouter/" + mid
+                    discovered.append((or_id, name + " (OpenRouter)", []))
+
+            if discovered:
+                discovered.sort(key=lambda t: t[1])
+                result["Wee Native (OpenRouter)"] = discovered
+                print(
+                    "[wee] OpenRouter: discovered %d models" % len(discovered),
+                    file=sys.stderr,
+                )
+
+            self._env_wee_models = result
+            self._openrouter_cache_ts = _time.time()
+            return self._static_models_to_dict(result)
+
+        except Exception as e:
+            print(
+                "[wee] OpenRouter discovery failed, using static list: %s" % e,
+                file=sys.stderr,
+            )
+            return self._static_models_to_dict(self.WEE_MODELS)
+
     def get_models_for_runtime(self, runtime: str) -> Dict:
         """Fetch available models for a runtime, using CLI discovery where possible.
 
@@ -3539,7 +3649,7 @@ You can mention an agent in your prompt and it will auto-delegate:
             "codex": self.fetch_codex_models,
             "devin": self.fetch_devin_models,
             "cursor": self.fetch_cursor_models,
-            "wee": lambda: {"Wee Native": [("ollama/gemma4:e4b", "Ollama Gemma 4 E4B (local)", []), ("openrouter/meta-llama/llama-4-scout", "Llama 4 Scout via OpenRouter", [])]},
+            "wee": self.fetch_wee_models,
         }
         fetcher = dispatch.get(runtime)
         if fetcher is None:
@@ -4066,6 +4176,7 @@ You can mention an agent in your prompt and it will auto-delegate:
             "codex": self._env_codex_models,
             "devin": self._env_devin_models,
             "cursor": self._env_cursor_models,
+            "wee": self._env_wee_models,
         }
         static_alias_map = {
             "claude": self.CLAUDE_MODELS,
@@ -4074,6 +4185,7 @@ You can mention an agent in your prompt and it will auto-delegate:
             "opencode": self.OPENCODE_MODELS,
             "devin": self.DEVIN_MODELS,
             "cursor": self.CURSOR_MODELS,
+            "wee": self.WEE_MODELS,
         }
 
         # Try env-loaded models first, fall back to static
@@ -9174,6 +9286,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             "codex",
             "devin",
             "cursor",
+            "wee",
         }
         if runtime not in known_runtimes:
             return {
@@ -9188,13 +9301,13 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 None, session_mgr.get_models_for_runtime, runtime
             )
             models = []
-            for _group, model_ids in raw.items():
+            for group_name, model_ids in raw.items():
                 for model_id in model_ids:
                     label = (
                         session_mgr._get_model_description(model_id, runtime)
                         or model_id
                     )
-                    models.append({"id": model_id, "label": label})
+                    models.append({"id": model_id, "label": label, "group": group_name})
             return {"runtime": runtime, "models": models}
         except Exception as e:
             return {"runtime": runtime, "models": [], "error": str(e)}
