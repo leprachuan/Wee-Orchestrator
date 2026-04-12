@@ -1,5 +1,30 @@
 # Changelog
 
+## [Issue #123] Bug Fix: Wee Runtime Tool Calling Returns {no response}
+**Status:** 🔧 In QA Review (Commit: 6c14696)
+
+**Root Cause:** The `dev` branch `run_wee_native()` made a single streaming API call with NO `tools` parameter. When a model requested a tool call (e.g. `bash` for `df -h`), Ollama returned chunks with `content: ""` and a `tool_calls` delta, but the code only checked `delta.content` and ignored tool calls entirely — resulting in empty output shown as `{no response}` in the WebUI.
+
+**6 Bugs Fixed:**
+1. No tool definitions passed to Ollama API (`tools` parameter missing)
+2. No tool call detection in streaming response loop
+3. No tool execution after detecting tool calls
+4. No conversation history persistence (Ollama is stateless)
+5. Wrong Ollama port: 11436 → 11434
+6. Wrong `build_agent_context_prompt` argument order
+
+**Added:**
+- Full agentic tool loop in `run_wee_native()` (max 10 rounds)
+- `_wee_execute_tool()` — bash, python, file_read, file_write
+- `_wee_load_messages()` / `_wee_save_messages()` — conversation history persistence
+- `_wee_augment_system_prompt_with_tools()` — system prompt tool capability declaration
+- Wee case in `session_exists()` for message-based session detection
+- Full tool-calling support in standalone `wee_runtime.py`
+- 41 regression tests (`test_issue123_tool_calling.py`)
+- Updated 3 pre-existing tests for port fix compatibility
+
+**Tests:** 1183 passed, 9 skipped (41 new)
+
 ## [Issue #100] Feature: GitHub Issues Integration for TODO Endpoints
 **Status:** ✅ QA Approved (Commit: ca21379)
 
