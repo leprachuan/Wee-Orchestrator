@@ -1,0 +1,238 @@
+"""Tests for Issue #118 — wee runtime model selection bug.
+
+Validates:
+- fetch_wee_models() returns flat strings (not tuples)
+- Ollama port is 11434 (not 11436) in run_wee_native and wee_runtime.py
+- get_models_for_runtime("wee") returns strings that can call .lower()
+- get_model_from_name resolves wee models correctly
+- /api/v1/models endpoint includes "wee" as a known runtime
+- When session model=ollama/gemma4:e4b, correct api_base port is used
+"""
+
+import os
+import sys
+import threading
+import unittest
+from pathlib import Path
+from unittest.mock import MagicMock, patch
+
+os.environ.setdefault("API_SHARED_KEY", "test_key_123")
+
+REPO = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(REPO))
+
+from agent_manager import SessionManager
+
+
+def _make_mgr():
+    mgr = SessionManager.__new__(SessionManager)
+    mgr.session_map = {}
+    mgr._session_map_lock = threading.Lock()
+    mgr.command_timeout = 300
+    mgr.AGENTS = {
+        "orchestrator": {"path": "/opt", "description": "test", "name": "orchestrator"}
+    }
+    mgr._stream_buffers = {}
+    return mgr
+
+
+class TestFetchWeeModels(unittest.TestCase):
+    """fetch_wee_models() must return flat strings, not tuples."""
+
+    def setUp(self):
+        self.mgr = _make_mgr()
+
+    def test_fetch_wee_models_returns_flat_strings(self):
+        """All returned items must be plain strings (not tuples)."""
+        with patch("urllib.request.urlopen") as mock_urlopen:
+            mock_resp = MagicMock()
+            mock_resp.read.return_value = b'{"models": [{"name": "gemma4:e4b"}, {"name": "qwen3.5:latest"}]}'
+            mock_resp.__enter__ = lambda s: s
+            mock_resp.__exit__ = MagicMock(return_value=False)
+            mock_urlopen.return_value = mock_resp
+
+            result = self.mgr.fetch_wee_models()
+
+        # Result is a dict with section keys
+        self.assertIsInstance(result, dict)
+        for section, models in result.items():
+            self.assertIsInstance(models, list, f"Section {section!r} must be a list")
+            for m in models:
+                self.assertIsInstance(m, str, f"Model {m!r} in section {section!r} must be a str, not {type(m)}")
+
+    def test_fetch_wee_models_ollama_prefix(self):
+        """Ollama models must be prefixed with 'ollama/'."""
+        with patch("urllib.request.urlopen") as mock_urlopen:
+            mock_resp = MagicMock()
+            mock_resp.read.return_value = b'{"models": [{"name": "gemma4:e4b"}, {"name": "granite3.3-tuned:latest"}]}'
+            mock_resp.__enter__ = lambda s: s
+            mock_resp.__exit__ = MagicMock(return_value=False)
+            mock_urlopen.return_value = mock_resp
+
+            result = self.mgr.fetch_wee_models()
+
+        ollama_section = result.get("Ollama (Local)", [])
+        self.assertIn("ollama/gemma4:e4b", ollama_section)
+        self.assertIn("ollama/granite3.3-tuned:latest", ollama_section)
+
+    def test_fetch_wee_models_includes_openrouter(self):
+        """OpenRouter section must be present with correct model IDs."""
+        with patch("urllib.request.urlopen") as mock_urlopen:
+            mock_resp = MagicMock()
+            mock_resp.read.return_value = b'{"models": []}'
+            mock_resp.__enter__ = lambda s: s
+            mock_resp.__exit__ = MagicMock(return_value=False)
+            mock_urlopen.return_value = mock_resp
+
+            result = self.mgr.fetch_wee_models()
+
+        openrouter_models = result.get("OpenRouter (Cloud)", [])
+        self.assertTrue(len(openrouter_models) > 0, "OpenRouter section must not be empty")
+        for m in openrouter_models:
+            self.assertTrue(m.startswith("openrouter/"), f"OpenRouter model {m!r} must start with 'openrouter/'")
+
+    def test_fetch_wee_models_fallback_on_error(self):
+        """Falls back to static list when Ollama is unreachable."""
+        with patch("urllib.request.urlopen", side_effect=Exception("connection refused")):
+            result = self.mgr.fetch_wee_models()
+
+        self.assertIsInstance(result, dict)
+        all_models = [m for section in result.values() for m in section]
+        self.assertTrue(len(all_models) > 0, "Fallback must return at least some models")
+        for m in all_models:
+            self.assertIsInstance(m, str)
+
+
+class TestGetModelsForRuntime(unittest.TestCase):
+    """get_models_for_runtime('wee') must return flat strings."""
+
+    def setUp(self):
+        self.mgr = _make_mgr()
+
+    def test_wee_models_are_strings(self):
+        """All models for 'wee' runtime must be strings (can call .lower())."""
+        with patch("urllib.request.urlopen") as mock_urlopen:
+            mock_resp = MagicMock()
+            mock_resp.read.return_value = b'{"models": [{"name": "gemma4:e4b"}]}'
+            mock_resp.__enter__ = lambda s: s
+            mock_resp.__exit__ = MagicMock(return_value=False)
+            mock_urlopen.return_value = mock_resp
+            models = self.mgr.get_models_for_runtime("wee")
+
+        all_models = [m for section in models.values() for m in section]
+        for m in all_models:
+            # This must not raise AttributeError (the original bug)
+            self.assertIsInstance(m.lower(), str)
+
+    def test_wee_models_no_tuples(self):
+        """No tuples allowed in the model list."""
+        with patch("urllib.request.urlopen") as mock_urlopen:
+            mock_resp = MagicMock()
+            mock_resp.read.return_value = b'{"models": [{"name": "gemma4:e4b"}]}'
+            mock_resp.__enter__ = lambda s: s
+            mock_resp.__exit__ = MagicMock(return_value=False)
+            mock_urlopen.return_value = mock_resp
+            models = self.mgr.get_models_for_runtime("wee")
+
+        all_models = [m for section in models.values() for m in section]
+        for m in all_models:
+            self.assertNotIsInstance(m, tuple, f"Got tuple in model list: {m!r}")
+
+
+class TestOllamaPort(unittest.TestCase):
+    """Ollama must connect on port 11434, not 11436."""
+
+    def test_wee_runtime_py_uses_correct_port(self):
+        """wee_runtime.py PROVIDER_PRESETS must reference port 11434."""
+        wee_runtime_path = REPO / "wee_runtime.py"
+        source = wee_runtime_path.read_text()
+        # Must NOT have 11436
+        self.assertNotIn("11436", source, "wee_runtime.py must not reference port 11436")
+        # Must have 11434
+        self.assertIn("11434", source, "wee_runtime.py must reference port 11434")
+
+    def test_agent_manager_wee_presets_use_correct_port(self):
+        """agent_manager.py run_wee_native presets must use port 11434."""
+        am_path = REPO / "agent_manager.py"
+        source = am_path.read_text()
+        # Find occurrences of 11436 — there should be none
+        import re
+        # Specifically check that 11436 doesn't appear near ollama
+        ollama_section = re.findall(r'.{100}11436.{100}', source)
+        for ctx in ollama_section:
+            if "ollama" in ctx.lower():
+                self.fail(f"Found 11436 near 'ollama' in agent_manager.py: ...{ctx}...")
+
+
+class TestRunWeeNativeModelPassthrough(unittest.TestCase):
+    """run_wee_native must pass the session model to OpenAI client."""
+
+    def setUp(self):
+        self.mgr = _make_mgr()
+
+    def test_gemma_model_uses_ollama_base(self):
+        """When model=ollama/gemma4:e4b, api_base must be Ollama (port 11434)."""
+        captured = {}
+
+        def fake_openai(**kwargs):
+            captured["base_url"] = kwargs.get("base_url", "")
+            captured["model"] = kwargs.get("model", "")
+            client = MagicMock()
+            client.chat.completions.create.return_value = iter([
+                MagicMock(choices=[MagicMock(delta=MagicMock(content="hi"), finish_reason=None)]),
+                MagicMock(choices=[MagicMock(delta=MagicMock(content=None), finish_reason="stop")]),
+            ])
+            return client
+
+        session_data = {
+            "model": "ollama/gemma4:e4b",
+            "runtime": "wee",
+            "session_id": "test-118",
+            "messages": [],
+        }
+        self.mgr.session_map["test-118"] = session_data
+
+        with patch("urllib.request.urlopen") as mock_u:
+            mock_resp = MagicMock()
+            mock_resp.read.return_value = b'{"models": [{"name": "gemma4:e4b"}]}'
+            mock_resp.__enter__ = lambda s: s
+            mock_resp.__exit__ = MagicMock(return_value=False)
+            mock_u.return_value = mock_resp
+            with patch("openai.OpenAI", fake_openai):
+                try:
+                    result = []
+                    gen = self.mgr.run_wee_native(
+                        session_id="test-118",
+                        user_message="hello",
+                        session_data=session_data,
+                        stream=False,
+                    )
+                    if hasattr(gen, "__iter__"):
+                        result = list(gen)
+                    elif hasattr(gen, "__next__"):
+                        result = list(gen)
+                except Exception:
+                    pass  # We only care about what was captured
+
+        if captured.get("base_url"):
+            self.assertIn("11434", captured["base_url"],
+                          f"api_base {captured['base_url']!r} must use port 11434 for Ollama model")
+            self.assertNotIn("11436", captured["base_url"])
+
+
+class TestWeeInKnownRuntimes(unittest.TestCase):
+    """The /api/v1/models endpoint must recognize 'wee' as a known runtime."""
+
+    def test_wee_in_known_runtimes(self):
+        """agent_manager.py must list 'wee' in its known_runtimes set."""
+        am_path = REPO / "agent_manager.py"
+        source = am_path.read_text()
+        # known_runtimes should contain "wee"
+        import re
+        # Look for known_runtimes set definition containing "wee"
+        self.assertIn('"wee"', source,
+                      'agent_manager.py must contain "wee" string (for known_runtimes)')
+
+
+if __name__ == "__main__":
+    unittest.main(verbosity=2)

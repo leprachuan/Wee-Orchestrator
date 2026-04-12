@@ -3522,6 +3522,56 @@ You can mention an agent in your prompt and it will auto-delegate:
 
         return self._static_models_to_dict(self.CURSOR_MODELS)
 
+    def fetch_wee_models(self) -> Dict:
+        """Fetch available models for the Wee native runtime.
+
+        Dynamically queries Ollama on the local network for available models and
+        returns them with the 'ollama/' prefix. Also includes a curated list of
+        popular OpenRouter cloud models. Falls back to a minimal static list if
+        Ollama is unreachable.
+        """
+        _OLLAMA_BASE = "http://192.168.1.101:11434"
+        _OPENROUTER_MODELS = [
+            "openrouter/meta-llama/llama-4-scout",
+            "openrouter/meta-llama/llama-4-maverick",
+            "openrouter/anthropic/claude-3.5-haiku",
+            "openrouter/google/gemini-2.5-flash",
+            "openrouter/mistralai/mistral-small-2603",
+            "openrouter/qwen/qwen-2.5-72b-instruct",
+        ]
+        _OLLAMA_FALLBACK = [
+            "ollama/gemma4:e4b",
+            "ollama/gemma4:latest",
+            "ollama/qwen3.5:latest",
+        ]
+
+        ollama_models = []
+        try:
+            import urllib.request as _urlreq
+            import json as _json
+            req = _urlreq.Request(
+                f"{_OLLAMA_BASE}/api/tags",
+                headers={"Accept": "application/json"},
+            )
+            with _urlreq.urlopen(req, timeout=5) as resp:
+                data = _json.loads(resp.read().decode())
+            for m in data.get("models", []):
+                name = m.get("name", "")
+                if name:
+                    ollama_models.append(f"ollama/{name}")
+        except Exception as e:
+            print(
+                f"[wee] Ollama model discovery failed, using fallback: {e}",
+                file=sys.stderr,
+            )
+            ollama_models = list(_OLLAMA_FALLBACK)
+
+        result: Dict = {}
+        if ollama_models:
+            result["Ollama (Local)"] = ollama_models
+        result["OpenRouter (Cloud)"] = list(_OPENROUTER_MODELS)
+        return result
+
     def get_models_for_runtime(self, runtime: str) -> Dict:
         """Fetch available models for a runtime, using CLI discovery where possible.
 
@@ -3539,7 +3589,7 @@ You can mention an agent in your prompt and it will auto-delegate:
             "codex": self.fetch_codex_models,
             "devin": self.fetch_devin_models,
             "cursor": self.fetch_cursor_models,
-            "wee": lambda: {"Wee Native": [("ollama/gemma4:e4b", "Ollama Gemma 4 E4B (local)", []), ("openrouter/meta-llama/llama-4-scout", "Llama 4 Scout via OpenRouter", [])]},
+            "wee": self.fetch_wee_models,
         }
         fetcher = dispatch.get(runtime)
         if fetcher is None:
@@ -7626,7 +7676,7 @@ User Request:
 
         # Provider presets
         _PRESETS = {
-            "ollama": ("http://192.168.1.101:11436/v1", "ollama"),
+            "ollama": ("http://192.168.1.101:11434/v1", "ollama"),
             "openrouter": ("https://openrouter.ai/api/v1", None),
             "lmstudio": ("http://localhost:1234/v1", "lm-studio"),
         }
@@ -7642,7 +7692,7 @@ User Request:
                 break
 
         if not api_base:
-            api_base = "http://192.168.1.101:11436/v1"
+            api_base = "http://192.168.1.101:11434/v1"
         if not api_key:
             # Try keyring for OpenRouter
             if "openrouter" in api_base.lower():
@@ -7664,10 +7714,17 @@ User Request:
         stream_buffer = getattr(self, "_stream_buffers", {}).get(n8n_session_id)
 
         # -- Create OpenAI client and call API --
+        import httpx as _httpx_wee
         client = OpenAI(
             base_url=api_base,
             api_key=api_key,
-            timeout=effective_timeout,
+            timeout=_httpx_wee.Timeout(
+                connect=15.0,
+                read=float(effective_timeout),
+                write=30.0,
+                pool=15.0,
+            ),
+            max_retries=0,
         )
 
         messages = []
@@ -9174,6 +9231,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             "codex",
             "devin",
             "cursor",
+            "wee",
         }
         if runtime not in known_runtimes:
             return {
@@ -9190,6 +9248,9 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             models = []
             for _group, model_ids in raw.items():
                 for model_id in model_ids:
+                    # Support both flat strings and (id, desc, aliases) tuples
+                    if isinstance(model_id, tuple):
+                        model_id = model_id[0]
                     label = (
                         session_mgr._get_model_description(model_id, runtime)
                         or model_id
