@@ -2015,6 +2015,7 @@ function insertToolCallBlock(streamBubble, toolId, toolName, inputSummary) {
  */
 function completeToolCallBlock(toolId, output, isError) {
   const row = document.getElementById('tc-' + toolId);
+  if (!row) return;
   const spinner = row.querySelector('.tc-spinner');
   if (spinner) spinner.classList.remove('spinning');
   const status = row.querySelector('.tc-status');
