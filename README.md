@@ -64,6 +64,7 @@ Wee-Orchestrator is a unified AI agent platform that lets you chat with **any AI
 - **🔔 In-Thread Notifications** — Real-time task lifecycle updates (queued → running → complete) in your conversation
 - **📋 Dual-Source TODOs** — Sync TODOs between GitHub Issues (primary) and flat files (fallback) with auto-deduplication
 - **🔧 Expandable Tool Calls** — View tool invocations with collapsible output panels in WebUI; markdown rendering, error highlighting, silent mode support
+- **💰 Token Usage Tracking** — Real-time tracking of prompt/completion tokens and cost estimation across all runtimes; live stats displayed in WebUI footer
 - **🔌 Extensible Skills** — Plugin architecture for adding capabilities (Cisco Meraki, Home Assistant, etc.)
 - **⚙️ Slash Command Registry — Pure-server commands that bypass the LLM for reduced latency; auto-registers with Telegram BotFather for autocomplete; built-in `/secret` command for secure credential management
 
@@ -1282,6 +1283,54 @@ The WebUI now displays tool invocations with inline expandable blocks in the str
 **Related Issues:**
 - [#115](../../issues/115) — Inline Expandable Tool Call Blocks (QA Approved)
 - [#87](../../issues/87) — Streaming + Tool Call support for copilot-sdk and claude-sdk
+
+---
+
+### 💰 Token Usage Tracking & Cost Estimation
+
+**Issue #128: Token Usage Tracking + Cost Estimation + WebUI Footer**
+
+The WebUI now displays real-time token usage statistics in the footer after each message. Tracks cumulative prompt and completion tokens across all runtimes, calculates costs based on per-model pricing, and displays live usage summary.
+
+**Features:**
+- ✅ **Real-time tracking** — Token counts updated after each message
+- ✅ **Multi-runtime support** — Tracks tokens across copilot-sdk, claude-sdk, openrouter, wee (Ollama/OpenRouter/LM Studio)
+- ✅ **Cost estimation** — Calculates costs based on current model pricing
+- ✅ **Accuracy** — ±1% margin within expected pricing for all supported models
+- ✅ **Session-level aggregation** — Cumulative counts show total tokens and estimated costs for entire session
+- ✅ **Per-message tracking** — Individual message metadata includes token counts and partial costs
+- ✅ **WebUI footer display** — Live stats accessible without API calls (cached locally)
+
+**Displayed Metrics:**
+- **Prompt tokens:** Total tokens in all input messages
+- **Completion tokens:** Total tokens in all model responses
+- **Total tokens:** Sum of prompt + completion tokens
+- **Estimated cost:** Calculated from per-model pricing (e.g., $0.15 per 1M input tokens)
+- **Model pricing:** Retrieved from token_calculator.py (based on published pricing)
+
+**Footer Display Format:**
+```
+💰 Tokens: 1,234 prompt + 567 completion = 1,801 total | Est. cost: $0.023 | Model: claude-3.5-sonnet
+```
+
+**Token Calculation Logic:**
+1. Each runtime reports token usage after completing a message
+2. Tokens summed by type (prompt vs completion)
+3. Cost calculated: `(prompt_tokens * model_input_price + completion_tokens * model_output_price) / 1_000_000`
+4. Metadata stored in session history for audit/replay purposes
+5. Wee runtime strips internal `__WEE_META__` before counting to avoid inflating token estimates
+
+**Supported Models:**
+- **Claude (claude-sdk):** claude-3.5-sonnet, claude-3-opus, claude-3-haiku
+- **Copilot (copilot-sdk):** GPT-4o, GPT-4 Turbo, GPT-3.5 Turbo
+- **OpenRouter:** 200+ models with live pricing via OpenRouter API
+- **Wee (Ollama):** Ollama local models (token count via token_calculator.py estimate)
+- **Wee (OpenRouter):** Same as OpenRouter routing
+- **Wee (LM Studio):** LM Studio models (token estimate via calculator)
+
+**Related Issues:**
+- [#128](../../issues/128) — Token Usage Tracking + Cost Estimation + WebUI Footer (QA Approved)
+- [#91](../../issues/91) — Background task permissions (Token tracking uses elevated permissions)
 
 ---
 
