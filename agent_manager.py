@@ -4432,6 +4432,9 @@ You can mention an agent in your prompt and it will auto-delegate:
             for line in lines:
                 if not line.strip() and not result:
                     continue
+                # Strip __WEE_META__ markers to keep internal metadata out of user output
+                if line.strip().startswith("__WEE_META__"):
+                    continue
                 result.append(line)
 
         # Remove trailing empty lines
@@ -11314,6 +11317,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                     sys.executable, _wee_script,
                     "--model", model,
                     "--timeout", str(timeout or 300),
+                    "--session-id", session_id,
                 ]
                 # Resolve api_base and api_key from session/env
                 _wee_api_base = os.environ.get("WEE_API_BASE", "")
