@@ -6310,14 +6310,41 @@ html, body {
   from { transform: rotate(0deg); }
   to { transform: rotate(360deg); }
 }
+/* ── Tool call blocks: expandable accordion (Issue #115) ── */
+.tc-block {
+  margin: 4px 0;
+  border-radius: 6px;
+  overflow: hidden;
+  transition: background 0.15s;
+}
+.tc-block:hover {
+  background: rgba(255,255,255,0.03);
+}
 .tc-line {
   display: flex;
   align-items: center;
   gap: 6px;
-  margin: 4px 0;
   font-size: 12px;
   color: var(--text-muted, #6b7280);
-  padding: 2px 0;
+  padding: 4px 6px;
+  cursor: pointer;
+  user-select: none;
+  border-radius: 6px;
+  transition: background 0.15s;
+}
+.tc-line:hover {
+  background: rgba(255,255,255,0.05);
+}
+.tc-toggle {
+  font-size: 10px;
+  color: var(--text-muted, #6b7280);
+  flex-shrink: 0;
+  width: 14px;
+  text-align: center;
+  transition: color 0.15s;
+}
+.tc-toggle.has-output {
+  color: var(--text-secondary, #d1d5db);
 }
 .tc-spinner {
   font-size: 12px;
@@ -6349,9 +6376,43 @@ html, body {
 .tc-status {
   font-size: 11px;
   flex-shrink: 0;
+  margin-left: auto;
 }
 .tc-status.running { color: #f5c542; }
 .tc-status.done { color: #3ecf8e; }
+.tc-status.error { color: #ef4444; }
+/* Expandable output area */
+.tc-output {
+  display: none;
+  font-family: var(--font-mono, monospace);
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--text-secondary, #d1d5db);
+  background: rgba(0,0,0,0.25);
+  border: 1px solid rgba(255,255,255,0.08);
+  border-radius: 4px;
+  margin: 2px 6px 6px 26px;
+  padding: 8px 10px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 300px;
+  overflow-y: auto;
+}
+.tc-block.tc-expanded .tc-output:not(:empty) {
+  display: block;
+}
+/* Error state */
+.tc-block.tc-error .tc-line {
+  color: #ef4444;
+}
+.tc-block.tc-error .tc-name {
+  color: #ef4444;
+}
+.tc-block.tc-error .tc-output {
+  border-color: rgba(239,68,68,0.25);
+  background: rgba(239,68,68,0.08);
+  color: #fca5a5;
+}
 /* F027: Verbose mode toggle */
 .meta-pill.meta-verbose {
   color: #a0d4ff;
@@ -6369,6 +6430,7 @@ html, body {
   border-color: rgba(107,114,128,0.28);
   background: rgba(107,114,128,0.08);
 }
+.tool-calls-hidden .tc-block { display: none !important; }
 .tool-calls-hidden .tc-line { display: none !important; }
 
 /* Hide old standalone row */

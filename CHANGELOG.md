@@ -44,6 +44,45 @@ Adds end-to-end token usage tracking for the wee runtime: token counts are captu
 
 
 # [Issue #100] Feature: GitHub Issues Integration for TODO Endpoints
+
+## [Issue #115] Feature: Inline Expandable Tool Call Blocks
+**Status:** ✅ QA Approved (Commit: a85e5b5)
+
+### Summary
+Tool call events (started/completed) from all runtimes (copilot-sdk, claude-sdk, claude, gemini) now emit inline expandable blocks in the WebUI streaming panel. Each block shows a ▶ disclosure triangle; clicking expands a scrollable output pane showing the tool result. Silent mode hides all tool-call blocks. CSS handles error highlighting and dark/light themes.
+
+### Changes
+- **app.js** — `insertToolCallBlock()` creates collapsible TC block; `completeToolCallBlock()` fills output and toggles expand/collapse. Null guard restored to prevent crash on late/duplicate events.
+- **agent_manager.py (copilot-sdk)** — `TOOL_EXECUTION_COMPLETE` event now includes `output` field extracted from `event.data.output/result/content` (up to 2000 chars)
+- **agent_manager.py (claude-sdk)** — `ToolResultBlock` handler now populates `output` field (was incorrectly putting content in `input` with 200-char limit)
+- **agent_manager.py (claude runtime)** — `tool_result` block SSE event now includes `output` field with list-join support (up to 2000 chars)
+- **agent_manager.py (gemini)** — Tool output truncation raised from `[:500]` to `[:2000]`
+- **app.css** — `.tc-block`, `.tc-toggle`, `.tc-output`, `.tc-error`, `.tc-expanded` styles; silent mode hides `.tc-block`
+
+### QA Round 2 Fixes (Commit a85e5b5)
+- M-1: Restored `if (!row) return;` null guard in `completeToolCallBlock`
+- M-2: Added `output` field to copilot-sdk `TOOL_EXECUTION_COMPLETE` event
+- M-3: claude-sdk `ToolResultBlock` — moved content to `output` field, cleared `input`, raised limit to 2000
+- M-4: claude runtime `tool_result` — added `_tr_content` extraction with list-join to `output` field
+- m-5 (MINOR): gemini `[:500]` → `[:2000]` confirmed applied
+
+### Tests
+- **39 new tests** in `tests/test_issue115_expandable_tool_calls.py`
+  - `TestSanitizeToolCallOutput` — sanitizer passthrough and truncation
+  - `TestCopilotSdkToolOutput` — output field extraction, fallbacks, 2000-char limit
+  - `TestClaudeSdkToolOutput` — list content join, string content, empty content
+  - `TestClaudeRuntimeToolResult` — list/string/error tool_result handling
+  - `TestGeminiOutputLimit` — confirms 2000-char limit
+  - `TestFrontendToolCallBlockStructure` — started/completed event handling, expand/collapse, markdown preservation
+  - `TestCssExpandableStyles` — all CSS rules verified
+  - `TestSilentModeIntegration` — silent mode hides tool call blocks
+
+### Test Results
+- **1181 total tests pass**, 9 skipped, 0 failures (no regressions)
+- All 39 Issue #115 tests pass (100%)
+- No BLOCKERs, no MAJORs, no MINORs
+
+## [Issue #100] Feature: GitHub Issues Integration for TODO Endpoints
 **Status:** ✅ QA Approved (Commit: ca21379)
 
 ### Summary
