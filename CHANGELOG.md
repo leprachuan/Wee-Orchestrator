@@ -1,5 +1,28 @@
 # Changelog
 
+## [Issue #115] Feature: Inline Expandable Tool Call Blocks
+**Status:** ✅ QA Approved — Pass 2 (Commit: a85e5b5)  
+**Verdict Date:** 2026-04-12  
+**Next State:** Ready for PR dev→main
+
+### Summary
+WebUI feature for inline expandable tool call blocks with markdown output rendering. Displays tool invocations with collapsible output panels. All 5 MAJOR/MINOR findings from Round 1 QA rejection fixed. Feature fully functional and ready to merge.
+
+### Test Results
+- ✅ 39/39 issue-specific tests pass
+- ✅ 1181/1181 full suite pass
+- ✅ 9 skipped (pre-existing, deterministic)
+- ✅ 0 failures, 0 regressions
+
+### Round 2 Fixes Applied
+1. **app.js L2017:** Restored null guard in `completeToolCallBlock()` — prevents crash when toolId not in DOM
+2. **agent_manager.py L6574:** Added `output` field to copilot-sdk TOOL_EXECUTION_COMPLETE events
+3. **agent_manager.py L6856:** Moved claude-sdk `ToolResultBlock.content` to `output` key (2000 char limit)
+4. **agent_manager.py L5782:** Added `output` extraction from claude runtime `tool_result` blocks
+5. **agent_manager.py L5866:** Bumped gemini output limit from 500 to 2000 characters
+
+---
+
 ## [Issue #114] Feature: Wee runtime auto-discover models from API hosts
 **Status:** ❌ QA Rejected — Offline fallback bug (Commit: 4a8b587)
 **Verdict Date:** 2026-04-11  
