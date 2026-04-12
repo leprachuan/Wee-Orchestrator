@@ -3305,6 +3305,12 @@ You can mention an agent in your prompt and it will auto-delegate:
     OPENROUTER_POPULAR_MODELS = {
         "meta-llama/llama-4-maverick",
         "meta-llama/llama-4-scout",
+        "google/gemma-3-27b-it:free",
+        "google/gemma-4-31b-it:free",
+        "meta-llama/llama-3.3-70b-instruct:free",
+        "nvidia/nemotron-3-super-120b-a12b:free",
+        "nvidia/nemotron-nano-9b-v2:free",
+        "qwen/qwen3-coder:free",
         "anthropic/claude-sonnet-4.6",
         "anthropic/claude-opus-4.6",
         "google/gemini-3.1-flash-lite-preview",
@@ -3330,6 +3336,14 @@ You can mention an agent in your prompt and it will auto-delegate:
             ("openrouter/google/gemini-3.1-flash-lite-preview", "Gemini 3.1 Flash Lite via OpenRouter", ["or-gemini-flash"]),
             ("openrouter/openai/gpt-4.1", "GPT-4.1 via OpenRouter", ["or-gpt-4.1"]),
             ("openrouter/deepseek/deepseek-v3.2", "DeepSeek V3.2 via OpenRouter", ["or-deepseek"]),
+        ],
+        "Wee Native (OpenRouter Free)": [
+            ("openrouter/google/gemma-3-27b-it:free", "Gemma 3 27B FREE via OpenRouter", ["gemma-3-free", "gemma-free"]),
+            ("openrouter/google/gemma-4-31b-it:free", "Gemma 4 31B FREE via OpenRouter", ["gemma-4-free"]),
+            ("openrouter/meta-llama/llama-3.3-70b-instruct:free", "Llama 3.3 70B FREE via OpenRouter", ["llama-free"]),
+            ("openrouter/nvidia/nemotron-3-super-120b-a12b:free", "Nemotron 3 Super 120B FREE via OpenRouter", ["nemotron-free"]),
+            ("openrouter/nvidia/nemotron-nano-9b-v2:free", "Nemotron Nano 9B FREE via OpenRouter", ["nemotron-nano-free"]),
+            ("openrouter/qwen/qwen3-coder:free", "Qwen3 Coder FREE via OpenRouter", ["qwen3-free", "qwen-free"]),
         ],
     }
 
@@ -7762,6 +7776,8 @@ User Request:
                     api_key = keyring.get_password("openrouter", "api_key")
                 except Exception:
                     pass
+                if not api_key:
+                    api_key = os.environ.get("OPENROUTER_API_KEY")
             if not api_key:
                 api_key = "ollama"
 
