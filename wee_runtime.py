@@ -13,6 +13,7 @@ Usage:
 """
 
 import argparse
+import re
 import json
 import os
 import subprocess
@@ -151,7 +152,46 @@ def execute_tool(func_name: str, func_args: dict) -> str:
         return f"Error: Tool {func_name} timed out after {TOOL_TIMEOUT}s"
     except Exception as e:
         return f"Error executing tool {func_name}: {e}"
+# Issue #113: SSH command sanitisation
+_SSH_BIN_RE = re.compile(r"\b(ssh|scp|sftp)\b")
 
+
+# TODO(#113): Wire sanitize_bash_command into the tool execution loop when
+# wee_runtime.py gains bash/shell tool calling support. The main() function
+# currently has no tool execution loop, so this function is defined but never called.
+def sanitize_bash_command(command: str) -> str:
+    """Auto-inject SSH flags to prevent host key verification failures.
+
+    Injects ``-o StrictHostKeyChecking=accept-new`` after ssh/scp/sftp
+    when the flag is not already present.  ``accept-new`` is preferred
+    over ``no`` because it still rejects CHANGED keys (potential MITM).
+
+    NOTE: Not yet wired in. Call on every bash tool input before execution
+    once wee_runtime.py gains a tool execution loop.
+    """
+    if not command or not _SSH_BIN_RE.search(command):
+        return command
+    if "StrictHostKeyChecking" in command:
+        return command
+
+    def _inject(m):
+        return m.group(0) + " -o StrictHostKeyChecking=accept-new"
+
+    return _SSH_BIN_RE.sub(_inject, command, count=0)
+
+
+# Issue #113: Anti-hallucination system prompt addendum
+_ANTI_HALLUCINATION_PROMPT = (
+    "\n\n[CRITICAL — Output Integrity Rules]\n"
+    "1. NEVER fabricate, invent, or hallucinate command output. If a command "
+    "fails or you cannot execute it, report the EXACT error message.\n"
+    "2. NEVER provide example or placeholder output and present it as real. "
+    'If you show an example, clearly label it as "EXAMPLE (not real output)".\n'
+    "3. When a tool call returns an error, relay the error verbatim to the user. "
+    "Do NOT attempt to guess what the successful output would have looked like.\n"
+    "4. For SSH commands: ALWAYS use ``-o StrictHostKeyChecking=accept-new`` to "
+    "avoid host-key verification failures on first connect.\n"
+)
 
 def main():
     parser = argparse.ArgumentParser(
@@ -190,8 +230,10 @@ def main():
     )
 
     messages = []
-    if args.system_prompt:
-        messages.append({"role": "system", "content": args.system_prompt})
+    # Issue #113: Augment system prompt with anti-hallucination rules
+    effective_system_prompt = (args.system_prompt or "") + _ANTI_HALLUCINATION_PROMPT
+    if effective_system_prompt.strip():
+        messages.append({"role": "system", "content": effective_system_prompt})
     messages.append({"role": "user", "content": args.prompt})
 
     if not args.tools:
