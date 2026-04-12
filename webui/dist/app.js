@@ -291,6 +291,7 @@ const RUNTIME_ICONS = {
   codex:       '/ui/assets/runtime-icons/openai.svg',
   devin:       '/ui/assets/runtime-icons/devin.svg',
   cursor:      '/ui/assets/runtime-icons/cursor.svg',
+  wee:         '/ui/assets/runtime-icons/wee.svg',
 };
 
 function runtimeIconHTML(runtime, size = 14) {
@@ -505,6 +506,7 @@ const PILL_OPTIONS = {
           { label: `${runtimeIconHTML('codex')}codex`,           cmd: '/runtime set codex' },
           { label: `${runtimeIconHTML('devin')}devin`,           cmd: '/runtime set devin' },
           { label: `${runtimeIconHTML('cursor')}cursor`,         cmd: '/runtime set cursor' },
+          { label: `${runtimeIconHTML('wee')}wee`,             cmd: '/runtime set wee' },
         ];
       }
     },
