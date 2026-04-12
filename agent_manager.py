@@ -7805,7 +7805,7 @@ User Request:
                 break
 
         if not api_base:
-            api_base = "http://192.168.1.101:11436/v1"
+            api_base = "http://192.168.1.101:11434/v1"
         if not api_key:
             # Try keyring for OpenRouter
             if "openrouter" in api_base.lower():
