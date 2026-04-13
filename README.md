@@ -311,7 +311,6 @@ mkdir skills/my-custom-skill
   - ✅ Security policy file
   - ✅ Public issue tracking
 
-
 #### Domain Folders
 Organize bot work by area of focus:
 - Keep related scripts, templates, and documentation together
@@ -591,14 +590,17 @@ All AI runtimes in this system are configured with **full tool access** to enabl
   - Background task subprocess execution via `wee_runtime.py`
 - **Implementation:** `run_wee_native()` in `agent_manager.py`; `wee_runtime.py` standalone CLI for background tasks
 - **Usage:** `/runtime set wee`
+
 - **Features & Improvements:**
   - OpenRouter integration: Full UI support for cloud-based models with 300s cached discovery & keyring-based API key management (Issue #119)
   - Model grouping in UI: Ollama and OpenRouter models displayed in separate dropdown optgroups
+  - All OpenRouter models in model listing: Removed hardcoded filter to show 350+ OpenRouter models instead of ~12 (Issue #145)
+
 - **Bug Fixes:**
   - Wrong Ollama port corrected: `11436` → `11434` (Issue #105)
   - `httpx.Timeout(connect=15s)` and `max_retries=0` added to OpenAI client for fast-fail on bad endpoints (Issue #105)
   - Model resolution fixed: `get_models_for_runtime('wee')` returns flat strings; `get_model_from_name()` strips provider prefix (`ollama/`) and prefers exact/shortest match (Issue #105)
-- **Issues:** [#88](../../issues/88), [#105](../../issues/105), [#119](../../issues/119)
+- **Issues:** [#88](../../issues/88), [#105](../../issues/105), [#119](../../issues/119), [#145](../../issues/145)
 
 ### Security Considerations
 
@@ -1251,7 +1253,6 @@ For scheduling memory promotion via the task scheduler or cron:
 bash scripts/promote_all_agents_memory.sh
 ```
 
-
 **PATCH /api/v1/sessions/{id}/settings** — Update session settings
 
 Modify session-level settings like verbose mode (tool call visibility). Settings are persisted and returned in subsequent session queries.
@@ -1287,8 +1288,6 @@ Error responses:
 **Security:**
 - Requires API authentication (Bearer token)
 - Per-session settings — each user session has independent configuration
-
-
 
 **POST /api/v1/query** — Stateless one-shot query endpoint
 
@@ -1350,7 +1349,6 @@ Error response body (JSON):
 }
 ```
 
-
 **Code Generation Improvements** (#68): Additional handling for empty/null responses and connection errors:
 
 | HTTP Status | Error Code | Triggers |
@@ -1406,7 +1404,6 @@ curl -s -X POST http://localhost:8000/api/v1/query \
   -d '{"prompt": "What is 2 + 2?", "runtime": "copilot", "model": "claude-haiku-4.5"}'
 ```
 
-
 **POST /api/v1/history/sessions/{session_id}/generate-title** — LLM title generation
 
 Force (re)generate a descriptive title for a session using an LLM or smart heuristic fallback. Useful when you want an immediate title refresh outside of the auto-trigger cycle.
@@ -1459,7 +1456,6 @@ Error responses:
 curl -s -X POST http://localhost:8000/api/v1/history/sessions/abc123/generate-title \
   -H "Authorization: Bearer $API_TOKEN"
 ```
-
 
 ### Quick Start
 
@@ -1692,7 +1688,6 @@ The scheduler is resilient to system clock adjustments (NTP corrections, manual 
 }
 ```
 
-
 ### REST API Endpoints
 
 | Method | Path | Description |
@@ -1902,7 +1897,6 @@ For scheduling memory promotion via the task scheduler or cron:
 bash scripts/promote_all_agents_memory.sh
 ```
 
-
 **PATCH /api/v1/sessions/{id}/settings** — Update session settings
 
 Modify session-level settings like verbose mode (tool call visibility). Settings are persisted and returned in subsequent session queries.
@@ -1938,7 +1932,6 @@ Error responses:
 **Security:**
 - Requires API authentication (Bearer token)
 - Per-session settings — each user session has independent configuration
-
 
 ### Quick Start
 
@@ -2215,7 +2208,6 @@ For scheduling memory promotion via the task scheduler or cron:
 bash scripts/promote_all_agents_memory.sh
 ```
 
-
 **PATCH /api/v1/sessions/{id}/settings** — Update session settings
 
 Modify session-level settings like verbose mode (tool call visibility). Settings are persisted and returned in subsequent session queries.
@@ -2251,7 +2243,6 @@ Error responses:
 **Security:**
 - Requires API authentication (Bearer token)
 - Per-session settings — each user session has independent configuration
-
 
 ### Quick Start
 
