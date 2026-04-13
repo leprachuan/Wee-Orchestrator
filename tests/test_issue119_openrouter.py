@@ -1,7 +1,7 @@
 """Tests for Issue #119: Wire up OpenRouter in wee runtime UI.
 
 Covers:
-  - WEE_MODELS structure and OPENROUTER_POPULAR_MODELS constant
+  - WEE_MODELS structure
   - fetch_wee_models() with mocked API responses, cache, fallback
   - _get_model_description() for wee models
   - get_model_from_name() with wee aliases
@@ -63,29 +63,9 @@ class TestWeeModelsConstant:
         assert len(mgr.WEE_MODELS["OpenRouter Models"]) >= 5
 
 
-# ── OPENROUTER_POPULAR_MODELS ──────────────────────────────────────────
-
-class TestOpenrouterPopularModels:
-    def test_is_a_set(self, mgr):
-        assert isinstance(mgr.OPENROUTER_POPULAR_MODELS, set)
-
-    def test_at_least_10_popular_models(self, mgr):
-        assert len(mgr.OPENROUTER_POPULAR_MODELS) >= 10
-
-    def test_contains_expected_ids(self, mgr):
-        for mid in [
-            "meta-llama/llama-4-maverick",
-            "meta-llama/llama-4-scout",
-            "openai/gpt-4.1",
-            "deepseek/deepseek-r1:free",
-        ]:
-            assert mid in mgr.OPENROUTER_POPULAR_MODELS, f"Missing {mid}"
-
-    def test_no_openrouter_prefix_in_popular_ids(self, mgr):
-        for mid in mgr.OPENROUTER_POPULAR_MODELS:
-            assert not mid.startswith("openrouter/"), \
-                f"Popular ID should be raw, not prefixed: {mid}"
-
+# ── OPENROUTER_POPULAR_MODELS removed (Issue #145) ────────────────────
+# The OPENROUTER_POPULAR_MODELS filter was removed to show all OpenRouter
+# models. Tests for it are in test_issue145_openrouter_model_listing.py.
 
 # ── fetch_wee_models() ─────────────────────────────────────────────────
 
@@ -133,8 +113,8 @@ class TestFetchWeeModels:
         r2 = mgr.fetch_wee_models()
         assert r1 == r2
 
-    def test_discovery_filters_to_popular(self, mgr):
-        """When OpenRouter API returns models, only popular ones are kept."""
+    def test_discovery_includes_all_api_models(self, mgr):
+        """When OpenRouter API returns models, ALL are included (Issue #145)."""
         self._reset_cache(mgr)
         fake_api_response = json.dumps({
             "data": [
@@ -160,7 +140,8 @@ class TestFetchWeeModels:
         assert "openrouter/meta-llama/llama-4-maverick" in or_models
         assert "openrouter/meta-llama/llama-4-scout" in or_models
         assert "openrouter/openai/gpt-4.1" in or_models
-        assert "openrouter/some-vendor/obscure-model" not in or_models
+        # Issue #145: ALL models now included (no filtering)
+        assert "openrouter/some-vendor/obscure-model" in or_models
 
     def test_discovered_models_have_openrouter_prefix(self, mgr):
         """Discovered OpenRouter models should have openrouter/ prefix."""
