@@ -591,11 +591,14 @@ All AI runtimes in this system are configured with **full tool access** to enabl
   - Background task subprocess execution via `wee_runtime.py`
 - **Implementation:** `run_wee_native()` in `agent_manager.py`; `wee_runtime.py` standalone CLI for background tasks
 - **Usage:** `/runtime set wee`
+- **Features & Improvements:**
+  - OpenRouter integration: Full UI support for cloud-based models with 300s cached discovery & keyring-based API key management (Issue #119)
+  - Model grouping in UI: Ollama and OpenRouter models displayed in separate dropdown optgroups
 - **Bug Fixes:**
   - Wrong Ollama port corrected: `11436` → `11434` (Issue #105)
   - `httpx.Timeout(connect=15s)` and `max_retries=0` added to OpenAI client for fast-fail on bad endpoints (Issue #105)
   - Model resolution fixed: `get_models_for_runtime('wee')` returns flat strings; `get_model_from_name()` strips provider prefix (`ollama/`) and prefers exact/shortest match (Issue #105)
-- **Issues:** [#88](../../issues/88), [#105](../../issues/105)
+- **Issues:** [#88](../../issues/88), [#105](../../issues/105), [#119](../../issues/119)
 
 ### Security Considerations
 

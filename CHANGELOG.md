@@ -1,5 +1,60 @@
 # Changelog
 
+## [Issue #119] Feature: Wire Up OpenRouter in Wee Runtime UI
+**Status:** ✅ QA Approved (Commit: 168a958, PR #121)
+
+### Summary
+Integrated OpenRouter as a primary model source for the wee runtime alongside Ollama. The wee runtime UI now displays OpenRouter models (llama-4-scout/maverick, gemma-3, qwen3, deepseek-r1, phi-4) grouped separately from Ollama models, with full model selection and execution support. Added 300-second cached model discovery with keyring-based API key storage and static fallback on network errors.
+
+### Root Cause (Integration Gap)
+The wee runtime model picker only showed Ollama models. OpenRouter integration existed in the backend but wasn't wired into the UI model dropdown or static model dispatch table.
+
+### Solution
+
+#### WEE_MODELS Constant Expansion
+- Added OpenRouter models (6 models): llama-4-scout, llama-4-maverick, gemma-3, qwen3, deepseek-r1, phi-4
+- Total wee model catalog: 16 models across 2 categories (Ollama + OpenRouter)
+- Each model includes cost label + group field for UI grouping
+
+#### OpenRouter Discovery & Caching
+- `_fetch_openrouter_pricing()` — Fetches model catalog from OpenRouter API (OPENROUTER_API_KEY env var)
+- 300-second TTL cache to minimize API calls
+- Keyring vault storage for API key (no secrets in env vars)
+- Static fallback on network error (prevents UI model picker from breaking)
+
+#### WebUI Model Grouping
+- `optgroup` rendering in app.js model dropdown
+  - "Ollama Models" group
+  - "OpenRouter Models" group
+- Group field populated in /api/v1/models endpoint
+- Smooth fallback when group data unavailable
+
+#### Model Dispatch Wiring
+- OpenRouter models added to `static_alias_map` (enables model name resolution)
+- OpenRouter models added to `env_alias_map` (enables env-override resolution)
+- `fetch_wee_models()` now returns both Ollama + OpenRouter in single list
+- Session model validation handles OpenRouter model selection
+
+### Files Changed
+- `agent_manager.py` — WEE_MODELS expansion, _fetch_openrouter_pricing(), keyring API key handling, optgroup support in /api/v1/models
+- `webui/dist/app.js` — optgroup rendering for model categories
+- `tests/test_issue119_openrouter.py` — 35 new regression tests
+
+### Tests
+- 35 new tests covering:
+  - OpenRouter model discovery & caching
+  - Keyring-based API key storage
+  - Static fallback on network error
+  - Model grouping in UI
+  - Session model validation with OpenRouter models
+- Total: 1432 passed, 35 new issue tests, 0 regressions
+
+### Non-Blocking Finding
+- M-1 (MINOR): When OpenRouter HTTPS call fails (network error) while keyring API key is configured, live Ollama results may be discarded if synthesis times out. Acceptable trade-off — graceful degradation to static model list takes priority.
+
+---
+
+
 ## [Issue #118] Bug: Wee Runtime Ignores Selected Ollama Model
 **Status:** Implementation complete — 30 new tests, 1324 total pass (0 new regressions)
 
