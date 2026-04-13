@@ -2308,26 +2308,22 @@ You can mention an agent in your prompt and it will auto-delegate:
             )
 
     def _slash_notifications(self, argument, session_data, n8n_session_id):
-        """Handle /notifications slash command."""
+        """Handle /notifications slash command.
+
+        Controls the **global** notification toggle which suppresses ALL
+        background task completion notifications (Telegram, WebEx, and WebUI)
+        when disabled.  Critical alerts (heartbeat, crashes) are never
+        suppressed.
+        """
         if not argument:
             argument = "current"
 
-        # Resolve identity for per-user preference store
-        _notif_identity = self._bg_identity or session_data.get("identity")
-        _notif_channel = session_data.get("channel", "webui")
-
         if argument == "current":
-            # Check global preference first, then per-identity, then session
             if self._notification_mgr:
-                if self._notification_mgr.is_muted("_global"):
-                    pref = "off"
-                elif _notif_identity:
-                    pref = self._notification_mgr.get_user_pref(_notif_identity)
-                else:
-                    pref = session_data.get("notification_preference", "all")
+                enabled = self._notification_mgr.is_global_enabled()
             else:
-                pref = session_data.get("notification_preference", "all")
-            status = "ON (All updates)" if pref == "all" else "OFF (WebUI only)"
+                enabled = session_data.get("notification_preference", "all") != "off"
+            status = "ON (all channels)" if enabled else "OFF (suppressed)"
             return f"🔔 **Background Notifications:** `{status}`"
 
         elif argument in ["on", "all"]:
@@ -2335,31 +2331,19 @@ You can mention an agent in your prompt and it will auto-delegate:
                 n8n_session_id, "notification_preference", "all"
             )
             if self._notification_mgr:
-                # Store under specific identity if available
-                if _notif_identity:
-                    self._notification_mgr.set_user_pref(
-                        _notif_identity, _notif_channel, "all"
-                    )
-                # Always store global preference so it applies across all channels
-                self._notification_mgr.set_user_pref(
-                    "_global", _notif_channel, "all"
-                )
-            return "✓ Background task notifications enabled for Telegram/WebEx."
+                self._notification_mgr.set_global_enabled(True)
+            return "✓ Background task notifications enabled for all channels."
 
         elif argument in ["off", "mute"]:
             self.update_session_field(
                 n8n_session_id, "notification_preference", "off"
             )
             if self._notification_mgr:
-                if _notif_identity:
-                    self._notification_mgr.set_user_pref(
-                        _notif_identity, _notif_channel, "off"
-                    )
-                # Always store global preference so it applies across all channels
-                self._notification_mgr.set_user_pref(
-                    "_global", _notif_channel, "off"
-                )
-            return "✓ Background task notifications muted for Telegram/WebEx (WebUI only)."
+                self._notification_mgr.set_global_enabled(False)
+            return (
+                "✓ Background task notifications suppressed globally.\n"
+                "Critical alerts (heartbeat, crashes) will still be delivered."
+            )
         else:
             return "Usage: `/notifications [on|off]` to toggle background task notifications."
 
@@ -11159,18 +11143,20 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         output_preview=None,
         error=None,
         notify: bool = True,
+        is_critical: bool = False,
     ):
-        """Emit a background task completion notification via notification_mgr."""
+        """Emit a background task completion notification via notification_mgr.
+
+        When ``is_critical`` is True the notification bypasses the global
+        suppression toggle (used for heartbeat alerts and system crashes).
+        """
         if notification_mgr is None:
             return
         try:
-            # Re-check per-identity AND global mute preference at emit time
-            # (user may have muted after the task was created, or muted from
-            # a different channel whose identity doesn't match).
-            if notify:
-                if notification_mgr.is_muted(
-                    user_identity
-                ) or notification_mgr.is_muted("_global"):
+            # Re-check per-identity mute preference at emit time
+            # (user may have muted after the task was created).
+            if notify and not is_critical:
+                if notification_mgr.is_muted(user_identity):
                     notify = False
 
             user_key = bg_task_mgr._user_key(channel, user_identity)
@@ -11183,6 +11169,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 output_preview=output_preview,
                 error=error,
                 skip_external=not notify,
+                is_critical=is_critical,
             )
             # Push in-thread event to originating session
             task = bg_task_mgr.get_task(task_id)
@@ -11992,12 +11979,12 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         )
 
         # Determine notification preference:
-        #   body override > global mute > per-identity store > session default > True
+        #   body override > global toggle > per-identity store > session default > True
         notify_pref = body.notify
         if notify_pref is None:
             if notification_mgr:
-                # Global mute takes priority (covers cross-channel identity mismatch)
-                if notification_mgr.is_muted("_global"):
+                # Global toggle takes priority (Issue #146)
+                if not notification_mgr.is_global_enabled():
                     notify_pref = False
                 # Per-identity store is authoritative
                 elif notification_mgr.is_muted(identity):
@@ -12437,6 +12424,51 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         user_key = bg_task_mgr._user_key(user["channel"], user["identity"])
         deleted = notification_mgr.delete_all_read(user_key)
         return {"deleted": deleted}
+
+    # --- Global Notification Settings (Issue #146) ---
+
+    class NotificationSettingsRequest(BaseModel):
+        notifications_enabled: bool
+
+    @app.get("/api/v1/settings/notifications")
+    async def get_notification_settings(request: Request):
+        """Return the global notification toggle state."""
+        await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        if notification_mgr is None:
+            return {"notifications_enabled": True, "available": False}
+        settings = notification_mgr.get_global_settings()
+        settings["available"] = True
+        return settings
+
+    @app.put("/api/v1/settings/notifications")
+    async def set_notification_settings(
+        body: NotificationSettingsRequest, request: Request
+    ):
+        """Set the global notification toggle."""
+        await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        if notification_mgr is None:
+            raise HTTPException(
+                status_code=503, detail="Notification manager unavailable"
+            )
+        notification_mgr.set_global_enabled(body.notifications_enabled)
+        return {
+            "notifications_enabled": body.notifications_enabled,
+            "message": (
+                "Notifications enabled for all channels"
+                if body.notifications_enabled
+                else "Notifications suppressed globally (critical alerts still delivered)"
+            ),
+        }
 
     # --- Task Scheduler ---
     if SCHEDULER_ENABLED:
