@@ -109,7 +109,15 @@ def resolve_model_and_endpoint(model: str, api_base: str = None, api_key: str = 
                     resolved_key = keyring.get_password("openrouter", "api_key")
                 except Exception:
                     pass
+            # Issue #144: Raise clear error instead of defaulting to "ollama"
             if not resolved_key:
+                if "openrouter" in (resolved_base or "").lower():
+                    print(
+                        "Error: OpenRouter API key not found. Set "
+                        "OPENROUTER_API_KEY env var or store via keyring.",
+                        file=sys.stderr,
+                    )
+                    sys.exit(1)
                 resolved_key = "ollama"
 
     return resolved_model, resolved_base, resolved_key
