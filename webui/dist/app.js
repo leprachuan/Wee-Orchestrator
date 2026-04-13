@@ -3902,17 +3902,39 @@ async function populateModelDropdown(container, runtime) {
   if (!select) return;
   const current = select.dataset.current || '';
   try {
-    const data = await apiRequest('GET', `/models?runtime=${encodeURIComponent(runtime)}`);
+    const data = await apiRequest('GET', '/models?runtime=' + encodeURIComponent(runtime));
     const models = data.models || [];
+    // Issue #142: Group models into <optgroup> when group field is present
+    const grouped = {};
+    const ungrouped = [];
+    for (const m of models) {
+      if (m.group) {
+        if (!grouped[m.group]) grouped[m.group] = [];
+        grouped[m.group].push(m);
+      } else {
+        ungrouped.push(m);
+      }
+    }
     let opts = '<option value="">(runtime default)</option>';
-    opts += models.map(m => {
+    const mkOption = function(m) {
       const sel = m.id === current ? ' selected' : '';
-      return `<option value="${escHtml(m.id)}"${sel}>${escHtml(m.label)}</option>`;
-    }).join('');
+      return '<option value="' + escHtml(m.id) + '"' + sel + '>' + escHtml(m.label || m.id) + '</option>';
+    };
+    const groupNames = Object.keys(grouped);
+    if (groupNames.length > 0) {
+      for (const gname of groupNames) {
+        opts += '<optgroup label="' + escHtml(gname) + '">';
+        opts += grouped[gname].map(mkOption).join('');
+        opts += '</optgroup>';
+      }
+      opts += ungrouped.map(mkOption).join('');
+    } else {
+      opts += models.map(mkOption).join('');
+    }
     select.innerHTML = opts;
   } catch (e) {
     let opts = '<option value="">(runtime default)</option>';
-    if (current) opts += `<option value="${escHtml(current)}" selected>${escHtml(current)}</option>`;
+    if (current) opts += '<option value="' + escHtml(current) + '" selected>' + escHtml(current) + '</option>';
     select.innerHTML = opts;
   }
 }

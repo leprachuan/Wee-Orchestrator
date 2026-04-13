@@ -1581,6 +1581,7 @@ class SessionManager:
         self._env_devin_models = None
         self._env_cursor_models = None
         self._env_wee_models = None
+        self._openrouter_cache_ts = 0.0
 
         # Load command timeout from environment
         self.command_timeout = get_command_timeout()
@@ -3547,13 +3548,15 @@ You can mention an agent in your prompt and it will auto-delegate:
         return self._static_models_to_dict(self.CURSOR_MODELS)
 
     def fetch_wee_models(self) -> Dict:
-        """Return available models for the wee native runtime.
+        """Return available wee models: live Ollama + live OpenRouter (Issue #142).
 
         Resolution order:
           1. WEE_MODELS_JSON env var (custom model list)
-          2. Live Ollama discovery + static OpenRouter models
+          2. Live Ollama discovery + live OpenRouter discovery (300s TTL cache)
           3. Static WEE_MODELS fallback
         """
+        import time as _time
+
         # Check for env var override first
         env_models = os.getenv("WEE_MODELS_JSON")
         if env_models:
@@ -3569,28 +3572,108 @@ You can mention an agent in your prompt and it will auto-delegate:
             except (json.JSONDecodeError, ValueError):
                 pass
 
-        # Try live discovery from Ollama
+        cache_ttl = 300  # 5 minutes
+
+        # Return cached result if still valid
+        if (
+            self._env_wee_models is not None
+            and _time.time() - self._openrouter_cache_ts < cache_ttl
+        ):
+            return self._static_models_to_dict(self._env_wee_models)
+
+        # Start with static model lists as fallback
+        result = {"Ollama Models": [], "OpenRouter Models": []}
+        for cat, entries in self.WEE_MODELS.items():
+            result[cat] = list(entries)
+
+        # Live Ollama discovery (Issue #142: return all installed models)
         try:
             import httpx
-
             resp = httpx.get(
                 "http://192.168.1.101:11434/api/tags",
                 timeout=httpx.Timeout(connect=5.0, read=10.0, write=10.0, pool=10.0),
             )
             if resp.status_code == 200:
                 tags = resp.json().get("models", [])
-                ollama_models = [f"ollama/{t['name']}" for t in tags]
-                if ollama_models:
-                    result = {"Ollama Models": ollama_models}
-                    static = self._static_models_to_dict(self.WEE_MODELS)
-                    if "OpenRouter Models" in static:
-                        result["OpenRouter Models"] = static["OpenRouter Models"]
-                    return result
-        except Exception:
-            pass
+                static_ollama = {e[0]: e for e in self.WEE_MODELS.get("Ollama Models", [])}
+                merged_ollama = []
+                discovered_ids = set()
+                for t in tags:
+                    or_id = "ollama/" + t["name"]
+                    if or_id in static_ollama:
+                        merged_ollama.append(static_ollama[or_id])
+                    else:
+                        merged_ollama.append((or_id, t["name"], []))
+                    discovered_ids.add(or_id)
+                # Add static models not found in live discovery (preserves aliases)
+                for entry in self.WEE_MODELS.get("Ollama Models", []):
+                    if entry[0] not in discovered_ids:
+                        merged_ollama.append(entry)
+                if merged_ollama:
+                    result["Ollama Models"] = merged_ollama
+                    print(
+                        "[wee] Ollama: discovered %d models" % len(tags),
+                        file=sys.stderr,
+                    )
+        except Exception as ollama_err:
+            print("[wee] Ollama discovery failed: %s" % ollama_err, file=sys.stderr)
 
-        return self._static_models_to_dict(self.WEE_MODELS)
+        # Live OpenRouter discovery — show ALL available models (Issue #142)
+        try:
+            api_key = None
+            try:
+                import keyring
+                api_key = keyring.get_password("openrouter", "api_key")
+            except Exception:
+                pass
+            if not api_key:
+                api_key = os.getenv("OPENROUTER_API_KEY")
 
+            if api_key:
+                import urllib.request
+                req = urllib.request.Request(
+                    "https://openrouter.ai/api/v1/models",
+                    headers={"Authorization": "Bearer " + api_key},
+                )
+                resp = urllib.request.urlopen(req, timeout=10)
+                data = json.loads(resp.read())
+                all_models = data.get("data", [])
+
+                popular = self.OPENROUTER_POPULAR_MODELS
+                static_aliases = {e[0]: e[2] for e in self.WEE_MODELS.get("OpenRouter Models", [])}
+                discovered_popular = []
+                discovered_rest = []
+                for m in all_models:
+                    mid = m.get("id", "")
+                    if not mid:
+                        continue
+                    name = m.get("name", mid)
+                    or_id = "openrouter/" + mid
+                    aliases = static_aliases.get(or_id, [])
+                    entry = (or_id, name, aliases)
+                    if mid in popular:
+                        discovered_popular.append(entry)
+                    else:
+                        discovered_rest.append(entry)
+                discovered_popular.sort(key=lambda t: t[1])
+                discovered_rest.sort(key=lambda t: t[1])
+                merged_or = discovered_popular + discovered_rest
+                if merged_or:
+                    result["OpenRouter Models"] = merged_or
+                print(
+                    "[wee] OpenRouter: discovered %d models (%d popular + %d other)"
+                    % (len(merged_or), len(discovered_popular), len(discovered_rest)),
+                    file=sys.stderr,
+                )
+            else:
+                print("[wee] OpenRouter: no API key, using static list", file=sys.stderr)
+
+        except Exception as or_err:
+            print("[wee] OpenRouter discovery failed: %s" % or_err, file=sys.stderr)
+
+        self._env_wee_models = result
+        self._openrouter_cache_ts = _time.time()
+        return self._static_models_to_dict(result)
 
     def get_models_for_runtime(self, runtime: str) -> Dict:
         """Fetch available models for a runtime, using CLI discovery where possible.
@@ -5857,9 +5940,13 @@ User Request:
                                         msg = obj.get("message") or {}
                                         for block in msg.get("content") or []:
                                             if block.get("type") == "tool_result":
+                                                _tr_content = block.get("content", "")
+                                                if isinstance(_tr_content, list):
+                                                    _tr_content = " ".join(b.get("text", str(b)) if isinstance(b, dict) else str(b) for b in _tr_content)
                                                 tc_event = {
                                                     "event": "result",
                                                     "id": block.get("tool_use_id", ""),
+                                                    "output": str(_tr_content)[:2000],
                                                     "is_error": block.get(
                                                         "is_error", False
                                                     ),
@@ -5946,7 +6033,7 @@ User Request:
                                                 "status": _gobj.get(
                                                     "status", "completed"
                                                 ),
-                                                "output": _gobj.get("output", "")[:500],
+                                                "output": _gobj.get("output", "")[:2000],
                                             }
                                             if stream_buffer:
                                                 stream_buffer.push(
@@ -6647,11 +6734,13 @@ User Request:
                         tool_name = "tool"
                         if hasattr(event, "data"):
                             tool_name = getattr(event.data, "name", None) or getattr(event.data, "tool_name", None) or "tool"
+                        tool_output = str(getattr(event.data, "output", "") or getattr(event.data, "result", "") or getattr(event.data, "content", "") or "")[:2000] if hasattr(event, "data") else ""
                         tc_evt = {
                             "event": "completed",
                             "id": f"tc_copilot-sdk_{_tool_call_counter[0]}",
                             "name": str(tool_name),
                             "input": "",
+                            "output": tool_output,
                             "runtime": "copilot-sdk",
                             "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
                         }
@@ -6928,11 +7017,15 @@ User Request:
                                 if stream_buffer:
                                     stream_buffer.push("tool_call", tc_evt)
                             elif isinstance(block, ToolResultBlock):
+                                _block_content = block.content
+                                if isinstance(_block_content, list):
+                                    _block_content = " ".join(getattr(b, "text", str(b)) for b in _block_content)
                                 tc_evt = {
                                     "event": "completed",
                                     "id": block.tool_use_id or f"tc_claude-sdk_{_tool_call_counter[0]}",
                                     "name": "tool",
-                                    "input": str(block.content)[:200] if block.content else "",
+                                    "input": "",
+                                    "output": str(_block_content)[:2000] if _block_content else "",
                                     "is_error": getattr(block, "is_error", False),
                                     "runtime": "claude-sdk",
                                     "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
@@ -7694,6 +7787,8 @@ User Request:
             )
 
         session_data = self.get_or_create_session_data(n8n_session_id)
+        # Issue #142: Retrieve background task ID for tool call tracking in Tasks panel
+        bg_task_id = session_data.get("bg_task_id")
         agent_dir = self.AGENTS.get(agent, self.AGENTS["orchestrator"])["path"]
         effective_timeout = timeout if timeout is not None else self.command_timeout
         channel = session_data.get("channel", "webui")
@@ -7931,15 +8026,27 @@ User Request:
                     except (ValueError, _json.JSONDecodeError):
                         func_args = {"raw": func_args_str}
 
-                    # Issue #109: Emit tool start event to SSE stream
+                    # Issue #109 / #142: Emit tool start event to SSE stream
                     tc_start_event = {
                         "id": tc_id,
                         "name": func_name,
-                        "arguments": func_args,
+                        "event": "detected",
+                        "input": func_args,
                         "status": "running",
                     }
                     if stream_buffer:
                         stream_buffer.push("tool_call", tc_start_event)
+
+                    # Issue #142: Track tool call in bg_task_mgr for Tasks panel
+                    if bg_task_id and self._bg_task_mgr:
+                        self._bg_task_mgr.append_tool_call(bg_task_id, {
+                            "id": tc_id,
+                            "name": func_name,
+                            "input": _json.dumps(func_args) if isinstance(func_args, dict) else str(func_args),
+                            "status": "running",
+                            "runtime": "wee",
+                            "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                        })
 
                     print(
                         f"[Wee Native] Tool: {func_name}({_json.dumps(func_args)[:200]})",
@@ -7949,16 +8056,26 @@ User Request:
                     # Execute the tool
                     tool_result = self._wee_execute_tool(func_name, func_args, agent)
 
-                    # Issue #109: Emit tool complete event to SSE stream
+                    # Issue #109 / #142: Emit tool complete event to SSE stream
                     tc_done_event = {
                         "id": tc_id,
                         "name": func_name,
-                        "arguments": func_args,
-                        "result": tool_result[:2000] if tool_result else "",
+                        "event": "result",
+                        "input": func_args,
+                        "output": tool_result[:2000] if tool_result else "",
                         "status": "complete",
                     }
                     if stream_buffer:
                         stream_buffer.push("tool_call", tc_done_event)
+
+                    # Issue #142: Update tool call completion in bg_task_mgr
+                    if bg_task_id and self._bg_task_mgr:
+                        self._bg_task_mgr.update_tool_call(
+                            bg_task_id,
+                            tc_id,
+                            status="completed",
+                            output=str(tool_result[:500]) if tool_result else "",
+                        )
 
                     # Append tool result to conversation for next round
                     messages.append({
@@ -8505,6 +8622,8 @@ User Request:
         # Background tasks run unattended — grant elevated permissions so
         # SDK runtimes (copilot-sdk, claude-sdk) don't block on approval gates
         self.update_session_field(session_id, "permissions", {"mode": "elevated"})
+        # Issue #142: Store task_id so run_wee_native can track tool calls
+        self.update_session_field(session_id, "bg_task_id", task_id)
         if timeout is not None:
             self.update_session_field(session_id, "timeout", timeout)
         try:
@@ -9711,7 +9830,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                         session_mgr._get_model_description(model_id, runtime)
                         or model_id
                     )
-                    models.append({"id": model_id, "label": label})
+                    models.append({"id": model_id, "label": label, "group": _group})
             return {"runtime": runtime, "models": models}
         except Exception as e:
             return {"runtime": runtime, "models": [], "error": str(e)}
@@ -11650,8 +11769,36 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             start_time = time.time()
 
             for line in process.stdout:
-                stdout_lines.append(line)
                 line_text = line.rstrip("\n\r")
+
+                # Issue #142: Handle wee runtime structured tool call events
+                # These JSON lines are for tool tracking only — skip them from output
+                if runtime == "wee" and line_text.strip().startswith('{"__wee_tc__"'):
+                    try:
+                        _wee_tc = _json.loads(line_text.strip())
+                        if _wee_tc.get("__wee_tc__") == "start":
+                            _tool_call_counter += 1
+                            _tc_input = _wee_tc.get("input", {})
+                            bg_task_mgr.append_tool_call(task_id, {
+                                "id": _wee_tc.get("id", f"bg_{task_id[:8]}_{_tool_call_counter}"),
+                                "name": _wee_tc.get("name", "tool"),
+                                "input": _json.dumps(_tc_input) if isinstance(_tc_input, dict) else str(_tc_input),
+                                "status": "running",
+                                "runtime": "wee",
+                                "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                            })
+                        elif _wee_tc.get("__wee_tc__") == "done":
+                            bg_task_mgr.update_tool_call(
+                                task_id,
+                                _wee_tc.get("id", ""),
+                                status="completed",
+                                output=str(_wee_tc.get("output", ""))[:500],
+                            )
+                    except (ValueError, KeyError, TypeError):
+                        pass
+                    continue  # Don't include tool-tracking JSON in output
+
+                stdout_lines.append(line)
 
                 # Append to output_lines for live log viewing
                 if line_text:

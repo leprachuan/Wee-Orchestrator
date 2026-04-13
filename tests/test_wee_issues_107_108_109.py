@@ -577,7 +577,7 @@ class TestWeeToolStreaming(unittest.TestCase):
         done_evt = tc_calls[1][0][1]
         self.assertEqual(done_evt["name"], "bash")
         self.assertEqual(done_evt["status"], "complete")
-        self.assertEqual(done_evt["result"], "devbox")
+        self.assertEqual(done_evt["output"], "devbox")
 
     @patch("openai.OpenAI")
     def test_content_streamed_during_final_answer(self, mock_openai_cls):

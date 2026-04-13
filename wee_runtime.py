@@ -378,8 +378,15 @@ def main():
                     func_args = {"raw": func_args_str}
 
                 print(f"[Wee] Tool: {func_name}({json.dumps(func_args)[:200]})", file=sys.stderr)
+                # Issue #142: Emit structured JSON to stdout for bg task tool call tracking
+                sys.stdout.write(json.dumps({"__wee_tc__": "start", "id": tc_id, "name": func_name, "input": func_args}) + "\n")
+                sys.stdout.flush()
 
                 tool_result = execute_tool(func_name, func_args)
+
+                # Issue #142: Emit tool result to stdout
+                sys.stdout.write(json.dumps({"__wee_tc__": "done", "id": tc_id, "name": func_name, "output": (tool_result or "")[:500]}) + "\n")
+                sys.stdout.flush()
 
                 messages.append({
                     "role": "tool",
