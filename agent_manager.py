@@ -4280,7 +4280,13 @@ You can mention an agent in your prompt and it will auto-delegate:
                     return m
 
         # Substring matching with shortest-match preference
-        matches = [m for m in all_models if name_lower in m.lower()]
+        # For wee runtime, skip multi-namespace models (openrouter/provider/model)
+        # to avoid cross-runtime contamination (e.g. gpt-5-mini matching
+        # openrouter/openai/gpt-5-mini) while allowing Ollama matches (1 slash)
+        if runtime == "wee":
+            matches = [m for m in all_models if m.count("/") <= 1 and name_lower in m.lower()]
+        else:
+            matches = [m for m in all_models if name_lower in m.lower()]
         if len(matches) == 1:
             return matches[0]
         if matches:
