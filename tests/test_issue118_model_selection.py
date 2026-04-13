@@ -253,11 +253,23 @@ class TestSessionValidationWee:
         assert session_data["model"] == "ollama/gemma4:e4b"
 
     def test_stale_copilot_model_replaced(self, session_mgr):
-        """A stale copilot model (e.g. gpt-5-mini) should be replaced for wee."""
+        """A stale copilot model (e.g. gpt-5-mini) should be replaced for wee.
+
+        Mocks Ollama (httpx.get) and OpenRouter (urllib.request.urlopen) to ensure
+        network-independent behaviour. Without mocks, live OpenRouter returns
+        openrouter/openai/gpt-5-mini which falsely matches 'gpt-5-mini' via substring
+        and causes the model to appear valid for wee runtime (Issue #142 regression).
+        """
         session_data = {"runtime": "wee", "model": "gpt-5-mini"}
-        runtime = "wee"
         current_model = session_data.get("model", "")
-        resolved = session_mgr.get_model_from_name(current_model, "wee")
+        # Clear any cached wee model list so patched network calls take effect.
+        session_mgr._env_wee_models = None
+        # Patch both network calls so only static WEE_MODELS fallback is used,
+        # ensuring gpt-5-mini cannot match openrouter/openai/gpt-5-mini.
+        with patch("httpx.get", side_effect=Exception("offline")), patch(
+            "urllib.request.urlopen", side_effect=Exception("offline")
+        ):
+            resolved = session_mgr.get_model_from_name(current_model, "wee")
         if not current_model or not resolved:
             session_data["model"] = os.getenv(
                 "WEE_DEFAULT_MODEL", "ollama/gemma4:e4b"
