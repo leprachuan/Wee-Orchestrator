@@ -4260,16 +4260,24 @@ You can mention an agent in your prompt and it will auto-delegate:
             if m.lower() == name_lower:
                 return m
 
-        # Exact match with provider prefix stripped (e.g., "gemma4:e4b" matches "ollama/gemma4:e4b")
+        # Exact match with "ollama/" prefix stripped (e.g., "gemma4:e4b" matches "ollama/gemma4:e4b").
+        # Intentionally only strips the ollama/ prefix -- not arbitrary provider prefixes --
+        # so bare names like "gpt-5-mini" never accidentally match "openrouter/openai/gpt-5-mini".
         for m in all_models:
             model_lower = m.lower()
-            if "/" in model_lower:
-                suffix = model_lower.split("/", 1)[1]
+            if model_lower.startswith("ollama/"):
+                suffix = model_lower[len("ollama/"):]
                 if suffix == name_lower:
                     return m
 
-        # Substring matching with shortest-match preference
-        matches = [m for m in all_models if name_lower in m.lower()]
+        # Substring matching with shortest-match preference.
+        # For wee runtime, bare names without an openrouter/ prefix are scoped to Ollama models
+        # only -- prevents accidental matches against the full OpenRouter catalog (350+ models).
+        if runtime == "wee" and not name_lower.startswith("openrouter/"):
+            candidate_models = [m for m in all_models if not m.lower().startswith("openrouter/")]
+        else:
+            candidate_models = all_models
+        matches = [m for m in candidate_models if name_lower in m.lower()]
         if len(matches) == 1:
             return matches[0]
         if matches:
