@@ -1725,7 +1725,7 @@ class SessionManager:
         """List stored secret names via secret_tool.py."""
         try:
             proc = subprocess.run(
-                [sys.executable, secret_tool, "list", "--backend", "file"],
+                [sys.executable, secret_tool, "list", "--backend", "pass"],
                 capture_output=True,
                 text=True,
                 timeout=10,
@@ -13932,7 +13932,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         )
         try:
             proc = await asyncio.create_subprocess_exec(
-                sys.executable, _SECRET_TOOL_PATH, "list", "--backend", "file",
+                sys.executable, _SECRET_TOOL_PATH, "list", "--backend", "pass",
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
@@ -13986,7 +13986,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         try:
             proc = await asyncio.create_subprocess_exec(
                 sys.executable, _SECRET_TOOL_PATH, "set",
-                "--name", name, "--value-stdin", "--backend", "file",
+                "--name", name, "--value-stdin", "--backend", "pass",
                 stdin=asyncio.subprocess.PIPE,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
@@ -14029,7 +14029,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         try:
             proc = await asyncio.create_subprocess_exec(
                 sys.executable, _SECRET_TOOL_PATH, "delete",
-                "--name", name, "--backend", "file",
+                "--name", name, "--backend", "pass",
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
