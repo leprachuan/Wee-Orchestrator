@@ -31,25 +31,42 @@
 ---
 
 ## [Issue #112] Bug: Wee runtime empty synthesis fallback
-**Status:** ✅ QA Approved (Conditional)  
+**Status:** ✅ QA Approved & Merged  
 **Verdict Date:** 2026-04-12  
-**Blockers:** 0 (Ready for merge)
-**Note:** PR requires rebase onto current dev before merge
+**Merge Date:** 2026-04-13  
+**Commit:** 34c5876  
+**PR:** #141  
+**Test Results:** 12/12 issue tests pass, 0 regressions
 
 ### Summary
-Fixed wee runtime handling of empty synthesis responses. When Ollama returns empty `synthesis`, wee runtime now gracefully falls back to last valid response message instead of crashing.
+Fixed wee runtime handling of empty synthesis responses. When the LLM generates empty text after tool execution (no visible tokens), the wee runtime now gracefully falls back to the last tool result instead of returning an empty string.
 
-### Test Results
-- ✅ 1207 tests pass
-- ✅ 0 failures, 0 regressions
-- ✅ Empty synthesis fallback verified end-to-end
+### Implementation Details
+**Fallback Logic (26 lines total):**
+- After the agentic loop completes, if LLM synthesis is empty (whitespace-only or no output)
+- Surface last tool result, truncated to 2000 chars
+- Fallback message: `Tool result:\n{truncated_result}` or `(No response generated)` placeholder
+- Applied in both `agent_manager.py` run_wee_native() and standalone `wee_runtime.py`
+
+### Changes
+- **agent_manager.py:** Added empty-synthesis fallback after agentic loop
+- **wee_runtime.py:** Mirrored fallback logic for CLI standalone execution
+- **tests/test_issue112_empty_synthesis.py:** 10 comprehensive regression tests
+  - Single and multi-tool calls
+  - Whitespace-only synthesis responses
+  - Truncation at 2000 chars
+  - SSE stream buffer edge cases
+  - Thinking-only responses
 
 ### QA Verdict
-- **APPROVED** — All functionality correct, no bugs found
-- **ACTION REQUIRED:** Branch needs rebase onto current `dev` before PR merge (Issue #113 conflict resolution will be in dev history)
+- ✅ **APPROVED** — All functionality correct, no bugs found
+- ✅ 12/12 issue tests pass
+- ✅ 0 failures, 0 regressions
+- ✅ Fallback verified with multiple tool call scenarios
 
-### Next State
-- After rebase, ready for PR: branch → `dev` → `main`
+### Status
+- ✅ Merged to dev (PR #141)
+- Ready for production (dev → main)
 
 ---
 
