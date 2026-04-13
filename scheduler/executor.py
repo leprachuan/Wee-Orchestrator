@@ -18,6 +18,20 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Dict, Optional
 
+# Gate check support (Issue #148)
+try:
+    from scheduler.qa_gate import is_wee_dev_gated
+except ImportError:
+    try:
+        from qa_gate import is_wee_dev_gated
+    except ImportError:
+        is_wee_dev_gated = None  # type: ignore[assignment]
+
+# Registry of gate_check names to callables
+_GATE_REGISTRY: Dict[str, object] = {}
+if is_wee_dev_gated is not None:
+    _GATE_REGISTRY["wee_dev_qa"] = is_wee_dev_gated
+
 # Repo root is parent of scheduler/ directory (e.g. /opt/n8n-copilot-shim-dev)
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 _SCHEDULER_BASE = _REPO_ROOT / ".task-scheduler"
@@ -368,6 +382,47 @@ class TaskSchedulerExecutor:
             logger.error(f"Failed to send WebEx notification to {email}: {e}")
             self._log_job(job_id, f"WebEx notification failed: {e}")
             return False
+
+    def _check_gate(self, job: Dict) -> bool:
+        """Check if a job's gate_check condition blocks execution.
+
+        Jobs can define a ``gate_check`` field (e.g. ``"wee_dev_qa"``) that
+        names a pre-dispatch gate. If the gate returns True (blocked), the
+        job is skipped for this cycle. (Issue #148)
+
+        Returns:
+            True if the job is allowed to execute, False if gated/blocked.
+        """
+        gate_name = job.get("gate_check")
+        if not gate_name:
+            return True  # no gate configured — always allowed
+
+        gate_fn = _GATE_REGISTRY.get(gate_name)
+        if gate_fn is None:
+            logger.warning(
+                f"Job {job.get('id', '?')} has gate_check={gate_name!r} "
+                f"but no gate function is registered for it — allowing execution"
+            )
+            return True
+
+        try:
+            gated, reason, details = gate_fn()
+            if gated:
+                logger.info(
+                    f"Job {job.get('id', '?')} blocked by gate {gate_name!r}: {reason}"
+                )
+                self._log_job(
+                    job.get("id", "?"),
+                    f"Skipped — gate {gate_name!r} blocked: {reason}",
+                )
+                return False
+            return True
+        except Exception as exc:
+            logger.error(
+                f"Gate check {gate_name!r} for job {job.get('id', '?')} "
+                f"raised an exception: {exc} — allowing execution (fail-open)"
+            )
+            return True
 
     def _execute_task(self, job: Dict) -> Optional[str]:
         """
@@ -811,6 +866,10 @@ class TaskSchedulerExecutor:
 
             job_id = job["id"]
             logger.info(f"Job ready: {job_id}")
+
+            # Gate check — skip this job if a pre-dispatch gate blocks it
+            if not self._check_gate(job):
+                continue
 
             # Record monotonic execution time BEFORE executing to close any
             # race window on backward clock jumps.
