@@ -1492,6 +1492,20 @@ class SessionManager:
         ],
     }
 
+    # Popular OpenRouter models — sorted first in dynamic discovery (Issue #142)
+    OPENROUTER_POPULAR_MODELS = {
+        "meta-llama/llama-4-scout",
+        "meta-llama/llama-4-maverick",
+        "google/gemma-3-27b-it:free",
+        "qwen/qwen3-32b:free",
+        "deepseek/deepseek-r1:free",
+        "microsoft/phi-4-reasoning-plus:free",
+        "anthropic/claude-sonnet-4",
+        "anthropic/claude-haiku-4",
+        "google/gemini-2.5-flash-preview",
+        "openai/gpt-4.1-mini",
+    }
+
     def __init__(self, config_file: Optional[str] = None, app_env: str = "PROD"):
         # Copilot Paths
         self.copilot_home = Path.home() / ".copilot"
