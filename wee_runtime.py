@@ -99,18 +99,28 @@ def resolve_model_and_endpoint(model: str, api_base: str = None, api_key: str = 
             "WEE_API_BASE", "http://192.168.1.101:11434/v1"
         )
     if not resolved_key:
-        resolved_key = os.environ.get("WEE_API_KEY") or os.environ.get(
-            "OPENROUTER_API_KEY"
-        )
+        # Issue #153: Check OPENROUTER_API_KEY env var for OpenRouter first
+        if "openrouter" in (resolved_base or "").lower():
+            resolved_key = os.environ.get("OPENROUTER_API_KEY")
+        if not resolved_key:
+            resolved_key = os.environ.get("WEE_API_KEY")
+        # Try keyring for OpenRouter
+        if not resolved_key and "openrouter" in (resolved_base or "").lower():
+            try:
+                import keyring
+                resolved_key = keyring.get_password("openrouter", "api_key")
+            except Exception:
+                pass
+        # Issue #153: Raise clear error instead of defaulting to "ollama"
         if not resolved_key:
             if "openrouter" in (resolved_base or "").lower():
-                try:
-                    import keyring
-                    resolved_key = keyring.get_password("openrouter", "api_key")
-                except Exception:
-                    pass
-            if not resolved_key:
-                resolved_key = "ollama"
+                print(
+                    "Error: OpenRouter API key not found. Set "
+                    "OPENROUTER_API_KEY env var or store via keyring.",
+                    file=sys.stderr,
+                )
+                sys.exit(1)
+            resolved_key = "ollama"
 
     return resolved_model, resolved_base, resolved_key
 

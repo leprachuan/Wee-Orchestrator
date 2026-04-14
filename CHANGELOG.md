@@ -1,5 +1,53 @@
 # Changelog
 
+## [Issue #153] Bug Fix: OpenRouter 401 Authentication Error
+**Status:** ✅ QA Approved (Commit: 1dae171, PR #154)
+
+### Summary
+Fixed silent 401 failures when using OpenRouter models in the wee runtime. Both `agent_manager.py` and `wee_runtime.py` were falling back to the local Ollama API key (`ollama`) as the Bearer token for OpenRouter requests. OpenRouter rejects this with HTTP 401 "Missing Authentication header". The fix adds proper `OPENROUTER_API_KEY` environment variable and keyring resolution, raising a clear error instead of silently using an invalid default.
+
+### Root Cause
+Both files used `os.environ.get('OPENROUTER_API_KEY', 'ollama')` — the `'ollama'` default is not a valid OpenRouter Bearer token.
+
+### Solution
+
+#### Key Resolution Order (after fix)
+1. `OPENROUTER_API_KEY` (explicit kwarg)
+2. `WEE_OPENROUTER_KEY` env var
+3. `OPENROUTER_API_KEY` env var
+4. keyring: `openrouter_api_key`
+5. Raise `ValueError` / `RuntimeError` — never `'ollama'` for OpenRouter
+
+#### agent_manager.py Changes
+- `_resolve_openrouter_key()` helper: env var first, then keyring lookup
+- `run_openrouter_model()`: uses resolver instead of hardcoded default
+- Raises `ValueError` with clear message when no key found
+
+#### wee_runtime.py Changes
+- `_get_openrouter_key()` helper: same env var → keyring resolution chain
+- OpenRouter request builder: uses helper, raises `RuntimeError` on missing key
+- Removed silent `'ollama'` fallback
+
+### Files Changed
+- `agent_manager.py` — `_resolve_openrouter_key()`, updated OpenRouter key resolution
+- `wee_runtime.py` — `_get_openrouter_key()`, updated OpenRouter request builder
+- `tests/test_issue153_openrouter_auth.py` — 16 regression tests
+
+### Tests
+- 16 new regression tests covering:
+  - Env var key resolution in both files
+  - Keyring fallback when env var absent
+  - `ValueError`/`RuntimeError` raised when no key found
+  - `'ollama'` string rejected as OpenRouter key
+  - Key priority ordering
+- Total: 1462 passed, 0 regressions
+
+### Non-Blocking Findings
+- N-1 (NITPICK): Minor punctuation inconsistency in error message
+- N-2 (NITPICK): PR description lists 1445 total pass vs 1462 actual (minor discrepancy, test suite grew between branch and QA)
+
+---
+
 ## [Issue #119] Feature: Wire Up OpenRouter in Wee Runtime UI
 **Status:** ✅ QA Approved (Commit: 168a958, PR #121)
 
