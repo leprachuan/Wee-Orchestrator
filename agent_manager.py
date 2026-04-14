@@ -7523,6 +7523,7 @@ User Request:
         n8n_session_id: str,
         timeout: Optional[int] = None,
         render_type: str = "text",
+        mode: str = "restricted",
     ) -> str:
         """Execute Devin CLI in non-interactive mode.
 
@@ -7530,13 +7531,23 @@ User Request:
         and allow full system access.
         """
         # Parse /mode command from prompt
-        prompt, mode = self._parse_mode_command(prompt)
+        prompt, parsed_mode = self._parse_mode_command(prompt)
 
         # Get session data once - reuse for mode and channel
         session_data = self.get_or_create_session_data(n8n_session_id)
 
-        # Resolve permission mode from session data (backward compat with yolo_mode)
-        mode = self._resolve_permission_mode(session_data, mode)
+        # Prefer explicitly passed-in mode over re-deriving from session data.
+        # This ensures scheduler/background dispatches with --mode elevated
+        # propagate correctly instead of being lost to session defaults.
+        if mode != "restricted":
+            # Explicit mode was passed in (e.g. from _dispatch_single_runtime)
+            pass
+        elif parsed_mode != "restricted":
+            # /mode command was found in the prompt
+            mode = parsed_mode
+        else:
+            # Fall back to session data resolution
+            mode = self._resolve_permission_mode(session_data, parsed_mode)
 
         agent_dir = self.AGENTS.get(agent, self.AGENTS["orchestrator"])["path"]
         effective_timeout = timeout if timeout is not None else self.command_timeout
@@ -7592,8 +7603,9 @@ User Request:
             context_prompt = context_prompt + sandboxed_instruction
 
         # -p is a boolean flag (print/non-interactive mode); prompt goes after --
-        # Permission mode: dangerous (auto-approve all) for elevated, auto for restricted/sandboxed
-        permission_mode = "dangerous" if mode == "elevated" else "auto"
+        # Permission mode: dangerous (auto-approve all) for elevated, normal for restricted/sandboxed
+        # Devin CLI valid values: normal, dangerous, bypass (NOT "auto")
+        permission_mode = "dangerous" if mode == "elevated" else "normal"
         cmd = [devin_bin, "-p"]
         if model:
             cmd += ["--model", model]
@@ -8764,6 +8776,7 @@ User Request:
                 n8n_session_id,
                 effective_timeout,
                 render_type,
+                mode,
             )
         elif runtime == "cursor":
             result = self.run_cursor(
@@ -11644,7 +11657,10 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                     if hasattr(session_mgr, "devin_bin") and session_mgr.devin_bin
                     else (_which_bin("devin") or "devin")
                 )
-                _devin_perm = "dangerous" if permission_mode == "elevated" else "auto"
+                # Devin CLI valid values: normal, dangerous, bypass (NOT "auto").
+                # Background tasks are non-interactive (no human to approve),
+                # so always use "dangerous" to prevent tool call rejections.
+                _devin_perm = "dangerous"
                 cmd = [_devin_bin, "-p", "--permission-mode", _devin_perm]
                 if model:
                     cmd.extend(["--model", model])
