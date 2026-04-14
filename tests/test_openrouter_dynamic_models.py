@@ -15,7 +15,6 @@ Tests:
 import json
 import sys
 import time
-import types
 import unittest
 from unittest.mock import MagicMock, patch
 
@@ -138,10 +137,10 @@ class TestFetchOpenrouterModels(unittest.TestCase):
     def test_cache_ttl(self, mock_urlopen, mock_keyring):
         """Second call within TTL should return cached result without making HTTP request."""
         mock_urlopen.side_effect = self._urlopen_mock
-        result1 = self.sm.fetch_openrouter_models()
+        self.sm.fetch_openrouter_models()
         call_count_1 = mock_urlopen.call_count
         # Second call should use cache
-        result2 = self.sm.fetch_openrouter_models()
+        self.sm.fetch_openrouter_models()
         call_count_2 = mock_urlopen.call_count
         self.assertEqual(call_count_1, call_count_2, "Second call should use cache, not HTTP")
 

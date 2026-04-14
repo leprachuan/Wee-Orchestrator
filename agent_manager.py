@@ -3326,8 +3326,6 @@ You can mention an agent in your prompt and it will auto-delegate:
             return self._static_models_to_dict(self.OPENCODE_MODELS)
 
 
-    # Curated popular OpenRouter model IDs for auto-discovery filtering
-    OPENROUTER_POPULAR_MODELS = {
         "meta-llama/llama-4-maverick",
         "meta-llama/llama-4-scout",
         "anthropic/claude-sonnet-4.6",
@@ -3340,7 +3338,6 @@ You can mention an agent in your prompt and it will auto-delegate:
         "qwen/qwen3-32b:free",
         "microsoft/phi-4-reasoning-plus:free",
         "google/gemma-3-27b-it:free",
-    }
 
     def _static_models_to_dict(self, static_dict: Dict) -> Dict:
         """Convert static model config {cat: [(id, desc, aliases)...]} to {cat: [id,...]}."""
