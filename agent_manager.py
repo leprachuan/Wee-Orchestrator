@@ -1581,7 +1581,9 @@ class SessionManager:
         self._env_devin_models = None
         self._env_cursor_models = None
         self._env_wee_models = None
-        self._openrouter_cache_ts = 0  # TTL timestamp for OpenRouter discovery cache
+        self._openrouter_cache_ts = 0  # TTL timestamp for wee model discovery cache
+        self._openrouter_models_cache: Optional[Dict] = None  # cached fetch_openrouter_models() result
+        self._openrouter_models_cache_ts: float = 0  # TTL timestamp for fetch_openrouter_models()
 
         # Load command timeout from environment
         self.command_timeout = get_command_timeout()
@@ -3347,6 +3349,137 @@ You can mention an agent in your prompt and it will auto-delegate:
             for cat, entries in static_dict.items()
         }
 
+    # Human-readable labels for known OpenRouter provider prefixes
+    OPENROUTER_PROVIDER_NAMES = {
+        "meta-llama": "Meta Llama",
+        "anthropic": "Anthropic",
+        "google": "Google",
+        "openai": "OpenAI",
+        "deepseek": "DeepSeek",
+        "mistralai": "Mistral AI",
+        "qwen": "Qwen",
+        "microsoft": "Microsoft",
+        "nvidia": "NVIDIA",
+        "cohere": "Cohere",
+        "perplexity": "Perplexity",
+        "x-ai": "xAI",
+        "01-ai": "01.AI",
+        "amazon": "Amazon",
+        "nousresearch": "Nous Research",
+        "liquid": "Liquid",
+        "bytedance": "ByteDance",
+    }
+
+    # Priority order for OpenRouter provider groups in the model selector
+    OPENROUTER_PROVIDER_PRIORITY = [
+        "OpenRouter - Anthropic",
+        "OpenRouter - OpenAI",
+        "OpenRouter - Google",
+        "OpenRouter - Meta Llama",
+        "OpenRouter - DeepSeek",
+        "OpenRouter - Mistral AI",
+        "OpenRouter - xAI",
+    ]
+
+    def fetch_openrouter_models(self) -> Dict:
+        """Fetch ALL available models from the OpenRouter API, grouped by provider.
+
+        Returns {category: [(model_id, description, aliases), ...]} where model_id
+        uses the "openrouter/<provider>/<name>" prefix understood by wee_runtime.py.
+
+        Resolution order:
+          1. Per-call 300s TTL cache (self._openrouter_models_cache)
+          2. Live API call to https://openrouter.ai/api/v1/models
+          3. Static WEE_MODELS["OpenRouter Models"] fallback
+
+        Authentication: keyring("openrouter", "api_key") -> OPENROUTER_API_KEY env var
+        """
+        import time as _time
+
+        static_fallback = {
+            "OpenRouter Models": list(self.WEE_MODELS.get("OpenRouter Models", []))
+        }
+
+        cache_ttl = 300
+        if (
+            self._openrouter_models_cache is not None
+            and _time.time() - self._openrouter_models_cache_ts < cache_ttl
+        ):
+            return self._openrouter_models_cache
+
+        api_key = None
+        try:
+            import keyring as _keyring
+            api_key = _keyring.get_password("openrouter", "api_key")
+        except Exception:
+            pass
+        if not api_key:
+            api_key = os.getenv("OPENROUTER_API_KEY")
+
+        if not api_key:
+            print("[wee] OpenRouter: no API key available, using static fallback", file=sys.stderr)
+            return static_fallback
+
+        try:
+            import urllib.request as _urlreq
+
+            req = _urlreq.Request(
+                "https://openrouter.ai/api/v1/models",
+                headers={"Authorization": "Bearer " + api_key},
+            )
+            resp = _urlreq.urlopen(req, timeout=15)
+            data = json.loads(resp.read())
+            all_models = data.get("data", [])
+
+            static_aliases = {
+                e[0]: e[2]
+                for e in self.WEE_MODELS.get("OpenRouter Models", [])
+            }
+
+            grouped = {}
+            for m in all_models:
+                mid = m.get("id", "")
+                if not mid:
+                    continue
+                name = m.get("name", mid)
+                or_id = "openrouter/" + mid
+                aliases = static_aliases.get(or_id, [])
+
+                provider_prefix = mid.split("/")[0] if "/" in mid else mid
+                friendly = self.OPENROUTER_PROVIDER_NAMES.get(
+                    provider_prefix,
+                    provider_prefix.replace("-", " ").title(),
+                )
+                category = "OpenRouter - " + friendly
+                grouped.setdefault(category, []).append((or_id, name, aliases))
+
+            if not grouped:
+                return static_fallback
+
+            for cat in grouped:
+                grouped[cat].sort(key=lambda t: t[1].lower())
+
+            ordered = {}
+            for priority_cat in self.OPENROUTER_PROVIDER_PRIORITY:
+                if priority_cat in grouped:
+                    ordered[priority_cat] = grouped.pop(priority_cat)
+            for cat in sorted(grouped):
+                ordered[cat] = grouped[cat]
+
+            total = sum(len(v) for v in ordered.values())
+            print(
+                f"[wee] OpenRouter: discovered {total} models in {len(ordered)} groups",
+                file=sys.stderr,
+            )
+
+            self._openrouter_models_cache = ordered
+            self._openrouter_models_cache_ts = _time.time()
+            return ordered
+
+        except Exception as e:
+            print(f"[wee] OpenRouter discovery failed: {e}", file=sys.stderr)
+            return static_fallback
+
     def _get_model_description(self, model_id: str, runtime: str) -> Optional[str]:
         """Look up a human-readable description for a model from static metadata."""
         # First check env-loaded models (if cached)
@@ -3633,64 +3766,19 @@ You can mention an agent in your prompt and it will auto-delegate:
         except Exception:
             pass
 
-        # Try live OpenRouter discovery
+        # Try live OpenRouter discovery via fetch_openrouter_models()
         try:
-            api_key = None
-            try:
-                import keyring
-                api_key = keyring.get_password("openrouter", "api_key")
-            except Exception:
-                pass
-            if not api_key:
-                api_key = os.getenv("OPENROUTER_API_KEY")
-
-            if api_key:
-                import urllib.request
-                req = urllib.request.Request(
-                    "https://openrouter.ai/api/v1/models",
-                    headers={"Authorization": "Bearer " + api_key},
-                )
-                resp = urllib.request.urlopen(req, timeout=10)
-                data = json.loads(resp.read())
-                all_models = data.get("data", [])
-
-                discovered = []
-                for m in all_models:
-                    mid = m.get("id", "")
-                    if mid in self.OPENROUTER_POPULAR_MODELS:
-                        name = m.get("name", mid)
-                        or_id = "openrouter/" + mid
-                        discovered.append((or_id, name + " (OpenRouter)", []))
-
-                if discovered:
-                    # Merge aliases from static WEE_MODELS into discovered models
-                    static_aliases = {e[0]: e[2] for e in self.WEE_MODELS.get("OpenRouter Models", [])}
-                    merged = []
-                    for or_id, name, _ in discovered:
-                        aliases = static_aliases.get(or_id, [])
-                        merged.append((or_id, name, aliases))
-                    merged.sort(key=lambda t: t[1])
-                    # Add any static models not discovered (keeps aliases for models not in API response)
-                    discovered_ids = {t[0] for t in merged}
-                    for entry in self.WEE_MODELS.get("OpenRouter Models", []):
-                        if entry[0] not in discovered_ids:
-                            merged.append(entry)
-                    result["OpenRouter Models"] = merged
-                    print(
-                        "[wee] OpenRouter: discovered %d models" % len(discovered),
-                        file=sys.stderr,
-                    )
-
-            self._env_wee_models = result
-            self._openrouter_cache_ts = _time.time()
-            return self._static_models_to_dict(result)
-
+            or_models = self.fetch_openrouter_models()
+            if or_models and any(v for v in or_models.values()):
+                # Remove the static OpenRouter Models key and replace with dynamic groups
+                result.pop("OpenRouter Models", None)
+                result.update(or_models)
         except Exception as e:
-            print(
-                "[wee] OpenRouter discovery failed, using static list: %s" % e,
-                file=sys.stderr,
-            )
-            return self._static_models_to_dict(self.WEE_MODELS)
+            print(f"[wee] OpenRouter discovery error: {e}", file=sys.stderr)
+
+        self._env_wee_models = result
+        self._openrouter_cache_ts = _time.time()
+        return self._static_models_to_dict(result)
 
 
     def get_models_for_runtime(self, runtime: str) -> Dict:
