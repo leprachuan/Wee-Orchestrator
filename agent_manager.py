@@ -3394,8 +3394,6 @@ You can mention an agent in your prompt and it will auto-delegate:
 
         Authentication: keyring("openrouter", "api_key") -> OPENROUTER_API_KEY env var
         """
-        import time as _time
-
         static_fallback = {
             "OpenRouter Models": list(self.WEE_MODELS.get("OpenRouter Models", []))
         }
@@ -3403,7 +3401,7 @@ You can mention an agent in your prompt and it will auto-delegate:
         cache_ttl = 300
         if (
             self._openrouter_models_cache is not None
-            and _time.time() - self._openrouter_models_cache_ts < cache_ttl
+            and time.time() - self._openrouter_models_cache_ts < cache_ttl
         ):
             return self._openrouter_models_cache
 
@@ -3473,7 +3471,7 @@ You can mention an agent in your prompt and it will auto-delegate:
             )
 
             self._openrouter_models_cache = ordered
-            self._openrouter_models_cache_ts = _time.time()
+            self._openrouter_models_cache_ts = time.time()
             return ordered
 
         except Exception as e:
@@ -3705,8 +3703,6 @@ You can mention an agent in your prompt and it will auto-delegate:
           2. Live Ollama discovery + live OpenRouter discovery (300s TTL cache)
           3. Static WEE_MODELS fallback
         """
-        import time as _time
-
         # Check for env var override first
         env_models = os.getenv("WEE_MODELS_JSON")
         if env_models:
@@ -3727,7 +3723,7 @@ You can mention an agent in your prompt and it will auto-delegate:
         # Return cache if still valid
         if (
             self._env_wee_models is not None
-            and _time.time() - self._openrouter_cache_ts < cache_ttl
+            and time.time() - self._openrouter_cache_ts < cache_ttl
         ):
             return self._static_models_to_dict(self._env_wee_models)
 
@@ -3777,7 +3773,7 @@ You can mention an agent in your prompt and it will auto-delegate:
             print(f"[wee] OpenRouter discovery error: {e}", file=sys.stderr)
 
         self._env_wee_models = result
-        self._openrouter_cache_ts = _time.time()
+        self._openrouter_cache_ts = time.time()
         return self._static_models_to_dict(result)
 
 

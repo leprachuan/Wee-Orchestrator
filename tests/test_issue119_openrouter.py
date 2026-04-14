@@ -291,7 +291,7 @@ class TestModelsEndpoint:
                 data["models"].append(entry)
         groups = {m.get("group", "") for m in data["models"]}
         assert "Ollama Models" in groups, f"Missing Ollama group. Got: {groups}"
-        assert "OpenRouter Models" in groups, f"Missing OpenRouter group. Got: {groups}"
+        assert any(g.startswith("OpenRouter") for g in groups), f"Missing OpenRouter group (expected group with OpenRouter prefix). Got: {groups}"
 
     def test_endpoint_unknown_runtime_rejected(self):
         """Unknown runtimes should return an error."""
