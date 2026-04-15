@@ -90,12 +90,20 @@ class TestKeyringAPIEndpoints(unittest.TestCase):
     def test_status_calls_secret_tool(self):
         with open("/opt/n8n-copilot-shim-dev/agent_manager.py", "r") as f:
             content = f.read()
-        self.assertIn('_SECRET_TOOL_PATH, "status"', content)
+        import re
+        self.assertIsNotNone(
+            re.search(r'_SECRET_TOOL_PATH,\s+"status"', content),
+            "_SECRET_TOOL_PATH should be called with 'status' command",
+        )
 
     def test_unlock_calls_secret_tool(self):
         with open("/opt/n8n-copilot-shim-dev/agent_manager.py", "r") as f:
             content = f.read()
-        self.assertIn('_SECRET_TOOL_PATH, "unlock"', content)
+        import re
+        self.assertIsNotNone(
+            re.search(r'_SECRET_TOOL_PATH,\s+"unlock"', content),
+            "_SECRET_TOOL_PATH should be called with 'unlock' command",
+        )
 
     def test_password_sent_via_stdin(self):
         """Password must be sent via stdin, not as CLI arg."""

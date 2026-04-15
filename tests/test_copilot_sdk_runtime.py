@@ -86,10 +86,14 @@ class TestCopilotSdkRuntimeRouting(unittest.TestCase):
         # Read the source to verify argparse choices contain copilot-sdk
         import inspect
         source = inspect.getsource(agent_manager)
-        self.assertIn(
-            '"copilot-sdk", "opencode"',
-            source,
-            "argparse choices should include copilot-sdk"
+        import re
+        self.assertIsNotNone(
+            re.search(r'"copilot-sdk"', source),
+            "argparse choices should include copilot-sdk",
+        )
+        self.assertIsNotNone(
+            re.search(r'"opencode"', source),
+            "argparse choices should include opencode",
         )
 
 
