@@ -354,3 +354,47 @@ def test_m3_response_variable_not_dead_code():
     assert (
         "_print_markdown(response" in source
     ), "response variable must be passed to _print_markdown() — M-3 fix missing"
+
+
+# ---------------------------------------------------------------------------
+# Regression test for Round 2 M-1: run_interactive() must pass permission
+# kwarg through to chat_stream() — previously silently dropped (fix: 7622e8d)
+# ---------------------------------------------------------------------------
+
+def test_m1_run_interactive_permission_passed_to_chat_stream():
+    """run_interactive() must forward permission= to chat_stream().
+
+    Regression test for Round-2 REJECT: run_interactive() accepted the
+    permission kwarg but dropped it before calling chat_stream(), so the
+    permission was never enforced during interactive sessions.
+    """
+    import unittest.mock as um
+
+    with (
+        um.patch('wee_cli._make_client'),
+        um.patch('wee_cli._init_readline'),
+        um.patch('wee_cli._save_readline'),
+        um.patch('wee_cli.chat_stream', return_value='ok') as mock_chat,
+        um.patch('builtins.input', side_effect=['hello', 'exit']),
+    ):
+        from wee_cli import run_interactive
+
+        run_interactive(
+            model='test-model',
+            api_base='http://localhost/v1',
+            api_key='test-key',
+            tools_enabled=False,
+            temperature=None,
+            timeout=60,
+            system_prompt='',
+            output_format='text',
+            permission='elevated',
+        )
+
+    mock_chat.assert_called()
+    for call in mock_chat.call_args_list:
+        actual_perm = call.kwargs.get('permission')
+        assert actual_perm == 'elevated', (
+            f'chat_stream called without permission=elevated -- '
+            f'run_interactive is dropping the permission kwarg. Got: {actual_perm!r}'
+        )
