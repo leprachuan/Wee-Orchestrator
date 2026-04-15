@@ -17,18 +17,16 @@ Run:
     pytest tests/test_wee_runtime_comprehensive.py tests/test_wee_runtime_agentic.py -v
 """
 import io
-import json
 import os
 import subprocess
 import sys
-import time
 import unittest
 from types import SimpleNamespace
-from unittest.mock import MagicMock, call, patch
+from unittest.mock import MagicMock, patch
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)) + "/..")
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)) + "/..")  # noqa: E402
 
-import wee_runtime
+import wee_runtime  # noqa: E402
 
 WEE_RUNTIME = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "..", "wee_runtime.py"
@@ -180,13 +178,15 @@ class TestEnvVarResolution(unittest.TestCase):
         self.assertEqual(key, "ollama")
 
     def test_wee_api_key_for_bare_model(self):
-        """WEE_API_KEY is used for bare models with no explicit api_base pointing to openrouter."""
+        """WEE_API_KEY is used for bare models with no explicit api_base pointing
+        to openrouter."""
         with patch.dict(
             os.environ,
             {"WEE_API_KEY": "bare-key"},
             clear=False,
         ):
-            # Patch WEE_API_BASE to something non-openrouter to avoid openrouter key check
+            # Patch WEE_API_BASE to something non-openrouter to avoid
+            # openrouter key check
             with patch.dict(os.environ, {"WEE_API_BASE": "http://other:1234/v1"}):
                 _, _, key = wee_runtime.resolve_model_and_endpoint("bare-model")
         self.assertEqual(key, "bare-key")
@@ -222,7 +222,8 @@ class TestOpenRouterKeyRequired(unittest.TestCase):
     """OpenRouter requires an API key — validates the enforcement chain."""
 
     def test_no_key_exits_with_code_1(self):
-        """resolve_model_and_endpoint exits with code 1 when OpenRouter key is missing."""
+        """resolve_model_and_endpoint exits with code 1 when OpenRouter key
+        is missing."""
         with patch.dict(os.environ, {}, clear=True):
             with patch("keyring.get_password", return_value=None):
                 with self.assertRaises(SystemExit) as ctx:
@@ -264,7 +265,9 @@ class TestOpenRouterKeyRequired(unittest.TestCase):
 
     def test_non_openrouter_model_no_exit(self):
         """Non-OpenRouter models don't exit even without OPENROUTER_API_KEY."""
-        with patch.dict(os.environ, {"WEE_API_BASE": "http://other:1234/v1"}, clear=True):
+        with patch.dict(
+            os.environ, {"WEE_API_BASE": "http://other:1234/v1"}, clear=True
+        ):
             # Should NOT exit — bare model with no openrouter base
             try:
                 model, base, key = wee_runtime.resolve_model_and_endpoint("bare-model")
@@ -651,10 +654,12 @@ class TestMultipleToolCallsPerRound(unittest.TestCase):
         mock_cls.return_value = mock_client
 
         # Round 1: two simultaneous tool calls
-        td1 = _make_tool_call_delta(0, tc_id="tc_1", name="bash",
-                                     arguments='{"command": "echo FIRST"}')
-        td2 = _make_tool_call_delta(1, tc_id="tc_2", name="python",
-                                     arguments='{"code": "print(\'SECOND\')"}')
+        td1 = _make_tool_call_delta(
+            0, tc_id="tc_1", name="bash",
+            arguments='{"command": "echo FIRST"}')
+        td2 = _make_tool_call_delta(
+            1, tc_id="tc_2", name="python",
+            arguments='{"code": "print(\'SECOND\')"}')
         round1 = [
             _make_chunk(content="", tool_calls=[td1]),
             _make_chunk(content="", tool_calls=[td2]),
@@ -680,10 +685,12 @@ class TestMultipleToolCallsPerRound(unittest.TestCase):
         mock_client = MagicMock()
         mock_cls.return_value = mock_client
 
-        td1 = _make_tool_call_delta(0, tc_id="tc_a", name="bash",
-                                     arguments='{"command": "echo A"}')
-        td2 = _make_tool_call_delta(1, tc_id="tc_b", name="bash",
-                                     arguments='{"command": "echo B"}')
+        td1 = _make_tool_call_delta(
+            0, tc_id="tc_a", name="bash",
+            arguments='{"command": "echo A"}')
+        td2 = _make_tool_call_delta(
+            1, tc_id="tc_b", name="bash",
+            arguments='{"command": "echo B"}')
         round1 = [
             _make_chunk(content="", tool_calls=[td1]),
             _make_chunk(content="", tool_calls=[td2]),
@@ -724,8 +731,9 @@ class TestToolCallIdFallback(unittest.TestCase):
         mock_cls.return_value = mock_client
 
         # tc_id is None — no ID from model
-        td = _make_tool_call_delta(0, tc_id=None, name="bash",
-                                    arguments='{"command": "echo synth_id_test"}')
+        td = _make_tool_call_delta(
+            0, tc_id=None, name="bash",
+            arguments='{"command": "echo synth_id_test"}')
         round1 = [_make_chunk(content="", tool_calls=[td]),
                   _make_chunk(finish_reason="tool_calls")]
         round2 = [_make_chunk(content="done"), _make_chunk(finish_reason="stop")]
@@ -812,12 +820,16 @@ class TestStreamingEdgeCases(unittest.TestCase):
         mock_client = MagicMock()
         mock_cls.return_value = mock_client
 
-        td = _make_tool_call_delta(0, tc_id="tc_mixed", name="bash",
-                                    arguments='{"command": "echo MIXED"}')
+        td = _make_tool_call_delta(
+            0, tc_id="tc_mixed", name="bash",
+            arguments='{"command": "echo MIXED"}')
         # Chunk has both content and tool call
         mixed_chunk = _make_chunk(content="Thinking...", tool_calls=[td])
         round1 = [mixed_chunk, _make_chunk(finish_reason="tool_calls")]
-        round2 = [_make_chunk(content="Result: MIXED"), _make_chunk(finish_reason="stop")]
+        round2 = [
+            _make_chunk(content="Result: MIXED"),
+            _make_chunk(finish_reason="stop"),
+        ]
 
         mock_client.chat.completions.create.side_effect = [
             iter(round1), iter(round2)
@@ -897,8 +909,9 @@ class TestMessageConstruction(unittest.TestCase):
         mock_client = MagicMock()
         mock_cls.return_value = mock_client
 
-        td = _make_tool_call_delta(0, tc_id="tc_check", name="bash",
-                                    arguments='{"command": "echo check"}')
+        td = _make_tool_call_delta(
+            0, tc_id="tc_check", name="bash",
+            arguments='{"command": "echo check"}')
         round1 = [_make_chunk(content="", tool_calls=[td]),
                   _make_chunk(finish_reason="tool_calls")]
         round2 = [_make_chunk(content="done"), _make_chunk(finish_reason="stop")]
@@ -908,7 +921,8 @@ class TestMessageConstruction(unittest.TestCase):
 
         _run_main_mocked("ollama/test", "check msg", tools=True)
 
-        round2_messages = mock_client.chat.completions.create.call_args_list[1][1]["messages"]
+        call_args = mock_client.chat.completions.create.call_args_list
+        round2_messages = call_args[1][1]["messages"]
         tool_msgs = [m for m in round2_messages if m.get("role") == "tool"]
         for msg in tool_msgs:
             self.assertIn("tool_call_id", msg)
@@ -921,8 +935,9 @@ class TestMessageConstruction(unittest.TestCase):
         mock_client = MagicMock()
         mock_cls.return_value = mock_client
 
-        td = _make_tool_call_delta(0, tc_id="tc_asst", name="bash",
-                                    arguments='{"command": "echo asst_check"}')
+        td = _make_tool_call_delta(
+            0, tc_id="tc_asst", name="bash",
+            arguments='{"command": "echo asst_check"}')
         round1 = [_make_chunk(content="", tool_calls=[td]),
                   _make_chunk(finish_reason="tool_calls")]
         round2 = [_make_chunk(content="done"), _make_chunk(finish_reason="stop")]
@@ -932,7 +947,8 @@ class TestMessageConstruction(unittest.TestCase):
 
         _run_main_mocked("ollama/test", "assistant msg test", tools=True)
 
-        round2_messages = mock_client.chat.completions.create.call_args_list[1][1]["messages"]
+        call_args = mock_client.chat.completions.create.call_args_list
+        round2_messages = call_args[1][1]["messages"]
         asst_msgs = [m for m in round2_messages if m.get("role") == "assistant"]
         self.assertTrue(
             any("tool_calls" in m for m in asst_msgs),
@@ -992,7 +1008,8 @@ class TestMaxToolRoundsConfig(unittest.TestCase):
 
     @patch("openai.OpenAI")
     def test_loop_sends_tools_only_before_max_rounds(self, mock_cls):
-        """tools key is omitted from the final fallback round (round > MAX_TOOL_ROUNDS)."""
+        """tools key is omitted from the final fallback round
+        (round > MAX_TOOL_ROUNDS)."""
         mock_client = MagicMock()
         mock_cls.return_value = mock_client
 
