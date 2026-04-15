@@ -32,9 +32,13 @@ __version__ = "0.1.0"
 _HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _HERE)
 
-from wee_runtime import (_ANTI_HALLUCINATION_PROMPT, _WEE_TOOLS,  # noqa: E402
-                         MAX_TOOL_ROUNDS, execute_tool,
-                         resolve_model_and_endpoint)
+from wee_runtime import _WEE_TOOLS  # noqa: E402
+from wee_runtime import (
+    _ANTI_HALLUCINATION_PROMPT,
+    MAX_TOOL_ROUNDS,
+    execute_tool,
+    resolve_model_and_endpoint,
+)
 
 # ---------------------------------------------------------------------------
 # Config file support (~/.wee/config.json)
