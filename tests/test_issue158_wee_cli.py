@@ -19,27 +19,24 @@ import sys
 import tempfile
 import unittest
 from io import StringIO
-from unittest.mock import MagicMock, patch, PropertyMock
+from unittest.mock import MagicMock, patch
 
 # Ensure project root is in path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from wee_cli import (
+from wee_cli import (  # noqa: E402
     TokenTracker,
     build_parser,
     load_config,
     save_config,
     main,
     chat_stream,
-    DEFAULT_CONFIG_DIR,
-    DEFAULT_CONFIG_FILE,
     __version__,
     REPL_HELP,
     _print_error,
     _print_info,
     _print_markdown,
     _make_client,
-    run_single_shot,
 )
 
 
@@ -72,18 +69,28 @@ class TestBuildParser(unittest.TestCase):
 
     def test_all_arguments(self):
         parser = build_parser()
-        args = parser.parse_args([
-            "--model", "openrouter/llama-2-70b",
-            "--api-key", "test-key",
-            "--api-base", "http://localhost:8080/v1",
-            "--tools",
-            "--permission", "elevated",
-            "--system", "You are helpful",
-            "--temperature", "0.7",
-            "--timeout", "60",
-            "--output", "json",
-            "What is 2+2?",
-        ])
+        args = parser.parse_args(
+            [
+                "--model",
+                "openrouter/llama-2-70b",
+                "--api-key",
+                "test-key",
+                "--api-base",
+                "http://localhost:8080/v1",
+                "--tools",
+                "--permission",
+                "elevated",
+                "--system",
+                "You are helpful",
+                "--temperature",
+                "0.7",
+                "--timeout",
+                "60",
+                "--output",
+                "json",
+                "What is 2+2?",
+            ]
+        )
         self.assertEqual(args.model, "openrouter/llama-2-70b")
         self.assertEqual(args.api_key, "test-key")
         self.assertEqual(args.api_base, "http://localhost:8080/v1")
@@ -239,9 +246,10 @@ class TestModelResolutionViaCLI(unittest.TestCase):
         # Model should be resolved from WEE_MODEL env
         mock_client.assert_called_once()
         call_args = mock_client.call_args
-        self.assertIn("192.168.1.101:11434", call_args[1]["api_base"]
-                       if "api_base" in call_args[1]
-                       else call_args[0][0])
+        self.assertIn(
+            "192.168.1.101:11434",
+            call_args[1]["api_base"] if "api_base" in call_args[1] else call_args[0][0],
+        )
 
     @patch("wee_cli._make_client")
     @patch("wee_cli.chat_stream", return_value="test response")
@@ -365,10 +373,17 @@ class TestREPLCommands(unittest.TestCase):
     def test_exit_command(self, mock_chat, mock_save, mock_init, mock_client):
         with patch("builtins.input", side_effect=["exit"]):
             from wee_cli import run_interactive
+
             run_interactive(
-                model="test", api_base="http://localhost/v1", api_key="test",
-                tools_enabled=False, temperature=None, timeout=60,
-                system_prompt="", output_format="text", permission="restricted",
+                model="test",
+                api_base="http://localhost/v1",
+                api_key="test",
+                tools_enabled=False,
+                temperature=None,
+                timeout=60,
+                system_prompt="",
+                output_format="text",
+                permission="restricted",
             )
         mock_chat.assert_not_called()
 
@@ -379,10 +394,17 @@ class TestREPLCommands(unittest.TestCase):
     def test_quit_command(self, mock_chat, mock_save, mock_init, mock_client):
         with patch("builtins.input", side_effect=["quit"]):
             from wee_cli import run_interactive
+
             run_interactive(
-                model="test", api_base="http://localhost/v1", api_key="test",
-                tools_enabled=False, temperature=None, timeout=60,
-                system_prompt="", output_format="text", permission="restricted",
+                model="test",
+                api_base="http://localhost/v1",
+                api_key="test",
+                tools_enabled=False,
+                temperature=None,
+                timeout=60,
+                system_prompt="",
+                output_format="text",
+                permission="restricted",
             )
         mock_chat.assert_not_called()
 
@@ -394,10 +416,17 @@ class TestREPLCommands(unittest.TestCase):
         inputs = ["hello", "/clear", "exit"]
         with patch("builtins.input", side_effect=inputs):
             from wee_cli import run_interactive
+
             run_interactive(
-                model="test", api_base="http://localhost/v1", api_key="test",
-                tools_enabled=False, temperature=None, timeout=60,
-                system_prompt="", output_format="text", permission="restricted",
+                model="test",
+                api_base="http://localhost/v1",
+                api_key="test",
+                tools_enabled=False,
+                temperature=None,
+                timeout=60,
+                system_prompt="",
+                output_format="text",
+                permission="restricted",
             )
         # chat_stream called once for "hello", /clear doesn't trigger it
         self.assertEqual(mock_chat.call_count, 1)
@@ -409,10 +438,17 @@ class TestREPLCommands(unittest.TestCase):
     def test_tokens_command(self, mock_chat, mock_save, mock_init, mock_client):
         with patch("builtins.input", side_effect=["/tokens", "exit"]):
             from wee_cli import run_interactive
+
             run_interactive(
-                model="test", api_base="http://localhost/v1", api_key="test",
-                tools_enabled=False, temperature=None, timeout=60,
-                system_prompt="", output_format="text", permission="restricted",
+                model="test",
+                api_base="http://localhost/v1",
+                api_key="test",
+                tools_enabled=False,
+                temperature=None,
+                timeout=60,
+                system_prompt="",
+                output_format="text",
+                permission="restricted",
             )
         mock_chat.assert_not_called()
 
@@ -423,10 +459,17 @@ class TestREPLCommands(unittest.TestCase):
     def test_help_command(self, mock_chat, mock_save, mock_init, mock_client):
         with patch("builtins.input", side_effect=["/help", "exit"]):
             from wee_cli import run_interactive
+
             run_interactive(
-                model="test", api_base="http://localhost/v1", api_key="test",
-                tools_enabled=False, temperature=None, timeout=60,
-                system_prompt="", output_format="text", permission="restricted",
+                model="test",
+                api_base="http://localhost/v1",
+                api_key="test",
+                tools_enabled=False,
+                temperature=None,
+                timeout=60,
+                system_prompt="",
+                output_format="text",
+                permission="restricted",
             )
         mock_chat.assert_not_called()
 
@@ -437,10 +480,17 @@ class TestREPLCommands(unittest.TestCase):
     def test_version_command(self, mock_chat, mock_save, mock_init, mock_client):
         with patch("builtins.input", side_effect=["/version", "exit"]):
             from wee_cli import run_interactive
+
             run_interactive(
-                model="test", api_base="http://localhost/v1", api_key="test",
-                tools_enabled=False, temperature=None, timeout=60,
-                system_prompt="", output_format="text", permission="restricted",
+                model="test",
+                api_base="http://localhost/v1",
+                api_key="test",
+                tools_enabled=False,
+                temperature=None,
+                timeout=60,
+                system_prompt="",
+                output_format="text",
+                permission="restricted",
             )
         mock_chat.assert_not_called()
 
@@ -451,10 +501,17 @@ class TestREPLCommands(unittest.TestCase):
     def test_unknown_command(self, mock_chat, mock_save, mock_init, mock_client):
         with patch("builtins.input", side_effect=["/unknown", "exit"]):
             from wee_cli import run_interactive
+
             run_interactive(
-                model="test", api_base="http://localhost/v1", api_key="test",
-                tools_enabled=False, temperature=None, timeout=60,
-                system_prompt="", output_format="text", permission="restricted",
+                model="test",
+                api_base="http://localhost/v1",
+                api_key="test",
+                tools_enabled=False,
+                temperature=None,
+                timeout=60,
+                system_prompt="",
+                output_format="text",
+                permission="restricted",
             )
         mock_chat.assert_not_called()
 
@@ -465,23 +522,39 @@ class TestREPLCommands(unittest.TestCase):
     def test_eof_exits(self, mock_chat, mock_save, mock_init, mock_client):
         with patch("builtins.input", side_effect=EOFError):
             from wee_cli import run_interactive
+
             run_interactive(
-                model="test", api_base="http://localhost/v1", api_key="test",
-                tools_enabled=False, temperature=None, timeout=60,
-                system_prompt="", output_format="text", permission="restricted",
+                model="test",
+                api_base="http://localhost/v1",
+                api_key="test",
+                tools_enabled=False,
+                temperature=None,
+                timeout=60,
+                system_prompt="",
+                output_format="text",
+                permission="restricted",
             )
 
     @patch("wee_cli._make_client")
     @patch("wee_cli._init_readline")
     @patch("wee_cli._save_readline")
     @patch("wee_cli.chat_stream", return_value="response text")
-    def test_keyboard_interrupt_exits(self, mock_chat, mock_save, mock_init, mock_client):
+    def test_keyboard_interrupt_exits(
+        self, mock_chat, mock_save, mock_init, mock_client
+    ):
         with patch("builtins.input", side_effect=KeyboardInterrupt):
             from wee_cli import run_interactive
+
             run_interactive(
-                model="test", api_base="http://localhost/v1", api_key="test",
-                tools_enabled=False, temperature=None, timeout=60,
-                system_prompt="", output_format="text", permission="restricted",
+                model="test",
+                api_base="http://localhost/v1",
+                api_key="test",
+                tools_enabled=False,
+                temperature=None,
+                timeout=60,
+                system_prompt="",
+                output_format="text",
+                permission="restricted",
             )
 
     @patch("wee_cli._make_client")
@@ -493,10 +566,17 @@ class TestREPLCommands(unittest.TestCase):
         inputs = ["first message", "second message", "exit"]
         with patch("builtins.input", side_effect=inputs):
             from wee_cli import run_interactive
+
             run_interactive(
-                model="test", api_base="http://localhost/v1", api_key="test",
-                tools_enabled=False, temperature=None, timeout=60,
-                system_prompt="", output_format="text", permission="restricted",
+                model="test",
+                api_base="http://localhost/v1",
+                api_key="test",
+                tools_enabled=False,
+                temperature=None,
+                timeout=60,
+                system_prompt="",
+                output_format="text",
+                permission="restricted",
             )
         # chat_stream called twice
         self.assertEqual(mock_chat.call_count, 2)
@@ -512,10 +592,17 @@ class TestREPLCommands(unittest.TestCase):
     def test_empty_input_ignored(self, mock_chat, mock_save, mock_init, mock_client):
         with patch("builtins.input", side_effect=["", "  ", "exit"]):
             from wee_cli import run_interactive
+
             run_interactive(
-                model="test", api_base="http://localhost/v1", api_key="test",
-                tools_enabled=False, temperature=None, timeout=60,
-                system_prompt="", output_format="text", permission="restricted",
+                model="test",
+                api_base="http://localhost/v1",
+                api_key="test",
+                tools_enabled=False,
+                temperature=None,
+                timeout=60,
+                system_prompt="",
+                output_format="text",
+                permission="restricted",
             )
         mock_chat.assert_not_called()
 
@@ -570,7 +657,7 @@ class TestMakeClient(unittest.TestCase):
         with patch.dict("sys.modules", {"openai": MagicMock()}):
             with patch("wee_cli._make_client.__module__", "wee_cli"):
                 try:
-                    client = _make_client("http://localhost/v1", "test-key", 60.0)
+                    _make_client("http://localhost/v1", "test-key", 60.0)
                 except Exception:
                     pass  # May fail without real openai, that's OK for structure test
 

@@ -3,17 +3,15 @@
 Covers M-1 (permission wired through), M-2 (output format works),
 M-3 (response variable used), N-1 (imports), N-2 (f-string), N-3 (line length).
 """
+
 import ast
-import importlib
 import io
 import json
 import sys
-import textwrap
 import types
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-import pytest
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -39,9 +37,9 @@ def test_n1_stdlib_imports_removed():
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             names = {alias.name.split(".")[0] for alias in node.names}
-            assert not names & _REMOVED_IMPORTS, (
-                f"Unused stdlib imports still present: {names & _REMOVED_IMPORTS}"
-            )
+            assert (
+                not names & _REMOVED_IMPORTS
+            ), f"Unused stdlib imports still present: {names & _REMOVED_IMPORTS}"
 
 
 def test_n1_wee_runtime_imports_cleaned():
@@ -50,8 +48,11 @@ def test_n1_wee_runtime_imports_cleaned():
     for node in ast.walk(tree):
         if isinstance(node, ast.ImportFrom) and node.module == "wee_runtime":
             names = {alias.name for alias in node.names}
-            assert not names & _REMOVED_FROM_IMPORTS, (
-                f"Dead imports from wee_runtime still present: {names & _REMOVED_FROM_IMPORTS}"
+            assert (
+                not names & _REMOVED_FROM_IMPORTS
+            ), (
+                f"Dead imports still present: "
+                f"{names & _REMOVED_FROM_IMPORTS}"
             )
 
 
@@ -68,9 +69,9 @@ def test_n1_syntax_import_removed():
 def test_n2_fstring_placeholder_fixed():
     """The /help message must not use an f-string without placeholders."""
     source = _CLI_PATH.read_text()
-    assert 'f"Type /help for commands, exit to quit' not in source, (
-        "F841: f-string with no placeholders still present"
-    )
+    assert (
+        'f"Type /help for commands, exit to quit' not in source
+    ), "F841: f-string with no placeholders still present"
 
 
 # ---------------------------------------------------------------------------
@@ -80,13 +81,10 @@ def test_n3_no_lines_over_88():
     """All lines in wee_cli.py must be ≤ 88 characters."""
     lines = _CLI_PATH.read_text().splitlines()
     violations = [
-        (i + 1, len(line), line)
-        for i, line in enumerate(lines)
-        if len(line) > 88
+        (i + 1, len(line), line) for i, line in enumerate(lines) if len(line) > 88
     ]
-    assert not violations, (
-        "Lines exceeding 88 chars:\n"
-        + "\n".join(f"  L{ln}: {length} chars" for ln, length, _ in violations)
+    assert not violations, "Lines exceeding 88 chars:\n" + "\n".join(
+        f"  L{ln}: {length} chars" for ln, length, _ in violations
     )
 
 
@@ -97,6 +95,7 @@ def test_nit1_api_key_help_warns_env():
     """--api-key help text must mention WEE_API_KEY env var as safer alternative."""
     # Import lazily to avoid side-effects at collection time
     import importlib.util
+
     spec = importlib.util.spec_from_file_location("wee_cli", _CLI_PATH)
     mod = importlib.util.module_from_spec(spec)
     # Stub wee_runtime so we don't need a live Ollama
@@ -117,9 +116,9 @@ def test_nit1_api_key_help_warns_env():
             a for a in parser._actions if "--api-key" in (a.option_strings or [])
         )
         help_text = api_key_action.help or ""
-        assert "WEE_API_KEY" in help_text, (
-            "--api-key help must mention WEE_API_KEY environment variable"
-        )
+        assert (
+            "WEE_API_KEY" in help_text
+        ), "--api-key help must mention WEE_API_KEY environment variable"
     finally:
         sys.modules.pop("wee_runtime", None)
 
@@ -130,6 +129,7 @@ def test_nit1_api_key_help_warns_env():
 def _make_wee_cli_module():
     """Load wee_cli with a stubbed wee_runtime."""
     import importlib.util
+
     spec = importlib.util.spec_from_file_location("wee_cli_test", _CLI_PATH)
     mod = importlib.util.module_from_spec(spec)
     fake_rt = types.ModuleType("wee_runtime")
@@ -137,7 +137,11 @@ def _make_wee_cli_module():
     fake_rt._WEE_TOOLS = []
     fake_rt.MAX_TOOL_ROUNDS = 3
     fake_rt.execute_tool = MagicMock(return_value="tool output")
-    fake_rt.resolve_model_and_endpoint = lambda *a, **kw: ("model", "http://base", "key")
+    fake_rt.resolve_model_and_endpoint = lambda *a, **kw: (
+        "model",
+        "http://base",
+        "key",
+    )
     sys.modules["wee_runtime"] = fake_rt
     try:
         spec.loader.exec_module(mod)
@@ -231,18 +235,20 @@ def test_m1_permission_passed_to_execute_tool():
 def test_m1_restricted_permission_blocks_tools():
     """execute_tool() must return an error when permission='restricted'."""
     import importlib.util
+
     spec = importlib.util.spec_from_file_location("wee_runtime_test", _RUNTIME_PATH)
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     result = mod.execute_tool("bash", {"command": "echo hi"}, permission="restricted")
-    assert "restricted" in result.lower() or "blocked" in result.lower(), (
-        f"Expected restriction error, got: {result!r}"
-    )
+    assert (
+        "restricted" in result.lower() or "blocked" in result.lower()
+    ), f"Expected restriction error, got: {result!r}"
 
 
 def test_m1_auto_permission_allows_tools():
     """execute_tool() must execute normally when permission='auto'."""
     import importlib.util
+
     spec = importlib.util.spec_from_file_location("wee_runtime_test2", _RUNTIME_PATH)
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
@@ -341,10 +347,10 @@ def test_m3_response_variable_not_dead_code():
     """run_single_shot() must not have response as a dead variable."""
     source = _CLI_PATH.read_text()
     # The old dead code pattern: assign response then do nothing with it
-    assert "if output_format == \"json\":\n            # Re-emit as JSON" not in source, (
-        "Dead code comment still present — M-3 not fixed"
-    )
+    assert (
+        'if output_format == "json":\n            # Re-emit as JSON' not in source
+    ), "Dead code comment still present — M-3 not fixed"
     # The response variable must be used in a call to _print_markdown
-    assert "_print_markdown(response" in source, (
-        "response variable must be passed to _print_markdown() — M-3 fix missing"
-    )
+    assert (
+        "_print_markdown(response" in source
+    ), "response variable must be passed to _print_markdown() — M-3 fix missing"

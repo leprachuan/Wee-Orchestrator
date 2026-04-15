@@ -32,7 +32,7 @@ __version__ = "0.1.0"
 _HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _HERE)
 
-from wee_runtime import (
+from wee_runtime import (  # noqa: E402
     _ANTI_HALLUCINATION_PROMPT,
     _WEE_TOOLS,
     MAX_TOOL_ROUNDS,

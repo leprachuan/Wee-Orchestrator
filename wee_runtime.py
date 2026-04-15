@@ -18,7 +18,6 @@ import json
 import os
 import subprocess
 import sys
-import time
 
 
 # Provider presets: prefix → (api_base, default_api_key)
@@ -137,8 +136,8 @@ def execute_tool(func_name: str, func_args: dict, permission: str = "auto") -> s
     """
     if permission == "restricted":
         return (
-            f"Error: Tool execution blocked by permission level 'restricted'. "
-            f"Run with --permission auto to enable tool calls."
+            "Error: Tool execution blocked by permission level 'restricted'. "
+            "Run with --permission auto to enable tool calls."
         )
     try:
         if func_name == "bash":
