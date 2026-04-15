@@ -304,8 +304,6 @@ export function AgentSettingsPanel({ onClose }: AgentSettingsPanelProps) {
                       onChange={e => setField('description', e.target.value)}
                     />
                   </div>
-                  <div className="form-group">
-                  </div>
                 </div>
               </section>
 
