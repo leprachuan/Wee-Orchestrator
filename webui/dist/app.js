@@ -2216,7 +2216,7 @@ async function sendMessageStreaming(query, sessionId) {
               if (_timingText) {
                 const timingDiv = document.createElement('div');
                 timingDiv.className = 'message-timing';
-                timingDiv.textContent = _timingText;
+                timingDiv.innerHTML = _timingText;
                 streamBubble.appendChild(timingDiv);
               }
               streamBubble.appendChild(createTtsButton(streamBubble));
@@ -2593,7 +2593,16 @@ function buildTimingText(elapsedSec, weeMeta) {
     if (costLabel === 'local') costStr = ' · local';
     else if (costLabel === 'free') costStr = ' · free';
     else if (costLabel && costLabel.startsWith('$')) costStr = ` · ${costLabel}`;
-    return base ? `⏱️ ${base} · ${tokenStr} tokens${costStr}` : `${tokenStr} tokens${costStr}`;
+    // Issue #160: Build tooltip with input/output breakdown
+    const pTokens = weeMeta.prompt_tokens;
+    const cTokens = weeMeta.completion_tokens;
+    let tooltip = `${tokenStr} total tokens`;
+    if (pTokens != null && cTokens != null) {
+      tooltip = `Input: ${pTokens.toLocaleString()} tokens\nOutput: ${cTokens.toLocaleString()} tokens\nTotal: ${tokenStr} tokens`;
+      if (costLabel && costLabel.startsWith('$')) tooltip += `\nEst. cost: ${costLabel}`;
+    }
+    const span = `<span title="${tooltip}">${tokenStr} tokens${costStr}</span>`;
+    return base ? `⏱️ ${base} · ${span}` : span;
   }
   return base ? `⏱️ ${base}` : '';
 }
@@ -2659,7 +2668,7 @@ async function renderMessage(role, content, files = [], timing = null, weeMeta =
     if (_rmTimingText) {
       const timingDiv = document.createElement('div');
       timingDiv.className = 'message-timing';
-      timingDiv.textContent = _rmTimingText;
+      timingDiv.innerHTML = _rmTimingText;
       bubble.appendChild(timingDiv);
     }
   }
