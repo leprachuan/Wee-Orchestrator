@@ -32,9 +32,9 @@ __version__ = "0.1.0"
 _HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _HERE)
 
-from wee_runtime import (  # noqa: E402
+from wee_runtime import _WEE_TOOLS  # noqa: E402
+from wee_runtime import (
     _ANTI_HALLUCINATION_PROMPT,
-    _WEE_TOOLS,
     MAX_TOOL_ROUNDS,
     execute_tool,
     resolve_model_and_endpoint,
@@ -80,8 +80,14 @@ def _init_readline():
 
     # Tab completion for slash commands
     _COMMANDS = [
-        "/clear", "/history", "/model", "/tokens", "/system",
-        "/help", "/config", "/version",
+        "/clear",
+        "/history",
+        "/model",
+        "/tokens",
+        "/system",
+        "/help",
+        "/config",
+        "/version",
     ]
 
     def completer(text, state):
@@ -256,9 +262,9 @@ def chat_stream(
                         if tc_delta.function.name:
                             tool_calls_acc[idx]["name"] = tc_delta.function.name
                         if tc_delta.function.arguments:
-                            tool_calls_acc[idx]["arguments"] += (
-                                tc_delta.function.arguments
-                            )
+                            tool_calls_acc[idx][
+                                "arguments"
+                            ] += tc_delta.function.arguments
 
             # Track usage from the final chunk
             if hasattr(chunk, "usage") and chunk.usage and token_tracker:
@@ -271,9 +277,7 @@ def chat_stream(
             break
 
         # Tool calls detected
-        _print_info(
-            f"[Wee] Round {round_num + 1}: {len(tool_calls_acc)} tool call(s)"
-        )
+        _print_info(f"[Wee] Round {round_num + 1}: {len(tool_calls_acc)} tool call(s)")
 
         assistant_tool_calls = []
         for idx in sorted(tool_calls_acc.keys()):
@@ -316,8 +320,7 @@ def chat_stream(
         last_results = [m["content"] for m in messages if m.get("role") == "tool"]
         if last_results:
             fallback = (
-                "Tool execution completed. Last result:\n"
-                + last_results[-1][:2000]
+                "Tool execution completed. Last result:\n" + last_results[-1][:2000]
             )
         else:
             fallback = "Max tool rounds reached without final response."
@@ -577,13 +580,15 @@ def build_parser() -> argparse.ArgumentParser:
         "--version", action="version", version=f"%(prog)s {__version__}"
     )
     parser.add_argument(
-        "--model", "-m",
+        "--model",
+        "-m",
         default=None,
         help="Model ID (e.g. ollama/qwen3:8b, openrouter/meta-llama/llama-2-70b). "
-             "Default: $WEE_MODEL or ollama/qwen3:8b",
+        "Default: $WEE_MODEL or ollama/qwen3:8b",
     )
     parser.add_argument(
-        "--api-key", "-k",
+        "--api-key",
+        "-k",
         default=None,
         help=(
             "API key override (default: from env or keyring). "
@@ -592,29 +597,34 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
-        "--api-base", "-b",
+        "--api-base",
+        "-b",
         default=None,
         help="Custom API base URL",
     )
     parser.add_argument(
-        "--tools", "-t",
+        "--tools",
+        "-t",
         action="store_true",
         default=False,
         help="Enable tool calling (bash, python)",
     )
     parser.add_argument(
-        "--permission", "-p",
+        "--permission",
+        "-p",
         choices=["restricted", "auto", "elevated"],
         default="restricted",
         help="Permission level for tool execution (default: restricted)",
     )
     parser.add_argument(
-        "--system", "-s",
+        "--system",
+        "-s",
         default=None,
         help="System prompt override",
     )
     parser.add_argument(
-        "--temperature", "-T",
+        "--temperature",
+        "-T",
         type=float,
         default=None,
         help="Sampling temperature",
@@ -626,13 +636,15 @@ def build_parser() -> argparse.ArgumentParser:
         help="Request timeout in seconds (default: 120)",
     )
     parser.add_argument(
-        "--output", "-o",
+        "--output",
+        "-o",
         choices=["text", "json", "markdown"],
         default="text",
         help="Output format (default: text)",
     )
     parser.add_argument(
-        "--interactive", "-i",
+        "--interactive",
+        "-i",
         action="store_true",
         default=False,
         help="Enter interactive REPL mode",

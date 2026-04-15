@@ -24,19 +24,19 @@ from unittest.mock import MagicMock, patch
 # Ensure project root is in path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from wee_cli import (  # noqa: E402
-    TokenTracker,
-    build_parser,
-    load_config,
-    save_config,
-    main,
-    chat_stream,
-    __version__,
+from wee_cli import __version__  # noqa: E402
+from wee_cli import (
     REPL_HELP,
+    TokenTracker,
+    _make_client,
     _print_error,
     _print_info,
     _print_markdown,
-    _make_client,
+    build_parser,
+    chat_stream,
+    load_config,
+    main,
+    save_config,
 )
 
 
