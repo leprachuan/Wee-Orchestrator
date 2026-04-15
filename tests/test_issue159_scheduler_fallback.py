@@ -1,15 +1,11 @@
 """Regression tests for Issue #159: Fallback Runtime/Model for Scheduled Tasks."""
 
-import asyncio
-import json
 import os
-import re
 import sys
-import time
 import unittest
 from datetime import datetime, timedelta
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
 sys.path.insert(0, "/opt/n8n-copilot-shim-dev")
 
@@ -197,8 +193,6 @@ class TestExecuteAiModeFallback(unittest.TestCase):
         job = self._make_job(fallback_runtime="claude", fallback_model="claude-haiku-4.5")
 
         call_count = [0]
-        original_run = ex._run_ai_attempt
-
         def mock_attempt(j, runtime_override=None, model_override=None):
             call_count[0] += 1
             return ("ok", None)

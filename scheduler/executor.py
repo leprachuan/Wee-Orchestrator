@@ -508,7 +508,7 @@ class TaskSchedulerExecutor:
         return None
 
     def _run_ai_attempt(
-        self, job: Dict, runtime_override: str = None, model_override: str = None
+        self, job: Dict, runtime_override: Optional[str] = None, model_override: Optional[str] = None
     ) -> tuple:
         """Run a single AI execution attempt.
 

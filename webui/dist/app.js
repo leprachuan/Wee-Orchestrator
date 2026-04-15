@@ -2216,7 +2216,7 @@ async function sendMessageStreaming(query, sessionId) {
               if (_timingText) {
                 const timingDiv = document.createElement('div');
                 timingDiv.className = 'message-timing';
-                timingDiv.textContent = _timingText;
+                timingDiv.innerHTML = _timingText;
                 streamBubble.appendChild(timingDiv);
               }
               streamBubble.appendChild(createTtsButton(streamBubble));
@@ -2593,7 +2593,16 @@ function buildTimingText(elapsedSec, weeMeta) {
     if (costLabel === 'local') costStr = ' · local';
     else if (costLabel === 'free') costStr = ' · free';
     else if (costLabel && costLabel.startsWith('$')) costStr = ` · ${costLabel}`;
-    return base ? `⏱️ ${base} · ${tokenStr} tokens${costStr}` : `${tokenStr} tokens${costStr}`;
+    // Issue #160: Build tooltip with input/output breakdown
+    const pTokens = weeMeta.prompt_tokens;
+    const cTokens = weeMeta.completion_tokens;
+    let tooltip = `${tokenStr} total tokens`;
+    if (pTokens != null && cTokens != null) {
+      tooltip = `Input: ${pTokens.toLocaleString()} tokens\nOutput: ${cTokens.toLocaleString()} tokens\nTotal: ${tokenStr} tokens`;
+      if (costLabel && costLabel.startsWith('$')) tooltip += `\nEst. cost: ${costLabel}`;
+    }
+    const span = `<span title="${tooltip}">${tokenStr} tokens${costStr}</span>`;
+    return base ? `⏱️ ${base} · ${span}` : span;
   }
   return base ? `⏱️ ${base}` : '';
 }
@@ -2659,7 +2668,7 @@ async function renderMessage(role, content, files = [], timing = null, weeMeta =
     if (_rmTimingText) {
       const timingDiv = document.createElement('div');
       timingDiv.className = 'message-timing';
-      timingDiv.textContent = _rmTimingText;
+      timingDiv.innerHTML = _rmTimingText;
       bubble.appendChild(timingDiv);
     }
   }
@@ -3723,6 +3732,11 @@ function renderJobEditForm(job, container) {
       schedToast('Update failed: ' + err.message, 'error');
     }
   });
+  // M-1: pre-populate fallback fields when editing an existing job
+  const fbRtEl = document.getElementById('sched-fallback-runtime');
+  const fbModelEl = document.getElementById('sched-fallback-model');
+  if (fbRtEl && job && job.fallback_runtime) fbRtEl.value = job.fallback_runtime;
+  if (fbModelEl && job && job.fallback_model) fbModelEl.value = job.fallback_model;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -4103,10 +4117,10 @@ function wireJobForm(container, onSubmit) {
       payload.agent   = data.agent || 'orchestrator';
       payload.runtime = data.runtime || 'claude';
       payload.model   = data.model?.trim() || null;
-      const fbRt = document.getElementById('sched-fallback-runtime')?.value;
-      const fbModel = document.getElementById('sched-fallback-model')?.value;
-      if (fbRt) payload.fallback_runtime = fbRt;
-      if (fbModel) payload.fallback_model = fbModel;
+      const fbRt = document.getElementById('sched-fallback-runtime')?.value || '';
+      const fbModel = document.getElementById('sched-fallback-model')?.value || '';
+      payload.fallback_runtime = fbRt;
+      payload.fallback_model = fbModel;
     } else {
       payload.working_dir = data.working_dir?.trim() || '/opt';
     }
