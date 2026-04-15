@@ -4927,8 +4927,6 @@ function _initFileViewer() {
 _initFileViewer();
 document.addEventListener('DOMContentLoaded', _initFileViewer);
 
-}
-
 window.openFileViewer = openFileViewer;
 window.linkifyFilePaths = linkifyFilePaths;
 
@@ -4970,6 +4968,9 @@ function switchMobileTab(tabName) {
     if (tabName === 'queue') {
       panel.classList.add('mobile-show-queue-only');
       renderQueuePanel();
+    }
+  }
+}
 
 function updateMobileBadges() {
   // Keep mobile badge counts in sync with queue counters
@@ -6371,6 +6372,7 @@ if (document.readyState !== 'loading') {
 
   // Dirty detection on basic text fields
   if (modalSettings) {
+    ['asf-name','asf-path','asf-description','asf-runtime','asf-model','asf-max-concurrent'].forEach(id => {
       const el = document.getElementById(id);
       if (el) el.addEventListener('input', updateDirtyIndicator);
     });
