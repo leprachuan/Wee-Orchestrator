@@ -413,14 +413,18 @@ class TestToolCallingLoopMocked(unittest.TestCase):
         mock_openai_cls.return_value = mock_client
 
         # Round 1: bash tool call
-        td1 = _make_tool_call_delta(0, tc_id="tc_1", name="bash",
-                                     arguments='{"command": "date +%Y"}')
+        td1 = _make_tool_call_delta(
+            0, tc_id="tc_1", name="bash",
+            arguments='{"command": "date +%Y"}',
+        )
         r1 = [_make_chunk(content="", tool_calls=[td1]),
               _make_chunk(content=None, finish_reason="tool_calls")]
 
         # Round 2: python tool call
-        td2 = _make_tool_call_delta(0, tc_id="tc_2", name="python",
-                                     arguments='{"code": "print(42)"}')
+        td2 = _make_tool_call_delta(
+            0, tc_id="tc_2", name="python",
+            arguments='{"code": "print(42)"}',
+        )
         r2 = [_make_chunk(content="", tool_calls=[td2]),
               _make_chunk(content=None, finish_reason="tool_calls")]
 
@@ -444,9 +448,11 @@ class TestToolCallingLoopMocked(unittest.TestCase):
 
         # Always return a tool call (never final text)
         def make_tool_round():
-            td = _make_tool_call_delta(0, tc_id=f"tc_{time.time_ns()}",
-                                        name="bash",
-                                        arguments='{"command": "echo loop"}')
+            td = _make_tool_call_delta(
+                0, tc_id=f"tc_{time.time_ns()}",
+                name="bash",
+                arguments='{"command": "echo loop"}',
+            )
             return iter([_make_chunk(content="", tool_calls=[td]),
                          _make_chunk(content=None, finish_reason="tool_calls")])
 
@@ -490,8 +496,12 @@ class TestOllamaLiveBasic(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 0, f"stderr: {result.stderr}")
         # Check that at least some words are uppercase
-        upper_words = sum(1 for w in result.stdout.split() if w.isupper() and len(w) > 2)
-        self.assertGreater(upper_words, 0, "System prompt should cause uppercase output")
+        upper_words = sum(
+            1 for w in result.stdout.split() if w.isupper() and len(w) > 2
+        )
+        self.assertGreater(
+            upper_words, 0, "System prompt should cause uppercase output"
+        )
 
     def test_markdown_formatting(self):
         """Model generates markdown when asked."""
@@ -536,14 +546,16 @@ class TestOllamaLiveToolCalling(unittest.TestCase):
         # 17*23+5 = 396
         self.assertTrue(
             "396" in result.stdout or "396" in result.stderr,
-            f"Expected 396 in output. stdout={result.stdout[:300]}, stderr={result.stderr[:300]}"
+            f"Expected 396 in output. stdout={result.stdout[:300]},"
+            f" stderr={result.stderr[:300]}"
         )
 
     def test_multi_step_tool_calls(self):
         """Model chains multiple tool calls."""
         result = run_wee_cli(
             OLLAMA_MODEL,
-            "Use bash to run 'hostname' and 'date +%H:%M', then summarize both results.",
+            "Use bash to run 'hostname' and 'date +%H:%M',"
+            " then summarize both results.",
             tools=True, timeout=LIVE_TIMEOUT,
         )
         self.assertEqual(result.returncode, 0, f"stderr: {result.stderr}")
@@ -636,7 +648,8 @@ class TestOpenRouterLiveToolCalling(unittest.TestCase):
         """OpenRouter model uses python tool for string operations."""
         result = run_wee_cli(
             OPENROUTER_MODEL,
-            "Use the python tool to reverse the string 'WeeRuntime' and tell me the result.",
+            "Use the python tool to reverse the string 'WeeRuntime'"  # noqa: E501
+            " and tell me the result.",
             tools=True, timeout=LIVE_TIMEOUT,
         )
         self.assertEqual(result.returncode, 0, f"stderr: {result.stderr}")
@@ -796,8 +809,10 @@ class TestErrorHandling(unittest.TestCase):
         result = run_wee_cli(
             "ollama/test",
             "hello",
-            extra_args=["--api-base", "http://127.0.0.1:9999/v1",
-                         "--api-key", "test"],
+            extra_args=[
+                "--api-base", "http://127.0.0.1:9999/v1",
+                "--api-key", "test",
+            ],
             timeout=15,
         )
         self.assertNotEqual(result.returncode, 0)
@@ -820,8 +835,10 @@ class TestErrorHandling(unittest.TestCase):
         mock_cls.return_value = mock_client
 
         # Tool call with invalid JSON arguments
-        td = _make_tool_call_delta(0, tc_id="tc_bad", name="bash",
-                                    arguments="not json at all {{{")
+        td = _make_tool_call_delta(
+            0, tc_id="tc_bad", name="bash",
+            arguments="not json at all {{{",
+        )
         round1 = [_make_chunk(content="", tool_calls=[td]),
                   _make_chunk(content=None, finish_reason="tool_calls")]
         round2 = [_make_chunk(content="Handled the error."),

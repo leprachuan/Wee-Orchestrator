@@ -75,7 +75,8 @@ def resolve_model_and_endpoint(model: str, api_base: str = None, api_key: str = 
     Model format: [provider/]model_name
     Examples:
         ollama/gemma4:e4b  → api_base=ollama preset, model=gemma4:e4b
-        openrouter/meta-llama/llama-4-scout → api_base=openrouter, model=meta-llama/llama-4-scout
+        openrouter/meta-llama/llama-4-scout
+            → api_base=openrouter, model=meta-llama/llama-4-scout
         gemma4:e4b         → use explicit api_base or default to ollama
     """
     resolved_model = model
@@ -176,6 +177,8 @@ def execute_tool(func_name: str, func_args: dict, permission: str = "auto") -> s
         return f"Error: Tool {func_name} timed out after {TOOL_TIMEOUT}s"
     except Exception as e:
         return f"Error executing tool {func_name}: {e}"
+
+
 # Issue #113: SSH command sanitisation
 _SSH_BIN_RE = re.compile(r"\b(ssh|scp|sftp)\b")
 
@@ -188,7 +191,9 @@ def sanitize_bash_command(command: str) -> str:
     when the flag is not already present.  ``accept-new`` is preferred
     over ``no`` because it still rejects CHANGED keys (potential MITM).
 
-    Wired into execute_tool() by Issue #111. Called on every bash tool input before execution
+    Wired into execute_tool() by Issue #111. Called on every bash
+    tool input before execution once wee_runtime.py gains a tool
+    execution loop.
     once wee_runtime.py gains a tool execution loop.
     """
     if not command or not _SSH_BIN_RE.search(command):
@@ -221,25 +226,33 @@ _ANTI_HALLUCINATION_PROMPT = (
 _WEE_TOOL_CAPABILITY_PROMPT = (
     "\n\n[Tool Capabilities]\n"
     "You have the following tools available. Use them to fulfil user requests.\n\n"
-    "1. **bash** — Execute shell commands. Parameters: {\"command\": \"<shell command>\"}\n"
+    "1. **bash** — Execute shell commands. Parameters: {\"command\": \"<shell command>\"}"  # noqa: E501
     "   Use this for: file operations, system commands, SSH, curl, git, etc.\n"
     "2. **python** — Execute Python code. Parameters: {\"code\": \"<python code>\"}\n"
     "   Use this for: data processing, calculations, scripting, etc.\n\n"
     "IMPORTANT: You are NOT sandboxed. You CAN and SHOULD use these tools to execute\n"
     "commands, SSH into remote hosts, read/write files, and interact with the system.\n"
-    "NEVER claim you cannot execute commands or are in a sandbox — use the tools above.\n"
+    "NEVER claim you cannot execute commands or are in a sandbox"  # noqa: E501
+    " — use the tools above.\n"
 )
+
 
 def main():
     parser = argparse.ArgumentParser(
         description="Wee Native Runtime — OpenAI-compatible chat completions"
     )
-    parser.add_argument("--model", required=True, help="Model name (e.g., ollama/gemma4:e4b)")
+    parser.add_argument(
+        "--model", required=True, help="Model name (e.g., ollama/gemma4:e4b)"
+    )
     parser.add_argument("--api-base", default=None, help="API base URL")
     parser.add_argument("--api-key", default=None, help="API key")
     parser.add_argument("--system-prompt", default="", help="System prompt")
-    parser.add_argument("--timeout", type=int, default=300, help="Request timeout in seconds")
-    parser.add_argument("--temperature", type=float, default=None, help="Sampling temperature")
+    parser.add_argument(
+        "--timeout", type=int, default=300, help="Request timeout in seconds"
+    )
+    parser.add_argument(
+        "--temperature", type=float, default=None, help="Sampling temperature"
+    )
     parser.add_argument("--tools", action="store_true", default=False,
                         help="Enable tool calling (bash, python)")
     parser.add_argument("prompt", help="User prompt")
@@ -252,7 +265,10 @@ def main():
     try:
         from openai import OpenAI
     except ImportError:
-        print("Error: openai package not installed. Run: pip install openai", file=sys.stderr)
+        print(
+            "Error: openai package not installed. Run: pip install openai",
+            file=sys.stderr,
+        )
         sys.exit(1)
 
     import httpx
@@ -350,7 +366,10 @@ def main():
                         if idx not in tool_calls_acc:
                             tool_call_counter += 1
                             tool_calls_acc[idx] = {
-                                "id": getattr(tc_delta, "id", None) or f"tc_wee_{tool_call_counter}",
+                                "id": (
+                                    getattr(tc_delta, "id", None)
+                                    or f"tc_wee_{tool_call_counter}"
+                                ),
                                 "name": "",
                                 "arguments": "",
                             }
@@ -360,7 +379,9 @@ def main():
                             if tc_delta.function.name:
                                 tool_calls_acc[idx]["name"] = tc_delta.function.name
                             if tc_delta.function.arguments:
-                                tool_calls_acc[idx]["arguments"] += tc_delta.function.arguments
+                                tool_calls_acc[idx]["arguments"] += (
+                                    tc_delta.function.arguments
+                                )
 
             content_text = "".join(round_content)
 
@@ -399,7 +420,10 @@ def main():
                 except (ValueError, json.JSONDecodeError):
                     func_args = {"raw": func_args_str}
 
-                print(f"[Wee] Tool: {func_name}({json.dumps(func_args)[:200]})", file=sys.stderr)
+                print(
+                    f"[Wee] Tool: {func_name}({json.dumps(func_args)[:200]})",
+                    file=sys.stderr,
+                )
 
                 tool_result = execute_tool(func_name, func_args)
 
@@ -412,7 +436,10 @@ def main():
             # All rounds had tool calls with no final text
             last_results = [m["content"] for m in messages if m.get("role") == "tool"]
             if last_results:
-                fallback = "Tool execution completed. Last result:\n" + last_results[-1][:2000]
+                fallback = (
+                    "Tool execution completed. Last result:\n"
+                    + last_results[-1][:2000]
+                )
             else:
                 fallback = "Max tool rounds reached without final response."
             collected_output.append(fallback)
