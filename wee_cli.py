@@ -493,6 +493,7 @@ def run_interactive(
                 tools_enabled=tools_enabled,
                 temperature=temperature,
                 token_tracker=token_tracker,
+                permission=permission,
             )
             messages.append({"role": "assistant", "content": response})
         except KeyboardInterrupt:
