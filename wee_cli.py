@@ -19,10 +19,7 @@ import argparse
 import json
 import os
 import readline
-import signal
 import sys
-import tempfile
-import time
 
 # ---------------------------------------------------------------------------
 # Version
@@ -36,11 +33,9 @@ _HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _HERE)
 
 from wee_runtime import (
-    PROVIDER_PRESETS,
     _ANTI_HALLUCINATION_PROMPT,
     _WEE_TOOLS,
     MAX_TOOL_ROUNDS,
-    TOOL_TIMEOUT,
     execute_tool,
     resolve_model_and_endpoint,
 )
@@ -117,7 +112,6 @@ _console = None
 try:
     from rich.console import Console
     from rich.markdown import Markdown
-    from rich.syntax import Syntax
 
     _rich_available = True
     _console = Console(stderr=True)
@@ -193,9 +187,17 @@ def chat_stream(
     tools_enabled: bool = False,
     temperature: float = None,
     token_tracker: TokenTracker = None,
+    permission: str = "auto",
+    stream_output: bool = True,
 ) -> str:
     """Send a chat completion request and stream the response.
 
+    Args:
+        stream_output: When False, suppress stdout streaming (used for JSON/markdown
+            output modes where the caller formats and prints the final response).
+        permission: Tool execution permission level. "restricted" blocks all tool
+            execution. "auto" (default) executes tools as requested. "elevated" is
+            treated the same as "auto" (no additional privilege escalation in CLI).
     Returns the full response text. Handles tool-calling loops.
     """
     tool_call_counter = 0
@@ -233,8 +235,9 @@ def chat_stream(
             if delta.content:
                 token = delta.content
                 round_content.append(token)
-                sys.stdout.write(token)
-                sys.stdout.flush()
+                if stream_output:
+                    sys.stdout.write(token)
+                    sys.stdout.flush()
 
             if getattr(delta, "tool_calls", None):
                 for tc_delta in delta.tool_calls:
@@ -300,7 +303,7 @@ def chat_stream(
                 func_args = {"command": tc_info["function"]["arguments"]}
 
             _print_info(f"[Wee] Executing: {func_name}({json.dumps(func_args)[:100]})")
-            tool_result = execute_tool(func_name, func_args)
+            tool_result = execute_tool(func_name, func_args, permission=permission)
             messages.append(
                 {
                     "role": "tool",
@@ -319,10 +322,12 @@ def chat_stream(
         else:
             fallback = "Max tool rounds reached without final response."
         collected_output.append(fallback)
-        sys.stdout.write(fallback)
+        if stream_output:
+            sys.stdout.write(fallback)
 
-    sys.stdout.write("\n")
-    sys.stdout.flush()
+    if stream_output:
+        sys.stdout.write("\n")
+        sys.stdout.flush()
 
     if token_tracker and not token_tracker.turns:
         token_tracker.turns = 1
@@ -393,7 +398,7 @@ def run_interactive(
     messages.append({"role": "system", "content": effective_system})
 
     _print_info(f"Wee CLI v{__version__} — model: {model}")
-    _print_info(f"Type /help for commands, exit to quit.\n")
+    _print_info("Type /help for commands, exit to quit.\n")
 
     while True:
         try:
@@ -457,7 +462,8 @@ def run_interactive(
             elif cmd == "/config":
                 _print_info(f"Model:       {model}")
                 _print_info(f"API Base:    {api_base}")
-                _print_info(f"Tools:       {'enabled' if tools_enabled else 'disabled'}")
+                status = "enabled" if tools_enabled else "disabled"
+                _print_info(f"Tools:       {status}")
                 _print_info(f"Temperature: {temperature or 'default'}")
                 _print_info(f"Timeout:     {timeout}s")
                 _print_info(f"Permission:  {permission}")
@@ -514,6 +520,7 @@ def run_single_shot(
     timeout: float,
     system_prompt: str,
     output_format: str,
+    permission: str = "auto",
 ):
     """Run a single prompt and exit."""
     client = _make_client(api_base, api_key, timeout)
@@ -526,6 +533,9 @@ def run_single_shot(
 
     messages.append({"role": "user", "content": prompt})
 
+    # For non-text output formats, suppress streaming so we can reformat
+    stream_output = output_format == "text"
+
     try:
         response = chat_stream(
             client=client,
@@ -534,10 +544,10 @@ def run_single_shot(
             tools_enabled=tools_enabled,
             temperature=temperature,
             token_tracker=token_tracker,
+            permission=permission,
+            stream_output=stream_output,
         )
-        if output_format == "json":
-            # Re-emit as JSON (chat_stream already printed to stdout)
-            pass
+        _print_markdown(response, output_format)
     except KeyboardInterrupt:
         sys.exit(130)
     except Exception as e:
@@ -574,7 +584,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--api-key", "-k",
         default=None,
-        help="API key override (default: from env or keyring)",
+        help=(
+            "API key override (default: from env or keyring). "
+            "WARNING: this value appears in the process list (ps aux). "
+            "Prefer setting the WEE_API_KEY environment variable instead."
+        ),
     )
     parser.add_argument(
         "--api-base", "-b",
@@ -665,13 +679,17 @@ def main(argv=None):
     system_prompt = args.system or cfg.get("system_prompt", "")
     tools_enabled = args.tools or cfg.get("tools", False)
     permission = args.permission or cfg.get("permission", "restricted")
-    temperature = args.temperature if args.temperature is not None else cfg.get("temperature")
+    temperature = (
+        args.temperature if args.temperature is not None else cfg.get("temperature")
+    )
     timeout = args.timeout or cfg.get("timeout", 120.0)
     output_format = args.output or cfg.get("output", "text")
 
     # Resolve model + endpoint
     model, api_base, api_key = resolve_model_and_endpoint(
-        model_str, args.api_base or cfg.get("api_base"), args.api_key or cfg.get("api_key")
+        model_str,
+        args.api_base or cfg.get("api_base"),
+        args.api_key or cfg.get("api_key"),
     )
 
     # Determine mode: interactive, piped stdin, or single-shot
@@ -727,6 +745,7 @@ def main(argv=None):
             timeout=timeout,
             system_prompt=system_prompt,
             output_format=output_format,
+            permission=permission,
         )
     else:
         parser.print_help()

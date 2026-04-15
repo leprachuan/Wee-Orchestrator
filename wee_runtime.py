@@ -125,8 +125,21 @@ def resolve_model_and_endpoint(model: str, api_base: str = None, api_key: str = 
     return resolved_model, resolved_base, resolved_key
 
 
-def execute_tool(func_name: str, func_args: dict) -> str:
-    """Execute a tool call and return its output (Issues #107, #111)."""
+def execute_tool(func_name: str, func_args: dict, permission: str = "auto") -> str:
+    """Execute a tool call and return its output (Issues #107, #111, #158).
+
+    Args:
+        permission: Controls execution gating.
+            "restricted" — blocks all tool execution and returns an error.
+            "auto" (default) — executes tools as requested by the model.
+            "elevated" — treated identically to "auto" (no privilege escalation
+            in CLI contexts).
+    """
+    if permission == "restricted":
+        return (
+            f"Error: Tool execution blocked by permission level 'restricted'. "
+            f"Run with --permission auto to enable tool calls."
+        )
     try:
         if func_name == "bash":
             command = func_args.get("command", "")
