@@ -16,6 +16,7 @@ Run:
     pytest tests/test_wee_runtime_comprehensive.py -v
     pytest tests/test_wee_runtime_comprehensive.py tests/test_wee_runtime_agentic.py -v
 """
+
 import io
 import os
 import subprocess
@@ -48,8 +49,9 @@ def _make_tool_call_delta(idx, tc_id=None, name=None, arguments=None):
     return SimpleNamespace(index=idx, id=tc_id, function=fn)
 
 
-def _run_main_mocked(model, prompt, tools=False, system_prompt="", temperature=None,
-                     extra_args=None):
+def _run_main_mocked(
+    model, prompt, tools=False, system_prompt="", temperature=None, extra_args=None
+):
     """Run wee_runtime.main() in-process with mocked sys.argv and captured I/O."""
     argv = ["wee_runtime.py", "--model", model]
     if tools:
@@ -83,6 +85,7 @@ def _run_main_mocked(model, prompt, tools=False, system_prompt="", temperature=N
 # ===========================================================================
 # 1. PROVIDER PRESET COMPLETENESS
 # ===========================================================================
+
 
 class TestProviderPresetCompleteness(unittest.TestCase):
     """All three provider presets are present and correctly configured."""
@@ -123,6 +126,7 @@ class TestProviderPresetCompleteness(unittest.TestCase):
 # 2. PROVIDER RESOLUTION — EDGE CASES
 # ===========================================================================
 
+
 class TestLmStudioPreset(unittest.TestCase):
     """Test lmstudio/ prefix resolution."""
 
@@ -158,8 +162,9 @@ class TestEnvVarResolution(unittest.TestCase):
 
     def test_wee_api_base_env_var(self):
         """WEE_API_BASE env var sets the base URL for bare models."""
-        with patch.dict(os.environ, {"WEE_API_BASE": "http://custom:9999/v1"},
-                        clear=False):
+        with patch.dict(
+            os.environ, {"WEE_API_BASE": "http://custom:9999/v1"}, clear=False
+        ):
             _, base, _ = wee_runtime.resolve_model_and_endpoint("bare-model")
         self.assertEqual(base, "http://custom:9999/v1")
 
@@ -170,9 +175,7 @@ class TestEnvVarResolution(unittest.TestCase):
             {"WEE_API_KEY": "my-test-key", "OPENROUTER_API_KEY": ""},
             clear=False,
         ):
-            _, _, key = wee_runtime.resolve_model_and_endpoint(
-                "ollama/test-model"
-            )
+            _, _, key = wee_runtime.resolve_model_and_endpoint("ollama/test-model")
         # ollama has a preset key of "ollama"; WEE_API_KEY only applies
         # when no preset/explicit key is set
         self.assertEqual(key, "ollama")
@@ -217,6 +220,7 @@ class TestEnvVarResolution(unittest.TestCase):
 # ===========================================================================
 # 3. OPENROUTER API KEY ENFORCEMENT
 # ===========================================================================
+
 
 class TestOpenRouterKeyRequired(unittest.TestCase):
     """OpenRouter requires an API key — validates the enforcement chain."""
@@ -279,6 +283,7 @@ class TestOpenRouterKeyRequired(unittest.TestCase):
 # 4. EXECUTE_TOOL PERMISSION LEVELS
 # ===========================================================================
 
+
 class TestExecuteToolPermissionLevels(unittest.TestCase):
     """Validate execute_tool()'s permission parameter behavior."""
 
@@ -327,13 +332,14 @@ class TestExecuteToolPermissionLevels(unittest.TestCase):
         # Should mention how to fix it
         self.assertTrue(
             "auto" in result.lower() or "--permission" in result.lower(),
-            f"Should mention how to enable tools. Got: {result}"
+            f"Should mention how to enable tools. Got: {result}",
         )
 
 
 # ===========================================================================
 # 5. EXECUTE_TOOL EDGE CASES
 # ===========================================================================
+
 
 class TestExecuteToolEdgeCases(unittest.TestCase):
     """Additional edge cases for execute_tool()."""
@@ -382,9 +388,7 @@ class TestExecuteToolEdgeCases(unittest.TestCase):
 
     def test_bash_large_output_not_truncated(self):
         """Large bash output is returned in full (not silently truncated)."""
-        result = wee_runtime.execute_tool(
-            "bash", {"command": "seq 1 200"}
-        )
+        result = wee_runtime.execute_tool("bash", {"command": "seq 1 200"})
         self.assertIn("200", result)
         self.assertIn("100", result)
 
@@ -397,9 +401,7 @@ class TestExecuteToolEdgeCases(unittest.TestCase):
 
     def test_bash_exit_code_zero_no_stderr(self):
         """Successful command without stderr doesn't include STDERR in output."""
-        result = wee_runtime.execute_tool(
-            "bash", {"command": "echo clean_output"}
-        )
+        result = wee_runtime.execute_tool("bash", {"command": "echo clean_output"})
         self.assertEqual(result, "clean_output")
         self.assertNotIn("STDERR", result)
 
@@ -407,6 +409,7 @@ class TestExecuteToolEdgeCases(unittest.TestCase):
 # ===========================================================================
 # 6. SANITIZE_BASH_COMMAND EXTENDED
 # ===========================================================================
+
 
 class TestSanitizeBashExtended(unittest.TestCase):
     """Extended coverage for SSH sanitization edge cases."""
@@ -470,6 +473,7 @@ class TestSanitizeBashExtended(unittest.TestCase):
 # 7. SYSTEM PROMPT AUGMENTATION
 # ===========================================================================
 
+
 class TestSystemPromptAugmentation(unittest.TestCase):
     """Validate that anti-hallucination and tool capability prompts are injected."""
 
@@ -496,9 +500,9 @@ class TestSystemPromptAugmentation(unittest.TestCase):
         """Anti-hallucination prompt is always included in system message."""
         mock_client = MagicMock()
         mock_cls.return_value = mock_client
-        mock_client.chat.completions.create.return_value = iter([
-            _make_chunk(content="ok"), _make_chunk(finish_reason="stop")
-        ])
+        mock_client.chat.completions.create.return_value = iter(
+            [_make_chunk(content="ok"), _make_chunk(finish_reason="stop")]
+        )
 
         _run_main_mocked("ollama/test", "hello", tools=False)
 
@@ -506,9 +510,11 @@ class TestSystemPromptAugmentation(unittest.TestCase):
         messages = call_args[1]["messages"] if call_args[1] else call_args[0][0]
         system_msgs = [m for m in messages if m.get("role") == "system"]
         self.assertTrue(
-            any(wee_runtime._ANTI_HALLUCINATION_PROMPT in m["content"]
-                for m in system_msgs),
-            "Anti-hallucination prompt should be in system message"
+            any(
+                wee_runtime._ANTI_HALLUCINATION_PROMPT in m["content"]
+                for m in system_msgs
+            ),
+            "Anti-hallucination prompt should be in system message",
         )
 
     @patch("openai.OpenAI")
@@ -518,9 +524,9 @@ class TestSystemPromptAugmentation(unittest.TestCase):
         mock_cls.return_value = mock_client
 
         # Without tools
-        mock_client.chat.completions.create.return_value = iter([
-            _make_chunk(content="ok"), _make_chunk(finish_reason="stop")
-        ])
+        mock_client.chat.completions.create.return_value = iter(
+            [_make_chunk(content="ok"), _make_chunk(finish_reason="stop")]
+        )
         _run_main_mocked("ollama/test", "hello", tools=False)
         call_args_no_tools = mock_client.chat.completions.create.call_args
         messages_no_tools = call_args_no_tools[1]["messages"]
@@ -530,9 +536,9 @@ class TestSystemPromptAugmentation(unittest.TestCase):
 
         # With tools
         mock_client.chat.completions.create.reset_mock()
-        mock_client.chat.completions.create.return_value = iter([
-            _make_chunk(content="ok"), _make_chunk(finish_reason="stop")
-        ])
+        mock_client.chat.completions.create.return_value = iter(
+            [_make_chunk(content="ok"), _make_chunk(finish_reason="stop")]
+        )
         _run_main_mocked("ollama/test", "hello", tools=True)
         call_args_tools = mock_client.chat.completions.create.call_args
         messages_tools = call_args_tools[1]["messages"]
@@ -542,12 +548,14 @@ class TestSystemPromptAugmentation(unittest.TestCase):
 
         # Tool capability prompt present only when tools=True
         self.assertNotIn(
-            "Tool Capabilities", system_no_tools,
-            "Tool capability should NOT be in no-tools system prompt"
+            "Tool Capabilities",
+            system_no_tools,
+            "Tool capability should NOT be in no-tools system prompt",
         )
         self.assertIn(
-            "Tool Capabilities", system_tools,
-            "Tool capability SHOULD be in tools-enabled system prompt"
+            "Tool Capabilities",
+            system_tools,
+            "Tool capability SHOULD be in tools-enabled system prompt",
         )
 
     @patch("openai.OpenAI")
@@ -555,12 +563,11 @@ class TestSystemPromptAugmentation(unittest.TestCase):
         """Custom system prompt is combined with augmented prompts, not replaced."""
         mock_client = MagicMock()
         mock_cls.return_value = mock_client
-        mock_client.chat.completions.create.return_value = iter([
-            _make_chunk(content="ok"), _make_chunk(finish_reason="stop")
-        ])
+        mock_client.chat.completions.create.return_value = iter(
+            [_make_chunk(content="ok"), _make_chunk(finish_reason="stop")]
+        )
 
-        _run_main_mocked("ollama/test", "hello",
-                         system_prompt="CUSTOM_SYSTEM_MARKER")
+        _run_main_mocked("ollama/test", "hello", system_prompt="CUSTOM_SYSTEM_MARKER")
 
         call_args = mock_client.chat.completions.create.call_args
         messages = call_args[1]["messages"]
@@ -576,6 +583,7 @@ class TestSystemPromptAugmentation(unittest.TestCase):
 # 8. TEMPERATURE FLAG
 # ===========================================================================
 
+
 class TestTemperatureFlag(unittest.TestCase):
     """Validate --temperature CLI flag is passed to the API."""
 
@@ -584,9 +592,9 @@ class TestTemperatureFlag(unittest.TestCase):
         """--temperature value is forwarded to chat.completions.create."""
         mock_client = MagicMock()
         mock_cls.return_value = mock_client
-        mock_client.chat.completions.create.return_value = iter([
-            _make_chunk(content="ok"), _make_chunk(finish_reason="stop")
-        ])
+        mock_client.chat.completions.create.return_value = iter(
+            [_make_chunk(content="ok"), _make_chunk(finish_reason="stop")]
+        )
 
         _run_main_mocked("ollama/test", "hello", temperature=0.7)
 
@@ -599,24 +607,27 @@ class TestTemperatureFlag(unittest.TestCase):
         """Without --temperature, temperature is not passed to the API."""
         mock_client = MagicMock()
         mock_cls.return_value = mock_client
-        mock_client.chat.completions.create.return_value = iter([
-            _make_chunk(content="ok"), _make_chunk(finish_reason="stop")
-        ])
+        mock_client.chat.completions.create.return_value = iter(
+            [_make_chunk(content="ok"), _make_chunk(finish_reason="stop")]
+        )
 
         _run_main_mocked("ollama/test", "hello")  # no temperature
 
         call_kwargs = mock_client.chat.completions.create.call_args[1]
-        self.assertNotIn("temperature", call_kwargs,
-                         "Temperature should not be passed when not specified")
+        self.assertNotIn(
+            "temperature",
+            call_kwargs,
+            "Temperature should not be passed when not specified",
+        )
 
     @patch("openai.OpenAI")
     def test_temperature_zero_passed(self, mock_cls):
         """temperature=0.0 is correctly forwarded (not treated as falsy)."""
         mock_client = MagicMock()
         mock_cls.return_value = mock_client
-        mock_client.chat.completions.create.return_value = iter([
-            _make_chunk(content="ok"), _make_chunk(finish_reason="stop")
-        ])
+        mock_client.chat.completions.create.return_value = iter(
+            [_make_chunk(content="ok"), _make_chunk(finish_reason="stop")]
+        )
 
         _run_main_mocked("ollama/test", "hello", temperature=0.0)
 
@@ -629,9 +640,9 @@ class TestTemperatureFlag(unittest.TestCase):
         """--temperature is also forwarded when --tools mode is active."""
         mock_client = MagicMock()
         mock_cls.return_value = mock_client
-        mock_client.chat.completions.create.return_value = iter([
-            _make_chunk(content="ok"), _make_chunk(finish_reason="stop")
-        ])
+        mock_client.chat.completions.create.return_value = iter(
+            [_make_chunk(content="ok"), _make_chunk(finish_reason="stop")]
+        )
 
         _run_main_mocked("ollama/test", "hello", tools=True, temperature=0.3)
 
@@ -644,6 +655,7 @@ class TestTemperatureFlag(unittest.TestCase):
 # 9. MULTIPLE SIMULTANEOUS TOOL CALLS PER ROUND
 # ===========================================================================
 
+
 class TestMultipleToolCallsPerRound(unittest.TestCase):
     """Model emits multiple tool calls in a single streaming round."""
 
@@ -655,11 +667,11 @@ class TestMultipleToolCallsPerRound(unittest.TestCase):
 
         # Round 1: two simultaneous tool calls
         td1 = _make_tool_call_delta(
-            0, tc_id="tc_1", name="bash",
-            arguments='{"command": "echo FIRST"}')
+            0, tc_id="tc_1", name="bash", arguments='{"command": "echo FIRST"}'
+        )
         td2 = _make_tool_call_delta(
-            1, tc_id="tc_2", name="python",
-            arguments='{"code": "print(\'SECOND\')"}')
+            1, tc_id="tc_2", name="python", arguments='{"code": "print(\'SECOND\')"}'
+        )
         round1 = [
             _make_chunk(content="", tool_calls=[td1]),
             _make_chunk(content="", tool_calls=[td2]),
@@ -670,9 +682,7 @@ class TestMultipleToolCallsPerRound(unittest.TestCase):
             _make_chunk(content="Got both: FIRST and SECOND"),
             _make_chunk(finish_reason="stop"),
         ]
-        mock_client.chat.completions.create.side_effect = [
-            iter(round1), iter(round2)
-        ]
+        mock_client.chat.completions.create.side_effect = [iter(round1), iter(round2)]
 
         result = _run_main_mocked("ollama/test", "run two tools", tools=True)
         self.assertEqual(result.returncode, 0)
@@ -686,20 +696,18 @@ class TestMultipleToolCallsPerRound(unittest.TestCase):
         mock_cls.return_value = mock_client
 
         td1 = _make_tool_call_delta(
-            0, tc_id="tc_a", name="bash",
-            arguments='{"command": "echo A"}')
+            0, tc_id="tc_a", name="bash", arguments='{"command": "echo A"}'
+        )
         td2 = _make_tool_call_delta(
-            1, tc_id="tc_b", name="bash",
-            arguments='{"command": "echo B"}')
+            1, tc_id="tc_b", name="bash", arguments='{"command": "echo B"}'
+        )
         round1 = [
             _make_chunk(content="", tool_calls=[td1]),
             _make_chunk(content="", tool_calls=[td2]),
             _make_chunk(finish_reason="tool_calls"),
         ]
         round2 = [_make_chunk(content="done"), _make_chunk(finish_reason="stop")]
-        mock_client.chat.completions.create.side_effect = [
-            iter(round1), iter(round2)
-        ]
+        mock_client.chat.completions.create.side_effect = [iter(round1), iter(round2)]
 
         _run_main_mocked("ollama/test", "parallel tools", tools=True)
 
@@ -721,6 +729,7 @@ class TestMultipleToolCallsPerRound(unittest.TestCase):
 # 10. TOOL CALL ID FALLBACK
 # ===========================================================================
 
+
 class TestToolCallIdFallback(unittest.TestCase):
     """Model omits tool call ID — runtime should assign a synthetic one."""
 
@@ -732,15 +741,15 @@ class TestToolCallIdFallback(unittest.TestCase):
 
         # tc_id is None — no ID from model
         td = _make_tool_call_delta(
-            0, tc_id=None, name="bash",
-            arguments='{"command": "echo synth_id_test"}')
-        round1 = [_make_chunk(content="", tool_calls=[td]),
-                  _make_chunk(finish_reason="tool_calls")]
+            0, tc_id=None, name="bash", arguments='{"command": "echo synth_id_test"}'
+        )
+        round1 = [
+            _make_chunk(content="", tool_calls=[td]),
+            _make_chunk(finish_reason="tool_calls"),
+        ]
         round2 = [_make_chunk(content="done"), _make_chunk(finish_reason="stop")]
 
-        mock_client.chat.completions.create.side_effect = [
-            iter(round1), iter(round2)
-        ]
+        mock_client.chat.completions.create.side_effect = [iter(round1), iter(round2)]
 
         result = _run_main_mocked("ollama/test", "no id test", tools=True)
         self.assertEqual(result.returncode, 0)
@@ -757,6 +766,7 @@ class TestToolCallIdFallback(unittest.TestCase):
 # ===========================================================================
 # 11. STREAMING EDGE CASES
 # ===========================================================================
+
 
 class TestStreamingEdgeCases(unittest.TestCase):
     """Edge cases in the streaming chunk processing loop."""
@@ -804,7 +814,7 @@ class TestStreamingEdgeCases(unittest.TestCase):
         mock_cls.return_value = mock_client
 
         chunks = [
-            _make_chunk(content=None),   # None should be skipped
+            _make_chunk(content=None),  # None should be skipped
             _make_chunk(content="real content"),
             _make_chunk(content=None, finish_reason="stop"),
         ]
@@ -821,8 +831,8 @@ class TestStreamingEdgeCases(unittest.TestCase):
         mock_cls.return_value = mock_client
 
         td = _make_tool_call_delta(
-            0, tc_id="tc_mixed", name="bash",
-            arguments='{"command": "echo MIXED"}')
+            0, tc_id="tc_mixed", name="bash", arguments='{"command": "echo MIXED"}'
+        )
         # Chunk has both content and tool call
         mixed_chunk = _make_chunk(content="Thinking...", tool_calls=[td])
         round1 = [mixed_chunk, _make_chunk(finish_reason="tool_calls")]
@@ -831,9 +841,7 @@ class TestStreamingEdgeCases(unittest.TestCase):
             _make_chunk(finish_reason="stop"),
         ]
 
-        mock_client.chat.completions.create.side_effect = [
-            iter(round1), iter(round2)
-        ]
+        mock_client.chat.completions.create.side_effect = [iter(round1), iter(round2)]
 
         result = _run_main_mocked("ollama/test", "mixed test", tools=True)
         self.assertEqual(result.returncode, 0)
@@ -842,6 +850,7 @@ class TestStreamingEdgeCases(unittest.TestCase):
 # ===========================================================================
 # 12. TOOLS-UNSUPPORTED FALLBACK
 # ===========================================================================
+
 
 class TestToolsUnsupportedFallback(unittest.TestCase):
     """When 'tools' param causes API error, runtime retries without it."""
@@ -856,8 +865,12 @@ class TestToolsUnsupportedFallback(unittest.TestCase):
         # Second call (without tools) succeeds
         mock_client.chat.completions.create.side_effect = [
             Exception("tools not supported by this model"),
-            iter([_make_chunk(content="fallback response"),
-                  _make_chunk(finish_reason="stop")]),
+            iter(
+                [
+                    _make_chunk(content="fallback response"),
+                    _make_chunk(finish_reason="stop"),
+                ]
+            ),
         ]
 
         result = _run_main_mocked("ollama/test", "tool test", tools=True)
@@ -877,13 +890,17 @@ class TestToolsUnsupportedFallback(unittest.TestCase):
 
         result = _run_main_mocked("ollama/test", "fallback test", tools=True)
         # Should log the fallback in stderr
-        self.assertIn("Tools not supported", result.stderr,
-                      f"Expected warning in stderr. Got: {result.stderr[:200]}")
+        self.assertIn(
+            "Tools not supported",
+            result.stderr,
+            f"Expected warning in stderr. Got: {result.stderr[:200]}",
+        )
 
 
 # ===========================================================================
 # 13. MESSAGE CONSTRUCTION CORRECTNESS
 # ===========================================================================
+
 
 class TestMessageConstruction(unittest.TestCase):
     """Validate that messages are built correctly for the API."""
@@ -893,9 +910,9 @@ class TestMessageConstruction(unittest.TestCase):
         """User prompt is the last message in the initial API call."""
         mock_client = MagicMock()
         mock_cls.return_value = mock_client
-        mock_client.chat.completions.create.return_value = iter([
-            _make_chunk(content="ok"), _make_chunk(finish_reason="stop")
-        ])
+        mock_client.chat.completions.create.return_value = iter(
+            [_make_chunk(content="ok"), _make_chunk(finish_reason="stop")]
+        )
 
         _run_main_mocked("ollama/test", "test user prompt")
 
@@ -910,14 +927,14 @@ class TestMessageConstruction(unittest.TestCase):
         mock_cls.return_value = mock_client
 
         td = _make_tool_call_delta(
-            0, tc_id="tc_check", name="bash",
-            arguments='{"command": "echo check"}')
-        round1 = [_make_chunk(content="", tool_calls=[td]),
-                  _make_chunk(finish_reason="tool_calls")]
-        round2 = [_make_chunk(content="done"), _make_chunk(finish_reason="stop")]
-        mock_client.chat.completions.create.side_effect = [
-            iter(round1), iter(round2)
+            0, tc_id="tc_check", name="bash", arguments='{"command": "echo check"}'
+        )
+        round1 = [
+            _make_chunk(content="", tool_calls=[td]),
+            _make_chunk(finish_reason="tool_calls"),
         ]
+        round2 = [_make_chunk(content="done"), _make_chunk(finish_reason="stop")]
+        mock_client.chat.completions.create.side_effect = [iter(round1), iter(round2)]
 
         _run_main_mocked("ollama/test", "check msg", tools=True)
 
@@ -936,14 +953,14 @@ class TestMessageConstruction(unittest.TestCase):
         mock_cls.return_value = mock_client
 
         td = _make_tool_call_delta(
-            0, tc_id="tc_asst", name="bash",
-            arguments='{"command": "echo asst_check"}')
-        round1 = [_make_chunk(content="", tool_calls=[td]),
-                  _make_chunk(finish_reason="tool_calls")]
-        round2 = [_make_chunk(content="done"), _make_chunk(finish_reason="stop")]
-        mock_client.chat.completions.create.side_effect = [
-            iter(round1), iter(round2)
+            0, tc_id="tc_asst", name="bash", arguments='{"command": "echo asst_check"}'
+        )
+        round1 = [
+            _make_chunk(content="", tool_calls=[td]),
+            _make_chunk(finish_reason="tool_calls"),
         ]
+        round2 = [_make_chunk(content="done"), _make_chunk(finish_reason="stop")]
+        mock_client.chat.completions.create.side_effect = [iter(round1), iter(round2)]
 
         _run_main_mocked("ollama/test", "assistant msg test", tools=True)
 
@@ -952,7 +969,7 @@ class TestMessageConstruction(unittest.TestCase):
         asst_msgs = [m for m in round2_messages if m.get("role") == "assistant"]
         self.assertTrue(
             any("tool_calls" in m for m in asst_msgs),
-            "Assistant message with tool calls must include 'tool_calls' key"
+            "Assistant message with tool calls must include 'tool_calls' key",
         )
 
     @patch("openai.OpenAI")
@@ -960,9 +977,9 @@ class TestMessageConstruction(unittest.TestCase):
         """stream=True is always passed to the API."""
         mock_client = MagicMock()
         mock_cls.return_value = mock_client
-        mock_client.chat.completions.create.return_value = iter([
-            _make_chunk(content="ok"), _make_chunk(finish_reason="stop")
-        ])
+        mock_client.chat.completions.create.return_value = iter(
+            [_make_chunk(content="ok"), _make_chunk(finish_reason="stop")]
+        )
 
         _run_main_mocked("ollama/test", "stream check")
 
@@ -974,9 +991,9 @@ class TestMessageConstruction(unittest.TestCase):
         """Resolved model name (prefix-stripped) is passed to the API."""
         mock_client = MagicMock()
         mock_cls.return_value = mock_client
-        mock_client.chat.completions.create.return_value = iter([
-            _make_chunk(content="ok"), _make_chunk(finish_reason="stop")
-        ])
+        mock_client.chat.completions.create.return_value = iter(
+            [_make_chunk(content="ok"), _make_chunk(finish_reason="stop")]
+        )
 
         _run_main_mocked("ollama/qwen3:8b", "model name test")
 
@@ -988,6 +1005,7 @@ class TestMessageConstruction(unittest.TestCase):
 # ===========================================================================
 # 14. MAX TOOL ROUNDS CONSTANT VALIDATION
 # ===========================================================================
+
 
 class TestMaxToolRoundsConfig(unittest.TestCase):
     """Validate MAX_TOOL_ROUNDS and TOOL_TIMEOUT constants are sane."""
@@ -1019,11 +1037,17 @@ class TestMaxToolRoundsConfig(unittest.TestCase):
             calls.append(kwargs.copy())
             # Always return a tool call to force loop exhaustion
             td = _make_tool_call_delta(
-                0, tc_id=f"tc_{len(calls)}", name="bash",
-                arguments='{"command": "echo loop"}'
+                0,
+                tc_id=f"tc_{len(calls)}",
+                name="bash",
+                arguments='{"command": "echo loop"}',
             )
-            return iter([_make_chunk(content="", tool_calls=[td]),
-                         _make_chunk(finish_reason="tool_calls")])
+            return iter(
+                [
+                    _make_chunk(content="", tool_calls=[td]),
+                    _make_chunk(finish_reason="tool_calls"),
+                ]
+            )
 
         mock_client.chat.completions.create.side_effect = capture_create
 
@@ -1034,8 +1058,7 @@ class TestMaxToolRoundsConfig(unittest.TestCase):
         if len(calls) > wee_runtime.MAX_TOOL_ROUNDS:
             last_call = calls[wee_runtime.MAX_TOOL_ROUNDS]
             self.assertNotIn(
-                "tools", last_call,
-                "Final exhaustion round should not include tools"
+                "tools", last_call, "Final exhaustion round should not include tools"
             )
 
 
@@ -1043,29 +1066,60 @@ class TestMaxToolRoundsConfig(unittest.TestCase):
 # 15. CLI FLAG INTEGRATION
 # ===========================================================================
 
+
 class TestCLIFlagIntegration(unittest.TestCase):
     """CLI flag parsing and forwarding integration tests."""
 
     def test_temperature_flag_accepted(self):
         """--temperature flag is accepted without error."""
         result = subprocess.run(
-            [sys.executable, WEE_RUNTIME, "--model", "ollama/test",
-             "--api-base", "http://127.0.0.1:9999/v1",
-             "--api-key", "test", "--temperature", "0.5", "hello"],
-            capture_output=True, text=True, timeout=15,
+            [
+                sys.executable,
+                WEE_RUNTIME,
+                "--model",
+                "ollama/test",
+                "--api-base",
+                "http://127.0.0.1:9999/v1",
+                "--api-key",
+                "test",
+                "--temperature",
+                "0.5",
+                "hello",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=15,
         )
         # Connection error expected (port 9999 not open) — but NOT argparse error
         self.assertNotIn("error: unrecognized arguments", result.stderr)
-        self.assertNotIn("--temperature", result.stderr.lower().split("usage")[0]
-                         if "usage" in result.stderr.lower() else result.stderr)
+        self.assertNotIn(
+            "--temperature",
+            (
+                result.stderr.lower().split("usage")[0]
+                if "usage" in result.stderr.lower()
+                else result.stderr
+            ),
+        )
 
     def test_timeout_flag_accepted(self):
         """--timeout flag is accepted without error."""
         result = subprocess.run(
-            [sys.executable, WEE_RUNTIME, "--model", "ollama/test",
-             "--api-base", "http://127.0.0.1:9999/v1",
-             "--api-key", "test", "--timeout", "30", "hello"],
-            capture_output=True, text=True, timeout=20,
+            [
+                sys.executable,
+                WEE_RUNTIME,
+                "--model",
+                "ollama/test",
+                "--api-base",
+                "http://127.0.0.1:9999/v1",
+                "--api-key",
+                "test",
+                "--timeout",
+                "30",
+                "hello",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=20,
         )
         # Should fail with connection error, not argument error
         self.assertNotIn("unrecognized arguments", result.stderr)
@@ -1074,7 +1128,9 @@ class TestCLIFlagIntegration(unittest.TestCase):
         """--tools flag is accepted by argparse."""
         result = subprocess.run(
             [sys.executable, WEE_RUNTIME, "--help"],
-            capture_output=True, text=True, timeout=10,
+            capture_output=True,
+            text=True,
+            timeout=10,
         )
         self.assertIn("--tools", result.stdout)
 
@@ -1082,7 +1138,9 @@ class TestCLIFlagIntegration(unittest.TestCase):
         """--temperature appears in --help output."""
         result = subprocess.run(
             [sys.executable, WEE_RUNTIME, "--help"],
-            capture_output=True, text=True, timeout=10,
+            capture_output=True,
+            text=True,
+            timeout=10,
         )
         self.assertIn("--temperature", result.stdout)
 
@@ -1090,7 +1148,9 @@ class TestCLIFlagIntegration(unittest.TestCase):
         """--system-prompt appears in --help output."""
         result = subprocess.run(
             [sys.executable, WEE_RUNTIME, "--help"],
-            capture_output=True, text=True, timeout=10,
+            capture_output=True,
+            text=True,
+            timeout=10,
         )
         self.assertIn("--system-prompt", result.stdout)
 
@@ -1098,6 +1158,7 @@ class TestCLIFlagIntegration(unittest.TestCase):
 # ===========================================================================
 # 16. SSH REGEX PATTERN VALIDATION
 # ===========================================================================
+
 
 class TestSSHRegexPattern(unittest.TestCase):
     """Validate the _SSH_BIN_RE regex pattern handles edge cases correctly."""
