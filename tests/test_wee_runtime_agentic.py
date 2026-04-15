@@ -17,15 +17,13 @@ Run:
     pytest tests/test_wee_runtime_agentic.py -v -k ollama
     pytest tests/test_wee_runtime_agentic.py -v -k openrouter
 """
-import json
 import os
-import re
 import subprocess
 import sys
 import time
 import unittest
 from types import SimpleNamespace
-from unittest.mock import MagicMock, patch, PropertyMock
+from unittest.mock import MagicMock, patch
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)) + "/..")
 
@@ -705,7 +703,7 @@ class TestPermissionLevels(unittest.TestCase):
         ]
         mock_client.chat.completions.create.return_value = iter(chunks)
 
-        result = _run_main_mocked("ollama/test", "run ls", tools=False)
+        _run_main_mocked("ollama/test", "run ls", tools=False)
         call_kwargs = mock_client.chat.completions.create.call_args
         if call_kwargs:
             kwargs = call_kwargs[1] if call_kwargs[1] else {}
@@ -724,7 +722,7 @@ class TestPermissionLevels(unittest.TestCase):
         ]
         mock_client.chat.completions.create.return_value = iter(chunks)
 
-        result = _run_main_mocked("ollama/test", "do something", tools=True)
+        _run_main_mocked("ollama/test", "do something", tools=True)
         call_kwargs = mock_client.chat.completions.create.call_args
         if call_kwargs:
             kwargs = call_kwargs[1] if call_kwargs[1] else {}
