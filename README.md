@@ -1488,9 +1488,11 @@ python3 -m unittest discover -s tests -p "test_*.py" -v
 
 ### Test Coverage
 
-The test suite includes **141 tests** across two test files:
+The test suite includes **209 tests** across multiple test files:
 
-**`tests/test_agent_manager.py`** (62 tests) — core functionality:
+**Orchestrator Core Tests**
+
+**`tests/test_agent_manager.py`** (62 tests) — core orchestrator functionality:
 - **Session Management** (5 tests) - Creating, resuming, and persisting sessions
 - **Agent Configuration** (4 tests) - Loading and managing agent configurations
 - **Slash Commands** (9 tests) - All interactive commands (`/help`, `/runtime`, `/model`, `/agent`, `/session`)
@@ -1508,19 +1510,39 @@ The test suite includes **141 tests** across two test files:
 - **Image search** — DuckDuckGo image search integration
 - **Rate limiting** — per-IP sliding window
 
+**Wee Native Runtime Tests**
+
+**`tests/test_wee_runtime_agentic.py`** (68 tests) — wee_runtime.py agentic capabilities:
+- **Model Resolution** (12 tests) - Ollama/OpenRouter prefix stripping, preset resolution, cross-provider parametrization
+- **Tool Definitions** (6 tests) - Schema validation, tool registration, JSON schema correctness
+- **Tool Execution** (11 tests) - Bash/Python execution, error handling, output capture, timeouts
+- **SSH Sanitization** (5 tests) - Word-boundary validation, injection prevention (Issue #111)
+- **CLI Argument Parsing** (3 tests) - Flag handling, defaults, priority resolution
+- **Tool-Calling Loop** (4 tests) - Single/multi-round mocked flows, max rounds enforcement
+- **Permission Levels** (5 tests) - Restricted/auto/elevated access control
+- **Streaming Output** (2 tests) - Empty response handling, newline termination
+- **Error Handling** (4 tests) - API failures, malformed arguments, invalid API base, timeouts
+- **Performance Baselines** (2 tests) - Import time <1s, model resolution <100ms
+- **Ollama Integration** (7 tests) - Live connection, single/multi-turn chat, tool calling
+- **OpenRouter Integration** (7 tests) - Live connection, API key verification, tool calling
+
 ### Test Results
 
-All tests pass with no external CLI dependencies required:
+All tests pass with minimal external dependencies:
 
 ```
-Ran 141 tests in 0.185s
-OK
+Orchestrator: 141 tests, 0.185s
+Wee Runtime: 61 passed, 7 skipped (OpenRouter key), 0 failures
+Total: 202+ passed
 ```
 
-Tests use mocking to isolate functionality and avoid:
+Tests use mocking to isolate orchestrator functionality and avoid:
 - Executing real CLI commands (Copilot, OpenCode, Claude)
 - Modifying user's home directory
-- Making real API calls
+- Making real API calls to runtime providers
+
+Wee runtime tests support both mocked tool-calling loops and optional live integration with Ollama and OpenRouter.
+
 
 ### Adding Tests
 
