@@ -25,7 +25,7 @@ from unittest.mock import MagicMock, patch
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from wee_cli import __version__  # noqa: E402
-from wee_cli import (
+from wee_cli import (  # noqa: E402
     REPL_HELP,
     TokenTracker,
     _make_client,

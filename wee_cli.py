@@ -33,7 +33,7 @@ _HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _HERE)
 
 from wee_runtime import _WEE_TOOLS  # noqa: E402
-from wee_runtime import (
+from wee_runtime import (  # noqa: E402
     _ANTI_HALLUCINATION_PROMPT,
     MAX_TOOL_ROUNDS,
     execute_tool,

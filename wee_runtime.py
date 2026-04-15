@@ -13,12 +13,11 @@ Usage:
 """
 
 import argparse
-import re
 import json
 import os
+import re
 import subprocess
 import sys
-
 
 # Provider presets: prefix → (api_base, default_api_key)
 PROVIDER_PRESETS = {
@@ -86,7 +85,7 @@ def resolve_model_and_endpoint(model: str, api_base: str = None, api_key: str = 
     # Check for provider prefix
     for prefix, (preset_base, preset_key) in PROVIDER_PRESETS.items():
         if model.lower().startswith(f"{prefix}/"):
-            resolved_model = model[len(prefix) + 1:]
+            resolved_model = model[len(prefix) + 1 :]
             if not resolved_base:
                 resolved_base = preset_base
             if not resolved_key and preset_key:
@@ -95,9 +94,7 @@ def resolve_model_and_endpoint(model: str, api_base: str = None, api_key: str = 
 
     # Defaults
     if not resolved_base:
-        resolved_base = os.environ.get(
-            "WEE_API_BASE", "http://192.168.1.101:11434/v1"
-        )
+        resolved_base = os.environ.get("WEE_API_BASE", "http://192.168.1.101:11434/v1")
     if not resolved_key:
         # Issue #153: Check OPENROUTER_API_KEY env var for OpenRouter first
         if "openrouter" in (resolved_base or "").lower():
@@ -108,6 +105,7 @@ def resolve_model_and_endpoint(model: str, api_base: str = None, api_key: str = 
         if not resolved_key and "openrouter" in (resolved_base or "").lower():
             try:
                 import keyring
+
                 resolved_key = keyring.get_password("openrouter", "api_key")
             except Exception:
                 pass
@@ -226,9 +224,9 @@ _ANTI_HALLUCINATION_PROMPT = (
 _WEE_TOOL_CAPABILITY_PROMPT = (
     "\n\n[Tool Capabilities]\n"
     "You have the following tools available. Use them to fulfil user requests.\n\n"
-    "1. **bash** — Execute shell commands. Parameters: {\"command\": \"<shell command>\"}"  # noqa: E501
+    '1. **bash** — Execute shell commands. Parameters: {"command": "<shell command>"}'  # noqa: E501
     "   Use this for: file operations, system commands, SSH, curl, git, etc.\n"
-    "2. **python** — Execute Python code. Parameters: {\"code\": \"<python code>\"}\n"
+    '2. **python** — Execute Python code. Parameters: {"code": "<python code>"}\n'
     "   Use this for: data processing, calculations, scripting, etc.\n\n"
     "IMPORTANT: You are NOT sandboxed. You CAN and SHOULD use these tools to execute\n"
     "commands, SSH into remote hosts, read/write files, and interact with the system.\n"
@@ -253,8 +251,12 @@ def main():
     parser.add_argument(
         "--temperature", type=float, default=None, help="Sampling temperature"
     )
-    parser.add_argument("--tools", action="store_true", default=False,
-                        help="Enable tool calling (bash, python)")
+    parser.add_argument(
+        "--tools",
+        action="store_true",
+        default=False,
+        help="Enable tool calling (bash, python)",
+    )
     parser.add_argument("prompt", help="User prompt")
     args = parser.parse_args()
 
@@ -272,6 +274,7 @@ def main():
         sys.exit(1)
 
     import httpx
+
     client = OpenAI(
         base_url=api_base,
         api_key=api_key,
@@ -379,9 +382,9 @@ def main():
                             if tc_delta.function.name:
                                 tool_calls_acc[idx]["name"] = tc_delta.function.name
                             if tc_delta.function.arguments:
-                                tool_calls_acc[idx]["arguments"] += (
-                                    tc_delta.function.arguments
-                                )
+                                tool_calls_acc[idx][
+                                    "arguments"
+                                ] += tc_delta.function.arguments
 
             content_text = "".join(round_content)
 
@@ -398,17 +401,21 @@ def main():
             assistant_tool_calls = []
             for idx in sorted(tool_calls_acc.keys()):
                 tc = tool_calls_acc[idx]
-                assistant_tool_calls.append({
-                    "id": tc["id"],
-                    "type": "function",
-                    "function": {"name": tc["name"], "arguments": tc["arguments"]},
-                })
+                assistant_tool_calls.append(
+                    {
+                        "id": tc["id"],
+                        "type": "function",
+                        "function": {"name": tc["name"], "arguments": tc["arguments"]},
+                    }
+                )
 
-            messages.append({
-                "role": "assistant",
-                "content": content_text or None,
-                "tool_calls": assistant_tool_calls,
-            })
+            messages.append(
+                {
+                    "role": "assistant",
+                    "content": content_text or None,
+                    "tool_calls": assistant_tool_calls,
+                }
+            )
 
             for tc_entry in assistant_tool_calls:
                 tc_id = tc_entry["id"]
@@ -427,18 +434,19 @@ def main():
 
                 tool_result = execute_tool(func_name, func_args)
 
-                messages.append({
-                    "role": "tool",
-                    "tool_call_id": tc_id,
-                    "content": tool_result or "No output",
-                })
+                messages.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": tc_id,
+                        "content": tool_result or "No output",
+                    }
+                )
         else:
             # All rounds had tool calls with no final text
             last_results = [m["content"] for m in messages if m.get("role") == "tool"]
             if last_results:
                 fallback = (
-                    "Tool execution completed. Last result:\n"
-                    + last_results[-1][:2000]
+                    "Tool execution completed. Last result:\n" + last_results[-1][:2000]
                 )
             else:
                 fallback = "Max tool rounds reached without final response."
