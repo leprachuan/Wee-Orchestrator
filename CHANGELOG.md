@@ -1,5 +1,113 @@
 # Changelog
 
+## [Issue #158] Feature: Wee CLI — Standalone Command-Line AI Tool
+**Status:** ✅ QA Approved (Commits: 7622e8d, 2a718be, PR pending dev→main)
+
+### Summary
+Added `wee_cli.py` — a standalone command-line AI assistant for the Wee ecosystem. Similar in style to GitHub Copilot CLI, Claude Code CLI, and Codex CLI. Supports single-shot prompts, interactive REPL, stdin piping, and tool calling via any OpenAI-compatible backend (Ollama, OpenRouter, LM Studio).
+
+### Key Features
+
+#### CLI Flags
+- `--model` / `-m` — Model ID with provider prefix (e.g. `ollama/qwen3:8b`, `openrouter/meta-llama/llama-2-70b`). Default: `$WEE_MODEL` or `ollama/qwen3:8b`.
+- `--permission` / `-p` — Tool execution permission level: `restricted` (default), `auto`, or `elevated`. Controls whether tool calls (bash, python) are allowed and with what scope.
+- `--output` / `-o` — Output format: `text` (default), `json`, or `markdown`. Non-text formats suppress streaming and reformat the full response after completion.
+- `--tools` / `-t` — Enable tool calling (bash, python). Requires explicit flag to avoid accidental execution.
+- `--interactive` / `-i` — Enter interactive REPL mode with readline history.
+- `--api-key` / `-k` — API key override (prefer env var `WEE_API_KEY` to avoid key exposure in `ps aux`).
+- `--api-base` / `-b` — Custom API base URL override.
+- `--system` / `-s` — System prompt override.
+- `--temperature` / `-T` — Sampling temperature.
+- `--timeout` — Request timeout in seconds (default: 120).
+- `--config` — Config file path (default: `~/.wee/config.json`).
+
+#### Usage Examples
+```bash
+# Single-shot prompt
+wee "What is the capital of France?"
+
+# With specific model
+wee --model openrouter/meta-llama/llama-2-70b "Explain quantum computing"
+
+# Tool calling with elevated permissions
+wee --tools --permission elevated "List all Python files in /opt"
+
+# JSON output (suppresses streaming, formats full response as JSON)
+wee --output json "What are the first 5 Fibonacci numbers?"
+
+# Markdown output with rich rendering
+wee --output markdown "Write a Python quicksort"
+
+# Interactive REPL
+wee --interactive
+
+# Pipe from stdin
+echo "summarize this" | wee --model ollama/qwen3:8b
+
+# Custom system prompt
+wee --system "You are a bash expert" "How do I tail a log file?"
+```
+
+#### Config File Support
+Persistent configuration via `~/.wee/config.json`:
+```json
+{
+  "model": "ollama/qwen3:8b",
+  "system_prompt": "You are a helpful assistant",
+  "tools": false,
+  "permission": "restricted",
+  "output_format": "text"
+}
+```
+Settings priority: CLI arg > env var > config file > built-in default.
+
+#### Permission Levels
+| Level | Tool Calls | Use Case |
+|-------|-----------|----------|
+| `restricted` (default) | Blocked | Safe for untrusted input |
+| `auto` | Confirmed per-call | Interactive use |
+| `elevated` | Unrestricted | Trusted automation |
+
+### Root Cause (Implementation Gap)
+The Wee ecosystem had `wee_runtime.py` for background subprocess use but lacked a user-facing CLI entry point. Users had no `wee` command they could run directly from the terminal.
+
+### Solution
+
+#### Core Architecture
+- `wee_cli.py` — standalone entrypoint, re-uses `wee_runtime.py` core functions (`resolve_model_and_endpoint`, `execute_tool`, `_WEE_TOOLS`, `MAX_TOOL_ROUNDS`)
+- `chat_stream()` — streaming chat loop with tool-call support and token usage tracking
+- `run_interactive()` — REPL with readline history (`~/.wee/history`), `/help`, `/model`, `/clear` slash commands
+- `run_single_shot()` — non-interactive single prompt execution
+
+#### Key Bug Fixes (QA Rounds 1–3)
+- **M-1 (Round 3, commit 7622e8d):** `run_interactive()` now correctly passes `permission` kwarg to `chat_stream()` (was silently defaulting to `"auto"` regardless of CLI flag)
+- **Round 2:** `--permission` default changed from `"auto"` to `"restricted"` for safer out-of-box behavior; output format wired end-to-end
+- **Round 1:** Unused imports removed, flake8 clean
+
+### Files Changed
+- `wee_cli.py` — new file, ~700 LOC
+- `tests/test_issue158_wee_cli.py` — 63 regression tests
+- `tests/test_issue158_permission_regression.py` — 1 regression test added by wee-qa (commit 2a718be)
+
+### Tests
+- 63 new regression tests covering:
+  - All CLI flags and their defaults
+  - Permission propagation through `run_interactive()` → `chat_stream()`
+  - Output format modes (text, json, markdown)
+  - Tool enabling/disabling
+  - Config file loading and priority resolution
+  - Stdin piping
+  - Interactive REPL slash commands
+  - Token usage tracking
+- Total: 1598 passed, 0 regressions
+
+### QA History
+- **Round 1:** REJECT — unused imports, default permission "auto" instead of "restricted"
+- **Round 2:** REJECT — M-1 BLOCKER: permission kwarg not passed from `run_interactive()` to `chat_stream()`
+- **Round 3:** APPROVE — all findings resolved; regression test added by wee-qa (commit 2a718be)
+
+---
+
 ## [Issue #153] Bug Fix: OpenRouter 401 Authentication Error
 **Status:** ✅ QA Approved (Commit: 1dae171, PR #154)
 
