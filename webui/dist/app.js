@@ -3853,6 +3853,27 @@ function buildJobForm(job) {
         </div>
         <p class="form-hint">Default is 300 seconds (5 minutes). Min: 60s, Max: 3600s (1 hour).</p>
       </div>
+      <details class="form-group" style="margin-top:8px">
+        <summary style="cursor:pointer;font-weight:600;color:var(--text-secondary,#aaa)">
+          ▶ Fallback Configuration
+        </summary>
+        <div style="margin-top:8px">
+          <div class="form-group">
+            <label>Fallback Runtime</label>
+            <select id="sched-fallback-runtime" name="fallback_runtime">
+              <option value="">None (no fallback)</option>
+            </select>
+            <small>Used if primary runtime fails (rate limit, auth error, timeout)</small>
+          </div>
+          <div class="form-group">
+            <label>Fallback Model</label>
+            <select id="sched-fallback-model" name="fallback_model">
+              <option value="">None (no fallback)</option>
+            </select>
+            <small>Used with fallback runtime</small>
+          </div>
+        </div>
+      </details>
       <div class="sched-form-actions">
         <button type="submit" class="btn btn-primary">💾 Save</button>
         <button type="button" class="btn btn-ghost" id="btn-form-cancel">Cancel</button>
@@ -3943,7 +3964,38 @@ async function populateModelDropdown(container, runtime) {
   }
 }
 
+function populateFallbackRuntimeDropdown(selectEl) {
+  const runtimes = ['copilot','claude','claude-sdk','gemini','opencode','wee','ollama'];
+  selectEl.innerHTML = '<option value="">None (no fallback)</option>';
+  runtimes.forEach(r => {
+    const opt = document.createElement('option');
+    opt.value = r; opt.textContent = r;
+    selectEl.appendChild(opt);
+  });
+}
+
+function populateFallbackModelDropdown(selectEl) {
+  const models = [
+    'claude-haiku-4.5','claude-sonnet-4.6','claude-opus-4.6',
+    'gpt-4.1','gpt-5-mini','gpt-5.2',
+    'gemini-1.5-pro','gemini-2.0-flash',
+    'sonnet','haiku','opus'
+  ];
+  selectEl.innerHTML = '<option value="">None (no fallback)</option>';
+  models.forEach(m => {
+    const opt = document.createElement('option');
+    opt.value = m; opt.textContent = m;
+    selectEl.appendChild(opt);
+  });
+}
+
 function wireJobForm(container, onSubmit) {
+  // Populate fallback dropdowns (Issue #159)
+  const fbRtEl = document.getElementById('sched-fallback-runtime');
+  const fbModelEl = document.getElementById('sched-fallback-model');
+  if (fbRtEl) populateFallbackRuntimeDropdown(fbRtEl);
+  if (fbModelEl) populateFallbackModelDropdown(fbModelEl);
+
   const form = container.querySelector('#sched-job-form');
   const errEl = container.querySelector('#sched-form-error');
   const cancelBtn = container.querySelector('#btn-form-cancel');
@@ -4051,6 +4103,10 @@ function wireJobForm(container, onSubmit) {
       payload.agent   = data.agent || 'orchestrator';
       payload.runtime = data.runtime || 'claude';
       payload.model   = data.model?.trim() || null;
+      const fbRt = document.getElementById('sched-fallback-runtime')?.value;
+      const fbModel = document.getElementById('sched-fallback-model')?.value;
+      if (fbRt) payload.fallback_runtime = fbRt;
+      if (fbModel) payload.fallback_model = fbModel;
     } else {
       payload.working_dir = data.working_dir?.trim() || '/opt';
     }

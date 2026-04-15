@@ -11,6 +11,7 @@ For each job that's ready to run:
 import json
 import logging
 import os
+import re
 import subprocess
 import sys
 import time
@@ -397,37 +398,145 @@ class TaskSchedulerExecutor:
         else:
             return self._execute_ai_mode(job)
 
+    # --- Fallback failure patterns (Issue #159) ---
+    _FALLBACK_FAILURE_PATTERNS = [
+        re.compile(p, re.IGNORECASE)
+        for p in [
+            r"429",
+            r"rate.?limit",
+            r"quota.?exceeded",
+            r"401",
+            r"unauthorized",
+            r"missing.?authentication",
+            r"api[_\-]?key.?(invalid|expired|missing)",
+            r"503",
+            r"service.?unavailable",
+            r"502",
+            r"bad.?gateway",
+            r"connection.?refused",
+            r"timed?.?out",
+            r"etimedout",
+            r"overloaded",
+        ]
+    ]
+
+    @staticmethod
+    def _is_fallback_eligible(error_text: str) -> bool:
+        """Check if error is an infrastructure failure eligible for fallback retry."""
+        if not error_text:
+            return False
+        for pattern in TaskSchedulerExecutor._FALLBACK_FAILURE_PATTERNS:
+            if pattern.search(error_text):
+                return True
+        return False
+
+    def _resolve_fallback(self, job: Dict):
+        """Resolve fallback runtime/model. Per-job > global env > None.
+
+        Returns (fallback_runtime, fallback_model) or (None, None).
+        """
+        fb_rt = job.get("fallback_runtime") or os.environ.get("SCHEDULER_FALLBACK_RUNTIME")
+        fb_model = job.get("fallback_model") or os.environ.get("SCHEDULER_FALLBACK_MODEL")
+        if fb_rt == job.get("runtime") and fb_model == job.get("model"):
+            return None, None
+        if not fb_rt and not fb_model:
+            return None, None
+        return fb_rt, fb_model
+
     def _execute_ai_mode(self, job: Dict) -> Optional[str]:
-        """Execute job via LLM agent (agent_manager.py)."""
+        """Execute job via LLM agent with optional fallback on infrastructure failure."""
+        job_id = job["id"]
+        notify = job.get("notify", False)
+
+        # --- Primary attempt ---
+        primary_result, primary_error = self._run_ai_attempt(job)
+        if primary_result is not None:
+            if notify:
+                self._notify_creator(
+                    job,
+                    _brief_notification("\u2705", job["name"], "done"),
+                )
+            return primary_result
+
+        # --- Fallback logic (Issue #159) ---
+        error_text = primary_error or ""
+        if self._is_fallback_eligible(error_text):
+            fb_runtime, fb_model = self._resolve_fallback(job)
+            if fb_runtime or fb_model:
+                fb_rt_label = fb_runtime or job.get("runtime", "?")
+                fb_model_label = fb_model or "(default)"
+                logger.warning(
+                    f"[Fallback] Job {job_id}: primary failed ({error_text[:120]}), "
+                    f"retrying with runtime={fb_rt_label}, model={fb_model_label}"
+                )
+                self._log_job(
+                    job_id,
+                    f"Fallback triggered: {error_text[:120]} -> runtime={fb_rt_label}, model={fb_model_label}",
+                )
+
+                fb_result, fb_error = self._run_ai_attempt(
+                    job, runtime_override=fb_runtime, model_override=fb_model
+                )
+                if fb_result is not None:
+                    self._log_job(job_id, f"Fallback succeeded (runtime={fb_rt_label})")
+                    if notify:
+                        self._notify_creator(
+                            job,
+                            _brief_notification("\u2705", job["name"], "done (fallback)"),
+                        )
+                    return fb_result
+
+                combined = f"Primary: {error_text[:200]}; Fallback ({fb_rt_label}): {fb_error or 'unknown'}"
+                self._log_job(job_id, f"Both attempts failed: {combined[:300]}")
+                self._save_result(job_id, job["name"], success=False, error=combined)
+                if notify:
+                    self._notify_creator(
+                        job,
+                        _brief_notification("\u274c", job["name"], "failed (primary + fallback)"),
+                    )
+                return None
+            else:
+                logger.info(f"[Fallback] Job {job_id}: eligible error but no fallback configured")
+
+        # No fallback or not eligible
+        self._save_result(job_id, job["name"], success=False, error=error_text)
+        if notify:
+            self._notify_creator(
+                job,
+                _brief_notification("\u274c", job["name"], "failed"),
+            )
+        return None
+
+    def _run_ai_attempt(
+        self, job: Dict, runtime_override: str = None, model_override: str = None
+    ) -> tuple:
+        """Run a single AI execution attempt.
+
+        Returns (output, None) on success or (None, error_msg) on failure.
+        """
         job_id = job["id"]
         agent = job.get("agent", os.getenv("SCHEDULER_DEFAULT_AGENT", "orchestrator"))
-        runtime = job.get("runtime", os.getenv("SCHEDULER_DEFAULT_RUNTIME", "claude"))
+        runtime = runtime_override or job.get("runtime", os.getenv("SCHEDULER_DEFAULT_RUNTIME", "claude"))
         task = job.get("task", "")
-        notify = job.get("notify", False)
         timeout = int(
             job.get("timeout") or os.getenv("SCHEDULER_DEFAULT_TIMEOUT", "300")
         )
 
-        # Create session ID
         session_id = f"scheduled-{job_id}-{int(time.time())}"
 
-        # Pick a sensible default model per runtime
         _default_models = {
             "claude": "sonnet",
             "copilot": "gpt-4.1",
             "gemini": "gemini-1.5-pro",
             "opencode": "gpt-4o",
         }
-        model = job.get("model") or _default_models.get(runtime, "sonnet")
+        model = model_override or job.get("model") or _default_models.get(runtime, "sonnet")
 
-        # Use repo_root to find agent_manager.py (already set in __init__)
         agent_manager_path = self.repo_root / "agent_manager.py"
-
-        # Resolve permission mode from job
         perm_mode = job.get("permission_mode", "restricted")
         cmd = [
             "python3",
-            agent_manager_path,
+            str(agent_manager_path),
             "--config",
             str(self.config_file),
             "--agent",
@@ -464,60 +573,28 @@ class TaskSchedulerExecutor:
                 self._log_job(job_id, f"Execution succeeded")
                 self._save_result(job_id, job["name"], success=True, output=output)
                 logger.info(f"Job {job_id} completed successfully")
-
-                if notify:
-                    self._notify_creator(
-                        job,
-                        _brief_notification("✅", job["name"], "done"),
-                    )
-
-                return output
+                return output, None
             else:
-                error_msg = result.stderr or result.stdout
+                error_msg = result.stderr or result.stdout or f"exit code {result.returncode}"
                 self._log_job(job_id, f"Execution failed: {error_msg[:200]}")
-                self._save_result(job_id, job["name"], success=False, error=error_msg)
                 logger.error(f"Job {job_id} failed with code {result.returncode}")
-
-                if notify:
-                    self._notify_creator(
-                        job,
-                        _brief_notification("❌", job["name"], "failed"),
-                    )
-
-                return None
+                return None, error_msg
 
         except subprocess.TimeoutExpired:
             timeout_mins = timeout / 60
-            self._log_job(job_id, f"Execution timed out ({timeout_mins:.1f} minutes)")
-            self._save_result(
-                job_id,
-                job["name"],
-                success=False,
-                error=f"Execution timed out ({timeout_mins:.1f} minutes)",
-            )
+            error_msg = f"Execution timed out ({timeout_mins:.1f} minutes)"
+            self._log_job(job_id, error_msg)
             logger.error(f"Job {job_id} execution timed out")
-
-            if notify:
-                self._notify_creator(
-                    job,
-                    _brief_notification("⏱️", job["name"], "timed out"),
-                )
-            return None
+            return None, error_msg
 
         except Exception as e:
             error_str = str(e)
             self._log_job(job_id, f"Exception: {error_str}")
-            self._save_result(job_id, job["name"], success=False, error=error_str)
             logger.error(f"Failed to execute job {job_id}: {e}")
-
-            if job.get("notify"):
-                self._notify_creator(
-                    job,
-                    _brief_notification("⚠️", job["name"], "error"),
-                )
-            return None
+            return None, error_str
         finally:
             self._clear_checkpoint(job_id)
+
 
     def _execute_command_mode(self, job: Dict) -> Optional[str]:
         """Execute job as direct shell/python command (no LLM)."""
