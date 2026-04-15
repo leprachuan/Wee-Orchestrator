@@ -96,7 +96,6 @@ export function validateConfig(agent: Partial<Agent>): ValidationResult {
     errors.push({ field: 'path', message: 'Working path must be an absolute path starting with /' });
   }
 
-  }
 
   if (agent.max_concurrent !== undefined && agent.max_concurrent !== null) {
     if (typeof agent.max_concurrent !== 'number' || !Number.isInteger(agent.max_concurrent) || agent.max_concurrent < 1) {
