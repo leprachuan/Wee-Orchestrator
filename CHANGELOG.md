@@ -1,5 +1,63 @@
 # Changelog
 
+## [Issue #159] Feature: Fallback Runtime/Model for Scheduled Tasks
+**Status:** ❌ QA Rejected (Round 1)  
+**Rejection Date:** 2026-04-15  
+**PR:** #163  
+**Commit:** b5dddef  
+**Blockers:** 1 MAJOR
+**Dispatch:** wee-dev task bg_46083a8f
+
+### QA Findings
+
+**BLOCKER #1: WebUI Edit Form Pre-population Fails**
+- File: `webui/dist/app.js`
+- Issue: Form fails to pre-populate existing fallback_runtime and fallback_model values when editing scheduled task
+- Impact: Users cannot see current fallback configuration, may accidentally clear it
+- Fix: Add fallback fields to form pre-population logic, ensure values load in collapsible section
+
+**MINOR #1: Cannot Clear Fallback via PUT Request**
+- File: `scheduler/management.py` or `agent_manager.py`
+- Issue: API does not support clearing fallback_runtime/fallback_model (cannot set to None)
+- Fix: Support null/empty values in PUT request to clear fallback fields
+
+**MINOR #2: 5 Unused Test Imports**
+- File: `tests/test_issue159_scheduler_fallback.py`
+- Fix: Remove unused imports
+
+**MINOR #3: 1 Unused Test Variable**
+- File: `tests/test_issue159_scheduler_fallback.py`
+- Fix: Remove or use variable
+
+**NITPICK #1: Type Hint Clarity (Non-blocking)**
+- Optional improvement to type hints
+
+### Test Results
+- ✅ 37/37 targeted Issue #159 tests pass
+- ✅ 0 new regressions (1478+ full suite clean)
+- ✅ All 15 regex failure patterns correctly identified
+
+### Implementation Highlights
+- **Core Logic:** ✅ Solid — fallback detection, priority chain, all patterns working
+- **15 Regex Patterns:** Rate limit (429), auth failure (401/403), service unavailable (502/503), timeout, connection errors, SSL failures, quota exceeded, + 8 more
+- **Fallback Priority:** Per-job → global env vars → default fallback
+- **API & Pydantic:** Routes correctly wired, validation working
+- **Test Coverage:** Comprehensive failure scenarios covered
+
+### Files Modified
+- `agent_manager.py` — +6 lines (API route updates)
+- `scheduler/executor.py` — +177/-50 lines (core fallback logic)
+- `scheduler/management.py` — +6 lines (Pydantic fields)
+- `webui/dist/app.js` — +56 lines (form + UI)
+- `tests/test_issue159_scheduler_fallback.py` — +488 lines (37 tests)
+
+### Next State
+- wee-dev assigned to fix BLOCKER #1 + MINORs (task bg_46083a8f)
+- Expected re-submission: 24-48 hours
+- Full approval expected with next QA pass (Round 2) after fixes
+
+---
+
 ## [Issue #113] Bug: Wee runtime synthesis caching + tool execution ordering
 **Status:** ❌ QA Rejected  
 **Rejection Date:** 2026-04-12  
