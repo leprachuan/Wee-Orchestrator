@@ -3325,20 +3325,6 @@ You can mention an agent in your prompt and it will auto-delegate:
             print(f"Error fetching opencode models: {e}", file=sys.stderr)
             return self._static_models_to_dict(self.OPENCODE_MODELS)
 
-
-        "meta-llama/llama-4-maverick",
-        "meta-llama/llama-4-scout",
-        "anthropic/claude-sonnet-4.6",
-        "anthropic/claude-opus-4.6",
-        "google/gemini-3.1-flash-lite-preview",
-        "google/gemini-3.1-pro-preview-customtools",
-        "openai/gpt-4.1",
-        "openai/gpt-4.1-mini",
-        "deepseek/deepseek-r1:free",
-        "qwen/qwen3-32b:free",
-        "microsoft/phi-4-reasoning-plus:free",
-        "google/gemma-3-27b-it:free",
-
     def _static_models_to_dict(self, static_dict: Dict) -> Dict:
         """Convert static model config {cat: [(id, desc, aliases)...]} to {cat: [id,...]}."""
         return {
