@@ -270,7 +270,6 @@ class TestModelsEndpoint:
 
     def test_endpoint_unknown_runtime_rejected(self):
         """Unknown runtimes should return an error."""
-        mod = importlib.import_module("agent_manager")
         src = open(os.path.join("/opt/n8n-copilot-shim-dev", "agent_manager.py")).read()
         assert "Unknown runtime" in src
 
