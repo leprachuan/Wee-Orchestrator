@@ -18,6 +18,19 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Dict, Optional
 
+try:
+    from scheduler.management import (
+        cron_next_run,
+        is_valid_cron,
+        parse_schedule_to_next_run,
+    )
+except ImportError:
+    from management import (  # type: ignore[no-redef]
+        cron_next_run,
+        is_valid_cron,
+        parse_schedule_to_next_run,
+    )
+
 # Gate check support (Issue #148)
 try:
     from scheduler.qa_gate import is_wee_dev_gated
@@ -80,12 +93,6 @@ try:
     from webex_connector import WebEXConnector as _WebEXConnector
 except ImportError:
     _WebEXConnector = None
-
-from scheduler.management import (
-    cron_next_run,
-    is_valid_cron,
-    parse_schedule_to_next_run,
-)
 
 
 class TaskSchedulerExecutor:
@@ -176,9 +183,7 @@ class TaskSchedulerExecutor:
                 # Forward drift reduces debt (clock catching up via NTP slew)
                 if self._wall_clock_debt > 0:
                     old_debt = self._wall_clock_debt
-                    self._wall_clock_debt = max(
-                        0.0, self._wall_clock_debt - drift
-                    )
+                    self._wall_clock_debt = max(0.0, self._wall_clock_debt - drift)
                     logger.info(
                         f"Wall-clock debt reduced {old_debt:.1f}s → "
                         f"{self._wall_clock_debt:.1f}s (forward drift recovery)"
@@ -225,7 +230,8 @@ class TaskSchedulerExecutor:
                 started_at = checkpoint.get("started_at", "unknown")
                 pid = checkpoint.get("pid", 0)
                 logger.warning(
-                    f"Found stale checkpoint for job {job_id} (started: {started_at}, pid: {pid})"
+                    f"Found stale checkpoint for job {job_id} "
+                    f"(started: {started_at}, pid: {pid})"
                 )
                 checkpoint_file.unlink()
             except Exception as e:
@@ -297,10 +303,11 @@ class TaskSchedulerExecutor:
             logger.error(f"Failed to save result for job {job_id}: {e}")
 
     def _notify_creator(self, job: Dict, message: str) -> bool:
-        """Send notification to the user who created the job, via their original channel.
+        """Send notification to the job creator via their original channel.
 
-        Reads job["created_by"] = {"identity": ..., "channel": "telegram"|"webex", "username": ...}
-        Falls back to logging a warning if the channel is unknown or connectors are unavailable.
+        Reads job["created_by"] = {"identity": ..., "channel": "telegram"|"webex",
+        "username": ...}
+        Falls back to logging a warning if channel is unknown or connectors unavailable.
         """
         job_id = job.get("id", "unknown")
         created_by = job.get("created_by", {})
@@ -426,7 +433,7 @@ class TaskSchedulerExecutor:
 
     def _execute_task(self, job: Dict) -> Optional[str]:
         """
-        Execute a job in either AI mode (via agent_manager.py) or command mode (direct shell).
+        Execute a job in AI mode (via agent_manager.py) or command mode (direct shell).
 
         Modes:
         - 'ai' (default): Execute via LLM agent through agent_manager.py
@@ -497,11 +504,13 @@ class TaskSchedulerExecutor:
         cmd.extend([task, session_id])
 
         logger.info(
-            f"[AI Mode] Executing job {job_id}: agent={agent}, runtime={runtime}, model={model}, task={task[:60]}..."
+            f"[AI Mode] Executing job {job_id}: agent={agent},"
+            f" runtime={runtime}, model={model}, task={task[:60]}..."
         )
         self._log_job(
             job_id,
-            f"Executing (AI mode): agent={agent}, runtime={runtime}, model={model}, session={session_id}",
+            f"Executing (AI mode): agent={agent}, runtime={runtime},"
+            f" model={model}, session={session_id}",
         )
 
         self._write_checkpoint(job_id)
@@ -516,7 +525,7 @@ class TaskSchedulerExecutor:
 
             if result.returncode == 0:
                 output = result.stdout.strip()
-                self._log_job(job_id, f"Execution succeeded")
+                self._log_job(job_id, "Execution succeeded")
                 self._save_result(job_id, job["name"], success=True, output=output)
                 logger.info(f"Job {job_id} completed successfully")
 
@@ -585,7 +594,8 @@ class TaskSchedulerExecutor:
         )
 
         logger.info(
-            f"[Command Mode] Executing job {job_id}: working_dir={working_dir}, task={task[:60]}..."
+            f"[Command Mode] Executing job {job_id}: working_dir={working_dir},"
+            f" task={task[:60]}..."
         )
         self._log_job(
             job_id,
@@ -605,7 +615,7 @@ class TaskSchedulerExecutor:
 
             if result.returncode == 0:
                 output = result.stdout.strip()
-                self._log_job(job_id, f"Command executed successfully")
+                self._log_job(job_id, "Command executed successfully")
                 self._save_result(job_id, job["name"], success=True, output=output)
                 logger.info(f"Job {job_id} (command mode) completed successfully")
 
@@ -699,9 +709,7 @@ class TaskSchedulerExecutor:
             compensated_now = now
             drift_compensated = False
             if self._wall_clock_debt > 0:
-                compensated_now = now + timedelta(
-                    seconds=self._wall_clock_debt
-                )
+                compensated_now = now + timedelta(seconds=self._wall_clock_debt)
 
             if next_run > compensated_now:
                 return False
@@ -735,7 +743,8 @@ class TaskSchedulerExecutor:
                 gap = (next_run - now).total_seconds()
                 logger.info(
                     f"Job {job_id} recovered via backward-drift compensation "
-                    f"(next_run {gap:.0f}s in future, debt={self._wall_clock_debt:.1f}s)"
+                    f"(next_run {gap:.0f}s in future,"
+                    f" debt={self._wall_clock_debt:.1f}s)"
                 )
                 self._drift_recovered_count += 1
             elif overdue_seconds > _CLOCK_DRIFT_THRESHOLD:
@@ -753,8 +762,8 @@ class TaskSchedulerExecutor:
             return False
 
     def _calculate_next_run(self, job: Dict) -> Optional[str]:
-        """Calculate next run time using cron (preferred) or schedule string fallback."""
-        # Prefer cron expression (set during job creation via AI or deterministic conversion)
+        """Calculate next run using cron (preferred) or schedule string fallback."""
+        # Prefer cron expression (set during job creation via AI or conversion)
         cron_expr = job.get("cron") if isinstance(job, dict) else None
         if cron_expr and is_valid_cron(cron_expr):
             next_run = cron_next_run(cron_expr)
@@ -768,7 +777,7 @@ class TaskSchedulerExecutor:
             if next_run:
                 return next_run
 
-        logger.warning(f"Could not calculate next run for job")
+        logger.warning("Could not calculate next run for job")
         return None
 
     def _recalculate_stale_jobs(self, data: Dict) -> Dict[str, Dict]:
@@ -843,7 +852,7 @@ class TaskSchedulerExecutor:
         double-execution after backward clock jumps.
         """
         # --- clock drift detection ---
-        drift = self._detect_clock_drift()
+        self._detect_clock_drift()
 
         if self._wall_clock_debt > 0:
             logger.debug(
@@ -876,7 +885,7 @@ class TaskSchedulerExecutor:
             self._job_last_exec_mono[job_id] = time.monotonic()
 
             # Execute the job
-            result = self._execute_task(job)
+            self._execute_task(job)
 
             # Update job record
             now = datetime.now(timezone.utc)

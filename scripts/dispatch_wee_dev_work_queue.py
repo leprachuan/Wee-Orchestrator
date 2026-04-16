@@ -11,14 +11,13 @@ GitHub Issues are the source of truth as of 2026-04-04.
 import argparse
 import json
 import os
-import re
-import uuid
 import ssl
 import subprocess
 import sys
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from urllib import error, request
+from urllib import request
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -85,9 +84,7 @@ def log(msg: str) -> None:
 def gh(*args: str, check: bool = True) -> str:
     """Run a ``gh`` command and return stdout."""
     cmd = ["gh"] + list(args)
-    result = subprocess.run(
-        cmd, capture_output=True, text=True, timeout=60
-    )
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
     if check and result.returncode != 0:
         raise RuntimeError(
             f"gh command failed ({result.returncode}): "
@@ -101,17 +98,22 @@ def ensure_labels() -> None:
     existing_raw = gh(
         "label", "list", "--repo", REPO, "--limit", "200", "--json", "name"
     )
-    existing = {l["name"] for l in json.loads(existing_raw)}
+    existing = {lbl["name"] for lbl in json.loads(existing_raw)}
     for name, colour in REQUIRED_LABELS.items():
         if name not in existing:
             if DRY_RUN:
                 log(f"[dry-run] Would create label {name!r} (#{colour})")
                 continue
             gh(
-                "label", "create", name,
-                "--repo", REPO,
-                "--color", colour,
-                "--description", f"wee-dev work queue status: {name}",
+                "label",
+                "create",
+                name,
+                "--repo",
+                REPO,
+                "--color",
+                colour,
+                "--description",
+                f"wee-dev work queue status: {name}",
                 "--force",
             )
             log(f"Created label {name!r}")
@@ -120,11 +122,16 @@ def ensure_labels() -> None:
 def fetch_github_issues() -> list[dict]:
     """Fetch open issues labelled ``wee-dev`` and return work-item dicts."""
     raw = gh(
-        "issue", "list",
-        "--repo", REPO,
-        "--label", "wee-dev",
-        "--state", "open",
-        "--limit", "100",
+        "issue",
+        "list",
+        "--repo",
+        REPO,
+        "--label",
+        "wee-dev",
+        "--state",
+        "open",
+        "--limit",
+        "100",
         "--json",
         "number,title,labels,body,author,createdAt,updatedAt",
     )
@@ -139,7 +146,7 @@ def fetch_github_issues() -> list[dict]:
 
 def _issue_to_work_item(issue: dict) -> dict:
     """Map a GitHub issue JSON object to the internal work-item dict."""
-    label_names = {l["name"] for l in issue.get("labels", [])}
+    label_names = {lbl["name"] for lbl in issue.get("labels", [])}
     status = "queued"  # default for open issues
     for label, mapped_status in STATUS_LABEL_PRIORITY:
         if label in label_names:
@@ -169,9 +176,13 @@ def add_label(issue_number: int, label: str) -> None:
         log(f"[dry-run] Would add label {label!r} to #{issue_number}")
         return
     gh(
-        "issue", "edit", str(issue_number),
-        "--repo", REPO,
-        "--add-label", label,
+        "issue",
+        "edit",
+        str(issue_number),
+        "--repo",
+        REPO,
+        "--add-label",
+        label,
     )
 
 
@@ -180,9 +191,13 @@ def remove_label(issue_number: int, label: str) -> None:
         log(f"[dry-run] Would remove label {label!r} from #{issue_number}")
         return
     gh(
-        "issue", "edit", str(issue_number),
-        "--repo", REPO,
-        "--remove-label", label,
+        "issue",
+        "edit",
+        str(issue_number),
+        "--repo",
+        REPO,
+        "--remove-label",
+        label,
         check=False,  # label may not be present — that's OK
     )
 
@@ -192,9 +207,13 @@ def add_comment(issue_number: int, body: str) -> None:
         log(f"[dry-run] Would comment on #{issue_number}: {body[:80]}...")
         return
     gh(
-        "issue", "comment", str(issue_number),
-        "--repo", REPO,
-        "--body", body,
+        "issue",
+        "comment",
+        str(issue_number),
+        "--repo",
+        REPO,
+        "--body",
+        body,
     )
 
 
@@ -203,9 +222,13 @@ def close_issue(issue_number: int, comment: str) -> None:
         log(f"[dry-run] Would close #{issue_number}")
         return
     gh(
-        "issue", "close", str(issue_number),
-        "--repo", REPO,
-        "--comment", comment,
+        "issue",
+        "close",
+        str(issue_number),
+        "--repo",
+        REPO,
+        "--comment",
+        comment,
     )
 
 
@@ -357,10 +380,14 @@ def dispatch_via_subprocess(
     cmd = [
         sys.executable,
         str(AGENT_MANAGER_PATH),
-        "--agent", agent,
-        "--runtime", "copilot",
-        "--model", model,
-        "--config", str(AGENTS_CONFIG_PATH),
+        "--agent",
+        agent,
+        "--runtime",
+        "copilot",
+        "--model",
+        model,
+        "--config",
+        str(AGENTS_CONFIG_PATH),
         prompt,
         sid,
     ]
@@ -476,9 +503,7 @@ def dispatch_wee_qa(item: dict) -> dict:
 # ---------------------------------------------------------------------------
 
 
-def first_with_status(
-    items: list[dict], statuses: set[str]
-) -> dict | None:
+def first_with_status(items: list[dict], statuses: set[str]) -> dict | None:
     for item in items:
         if item["status"] in statuses:
             return item
@@ -526,13 +551,15 @@ def main() -> int:
     # --- Stalled qa-review detection ---
     if active_item and active_item["status"] == "qa-review":
         if has_running_wee_qa_task():
-            write_lock({
-                "state": "qa-review",
-                "reason": "Waiting for wee-qa to finish review.",
-                "work_item_id": active_item["id"],
-                "work_item_title": active_item["title"],
-                "github_issue": active_item["number"],
-            })
+            write_lock(
+                {
+                    "state": "qa-review",
+                    "reason": "Waiting for wee-qa to finish review.",
+                    "work_item_id": active_item["id"],
+                    "work_item_title": active_item["title"],
+                    "github_issue": active_item["number"],
+                }
+            )
             log(f"wee-qa is actively reviewing {active_item['id']} — no action.")
             return 0
 
@@ -546,14 +573,16 @@ def main() -> int:
         except OSError as exc:
             log(f"Failed to re-dispatch wee-qa subprocess: {exc}")
             return 1
-        write_lock({
-            "state": "qa-review",
-            "reason": "wee-qa re-dispatched by stall detector.",
-            "work_item_id": active_item["id"],
-            "work_item_title": active_item["title"],
-            "github_issue": active_item["number"],
-            "wee_qa_pid": result.get("pid"),
-        })
+        write_lock(
+            {
+                "state": "qa-review",
+                "reason": "wee-qa re-dispatched by stall detector.",
+                "work_item_id": active_item["id"],
+                "work_item_title": active_item["title"],
+                "github_issue": active_item["number"],
+                "wee_qa_pid": result.get("pid"),
+            }
+        )
         log(
             f"Re-dispatched wee-qa subprocess PID={result.get('pid')} "
             f"for {active_item['id']}."
@@ -602,16 +631,18 @@ def main() -> int:
             f"{active_item['status']!r} state — blocking new issue dispatch. "
             f"wee-dev must wait for QA verdict before dequeuing."
         )
-        write_lock({
-            "state": "qa-gate-blocked",
-            "reason": (
-                f"QA gate blocked: {active_item['id']} is {active_item['status']}. "
-                f"wee-dev must wait for QA approval before picking up a new issue."
-            ),
-            "work_item_id": active_item["id"],
-            "work_item_title": active_item["title"],
-            "github_issue": active_item["number"],
-        })
+        write_lock(
+            {
+                "state": "qa-gate-blocked",
+                "reason": (
+                    f"QA gate blocked: {active_item['id']} is {active_item['status']}. "
+                    f"wee-dev must wait for QA approval before picking up a new issue."
+                ),
+                "work_item_id": active_item["id"],
+                "work_item_title": active_item["title"],
+                "github_issue": active_item["number"],
+            }
+        )
         return 0
 
     # --- Nothing to do ---
@@ -619,8 +650,16 @@ def main() -> int:
         log("No actionable issues (all may be in-progress/qa-review).")
         return 0
 
-    if next_item is None and not actionable and active_item and active_item["status"] not in ACTIONABLE_STATUSES:
-        log(f"Active item {active_item['id']} is {active_item['status']} — nothing to dispatch.")
+    if (
+        next_item is None
+        and not actionable
+        and active_item
+        and active_item["status"] not in ACTIONABLE_STATUSES
+    ):
+        log(
+            f"Active item {active_item['id']} is"
+            f" {active_item['status']} — nothing to dispatch."
+        )
         return 0
 
     # --- Pick next work item ---
@@ -658,13 +697,15 @@ def main() -> int:
     if existing_lock:
         clear_lock()
 
-    if not create_lock({
-        "state": "dispatching",
-        "reason": "Dispatching wee-dev for the next work item.",
-        "work_item_id": next_item["id"],
-        "work_item_title": next_item["title"],
-        "github_issue": next_item["number"],
-    }):
+    if not create_lock(
+        {
+            "state": "dispatching",
+            "reason": "Dispatching wee-dev for the next work item.",
+            "work_item_id": next_item["id"],
+            "work_item_title": next_item["title"],
+            "github_issue": next_item["number"],
+        }
+    ):
         log("Work queue lock already exists; skipping dispatch.")
         return 0
 
@@ -692,14 +733,16 @@ def main() -> int:
         clear_lock()
         raise
 
-    write_lock({
-        "state": "wee-dev-running",
-        "reason": "wee-dev dispatched from the work queue runner.",
-        "work_item_id": next_item["id"],
-        "work_item_title": next_item["title"],
-        "github_issue": next_item["number"],
-        "wee_dev_pid": result.get("pid"),
-    })
+    write_lock(
+        {
+            "state": "wee-dev-running",
+            "reason": "wee-dev dispatched from the work queue runner.",
+            "work_item_id": next_item["id"],
+            "work_item_title": next_item["title"],
+            "github_issue": next_item["number"],
+            "wee_dev_pid": result.get("pid"),
+        }
+    )
     log(
         f"Dispatched wee-dev subprocess PID={result.get('pid')} "
         f"for issue {next_item['id']}."
