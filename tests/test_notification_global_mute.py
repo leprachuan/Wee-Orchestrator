@@ -12,11 +12,12 @@ Tests 5-6: Integration tests via production API (port 8000)
 """
 
 import json
-import pytest
 import os
 import sys
 import tempfile
 import time
+
+import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -248,7 +249,7 @@ def test_prefs_file_persistence():
 
 @pytest.mark.skipif(
     os.environ.get("CI") == "true" or os.environ.get("GITHUB_ACTIONS") == "true",
-    reason="Integration test requires running API server"
+    reason="Integration test requires running API server",
 )
 def test_api_notifications_off_sets_global_mute():
     """Sending /notifications off via API sets _global mute in prefs file."""
@@ -327,7 +328,7 @@ def test_api_notifications_off_sets_global_mute():
 
 @pytest.mark.skipif(
     os.environ.get("CI") == "true" or os.environ.get("GITHUB_ACTIONS") == "true",
-    reason="Integration test requires running API server"
+    reason="Integration test requires running API server",
 )
 def test_api_cross_channel_mute_blocks_notification():
     """Mute from WebUI blocks notifications for Telegram-originated bg tasks."""

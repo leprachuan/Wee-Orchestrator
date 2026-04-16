@@ -5,11 +5,11 @@ Regression tests for Issue #142:
 3. Background task tool call JSON tracking from wee_runtime.py
 """
 
-import json
-import sys
-import types
+import json  # noqa: F401
+import sys  # noqa: F401
+import types  # noqa: F401
 import unittest
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, patch  # noqa: F401
 
 
 class TestIssue142WeeModelsDynamic(unittest.TestCase):
@@ -18,13 +18,13 @@ class TestIssue142WeeModelsDynamic(unittest.TestCase):
     def _make_manager(self):
         """Return a minimal CopilotManager-like object for testing fetch_wee_models."""
         import importlib.util
-        import os
+        import os  # noqa: F401
 
         spec = importlib.util.spec_from_file_location(
             "agent_manager",
             "/opt/n8n-copilot-shim-dev/agent_manager.py",
         )
-        mod = (
+        _ = (
             importlib.util.load_from_spec(spec)
             if hasattr(spec, "load_from_spec")
             else None
@@ -90,13 +90,13 @@ class TestIssue142WeeModelsDynamic(unittest.TestCase):
 
 
 class TestIssue142ToolCallSSEEvents(unittest.TestCase):
-    """Bug 2: tc_start_event and tc_done_event must have correct event/input/output fields."""
+    """Bug 2: tc_start_event and tc_done_event must have correct event/input/output fields."""  # noqa: E501
 
     def setUp(self):
         """Load agent_manager module for inspection."""
         import importlib.util
 
-        spec = importlib.util.spec_from_file_location(
+        _ = importlib.util.spec_from_file_location(
             "agent_manager_142",
             "/opt/n8n-copilot-shim-dev/agent_manager.py",
         )
@@ -146,7 +146,7 @@ class TestIssue142ToolCallSSEEvents(unittest.TestCase):
         self.assertNotIn('"arguments"', block, "tc_done_event must not use 'arguments'")
 
     def test_tc_done_event_no_standalone_result_field(self):
-        """tc_done_event must not use 'result' as a data field key (renamed to 'output')."""
+        """tc_done_event must not use 'result' as a data field key (renamed to 'output')."""  # noqa: E501
         import re
 
         # Find the tc_done_event block specifically
@@ -230,7 +230,7 @@ class TestIssue142WeeRuntimeStructuredOutput(unittest.TestCase):
         )
 
     def test_bg_task_loop_calls_append_tool_call(self):
-        """Background task loop must call bg_task_mgr.append_tool_call for wee start events."""
+        """Background task loop must call bg_task_mgr.append_tool_call for wee start events."""  # noqa: E501
         with open("/opt/n8n-copilot-shim-dev/agent_manager.py") as f:
             src = f.read()
         # Find the __wee_tc__ handler block

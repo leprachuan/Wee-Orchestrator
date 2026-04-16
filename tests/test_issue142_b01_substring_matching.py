@@ -1,4 +1,4 @@
-"""Regression test for Issue #142 B01: Substring matching too permissive for wee runtime.
+"""Regression test for Issue #142 B01: Substring matching too permissive for wee runtime.  # noqa: E501
 
 When OpenRouter has 349+ models including multi-namespace ones like
 'openrouter/openai/gpt-5-mini', substring matching should NOT match
@@ -9,8 +9,10 @@ The fix: For wee runtime, skip substring matching on models with 2+ slashes
 matches (1 slash like 'ollama/model').
 """
 
-import pytest
 from unittest.mock import patch
+
+import pytest
+
 from agent_manager import SessionManager
 
 

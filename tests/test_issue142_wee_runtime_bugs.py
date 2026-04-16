@@ -10,9 +10,9 @@ Three sub-bugs:
 import json
 import os
 import sys
-import time
-import types
-from unittest.mock import MagicMock, patch, PropertyMock
+import time  # noqa: F401
+import types  # noqa: F401
+from unittest.mock import MagicMock, PropertyMock, patch  # noqa: F401
 
 import pytest
 
@@ -57,7 +57,7 @@ class TestBug1OpenRouterDynamicModels:
     from the API rather than using a hardcoded static list."""
 
     def test_fetch_wee_models_calls_openrouter_api(self, session_mgr):
-        """fetch_wee_models should hit openrouter.ai/api/v1/models when key is available."""
+        """fetch_wee_models should hit openrouter.ai/api/v1/models when key is available."""  # noqa: E501
         fake_response = json.dumps(
             {
                 "data": [
@@ -79,7 +79,7 @@ class TestBug1OpenRouterDynamicModels:
             patch.dict(os.environ, {"OPENROUTER_API_KEY": "test-key-123"}),
             patch("urllib.request.urlopen", return_value=mock_resp) as mock_urlopen,
         ):
-            result = session_mgr.fetch_wee_models()
+            session_mgr.fetch_wee_models()
 
         # Verify API was called with correct URL and auth header
         mock_urlopen.assert_called_once()
@@ -137,7 +137,7 @@ class TestBug1OpenRouterDynamicModels:
         assert "OpenRouter Models" in result
 
     def test_models_api_includes_group_field(self, session_mgr):
-        """The /api/v1/models response must include a 'group' field for optgroup rendering."""
+        """The /api/v1/models response must include a 'group' field for optgroup rendering."""  # noqa: E501
         # Use static models (no live fetch)
         with (
             patch("httpx.get", side_effect=Exception("skip")),
@@ -171,11 +171,11 @@ class TestBug1OpenRouterDynamicModels:
             patch("urllib.request.urlopen", return_value=mock_resp) as mock_fetch,
         ):
             # First call should fetch
-            result1 = session_mgr.fetch_wee_models()
+            session_mgr.fetch_wee_models()
             assert mock_fetch.call_count == 1
 
             # Second call should use cache
-            result2 = session_mgr.fetch_wee_models()
+            session_mgr.fetch_wee_models()
             assert mock_fetch.call_count == 1  # Not called again
 
     def test_openrouter_popular_models_prioritized(self, session_mgr):
@@ -334,6 +334,7 @@ class TestBug3BgTaskToolTracking:
         """_execute_background_task must store task_id in session data."""
         # Verify source code stores bg_task_id
         import inspect
+
         from agent_manager import SessionManager
 
         source = inspect.getsource(SessionManager._execute_background_task)
@@ -348,6 +349,7 @@ class TestBug3BgTaskToolTracking:
     def test_bg_task_id_stored_before_execute(self, session_mgr):
         """bg_task_id should be set before self.execute() is called."""
         import inspect
+
         from agent_manager import SessionManager
 
         source = inspect.getsource(SessionManager._execute_background_task)
@@ -363,6 +365,7 @@ class TestBug3BgTaskToolTracking:
     def test_run_wee_native_reads_bg_task_id(self):
         """run_wee_native should read bg_task_id from session data."""
         import inspect
+
         from agent_manager import SessionManager
 
         source = inspect.getsource(SessionManager.run_wee_native)
@@ -374,8 +377,9 @@ class TestBug3BgTaskToolTracking:
         ), "Should use session_data.get('bg_task_id') to retrieve task ID"
 
     def test_run_wee_native_calls_append_tool_call(self):
-        """run_wee_native must call bg_task_mgr.append_tool_call when bg_task_id is set."""
+        """run_wee_native must call bg_task_mgr.append_tool_call when bg_task_id is set."""  # noqa: E501
         import inspect
+
         from agent_manager import SessionManager
 
         source = inspect.getsource(SessionManager.run_wee_native)
@@ -389,6 +393,7 @@ class TestBug3BgTaskToolTracking:
     def test_run_wee_native_calls_update_tool_call(self):
         """run_wee_native must call bg_task_mgr.update_tool_call on tool completion."""
         import inspect
+
         from agent_manager import SessionManager
 
         source = inspect.getsource(SessionManager.run_wee_native)
@@ -397,8 +402,9 @@ class TestBug3BgTaskToolTracking:
         ), "run_wee_native must call bg_task_mgr.update_tool_call on completion"
 
     def test_append_tool_call_includes_required_fields(self):
-        """Tool call appended to bg_task_mgr must have id, name, input, status, runtime."""
+        """Tool call appended to bg_task_mgr must have id, name, input, status, runtime."""  # noqa: E501
         import inspect
+
         from agent_manager import SessionManager
 
         source = inspect.getsource(SessionManager.run_wee_native)
@@ -412,6 +418,7 @@ class TestBug3BgTaskToolTracking:
     def test_update_tool_call_sets_output(self):
         """update_tool_call must set output field for Tools tab expansion."""
         import inspect
+
         from agent_manager import SessionManager
 
         source = inspect.getsource(SessionManager.run_wee_native)
@@ -491,9 +498,10 @@ class TestBug3BgTaskToolTracking:
         assert tc["output"] == "hello world"
 
     def test_no_tracking_when_no_bg_task_id(self):
-        """When bg_task_id is None (interactive session), bg_task_mgr should NOT be called."""
+        """When bg_task_id is None (interactive session), bg_task_mgr should NOT be called."""  # noqa: E501
         # The guard condition ensures no tracking without bg_task_id
         import inspect
+
         from agent_manager import SessionManager
 
         source = inspect.getsource(SessionManager.run_wee_native)
@@ -505,6 +513,7 @@ class TestBug3BgTaskToolTracking:
     def test_guard_condition_prevents_tracking_without_mgr(self):
         """Tool tracking must be guarded by both bg_task_id and self._bg_task_mgr."""
         import inspect
+
         from agent_manager import SessionManager
 
         source = inspect.getsource(SessionManager.run_wee_native)
@@ -593,6 +602,7 @@ class TestIssue142Integration:
     def test_execute_bg_task_full_flow(self):
         """Full background task flow: task_id stored → retrieved in wee native."""
         import inspect
+
         from agent_manager import SessionManager
 
         # Step 1: _execute_background_task stores bg_task_id
