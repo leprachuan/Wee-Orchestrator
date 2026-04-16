@@ -12,32 +12,21 @@ Usage:
     python3 wee_runtime.py --model ollama/qwen3:8b --tools "ask what day it is"
 """
 
-# noqa: E501
 import argparse
 import json
 import os
 import re
 import subprocess
 import sys
+import time
 
-# noqa: E501
-# noqa: E501
 # Provider presets: prefix → (api_base, default_api_key)
 PROVIDER_PRESETS = {
-    "ollama": (
-        "http://192.168.1.101:11434/v1",
-        "ollama",
-    ),
-    "openrouter": (
-        "https://openrouter.ai/api/v1",
-        None,
-    ),
-    "lmstudio": (
-        "http://localhost:1234/v1",
-        "lm-studio",
-    ),
+    "ollama": ("http://192.168.1.101:11434/v1", "ollama"),
+    "openrouter": ("https://openrouter.ai/api/v1", None),
+    "lmstudio": ("http://localhost:1234/v1", "lm-studio"),
 }
-# noqa: E501
+
 # Tool definitions (Issue #107)
 _WEE_TOOLS = [
     {
@@ -75,20 +64,18 @@ _WEE_TOOLS = [
         },
     },
 ]
-# noqa: E501
+
 MAX_TOOL_ROUNDS = 10
 TOOL_TIMEOUT = 120  # seconds per tool execution
 
 
-# noqa: E501
-# noqa: E501
 def resolve_model_and_endpoint(model: str, api_base: str = None, api_key: str = None):
     """Parse model string and resolve API endpoint.
 
     Model format: [provider/]model_name
     Examples:
         ollama/gemma4:e4b  → api_base=ollama preset, model=gemma4:e4b
-        openrouter/meta-llama/llama-4-scout → api_base=openrouter, model=meta-llama/llama-4-scout  # noqa: E501
+        openrouter/meta-llama/llama-4-scout → api_base=openrouter, model=meta-llama/llama-4-scout
         gemma4:e4b         → use explicit api_base or default to ollama
     """
     resolved_model = model
@@ -96,10 +83,7 @@ def resolve_model_and_endpoint(model: str, api_base: str = None, api_key: str = 
     resolved_key = api_key
 
     # Check for provider prefix
-    for prefix, (
-        preset_base,
-        preset_key,
-    ) in PROVIDER_PRESETS.items():
+    for prefix, (preset_base, preset_key) in PROVIDER_PRESETS.items():
         if model.lower().startswith(f"{prefix}/"):
             resolved_model = model[len(prefix) + 1 :]
             if not resolved_base:
@@ -110,10 +94,7 @@ def resolve_model_and_endpoint(model: str, api_base: str = None, api_key: str = 
 
     # Defaults
     if not resolved_base:
-        resolved_base = os.environ.get(
-            "WEE_API_BASE",
-            "http://192.168.1.101:11434/v1",
-        )
+        resolved_base = os.environ.get("WEE_API_BASE", "http://192.168.1.101:11434/v1")
     if not resolved_key:
         resolved_key = os.environ.get("WEE_API_KEY") or os.environ.get(
             "OPENROUTER_API_KEY"
@@ -129,15 +110,9 @@ def resolve_model_and_endpoint(model: str, api_base: str = None, api_key: str = 
             if not resolved_key:
                 resolved_key = "ollama"
 
-    return (
-        resolved_model,
-        resolved_base,
-        resolved_key,
-    )
+    return resolved_model, resolved_base, resolved_key
 
 
-# noqa: E501
-# noqa: E501
 def execute_tool(func_name: str, func_args: dict) -> str:
     """Execute a tool call and return its output (Issues #107, #111)."""
     try:
@@ -148,11 +123,7 @@ def execute_tool(func_name: str, func_args: dict) -> str:
             # Issue #111: Sanitize SSH commands
             command = sanitize_bash_command(command)
             result = subprocess.run(
-                [
-                    "bash",
-                    "-c",
-                    command,
-                ],
+                ["bash", "-c", command],
                 capture_output=True,
                 text=True,
                 timeout=TOOL_TIMEOUT,
@@ -166,11 +137,7 @@ def execute_tool(func_name: str, func_args: dict) -> str:
             if not code:
                 return "Error: No code provided"
             result = subprocess.run(
-                [
-                    sys.executable,
-                    "-c",
-                    code,
-                ],
+                [sys.executable, "-c", code],
                 capture_output=True,
                 text=True,
                 timeout=TOOL_TIMEOUT,
@@ -191,19 +158,15 @@ def execute_tool(func_name: str, func_args: dict) -> str:
 _SSH_BIN_RE = re.compile(r"\b(ssh|scp|sftp)\b")
 
 
-# noqa: E501
-# noqa: E501
 # Issue #111: SSH sanitization now wired into execute_tool() (resolves #113 TODO).
-def sanitize_bash_command(
-    command: str,
-) -> str:
+def sanitize_bash_command(command: str) -> str:
     """Auto-inject SSH flags to prevent host key verification failures.
 
     Injects ``-o StrictHostKeyChecking=accept-new`` after ssh/scp/sftp
     when the flag is not already present.  ``accept-new`` is preferred
     over ``no`` because it still rejects CHANGED keys (potential MITM).
 
-    Wired into execute_tool() by Issue #111. Called on every bash tool input before execution  # noqa: E501
+    Wired into execute_tool() by Issue #111. Called on every bash tool input before execution
     once wee_runtime.py gains a tool execution loop.
     """
     if not command or not _SSH_BIN_RE.search(command):
@@ -211,16 +174,12 @@ def sanitize_bash_command(
     if "StrictHostKeyChecking" in command:
         return command
 
-    def _inject(
-        m,
-    ):
+    def _inject(m):
         return m.group(0) + " -o StrictHostKeyChecking=accept-new"
 
     return _SSH_BIN_RE.sub(_inject, command, count=0)
 
 
-# noqa: E501
-# noqa: E501
 # Issue #113: Anti-hallucination system prompt addendum
 _ANTI_HALLUCINATION_PROMPT = (
     "\n\n[CRITICAL — Output Integrity Rules]\n"
@@ -233,24 +192,23 @@ _ANTI_HALLUCINATION_PROMPT = (
     "4. For SSH commands: ALWAYS use ``-o StrictHostKeyChecking=accept-new`` to "
     "avoid host-key verification failures on first connect.\n"
 )
-# noqa: E501
+
 # Issue #111: Explicit tool capability prompt for Ollama models.
 # Many Ollama models ignore JSON tool schemas unless the system prompt
 # explicitly tells them about tool availability and usage instructions.
 _WEE_TOOL_CAPABILITY_PROMPT = (
     "\n\n[Tool Capabilities]\n"
     "You have the following tools available. Use them to fulfil user requests.\n\n"
-    '1. **bash** — Execute shell commands. Parameters: {"command": "<shell command>"}\n'  # noqa: E501
+    '1. **bash** — Execute shell commands. Parameters: {"command": "<shell command>"}\n'
     "   Use this for: file operations, system commands, SSH, curl, git, etc.\n"
     '2. **python** — Execute Python code. Parameters: {"code": "<python code>"}\n'
     "   Use this for: data processing, calculations, scripting, etc.\n\n"
     "IMPORTANT: You are NOT sandboxed. You CAN and SHOULD use these tools to execute\n"
     "commands, SSH into remote hosts, read/write files, and interact with the system.\n"
-    "NEVER claim you cannot execute commands or are in a sandbox — use the tools above.\n"  # noqa: E501
+    "NEVER claim you cannot execute commands or are in a sandbox — use the tools above.\n"
 )
 
 
-# noqa: E501
 def main():
     parser = argparse.ArgumentParser(
         description="Wee Native Runtime — OpenAI-compatible chat completions"
@@ -277,15 +235,11 @@ def main():
     args = parser.parse_args()
 
     model, api_base, api_key = resolve_model_and_endpoint(
-        args.model,
-        args.api_base,
-        args.api_key,
+        args.model, args.api_base, args.api_key
     )
 
     try:
-        from openai import (
-            OpenAI,
-        )
+        from openai import OpenAI
     except ImportError:
         print(
             "Error: openai package not installed. Run: pip install openai",
@@ -423,10 +377,7 @@ def main():
                     {
                         "id": tc["id"],
                         "type": "function",
-                        "function": {
-                            "name": tc["name"],
-                            "arguments": tc["arguments"],
-                        },
+                        "function": {"name": tc["name"], "arguments": tc["arguments"]},
                     }
                 )
 
@@ -445,38 +396,41 @@ def main():
 
                 try:
                     func_args = json.loads(func_args_str)
-                except (
-                    ValueError,
-                    json.JSONDecodeError,
-                ):
+                except (ValueError, json.JSONDecodeError):
                     func_args = {"raw": func_args_str}
 
-                func_repr = json.dumps(func_args)[:200]
-                print(f"[Wee] Tool: {func_name}({func_repr})", file=sys.stderr)
-                # Issue #142: Emit structured JSON for bg task tool call tracking
-                tc_start = json.dumps(
-                    {
-                        "__wee_tc__": "start",
-                        "id": tc_id,
-                        "name": func_name,
-                        "input": func_args,
-                    }
+                print(
+                    f"[Wee] Tool: {func_name}({json.dumps(func_args)[:200]})",
+                    file=sys.stderr,
                 )
-                sys.stdout.write(tc_start + "\n")
+                # Issue #142: Emit structured JSON to stdout for bg task tool call tracking
+                sys.stdout.write(
+                    json.dumps(
+                        {
+                            "__wee_tc__": "start",
+                            "id": tc_id,
+                            "name": func_name,
+                            "input": func_args,
+                        }
+                    )
+                    + "\n"
+                )
                 sys.stdout.flush()
 
                 tool_result = execute_tool(func_name, func_args)
 
                 # Issue #142: Emit tool result to stdout
-                tc_done = json.dumps(
-                    {
-                        "__wee_tc__": "done",
-                        "id": tc_id,
-                        "name": func_name,
-                        "output": (tool_result or "")[:500],
-                    }
+                sys.stdout.write(
+                    json.dumps(
+                        {
+                            "__wee_tc__": "done",
+                            "id": tc_id,
+                            "name": func_name,
+                            "output": (tool_result or "")[:500],
+                        }
+                    )
+                    + "\n"
                 )
-                sys.stdout.write(tc_done + "\n")
                 sys.stdout.flush()
 
                 messages.append(
@@ -508,7 +462,5 @@ def main():
         sys.exit(1)
 
 
-# noqa: E501
-# noqa: E501
 if __name__ == "__main__":
     main()
