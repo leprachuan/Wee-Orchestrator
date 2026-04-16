@@ -6,14 +6,13 @@ correctly routes command-mode jobs to direct shell execution instead of
 dispatching them through the LLM pipeline.
 """
 
-import asyncio
-import json
+
 import os
 import sys
-import time
+
 import unittest
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
@@ -150,7 +149,6 @@ class TestRunCommandTaskExecution(unittest.TestCase):
         Since it's defined inside create_api_app(), we need to create the app
         first to access it.
         """
-        import agent_manager
 
         # Create the app which defines _run_command_task in its scope
         # We'll test via the API endpoint instead
@@ -258,7 +256,7 @@ class TestRunNowAPIIntegration(unittest.TestCase):
         app = create_api_app()
 
         # Mock the scheduler to return a command-mode job
-        mock_job = {
+        mock_job = {  # noqa: F841
             "id": "test_cmd_job",
             "name": "Test Command",
             "task": "echo hello",
@@ -270,7 +268,7 @@ class TestRunNowAPIIntegration(unittest.TestCase):
 
         with patch.object(
             app.state.bg_task_mgr, "create_task", return_value={}
-        ) as mock_create:
+        ) as mock_create:  # noqa: F841
 
             async def _run():
                 transport = ASGITransport(app=app)
@@ -283,7 +281,7 @@ class TestRunNowAPIIntegration(unittest.TestCase):
                         return_value=None,
                     ):
                         response = await client.post(
-                            f"/api/v1/scheduler/jobs/test_cmd_job/run",
+                            "/api/v1/scheduler/jobs/test_cmd_job/run",
                             headers={
                                 "Authorization": "Bearer test_key_123",
                             },

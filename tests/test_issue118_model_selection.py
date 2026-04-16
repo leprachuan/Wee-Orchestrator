@@ -56,7 +56,9 @@ class TestWeeModelsConstant:
         """Each model entry must be a (model_id, description, aliases) tuple."""
         for category, entries in session_mgr.WEE_MODELS.items():
             for entry in entries:
-                assert isinstance(entry, tuple), f"Entry in {category} is not a tuple: {entry}"
+                assert isinstance(
+                    entry, tuple
+                ), f"Entry in {category} is not a tuple: {entry}"
                 assert len(entry) == 3, f"Entry should have 3 elements: {entry}"
                 model_id, desc, aliases = entry
                 assert isinstance(model_id, str)
@@ -71,7 +73,7 @@ class TestWeeModelsConstant:
         assert "ollama/gemma4:e4b" in all_ids
 
     def test_wee_models_contains_granite(self, session_mgr):
-        """WEE_MODELS must include granite3.3-tuned (the default that was always used)."""
+        """WEE_MODELS must include granite3.3-tuned (the default that was always used)."""  # noqa: E501
         all_ids = [
             mid for entries in session_mgr.WEE_MODELS.values() for mid, _, _ in entries
         ]
@@ -94,9 +96,9 @@ class TestGetModelsForRuntimeWee:
         result = session_mgr.get_models_for_runtime("wee")
         for category, model_ids in result.items():
             for mid in model_ids:
-                assert isinstance(mid, str), (
-                    f"Model ID in {category} is {type(mid).__name__}, not str: {mid}"
-                )
+                assert isinstance(
+                    mid, str
+                ), f"Model ID in {category} is {type(mid).__name__}, not str: {mid}"
 
     def test_contains_gemma_model(self, session_mgr):
         """Result must include ollama/gemma4:e4b."""
@@ -200,7 +202,6 @@ class TestKnownRuntimes:
 
     def test_wee_in_known_runtimes(self):
         """'wee' must appear in the known_runtimes set in get_models endpoint."""
-        import ast
         import inspect
 
         from agent_manager import SessionManager
@@ -227,24 +228,21 @@ class TestSessionValidationWee:
 
     def test_empty_model_gets_default(self, session_mgr):
         """When model is empty for wee runtime, default should be set."""
-        from unittest.mock import PropertyMock
 
         session_data = {"runtime": "wee", "model": ""}
         # Simulate the validation logic
-        runtime = "wee"
+        runtime = "wee"  # noqa: F841
         current_model = session_data.get("model", "")
         if not current_model or not session_mgr.get_model_from_name(
             current_model, "wee"
         ):
-            session_data["model"] = os.getenv(
-                "WEE_DEFAULT_MODEL", "ollama/gemma4:e4b"
-            )
+            session_data["model"] = os.getenv("WEE_DEFAULT_MODEL", "ollama/gemma4:e4b")
         assert session_data["model"] == "ollama/gemma4:e4b"
 
     def test_valid_model_preserved(self, session_mgr):
         """When a valid wee model is set, it should be preserved."""
         session_data = {"runtime": "wee", "model": "ollama/gemma4:e4b"}
-        runtime = "wee"
+        runtime = "wee"  # noqa: F841
         current_model = session_data.get("model", "")
         if not current_model or not session_mgr.get_model_from_name(
             current_model, "wee"
@@ -255,13 +253,11 @@ class TestSessionValidationWee:
     def test_stale_copilot_model_replaced(self, session_mgr):
         """A stale copilot model (e.g. gpt-5-mini) should be replaced for wee."""
         session_data = {"runtime": "wee", "model": "gpt-5-mini"}
-        runtime = "wee"
+        runtime = "wee"  # noqa: F841
         current_model = session_data.get("model", "")
         resolved = session_mgr.get_model_from_name(current_model, "wee")
         if not current_model or not resolved:
-            session_data["model"] = os.getenv(
-                "WEE_DEFAULT_MODEL", "ollama/gemma4:e4b"
-            )
+            session_data["model"] = os.getenv("WEE_DEFAULT_MODEL", "ollama/gemma4:e4b")
         # gpt-5-mini is not a wee model, so it should be replaced
         assert session_data["model"] == "ollama/gemma4:e4b"
 

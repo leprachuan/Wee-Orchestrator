@@ -10,7 +10,6 @@ Tests the full tool-calling agentic loop:
 7. wee_runtime.py standalone tool calling
 """
 
-import json
 import os
 import sys
 import threading
@@ -67,6 +66,7 @@ def make_tool_call_stream(tool_calls):
 
 def _create_test_manager():
     from agent_manager import SessionManager
+
     mgr = SessionManager.__new__(SessionManager)
     mgr.session_map = {}
     mgr._session_map_lock = threading.Lock()
@@ -86,13 +86,17 @@ def _create_test_manager():
 class TestOllamaPortCorrectness(unittest.TestCase):
 
     def test_agent_manager_presets_port(self):
-        with open(os.path.join(os.path.dirname(os.path.dirname(__file__)), "agent_manager.py")) as f:
+        with open(
+            os.path.join(os.path.dirname(os.path.dirname(__file__)), "agent_manager.py")
+        ) as f:
             content = f.read()
         self.assertIn('"http://192.168.1.101:11434/v1"', content)
         self.assertNotIn("11436", content)
 
     def test_wee_runtime_presets_port(self):
-        with open(os.path.join(os.path.dirname(os.path.dirname(__file__)), "wee_runtime.py")) as f:
+        with open(
+            os.path.join(os.path.dirname(os.path.dirname(__file__)), "wee_runtime.py")
+        ) as f:
             content = f.read()
         self.assertIn('"http://192.168.1.101:11434/v1"', content)
         self.assertNotIn("11436", content)
@@ -111,14 +115,20 @@ class TestToolCallDetection(unittest.TestCase):
                     idx = tc_delta.index
                     if idx not in tool_calls_acc:
                         tc_counter += 1
-                        tool_calls_acc[idx] = {"id": getattr(tc_delta, "id", None) or f"tc_{tc_counter}", "name": "", "arguments": ""}
+                        tool_calls_acc[idx] = {
+                            "id": getattr(tc_delta, "id", None) or f"tc_{tc_counter}",
+                            "name": "",
+                            "arguments": "",
+                        }
                     if tc_delta.id:
                         tool_calls_acc[idx]["id"] = tc_delta.id
                     if tc_delta.function:
                         if tc_delta.function.name:
                             tool_calls_acc[idx]["name"] = tc_delta.function.name
                         if tc_delta.function.arguments:
-                            tool_calls_acc[idx]["arguments"] += tc_delta.function.arguments
+                            tool_calls_acc[idx][
+                                "arguments"
+                            ] += tc_delta.function.arguments
         self.assertEqual(len(tool_calls_acc), 1)
         self.assertEqual(tool_calls_acc[0]["name"], "bash")
         self.assertEqual(tool_calls_acc[0]["arguments"], '{"command": "date"}')
@@ -126,10 +136,12 @@ class TestToolCallDetection(unittest.TestCase):
     def test_multiple_tool_calls(self):
         tool_calls_acc = {}
         tc_counter = 0
-        stream = make_tool_call_stream([
-            ("c1", "bash", '{"command": "date"}'),
-            ("c2", "python", '{"code": "print(42)"}'),
-        ])
+        stream = make_tool_call_stream(
+            [
+                ("c1", "bash", '{"command": "date"}'),
+                ("c2", "python", '{"code": "print(42)"}'),
+            ]
+        )
         for chunk in stream:
             delta = chunk.choices[0].delta
             if getattr(delta, "tool_calls", None):
@@ -137,14 +149,20 @@ class TestToolCallDetection(unittest.TestCase):
                     idx = tc_delta.index
                     if idx not in tool_calls_acc:
                         tc_counter += 1
-                        tool_calls_acc[idx] = {"id": getattr(tc_delta, "id", None) or f"tc_{tc_counter}", "name": "", "arguments": ""}
+                        tool_calls_acc[idx] = {
+                            "id": getattr(tc_delta, "id", None) or f"tc_{tc_counter}",
+                            "name": "",
+                            "arguments": "",
+                        }
                     if tc_delta.id:
                         tool_calls_acc[idx]["id"] = tc_delta.id
                     if tc_delta.function:
                         if tc_delta.function.name:
                             tool_calls_acc[idx]["name"] = tc_delta.function.name
                         if tc_delta.function.arguments:
-                            tool_calls_acc[idx]["arguments"] += tc_delta.function.arguments
+                            tool_calls_acc[idx][
+                                "arguments"
+                            ] += tc_delta.function.arguments
         self.assertEqual(len(tool_calls_acc), 2)
         self.assertEqual(tool_calls_acc[0]["name"], "bash")
         self.assertEqual(tool_calls_acc[1]["name"], "python")
@@ -168,26 +186,32 @@ class TestToolExecution(unittest.TestCase):
 
     def test_bash_tool(self):
         from wee_runtime import execute_tool
+
         self.assertEqual(execute_tool("bash", {"command": "echo hello"}), "hello")
 
     def test_python_tool(self):
         from wee_runtime import execute_tool
+
         self.assertEqual(execute_tool("python", {"code": "print(2 + 2)"}), "4")
 
     def test_unknown_tool(self):
         from wee_runtime import execute_tool
+
         self.assertIn("Error: Unknown tool", execute_tool("unknown", {}))
 
     def test_empty_command(self):
         from wee_runtime import execute_tool
+
         self.assertIn("Error: No command", execute_tool("bash", {"command": ""}))
 
     def test_empty_code(self):
         from wee_runtime import execute_tool
+
         self.assertIn("Error: No code", execute_tool("python", {"code": ""}))
 
     def test_bash_stderr(self):
         from wee_runtime import execute_tool
+
         result = execute_tool("bash", {"command": "echo err >&2 && exit 1"})
         self.assertIn("STDERR", result)
 
@@ -203,14 +227,26 @@ class TestAgenticLoop(unittest.TestCase):
             iter(list(make_text_stream("Today is Friday"))),
         ]
         mgr = _create_test_manager()
-        with patch.object(mgr, "get_or_create_session_data", return_value={"channel": "api"}), \
-             patch.object(mgr, "build_agent_context_prompt", return_value="ctx"), \
-             patch.object(mgr, "_wee_execute_tool", return_value="Fri Jul 11"), \
-             patch.object(mgr, "_wee_load_messages", return_value=[{"role": "system", "content": "ctx"}]), \
-             patch.object(mgr, "_wee_save_messages"):
+        with (
+            patch.object(
+                mgr, "get_or_create_session_data", return_value={"channel": "api"}
+            ),
+            patch.object(mgr, "build_agent_context_prompt", return_value="ctx"),
+            patch.object(mgr, "_wee_execute_tool", return_value="Fri Jul 11"),
+            patch.object(
+                mgr,
+                "_wee_load_messages",
+                return_value=[{"role": "system", "content": "ctx"}],
+            ),
+            patch.object(mgr, "_wee_save_messages"),
+        ):
             result = mgr.run_wee_native(
-                model="qwen3:8b", prompt="What day?", agent="orchestrator",
-                session_id=None, resume=True, n8n_session_id="t107_1",
+                model="qwen3:8b",
+                prompt="What day?",
+                agent="orchestrator",
+                session_id=None,
+                resume=True,
+                n8n_session_id="t107_1",
             )
         self.assertEqual(result, "Today is Friday")
         self.assertEqual(mock_client.chat.completions.create.call_count, 2)
@@ -219,15 +255,25 @@ class TestAgenticLoop(unittest.TestCase):
     def test_no_tool_calls_direct(self, mock_cls):
         mock_client = MagicMock()
         mock_cls.return_value = mock_client
-        mock_client.chat.completions.create.return_value = iter(list(make_text_stream("Simple")))
+        mock_client.chat.completions.create.return_value = iter(
+            list(make_text_stream("Simple"))
+        )
         mgr = _create_test_manager()
-        with patch.object(mgr, "get_or_create_session_data", return_value={"channel": "api"}), \
-             patch.object(mgr, "build_agent_context_prompt", return_value=""), \
-             patch.object(mgr, "_wee_load_messages", return_value=[]), \
-             patch.object(mgr, "_wee_save_messages"):
+        with (
+            patch.object(
+                mgr, "get_or_create_session_data", return_value={"channel": "api"}
+            ),
+            patch.object(mgr, "build_agent_context_prompt", return_value=""),
+            patch.object(mgr, "_wee_load_messages", return_value=[]),
+            patch.object(mgr, "_wee_save_messages"),
+        ):
             result = mgr.run_wee_native(
-                model="qwen3:8b", prompt="Hi", agent="orchestrator",
-                session_id=None, resume=True, n8n_session_id="t107_2",
+                model="qwen3:8b",
+                prompt="Hi",
+                agent="orchestrator",
+                session_id=None,
+                resume=True,
+                n8n_session_id="t107_2",
             )
         self.assertEqual(result, "Simple")
         self.assertEqual(mock_client.chat.completions.create.call_count, 1)
@@ -237,21 +283,37 @@ class TestAgenticLoop(unittest.TestCase):
         mock_client = MagicMock()
         mock_cls.return_value = mock_client
         mock_client.chat.completions.create.side_effect = [
-            iter(list(make_tool_call_stream([("call_42", "bash", '{"command": "whoami"}')]))),
+            iter(
+                list(
+                    make_tool_call_stream(
+                        [("call_42", "bash", '{"command": "whoami"}')]
+                    )
+                )
+            ),
             iter(list(make_text_stream("root"))),
         ]
         mgr = _create_test_manager()
         saved = []
+
         def capture(sid, msgs):
             saved.extend(msgs)
-        with patch.object(mgr, "get_or_create_session_data", return_value={"channel": "api"}), \
-             patch.object(mgr, "build_agent_context_prompt", return_value=""), \
-             patch.object(mgr, "_wee_execute_tool", return_value="root"), \
-             patch.object(mgr, "_wee_load_messages", return_value=[]), \
-             patch.object(mgr, "_wee_save_messages", side_effect=capture):
+
+        with (
+            patch.object(
+                mgr, "get_or_create_session_data", return_value={"channel": "api"}
+            ),
+            patch.object(mgr, "build_agent_context_prompt", return_value=""),
+            patch.object(mgr, "_wee_execute_tool", return_value="root"),
+            patch.object(mgr, "_wee_load_messages", return_value=[]),
+            patch.object(mgr, "_wee_save_messages", side_effect=capture),
+        ):
             mgr.run_wee_native(
-                model="qwen3:8b", prompt="whoami", agent="orchestrator",
-                session_id=None, resume=True, n8n_session_id="t107_3",
+                model="qwen3:8b",
+                prompt="whoami",
+                agent="orchestrator",
+                session_id=None,
+                resume=True,
+                n8n_session_id="t107_3",
             )
         tool_msgs = [m for m in saved if m.get("role") == "tool"]
         self.assertTrue(len(tool_msgs) >= 1)
@@ -263,25 +325,41 @@ class TestAgenticLoop(unittest.TestCase):
         mock_client = MagicMock()
         mock_cls.return_value = mock_client
         mock_client.chat.completions.create.side_effect = [
-            iter(list(make_tool_call_stream([
-                ("ca", "bash", '{"command": "date"}'),
-                ("cb", "python", '{"code": "print(42)"}'),
-            ]))),
+            iter(
+                list(
+                    make_tool_call_stream(
+                        [
+                            ("ca", "bash", '{"command": "date"}'),
+                            ("cb", "python", '{"code": "print(42)"}'),
+                        ]
+                    )
+                )
+            ),
             iter(list(make_text_stream("Done"))),
         ]
         mgr = _create_test_manager()
         calls = []
+
         def track(fn, fa, ag):
             calls.append(fn)
             return "r"
-        with patch.object(mgr, "get_or_create_session_data", return_value={"channel": "api"}), \
-             patch.object(mgr, "build_agent_context_prompt", return_value=""), \
-             patch.object(mgr, "_wee_execute_tool", side_effect=track), \
-             patch.object(mgr, "_wee_load_messages", return_value=[]), \
-             patch.object(mgr, "_wee_save_messages"):
+
+        with (
+            patch.object(
+                mgr, "get_or_create_session_data", return_value={"channel": "api"}
+            ),
+            patch.object(mgr, "build_agent_context_prompt", return_value=""),
+            patch.object(mgr, "_wee_execute_tool", side_effect=track),
+            patch.object(mgr, "_wee_load_messages", return_value=[]),
+            patch.object(mgr, "_wee_save_messages"),
+        ):
             result = mgr.run_wee_native(
-                model="qwen3:8b", prompt="two things", agent="orchestrator",
-                session_id=None, resume=True, n8n_session_id="t107_4",
+                model="qwen3:8b",
+                prompt="two things",
+                agent="orchestrator",
+                session_id=None,
+                resume=True,
+                n8n_session_id="t107_4",
             )
         self.assertEqual(len(calls), 2)
         self.assertEqual(result, "Done")
@@ -298,14 +376,22 @@ class TestMaxRoundsSafetyNet(unittest.TestCase):
             for _ in range(12)
         ]
         mgr = _create_test_manager()
-        with patch.object(mgr, "get_or_create_session_data", return_value={"channel": "api"}), \
-             patch.object(mgr, "build_agent_context_prompt", return_value=""), \
-             patch.object(mgr, "_wee_execute_tool", return_value="round result"), \
-             patch.object(mgr, "_wee_load_messages", return_value=[]), \
-             patch.object(mgr, "_wee_save_messages"):
+        with (
+            patch.object(
+                mgr, "get_or_create_session_data", return_value={"channel": "api"}
+            ),
+            patch.object(mgr, "build_agent_context_prompt", return_value=""),
+            patch.object(mgr, "_wee_execute_tool", return_value="round result"),
+            patch.object(mgr, "_wee_load_messages", return_value=[]),
+            patch.object(mgr, "_wee_save_messages"),
+        ):
             result = mgr.run_wee_native(
-                model="qwen3:8b", prompt="loop", agent="orchestrator",
-                session_id=None, resume=True, n8n_session_id="t107_5",
+                model="qwen3:8b",
+                prompt="loop",
+                agent="orchestrator",
+                session_id=None,
+                resume=True,
+                n8n_session_id="t107_5",
             )
         self.assertIn("Tool execution completed", result)
         self.assertIn("round result", result)
@@ -322,13 +408,21 @@ class TestToolsRetryFallback(unittest.TestCase):
             iter(list(make_text_stream("Fallback"))),
         ]
         mgr = _create_test_manager()
-        with patch.object(mgr, "get_or_create_session_data", return_value={"channel": "api"}), \
-             patch.object(mgr, "build_agent_context_prompt", return_value=""), \
-             patch.object(mgr, "_wee_load_messages", return_value=[]), \
-             patch.object(mgr, "_wee_save_messages"):
+        with (
+            patch.object(
+                mgr, "get_or_create_session_data", return_value={"channel": "api"}
+            ),
+            patch.object(mgr, "build_agent_context_prompt", return_value=""),
+            patch.object(mgr, "_wee_load_messages", return_value=[]),
+            patch.object(mgr, "_wee_save_messages"),
+        ):
             result = mgr.run_wee_native(
-                model="qwen3:8b", prompt="Hi", agent="orchestrator",
-                session_id=None, resume=True, n8n_session_id="t107_6",
+                model="qwen3:8b",
+                prompt="Hi",
+                agent="orchestrator",
+                session_id=None,
+                resume=True,
+                n8n_session_id="t107_6",
             )
         self.assertEqual(result, "Fallback")
 
@@ -337,24 +431,28 @@ class TestWeeRuntimeStandalone(unittest.TestCase):
 
     def test_resolve_ollama_prefix(self):
         from wee_runtime import resolve_model_and_endpoint
+
         m, b, k = resolve_model_and_endpoint("ollama/qwen3:8b")
         self.assertEqual(m, "qwen3:8b")
         self.assertIn("11434", b)
 
     def test_resolve_no_prefix(self):
         from wee_runtime import resolve_model_and_endpoint
+
         m, b, k = resolve_model_and_endpoint("gemma4:e4b")
         self.assertEqual(m, "gemma4:e4b")
         self.assertIn("11434", b)
 
     def test_tool_definitions(self):
         from wee_runtime import _WEE_TOOLS
+
         names = [t["function"]["name"] for t in _WEE_TOOLS]
         self.assertIn("bash", names)
         self.assertIn("python", names)
 
     def test_constants(self):
         import wee_runtime
+
         self.assertEqual(wee_runtime.MAX_TOOL_ROUNDS, 10)
         self.assertEqual(wee_runtime.TOOL_TIMEOUT, 120)
 
