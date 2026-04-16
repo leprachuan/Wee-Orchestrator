@@ -44,12 +44,19 @@ def _gh_issue_list(repo: str, label: str, timeout: int = 30) -> List[Dict]:
     try:
         result = subprocess.run(
             [
-                "gh", "issue", "list",
-                "--repo", repo,
-                "--label", label,
-                "--state", "open",
-                "--limit", "10",
-                "--json", "number,title,labels",
+                "gh",
+                "issue",
+                "list",
+                "--repo",
+                repo,
+                "--label",
+                label,
+                "--state",
+                "open",
+                "--limit",
+                "10",
+                "--json",
+                "number,title,labels",
             ],
             capture_output=True,
             text=True,
@@ -67,11 +74,17 @@ def _gh_pr_list(repo: str, state: str = "open", timeout: int = 30) -> List[Dict]
     try:
         result = subprocess.run(
             [
-                "gh", "pr", "list",
-                "--repo", repo,
-                "--state", state,
-                "--limit", "20",
-                "--json", "number,title,headRefName,state,labels,mergeable",
+                "gh",
+                "pr",
+                "list",
+                "--repo",
+                repo,
+                "--state",
+                state,
+                "--limit",
+                "20",
+                "--json",
+                "number,title,headRefName,state,labels,mergeable",
             ],
             capture_output=True,
             text=True,
@@ -181,9 +194,7 @@ def is_wee_dev_gated(
         if blocking:
             details["blocking_issues"] = blocking
             nums = ", ".join(f"#{b['number']}" for b in blocking)
-            labels = ", ".join(
-                lbl for b in blocking for lbl in b["blocking_labels"]
-            )
+            labels = ", ".join(lbl for b in blocking for lbl in b["blocking_labels"])
             reason = (
                 f"GitHub issues {nums} have blocking labels ({labels}) "
                 f"-- wee-dev must wait for QA verdict"
