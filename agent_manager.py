@@ -8013,6 +8013,10 @@ User Request:
         collected_output = []
         _tool_call_counter = 0
         MAX_TOOL_ROUNDS = 10
+        # Issue #160: Track token usage across all rounds
+        _total_prompt_tokens = 0
+        _total_completion_tokens = 0
+        _usage_available = False
 
         try:
             for round_num in range(MAX_TOOL_ROUNDS + 1):
@@ -8021,6 +8025,8 @@ User Request:
                     "model": resolved_model,
                     "messages": messages,
                     "stream": True,
+                    # Issue #160: Request usage stats in streaming response
+                    "stream_options": {"include_usage": True},
                 }
                 if round_num < MAX_TOOL_ROUNDS:
                     create_kwargs["tools"] = _WEE_TOOLS
@@ -8028,15 +8034,28 @@ User Request:
                 try:
                     stream = client.chat.completions.create(**create_kwargs)
                 except Exception as tools_err:
-                    # Some models/endpoints may not support tools — retry without
+                    # Some models/endpoints may not support tools or stream_options
+                    retried = False
                     if "tools" in create_kwargs:
                         print(
                             f"[Wee Native] Tools not supported, retrying without: {tools_err}",
                             file=sys.stderr,
                         )
                         create_kwargs.pop("tools", None)
+                        try:
+                            stream = client.chat.completions.create(**create_kwargs)
+                            retried = True
+                        except Exception:
+                            pass  # fall through to stream_options removal
+                    if not retried and "stream_options" in create_kwargs:
+                        # Issue #160: Ollama/LM Studio may not support stream_options
+                        print(
+                            f"[Wee Native] stream_options not supported, retrying without: {tools_err}",
+                            file=sys.stderr,
+                        )
+                        create_kwargs.pop("stream_options", None)
                         stream = client.chat.completions.create(**create_kwargs)
-                    else:
+                    elif not retried:
                         raise
 
                 # Accumulate content and tool calls from streaming response
@@ -8044,6 +8063,13 @@ User Request:
                 tool_calls_acc = {}  # index -> {id, name, arguments}
 
                 for chunk in stream:
+                    # Issue #160: Capture usage stats from final streaming chunk
+                    if hasattr(chunk, "usage") and chunk.usage is not None:
+                        _u = chunk.usage
+                        _total_prompt_tokens += getattr(_u, "prompt_tokens", 0) or 0
+                        _total_completion_tokens += getattr(_u, "completion_tokens", 0) or 0
+                        _usage_available = True
+
                     if not chunk.choices:
                         continue
                     delta = chunk.choices[0].delta
@@ -8199,12 +8225,21 @@ User Request:
             # Issue #108: Persist conversation history
             self._wee_save_messages(n8n_session_id, messages)
 
+            # Issue #160: Build and store wee_meta with token usage and cost
+            _wee_meta = self._build_wee_meta(
+                api_base, resolved_model, model,
+                _total_prompt_tokens, _total_completion_tokens,
+                _usage_available,
+            )
+            self.update_session_field(n8n_session_id, "_wee_meta", _wee_meta)
+
             # Push done sentinel
             if stream_buffer:
                 stream_buffer.push("done", output)
 
             print(
-                f"[Wee Native] Completed. Output length: {len(output)} chars",
+                f"[Wee Native] Completed. Output length: {len(output)} chars, "
+                f"tokens: {_wee_meta.get('tokens', 'N/A')}",
                 file=sys.stderr,
             )
             return output
@@ -8220,6 +8255,97 @@ User Request:
             return error_msg
 
     # -- Wee runtime helper methods (Issues #107, #108, #109) --
+
+    # Issue #160: Model pricing per 1M tokens (input, output) in USD
+    _WEE_MODEL_PRICING = {
+        # OpenRouter pricing (per 1M tokens)
+        "google/gemini-2.5-flash-preview": (0.15, 0.60),
+        "google/gemini-2.5-pro-preview": (1.25, 10.00),
+        "google/gemini-2.0-flash-001": (0.10, 0.40),
+        "anthropic/claude-sonnet-4": (3.00, 15.00),
+        "anthropic/claude-3.5-sonnet": (3.00, 15.00),
+        "anthropic/claude-haiku-4": (0.80, 4.00),
+        "anthropic/claude-3.5-haiku": (0.80, 4.00),
+        "openai/gpt-4.1": (2.00, 8.00),
+        "openai/gpt-4.1-mini": (0.40, 1.60),
+        "openai/gpt-4.1-nano": (0.10, 0.40),
+        "openai/gpt-4o": (2.50, 10.00),
+        "openai/gpt-4o-mini": (0.15, 0.60),
+        "meta-llama/llama-4-maverick": (0.20, 0.60),
+        "meta-llama/llama-4-scout": (0.15, 0.40),
+        "meta-llama/llama-3.3-70b-instruct": (0.10, 0.15),
+        "deepseek/deepseek-chat-v3-0324": (0.30, 0.88),
+        "deepseek/deepseek-r1": (0.55, 2.19),
+        "qwen/qwen3-235b-a22b": (0.20, 0.60),
+        "microsoft/mai-ds-r1": (0.55, 2.19),
+        "nvidia/llama-3.1-nemotron-ultra-253b-v1": (0.00, 0.00),
+    }
+
+    def _build_wee_meta(
+        self,
+        api_base: str,
+        resolved_model: str,
+        original_model: str,
+        prompt_tokens: int,
+        completion_tokens: int,
+        usage_available: bool,
+    ) -> dict:
+        """Build wee_meta dict with token usage and estimated cost (Issue #160).
+
+        Returns a dict suitable for inclusion in the SSE done event:
+        {runtime, tokens, prompt_tokens, completion_tokens, cost_label}
+        """
+        meta = {"runtime": "wee"}
+        is_ollama = "11434" in (api_base or "") or (api_base or "").startswith("http://192.168.1.101")
+        is_openrouter = "openrouter" in (api_base or "").lower()
+        is_lmstudio = "1234" in (api_base or "")
+
+        if not usage_available:
+            if is_ollama or is_lmstudio:
+                meta["cost_label"] = "local"
+            return meta
+
+        total = prompt_tokens + completion_tokens
+        meta["tokens"] = total
+        meta["prompt_tokens"] = prompt_tokens
+        meta["completion_tokens"] = completion_tokens
+
+        # Determine cost label
+        if is_ollama or is_lmstudio:
+            meta["cost_label"] = "local"
+        elif is_openrouter:
+            # Look up pricing — try full model ID, then with prefix
+            pricing = None
+            for candidate in [original_model, resolved_model]:
+                candidate_lower = candidate.lower() if candidate else ""
+                # Strip openrouter/ prefix if present
+                if candidate_lower.startswith("openrouter/"):
+                    candidate_lower = candidate_lower[len("openrouter/"):]
+                for key, val in self._WEE_MODEL_PRICING.items():
+                    if key.lower() == candidate_lower or candidate_lower.startswith(key.lower()):
+                        pricing = val
+                        break
+                if pricing:
+                    break
+            if pricing:
+                input_cost = (prompt_tokens / 1_000_000) * pricing[0]
+                output_cost = (completion_tokens / 1_000_000) * pricing[1]
+                total_cost = input_cost + output_cost
+                if total_cost < 0.001:
+                    meta["cost_label"] = f"${total_cost:.6f}"
+                elif total_cost < 0.01:
+                    meta["cost_label"] = f"${total_cost:.4f}"
+                else:
+                    meta["cost_label"] = f"${total_cost:.2f}"
+            elif any(":free" in (original_model or "").lower()
+                     for _ in [1]):
+                meta["cost_label"] = "free"
+            else:
+                meta["cost_label"] = "est. N/A"
+        else:
+            meta["cost_label"] = ""
+
+        return meta
 
     def _wee_load_messages(
         self,
@@ -10413,14 +10539,17 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
 
                 session_data = session_mgr.get_or_create_session_data(session_id)
                 runtime = session_data.get("runtime", "copilot")
-                done_payload = _json.dumps(
-                    {
-                        "type": "done",
-                        "response": result,
-                        "runtime": runtime,
-                        "model": session_data.get("model"),
-                    }
-                )
+                _done_evt = {
+                    "type": "done",
+                    "response": result,
+                    "runtime": runtime,
+                    "model": session_data.get("model"),
+                }
+                # Issue #160: Include wee_meta (token usage + cost) if available
+                _wm = session_data.get("_wee_meta")
+                if _wm:
+                    _done_evt["wee_meta"] = _wm
+                done_payload = _json.dumps(_done_evt)
                 yield f"data: {done_payload}\n\n"
                 done_delivered = True
             finally:
@@ -10515,16 +10644,19 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                             session_id
                         )
                         runtime = session_data.get("runtime", "copilot")
-                        done_payload = _json.dumps(
-                            {
-                                "type": "done",
-                                "response": (
-                                    data if isinstance(data, str) else str(data)
-                                ),
-                                "runtime": runtime,
-                                "model": session_data.get("model"),
-                            }
-                        )
+                        _done_evt = {
+                            "type": "done",
+                            "response": (
+                                data if isinstance(data, str) else str(data)
+                            ),
+                            "runtime": runtime,
+                            "model": session_data.get("model"),
+                        }
+                        # Issue #160: Include wee_meta if available
+                        _wm = session_data.get("_wee_meta")
+                        if _wm:
+                            _done_evt["wee_meta"] = _wm
+                        done_payload = _json.dumps(_done_evt)
                         yield f"data: {done_payload}\n\n"
                         return
 
@@ -10533,14 +10665,17 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                     session_data = session_mgr.get_or_create_session_data(session_id)
                     runtime = session_data.get("runtime", "copilot")
                     result = buf.done_result if isinstance(buf.done_result, str) else ""
-                    done_payload = _json.dumps(
-                        {
-                            "type": "done",
-                            "response": result,
-                            "runtime": runtime,
-                            "model": session_data.get("model"),
-                        }
-                    )
+                    _done_evt = {
+                        "type": "done",
+                        "response": result,
+                        "runtime": runtime,
+                        "model": session_data.get("model"),
+                    }
+                    # Issue #160: Include wee_meta if available
+                    _wm = session_data.get("_wee_meta")
+                    if _wm:
+                        _done_evt["wee_meta"] = _wm
+                    done_payload = _json.dumps(_done_evt)
                     yield f"data: {done_payload}\n\n"
                     return
 
@@ -10571,14 +10706,17 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 session_data = session_mgr.get_or_create_session_data(session_id)
                 runtime = session_data.get("runtime", "copilot")
                 result = buf.done_result if isinstance(buf.done_result, str) else ""
-                done_payload = _json.dumps(
-                    {
-                        "type": "done",
-                        "response": result,
-                        "runtime": runtime,
-                        "model": session_data.get("model"),
-                    }
-                )
+                _done_evt = {
+                    "type": "done",
+                    "response": result,
+                    "runtime": runtime,
+                    "model": session_data.get("model"),
+                }
+                # Issue #160: Include wee_meta if available
+                _wm = session_data.get("_wee_meta")
+                if _wm:
+                    _done_evt["wee_meta"] = _wm
+                done_payload = _json.dumps(_done_evt)
                 yield f"data: {done_payload}\n\n"
             finally:
                 buf.remove_consumer(queue)
@@ -12616,6 +12754,8 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             mode: Optional[str] = None  # "ai" (default, uses LLM) or "command" (shell)
             task: str = ""
             notify: bool = False
+            fallback_runtime: Optional[str] = None
+            fallback_model: Optional[str] = None
             recurring: bool = True
             timeout: Optional[int] = None  # Execution timeout in seconds (default: 300)
             permission_mode: Optional[str] = (
@@ -12631,6 +12771,8 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             mode: Optional[str] = None  # "ai" (default, uses LLM) or "command" (shell)
             task: Optional[str] = None
             notify: Optional[bool] = None
+            fallback_runtime: Optional[str] = None
+            fallback_model: Optional[str] = None
             recurring: Optional[bool] = None
             enabled: Optional[bool] = None
             timeout: Optional[int] = None  # Execution timeout in seconds
@@ -12696,6 +12838,8 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 agent=body.agent,
                 runtime=body.runtime,
                 model=body.model,
+                fallback_runtime=body.fallback_runtime,
+                fallback_model=body.fallback_model,
                 mode=body.mode,
                 task=body.task,
                 notify=body.notify,
@@ -12730,7 +12874,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 client_ip, "scheduler_write", max_requests=20, window=60
             ):
                 raise HTTPException(status_code=429, detail="Rate limit exceeded")
-            updates = {k: v for k, v in body.model_dump().items() if v is not None}
+            updates = body.model_dump(exclude_unset=True)
             if not updates:
                 raise HTTPException(status_code=400, detail="No fields to update")
             result = _get_scheduler().update_job(job_id, updates)
