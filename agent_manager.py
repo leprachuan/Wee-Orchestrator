@@ -3398,7 +3398,7 @@ You can mention an agent in your prompt and it will auto-delegate:
             api_key = os.getenv("OPENROUTER_API_KEY")
 
         if not api_key:
-            print("[wee] OpenRouter: no API key available, using static fallback", file=sys.stderr)
+            logger.warning("OpenRouter: no API key available, using static fallback")
             return static_fallback
 
         try:
@@ -3448,17 +3448,14 @@ You can mention an agent in your prompt and it will auto-delegate:
                 ordered[cat] = grouped[cat]
 
             total = sum(len(v) for v in ordered.values())
-            print(
-                f"[wee] OpenRouter: discovered {total} models in {len(ordered)} groups",
-                file=sys.stderr,
-            )
+            logger.debug("OpenRouter: discovered %d models in %d groups", total, len(ordered))
 
             self._openrouter_models_cache = ordered
             self._openrouter_models_cache_ts = time.time()
             return ordered
 
         except Exception as e:
-            print(f"[wee] OpenRouter discovery failed: {e}", file=sys.stderr)
+            logger.warning("OpenRouter discovery failed: %s", e)
             return static_fallback
 
     def _get_model_description(self, model_id: str, runtime: str) -> Optional[str]:

@@ -34,9 +34,7 @@ SECRET_TOOL_PATH = SCRIPT_DIR / "secret_tool" / "secret_tool.py"
 
 # API defaults
 DEFAULT_API_URL = os.getenv("API_URL", "https://127.0.0.1:8000")
-DEFAULT_API_SHARED_KEY = os.getenv(
-    "API_SHARED_KEY", "R6R6wReORUV6bouLntScMTowbsh30Rzqa3hzjs3bWgU"
-)
+DEFAULT_API_SHARED_KEY = os.getenv("API_SHARED_KEY", "")
 
 
 def resolve_secret(secret_name: str) -> Optional[str]:
@@ -878,6 +876,13 @@ def main():
         choices=["DEBUG", "INFO", "WARNING", "ERROR"],
     )
     args = parser.parse_args()
+
+    if not args.api_key:
+        print(
+            "ERROR: --api-key or API_SHARED_KEY env var required",
+            file=sys.stderr,
+        )
+        sys.exit(1)
 
     logging.basicConfig(
         level=getattr(logging, args.log_level),
