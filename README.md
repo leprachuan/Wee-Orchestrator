@@ -599,7 +599,9 @@ All AI runtimes in this system are configured with **full tool access** to enabl
   - Wrong Ollama port corrected: `11436` → `11434` (Issue #105)
   - `httpx.Timeout(connect=15s)` and `max_retries=0` added to OpenAI client for fast-fail on bad endpoints (Issue #105)
   - Model resolution fixed: `get_models_for_runtime('wee')` returns flat strings; `get_model_from_name()` strips provider prefix (`ollama/`) and prefers exact/shortest match (Issue #105)
-- **Issues:** [#88](../../issues/88), [#105](../../issues/105), [#119](../../issues/119), [#146](../../issues/146)
+- **Bug Fixes (continued):**
+  - OpenRouter 401 auth fixed: `OPENROUTER_API_KEY` env var + keyring resolution replaces silent `'ollama'` fallback; raises clear error when no key found (Issue #153)
+- **Issues:** [#88](../../issues/88), [#105](../../issues/105), [#119](../../issues/119), [#146](../../issues/146), [#153](../../issues/153)
 
 ### Security Considerations
 

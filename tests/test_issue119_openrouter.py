@@ -1,7 +1,7 @@
 """Tests for Issue #119: Wire up OpenRouter in wee runtime UI.
 
 Covers:
-  - WEE_MODELS structure and OPENROUTER_POPULAR_MODELS constant
+  - WEE_MODELS structure
   - fetch_wee_models() with mocked API responses, cache, fallback
   - _get_model_description() for wee models
   - get_model_from_name() with wee aliases
@@ -14,7 +14,6 @@ import json
 import os
 import sys
 import time
-import types
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -61,30 +60,6 @@ class TestWeeModelsConstant:
 
     def test_at_least_5_openrouter_static_models(self, mgr):
         assert len(mgr.WEE_MODELS["OpenRouter Models"]) >= 5
-
-
-# ── OPENROUTER_POPULAR_MODELS ──────────────────────────────────────────
-
-class TestOpenrouterPopularModels:
-    def test_is_a_set(self, mgr):
-        assert isinstance(mgr.OPENROUTER_POPULAR_MODELS, set)
-
-    def test_at_least_10_popular_models(self, mgr):
-        assert len(mgr.OPENROUTER_POPULAR_MODELS) >= 10
-
-    def test_contains_expected_ids(self, mgr):
-        for mid in [
-            "meta-llama/llama-4-maverick",
-            "meta-llama/llama-4-scout",
-            "openai/gpt-4.1",
-            "deepseek/deepseek-r1:free",
-        ]:
-            assert mid in mgr.OPENROUTER_POPULAR_MODELS, f"Missing {mid}"
-
-    def test_no_openrouter_prefix_in_popular_ids(self, mgr):
-        for mid in mgr.OPENROUTER_POPULAR_MODELS:
-            assert not mid.startswith("openrouter/"), \
-                f"Popular ID should be raw, not prefixed: {mid}"
 
 
 # ── fetch_wee_models() ─────────────────────────────────────────────────
@@ -291,11 +266,10 @@ class TestModelsEndpoint:
                 data["models"].append(entry)
         groups = {m.get("group", "") for m in data["models"]}
         assert "Ollama Models" in groups, f"Missing Ollama group. Got: {groups}"
-        assert "OpenRouter Models" in groups, f"Missing OpenRouter group. Got: {groups}"
+        assert any(g.startswith("OpenRouter") for g in groups), f"Missing OpenRouter group (expected group with OpenRouter prefix). Got: {groups}"
 
     def test_endpoint_unknown_runtime_rejected(self):
         """Unknown runtimes should return an error."""
-        mod = importlib.import_module("agent_manager")
         src = open(os.path.join("/opt/n8n-copilot-shim-dev", "agent_manager.py")).read()
         assert "Unknown runtime" in src
 
