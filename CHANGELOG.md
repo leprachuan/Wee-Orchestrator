@@ -1,63 +1,52 @@
 # Changelog
-## [Issue #142] Bug: Wee Runtime Dynamic Models, SSE Tool Events, BG Task Tool Tracking
-**Status:** ✅ QA Approved (Commit: 627a408, PR #143)
+
+## [Issue #153] Bug Fix: OpenRouter 401 Authentication Error
+**Status:** ✅ QA Approved (Commit: 1dae171, PR #154)
 
 ### Summary
-Fixed three critical bugs affecting wee runtime operation: dynamic Ollama/OpenRouter model discovery with substring matching safeguards, SSE tool event field consistency, and background task tool call tracking via __WEE_TC__ JSON output.
+Fixed silent 401 failures when using OpenRouter models in the wee runtime. Both `agent_manager.py` and `wee_runtime.py` were falling back to the local Ollama API key (`ollama`) as the Bearer token for OpenRouter requests. OpenRouter rejects this with HTTP 401 "Missing Authentication header". The fix adds proper `OPENROUTER_API_KEY` environment variable and keyring resolution, raising a clear error instead of silently using an invalid default.
 
-### Root Causes (3 bugs)
-
-**B1: Substring Matching Regression on Multi-Namespace OpenRouter Models**
-- get_model_from_name() used substring matching to find Ollama models ("granite" → "granite3.3-tuned")
-- When OpenRouter multi-namespace models (e.g., "anthropic/claude-opus") were added, substring matching incorrectly matched "anthropic" across Ollama catalog, causing stale model selection
-- Test-level mock in test_stale_copilot_model_replaced prevented live OpenRouter fetch, masking the bug
-
-**B2: SSE Tool Event Field Inconsistency**
-- Tool call start event (tc_start_event) used arguments field; done event used result field
-- Inconsistent field names broke tool call reconstruction in streaming pipelines
-
-**B3: Background Task Tool Call Tracking Missing**
-- Background tasks dispatching tool calls had no visibility into tool execution progress
-- No way to track which tools ran, what inputs were sent, or what outputs were received
+### Root Cause
+Both files used `os.environ.get('OPENROUTER_API_KEY', 'ollama')` — the `'ollama'` default is not a valid OpenRouter Bearer token.
 
 ### Solution
 
-#### B1: Multi-Namespace Model Substring Matching Fix
-- get_model_from_name() now skips substring matching for models with 2+ slashes (multi-namespace)
-- Ollama models still use substring matching (single namespace, e.g., "granite3.3-tuned")
-- OpenRouter multi-namespace models use exact prefix-stripped matching (e.g., "claude-opus" from "anthropic/claude-opus")
-- Test-level fix: test_stale_copilot_model_replaced mocks OpenRouter network calls to prevent substring match regression
+#### Key Resolution Order (after fix)
+1. `OPENROUTER_API_KEY` (explicit kwarg)
+2. `WEE_OPENROUTER_KEY` env var
+3. `OPENROUTER_API_KEY` env var
+4. keyring: `openrouter_api_key`
+5. Raise `ValueError` / `RuntimeError` — never `'ollama'` for OpenRouter
 
-#### B2: SSE Tool Event Field Standardization
-- tc_start_event → renamed arguments → input for consistency with done event
-- tc_done_event → added event="result" field, result → output, clarified input field present
-- Updated all callers in agent_manager.py and regression tests in test_wee_issues_107_108_109.py
+#### agent_manager.py Changes
+- `_resolve_openrouter_key()` helper: env var first, then keyring lookup
+- `run_openrouter_model()`: uses resolver instead of hardcoded default
+- Raises `ValueError` with clear message when no key found
 
-#### B3: Background Task Tool Tracking
-- wee_runtime.py emits __WEE_TC__ JSON marker before each tool call (JSON lines format)
-- Agent manager background task loop parses __WEE_TC__ events and calls:
-  - append_tool_call(tool_name, input_json) when tool call initiates
-  - update_tool_call(tool_name, output_json) when tool completes
-- Enables real-time tool tracking in background tasks
+#### wee_runtime.py Changes
+- `_get_openrouter_key()` helper: same env var → keyring resolution chain
+- OpenRouter request builder: uses helper, raises `RuntimeError` on missing key
+- Removed silent `'ollama'` fallback
 
 ### Files Changed
-- agent_manager.py: B1 substring matching fix, B2 field renaming, B3 tool tracking loop
-- wee_runtime.py: B3 __WEE_TC__ JSON emission
-- webui/dist/app.js: B2 field name updates in UI (if rendering tool events)
-- tests/test_issue142_wee_models_tool_expansion.py: 19 new regression tests
-- tests/test_wee_issues_107_108_109.py: B2 field name updates in existing tests
+- `agent_manager.py` — `_resolve_openrouter_key()`, updated OpenRouter key resolution
+- `wee_runtime.py` — `_get_openrouter_key()`, updated OpenRouter request builder
+- `tests/test_issue153_openrouter_auth.py` — 16 regression tests
 
-### Tests & Regressions
-- 7 B01 regression tests: prefix-stripped matching, Ollama substring matching, multi-namespace exact match
-- 12 original issue tests: all verified correct
-- Full suite: 1443 passed / 33 failed (vs dev baseline 1432/33 — 0 new regressions)
-- Cleanup: Removed unreferenced wee-reference.png from runtime-icons
+### Tests
+- 16 new regression tests covering:
+  - Env var key resolution in both files
+  - Keyring fallback when env var absent
+  - `ValueError`/`RuntimeError` raised when no key found
+  - `'ollama'` string rejected as OpenRouter key
+  - Key priority ordering
+- Total: 1462 passed, 0 regressions
 
-### Non-Blocking Finding
-- M-1 (MINOR): wee-reference.png was committed but not referenced in code — removed in cleanup commit 627a408
+### Non-Blocking Findings
+- N-1 (NITPICK): Minor punctuation inconsistency in error message
+- N-2 (NITPICK): PR description lists 1445 total pass vs 1462 actual (minor discrepancy, test suite grew between branch and QA)
 
 ---
-
 
 ## [Issue #119] Feature: Wire Up OpenRouter in Wee Runtime UI
 **Status:** ✅ QA Approved (Commit: 168a958, PR #121)

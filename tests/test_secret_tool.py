@@ -49,7 +49,7 @@ class TestParseArgs(unittest.TestCase):
         self.assertEqual(args.value, "v")
         self.assertFalse(args.value_stdin)
         self.assertFalse(args.no_clobber)
-        self.assertEqual(args.backend, "keyring")
+        self.assertEqual(args.backend, "pass")
 
     def test_set_with_value_stdin(self):
         args = secret_tool.parse_args(["set", "--name", "k", "--value-stdin"])
@@ -96,7 +96,7 @@ class TestParseArgs(unittest.TestCase):
     def test_list_command(self):
         args = secret_tool.parse_args(["list"])
         self.assertEqual(args.cmd, "list")
-        self.assertEqual(args.backend, "keyring")
+        self.assertEqual(args.backend, "pass")
         self.assertFalse(args.json_output)
 
     def test_list_json_flag(self):
@@ -290,7 +290,7 @@ class TestMainFunction(unittest.TestCase):
         }
         return be
 
-    @patch("secret_tool.KeyringBackend")
+    @patch("secret_tool.PassBackend")
     def test_set_prints_json_without_value(self, mock_cls):
         be = self._mock_backend()
         mock_cls.return_value = be
@@ -304,7 +304,7 @@ class TestMainFunction(unittest.TestCase):
         self.assertNotIn("credential", output)
         self.assertNotIn("mysecret", out.getvalue())
 
-    @patch("secret_tool.KeyringBackend")
+    @patch("secret_tool.PassBackend")
     def test_set_no_clobber_rejects(self, mock_cls):
         be = self._mock_backend()
         be.exists.return_value = True
@@ -318,7 +318,7 @@ class TestMainFunction(unittest.TestCase):
         self.assertEqual(output["status"], "error")
         self.assertIn("already exists", output["message"])
 
-    @patch("secret_tool.KeyringBackend")
+    @patch("secret_tool.PassBackend")
     def test_set_no_clobber_allows_new(self, mock_cls):
         be = self._mock_backend()
         be.exists.return_value = False
@@ -329,7 +329,7 @@ class TestMainFunction(unittest.TestCase):
             )
         self.assertEqual(rc, 0)
 
-    @patch("secret_tool.KeyringBackend")
+    @patch("secret_tool.PassBackend")
     def test_add_works_same_as_set(self, mock_cls):
         be = self._mock_backend()
         mock_cls.return_value = be
@@ -338,7 +338,7 @@ class TestMainFunction(unittest.TestCase):
         self.assertEqual(rc, 0)
         be.set.assert_called_once_with("k", "v")
 
-    @patch("secret_tool.KeyringBackend")
+    @patch("secret_tool.PassBackend")
     def test_get_prints_raw_value(self, mock_cls):
         be = self._mock_backend()
         mock_cls.return_value = be
@@ -347,7 +347,7 @@ class TestMainFunction(unittest.TestCase):
         self.assertEqual(rc, 0)
         self.assertEqual(out.getvalue().strip(), "secret_val")
 
-    @patch("secret_tool.KeyringBackend")
+    @patch("secret_tool.PassBackend")
     def test_get_not_found(self, mock_cls):
         be = self._mock_backend()
         be.get.return_value = {
@@ -360,7 +360,7 @@ class TestMainFunction(unittest.TestCase):
             rc = secret_tool.main(["get", "--name", "missing"])
         self.assertEqual(rc, 1)
 
-    @patch("secret_tool.KeyringBackend")
+    @patch("secret_tool.PassBackend")
     def test_value_stdin(self, mock_cls):
         be = self._mock_backend()
         mock_cls.return_value = be
@@ -379,7 +379,7 @@ class TestMainFunction(unittest.TestCase):
 
     # --- list command ---
 
-    @patch("secret_tool.KeyringBackend")
+    @patch("secret_tool.PassBackend")
     def test_list_prints_names(self, mock_cls):
         be = self._mock_backend()
         mock_cls.return_value = be
@@ -388,7 +388,7 @@ class TestMainFunction(unittest.TestCase):
         self.assertEqual(rc, 0)
         self.assertEqual(out.getvalue().strip().split("\n"), ["a", "b"])
 
-    @patch("secret_tool.KeyringBackend")
+    @patch("secret_tool.PassBackend")
     def test_list_json(self, mock_cls):
         be = self._mock_backend()
         mock_cls.return_value = be
@@ -397,7 +397,7 @@ class TestMainFunction(unittest.TestCase):
         self.assertEqual(rc, 0)
         self.assertEqual(json.loads(out.getvalue()), ["a", "b"])
 
-    @patch("secret_tool.KeyringBackend")
+    @patch("secret_tool.PassBackend")
     def test_list_empty(self, mock_cls):
         be = self._mock_backend()
         be.list.return_value = {"status": "success", "names": []}
@@ -407,7 +407,7 @@ class TestMainFunction(unittest.TestCase):
         self.assertEqual(rc, 0)
         self.assertEqual(out.getvalue().strip(), "")
 
-    @patch("secret_tool.KeyringBackend")
+    @patch("secret_tool.PassBackend")
     def test_list_empty_json(self, mock_cls):
         be = self._mock_backend()
         be.list.return_value = {"status": "success", "names": []}
@@ -417,7 +417,7 @@ class TestMainFunction(unittest.TestCase):
         self.assertEqual(rc, 0)
         self.assertEqual(json.loads(out.getvalue()), [])
 
-    @patch("secret_tool.KeyringBackend")
+    @patch("secret_tool.PassBackend")
     def test_list_unsupported_backend(self, mock_cls):
         be = self._mock_backend()
         be.list.return_value = {
@@ -433,7 +433,7 @@ class TestMainFunction(unittest.TestCase):
 
     # --- delete command ---
 
-    @patch("secret_tool.KeyringBackend")
+    @patch("secret_tool.PassBackend")
     def test_delete_success(self, mock_cls):
         be = self._mock_backend()
         mock_cls.return_value = be
@@ -445,7 +445,7 @@ class TestMainFunction(unittest.TestCase):
         self.assertEqual(output["action"], "deleted")
         be.delete.assert_called_once_with("k")
 
-    @patch("secret_tool.KeyringBackend")
+    @patch("secret_tool.PassBackend")
     def test_delete_not_found(self, mock_cls):
         be = self._mock_backend()
         be.delete.return_value = {

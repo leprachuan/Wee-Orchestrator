@@ -2,13 +2,17 @@
 """
 Lightweight secret-tool wrapper for wee-dev
 Supports:
-  secret-tool set --name <name> --value <value> [--no-clobber] [--backend keyring|file]
-  secret-tool set --name <name> --value-stdin   [--no-clobber] [--backend keyring|file]
+  secret-tool set --name <name> --value <value> [--no-clobber] [--backend pass|keyring|file]
+  secret-tool set --name <name> --value-stdin   [--no-clobber] [--backend pass|keyring|file]
   secret-tool add ...   (alias for set)
-  secret-tool get --name <name> [--backend keyring|file]
+  secret-tool get --name <name> [--backend pass|keyring|file]
 
-Prefers existing keyring-vault skill when available. File backend encrypts
-secrets with a Fernet key stored in the user's keyring.
+Default backend: pass (GPG-encrypted via password-store — no GNOME session required).
+Keyring backend wraps GNOME libsecret (session-dependent).
+File backend encrypts with Fernet but derives key from keyring (also session-dependent).
+
+Pass store location: PASSWORD_STORE_DIR env var or /opt/pass-store/
+Secrets are stored under the wee/ namespace: wee/<name>.gpg
 """
 
 import argparse
@@ -98,6 +102,94 @@ class KeyringBackend:
             self._keyring.delete_password("secret-tool", name)
         else:
             self._vault.delete("secret-tool", name)
+        return {"status": "success", "action": "deleted", "name": name}
+
+
+# ---------------------------------------------------------------------------
+# PassBackend — GPG-encrypted via password-store (pass). No GNOME session needed.
+# ---------------------------------------------------------------------------
+
+_PASS_STORE_DIR = os.environ.get("PASSWORD_STORE_DIR", "/opt/pass-store")
+_PASS_NAMESPACE = "wee"  # secrets live at wee/<name>.gpg inside the store
+
+
+class PassBackend:
+    """GPG-encrypted secret store using 'pass' (password-store).
+
+    Unlike KeyringBackend and FileBackend this requires NO active GNOME session
+    and works reliably from systemd services, cron jobs, and headless scripts.
+
+    Prerequisites:
+      - pass installed (apt install pass)
+      - GPG key generated without a passphrase (for unattended decryption)
+      - Store initialised: PASSWORD_STORE_DIR=/opt/pass-store pass init <KEY_ID>
+      - Key trusted: echo '<FINGERPRINT>:6:' | gpg --import-ownertrust
+
+    Secrets are stored as wee/<name> inside the pass store.
+    """
+
+    def __init__(self, store_dir: str | None = None):
+        self.store_dir = store_dir or _PASS_STORE_DIR
+        if not shutil.which("pass"):
+            raise RuntimeError("'pass' is not installed — run: apt install pass")
+        if not os.path.exists(self.store_dir):
+            raise RuntimeError(
+                f"Pass store not found at {self.store_dir}. "
+                f"Initialise it with: PASSWORD_STORE_DIR={self.store_dir} pass init <GPG_KEY_ID>"
+            )
+
+    def _run_pass(self, *args, input_data: str | None = None) -> subprocess.CompletedProcess:
+        env = {**os.environ, "PASSWORD_STORE_DIR": self.store_dir}
+        return subprocess.run(
+            ["pass", *args],
+            capture_output=True,
+            text=True,
+            input=input_data,
+            env=env,
+        )
+
+    def _pass_path(self, name: str) -> str:
+        return f"{_PASS_NAMESPACE}/{name}"
+
+    def exists(self, name: str) -> bool:
+        gpg_file = Path(self.store_dir) / _PASS_NAMESPACE / f"{name}.gpg"
+        return gpg_file.exists()
+
+    def set(self, name: str, value: str) -> dict:
+        existed = self.exists(name)
+        result = self._run_pass(
+            "insert", "--force", "--multiline", self._pass_path(name),
+            input_data=value,
+        )
+        if result.returncode != 0:
+            msg = result.stderr.strip() or result.stdout.strip() or "pass insert failed"
+            return {"status": "error", "message": msg}
+        action = "updated" if existed else "created"
+        return {"status": "success", "action": action, "name": name}
+
+    def add(self, name: str, value: str) -> dict:
+        return self.set(name, value)
+
+    def get(self, name: str) -> dict:
+        result = self._run_pass("show", self._pass_path(name))
+        if result.returncode != 0:
+            return {"status": "failure", "message": "not found", "credential": None}
+        return {"status": "success", "credential": result.stdout.rstrip("\n")}
+
+    def list(self) -> dict:
+        ns_dir = Path(self.store_dir) / _PASS_NAMESPACE
+        if not ns_dir.exists():
+            return {"status": "success", "names": []}
+        names = sorted(p.stem for p in ns_dir.glob("*.gpg"))
+        return {"status": "success", "names": names}
+
+    def delete(self, name: str) -> dict:
+        if not self.exists(name):
+            return {"status": "error", "message": f"Secret '{name}' not found"}
+        result = self._run_pass("rm", "--force", self._pass_path(name))
+        if result.returncode != 0:
+            msg = result.stderr.strip() or "pass rm failed"
+            return {"status": "error", "message": msg}
         return {"status": "success", "action": "deleted", "name": name}
 
 
@@ -214,7 +306,7 @@ def _build_set_parser(subparser, name: str, help_text: str):
         default=False,
         help="Fail if the secret already exists instead of overwriting",
     )
-    p.add_argument("--backend", choices=["keyring", "file"], default="keyring")
+    p.add_argument("--backend", choices=["pass", "keyring", "file"], default="pass")
     return p
 
 
@@ -230,10 +322,10 @@ def parse_args(argv=None):
 
     p_get = sub.add_parser("get", help="Retrieve a secret")
     p_get.add_argument("--name", required=True, help="Secret name")
-    p_get.add_argument("--backend", choices=["keyring", "file"], default="keyring")
+    p_get.add_argument("--backend", choices=["pass", "keyring", "file"], default="pass")
 
     p_list = sub.add_parser("list", help="List stored secret names (no values)")
-    p_list.add_argument("--backend", choices=["keyring", "file"], default="keyring")
+    p_list.add_argument("--backend", choices=["pass", "keyring", "file"], default="pass")
     p_list.add_argument(
         "--json",
         action="store_true",
@@ -244,7 +336,7 @@ def parse_args(argv=None):
 
     p_del = sub.add_parser("delete", help="Delete a secret")
     p_del.add_argument("--name", required=True, help="Secret name to delete")
-    p_del.add_argument("--backend", choices=["keyring", "file"], default="keyring")
+    p_del.add_argument("--backend", choices=["pass", "keyring", "file"], default="pass")
 
     sub.add_parser("status", help="Check if the secret store is accessible")
     sub.add_parser("unlock", help="Unlock the keyring (password from stdin)")
@@ -371,7 +463,7 @@ def main(argv=None):
     if args.cmd is None:
         print(
             "Usage: secret-tool {set|add|get|list|delete|status|unlock} --name NAME "
-            "[--value VALUE | --value-stdin] [--backend keyring|file]"
+            "[--value VALUE | --value-stdin] [--backend pass|keyring|file]"
         )
         return 2
 
@@ -389,7 +481,9 @@ def main(argv=None):
 
     backend = None
     try:
-        if args.backend == "keyring":
+        if args.backend == "pass":
+            backend = PassBackend()
+        elif args.backend == "keyring":
             backend = KeyringBackend()
         else:
             backend = FileBackend()

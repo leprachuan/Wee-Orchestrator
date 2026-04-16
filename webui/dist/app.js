@@ -518,10 +518,16 @@ const PILL_OPTIONS = {
       const runtime = $('meta-runtime')?.dataset?.runtime || $('meta-runtime')?.textContent?.trim() || 'copilot';
       try {
         const data = await apiRequest('GET', `/models?runtime=${encodeURIComponent(runtime)}`);
-        const opts = (data.models || []).map(m => ({
-          label: m.label,
-          cmd: `/model set ${m.id}`,
-        }));
+        const models = data.models || [];
+        const opts = [];
+        let lastGroup = null;
+        models.forEach(m => {
+          if (m.group && m.group !== lastGroup) {
+            opts.push({ label: '── ' + m.group + ' ──', cmd: null, disabled: true });
+            lastGroup = m.group;
+          }
+          opts.push({ label: m.label, cmd: `/model set ${m.id}` });
+        });
         opts.push({ label: '📋 list models', cmd: '/model list' });
         return opts;
       } catch (e) {
@@ -2210,7 +2216,7 @@ async function sendMessageStreaming(query, sessionId) {
               if (_timingText) {
                 const timingDiv = document.createElement('div');
                 timingDiv.className = 'message-timing';
-                timingDiv.textContent = _timingText;
+                timingDiv.innerHTML = _timingText;
                 streamBubble.appendChild(timingDiv);
               }
               streamBubble.appendChild(createTtsButton(streamBubble));
@@ -2587,7 +2593,16 @@ function buildTimingText(elapsedSec, weeMeta) {
     if (costLabel === 'local') costStr = ' · local';
     else if (costLabel === 'free') costStr = ' · free';
     else if (costLabel && costLabel.startsWith('$')) costStr = ` · ${costLabel}`;
-    return base ? `⏱️ ${base} · ${tokenStr} tokens${costStr}` : `${tokenStr} tokens${costStr}`;
+    // Issue #160: Build tooltip with input/output breakdown
+    const pTokens = weeMeta.prompt_tokens;
+    const cTokens = weeMeta.completion_tokens;
+    let tooltip = `${tokenStr} total tokens`;
+    if (pTokens != null && cTokens != null) {
+      tooltip = `Input: ${pTokens.toLocaleString()} tokens\nOutput: ${cTokens.toLocaleString()} tokens\nTotal: ${tokenStr} tokens`;
+      if (costLabel && costLabel.startsWith('$')) tooltip += `\nEst. cost: ${costLabel}`;
+    }
+    const span = `<span title="${tooltip}">${tokenStr} tokens${costStr}</span>`;
+    return base ? `⏱️ ${base} · ${span}` : span;
   }
   return base ? `⏱️ ${base}` : '';
 }
@@ -2653,7 +2668,7 @@ async function renderMessage(role, content, files = [], timing = null, weeMeta =
     if (_rmTimingText) {
       const timingDiv = document.createElement('div');
       timingDiv.className = 'message-timing';
-      timingDiv.textContent = _rmTimingText;
+      timingDiv.innerHTML = _rmTimingText;
       bubble.appendChild(timingDiv);
     }
   }
@@ -3717,6 +3732,11 @@ function renderJobEditForm(job, container) {
       schedToast('Update failed: ' + err.message, 'error');
     }
   });
+  // M-1: pre-populate fallback fields when editing an existing job
+  const fbRtEl = document.getElementById('sched-fallback-runtime');
+  const fbModelEl = document.getElementById('sched-fallback-model');
+  if (fbRtEl && job && job.fallback_runtime) fbRtEl.value = job.fallback_runtime;
+  if (fbModelEl && job && job.fallback_model) fbModelEl.value = job.fallback_model;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -3847,6 +3867,27 @@ function buildJobForm(job) {
         </div>
         <p class="form-hint">Default is 300 seconds (5 minutes). Min: 60s, Max: 3600s (1 hour).</p>
       </div>
+      <details class="form-group" style="margin-top:8px">
+        <summary style="cursor:pointer;font-weight:600;color:var(--text-secondary,#aaa)">
+          ▶ Fallback Configuration
+        </summary>
+        <div style="margin-top:8px">
+          <div class="form-group">
+            <label>Fallback Runtime</label>
+            <select id="sched-fallback-runtime" name="fallback_runtime">
+              <option value="">None (no fallback)</option>
+            </select>
+            <small>Used if primary runtime fails (rate limit, auth error, timeout)</small>
+          </div>
+          <div class="form-group">
+            <label>Fallback Model</label>
+            <select id="sched-fallback-model" name="fallback_model">
+              <option value="">None (no fallback)</option>
+            </select>
+            <small>Used with fallback runtime</small>
+          </div>
+        </div>
+      </details>
       <div class="sched-form-actions">
         <button type="submit" class="btn btn-primary">💾 Save</button>
         <button type="button" class="btn btn-ghost" id="btn-form-cancel">Cancel</button>
@@ -3902,44 +3943,73 @@ async function populateModelDropdown(container, runtime) {
   if (!select) return;
   const current = select.dataset.current || '';
   try {
-    const data = await apiRequest('GET', '/models?runtime=' + encodeURIComponent(runtime));
+    const data = await apiRequest('GET', `/models?runtime=${encodeURIComponent(runtime)}`);
     const models = data.models || [];
-    // Issue #142: Group models into <optgroup> when group field is present
-    const grouped = {};
-    const ungrouped = [];
-    for (const m of models) {
-      if (m.group) {
-        if (!grouped[m.group]) grouped[m.group] = [];
-        grouped[m.group].push(m);
-      } else {
-        ungrouped.push(m);
-      }
-    }
     let opts = '<option value="">(runtime default)</option>';
-    const mkOption = function(m) {
-      const sel = m.id === current ? ' selected' : '';
-      return '<option value="' + escHtml(m.id) + '"' + sel + '>' + escHtml(m.label || m.id) + '</option>';
-    };
-    const groupNames = Object.keys(grouped);
-    if (groupNames.length > 0) {
-      for (const gname of groupNames) {
-        opts += '<optgroup label="' + escHtml(gname) + '">';
-        opts += grouped[gname].map(mkOption).join('');
-        opts += '</optgroup>';
+    // Group models by their group field for optgroup rendering
+    const groups = {};
+    let hasGroups = false;
+    models.forEach(m => {
+      const g = m.group || '';
+      if (g) hasGroups = true;
+      if (!groups[g]) groups[g] = [];
+      groups[g].push(m);
+    });
+    if (hasGroups) {
+      for (const [gName, gModels] of Object.entries(groups)) {
+        if (gName) opts += `<optgroup label="${escHtml(gName)}">`;
+        opts += gModels.map(m => {
+          const sel = m.id === current ? ' selected' : '';
+          return `<option value="${escHtml(m.id)}"${sel}>${escHtml(m.label)}</option>`;
+        }).join('');
+        if (gName) opts += '</optgroup>';
       }
-      opts += ungrouped.map(mkOption).join('');
     } else {
-      opts += models.map(mkOption).join('');
+      opts += models.map(m => {
+        const sel = m.id === current ? ' selected' : '';
+        return `<option value="${escHtml(m.id)}"${sel}>${escHtml(m.label)}</option>`;
+      }).join('');
     }
     select.innerHTML = opts;
   } catch (e) {
     let opts = '<option value="">(runtime default)</option>';
-    if (current) opts += '<option value="' + escHtml(current) + '" selected>' + escHtml(current) + '</option>';
+    if (current) opts += `<option value="${escHtml(current)}" selected>${escHtml(current)}</option>`;
     select.innerHTML = opts;
   }
 }
 
+function populateFallbackRuntimeDropdown(selectEl) {
+  const runtimes = ['copilot','claude','claude-sdk','gemini','opencode','wee','ollama'];
+  selectEl.innerHTML = '<option value="">None (no fallback)</option>';
+  runtimes.forEach(r => {
+    const opt = document.createElement('option');
+    opt.value = r; opt.textContent = r;
+    selectEl.appendChild(opt);
+  });
+}
+
+function populateFallbackModelDropdown(selectEl) {
+  const models = [
+    'claude-haiku-4.5','claude-sonnet-4.6','claude-opus-4.6',
+    'gpt-4.1','gpt-5-mini','gpt-5.2',
+    'gemini-1.5-pro','gemini-2.0-flash',
+    'sonnet','haiku','opus'
+  ];
+  selectEl.innerHTML = '<option value="">None (no fallback)</option>';
+  models.forEach(m => {
+    const opt = document.createElement('option');
+    opt.value = m; opt.textContent = m;
+    selectEl.appendChild(opt);
+  });
+}
+
 function wireJobForm(container, onSubmit) {
+  // Populate fallback dropdowns (Issue #159)
+  const fbRtEl = document.getElementById('sched-fallback-runtime');
+  const fbModelEl = document.getElementById('sched-fallback-model');
+  if (fbRtEl) populateFallbackRuntimeDropdown(fbRtEl);
+  if (fbModelEl) populateFallbackModelDropdown(fbModelEl);
+
   const form = container.querySelector('#sched-job-form');
   const errEl = container.querySelector('#sched-form-error');
   const cancelBtn = container.querySelector('#btn-form-cancel');
@@ -4047,6 +4117,10 @@ function wireJobForm(container, onSubmit) {
       payload.agent   = data.agent || 'orchestrator';
       payload.runtime = data.runtime || 'claude';
       payload.model   = data.model?.trim() || null;
+      const fbRt = document.getElementById('sched-fallback-runtime')?.value || '';
+      const fbModel = document.getElementById('sched-fallback-model')?.value || '';
+      payload.fallback_runtime = fbRt;
+      payload.fallback_model = fbModel;
     } else {
       payload.working_dir = data.working_dir?.trim() || '/opt';
     }
