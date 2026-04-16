@@ -56,7 +56,9 @@ class TestWeeModelsConstant:
         """Each model entry must be a (model_id, description, aliases) tuple."""
         for category, entries in session_mgr.WEE_MODELS.items():
             for entry in entries:
-                assert isinstance(entry, tuple), f"Entry in {category} is not a tuple: {entry}"
+                assert isinstance(
+                    entry, tuple
+                ), f"Entry in {category} is not a tuple: {entry}"
                 assert len(entry) == 3, f"Entry should have 3 elements: {entry}"
                 model_id, desc, aliases = entry
                 assert isinstance(model_id, str)
@@ -94,9 +96,9 @@ class TestGetModelsForRuntimeWee:
         result = session_mgr.get_models_for_runtime("wee")
         for category, model_ids in result.items():
             for mid in model_ids:
-                assert isinstance(mid, str), (
-                    f"Model ID in {category} is {type(mid).__name__}, not str: {mid}"
-                )
+                assert isinstance(
+                    mid, str
+                ), f"Model ID in {category} is {type(mid).__name__}, not str: {mid}"
 
     def test_contains_gemma_model(self, session_mgr):
         """Result must include ollama/gemma4:e4b."""
@@ -236,9 +238,7 @@ class TestSessionValidationWee:
         if not current_model or not session_mgr.get_model_from_name(
             current_model, "wee"
         ):
-            session_data["model"] = os.getenv(
-                "WEE_DEFAULT_MODEL", "ollama/gemma4:e4b"
-            )
+            session_data["model"] = os.getenv("WEE_DEFAULT_MODEL", "ollama/gemma4:e4b")
         assert session_data["model"] == "ollama/gemma4:e4b"
 
     def test_valid_model_preserved(self, session_mgr):
@@ -266,14 +266,13 @@ class TestSessionValidationWee:
         session_mgr._env_wee_models = None
         # Patch both network calls so only static WEE_MODELS fallback is used,
         # ensuring gpt-5-mini cannot match openrouter/openai/gpt-5-mini.
-        with patch("httpx.get", side_effect=Exception("offline")), patch(
-            "urllib.request.urlopen", side_effect=Exception("offline")
+        with (
+            patch("httpx.get", side_effect=Exception("offline")),
+            patch("urllib.request.urlopen", side_effect=Exception("offline")),
         ):
             resolved = session_mgr.get_model_from_name(current_model, "wee")
         if not current_model or not resolved:
-            session_data["model"] = os.getenv(
-                "WEE_DEFAULT_MODEL", "ollama/gemma4:e4b"
-            )
+            session_data["model"] = os.getenv("WEE_DEFAULT_MODEL", "ollama/gemma4:e4b")
         # gpt-5-mini is not a wee model, so it should be replaced
         assert session_data["model"] == "ollama/gemma4:e4b"
 

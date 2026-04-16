@@ -32,16 +32,22 @@ class TestIssue142B01SubstringMatching:
             "Ollama": [],
             "OpenRouter": ["openrouter/openai/gpt-5-mini"],
         }
-        with patch.object(session_mgr, "get_models_for_runtime", return_value=models_dict):
+        with patch.object(
+            session_mgr, "get_models_for_runtime", return_value=models_dict
+        ):
             result = session_mgr.get_model_from_name("gpt-5-mini", "wee")
-        assert result is None, "Multi-namespace models should NOT substring-match for wee"
+        assert (
+            result is None
+        ), "Multi-namespace models should NOT substring-match for wee"
 
     def test_exact_prefix_match_still_works(self, session_mgr):
         """Exact prefix-stripped matches should still work."""
         models_dict = {
             "Ollama": ["ollama/gemma4:e4b"],
         }
-        with patch.object(session_mgr, "get_models_for_runtime", return_value=models_dict):
+        with patch.object(
+            session_mgr, "get_models_for_runtime", return_value=models_dict
+        ):
             result = session_mgr.get_model_from_name("gemma4:e4b", "wee")
         assert result == "ollama/gemma4:e4b"
 
@@ -50,7 +56,9 @@ class TestIssue142B01SubstringMatching:
         models_dict = {
             "Ollama": ["ollama/gemma4:e4b"],
         }
-        with patch.object(session_mgr, "get_models_for_runtime", return_value=models_dict):
+        with patch.object(
+            session_mgr, "get_models_for_runtime", return_value=models_dict
+        ):
             result = session_mgr.get_model_from_name("gemma", "wee")
         assert result is not None, "Single-slash Ollama models should substring-match"
         assert "gemma" in result.lower()
@@ -60,7 +68,9 @@ class TestIssue142B01SubstringMatching:
         models_dict = {
             "Models": ["provider/sub-provider/model-3.5-sonnet"],
         }
-        with patch.object(session_mgr, "get_models_for_runtime", return_value=models_dict):
+        with patch.object(
+            session_mgr, "get_models_for_runtime", return_value=models_dict
+        ):
             result = session_mgr.get_model_from_name("3.5-sonnet", "claude")
         assert result is not None
         assert "3.5-sonnet" in result.lower()
@@ -70,8 +80,12 @@ class TestIssue142B01SubstringMatching:
         models_dict = {
             "OpenRouter": ["openrouter/openai/gpt-5-mini"],
         }
-        with patch.object(session_mgr, "get_models_for_runtime", return_value=models_dict):
-            result = session_mgr.get_model_from_name("openrouter/openai/gpt-5-mini", "wee")
+        with patch.object(
+            session_mgr, "get_models_for_runtime", return_value=models_dict
+        ):
+            result = session_mgr.get_model_from_name(
+                "openrouter/openai/gpt-5-mini", "wee"
+            )
         assert result == "openrouter/openai/gpt-5-mini"
 
     def test_openrouter_prefix_stripped_match(self, session_mgr):
@@ -79,7 +93,9 @@ class TestIssue142B01SubstringMatching:
         models_dict = {
             "OpenRouter": ["openrouter/openai/gpt-5-mini"],
         }
-        with patch.object(session_mgr, "get_models_for_runtime", return_value=models_dict):
+        with patch.object(
+            session_mgr, "get_models_for_runtime", return_value=models_dict
+        ):
             result = session_mgr.get_model_from_name("openai/gpt-5-mini", "wee")
         assert result == "openrouter/openai/gpt-5-mini"
 
@@ -93,7 +109,14 @@ class TestIssue142B01SubstringMatching:
             ],
         }
         with patch.object(type(session_mgr), "WEE_MODELS", {}):
-            with patch.object(session_mgr, "get_models_for_runtime", return_value=models_dict):
+            with patch.object(
+                session_mgr, "get_models_for_runtime", return_value=models_dict
+            ):
                 assert session_mgr.get_model_from_name("gpt-5-mini", "wee") is None
-                assert session_mgr.get_model_from_name("claude-3.5-sonnet", "wee") is None
-                assert session_mgr.get_model_from_name("custom", "wee") == "ollama/custom-7b"
+                assert (
+                    session_mgr.get_model_from_name("claude-3.5-sonnet", "wee") is None
+                )
+                assert (
+                    session_mgr.get_model_from_name("custom", "wee")
+                    == "ollama/custom-7b"
+                )

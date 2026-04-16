@@ -24,10 +24,12 @@ if _PROJECT_ROOT not in sys.path:
 
 # ── Shared fixtures ──
 
+
 @pytest.fixture
 def session_mgr():
     """Create a minimal SessionManager instance for testing."""
     from agent_manager import SessionManager
+
     mgr = SessionManager.__new__(SessionManager)
     mgr.session_map = {}
     mgr._session_map_lock = MagicMock()
@@ -49,29 +51,34 @@ def session_mgr():
 # Bug 1: OpenRouter dynamic model fetching
 # ═══════════════════════════════════════════════════════════════════
 
+
 class TestBug1OpenRouterDynamicModels:
     """Verify that fetch_wee_models() fetches OpenRouter models dynamically
     from the API rather than using a hardcoded static list."""
 
     def test_fetch_wee_models_calls_openrouter_api(self, session_mgr):
         """fetch_wee_models should hit openrouter.ai/api/v1/models when key is available."""
-        fake_response = json.dumps({
-            "data": [
-                {"id": "meta-llama/llama-4-scout", "name": "Llama 4 Scout"},
-                {"id": "google/gemma-3-27b-it:free", "name": "Gemma 3 27B"},
-                {"id": "anthropic/claude-sonnet-4", "name": "Claude Sonnet 4"},
-            ]
-        }).encode()
+        fake_response = json.dumps(
+            {
+                "data": [
+                    {"id": "meta-llama/llama-4-scout", "name": "Llama 4 Scout"},
+                    {"id": "google/gemma-3-27b-it:free", "name": "Gemma 3 27B"},
+                    {"id": "anthropic/claude-sonnet-4", "name": "Claude Sonnet 4"},
+                ]
+            }
+        ).encode()
 
         mock_resp = MagicMock()
         mock_resp.read.return_value = fake_response
         mock_resp.status = 200
 
         # Mock Ollama to fail (focus on OpenRouter) + mock keyring
-        with patch("httpx.get", side_effect=Exception("Ollama down")), \
-             patch("keyring.get_password", return_value=None), \
-             patch.dict(os.environ, {"OPENROUTER_API_KEY": "test-key-123"}), \
-             patch("urllib.request.urlopen", return_value=mock_resp) as mock_urlopen:
+        with (
+            patch("httpx.get", side_effect=Exception("Ollama down")),
+            patch("keyring.get_password", return_value=None),
+            patch.dict(os.environ, {"OPENROUTER_API_KEY": "test-key-123"}),
+            patch("urllib.request.urlopen", return_value=mock_resp) as mock_urlopen,
+        ):
             result = session_mgr.fetch_wee_models()
 
         # Verify API was called with correct URL and auth header
@@ -83,20 +90,27 @@ class TestBug1OpenRouterDynamicModels:
 
     def test_fetch_wee_models_returns_discovered_models(self, session_mgr):
         """Discovered OpenRouter models should appear in the result."""
-        fake_response = json.dumps({
-            "data": [
-                {"id": "meta-llama/llama-4-scout", "name": "Llama 4 Scout"},
-                {"id": "google/gemma-3-27b-it:free", "name": "Gemma 3 27B IT (free)"},
-            ]
-        }).encode()
+        fake_response = json.dumps(
+            {
+                "data": [
+                    {"id": "meta-llama/llama-4-scout", "name": "Llama 4 Scout"},
+                    {
+                        "id": "google/gemma-3-27b-it:free",
+                        "name": "Gemma 3 27B IT (free)",
+                    },
+                ]
+            }
+        ).encode()
 
         mock_resp = MagicMock()
         mock_resp.read.return_value = fake_response
 
-        with patch("httpx.get", side_effect=Exception("Ollama down")), \
-             patch("keyring.get_password", return_value=None), \
-             patch.dict(os.environ, {"OPENROUTER_API_KEY": "test-key"}), \
-             patch("urllib.request.urlopen", return_value=mock_resp):
+        with (
+            patch("httpx.get", side_effect=Exception("Ollama down")),
+            patch("keyring.get_password", return_value=None),
+            patch.dict(os.environ, {"OPENROUTER_API_KEY": "test-key"}),
+            patch("urllib.request.urlopen", return_value=mock_resp),
+        ):
             result = session_mgr.fetch_wee_models()
 
         # Result should have OpenRouter Models category
@@ -107,8 +121,10 @@ class TestBug1OpenRouterDynamicModels:
 
     def test_fetch_wee_models_no_api_key_uses_static(self, session_mgr):
         """Without API key, OpenRouter falls back to static model list."""
-        with patch("httpx.get", side_effect=Exception("Ollama down")), \
-             patch.dict(os.environ, {}, clear=False):
+        with (
+            patch("httpx.get", side_effect=Exception("Ollama down")),
+            patch.dict(os.environ, {}, clear=False),
+        ):
             # Remove OPENROUTER_API_KEY if present
             os.environ.pop("OPENROUTER_API_KEY", None)
             try:
@@ -123,8 +139,10 @@ class TestBug1OpenRouterDynamicModels:
     def test_models_api_includes_group_field(self, session_mgr):
         """The /api/v1/models response must include a 'group' field for optgroup rendering."""
         # Use static models (no live fetch)
-        with patch("httpx.get", side_effect=Exception("skip")), \
-             patch.dict(os.environ, {}, clear=False):
+        with (
+            patch("httpx.get", side_effect=Exception("skip")),
+            patch.dict(os.environ, {}, clear=False),
+        ):
             os.environ.pop("OPENROUTER_API_KEY", None)
             try:
                 with patch("keyring.get_password", return_value=None):
@@ -140,16 +158,18 @@ class TestBug1OpenRouterDynamicModels:
 
     def test_openrouter_cache_ttl(self, session_mgr):
         """fetch_wee_models should cache and reuse results within TTL."""
-        fake_response = json.dumps({
-            "data": [{"id": "test/model", "name": "Test"}]
-        }).encode()
+        fake_response = json.dumps(
+            {"data": [{"id": "test/model", "name": "Test"}]}
+        ).encode()
         mock_resp = MagicMock()
         mock_resp.read.return_value = fake_response
 
-        with patch("httpx.get", side_effect=Exception("skip")), \
-             patch("keyring.get_password", return_value=None), \
-             patch.dict(os.environ, {"OPENROUTER_API_KEY": "key"}), \
-             patch("urllib.request.urlopen", return_value=mock_resp) as mock_fetch:
+        with (
+            patch("httpx.get", side_effect=Exception("skip")),
+            patch("keyring.get_password", return_value=None),
+            patch.dict(os.environ, {"OPENROUTER_API_KEY": "key"}),
+            patch("urllib.request.urlopen", return_value=mock_resp) as mock_fetch,
+        ):
             # First call should fetch
             result1 = session_mgr.fetch_wee_models()
             assert mock_fetch.call_count == 1
@@ -161,6 +181,7 @@ class TestBug1OpenRouterDynamicModels:
     def test_openrouter_popular_models_prioritized(self, session_mgr):
         """Popular OpenRouter models should be sorted before others."""
         from agent_manager import SessionManager
+
         popular = SessionManager.OPENROUTER_POPULAR_MODELS
         assert isinstance(popular, (list, tuple, set, frozenset))
         assert len(popular) > 0, "OPENROUTER_POPULAR_MODELS should not be empty"
@@ -172,6 +193,7 @@ class TestBug1OpenRouterDynamicModels:
 # ═══════════════════════════════════════════════════════════════════
 # Bug 2: Synthesis response after tool calls
 # ═══════════════════════════════════════════════════════════════════
+
 
 class TestBug2SynthesisResponse:
     """Verify that tc_start_event and tc_done_event have correct fields
@@ -214,14 +236,29 @@ class TestBug2SynthesisResponse:
 
         assert tc_done_event["event"] == "result"
         assert "output" in tc_done_event
-        assert "result" not in tc_done_event or tc_done_event.get("result") is None, \
-            "Should use 'output' not 'result' field for tool output"
+        assert (
+            "result" not in tc_done_event or tc_done_event.get("result") is None
+        ), "Should use 'output' not 'result' field for tool output"
 
     def test_tc_events_match_appjs_expectations(self):
         """Event fields must match what app.js expects for tool rendering."""
-        # app.js checks: evt.event || 'detected', evt.input, evt.output, evt.name, evt.id
-        start = {"id": "c1", "name": "bash", "event": "detected", "input": {}, "status": "running"}
-        done = {"id": "c1", "name": "bash", "event": "result", "input": {}, "output": "ok", "status": "complete"}
+        # app.js checks: evt.event || 'detected', evt.input, evt.output, evt.name,
+        # evt.id
+        start = {
+            "id": "c1",
+            "name": "bash",
+            "event": "detected",
+            "input": {},
+            "status": "running",
+        }
+        done = {
+            "id": "c1",
+            "name": "bash",
+            "event": "result",
+            "input": {},
+            "output": "ok",
+            "status": "complete",
+        }
 
         # Verify start event
         assert start.get("event", "detected") == "detected"
@@ -229,7 +266,7 @@ class TestBug2SynthesisResponse:
         assert "name" in start
         assert "id" in start
 
-        # Verify done event  
+        # Verify done event
         assert done.get("event") == "result"
         assert "output" in done
         assert done["output"] == "ok"
@@ -253,12 +290,17 @@ class TestBug2SynthesisResponse:
 
         # Simulate fallback logic from Issue #112
         messages = [
-            {"role": "tool", "content": "File saved successfully", "tool_call_id": "c1"},
+            {
+                "role": "tool",
+                "content": "File saved successfully",
+                "tool_call_id": "c1",
+            },
         ]
 
         if not output.strip():
             tool_results = [
-                m["content"] for m in messages
+                m["content"]
+                for m in messages
                 if m.get("role") == "tool" and m.get("content")
             ]
             if tool_results:
@@ -283,6 +325,7 @@ class TestBug2SynthesisResponse:
 # Bug 3: bg_task_mgr tool call tracking for Tasks panel
 # ═══════════════════════════════════════════════════════════════════
 
+
 class TestBug3BgTaskToolTracking:
     """Verify that run_wee_native tracks tool calls in bg_task_mgr
     when running in a background task context."""
@@ -292,9 +335,12 @@ class TestBug3BgTaskToolTracking:
         # Verify source code stores bg_task_id
         import inspect
         from agent_manager import SessionManager
+
         source = inspect.getsource(SessionManager._execute_background_task)
-        assert "bg_task_id" in source,             "_execute_background_task must store bg_task_id in session"
-        assert 'update_session_field' in source
+        assert (
+            "bg_task_id" in source
+        ), "_execute_background_task must store bg_task_id in session"
+        assert "update_session_field" in source
         # bg_task_id should be stored via update_session_field
         idx_bg = source.find('"bg_task_id"')
         assert idx_bg > 0, "bg_task_id string literal must appear in source"
@@ -310,8 +356,9 @@ class TestBug3BgTaskToolTracking:
         execute_pos = source.find("self.execute(prompt")
         assert bg_task_id_pos > 0, "bg_task_id not found in _execute_background_task"
         assert execute_pos > 0, "self.execute not found in _execute_background_task"
-        assert bg_task_id_pos < execute_pos, \
-            "bg_task_id must be stored BEFORE self.execute() is called"
+        assert (
+            bg_task_id_pos < execute_pos
+        ), "bg_task_id must be stored BEFORE self.execute() is called"
 
     def test_run_wee_native_reads_bg_task_id(self):
         """run_wee_native should read bg_task_id from session data."""
@@ -319,10 +366,12 @@ class TestBug3BgTaskToolTracking:
         from agent_manager import SessionManager
 
         source = inspect.getsource(SessionManager.run_wee_native)
-        assert "bg_task_id" in source, \
-            "run_wee_native must read bg_task_id from session data"
-        assert 'session_data.get("bg_task_id")' in source, \
-            "Should use session_data.get('bg_task_id') to retrieve task ID"
+        assert (
+            "bg_task_id" in source
+        ), "run_wee_native must read bg_task_id from session data"
+        assert (
+            'session_data.get("bg_task_id")' in source
+        ), "Should use session_data.get('bg_task_id') to retrieve task ID"
 
     def test_run_wee_native_calls_append_tool_call(self):
         """run_wee_native must call bg_task_mgr.append_tool_call when bg_task_id is set."""
@@ -330,10 +379,12 @@ class TestBug3BgTaskToolTracking:
         from agent_manager import SessionManager
 
         source = inspect.getsource(SessionManager.run_wee_native)
-        assert "append_tool_call" in source, \
-            "run_wee_native must call bg_task_mgr.append_tool_call for tool tracking"
-        assert "_bg_task_mgr" in source, \
-            "run_wee_native must reference self._bg_task_mgr"
+        assert (
+            "append_tool_call" in source
+        ), "run_wee_native must call bg_task_mgr.append_tool_call for tool tracking"
+        assert (
+            "_bg_task_mgr" in source
+        ), "run_wee_native must reference self._bg_task_mgr"
 
     def test_run_wee_native_calls_update_tool_call(self):
         """run_wee_native must call bg_task_mgr.update_tool_call on tool completion."""
@@ -341,8 +392,9 @@ class TestBug3BgTaskToolTracking:
         from agent_manager import SessionManager
 
         source = inspect.getsource(SessionManager.run_wee_native)
-        assert "update_tool_call" in source, \
-            "run_wee_native must call bg_task_mgr.update_tool_call on completion"
+        assert (
+            "update_tool_call" in source
+        ), "run_wee_native must call bg_task_mgr.update_tool_call on completion"
 
     def test_append_tool_call_includes_required_fields(self):
         """Tool call appended to bg_task_mgr must have id, name, input, status, runtime."""
@@ -367,15 +419,16 @@ class TestBug3BgTaskToolTracking:
         idx = source.find("update_tool_call")
         assert idx > 0
         # Get surrounding context
-        snippet = source[idx:idx+300]
-        assert "output=" in snippet, \
-            "update_tool_call must pass output= parameter for Tools tab display"
-        assert "status=" in snippet, \
-            "update_tool_call must pass status= parameter"
+        snippet = source[idx : idx + 300]
+        assert (
+            "output=" in snippet
+        ), "update_tool_call must pass output= parameter for Tools tab display"
+        assert "status=" in snippet, "update_tool_call must pass status= parameter"
 
     def test_bg_task_mgr_append_tool_call_method(self):
         """BackgroundTaskManager.append_tool_call should work correctly."""
         from agent_manager import BackgroundTaskManager
+
         mgr = BackgroundTaskManager.__new__(BackgroundTaskManager)
         mgr._lock = MagicMock()
         mgr._lock.__enter__ = MagicMock(return_value=None)
@@ -389,13 +442,16 @@ class TestBug3BgTaskToolTracking:
         mgr._load = MagicMock(return_value=[task])
         mgr._save = MagicMock()
 
-        mgr.append_tool_call("bg_test142", {
-            "id": "call_1",
-            "name": "bash",
-            "input": '{"command": "ls"}',
-            "status": "running",
-            "runtime": "wee",
-        })
+        mgr.append_tool_call(
+            "bg_test142",
+            {
+                "id": "call_1",
+                "name": "bash",
+                "input": '{"command": "ls"}',
+                "status": "running",
+                "runtime": "wee",
+            },
+        )
 
         mgr._save.assert_called_once()
         saved_tasks = mgr._save.call_args[0][0]
@@ -408,6 +464,7 @@ class TestBug3BgTaskToolTracking:
     def test_bg_task_mgr_update_tool_call_method(self):
         """BackgroundTaskManager.update_tool_call should update existing tool call."""
         from agent_manager import BackgroundTaskManager
+
         mgr = BackgroundTaskManager.__new__(BackgroundTaskManager)
         mgr._lock = MagicMock()
         mgr._lock.__enter__ = MagicMock(return_value=None)
@@ -423,7 +480,9 @@ class TestBug3BgTaskToolTracking:
         mgr._load = MagicMock(return_value=[task])
         mgr._save = MagicMock()
 
-        mgr.update_tool_call("bg_test142", "call_1", status="completed", output="hello world")
+        mgr.update_tool_call(
+            "bg_test142", "call_1", status="completed", output="hello world"
+        )
 
         mgr._save.assert_called_once()
         saved = mgr._save.call_args[0][0]
@@ -436,10 +495,12 @@ class TestBug3BgTaskToolTracking:
         # The guard condition ensures no tracking without bg_task_id
         import inspect
         from agent_manager import SessionManager
+
         source = inspect.getsource(SessionManager.run_wee_native)
         # Guard must check bg_task_id is truthy before calling bg_task_mgr
-        assert "if bg_task_id and self._bg_task_mgr" in source, \
-            "Must guard tool tracking behind bg_task_id check"
+        assert (
+            "if bg_task_id and self._bg_task_mgr" in source
+        ), "Must guard tool tracking behind bg_task_id check"
 
     def test_guard_condition_prevents_tracking_without_mgr(self):
         """Tool tracking must be guarded by both bg_task_id and self._bg_task_mgr."""
@@ -447,13 +508,15 @@ class TestBug3BgTaskToolTracking:
         from agent_manager import SessionManager
 
         source = inspect.getsource(SessionManager.run_wee_native)
-        assert "bg_task_id and self._bg_task_mgr" in source, \
-            "Must guard with 'if bg_task_id and self._bg_task_mgr'"
+        assert (
+            "bg_task_id and self._bg_task_mgr" in source
+        ), "Must guard with 'if bg_task_id and self._bg_task_mgr'"
 
 
 # ═══════════════════════════════════════════════════════════════════
 # Integration: Verify full pipeline
 # ═══════════════════════════════════════════════════════════════════
+
 
 class TestIssue142Integration:
     """Cross-bug integration tests."""
@@ -484,8 +547,10 @@ class TestIssue142Integration:
 
     def test_wee_models_api_response_shape(self, session_mgr):
         """Models API response for wee runtime should have correct shape."""
-        with patch("httpx.get", side_effect=Exception("skip")), \
-             patch.dict(os.environ, {}, clear=False):
+        with (
+            patch("httpx.get", side_effect=Exception("skip")),
+            patch.dict(os.environ, {}, clear=False),
+        ):
             os.environ.pop("OPENROUTER_API_KEY", None)
             try:
                 with patch("keyring.get_password", return_value=None):
@@ -503,13 +568,18 @@ class TestIssue142Integration:
         """SSE tool_call events and bg_task_mgr tool_calls share consistent fields."""
         # SSE event (for WebUI stream)
         sse_start = {
-            "id": "call_1", "name": "bash",
-            "event": "detected", "input": {"cmd": "ls"}, "status": "running",
+            "id": "call_1",
+            "name": "bash",
+            "event": "detected",
+            "input": {"cmd": "ls"},
+            "status": "running",
         }
         # bg_task_mgr entry (for Tasks panel)
         bg_entry = {
-            "id": "call_1", "name": "bash",
-            "input": '{"cmd": "ls"}', "status": "running",
+            "id": "call_1",
+            "name": "bash",
+            "input": '{"cmd": "ls"}',
+            "status": "running",
             "runtime": "wee",
         }
 
@@ -529,9 +599,11 @@ class TestIssue142Integration:
         bg_src = inspect.getsource(SessionManager._execute_background_task)
         assert '"bg_task_id"' in bg_src, "must store bg_task_id in session"
 
-        # Step 2: run_wee_native retrieves it  
+        # Step 2: run_wee_native retrieves it
         wee_src = inspect.getsource(SessionManager.run_wee_native)
-        assert 'session_data.get("bg_task_id")' in wee_src,             "must retrieve bg_task_id from session data"
+        assert (
+            'session_data.get("bg_task_id")' in wee_src
+        ), "must retrieve bg_task_id from session data"
 
         # Step 3: bg_task_mgr is called for tracking
         assert "append_tool_call" in wee_src, "must append tool calls"
