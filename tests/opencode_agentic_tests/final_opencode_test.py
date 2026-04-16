@@ -160,11 +160,11 @@ Ensure step 3 uses info from step 1."""
         print("\nBy Category:")
         print(f"  Context Persistence: {'✓ PASS' if ctx_success else '✗ FAIL'}")
         print(
-            f"  Tool Calling:        {'✓ PASS' if tool_success else '✗ FAIL'} ({tool_passed}/3)"
+            f"  Tool Calling:        {'✓ PASS' if tool_success else '✗ FAIL'} ({tool_passed}/3)"  # noqa: E501
         )
         print(f"  Agentic Flow:        {'✓ PASS' if flow_success else '✗ FAIL'}")
         print(
-            f"  Edge Cases:          {'✓ PASS' if edge_success else '✗ FAIL'} ({edge_passed}/3)"
+            f"  Edge Cases:          {'✓ PASS' if edge_success else '✗ FAIL'} ({edge_passed}/3)"  # noqa: E501
         )
 
         all_pass = [ctx_success, tool_success, flow_success, edge_success]
@@ -175,7 +175,7 @@ Ensure step 3 uses info from step 1."""
             print(f"\nFailures ({len(self.results['failures'])}):")
             for f in self.results["failures"][:5]:
                 print(
-                    f"  - {f.get('test', 'unknown')}: {f.get('error', f.get('output', 'unknown'))[:80]}"
+                    f"  - {f.get('test', 'unknown')}: {f.get('error', f.get('output', 'unknown'))[:80]}"  # noqa: E501
                 )
 
         print("=" * 70 + "\n")

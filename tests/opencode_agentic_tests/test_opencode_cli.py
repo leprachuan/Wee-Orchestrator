@@ -1,9 +1,7 @@
 #!/usr/bin/env python3
 """Test opencode runtime CLI directly"""
 
-import json
 import subprocess
-import time
 from datetime import datetime
 
 
@@ -45,7 +43,7 @@ class OpenCodeCLITester:
                 "-c",
                 f"""
 import subprocess
-result = subprocess.run(['opencode', '--model', 'auto'], input='{prompt}', capture_output=True, text=True, timeout=25)
+result = subprocess.run(['opencode', '--model', 'auto'], input='{prompt}', capture_output=True, text=True, timeout=25)  # noqa: E501
 print(result.stdout)
 print(result.stderr, file=__import__('sys').stderr)
 """,
@@ -79,7 +77,7 @@ print(result.stderr, file=__import__('sys').stderr)
                 ["which", "opencode"], capture_output=True, timeout=5
             )
             return result.returncode == 0
-        except:
+        except Exception:  # noqa: B014
             return False
 
 

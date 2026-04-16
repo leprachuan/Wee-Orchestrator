@@ -84,7 +84,7 @@ Turn 3: The budget is $50,000.
 Turn 4: I need 3 team members.
 Turn 5: Timeline is 6 months.
 
-After each turn, confirm what you've learned so far. At the end, summarize ALL details together.
+After each turn, confirm what you've learned so far. At the end, summarize ALL details together.  # noqa: E501
 This tests if you maintain context across 5+ turns without losing information.
 """
 
@@ -119,11 +119,11 @@ This tests if you maintain context across 5+ turns without losing information.
             ),
             (
                 "multi_step_tools",
-                "Write code to: 1) create a list of numbers 1-100, 2) filter evens, 3) sum them.",
+                "Write code to: 1) create a list of numbers 1-100, 2) filter evens, 3) sum them.",  # noqa: E501
             ),
             (
                 "conditional_logic",
-                "Write code that reads a number and outputs 'even' or 'odd' based on value. Test with 42 and 17.",
+                "Write code that reads a number and outputs 'even' or 'odd' based on value. Test with 42 and 17.",  # noqa: E501
             ),
         ]
 
@@ -147,7 +147,8 @@ Complete this multi-step agent task without losing context:
 
 Step 1 (Research): List 5 key concepts about quantum computing
 Step 2 (Summarize): Create a 2-sentence summary of quantum computing basics
-Step 3 (Format): Present the summary as a JSON object with fields: concept, summary, difficulty_level
+Step 3 (Format): Present the summary as a JSON object with  # noqa: E501
+            "fields: concept, summary, difficulty_level
 
 Verify that all steps reference information from step 1.
 """
@@ -163,7 +164,7 @@ Verify that all steps reference information from step 1.
             return True
         else:
             print(
-                f"✗ FAIL: Agentic flow incomplete (step1:{has_step1}, step3:{has_step3})"
+                f"✗ FAIL: Agentic flow incomplete (step1:{has_step1}, step3:{has_step3})"  # noqa: E501
             )
             return False
 
@@ -179,11 +180,11 @@ Verify that all steps reference information from step 1.
             ),
             (
                 "rapid_tool_calls",
-                "Write 5 independent Python snippets: 1) factorial(10), 2) fibonacci(10), 3) is_prime(17), 4) gcd(48,18), 5) lcm(12,15)",
+                "Write 5 independent Python snippets: 1) factorial(10), 2) fibonacci(10), 3) is_prime(17), 4) gcd(48,18), 5) lcm(12,15)",  # noqa: E501
             ),
             (
                 "error_recovery",
-                "Attempt to execute invalid Python code first, then correct it and show the fixed version.",
+                "Attempt to execute invalid Python code first, then correct it and show the fixed version.",  # noqa: E501
             ),
         ]
 
@@ -245,7 +246,7 @@ Verify that all steps reference information from step 1.
         # File issues for failures
         if self.results["failures"]:
             print(
-                f"\n=== Filing GitHub Issues for {len(self.results['failures'])} failures ==="
+                f"\n=== Filing GitHub Issues for {len(self.results['failures'])} failures ==="  # noqa: E501
             )
             for failure in self.results["failures"]:
                 title = f"Gemma4-26B: {failure['test']} failed"

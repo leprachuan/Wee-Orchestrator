@@ -5,10 +5,7 @@ Tests with model: openai-compatible/gemma4-26b
 """
 
 import json
-import os
 import subprocess
-import sys
-import time
 from datetime import datetime
 
 
@@ -67,7 +64,7 @@ class OpenCodeDirectTester:
                         self.results["tests_passed"] += 1
                         output = response.get("response", response.get("output", ""))
                         return True, output
-                except:
+                except Exception:  # noqa: B014
                     pass
 
             self.results["tests_failed"] += 1
@@ -134,11 +131,11 @@ After processing all items, confirm you remember ALL five details."""
             ("calc", "Calculate: (123 * 456) + 789 - 45. Show steps and final result."),
             (
                 "code_gen",
-                "Write Python to: 1) create list [1..100], 2) filter for primes, 3) sum them.",
+                "Write Python to: 1) create list [1..100], 2) filter for primes, 3) sum them.",  # noqa: E501
             ),
             (
                 "logic",
-                "If x=7, is it prime? If y=12, what's gcd(y,18)? Show both calculations.",
+                "If x=7, is it prime? If y=12, what's gcd(y,18)? Show both calculations.",  # noqa: E501
             ),
         ]
 
@@ -190,7 +187,7 @@ Show all three steps and verify step 3 uses info from step 1."""
             ),
             (
                 "rapid",
-                "Compute: factorial(5), fibonacci(8), prime_check(17), gcd(48,18), lcm(12,15)",
+                "Compute: factorial(5), fibonacci(8), prime_check(17), gcd(48,18), lcm(12,15)",  # noqa: E501
             ),
             (
                 "error_fix",
@@ -224,7 +221,7 @@ Show all three steps and verify step 3 uses info from step 1."""
                 body,
             ]
             # Add only valid labels
-            valid_labels = [l for l in labels if l in ["bug", "wee-dev"]]
+            valid_labels = [label for label in labels if label in ["bug", "wee-dev"]]
             if valid_labels:
                 cmd.extend(["--label", ",".join(valid_labels)])
 
@@ -232,14 +229,14 @@ Show all three steps and verify step 3 uses info from step 1."""
             if result.returncode == 0:
                 return result.stdout.strip()
             return None
-        except:
+        except Exception:  # noqa: B014
             return None
 
     def run_all_tests(self):
         """Run all tests"""
         print(f"\n{'='*70}")
-        print(f"OpenCode Agentic Flow Tests")
-        print(f"Runtime: opencode | Model: gemma4-26b")
+        print("OpenCode Agentic Flow Tests")
+        print("Runtime: opencode | Model: gemma4-26b")
         print(f"API: {self.api_url}")
         print(f"Started: {self.results['timestamp']}")
         print(f"{'='*70}")
@@ -253,7 +250,7 @@ Show all three steps and verify step 3 uses info from step 1."""
         # File issues for any failures
         for failure in self.results["failures"][:3]:  # Limit to 3 issues
             title = f"OpenCode/Gemma4: {failure['test']} test failed"
-            body = f"""## Test Failure
+            body = """## Test Failure
 
 Test: `{failure['test']}`
 Runtime: opencode
@@ -276,19 +273,19 @@ Timestamp: {self.results['timestamp']}
 
         # Summary
         print(f"\n{'='*70}")
-        print(f"SUMMARY")
+        print("SUMMARY")
         print(f"{'='*70}")
         print(f"Tests Run:      {self.results['tests_run']}")
         print(f"Tests Passed:   {self.results['tests_passed']}")
         print(f"Tests Failed:   {self.results['tests_failed']}")
         print(f"Issues Filed:   {len(self.results['issues_filed'])}")
-        print(f"\nResults by Category:")
+        print("\nResults by Category:")
         for name, passed in results:
             status = "✓ PASS" if passed else "✗ FAIL"
             print(f"  {status}: {name}")
 
         if self.results["issues_filed"]:
-            print(f"\nGitHub Issues:")
+            print("\nGitHub Issues:")
             for issue in self.results["issues_filed"]:
                 print(f"  - {issue}")
 
