@@ -1,4 +1,4 @@
-"""Regression tests for Issue #146: Global toggle to suppress background task notifications.
+"""Regression tests for Issue #146: Global notification toggle.
 
 Tests cover:
 1. NotificationManager global settings persistence (load/save/toggle)
@@ -20,7 +20,7 @@ PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
-from notification_manager import NotificationManager
+from notification_manager import NotificationManager  # noqa: E402
 
 
 @pytest.fixture
@@ -143,13 +143,13 @@ class TestSlashNotifications:
 
     def test_off_command_sets_global_disabled(self, nm):
         mgr = self._make_session_mgr(nm)
-        result = mgr._slash_notifications("off", {"channel": "telegram"}, "sess1")
+        mgr._slash_notifications("off", {"channel": "telegram"}, "sess1")
         assert nm.is_global_enabled() is False
 
     def test_on_command_sets_global_enabled(self, nm):
         nm.set_global_enabled(False)
         mgr = self._make_session_mgr(nm)
-        result = mgr._slash_notifications("on", {"channel": "telegram"}, "sess1")
+        mgr._slash_notifications("on", {"channel": "telegram"}, "sess1")
         assert nm.is_global_enabled() is True
 
     def test_current_shows_on(self, nm):

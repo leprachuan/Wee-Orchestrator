@@ -245,7 +245,7 @@ class NotificationManager:
         # skip_external was not explicitly set (covers identity mismatch and
         # late-mute edge cases).
         if not skip_external:
-            if self.is_muted("_global"):
+            if not is_critical and self.is_muted("_global"):
                 skip_external = True
             elif self.is_muted(user_key):
                 skip_external = True
