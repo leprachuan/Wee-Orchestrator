@@ -42,6 +42,7 @@ def _make_mgr():
         }
     }
     mgr._stream_buffers = {}
+    mgr.session_map_file = Path("/tmp/test_wee_session_map.json")
     return mgr
 
 
