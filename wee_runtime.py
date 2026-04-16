@@ -99,28 +99,18 @@ def resolve_model_and_endpoint(model: str, api_base: str = None, api_key: str = 
             "WEE_API_BASE", "http://192.168.1.101:11434/v1"
         )
     if not resolved_key:
-        # Issue #153: Check OPENROUTER_API_KEY env var for OpenRouter first
-        if "openrouter" in (resolved_base or "").lower():
-            resolved_key = os.environ.get("OPENROUTER_API_KEY")
-        if not resolved_key:
-            resolved_key = os.environ.get("WEE_API_KEY")
-        # Try keyring for OpenRouter
-        if not resolved_key and "openrouter" in (resolved_base or "").lower():
-            try:
-                import keyring
-                resolved_key = keyring.get_password("openrouter", "api_key")
-            except Exception:
-                pass
-        # Issue #153: Raise clear error instead of defaulting to "ollama"
+        resolved_key = os.environ.get("WEE_API_KEY") or os.environ.get(
+            "OPENROUTER_API_KEY"
+        )
         if not resolved_key:
             if "openrouter" in (resolved_base or "").lower():
-                print(
-                    "Error: OpenRouter API key not found. Set "
-                    "OPENROUTER_API_KEY env var or store via keyring.",
-                    file=sys.stderr,
-                )
-                sys.exit(1)
-            resolved_key = "ollama"
+                try:
+                    import keyring
+                    resolved_key = keyring.get_password("openrouter", "api_key")
+                except Exception:
+                    pass
+            if not resolved_key:
+                resolved_key = "ollama"
 
     return resolved_model, resolved_base, resolved_key
 
@@ -388,8 +378,15 @@ def main():
                     func_args = {"raw": func_args_str}
 
                 print(f"[Wee] Tool: {func_name}({json.dumps(func_args)[:200]})", file=sys.stderr)
+                # Issue #142: Emit structured JSON to stdout for bg task tool call tracking
+                sys.stdout.write(json.dumps({"__wee_tc__": "start", "id": tc_id, "name": func_name, "input": func_args}) + "\n")
+                sys.stdout.flush()
 
                 tool_result = execute_tool(func_name, func_args)
+
+                # Issue #142: Emit tool result to stdout
+                sys.stdout.write(json.dumps({"__wee_tc__": "done", "id": tc_id, "name": func_name, "output": (tool_result or "")[:500]}) + "\n")
+                sys.stdout.flush()
 
                 messages.append({
                     "role": "tool",
