@@ -20,7 +20,7 @@ import time
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from notification_manager import NotificationManager
+from notification_manager import NotificationManager  # noqa: E402
 
 # --- API helpers for integration tests ---
 
@@ -294,7 +294,7 @@ def test_api_notifications_off_sets_global_mute():
         )
         assert (
             global_pref == "off"
-        ), f"Expected _global preference 'off', got '{global_pref}'. Full prefs: {json.dumps(prefs)}"
+        ), f"Expected _global preference 'off', got '{global_pref}'. Full prefs: {json.dumps(prefs)}"  # noqa: E501
         print("✓ _global preference is 'off' in notification_prefs.json")
     else:
         raise AssertionError(f"notification_prefs.json not found at {prefs_path}")
