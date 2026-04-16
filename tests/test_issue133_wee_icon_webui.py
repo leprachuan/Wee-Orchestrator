@@ -35,8 +35,14 @@ class TestWeeIconSvgAsset(unittest.TestCase):
         tree = ET.parse(SVG_PATH)
         root = tree.getroot()
         # Check with and without namespace prefix
-        attribs = {k.split("}")[-1] if "}" in k else k: v for k, v in root.attrib.items()}
-        self.assertIn("viewBox", attribs, "SVG must have viewBox for correct 14x14px rendering")
+        attribs = {
+            k.split("}")[-1] if "}" in k else k: v
+            for k, v in root.attrib.items()
+        }
+        self.assertIn(
+            "viewBox", attribs,
+            "SVG must have viewBox for correct 14x14px rendering"
+        )
 
     def test_wee_svg_file_size(self):
         """wee.svg should be a reasonable size (50B–4KB)."""
@@ -48,14 +54,20 @@ class TestWeeIconSvgAsset(unittest.TestCase):
         """wee.svg must not hardcode white fills (breaks dark/light theming)."""
         with open(SVG_PATH) as f:
             content = f.read().lower()
-        for bad_fill in ['fill="white"', "fill='white'", 'fill="#fff"', 'fill="#ffffff"']:
+        for bad_fill in [
+            'fill="white"', "fill='white'",
+            'fill="#fff"', 'fill="#ffffff"',
+        ]:
             self.assertNotIn(bad_fill, content, f"SVG hardcodes white fill: {bad_fill}")
 
     def test_wee_svg_no_hardcoded_black_colors(self):
         """wee.svg must not hardcode black fills (breaks icon color CSS filters)."""
         with open(SVG_PATH) as f:
             content = f.read().lower()
-        for bad_fill in ['fill="black"', "fill='black'", 'fill="#000"', 'fill="#000000"']:
+        for bad_fill in [
+            'fill="black"', "fill='black'",
+            'fill="#000"', 'fill="#000000"',
+        ]:
             self.assertNotIn(bad_fill, content, f"SVG hardcodes black fill: {bad_fill}")
 
 
@@ -87,7 +99,10 @@ class TestRuntimeIconsMap(unittest.TestCase):
     def test_other_runtimes_still_present(self):
         """Existing runtime icon mappings must not be broken by wee addition."""
         for runtime in ("claude", "copilot", "gemini", "opencode", "devin", "cursor"):
-            self.assertIn(f"'{runtime}'", self.app_js, f"Runtime '{runtime}' missing from app.js")
+            self.assertIn(
+                f"'{runtime}'", self.app_js,
+                f"Runtime '{runtime}' missing from app.js"
+            )
 
     def test_runtime_icon_html_function_renders_img(self):
         """runtimeIconHTML function must generate an <img> tag for icon rendering."""
