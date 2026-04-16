@@ -6930,7 +6930,6 @@ User Request:
 
         import asyncio
 
-        import io
         import sys
         # Parse mode
         if mode is None:
