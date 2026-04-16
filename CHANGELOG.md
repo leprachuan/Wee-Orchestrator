@@ -1,5 +1,27 @@
 # Changelog
 
+## [Issue #166] Feature: Per-Agent Telegram/WebEx Bots
+**Status:** QA Approved Round 2 (Commit: 8479c6f, Branch: issue/166)
+
+### Summary
+Adds agent_bot_manager.py — standalone manager that reads agents.json and
+automatically starts per-agent Telegram or WebEx bots. Hot-reloads on config change.
+
+### Setup
+Create /opt/n8n-copilot-shim/agent-bot-manager.env (gitignored):
+  API_SHARED_KEY=<your-api-key>
+
+### Security
+- API key via EnvironmentFile (not in ExecStart args)
+- DEFAULT_API_SHARED_KEY defaults to empty; main() fails fast on missing key
+- Bot tokens from keyring at runtime, never hardcoded
+
+### Tests
+- 57 regression tests (tests/test_issue166_agent_bot_manager.py)
+- 0 regressions against full suite
+
+---
+
 ## [Issue #153] Bug Fix: OpenRouter 401 Authentication Error
 **Status:** ✅ QA Approved (Commit: 1dae171, PR #154)
 
@@ -1025,6 +1047,21 @@ compatibility with the existing `copilot` CLI runtime.
 
 
 ### Added
+
+#### F025 (Enhanced): Custom Themes API — wee-qa Fix Round 2
+- **Status**: 🔄 QA Submitted (commit 6d45763 on dev)
+- **Commit**: 6d45763
+- Adds custom theme support via `/api/v1/themes` endpoint with CSS embedded in listing response
+- **B01 (BLOCKER) Fix**: Removed `/api/v1/themes/{name}/css` endpoint entirely.
+  - CSS content now embedded as `css` field in each custom theme object in the themes list response.
+  - `loadCustomThemes()` caches CSS content in `_customThemeCSS` map (populated via the already-authenticated themes list call).
+  - `applyTheme()` now injects custom CSS via `<style id="custom-theme-style">` element instead of `<link href="...">`.
+  - `<link>` elements cannot send `Authorization` headers — the root cause of always-401 custom theme loading.
+  - After `loadCustomThemes()` completes, re-applies current theme if it's custom (handles localStorage-persisted custom themes on page load).
+- **M01 Fix**: `name == "custom.css"` dead code → corrected to `name == "custom"` (stem of `custom.css.template` is `custom.css` but `.template` files don't match `*.css` glob).
+- **M02 Fix**: E501 violation on `fastapi.responses` import line — split to multi-line parenthesized import form.
+- **M03 Fix**: `innerHTML` with server data in `loadCustomThemes()` → replaced with explicit DOM element creation using `textContent` for label/description fields.
+- **Testing**: Replaced `TestGetThemeCSS` (9 tests, endpoint removed) with `TestCustomThemeCSSInListing` (4 new tests: css in listing, builtins have no css field, endpoint returns 404, traversal regex). 17 themes tests pass; full suite 857 passed, 9 skipped.
 
 #### #69: BLOCKERS.md Template for Structured wee-dev Blocker Tracking
 - **Status**: ✅ QA Approved (commit 6d2aade on dev)
