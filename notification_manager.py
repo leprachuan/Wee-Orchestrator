@@ -150,9 +150,7 @@ class NotificationManager:
         with self._global_settings_lock:
             settings = self._load_global_settings()
             settings["notifications_enabled"] = enabled
-            settings["updated_at"] = time.strftime(
-                "%Y-%m-%dT%H:%M:%SZ", time.gmtime()
-            )
+            settings["updated_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
             self._save_global_settings(settings)
 
     def is_global_enabled(self) -> bool:
@@ -259,29 +257,29 @@ class NotificationManager:
             if chan == "telegram":
                 if not identity_unknown:
                     print(
-                        f"[NotificationManager] Routing Telegram notification for {task_id} to {ukey}"
+                        f"[NotificationManager] Routing Telegram notification for {task_id} to {ukey}"  # noqa: E501
                     )
                     self._notify_telegram(notification)
                 else:
                     print(
-                        f"[NotificationManager] Broadcasting Telegram notification for {task_id} (identity unknown)"
+                        f"[NotificationManager] Broadcasting Telegram notification for {task_id} (identity unknown)"  # noqa: E501
                     )
                     self._notify_telegram_broadcast(notification)
             elif chan == "webex":
                 if not identity_unknown:
                     print(
-                        f"[NotificationManager] Routing WebEx notification for {task_id} to {ukey}"
+                        f"[NotificationManager] Routing WebEx notification for {task_id} to {ukey}"  # noqa: E501
                     )
                     self._notify_webex(notification)
                 else:
                     print(
-                        f"[NotificationManager] Broadcasting WebEx notification for {task_id} (identity unknown)"
+                        f"[NotificationManager] Broadcasting WebEx notification for {task_id} (identity unknown)"  # noqa: E501
                     )
                     self._notify_webex_broadcast(notification)
             # webui/api/other channels: no external push needed (WebUI polls)
         else:
             print(
-                f"[NotificationManager] Skipping external notification for {task_id} (skip_external=True)"
+                f"[NotificationManager] Skipping external notification for {task_id} (skip_external=True)"  # noqa: E501
             )
 
         return notification
@@ -410,7 +408,7 @@ class NotificationManager:
                     connector.send_message(chat_id, msg)
                 except Exception as e:
                     print(
-                        f"[NotificationManager] Telegram broadcast to {chat_id} failed: {e}",
+                        f"[NotificationManager] Telegram broadcast to {chat_id} failed: {e}",  # noqa: E501
                         file=sys.stderr,
                     )
         except Exception as e:
@@ -471,7 +469,7 @@ class NotificationManager:
                     connector.send_message(person_id, msg)
                 except Exception as e:
                     print(
-                        f"[NotificationManager] WebEx broadcast to {person_id} failed: {e}",
+                        f"[NotificationManager] WebEx broadcast to {person_id} failed: {e}",  # noqa: E501
                         file=sys.stderr,
                     )
         except Exception as e:

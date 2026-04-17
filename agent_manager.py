@@ -1830,7 +1830,7 @@ class SessionManager:
         """List stored secret names via secret_tool.py."""
         try:
             proc = subprocess.run(
-                [sys.executable, secret_tool, "list", "--backend", "pass"],
+                [sys.executable, secret_tool, "list", "--backend", "file"],
                 capture_output=True,
                 text=True,
                 timeout=10,
