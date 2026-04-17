@@ -162,9 +162,7 @@ class TaskSchedulerExecutor:
                 # Forward drift reduces debt (clock catching up via NTP slew)
                 if self._wall_clock_debt > 0:
                     old_debt = self._wall_clock_debt
-                    self._wall_clock_debt = max(
-                        0.0, self._wall_clock_debt - drift
-                    )
+                    self._wall_clock_debt = max(0.0, self._wall_clock_debt - drift)
                     logger.info(
                         f"Wall-clock debt reduced {old_debt:.1f}s → "
                         f"{self._wall_clock_debt:.1f}s (forward drift recovery)"
@@ -644,9 +642,7 @@ class TaskSchedulerExecutor:
             compensated_now = now
             drift_compensated = False
             if self._wall_clock_debt > 0:
-                compensated_now = now + timedelta(
-                    seconds=self._wall_clock_debt
-                )
+                compensated_now = now + timedelta(seconds=self._wall_clock_debt)
 
             if next_run > compensated_now:
                 return False
