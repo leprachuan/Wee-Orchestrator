@@ -18,7 +18,6 @@ import os
 import re
 import subprocess
 import sys
-import time
 
 # Provider presets: prefix → (api_base, default_api_key)
 PROVIDER_PRESETS = {
@@ -75,7 +74,8 @@ def resolve_model_and_endpoint(model: str, api_base: str = None, api_key: str = 
     Model format: [provider/]model_name
     Examples:
         ollama/gemma4:e4b  → api_base=ollama preset, model=gemma4:e4b
-        openrouter/meta-llama/llama-4-scout → api_base=openrouter, model=meta-llama/llama-4-scout
+        openrouter/meta-llama/llama-4-scout → api_base=openrouter,
+            model=meta-llama/llama-4-scout
         gemma4:e4b         → use explicit api_base or default to ollama
     """
     resolved_model = model
@@ -176,7 +176,8 @@ def sanitize_bash_command(command: str) -> str:
     when the flag is not already present.  ``accept-new`` is preferred
     over ``no`` because it still rejects CHANGED keys (potential MITM).
 
-    Wired into execute_tool() by Issue #111. Called on every bash tool input before execution
+    Wired into execute_tool() by Issue #111. Called on every bash tool
+    input before execution
     once wee_runtime.py gains a tool execution loop.
     """
     if not command or not _SSH_BIN_RE.search(command):
@@ -215,7 +216,8 @@ _WEE_TOOL_CAPABILITY_PROMPT = (
     "   Use this for: data processing, calculations, scripting, etc.\n\n"
     "IMPORTANT: You are NOT sandboxed. You CAN and SHOULD use these tools to execute\n"
     "commands, SSH into remote hosts, read/write files, and interact with the system.\n"
-    "NEVER claim you cannot execute commands or are in a sandbox — use the tools above.\n"
+    "NEVER claim you cannot execute commands or are in a sandbox"
+    " — use the tools above.\n"
 )
 
 

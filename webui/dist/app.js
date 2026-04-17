@@ -2216,7 +2216,7 @@ async function sendMessageStreaming(query, sessionId) {
               if (_timingText) {
                 const timingDiv = document.createElement('div');
                 timingDiv.className = 'message-timing';
-                timingDiv.innerHTML = _timingText;
+                timingDiv.appendChild(_timingText);
                 streamBubble.appendChild(timingDiv);
               }
               streamBubble.appendChild(createTtsButton(streamBubble));
@@ -2579,13 +2579,18 @@ async function loadEarlierMessages() {
  * Build timing/token footer text for assistant messages (Issue #128).
  */
 function buildTimingText(elapsedSec, weeMeta) {
+  const frag = document.createDocumentFragment();
   const base = elapsedSec != null ? `Generated in ${elapsedSec.toFixed(1)}s` : null;
-  if (!weeMeta) return base ? `⏱️ ${base}` : '';
+  if (!weeMeta) {
+    if (base) frag.appendChild(document.createTextNode(`⏱️ ${base}`));
+    return frag.childNodes.length ? frag : null;
+  }
   const runtime = weeMeta.runtime || '';
   const tokens = weeMeta.tokens;
   const costLabel = weeMeta.cost_label || '';
   if (runtime === 'copilot-sdk' || costLabel === 'copilot') {
-    return base ? `⏱️ ${base} · copilot request` : 'copilot request';
+    frag.appendChild(document.createTextNode(base ? `⏱️ ${base} · copilot request` : 'copilot request'));
+    return frag;
   }
   if (tokens != null) {
     const tokenStr = tokens.toLocaleString();
@@ -2601,10 +2606,15 @@ function buildTimingText(elapsedSec, weeMeta) {
       tooltip = `Input: ${pTokens.toLocaleString()} tokens\nOutput: ${cTokens.toLocaleString()} tokens\nTotal: ${tokenStr} tokens`;
       if (costLabel && costLabel.startsWith('$')) tooltip += `\nEst. cost: ${costLabel}`;
     }
-    const span = `<span title="${tooltip}">${tokenStr} tokens${costStr}</span>`;
-    return base ? `⏱️ ${base} · ${span}` : span;
+    if (base) frag.appendChild(document.createTextNode(`⏱️ ${base} · `));
+    const span = document.createElement('span');
+    span.setAttribute('title', tooltip);
+    span.textContent = `${tokenStr} tokens${costStr}`;
+    frag.appendChild(span);
+    return frag;
   }
-  return base ? `⏱️ ${base}` : '';
+  if (base) frag.appendChild(document.createTextNode(`⏱️ ${base}`));
+  return frag.childNodes.length ? frag : null;
 }
 
 async function renderMessage(role, content, files = [], timing = null, weeMeta = null) {
@@ -2668,7 +2678,7 @@ async function renderMessage(role, content, files = [], timing = null, weeMeta =
     if (_rmTimingText) {
       const timingDiv = document.createElement('div');
       timingDiv.className = 'message-timing';
-      timingDiv.innerHTML = _rmTimingText;
+      timingDiv.appendChild(_rmTimingText);
       bubble.appendChild(timingDiv);
     }
   }
