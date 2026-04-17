@@ -8156,6 +8156,11 @@ User Request:
         _total_completion_tokens = 0
         _usage_available = False
 
+        # Issue #160: Track token usage across tool rounds
+        _total_prompt_tokens = 0
+        _total_completion_tokens = 0
+        _usage_available = False
+
         try:
             for round_num in range(MAX_TOOL_ROUNDS + 1):
                 # Build create kwargs — include tools unless on final safety round
@@ -10738,7 +10743,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                     "model": session_data.get("model"),
                 }
                 # Issue #160: Include wee_meta (token usage + cost) if available
-                _wm = session_data.get("_wee_meta")
+                _wm = session_data.pop("_wee_meta", None)
                 if _wm:
                     _done_evt["wee_meta"] = _wm
                 done_payload = _json.dumps(_done_evt)
@@ -10843,7 +10848,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                             "model": session_data.get("model"),
                         }
                         # Issue #160: Include wee_meta if available
-                        _wm = session_data.get("_wee_meta")
+                        _wm = session_data.pop("_wee_meta", None)
                         if _wm:
                             _done_evt["wee_meta"] = _wm
                         done_payload = _json.dumps(_done_evt)
@@ -10862,7 +10867,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                         "model": session_data.get("model"),
                     }
                     # Issue #160: Include wee_meta if available
-                    _wm = session_data.get("_wee_meta")
+                    _wm = session_data.pop("_wee_meta", None)
                     if _wm:
                         _done_evt["wee_meta"] = _wm
                     done_payload = _json.dumps(_done_evt)
@@ -10903,7 +10908,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                     "model": session_data.get("model"),
                 }
                 # Issue #160: Include wee_meta if available
-                _wm = session_data.get("_wee_meta")
+                _wm = session_data.pop("_wee_meta", None)
                 if _wm:
                     _done_evt["wee_meta"] = _wm
                 done_payload = _json.dumps(_done_evt)
@@ -12121,6 +12126,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 ]
                 if permission_mode == "elevated":
                     cmd.extend(["--allow-all-paths", "--yolo"])
+
 
 
             proc_timeout = (timeout or 900) + 30
