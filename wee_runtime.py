@@ -13,13 +13,11 @@ Usage:
 """
 
 import argparse
-import re
 import json
 import os
+import re
 import subprocess
 import sys
-import time
-
 
 # Provider presets: prefix → (api_base, default_api_key)
 PROVIDER_PRESETS = {
@@ -76,7 +74,8 @@ def resolve_model_and_endpoint(model: str, api_base: str = None, api_key: str = 
     Model format: [provider/]model_name
     Examples:
         ollama/gemma4:e4b  → api_base=ollama preset, model=gemma4:e4b
-        openrouter/meta-llama/llama-4-scout → api_base=openrouter, model=meta-llama/llama-4-scout
+        openrouter/meta-llama/llama-4-scout
+            → api_base=openrouter, model=meta-llama/llama-4-scout
         gemma4:e4b         → use explicit api_base or default to ollama
     """
     resolved_model = model
@@ -86,7 +85,7 @@ def resolve_model_and_endpoint(model: str, api_base: str = None, api_key: str = 
     # Check for provider prefix
     for prefix, (preset_base, preset_key) in PROVIDER_PRESETS.items():
         if model.lower().startswith(f"{prefix}/"):
-            resolved_model = model[len(prefix) + 1:]
+            resolved_model = model[len(prefix) + 1 :]
             if not resolved_base:
                 resolved_base = preset_base
             if not resolved_key and preset_key:
@@ -95,9 +94,7 @@ def resolve_model_and_endpoint(model: str, api_base: str = None, api_key: str = 
 
     # Defaults
     if not resolved_base:
-        resolved_base = os.environ.get(
-            "WEE_API_BASE", "http://192.168.1.101:11434/v1"
-        )
+        resolved_base = os.environ.get("WEE_API_BASE", "http://192.168.1.101:11434/v1")
     if not resolved_key:
         # Issue #153: Check OPENROUTER_API_KEY env var for OpenRouter first
         if "openrouter" in (resolved_base or "").lower():
@@ -108,6 +105,7 @@ def resolve_model_and_endpoint(model: str, api_base: str = None, api_key: str = 
         if not resolved_key and "openrouter" in (resolved_base or "").lower():
             try:
                 import keyring
+
                 resolved_key = keyring.get_password("openrouter", "api_key")
             except Exception:
                 pass
@@ -125,8 +123,21 @@ def resolve_model_and_endpoint(model: str, api_base: str = None, api_key: str = 
     return resolved_model, resolved_base, resolved_key
 
 
-def execute_tool(func_name: str, func_args: dict) -> str:
-    """Execute a tool call and return its output (Issues #107, #111)."""
+def execute_tool(func_name: str, func_args: dict, permission: str = "auto") -> str:
+    """Execute a tool call and return its output (Issues #107, #111, #158).
+
+    Args:
+        permission: Controls execution gating.
+            "restricted" — blocks all tool execution and returns an error.
+            "auto" (default) — executes tools as requested by the model.
+            "elevated" — treated identically to "auto" (no privilege escalation
+            in CLI contexts).
+    """
+    if permission == "restricted":
+        return (
+            "Error: Tool execution blocked by permission level 'restricted'. "
+            "Run with --permission auto to enable tool calls."
+        )
     try:
         if func_name == "bash":
             command = func_args.get("command", "")
@@ -164,6 +175,8 @@ def execute_tool(func_name: str, func_args: dict) -> str:
         return f"Error: Tool {func_name} timed out after {TOOL_TIMEOUT}s"
     except Exception as e:
         return f"Error executing tool {func_name}: {e}"
+
+
 # Issue #113: SSH command sanitisation
 _SSH_BIN_RE = re.compile(r"\b(ssh|scp|sftp)\b")
 
@@ -176,7 +189,9 @@ def sanitize_bash_command(command: str) -> str:
     when the flag is not already present.  ``accept-new`` is preferred
     over ``no`` because it still rejects CHANGED keys (potential MITM).
 
-    Wired into execute_tool() by Issue #111. Called on every bash tool input before execution
+    Wired into execute_tool() by Issue #111. Called on every bash
+    tool input before execution once wee_runtime.py gains a tool
+    execution loop.
     once wee_runtime.py gains a tool execution loop.
     """
     if not command or not _SSH_BIN_RE.search(command):
@@ -209,27 +224,39 @@ _ANTI_HALLUCINATION_PROMPT = (
 _WEE_TOOL_CAPABILITY_PROMPT = (
     "\n\n[Tool Capabilities]\n"
     "You have the following tools available. Use them to fulfil user requests.\n\n"
-    "1. **bash** — Execute shell commands. Parameters: {\"command\": \"<shell command>\"}\n"
+    '1. **bash** — Execute shell commands. Parameters: {"command": "<shell command>"}'  # noqa: E501
     "   Use this for: file operations, system commands, SSH, curl, git, etc.\n"
-    "2. **python** — Execute Python code. Parameters: {\"code\": \"<python code>\"}\n"
+    '2. **python** — Execute Python code. Parameters: {"code": "<python code>"}\n'
     "   Use this for: data processing, calculations, scripting, etc.\n\n"
     "IMPORTANT: You are NOT sandboxed. You CAN and SHOULD use these tools to execute\n"
     "commands, SSH into remote hosts, read/write files, and interact with the system.\n"
-    "NEVER claim you cannot execute commands or are in a sandbox — use the tools above.\n"
+    "NEVER claim you cannot execute commands or are in a sandbox"  # noqa: E501
+    " — use the tools above.\n"
 )
+
 
 def main():
     parser = argparse.ArgumentParser(
         description="Wee Native Runtime — OpenAI-compatible chat completions"
     )
-    parser.add_argument("--model", required=True, help="Model name (e.g., ollama/gemma4:e4b)")
+    parser.add_argument(
+        "--model", required=True, help="Model name (e.g., ollama/gemma4:e4b)"
+    )
     parser.add_argument("--api-base", default=None, help="API base URL")
     parser.add_argument("--api-key", default=None, help="API key")
     parser.add_argument("--system-prompt", default="", help="System prompt")
-    parser.add_argument("--timeout", type=int, default=300, help="Request timeout in seconds")
-    parser.add_argument("--temperature", type=float, default=None, help="Sampling temperature")
-    parser.add_argument("--tools", action="store_true", default=False,
-                        help="Enable tool calling (bash, python)")
+    parser.add_argument(
+        "--timeout", type=int, default=300, help="Request timeout in seconds"
+    )
+    parser.add_argument(
+        "--temperature", type=float, default=None, help="Sampling temperature"
+    )
+    parser.add_argument(
+        "--tools",
+        action="store_true",
+        default=False,
+        help="Enable tool calling (bash, python)",
+    )
     parser.add_argument("prompt", help="User prompt")
     args = parser.parse_args()
 
@@ -240,10 +267,14 @@ def main():
     try:
         from openai import OpenAI
     except ImportError:
-        print("Error: openai package not installed. Run: pip install openai", file=sys.stderr)
+        print(
+            "Error: openai package not installed. Run: pip install openai",
+            file=sys.stderr,
+        )
         sys.exit(1)
 
     import httpx
+
     client = OpenAI(
         base_url=api_base,
         api_key=api_key,
@@ -338,7 +369,10 @@ def main():
                         if idx not in tool_calls_acc:
                             tool_call_counter += 1
                             tool_calls_acc[idx] = {
-                                "id": getattr(tc_delta, "id", None) or f"tc_wee_{tool_call_counter}",
+                                "id": (
+                                    getattr(tc_delta, "id", None)
+                                    or f"tc_wee_{tool_call_counter}"
+                                ),
                                 "name": "",
                                 "arguments": "",
                             }
@@ -348,7 +382,9 @@ def main():
                             if tc_delta.function.name:
                                 tool_calls_acc[idx]["name"] = tc_delta.function.name
                             if tc_delta.function.arguments:
-                                tool_calls_acc[idx]["arguments"] += tc_delta.function.arguments
+                                tool_calls_acc[idx][
+                                    "arguments"
+                                ] += tc_delta.function.arguments
 
             content_text = "".join(round_content)
 
@@ -365,17 +401,21 @@ def main():
             assistant_tool_calls = []
             for idx in sorted(tool_calls_acc.keys()):
                 tc = tool_calls_acc[idx]
-                assistant_tool_calls.append({
-                    "id": tc["id"],
-                    "type": "function",
-                    "function": {"name": tc["name"], "arguments": tc["arguments"]},
-                })
+                assistant_tool_calls.append(
+                    {
+                        "id": tc["id"],
+                        "type": "function",
+                        "function": {"name": tc["name"], "arguments": tc["arguments"]},
+                    }
+                )
 
-            messages.append({
-                "role": "assistant",
-                "content": content_text or None,
-                "tool_calls": assistant_tool_calls,
-            })
+            messages.append(
+                {
+                    "role": "assistant",
+                    "content": content_text or None,
+                    "tool_calls": assistant_tool_calls,
+                }
+            )
 
             for tc_entry in assistant_tool_calls:
                 tc_id = tc_entry["id"]
@@ -387,20 +427,27 @@ def main():
                 except (ValueError, json.JSONDecodeError):
                     func_args = {"raw": func_args_str}
 
-                print(f"[Wee] Tool: {func_name}({json.dumps(func_args)[:200]})", file=sys.stderr)
+                print(
+                    f"[Wee] Tool: {func_name}({json.dumps(func_args)[:200]})",
+                    file=sys.stderr,
+                )
 
                 tool_result = execute_tool(func_name, func_args)
 
-                messages.append({
-                    "role": "tool",
-                    "tool_call_id": tc_id,
-                    "content": tool_result or "No output",
-                })
+                messages.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": tc_id,
+                        "content": tool_result or "No output",
+                    }
+                )
         else:
             # All rounds had tool calls with no final text
             last_results = [m["content"] for m in messages if m.get("role") == "tool"]
             if last_results:
-                fallback = "Tool execution completed. Last result:\n" + last_results[-1][:2000]
+                fallback = (
+                    "Tool execution completed. Last result:\n" + last_results[-1][:2000]
+                )
             else:
                 fallback = "Max tool rounds reached without final response."
             collected_output.append(fallback)

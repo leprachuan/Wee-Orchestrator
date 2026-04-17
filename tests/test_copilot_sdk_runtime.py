@@ -5,12 +5,10 @@ routing paths, configuration surfaces, and API endpoints without affecting
 the existing copilot CLI runtime.
 """
 
-import asyncio
-import json
 import os
 import sys
 import unittest
-from unittest.mock import AsyncMock, MagicMock, patch, PropertyMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 # Ensure test key is consistent across test suite
 os.environ.setdefault("API_SHARED_KEY", "test_key_123")
@@ -82,11 +80,14 @@ class TestCopilotSdkRuntimeRouting(unittest.TestCase):
 
     def test_argparse_includes_copilot_sdk_in_choices(self):
         """argparse runtime choices include copilot-sdk."""
-        import agent_manager
         # Read the source to verify argparse choices contain copilot-sdk
         import inspect
+
+        import agent_manager
+
         source = inspect.getsource(agent_manager)
         import re
+
         self.assertIsNotNone(
             re.search(r'"copilot-sdk"', source),
             "argparse choices should include copilot-sdk",
@@ -103,7 +104,10 @@ class TestCopilotSdkStripMetadata(unittest.TestCase):
     def test_strip_metadata_copilot_sdk(self):
         """copilot-sdk output goes through same strip_metadata as copilot."""
         mgr = _get_session_mgr()
-        test_output = "Hello, world!\nTotal usage est: 100 tokens\nBreakdown by AI model:\n  gpt-5: 100"
+        test_output = (
+            "Hello, world!\nTotal usage est: 100 tokens"
+            "\nBreakdown by AI model:\n  gpt-5: 100"
+        )
         result = mgr.strip_metadata(test_output, "copilot-sdk")
         self.assertIn("Hello, world!", result)
         self.assertNotIn("Total usage est", result)
@@ -169,7 +173,9 @@ class TestCopilotSdkRunMethod(unittest.TestCase):
         mock_client_cls.return_value = mock_client
 
         # Mock build_agent_context_prompt to avoid complex dependencies
-        with patch.object(mgr, "build_agent_context_prompt", return_value="test prompt"):
+        with patch.object(
+            mgr, "build_agent_context_prompt", return_value="test prompt"
+        ):
             result = mgr.run_copilot_sdk(
                 "what is 2+2", "gpt-5", "orchestrator", None, False, "test-sess-6"
             )
@@ -200,8 +206,12 @@ class TestCopilotSdkRunMethod(unittest.TestCase):
         mock_client_cls.return_value = mock_client
 
         result = mgr.run_copilot_sdk(
-            "continue", "gpt-5", "orchestrator",
-            "existing-session-456", True, "test-sess-7"
+            "continue",
+            "gpt-5",
+            "orchestrator",
+            "existing-session-456",
+            True,
+            "test-sess-7",
         )
         self.assertIn("Resumed response", result)
         mock_client.resume_session.assert_called_once()
@@ -255,6 +265,7 @@ class TestCopilotSdkRunMethod(unittest.TestCase):
             if captured_on_event:
                 event = MagicMock()
                 from copilot.session import SessionEventType
+
                 event.type = SessionEventType.ASSISTANT_MESSAGE
                 event.data = MagicMock()
                 event.data.content = "Event-collected response"
@@ -294,8 +305,12 @@ class TestCopilotSdkRunMethod(unittest.TestCase):
         with patch.object(mgr, "build_agent_context_prompt", return_value="test"):
             # The /mode elevated gets parsed from the prompt
             result = mgr.run_copilot_sdk(
-                "/mode elevated do stuff", "gpt-5", "orchestrator",
-                None, False, "test-sess-10"
+                "/mode elevated do stuff",
+                "gpt-5",
+                "orchestrator",
+                None,
+                False,
+                "test-sess-10",
             )
         self.assertIn("elevated result", result)
 
@@ -307,7 +322,9 @@ class TestCopilotSdkDispatch(unittest.TestCase):
         """_dispatch_single_runtime routes copilot-sdk to run_copilot_sdk."""
         mgr = _get_session_mgr()
 
-        with patch.object(mgr, "run_copilot_sdk", return_value="SDK dispatched") as mock_run:
+        with patch.object(
+            mgr, "run_copilot_sdk", return_value="SDK dispatched"
+        ) as mock_run:
             with patch.object(mgr, "touch_session"):
                 result = mgr._dispatch_single_runtime(
                     prompt="test",
@@ -327,7 +344,9 @@ class TestCopilotSdkDispatch(unittest.TestCase):
         """_dispatch_single_runtime still routes copilot to run_copilot."""
         mgr = _get_session_mgr()
 
-        with patch.object(mgr, "run_copilot", return_value="CLI dispatched") as mock_run:
+        with patch.object(
+            mgr, "run_copilot", return_value="CLI dispatched"
+        ) as mock_run:
             with patch.object(mgr, "touch_session"):
                 result = mgr._dispatch_single_runtime(
                     prompt="test",
@@ -349,8 +368,9 @@ class TestCopilotSdkApiEndpoints(unittest.TestCase):
 
     def test_get_runtimes_includes_sdk(self):
         """GET /api/v1/runtimes includes copilot-sdk."""
-        from agent_manager import create_api_app
         from fastapi.testclient import TestClient
+
+        from agent_manager import create_api_app
 
         app = create_api_app()
         client = TestClient(app)
@@ -366,8 +386,9 @@ class TestCopilotSdkApiEndpoints(unittest.TestCase):
 
     def test_get_models_accepts_sdk(self):
         """GET /api/v1/models?runtime=copilot-sdk does not return unknown error."""
-        from agent_manager import create_api_app
         from fastapi.testclient import TestClient
+
+        from agent_manager import create_api_app
 
         app = create_api_app()
         client = TestClient(app)
@@ -377,8 +398,11 @@ class TestCopilotSdkApiEndpoints(unittest.TestCase):
         )
         self.assertEqual(response.status_code, 200)
         data = response.json()
-        self.assertNotIn("error", data.get("error", ""),
-                         "copilot-sdk should not return 'Unknown runtime' error")
+        self.assertNotIn(
+            "error",
+            data.get("error", ""),
+            "copilot-sdk should not return 'Unknown runtime' error",
+        )
 
 
 if __name__ == "__main__":

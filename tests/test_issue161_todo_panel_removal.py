@@ -9,25 +9,25 @@ Verifies that:
 5. Other API endpoints still function correctly
 """
 
-import importlib
 import os
 import re
-import sys
 from pathlib import Path
-from unittest.mock import patch
 
 import pytest
 
 # ---------------------------------------------------------------------------
 # Resolve project root (works both locally and via pytest)
 # ---------------------------------------------------------------------------
-_PROJ_ROOT = Path(os.environ.get(
-    "WEE_PROJECT_ROOT",
-    Path(__file__).resolve().parent.parent,
-))
+_PROJ_ROOT = Path(
+    os.environ.get(
+        "WEE_PROJECT_ROOT",
+        Path(__file__).resolve().parent.parent,
+    )
+)
 
 
 # ── 1. Removed Python functions should not exist ─────────────────────────
+
 
 class TestTodoFunctionsRemoved:
     """Ensure TODO-related helper functions are gone from agent_manager.py."""
@@ -61,6 +61,7 @@ class TestTodoFunctionsRemoved:
 
 
 # ── 2. WebUI dist files: no TODO panel markup/logic ──────────────────────
+
 
 class TestWebUIDistClean:
     """Verify WebUI dist files have no TODO panel references."""
@@ -111,11 +112,12 @@ class TestWebUIDistClean:
     def test_no_td_prefix_css(self):
         """No .td-* classes (todo detail panel styles)."""
         # Allow .td in general table contexts — match only .td- prefix
-        matches = re.findall(r'\.td-[a-z]', self.css)
+        matches = re.findall(r"\.td-[a-z]", self.css)
         assert len(matches) == 0, f"Found TODO detail CSS classes: {matches}"
 
 
 # ── 3. WebUI source (TypeScript) ─────────────────────────────────────────
+
 
 class TestWebUISourceClean:
     """Verify TypeScript source files have no todo_dir references."""
@@ -142,6 +144,7 @@ class TestWebUISourceClean:
 
 # ── 4. Copilot CLI TodoRead/TodoWrite NOT removed ────────────────────────
 
+
 class TestCopilotToolsPreserved:
     """TodoRead/TodoWrite are Copilot CLI tools, NOT our TODO panel.
     They must remain in the allowlists."""
@@ -158,6 +161,7 @@ class TestCopilotToolsPreserved:
 
 
 # ── 5. Other API sections still present ──────────────────────────────────
+
 
 class TestOtherSectionsIntact:
     """Verify that removing TODO API didn't break neighboring sections."""
