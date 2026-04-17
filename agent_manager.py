@@ -2412,6 +2412,9 @@ You can mention an agent in your prompt and it will auto-delegate:
         when disabled.  Critical alerts (heartbeat, crashes) are never
         suppressed.
         """
+        _notif_identity = session_data.get("identity", "") or ""
+        _notif_channel = session_data.get("channel", "webui")
+
         if not argument:
             argument = "current"
 
