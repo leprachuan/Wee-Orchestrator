@@ -168,6 +168,30 @@ pytest tests/test_wee_runtime_agentic.py -v
 ./scripts/run_agentic_tests.sh --openrouter
 ```
 
+## [Issue #155] Bug: Devin Runtime Invalid Permission Mode causes Protocol Error
+**Status:** QA Approved (Commit: a8311c5, Branch: issue/155)
+
+### Summary
+Fixed two root causes causing Devin runtime Protocol error when permission mode was set to "auto" (not a valid Devin CLI value).
+
+### Root Cause 1: Invalid --permission-mode auto
+Devin CLI only accepts normal, dangerous, bypass.
+- run_devin(): Changed "auto" to "normal" for restricted/sandboxed sessions
+- _run_background_task(): Unconditional "dangerous" for background tasks (always non-interactive)
+
+### Root Cause 2: mode Param Not Propagated to run_devin()
+- Added mode: str = "restricted" parameter to run_devin() signature
+- Mode priority: explicit param > /mode in prompt > session data
+- _dispatch_single_runtime() now correctly passes mode to run_devin()
+
+### Files Changed
+- agent_manager.py -- permission mode fix, mode param propagation
+- tests/test_issue155_devin_permission_mode.py -- 17 new regression tests
+
+### Tests
+- 17 regression tests covering all fix paths
+- Full suite: 1448 passed, 34 pre-existing failures, 0 new regressions
+
 ---
 
 ## [Issue #153] Bug Fix: OpenRouter 401 Authentication Error

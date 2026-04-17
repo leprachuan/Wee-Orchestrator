@@ -17,6 +17,7 @@ Run:
     pytest tests/test_wee_runtime_agentic.py -v -k ollama
     pytest tests/test_wee_runtime_agentic.py -v -k openrouter
 """
+
 import os
 import subprocess
 import sys
@@ -51,9 +52,18 @@ def _has_ollama():
     """Check if Ollama is reachable."""
     try:
         result = subprocess.run(
-            ["curl", "-s", "-o", "/dev/null", "-w", "%{http_code}",
-             f"{OLLAMA_HOST}/api/tags"],
-            capture_output=True, text=True, timeout=5,
+            [
+                "curl",
+                "-s",
+                "-o",
+                "/dev/null",
+                "-w",
+                "%{http_code}",
+                f"{OLLAMA_HOST}/api/tags",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=5,
         )
         return result.stdout.strip() == "200"
     except Exception:
@@ -68,6 +78,7 @@ def _has_openrouter_key():
     # Try keyring
     try:
         import keyring
+
         val = keyring.get_password("wee-orchestrator", "OPENROUTER_API_KEY")
         return bool(val)
     except Exception:
@@ -85,8 +96,10 @@ skip_openrouter = unittest.skipUnless(HAS_OPENROUTER, "No OPENROUTER_API_KEY")
 # Helpers
 # ---------------------------------------------------------------------------
 
-def run_wee_cli(model, prompt, tools=False, system_prompt="", timeout=LIVE_TIMEOUT,
-                extra_args=None):
+
+def run_wee_cli(
+    model, prompt, tools=False, system_prompt="", timeout=LIVE_TIMEOUT, extra_args=None
+):
     """Run wee_runtime.py as a subprocess and capture output."""
     cmd = [sys.executable, WEE_RUNTIME, "--model", model, "--timeout", str(timeout)]
     if tools:
@@ -97,7 +110,10 @@ def run_wee_cli(model, prompt, tools=False, system_prompt="", timeout=LIVE_TIMEO
         cmd.extend(extra_args)
     cmd.append(prompt)
     result = subprocess.run(
-        cmd, capture_output=True, text=True, timeout=timeout + 30,
+        cmd,
+        capture_output=True,
+        text=True,
+        timeout=timeout + 30,
         env={**os.environ, "PYTHONUNBUFFERED": "1"},
     )
     return result
@@ -107,11 +123,13 @@ def run_wee_cli(model, prompt, tools=False, system_prompt="", timeout=LIVE_TIMEO
 # 1. UNIT TESTS — Model Resolution & Configuration (no live API)
 # ===========================================================================
 
+
 class TestModelResolution(unittest.TestCase):
     """Validate resolve_model_and_endpoint for various model strings."""
 
     def setUp(self):
         import wee_runtime
+
         self.resolve = wee_runtime.resolve_model_and_endpoint
         self.presets = wee_runtime.PROVIDER_PRESETS
 
@@ -163,6 +181,7 @@ class TestToolDefinitions(unittest.TestCase):
 
     def setUp(self):
         import wee_runtime
+
         self.tools = wee_runtime._WEE_TOOLS
 
     def test_tools_is_list(self):
@@ -188,11 +207,13 @@ class TestToolDefinitions(unittest.TestCase):
 
     def test_max_tool_rounds_defined(self):
         import wee_runtime
+
         self.assertGreaterEqual(wee_runtime.MAX_TOOL_ROUNDS, 1)
         self.assertLessEqual(wee_runtime.MAX_TOOL_ROUNDS, 20)
 
     def test_tool_timeout_defined(self):
         import wee_runtime
+
         self.assertGreaterEqual(wee_runtime.TOOL_TIMEOUT, 10)
 
 
@@ -201,6 +222,7 @@ class TestExecuteTool(unittest.TestCase):
 
     def setUp(self):
         import wee_runtime
+
         self.execute = wee_runtime.execute_tool
 
     def test_bash_echo(self):
@@ -254,6 +276,7 @@ class TestSanitizeBashCommand(unittest.TestCase):
 
     def setUp(self):
         import wee_runtime
+
         self.sanitize = wee_runtime.sanitize_bash_command
 
     def test_ssh_gets_strict_flag(self):
@@ -286,7 +309,9 @@ class TestCLIArgParsing(unittest.TestCase):
         """--help should exit with 0 and show usage."""
         result = subprocess.run(
             [sys.executable, WEE_RUNTIME, "--help"],
-            capture_output=True, text=True, timeout=10,
+            capture_output=True,
+            text=True,
+            timeout=10,
         )
         self.assertEqual(result.returncode, 0)
         self.assertIn("--model", result.stdout)
@@ -296,7 +321,9 @@ class TestCLIArgParsing(unittest.TestCase):
         """Missing --model should fail."""
         result = subprocess.run(
             [sys.executable, WEE_RUNTIME, "test prompt"],
-            capture_output=True, text=True, timeout=10,
+            capture_output=True,
+            text=True,
+            timeout=10,
         )
         self.assertNotEqual(result.returncode, 0)
 
@@ -304,7 +331,9 @@ class TestCLIArgParsing(unittest.TestCase):
         """Missing positional prompt should fail."""
         result = subprocess.run(
             [sys.executable, WEE_RUNTIME, "--model", "test-model"],
-            capture_output=True, text=True, timeout=10,
+            capture_output=True,
+            text=True,
+            timeout=10,
         )
         self.assertNotEqual(result.returncode, 0)
 
@@ -312,6 +341,7 @@ class TestCLIArgParsing(unittest.TestCase):
 # ===========================================================================
 # 2. MOCK INTEGRATION TESTS — Tool Calling Loop (no live API)
 # ===========================================================================
+
 
 def _make_chunk(content=None, tool_calls=None, finish_reason=None):
     """Build a mock streaming chunk."""
@@ -326,9 +356,10 @@ def _make_tool_call_delta(idx, tc_id=None, name=None, arguments=None):
     return SimpleNamespace(index=idx, id=tc_id, function=fn)
 
 
-def _run_main_mocked(model, prompt, tools=False, system_prompt=""):
+def _run_main_mocked(model, prompt, tools=False, system_prompt="", extra_args=None):
     """Run wee_runtime.main() in-process with mocked sys.argv and captured I/O."""
     import io
+
     import wee_runtime
 
     argv = ["wee_runtime.py", "--model", model]
@@ -336,6 +367,8 @@ def _run_main_mocked(model, prompt, tools=False, system_prompt=""):
         argv.append("--tools")
     if system_prompt:
         argv.extend(["--system-prompt", system_prompt])
+    if extra_args:
+        argv.extend(extra_args)
     argv.append(prompt)
 
     old_argv = sys.argv
@@ -385,8 +418,7 @@ class TestToolCallingLoopMocked(unittest.TestCase):
 
         # Round 1: model emits a tool call
         tool_delta = _make_tool_call_delta(
-            0, tc_id="tc_1", name="bash",
-            arguments='{"command": "echo mock_output"}'
+            0, tc_id="tc_1", name="bash", arguments='{"command": "echo mock_output"}'
         )
         round1_chunks = [
             _make_chunk(content="", tool_calls=[tool_delta]),
@@ -400,7 +432,8 @@ class TestToolCallingLoopMocked(unittest.TestCase):
         ]
 
         mock_client.chat.completions.create.side_effect = [
-            iter(round1_chunks), iter(round2_chunks)
+            iter(round1_chunks),
+            iter(round2_chunks),
         ]
 
         result = _run_main_mocked("ollama/test-model", "run echo", tools=True)
@@ -414,27 +447,29 @@ class TestToolCallingLoopMocked(unittest.TestCase):
 
         # Round 1: bash tool call
         td1 = _make_tool_call_delta(
-            0, tc_id="tc_1", name="bash",
-            arguments='{"command": "date +%Y"}',
+            0, tc_id="tc_1", name="bash", arguments='{"command": "date +%Y"}'
         )
-        r1 = [_make_chunk(content="", tool_calls=[td1]),
-              _make_chunk(content=None, finish_reason="tool_calls")]
+        r1 = [
+            _make_chunk(content="", tool_calls=[td1]),
+            _make_chunk(content=None, finish_reason="tool_calls"),
+        ]
 
         # Round 2: python tool call
         td2 = _make_tool_call_delta(
-            0, tc_id="tc_2", name="python",
-            arguments='{"code": "print(42)"}',
+            0, tc_id="tc_2", name="python", arguments='{"code": "print(42)"}'
         )
-        r2 = [_make_chunk(content="", tool_calls=[td2]),
-              _make_chunk(content=None, finish_reason="tool_calls")]
+        r2 = [
+            _make_chunk(content="", tool_calls=[td2]),
+            _make_chunk(content=None, finish_reason="tool_calls"),
+        ]
 
         # Round 3: final answer
-        r3 = [_make_chunk(content="Year is 2026 and 42."),
-              _make_chunk(content=None, finish_reason="stop")]
-
-        mock_client.chat.completions.create.side_effect = [
-            iter(r1), iter(r2), iter(r3)
+        r3 = [
+            _make_chunk(content="Year is 2026 and 42."),
+            _make_chunk(content=None, finish_reason="stop"),
         ]
+
+        mock_client.chat.completions.create.side_effect = [iter(r1), iter(r2), iter(r3)]
 
         result = _run_main_mocked("ollama/test-model", "date and math", tools=True)
         self.assertEqual(result.returncode, 0)
@@ -443,18 +478,24 @@ class TestToolCallingLoopMocked(unittest.TestCase):
     def test_max_tool_rounds_exhaustion(self, mock_openai_cls):
         """Tool loop terminates after MAX_TOOL_ROUNDS to prevent infinite loops."""
         import wee_runtime
+
         mock_client = MagicMock()
         mock_openai_cls.return_value = mock_client
 
         # Always return a tool call (never final text)
         def make_tool_round():
             td = _make_tool_call_delta(
-                0, tc_id=f"tc_{time.time_ns()}",
+                0,
+                tc_id=f"tc_{time.time_ns()}",
                 name="bash",
                 arguments='{"command": "echo loop"}',
             )
-            return iter([_make_chunk(content="", tool_calls=[td]),
-                         _make_chunk(content=None, finish_reason="tool_calls")])
+            return iter(
+                [
+                    _make_chunk(content="", tool_calls=[td]),
+                    _make_chunk(content=None, finish_reason="tool_calls"),
+                ]
+            )
 
         mock_client.chat.completions.create.side_effect = [
             make_tool_round() for _ in range(wee_runtime.MAX_TOOL_ROUNDS + 2)
@@ -465,9 +506,9 @@ class TestToolCallingLoopMocked(unittest.TestCase):
         self.assertEqual(result.returncode, 0)
         # Should contain fallback text
         self.assertTrue(
-            "Tool execution completed" in result.stdout or
-            "Max tool rounds" in result.stdout or
-            result.stdout.strip() != ""
+            "Tool execution completed" in result.stdout
+            or "Max tool rounds" in result.stdout
+            or result.stdout.strip() != ""
         )
 
 
@@ -475,14 +516,16 @@ class TestToolCallingLoopMocked(unittest.TestCase):
 # 3. LIVE INTEGRATION TESTS — Ollama
 # ===========================================================================
 
+
 @skip_ollama
 class TestOllamaLiveBasic(unittest.TestCase):
     """Live tests against Ollama — basic text generation."""
 
     def test_simple_prompt(self):
         """Ollama model responds to a simple text prompt."""
-        result = run_wee_cli(OLLAMA_MODEL, "Say exactly: HELLO_WEE_TEST",
-                             timeout=LIVE_TIMEOUT)
+        result = run_wee_cli(
+            OLLAMA_MODEL, "Say exactly: HELLO_WEE_TEST", timeout=LIVE_TIMEOUT
+        )
         self.assertEqual(result.returncode, 0, f"stderr: {result.stderr}")
         self.assertTrue(len(result.stdout.strip()) > 0, "Should produce output")
 
@@ -515,8 +558,7 @@ class TestOllamaLiveBasic(unittest.TestCase):
         output = result.stdout
         # Check for markdown table indicators
         self.assertTrue(
-            "|" in output,
-            f"Should contain markdown table pipes. Got: {output[:200]}"
+            "|" in output, f"Should contain markdown table pipes. Got: {output[:200]}"
         )
 
 
@@ -529,7 +571,8 @@ class TestOllamaLiveToolCalling(unittest.TestCase):
         result = run_wee_cli(
             OLLAMA_MODEL,
             "Use the bash tool to run 'date +%Y-%m-%d' and tell me today's date.",
-            tools=True, timeout=LIVE_TIMEOUT,
+            tools=True,
+            timeout=LIVE_TIMEOUT,
         )
         self.assertEqual(result.returncode, 0, f"stderr: {result.stderr}")
         # Check stderr for tool call evidence
@@ -540,14 +583,15 @@ class TestOllamaLiveToolCalling(unittest.TestCase):
         result = run_wee_cli(
             OLLAMA_MODEL,
             "Use the python tool to calculate 17 * 23 + 5 and report the result.",
-            tools=True, timeout=LIVE_TIMEOUT,
+            tools=True,
+            timeout=LIVE_TIMEOUT,
         )
         self.assertEqual(result.returncode, 0, f"stderr: {result.stderr}")
         # 17*23+5 = 396
         self.assertTrue(
             "396" in result.stdout or "396" in result.stderr,
-            f"Expected 396 in output. stdout={result.stdout[:300]},"
-            f" stderr={result.stderr[:300]}"
+            f"Expected 396. stdout={result.stdout[:200]},"
+            f" stderr={result.stderr[:200]}",
         )
 
     def test_multi_step_tool_calls(self):
@@ -556,7 +600,8 @@ class TestOllamaLiveToolCalling(unittest.TestCase):
             OLLAMA_MODEL,
             "Use bash to run 'hostname' and 'date +%H:%M',"
             " then summarize both results.",
-            tools=True, timeout=LIVE_TIMEOUT,
+            tools=True,
+            timeout=LIVE_TIMEOUT,
         )
         self.assertEqual(result.returncode, 0, f"stderr: {result.stderr}")
         # Should have at least one tool call
@@ -568,7 +613,8 @@ class TestOllamaLiveToolCalling(unittest.TestCase):
         result = run_wee_cli(
             OLLAMA_MODEL,
             "Use bash to run 'cat /nonexistent_file_xyz_999' and explain the error.",
-            tools=True, timeout=LIVE_TIMEOUT,
+            tools=True,
+            timeout=LIVE_TIMEOUT,
         )
         self.assertEqual(result.returncode, 0, f"stderr: {result.stderr}")
         # Should not crash — should get a response
@@ -579,14 +625,16 @@ class TestOllamaLiveToolCalling(unittest.TestCase):
 # 4. LIVE INTEGRATION TESTS — OpenRouter
 # ===========================================================================
 
+
 @skip_openrouter
 class TestOpenRouterLiveBasic(unittest.TestCase):
     """Live tests against OpenRouter — basic text generation."""
 
     def test_simple_prompt(self):
         """OpenRouter model responds to a simple text prompt."""
-        result = run_wee_cli(OPENROUTER_MODEL, "Say exactly: HELLO_WEE_OPENROUTER",
-                             timeout=LIVE_TIMEOUT)
+        result = run_wee_cli(
+            OPENROUTER_MODEL, "Say exactly: HELLO_WEE_OPENROUTER", timeout=LIVE_TIMEOUT
+        )
         self.assertEqual(result.returncode, 0, f"stderr: {result.stderr}")
         self.assertTrue(len(result.stdout.strip()) > 0, "Should produce output")
 
@@ -624,8 +672,7 @@ class TestOpenRouterLiveBasic(unittest.TestCase):
         self.assertEqual(result.returncode, 0, f"stderr: {result.stderr}")
         output = result.stdout
         self.assertTrue(
-            "#" in output,
-            f"Should contain markdown headers. Got: {output[:200]}"
+            "#" in output, f"Should contain markdown headers. Got: {output[:200]}"
         )
 
 
@@ -638,7 +685,8 @@ class TestOpenRouterLiveToolCalling(unittest.TestCase):
         result = run_wee_cli(
             OPENROUTER_MODEL,
             "Use the bash tool to run 'ls /tmp' and report what you see.",
-            tools=True, timeout=LIVE_TIMEOUT,
+            tools=True,
+            timeout=LIVE_TIMEOUT,
         )
         self.assertEqual(result.returncode, 0, f"stderr: {result.stderr}")
         # Check for tool usage in stderr
@@ -648,9 +696,9 @@ class TestOpenRouterLiveToolCalling(unittest.TestCase):
         """OpenRouter model uses python tool for string operations."""
         result = run_wee_cli(
             OPENROUTER_MODEL,
-            "Use the python tool to reverse the string 'WeeRuntime'"  # noqa: E501
-            " and tell me the result.",
-            tools=True, timeout=LIVE_TIMEOUT,
+            "Use the python tool to reverse 'WeeRuntime' and tell me the result.",
+            tools=True,
+            timeout=LIVE_TIMEOUT,
         )
         self.assertEqual(result.returncode, 0, f"stderr: {result.stderr}")
 
@@ -660,7 +708,8 @@ class TestOpenRouterLiveToolCalling(unittest.TestCase):
             OPENROUTER_MODEL,
             "Use bash to run 'cat /etc/os-release' and summarize the OS info "
             "in a markdown table with Key and Value columns.",
-            tools=True, timeout=LIVE_TIMEOUT,
+            tools=True,
+            timeout=LIVE_TIMEOUT,
         )
         self.assertEqual(result.returncode, 0, f"stderr: {result.stderr}")
         # Should have tool calls and markdown output
@@ -671,6 +720,7 @@ class TestOpenRouterLiveToolCalling(unittest.TestCase):
 # ===========================================================================
 # 5. PERMISSION LEVEL TESTS (Unit — mocked)
 # ===========================================================================
+
 
 class TestPermissionLevels(unittest.TestCase):
     """Test permission enforcement for tool access.
@@ -683,10 +733,20 @@ class TestPermissionLevels(unittest.TestCase):
     def test_no_tools_flag_disables_tools(self):
         """Without --tools, model should NOT receive tool definitions."""
         result = subprocess.run(
-            [sys.executable, WEE_RUNTIME, "--model", "ollama/test",
-             "--api-base", "http://127.0.0.1:9999/v1",
-             "--api-key", "test", "hello"],
-            capture_output=True, text=True, timeout=15,
+            [
+                sys.executable,
+                WEE_RUNTIME,
+                "--model",
+                "ollama/test",
+                "--api-base",
+                "http://127.0.0.1:9999/v1",
+                "--api-key",
+                "test",
+                "hello",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=15,
         )
         # Connection error expected
         self.assertNotEqual(result.returncode, 0)
@@ -696,10 +756,21 @@ class TestPermissionLevels(unittest.TestCase):
     def test_tools_flag_enables_tool_loop(self):
         """With --tools, the runtime enters tool-calling mode."""
         result = subprocess.run(
-            [sys.executable, WEE_RUNTIME, "--model", "ollama/test",
-             "--api-base", "http://127.0.0.1:9999/v1",
-             "--api-key", "test", "--tools", "hello"],
-            capture_output=True, text=True, timeout=15,
+            [
+                sys.executable,
+                WEE_RUNTIME,
+                "--model",
+                "ollama/test",
+                "--api-base",
+                "http://127.0.0.1:9999/v1",
+                "--api-key",
+                "test",
+                "--tools",
+                "hello",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=15,
         )
         # Connection will fail but --tools mode is activated
         self.assertNotEqual(result.returncode, 0)
@@ -720,8 +791,9 @@ class TestPermissionLevels(unittest.TestCase):
         call_kwargs = mock_client.chat.completions.create.call_args
         if call_kwargs:
             kwargs = call_kwargs[1] if call_kwargs[1] else {}
-            self.assertNotIn("tools", kwargs,
-                             "tools should not be passed when --tools is off")
+            self.assertNotIn(
+                "tools", kwargs, "tools should not be passed when --tools is off"
+            )
 
     @patch("openai.OpenAI")
     def test_auto_permission_has_tools(self, mock_cls):
@@ -739,8 +811,7 @@ class TestPermissionLevels(unittest.TestCase):
         call_kwargs = mock_client.chat.completions.create.call_args
         if call_kwargs:
             kwargs = call_kwargs[1] if call_kwargs[1] else {}
-            self.assertIn("tools", kwargs,
-                          "tools should be passed when --tools is on")
+            self.assertIn("tools", kwargs, "tools should be passed when --tools is on")
 
     @patch("openai.OpenAI")
     def test_elevated_permission_full_access(self, mock_cls):
@@ -762,6 +833,7 @@ class TestPermissionLevels(unittest.TestCase):
 # 6. STREAMING & OUTPUT FORMAT TESTS
 # ===========================================================================
 
+
 class TestStreamingOutput(unittest.TestCase):
     """Test streaming output behavior."""
 
@@ -778,8 +850,7 @@ class TestStreamingOutput(unittest.TestCase):
         mock_client.chat.completions.create.return_value = iter(chunks)
 
         result = _run_main_mocked("ollama/test", "test")
-        self.assertTrue(result.stdout.endswith("\n"),
-                        "Output should end with newline")
+        self.assertTrue(result.stdout.endswith("\n"), "Output should end with newline")
 
     @patch("openai.OpenAI")
     def test_empty_response_handled(self, mock_cls):
@@ -801,6 +872,7 @@ class TestStreamingOutput(unittest.TestCase):
 # 7. ERROR HANDLING & EDGE CASES
 # ===========================================================================
 
+
 class TestErrorHandling(unittest.TestCase):
     """Test error handling and edge cases."""
 
@@ -809,10 +881,7 @@ class TestErrorHandling(unittest.TestCase):
         result = run_wee_cli(
             "ollama/test",
             "hello",
-            extra_args=[
-                "--api-base", "http://127.0.0.1:9999/v1",
-                "--api-key", "test",
-            ],
+            extra_args=["--api-base", "http://127.0.0.1:9999/v1", "--api-key", "test"],
             timeout=15,
         )
         self.assertNotEqual(result.returncode, 0)
@@ -836,17 +905,18 @@ class TestErrorHandling(unittest.TestCase):
 
         # Tool call with invalid JSON arguments
         td = _make_tool_call_delta(
-            0, tc_id="tc_bad", name="bash",
-            arguments="not json at all {{{",
+            0, tc_id="tc_bad", name="bash", arguments="not json at all {{{"
         )
-        round1 = [_make_chunk(content="", tool_calls=[td]),
-                  _make_chunk(content=None, finish_reason="tool_calls")]
-        round2 = [_make_chunk(content="Handled the error."),
-                  _make_chunk(content=None, finish_reason="stop")]
-
-        mock_client.chat.completions.create.side_effect = [
-            iter(round1), iter(round2)
+        round1 = [
+            _make_chunk(content="", tool_calls=[td]),
+            _make_chunk(content=None, finish_reason="tool_calls"),
         ]
+        round2 = [
+            _make_chunk(content="Handled the error."),
+            _make_chunk(content=None, finish_reason="stop"),
+        ]
+
+        mock_client.chat.completions.create.side_effect = [iter(round1), iter(round2)]
 
         result = _run_main_mocked("ollama/test", "bad args test", tools=True)
         # Should not crash — graceful handling
@@ -855,12 +925,16 @@ class TestErrorHandling(unittest.TestCase):
     def test_tool_timeout_enforcement(self):
         """Tool execution respects timeout."""
         import wee_runtime
+
         # sleep 1000 should be killed by TOOL_TIMEOUT
         start = time.time()
         result = wee_runtime.execute_tool("bash", {"command": "sleep 1000"})
         elapsed = time.time() - start
-        self.assertLess(elapsed, wee_runtime.TOOL_TIMEOUT + 5,
-                        "Tool should be killed within timeout")
+        self.assertLess(
+            elapsed,
+            wee_runtime.TOOL_TIMEOUT + 5,
+            "Tool should be killed within timeout",
+        )
         self.assertIn("timed out", result.lower())
 
 
@@ -868,11 +942,13 @@ class TestErrorHandling(unittest.TestCase):
 # 8. CROSS-PROVIDER PARAMETRIZED TESTS
 # ===========================================================================
 
+
 class TestCrossProviderResolution(unittest.TestCase):
     """Parametrized tests across multiple provider prefixes."""
 
     def _test_resolution(self, model_str, expected_in_base, expected_model):
         import wee_runtime
+
         model, base, key = wee_runtime.resolve_model_and_endpoint(model_str)
         self.assertEqual(model, expected_model)
         if expected_in_base:
@@ -888,14 +964,14 @@ class TestCrossProviderResolution(unittest.TestCase):
         self._test_resolution(
             "openrouter/meta-llama/llama-4-scout",
             "openrouter.ai",
-            "meta-llama/llama-4-scout"
+            "meta-llama/llama-4-scout",
         )
 
     def test_openrouter_google(self):
         self._test_resolution(
             "openrouter/google/gemma-3-12b-it:free",
             "openrouter.ai",
-            "google/gemma-3-12b-it:free"
+            "google/gemma-3-12b-it:free",
         )
 
     def test_bare_model(self):
@@ -906,6 +982,7 @@ class TestCrossProviderResolution(unittest.TestCase):
 # 9. PERFORMANCE METRICS
 # ===========================================================================
 
+
 class TestPerformanceBaseline(unittest.TestCase):
     """Basic performance sanity checks."""
 
@@ -913,6 +990,7 @@ class TestPerformanceBaseline(unittest.TestCase):
         """wee_runtime imports in under 2 seconds."""
         start = time.time()
         import importlib
+
         importlib.reload(__import__("wee_runtime"))
         elapsed = time.time() - start
         self.assertLess(elapsed, 2.0, f"Import took {elapsed:.2f}s")
@@ -920,6 +998,7 @@ class TestPerformanceBaseline(unittest.TestCase):
     def test_model_resolution_speed(self):
         """resolve_model_and_endpoint is fast (<10ms)."""
         import wee_runtime
+
         start = time.time()
         for _ in range(100):
             wee_runtime.resolve_model_and_endpoint("ollama/test-model")
@@ -930,3 +1009,295 @@ class TestPerformanceBaseline(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+# ===========================================================================
+# 10. EXECUTE_TOOL PERMISSION ENFORCEMENT (Direct Unit Tests)
+# ===========================================================================
+
+
+class TestExecuteToolDirect(unittest.TestCase):
+    """Directly test execute_tool() behavior: bash, python, timeout, unknown."""
+
+    def setUp(self):
+        import wee_runtime
+
+        self.execute = wee_runtime.execute_tool
+
+    def test_bash_returns_output(self):
+        """bash tool runs command and returns stdout."""
+        result = self.execute("bash", {"command": "echo direct_ok"})
+        self.assertIn("direct_ok", result)
+
+    def test_python_returns_output(self):
+        """python tool runs code and returns stdout."""
+        result = self.execute("python", {"code": "print('python_ok')"})
+        self.assertIn("python_ok", result)
+
+    def test_bash_empty_command_returns_error(self):
+        """bash with empty command returns Error string."""
+        result = self.execute("bash", {"command": ""})
+        self.assertIn("Error", result)
+
+    def test_python_empty_code_returns_error(self):
+        """python with empty code returns Error string."""
+        result = self.execute("python", {"code": ""})
+        self.assertIn("Error", result)
+
+    def test_unknown_tool_returns_error(self):
+        """Unrecognised tool name returns Error string."""
+        result = self.execute("unknown_tool", {"arg": "val"})
+        self.assertIn("Error", result)
+        self.assertIn("unknown_tool", result)
+
+    def test_bash_stderr_captured(self):
+        """bash stderr is included in result when command exits non-zero."""
+        result = self.execute("bash", {"command": "echo err_msg >&2; exit 1"})
+        self.assertIn("err_msg", result)
+
+    def test_python_exception_output_captured(self):
+        """python traceback appears in result when code raises."""
+        result = self.execute("python", {"code": "raise ValueError('boom')"})
+        # Output will contain "Error" in the STDERR section or (no output)
+        self.assertTrue("boom" in result or "Error" in result)
+
+
+class TestProviderPresetsExtended(unittest.TestCase):
+    """Extended provider preset tests including LM Studio."""
+
+    def setUp(self):
+        import wee_runtime
+
+        self.resolve = wee_runtime.resolve_model_and_endpoint
+        self.presets = wee_runtime.PROVIDER_PRESETS
+
+    def test_lmstudio_preset_exists(self):
+        self.assertIn("lmstudio", self.presets)
+
+    def test_lmstudio_preset_localhost(self):
+        base, key = self.presets["lmstudio"]
+        self.assertIn("localhost", base)
+        self.assertEqual(key, "lm-studio")
+
+    def test_lmstudio_prefix_strip(self):
+        model, base, key = self.resolve("lmstudio/phi-3")
+        self.assertEqual(model, "phi-3")
+        self.assertIn("localhost", base)
+        self.assertEqual(key, "lm-studio")
+
+    def test_explicit_api_key_overrides_preset(self):
+        _, _, key = self.resolve("ollama/gemma4:e4b", api_key="custom-key")
+        self.assertEqual(key, "custom-key")
+
+    def test_openrouter_multi_slash_model(self):
+        model, base, _ = self.resolve("openrouter/google/gemma-3-12b-it:free")
+        self.assertEqual(model, "google/gemma-3-12b-it:free")
+        self.assertIn("openrouter.ai", base)
+
+    def test_all_presets_have_base_url(self):
+        for name, (base, _) in self.presets.items():
+            self.assertTrue(base, f"Preset '{name}' has empty base URL")
+
+    def test_all_presets_base_ends_with_v1(self):
+        for name, (base, _) in self.presets.items():
+            self.assertTrue(
+                base.endswith("/v1"),
+                f"Preset '{name}' base URL doesn't end with /v1: {base}",
+            )
+
+
+# ===========================================================================
+# 12. RUNTIME CONSTANTS (Prompt content & numeric bounds)
+# ===========================================================================
+
+
+class TestRuntimeConstants(unittest.TestCase):
+    """Validate runtime constants used in production."""
+
+    def test_anti_hallucination_prompt_exists(self):
+        import wee_runtime
+
+        self.assertGreater(len(wee_runtime._ANTI_HALLUCINATION_PROMPT), 50)
+
+    def test_anti_hallucination_prompt_has_never_rule(self):
+        import wee_runtime
+
+        self.assertIn("NEVER", wee_runtime._ANTI_HALLUCINATION_PROMPT)
+
+    def test_anti_hallucination_prompt_has_ssh_rule(self):
+        import wee_runtime
+
+        self.assertIn("StrictHostKeyChecking", wee_runtime._ANTI_HALLUCINATION_PROMPT)
+
+    def test_tool_capability_prompt_mentions_bash(self):
+        import wee_runtime
+
+        self.assertIn("bash", wee_runtime._WEE_TOOL_CAPABILITY_PROMPT)
+
+    def test_tool_capability_prompt_mentions_python(self):
+        import wee_runtime
+
+        self.assertIn("python", wee_runtime._WEE_TOOL_CAPABILITY_PROMPT)
+
+    def test_max_tool_rounds_lower_bound(self):
+        import wee_runtime
+
+        self.assertGreaterEqual(
+            wee_runtime.MAX_TOOL_ROUNDS, 3, "Should allow multi-step tasks"
+        )
+
+    def test_max_tool_rounds_upper_bound(self):
+        import wee_runtime
+
+        self.assertLessEqual(
+            wee_runtime.MAX_TOOL_ROUNDS, 15, "Should cap to prevent runaway loops"
+        )
+
+    def test_tool_timeout_lower_bound(self):
+        import wee_runtime
+
+        self.assertGreaterEqual(
+            wee_runtime.TOOL_TIMEOUT, 30, "Should allow at least 30s for real commands"
+        )
+
+    def test_tool_timeout_upper_bound(self):
+        import wee_runtime
+
+        self.assertLessEqual(wee_runtime.TOOL_TIMEOUT, 300, "Should not wait forever")
+
+
+# ===========================================================================
+# 13. SYSTEM PROMPT INJECTION (Mock Integration)
+# ===========================================================================
+
+
+class TestSystemPromptInjection(unittest.TestCase):
+    """Verify anti-hallucination and tool prompts are wired into system messages."""
+
+    @patch("openai.OpenAI")
+    def test_anti_hallucination_always_injected(self, mock_cls):
+        """_ANTI_HALLUCINATION_PROMPT is always in the system message."""
+        mock_client = MagicMock()
+        mock_cls.return_value = mock_client
+        mock_client.chat.completions.create.return_value = iter(
+            [_make_chunk(content="ok"), _make_chunk(content=None, finish_reason="stop")]
+        )
+        _run_main_mocked("ollama/test", "no system prompt")
+        call_kwargs = mock_client.chat.completions.create.call_args
+        kw = call_kwargs[1] if call_kwargs and call_kwargs[1] else {}
+        system_msgs = [m for m in kw.get("messages", []) if m.get("role") == "system"]
+        self.assertTrue(system_msgs, "Should always have a system message")
+        self.assertIn("NEVER", system_msgs[0]["content"])
+
+    @patch("openai.OpenAI")
+    def test_tool_capability_injected_with_tools_flag(self, mock_cls):
+        """_WEE_TOOL_CAPABILITY_PROMPT is added when --tools is on."""
+        mock_client = MagicMock()
+        mock_cls.return_value = mock_client
+        mock_client.chat.completions.create.return_value = iter(
+            [_make_chunk(content="ok"), _make_chunk(content=None, finish_reason="stop")]
+        )
+        _run_main_mocked("ollama/test", "use tools", tools=True)
+        call_kwargs = mock_client.chat.completions.create.call_args
+        kw = call_kwargs[1] if call_kwargs and call_kwargs[1] else {}
+        system_msgs = [m for m in kw.get("messages", []) if m.get("role") == "system"]
+        if system_msgs:
+            self.assertIn("bash", system_msgs[0]["content"])
+
+    @patch("openai.OpenAI")
+    def test_tools_not_in_api_call_without_tools_flag(self, mock_cls):
+        """Without --tools, tools param is absent from API call."""
+        mock_client = MagicMock()
+        mock_cls.return_value = mock_client
+        mock_client.chat.completions.create.return_value = iter(
+            [
+                _make_chunk(content="done"),
+                _make_chunk(content=None, finish_reason="stop"),
+            ]
+        )
+        _run_main_mocked("ollama/test", "hello", tools=False)
+        call_kwargs = mock_client.chat.completions.create.call_args
+        kw = call_kwargs[1] if call_kwargs and call_kwargs[1] else {}
+        self.assertNotIn(
+            "tools", kw, "tools should not be in API call when flag is off"
+        )
+
+    @patch("openai.OpenAI")
+    def test_tools_in_api_call_with_tools_flag(self, mock_cls):
+        """With --tools, tools param is included in first API call."""
+        mock_client = MagicMock()
+        mock_cls.return_value = mock_client
+        mock_client.chat.completions.create.return_value = iter(
+            [
+                _make_chunk(content="done"),
+                _make_chunk(content=None, finish_reason="stop"),
+            ]
+        )
+        _run_main_mocked("ollama/test", "use tools", tools=True)
+        call_kwargs = mock_client.chat.completions.create.call_args
+        kw = call_kwargs[1] if call_kwargs and call_kwargs[1] else {}
+        self.assertIn("tools", kw, "tools should be in API call when --tools is on")
+
+
+# ===========================================================================
+# 14. TOOLS-NOT-SUPPORTED FALLBACK & EDGE CASES
+# ===========================================================================
+
+
+class TestStreamingEdgeCases(unittest.TestCase):
+    """Edge cases in the streaming response loop."""
+
+    @patch("openai.OpenAI")
+    def test_empty_choices_chunk_skipped(self, mock_cls):
+        """Chunks with empty choices list don't crash the loop."""
+        mock_client = MagicMock()
+        mock_cls.return_value = mock_client
+        empty_chunk = SimpleNamespace(choices=[])
+        chunks = [
+            empty_chunk,
+            _make_chunk(content="real output"),
+            empty_chunk,
+            _make_chunk(content=None, finish_reason="stop"),
+        ]
+        mock_client.chat.completions.create.return_value = iter(chunks)
+        result = _run_main_mocked("ollama/test", "stream test")
+        self.assertEqual(result.returncode, 0)
+        self.assertIn("real output", result.stdout)
+
+    @patch("openai.OpenAI")
+    def test_tools_exception_retries_without_tools(self, mock_cls):
+        """If first tools call raises, runtime retries without tools."""
+        mock_client = MagicMock()
+        mock_cls.return_value = mock_client
+        call_count = [0]
+
+        def _side_effect(**kwargs):
+            call_count[0] += 1
+            if "tools" in kwargs and call_count[0] == 1:
+                raise Exception("tools not supported by this model")
+            return iter(
+                [
+                    _make_chunk(content="fallback ok"),
+                    _make_chunk(content=None, finish_reason="stop"),
+                ]
+            )
+
+        mock_client.chat.completions.create.side_effect = _side_effect
+        result = _run_main_mocked("ollama/test", "try tools", tools=True)
+        self.assertEqual(result.returncode, 0)
+        self.assertGreaterEqual(call_count[0], 1)
+
+    @patch("openai.OpenAI")
+    def test_chunk_with_none_delta_content_skipped(self, mock_cls):
+        """Chunks where delta.content is None are skipped cleanly."""
+        mock_client = MagicMock()
+        mock_cls.return_value = mock_client
+        chunks = [
+            _make_chunk(content=None),
+            _make_chunk(content="final"),
+            _make_chunk(content=None, finish_reason="stop"),
+        ]
+        mock_client.chat.completions.create.return_value = iter(chunks)
+        result = _run_main_mocked("ollama/test", "none test")
+        self.assertEqual(result.returncode, 0)
+        self.assertIn("final", result.stdout)
