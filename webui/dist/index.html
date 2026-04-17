@@ -230,59 +230,9 @@
       <div id="fv-content" class="fv-content"></div>
     </aside>
 
-    <!-- TODO DETAILS PANEL (right side, overlays queue) -->
-    <aside id="todo-details-panel" class="todo-details-panel todo-details-hidden">
-      <div class="td-header">
-        <div class="td-header-title">
-          <span class="td-icon">✅</span>
-          <span id="td-title" class="td-title">TODO Details</span>
-        </div>
-        <div class="td-header-buttons">
-          <button id="btn-td-edit" class="td-edit-btn" title="Edit details">✎</button>
-          <button id="btn-td-close" class="td-close-btn" title="Close panel">✕</button>
-        </div>
-      </div>
-      <div class="td-meta" id="td-meta"></div>
-      <div id="td-view-mode" class="td-view-mode">
-        <div id="td-content" class="td-content"></div>
-      </div>
-      <div id="td-edit-mode" class="td-edit-mode" style="display:none;">
-        <textarea id="td-editor" class="td-editor" placeholder="Enter markdown details..."></textarea>
-        <div class="td-edit-buttons">
-          <button id="btn-td-save" class="td-save-btn">Save</button>
-          <button id="btn-td-cancel" class="td-cancel-btn">Cancel</button>
-        </div>
-      </div>
-    </aside>
 
     <!-- REQUEST QUEUE PANEL (right side) -->
     <aside id="request-queue-panel" class="request-queue-panel queue-minimized">
-      <!-- TODO Section (inside queue panel) -->
-      <div id="todo-section" class="todo-section">
-        <div class="todo-section-header">
-          <span class="todo-section-icon">✅</span>
-          <span class="todo-section-label">Upcoming TODOs</span>
-          <span id="todo-count" class="todo-count">0</span>
-          <button id="btn-add-todo" class="todo-add-btn" title="Add new TODO">＋</button>
-          <button id="btn-refresh-todos" class="todo-refresh-btn" title="Refresh TODOs">↻</button>
-          <button id="btn-toggle-queue" class="queue-toggle-btn" title="Expand panel">›</button>
-        </div>
-        <!-- Quick-add form (hidden by default) -->
-        <div id="todo-quick-add" class="todo-quick-add" style="display:none;">
-          <input id="todo-qa-title" class="todo-qa-input" type="text" placeholder="New TODO title…" autocomplete="off" />
-          <div class="todo-qa-row">
-            <input id="todo-qa-due" class="todo-qa-due" type="datetime-local" title="Due date (optional)" />
-            <input id="todo-qa-labels" class="todo-qa-labels" type="text" placeholder="Labels (comma-sep)" title="Labels (optional)" />
-          </div>
-          <div class="todo-qa-actions">
-            <button id="btn-todo-qa-save" class="todo-qa-save-btn">Add</button>
-            <button id="btn-todo-qa-cancel" class="todo-qa-cancel-btn">Cancel</button>
-          </div>
-        </div>
-        <div id="todo-items-list" class="todo-items-list">
-          <p class="todo-empty"><img src="/static/icon-192.png" alt="" style="width:48px;height:48px;border-radius:10px;opacity:0.5;display:block;margin:0 auto 8px;"><span>No upcoming TODOs</span></p>
-        </div>
-      </div>
 
       <!-- Queue Section (Collapsible) -->
       <div id="queue-section" class="queue-section queue-section-collapsed">
@@ -495,9 +445,6 @@
       <button class="mobile-tab" data-tab="queue" role="tab" aria-selected="false">
         <span class="mobile-tab-icon">📋</span><span class="mobile-tab-label">Queue <span id="mobile-queue-badge" class="mobile-tab-badge hidden">0</span></span>
       </button>
-      <button class="mobile-tab" data-tab="todos" role="tab" aria-selected="false">
-        <span class="mobile-tab-icon">✅</span><span class="mobile-tab-label">TODOs <span id="mobile-todo-badge" class="mobile-tab-badge hidden">0</span></span>
-      </button>
     </nav>
   </div>
 
@@ -540,8 +487,6 @@
               <textarea id="asf-description" class="glass-input asf-textarea" rows="2" placeholder="What this agent does…"></textarea>
             </div>
             <div class="asf-field">
-              <label class="asf-label" for="asf-todo-dir">TODO Directory</label>
-              <input id="asf-todo-dir" type="text" class="glass-input asf-input asf-mono" placeholder="/opt/fosterbot-home/TODOs" autocomplete="off" />
             </div>
           </div>
         </div>

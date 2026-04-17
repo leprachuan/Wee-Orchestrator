@@ -373,14 +373,6 @@ function updateSessionMeta(data) {
     _updateVerboseToggleUI(_silentMode);
   }
 
-  // Refresh TODOs when agent changes
-  if (typeof fetchAndRenderTodos === 'function') {
-    const newAgent = data?.agent || null;
-    if (newAgent !== _todoCurrentAgent) {
-      _todoCurrentAgent = newAgent;
-      fetchAndRenderTodos();
-    }
-  }
 }
 
 async function fetchAndUpdateMeta(sessionId) {
@@ -1228,616 +1220,6 @@ async function loadScratchNotes() {
   } catch (err) {
     console.warn('Error loading scratch notes:', err);
   }
-}
-
-// ─── TODO Panel ───────────────────────────────────────────────────────────────
-let _todoRefreshTimer = null;
-let _todoCurrentAgent = null;
-
-async function fetchAndRenderTodos() {
-  const list = $('todo-items-list');
-  const counter = $('todo-count');
-  if (!list) return;
-
-  // Read current agent from the meta pill
-  const agentEl = $('meta-agent');
-  const agent = agentEl ? agentEl.textContent.trim() : '';
-  const agentParam = agent && agent !== '—' ? `&agent=${encodeURIComponent(agent)}` : '';
-
-  try {
-    const data = await apiRequest('GET', `/todos?limit=100${agentParam}`);
-    const todos = data.todos || [];
-    
-    // Sort todos by due date in ascending order (earliest first)
-    todos.sort((a, b) => {
-      if (!a.due && !b.due) return 0;
-      if (!a.due) return 1;  // No due date goes to bottom
-      if (!b.due) return -1;
-      
-      // Parse dates in MM/DD/YYYY HH:MM:SS or YYYY-MM-DD HH:MM format
-      const parseDate = (due) => {
-        if (!due) return new Date(NaN);
-        const parts = due.trim().split(' ');
-        const datePart = parts[0];
-        const timePart = parts[1] || '00:00:00';
-        if (datePart.includes('-')) {
-          // YYYY-MM-DD format (ISO-style from folder-based todos)
-          return new Date(`${datePart}T${timePart}`);
-        }
-        // MM/DD/YYYY format (legacy flat-file todos)
-        const dp = datePart.split('/');
-        return new Date(`${dp[2]}-${(dp[0]||'01').padStart(2,'0')}-${(dp[1]||'01').padStart(2,'0')}T${timePart}`);
-      };
-      
-      return parseDate(a.due) - parseDate(b.due);
-    });
-    
-    if (counter) counter.textContent = todos.length;
-
-    if (todos.length === 0) {
-      list.innerHTML = '<p class="todo-empty"><img src="/static/icon-192.png" alt="" style="width:48px;height:48px;border-radius:10px;opacity:0.5;display:block;margin:0 auto 8px;">No upcoming TODOs</p>';
-      return;
-    }
-
-    const now = new Date();
-    list.innerHTML = todos.map((t, idx) => {
-      let dueBadge = '';
-      let isOverdue = false;
-      let overdueClass = '';
-      if (t.due) {
-        // Parse due date - supports YYYY-MM-DD HH:MM and MM/DD/YYYY HH:MM:SS formats
-        let dueDate;
-        const dueTrim = t.due.trim();
-        const parts = dueTrim.split(' ');
-        const datePart = parts[0];
-        const timePart = parts[1] || '00:00:00';
-        if (datePart.includes('-')) {
-          dueDate = new Date(`${datePart}T${timePart}`);
-        } else {
-          const dp = datePart.split('/');
-          dueDate = new Date(`${dp[2]}-${(dp[0]||'01').padStart(2,'0')}-${(dp[1]||'01').padStart(2,'0')}T${timePart}`);
-        }
-        isOverdue = dueDate < now;
-        overdueClass = isOverdue ? ' overdue' : '';
-        dueBadge = `<span class="todo-due${overdueClass}">${isOverdue ? '⚠️' : '📅'} ${t.due}</span>`;
-      }
-
-      const labels = (t.labels || []).map(l => `<span class="todo-label">${l}</span>`).join('');
-      
-      const hasDetails = t.details && t.details.trim().length > 0;
-      const hasNotes = t.notes && t.notes.length > 0;
-      const detailsIcon = hasDetails ? '<span class="todo-details-icon">📝</span>' : '';
-      // Store todo data in data attributes for safe click handling
-      const safeTitle = escHtml(t.description);
-      const detailsB64 = btoa(unescape(encodeURIComponent(t.details || '')));
-      const metaB64 = btoa(JSON.stringify({ due: t.due || '', labels: t.labels || [] }));
-
-      const dueDateVal = t.due || '';
-      return `
-      <div class="todo-item todo-item-clickable"
-           data-todo-title="${safeTitle}"
-           data-todo-details="${detailsB64}"
-           data-todo-meta="${metaB64}"
-           data-todo-due="${escHtml(dueDateVal)}"
-           onclick="openTodoDetailsPanel(this)">
-        <div class="todo-item-row">
-          <div class="todo-item-desc" ondblclick="todoInlineEditLabel(event, this)">${safeTitle}</div>
-          <span class="todo-edit-pencil" onclick="event.stopPropagation(); todoInlineEditLabel(event, this.previousElementSibling)" title="Edit title">✎</span>
-        </div>
-        <div class="todo-item-meta">
-          ${t.due ? `<span class="todo-due${overdueClass}" onclick="event.stopPropagation(); todoInlineEditDue(event, this)" title="Click to edit due date">${isOverdue ? '⚠️' : '📅'} ${t.due}</span>` : `<span class="todo-add-due" onclick="event.stopPropagation(); todoInlineEditDue(event, this)" title="Add due date">+ 📅</span>`}
-          ${labels}${detailsIcon}
-        </div>
-        ${hasNotes ? `<div class="todo-item-notes">${t.notes.map(n => `<div>${escHtml(n)}</div>`).join('')}</div>` : ''}
-      </div>`;
-    }).join('');
-  } catch (e) {
-    list.innerHTML = '<p class="todo-empty"><img src="/static/icon-192.png" alt="" style="width:48px;height:48px;border-radius:10px;opacity:0.5;display:block;margin:0 auto 8px;">Could not load TODOs</p>';
-  }
-}
-
-// ─── F018: Quick-Add TODO ─────────────────────────────────────────────────────
-
-function toggleTodoQuickAdd() {
-  const form = $('todo-quick-add');
-  if (!form) return;
-  const visible = form.style.display !== 'none';
-  if (visible) {
-    closeTodoQuickAdd();
-  } else {
-    form.style.display = '';
-    const titleInput = $('todo-qa-title');
-    if (titleInput) { titleInput.value = ''; titleInput.focus(); }
-    const dueInput = $('todo-qa-due');
-    if (dueInput) dueInput.value = '';
-    const labelsInput = $('todo-qa-labels');
-    if (labelsInput) labelsInput.value = '';
-  }
-}
-
-function closeTodoQuickAdd() {
-  const form = $('todo-quick-add');
-  if (form) form.style.display = 'none';
-}
-
-async function submitTodoQuickAdd() {
-  const titleInput = $('todo-qa-title');
-  const dueInput = $('todo-qa-due');
-  const labelsInput = $('todo-qa-labels');
-  const saveBtn = $('btn-todo-qa-save');
-
-  const title = (titleInput ? titleInput.value : '').trim();
-  if (!title) {
-    if (titleInput) { titleInput.classList.add('todo-qa-input-error'); setTimeout(() => titleInput.classList.remove('todo-qa-input-error'), 600); }
-    return;
-  }
-
-  // Parse due date
-  let due_date = '';
-  if (dueInput && dueInput.value) {
-    const d = new Date(dueInput.value);
-    if (!isNaN(d.getTime())) {
-      const pad = n => String(n).padStart(2, '0');
-      due_date = `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
-    }
-  }
-
-  // Parse labels
-  let labels = [];
-  if (labelsInput && labelsInput.value.trim()) {
-    labels = labelsInput.value.split(',').map(l => l.trim()).filter(Boolean);
-  }
-
-  // Disable button while saving
-  if (saveBtn) { saveBtn.disabled = true; saveBtn.textContent = '...'; }
-
-  try {
-    const res = await apiRequest('POST', '/todos', { title, due_date, labels });
-    if (res && res.success) {
-      closeTodoQuickAdd();
-      fetchAndRenderTodos();
-    } else {
-      const msg = (res && res.error) || 'Failed to create TODO';
-      if (titleInput) { titleInput.setCustomValidity(msg); titleInput.reportValidity(); setTimeout(() => titleInput.setCustomValidity(''), 2000); }
-    }
-  } catch (err) {
-    console.error('Quick-add TODO failed:', err);
-  } finally {
-    if (saveBtn) { saveBtn.disabled = false; saveBtn.textContent = 'Add'; }
-  }
-}
-
-function startTodoRefresh() {
-  fetchAndRenderTodos();
-  if (_todoRefreshTimer) clearInterval(_todoRefreshTimer);
-  _todoRefreshTimer = setInterval(fetchAndRenderTodos, 60000); // refresh every 60s
-}
-
-function stopTodoRefresh() {
-  if (_todoRefreshTimer) { clearInterval(_todoRefreshTimer); _todoRefreshTimer = null; }
-}
-
-// ─── Inline TODO Editing ─────────────────────────────────────────────────────
-
-function todoInlineEditLabel(event, descEl) {
-  event.stopPropagation();
-  if (descEl.querySelector('input')) return; // already editing
-
-  const todoItem = descEl.closest('.todo-item');
-  const oldTitle = todoItem.dataset.todoTitle;
-  const text = descEl.textContent.trim();
-
-  const input = document.createElement('input');
-  input.type = 'text';
-  input.value = text;
-  input.className = 'todo-inline-input';
-  input.onclick = (e) => e.stopPropagation();
-
-  const save = async () => {
-    const newLabel = input.value.trim();
-    if (!newLabel || newLabel === text) {
-      descEl.textContent = text;
-      return;
-    }
-    descEl.textContent = newLabel + ' …';
-    try {
-      await apiRequest('PATCH', `/todos/${encodeURIComponent(oldTitle)}`, { label: newLabel });
-      fetchAndRenderTodos();
-    } catch (e) {
-      descEl.textContent = text;
-      console.error('Failed to update label:', e);
-    }
-  };
-
-  input.addEventListener('blur', save);
-  input.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') { e.preventDefault(); input.blur(); }
-    if (e.key === 'Escape') { descEl.textContent = text; }
-  });
-
-  descEl.textContent = '';
-  descEl.appendChild(input);
-  input.focus();
-  input.select();
-}
-
-function todoInlineEditDue(event, dueEl) {
-  event.stopPropagation();
-  if (dueEl.querySelector('input')) return;
-
-  const todoItem = dueEl.closest('.todo-item');
-  const todoTitle = todoItem.dataset.todoTitle;
-  const oldDue = todoItem.dataset.todoDue || '';
-
-  // Parse existing due date to datetime-local format
-  let dtVal = '';
-  if (oldDue) {
-    const parts = oldDue.trim().split(' ');
-    const datePart = parts[0];
-    const timePart = parts[1] || '00:00';
-    if (datePart.includes('-')) {
-      dtVal = datePart + 'T' + timePart.substring(0, 5);
-    } else if (datePart.includes('/')) {
-      const dp = datePart.split('/');
-      dtVal = `${dp[2]}-${dp[0].padStart(2,'0')}-${dp[1].padStart(2,'0')}T${timePart.substring(0,5)}`;
-    }
-  }
-
-  const input = document.createElement('input');
-  input.type = 'datetime-local';
-  input.value = dtVal;
-  input.className = 'todo-inline-date';
-  input.onclick = (e) => e.stopPropagation();
-
-  const origHTML = dueEl.innerHTML;
-
-  const save = async () => {
-    const newVal = input.value;
-    if (!newVal && !oldDue) {
-      dueEl.innerHTML = origHTML;
-      return;
-    }
-    // Format as YYYY-MM-DD HH:MM
-    let formattedDue = '';
-    if (newVal) {
-      const dt = new Date(newVal);
-      const y = dt.getFullYear();
-      const m = String(dt.getMonth()+1).padStart(2,'0');
-      const d = String(dt.getDate()).padStart(2,'0');
-      const hh = String(dt.getHours()).padStart(2,'0');
-      const mm = String(dt.getMinutes()).padStart(2,'0');
-      formattedDue = `${y}-${m}-${d} ${hh}:${mm}`;
-    }
-    dueEl.innerHTML = '⏳ Saving...';
-    try {
-      await apiRequest('PATCH', `/todos/${encodeURIComponent(todoTitle)}`, { due_date: formattedDue });
-      fetchAndRenderTodos();
-    } catch (e) {
-      dueEl.innerHTML = origHTML;
-      console.error('Failed to update due date:', e);
-    }
-  };
-
-  input.addEventListener('blur', save);
-  input.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') { e.preventDefault(); input.blur(); }
-    if (e.key === 'Escape') { dueEl.innerHTML = origHTML; }
-  });
-
-  // Clear button for removing due date
-  const clearBtn = document.createElement('button');
-  clearBtn.textContent = '✕';
-  clearBtn.className = 'todo-due-clear';
-  clearBtn.title = 'Remove due date';
-  clearBtn.onclick = async (e) => {
-    e.stopPropagation();
-    dueEl.innerHTML = '⏳ Removing...';
-    try {
-      await apiRequest('PATCH', `/todos/${encodeURIComponent(todoTitle)}`, { due_date: '' });
-      fetchAndRenderTodos();
-    } catch (err) {
-      dueEl.innerHTML = origHTML;
-      console.error('Failed to remove due date:', err);
-    }
-  };
-
-  dueEl.innerHTML = '';
-  dueEl.appendChild(input);
-  if (oldDue) dueEl.appendChild(clearBtn);
-  input.focus();
-}
-
-// ─── Detail Panel Inline Editing ─────────────────────────────────────────────
-
-function initTodoDetailEditing() {
-  const titleEl = document.getElementById('td-title');
-  if (!titleEl || titleEl.dataset.editBound) return;
-  titleEl.dataset.editBound = 'true';
-
-  titleEl.classList.add('td-title-editable');
-  titleEl.title = 'Click to edit title';
-
-  titleEl.addEventListener('click', () => {
-    if (titleEl.querySelector('input')) return;
-    const oldTitle = _currentTodoTitle;
-    const text = titleEl.textContent.trim();
-
-    const input = document.createElement('input');
-    input.type = 'text';
-    input.value = text;
-    input.className = 'td-title-input';
-
-    const save = async () => {
-      const newLabel = input.value.trim();
-      if (!newLabel || newLabel === text) {
-        titleEl.textContent = text;
-        return;
-      }
-      titleEl.textContent = newLabel;
-      _currentTodoTitle = newLabel;
-      try {
-        await apiRequest('PATCH', `/todos/${encodeURIComponent(oldTitle)}`, { label: newLabel });
-        fetchAndRenderTodos();
-      } catch (e) {
-        titleEl.textContent = text;
-        _currentTodoTitle = oldTitle;
-        console.error('Failed to update title:', e);
-      }
-    };
-
-    input.addEventListener('blur', save);
-    input.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter') { e.preventDefault(); input.blur(); }
-      if (e.key === 'Escape') { titleEl.textContent = text; }
-    });
-
-    titleEl.textContent = '';
-    titleEl.appendChild(input);
-    input.focus();
-    input.select();
-  });
-
-  // Due date editing in meta bar
-  const metaEl = document.getElementById('td-meta');
-  if (metaEl && !metaEl.dataset.dueEditBound) {
-    metaEl.dataset.dueEditBound = 'true';
-    metaEl.addEventListener('click', (e) => {
-      const dueBadge = e.target.closest('.todo-due, .td-add-due');
-      if (!dueBadge) return;
-      todoDetailEditDue(dueBadge);
-    });
-  }
-}
-
-function todoDetailEditDue(dueEl) {
-  if (dueEl.querySelector('input')) return;
-  const oldDue = _currentTodoDue || '';
-  const todoTitle = _currentTodoTitle;
-
-  let dtVal = '';
-  if (oldDue) {
-    const parts = oldDue.trim().split(' ');
-    const datePart = parts[0];
-    const timePart = parts[1] || '00:00';
-    if (datePart.includes('-')) {
-      dtVal = datePart + 'T' + timePart.substring(0, 5);
-    } else if (datePart.includes('/')) {
-      const dp = datePart.split('/');
-      dtVal = `${dp[2]}-${dp[0].padStart(2,'0')}-${dp[1].padStart(2,'0')}T${timePart.substring(0,5)}`;
-    }
-  }
-
-  const input = document.createElement('input');
-  input.type = 'datetime-local';
-  input.value = dtVal;
-  input.className = 'todo-inline-date';
-  const origHTML = dueEl.innerHTML;
-
-  const save = async () => {
-    const newVal = input.value;
-    if (!newVal && !oldDue) { dueEl.innerHTML = origHTML; return; }
-    let formattedDue = '';
-    if (newVal) {
-      const dt = new Date(newVal);
-      const y = dt.getFullYear();
-      const m = String(dt.getMonth()+1).padStart(2,'0');
-      const d = String(dt.getDate()).padStart(2,'0');
-      const hh = String(dt.getHours()).padStart(2,'0');
-      const mm = String(dt.getMinutes()).padStart(2,'0');
-      formattedDue = `${y}-${m}-${d} ${hh}:${mm}`;
-    }
-    dueEl.innerHTML = '⏳';
-    try {
-      await apiRequest('PATCH', `/todos/${encodeURIComponent(todoTitle)}`, { due_date: formattedDue });
-      _currentTodoDue = formattedDue;
-      // Re-render meta bar
-      const metaEl = document.getElementById('td-meta');
-      if (metaEl) renderTodoDetailMeta(metaEl);
-      fetchAndRenderTodos();
-    } catch (e) {
-      dueEl.innerHTML = origHTML;
-      console.error('Failed to update due date:', e);
-    }
-  };
-
-  input.addEventListener('blur', save);
-  input.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') { e.preventDefault(); input.blur(); }
-    if (e.key === 'Escape') { dueEl.innerHTML = origHTML; }
-  });
-
-  dueEl.innerHTML = '';
-  dueEl.appendChild(input);
-  input.focus();
-}
-
-function renderTodoDetailMeta(metaEl) {
-  const parts = [];
-  if (_currentTodoDue) {
-    const now = new Date();
-    const dateParts = _currentTodoDue.split(' ');
-    const dp0 = dateParts[0];
-    let dueDate;
-    if (dp0.includes('-')) {
-      dueDate = new Date(_currentTodoDue.replace(' ', 'T'));
-    } else {
-      const dp = dp0.split('/');
-      dueDate = new Date(`${dp[2]}-${dp[0].padStart(2,'0')}-${dp[1].padStart(2,'0')}T${dateParts[1] || '00:00'}`);
-    }
-    const isOverdue = dueDate < now;
-    parts.push(`<span class="td-meta-item"><span class="todo-due${isOverdue ? ' overdue' : ''}" title="Click to edit due date" style="cursor:pointer">${isOverdue ? '⚠️' : '📅'} ${escHtml(_currentTodoDue)}</span></span>`);
-  } else {
-    parts.push(`<span class="td-meta-item"><span class="td-add-due" title="Add due date" style="cursor:pointer;opacity:0.6">+ 📅 Add due date</span></span>`);
-  }
-  _currentTodoLabels.forEach(l => {
-    parts.push(`<span class="td-meta-item"><span class="todo-label">${escHtml(l)}</span></span>`);
-  });
-  metaEl.innerHTML = parts.join('');
-  metaEl.style.display = '';
-}
-
-// ─── Todo Details Panel ────────────────────────────────────────────────────────
-let _currentTodoTitle = null;
-let _currentTodoDetails = null;
-let _currentTodoDue = null;
-let _currentTodoLabels = [];
-
-function openTodoDetailsPanel(el) {
-  // Support both element (data-attribute) and legacy (title, detailsB64) call signatures
-  let title, detailsB64, metaB64;
-  if (typeof el === 'string') {
-    // Legacy: openTodoDetailsPanel(title, detailsB64)
-    title = el;
-    detailsB64 = arguments[1] || '';
-    metaB64 = null;
-  } else {
-    title = el.dataset.todoTitle || '';
-    detailsB64 = el.dataset.todoDetails || '';
-    metaB64 = el.dataset.todoMeta || null;
-  }
-
-  _currentTodoTitle = title;
-  _currentTodoDetails = decodeURIComponent(escape(atob(detailsB64)));
-
-  // Parse meta (due + labels)
-  let meta = { due: '', labels: [] };
-  if (metaB64) {
-    try { meta = JSON.parse(atob(metaB64)); } catch(e) {}
-  }
-  _currentTodoDue = meta.due || '';
-  _currentTodoLabels = meta.labels || [];
-
-  const panel = $('todo-details-panel');
-  const titleEl = $('td-title');
-  const contentEl = $('td-content');
-  const metaEl = $('td-meta');
-  const editorEl = $('td-editor');
-
-  if (!panel) return;
-
-  titleEl.textContent = title;
-  editorEl.value = _currentTodoDetails;
-
-  // Populate meta bar with due date and labels (editable)
-  if (metaEl) {
-    renderTodoDetailMeta(metaEl);
-    initTodoDetailEditing();
-  }
-
-
-  // Render markdown using marked if available, else fallback
-  const html = markdownToHtml(_currentTodoDetails);
-  contentEl.innerHTML = html;
-
-  // Show view mode, hide edit mode
-  const viewMode = panel.querySelector('#td-view-mode');
-  const editMode = panel.querySelector('#td-edit-mode');
-  if (viewMode) viewMode.style.display = '';
-  if (editMode) editMode.style.display = 'none';
-
-  // Open panel
-  panel.classList.remove('todo-details-hidden');
-}
-
-function closeTodoDetailsPanel() {
-  const panel = $('todo-details-panel');
-  if (panel) panel.classList.add('todo-details-hidden');
-  _currentTodoTitle = null;
-  _currentTodoDetails = null;
-}
-
-function openTodoEditMode() {
-  const panel = $('todo-details-panel');
-  const viewMode = panel.querySelector('#td-view-mode');
-  const editMode = panel.querySelector('#td-edit-mode');
-  if (viewMode) viewMode.style.display = 'none';
-  if (editMode) editMode.style.display = '';
-}
-
-function closeTodoEditMode() {
-  const panel = $('todo-details-panel');
-  const viewMode = panel.querySelector('#td-view-mode');
-  const editMode = panel.querySelector('#td-edit-mode');
-  if (viewMode) viewMode.style.display = '';
-  if (editMode) editMode.style.display = 'none';
-}
-
-async function saveTodoDetails() {
-  const editorEl = $('td-editor');
-  const newDetails = editorEl.value;
-  
-  if (!_currentTodoTitle) return;
-  
-  try {
-    // Update via API
-    const response = await apiRequest('PATCH', `/todos/${encodeURIComponent(_currentTodoTitle)}`, {
-      details: newDetails
-    });
-    
-    if (response.success || response.updated) {
-      _currentTodoDetails = newDetails;
-      // Update view mode
-      const contentEl = $('td-content');
-      const html = markdownToHtml(newDetails);
-      contentEl.innerHTML = html;
-      // Close edit mode
-      closeTodoEditMode();
-      // Refresh todo list
-      await fetchAndRenderTodos();
-    }
-  } catch (e) {
-    console.error('Failed to save todo details:', e);
-    alert('Failed to save todo details');
-  }
-}
-
-function markdownToHtml(markdown) {
-  if (!markdown || markdown.trim().length === 0) {
-    return '<p style="color: var(--text-muted); font-style: italic;">No details — click ✎ to add some.</p>';
-  }
-
-  // Use marked library (loaded via CDN) for full markdown support
-  if (typeof marked !== 'undefined') {
-    try {
-      return marked.parse(markdown, { breaks: true, gfm: true });
-    } catch(e) { /* fall through to regex fallback */ }
-  }
-
-  // Regex fallback (no external dep)
-  let html = escHtml(markdown)
-    .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
-    .replace(/\*(.*?)\*/g, '<em>$1</em>')
-    .replace(/__(.*?)__/g, '<strong>$1</strong>')
-    .replace(/_(.+?)_/g, '<em>$1</em>')
-    .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank">$1</a>')
-    .replace(/^### (.*?)$/gm, '<h3>$1</h3>')
-    .replace(/^## (.*?)$/gm, '<h2>$1</h2>')
-    .replace(/^# (.*?)$/gm, '<h1>$1</h1>')
-    .replace(/^- (.*?)$/gm, '<li>$1</li>')
-    .replace(/(<li>.*?<\/li>)/s, '<ul>$1</ul>')
-    .replace(/\n/g, '<br>');
-
-  return html;
 }
 
 // ─── Messaging ────────────────────────────────────────────────────────────────
@@ -2839,7 +2221,6 @@ async function initApp() {
     // instead of showing a blank empty-state that requires a manual click to restore.
     await selectSession(STATE.sessions[0].session_id);
   }
-  startTodoRefresh();
 }
 
 // ─── Boot ─────────────────────────────────────────────────────────────────────
@@ -3003,19 +2384,6 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
 
-  // --- TODO panel ---
-  // F018: Quick-add TODO button and form
-  const btnAddTodo = $('btn-add-todo');
-  if (btnAddTodo) btnAddTodo.addEventListener('click', toggleTodoQuickAdd);
-  const btnTodoQaSave = $('btn-todo-qa-save');
-  if (btnTodoQaSave) btnTodoQaSave.addEventListener('click', submitTodoQuickAdd);
-  const btnTodoQaCancel = $('btn-todo-qa-cancel');
-  if (btnTodoQaCancel) btnTodoQaCancel.addEventListener('click', closeTodoQuickAdd);
-  const todoQaTitle = $('todo-qa-title');
-  if (todoQaTitle) todoQaTitle.addEventListener('keydown', (e) => { if (e.key === 'Enter') submitTodoQuickAdd(); if (e.key === 'Escape') closeTodoQuickAdd(); });
-
-  const btnRefreshTodos = $('btn-refresh-todos');
-  if (btnRefreshTodos) btnRefreshTodos.addEventListener('click', fetchAndRenderTodos);
 
   // --- Textarea ---
   const ta = $('message-input');
@@ -5639,59 +5007,11 @@ function _initFileViewer() {
 _initFileViewer();
 document.addEventListener('DOMContentLoaded', _initFileViewer);
 
-function _initTodoDetailsPanel() {
-  const closeBtn = $('btn-td-close');
-  if (closeBtn && !closeBtn._tdBound) {
-    closeBtn._tdBound = true;
-    closeBtn.addEventListener('click', closeTodoDetailsPanel);
-  }
-  
-  const editBtn = $('btn-td-edit');
-  if (editBtn && !editBtn._tdBound) {
-    editBtn._tdBound = true;
-    editBtn.addEventListener('click', openTodoEditMode);
-  }
-  
-  const saveBtn = $('btn-td-save');
-  if (saveBtn && !saveBtn._tdBound) {
-    saveBtn._tdBound = true;
-    saveBtn.addEventListener('click', saveTodoDetails);
-  }
-  
-  const cancelBtn = $('btn-td-cancel');
-  if (cancelBtn && !cancelBtn._tdBound) {
-    cancelBtn._tdBound = true;
-    cancelBtn.addEventListener('click', closeTodoEditMode);
-  }
-  
-  // Close on Escape key
-  if (!window._tdEscBound) {
-    window._tdEscBound = true;
-    document.addEventListener('keydown', (e) => {
-      if (e.key === 'Escape') {
-        const panel = $('todo-details-panel');
-        if (panel && !panel.classList.contains('todo-details-hidden')) {
-          const editMode = panel.querySelector('#td-edit-mode');
-          if (editMode && editMode.style.display !== 'none') {
-            closeTodoEditMode();
-          } else {
-            closeTodoDetailsPanel();
-          }
-        }
-      }
-    });
-  }
-}
-_initTodoDetailsPanel();
-document.addEventListener('DOMContentLoaded', _initTodoDetailsPanel);
-
 window.openFileViewer = openFileViewer;
 window.linkifyFilePaths = linkifyFilePaths;
-window.openTodoDetailsPanel = openTodoDetailsPanel;
-window.closeTodoDetailsPanel = closeTodoDetailsPanel;
 
 // ─── Mobile Tab Navigation ────────────────────────────────────────────────────
-// Allows users to switch between Chat, Queue, and TODOs views on mobile.
+// Allows users to switch between Chat, Queue views on mobile.
 // Desktop layout is unchanged (panels visible side-by-side).
 
 let _mobileActiveTab = 'chat';
@@ -5715,7 +5035,7 @@ function switchMobileTab(tabName) {
 
   if (tabName === 'chat') {
     // Hide panel overlay, restore minimized state
-    panel.classList.remove('mobile-panel-active', 'mobile-show-queue-only', 'mobile-show-todos-only');
+    panel.classList.remove('mobile-panel-active', 'mobile-show-queue-only');
     chatPanel.classList.remove('hidden');
     if (_mobileQueueWasMinimized) panel.classList.add('queue-minimized');
   } else {
@@ -5727,20 +5047,14 @@ function switchMobileTab(tabName) {
 
     if (tabName === 'queue') {
       panel.classList.add('mobile-show-queue-only');
-      panel.classList.remove('mobile-show-todos-only');
       renderQueuePanel();
-    } else if (tabName === 'todos') {
-      panel.classList.add('mobile-show-todos-only');
-      panel.classList.remove('mobile-show-queue-only');
-      fetchAndRenderTodos();
     }
   }
 }
 
 function updateMobileBadges() {
-  // Keep mobile badge counts in sync with queue/todo counters
+  // Keep mobile badge counts in sync with queue counters
   const queueBadge = $('mobile-queue-badge');
-  const todoBadge = $('mobile-todo-badge');
 
   if (queueBadge) {
     const count = STATE.requestQueue ? STATE.requestQueue.length : 0;
@@ -5748,12 +5062,6 @@ function updateMobileBadges() {
     queueBadge.classList.toggle('hidden', count === 0);
   }
 
-  if (todoBadge) {
-    const todoCountEl = $('todo-count');
-    const count = todoCountEl ? parseInt(todoCountEl.textContent, 10) || 0 : 0;
-    todoBadge.textContent = count;
-    todoBadge.classList.toggle('hidden', count === 0);
-  }
 }
 
 function initMobileTabs() {
@@ -5761,11 +5069,6 @@ function initMobileTabs() {
     tab.addEventListener('click', () => switchMobileTab(tab.dataset.tab));
   });
 
-  // Observe todo count changes to update badge
-  const todoCountEl = $('todo-count');
-  if (todoCountEl && window.MutationObserver) {
-    new MutationObserver(updateMobileBadges).observe(todoCountEl, { childList: true, characterData: true, subtree: true });
-  }
 }
 
 // Wire up on DOMContentLoaded and immediately (module scripts defer automatically)
@@ -6728,7 +6031,6 @@ if (document.readyState !== 'loading') {
     name:        () => document.getElementById('asf-name'),
     path:        () => document.getElementById('asf-path'),
     description: () => document.getElementById('asf-description'),
-    todoDir:     () => document.getElementById('asf-todo-dir'),
     runtime:     () => document.getElementById('asf-runtime'),
     model:       () => document.getElementById('asf-model'),
     maxConcurrent: () => document.getElementById('asf-max-concurrent'),
@@ -6876,7 +6178,6 @@ if (document.readyState !== 'loading') {
     set(F.name,        agent.name);
     set(F.path,        agent.path);
     set(F.description, agent.description);
-    set(F.todoDir,     agent.todo_dir);
     set(F.runtime,     agent.runtime);
     set(F.model,       agent.model);
     const mcEl = F.maxConcurrent();
@@ -6905,7 +6206,6 @@ if (document.readyState !== 'loading') {
       name:        get(F.name),
       path:        get(F.path),
       description: get(F.description) || undefined,
-      todo_dir:    get(F.todoDir)     || undefined,
       runtime:     get(F.runtime)     || undefined,
       model:       get(F.model)       || undefined,
       max_concurrent: (() => {
@@ -6928,7 +6228,6 @@ if (document.readyState !== 'loading') {
     else if (!/^[a-z0-9_-]+$/.test(agent.name)) errs.push('Name must be lowercase with hyphens/underscores only');
     if (!agent.path) errs.push('Working path is required');
     else if (!agent.path.startsWith('/')) errs.push('Working path must start with /');
-    if (agent.todo_dir && !agent.todo_dir.startsWith('/')) errs.push('TODO directory must start with /');
     if (agent.max_concurrent !== undefined && agent.max_concurrent !== null) {
       if (!Number.isInteger(agent.max_concurrent) || agent.max_concurrent < 1) {
         errs.push('Max concurrent must be an integer ≥ 1');
@@ -7153,7 +6452,7 @@ if (document.readyState !== 'loading') {
 
   // Dirty detection on basic text fields
   if (modalSettings) {
-    ['asf-name','asf-path','asf-description','asf-todo-dir','asf-runtime','asf-model','asf-max-concurrent'].forEach(id => {
+    ['asf-name','asf-path','asf-description','asf-runtime','asf-model','asf-max-concurrent'].forEach(id => {
       const el = document.getElementById(id);
       if (el) el.addEventListener('input', updateDirtyIndicator);
     });
