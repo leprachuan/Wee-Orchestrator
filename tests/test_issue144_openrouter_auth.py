@@ -30,6 +30,7 @@ sys.path.insert(0, "/opt/n8n-copilot-shim-dev")
 
 # ── helpers ─────────────────────────────────────────────────────────────
 
+
 def _get_session_mgr():
     """Instantiate SessionManager without starting the full server."""
     mod = importlib.import_module("agent_manager")
@@ -61,10 +62,12 @@ def _clean_env(*keys):
             for k in keys:
                 if k not in saved and k in os.environ:
                     del os.environ[k]
+
     return _ctx()
 
 
 # ── agent_manager.py: run_wee_native() auth tests ──────────────────────
+
 
 class TestIssue144OpenRouterEnvVar:
     """OPENROUTER_API_KEY env var should be used for OpenRouter models."""
@@ -80,10 +83,20 @@ class TestIssue144OpenRouterEnvVar:
             os.environ["OPENROUTER_API_KEY"] = "sk-or-test-key-144"
             with patch("openai.OpenAI", mock_openai):
                 with patch.object(mgr, "get_or_create_session_data", return_value={}):
-                    with patch.object(mgr, "build_agent_context_prompt", return_value="ctx"):
-                        with patch.object(mgr, "_wee_augment_system_prompt_with_tools", return_value="ctx"):
-                            with patch.object(mgr, "_wee_anti_hallucination_prompt", return_value=""):
-                                with patch.object(mgr, "_wee_load_messages", return_value=[]):
+                    with patch.object(
+                        mgr, "build_agent_context_prompt", return_value="ctx"
+                    ):
+                        with patch.object(
+                            mgr,
+                            "_wee_augment_system_prompt_with_tools",
+                            return_value="ctx",
+                        ):
+                            with patch.object(
+                                mgr, "_wee_anti_hallucination_prompt", return_value=""
+                            ):
+                                with patch.object(
+                                    mgr, "_wee_load_messages", return_value=[]
+                                ):
                                     try:
                                         mgr.run_wee_native(
                                             "test prompt",
@@ -116,10 +129,20 @@ class TestIssue144OpenRouterEnvVar:
             os.environ["OPENROUTER_API_KEY"] = "sk-or-fallback"
             with patch("openai.OpenAI", mock_openai):
                 with patch.object(mgr, "get_or_create_session_data", return_value={}):
-                    with patch.object(mgr, "build_agent_context_prompt", return_value="ctx"):
-                        with patch.object(mgr, "_wee_augment_system_prompt_with_tools", return_value="ctx"):
-                            with patch.object(mgr, "_wee_anti_hallucination_prompt", return_value=""):
-                                with patch.object(mgr, "_wee_load_messages", return_value=[]):
+                    with patch.object(
+                        mgr, "build_agent_context_prompt", return_value="ctx"
+                    ):
+                        with patch.object(
+                            mgr,
+                            "_wee_augment_system_prompt_with_tools",
+                            return_value="ctx",
+                        ):
+                            with patch.object(
+                                mgr, "_wee_anti_hallucination_prompt", return_value=""
+                            ):
+                                with patch.object(
+                                    mgr, "_wee_load_messages", return_value=[]
+                                ):
                                     try:
                                         mgr.run_wee_native(
                                             "test",
@@ -134,9 +157,9 @@ class TestIssue144OpenRouterEnvVar:
 
             if mock_openai.called:
                 call_kwargs = mock_openai.call_args
-                assert call_kwargs.kwargs.get("api_key") == "sk-or-wee-key", (
-                    "WEE_API_KEY should take priority over OPENROUTER_API_KEY"
-                )
+                assert (
+                    call_kwargs.kwargs.get("api_key") == "sk-or-wee-key"
+                ), "WEE_API_KEY should take priority over OPENROUTER_API_KEY"
 
     def test_session_data_api_key_takes_priority(self, mgr):
         """api_key in session_data should override all env vars."""
@@ -149,11 +172,23 @@ class TestIssue144OpenRouterEnvVar:
         with _clean_env("OPENROUTER_API_KEY", "WEE_API_KEY", "WEE_API_BASE"):
             os.environ["OPENROUTER_API_KEY"] = "sk-or-env-key"
             with patch("openai.OpenAI", mock_openai):
-                with patch.object(mgr, "get_or_create_session_data", return_value=session):
-                    with patch.object(mgr, "build_agent_context_prompt", return_value="ctx"):
-                        with patch.object(mgr, "_wee_augment_system_prompt_with_tools", return_value="ctx"):
-                            with patch.object(mgr, "_wee_anti_hallucination_prompt", return_value=""):
-                                with patch.object(mgr, "_wee_load_messages", return_value=[]):
+                with patch.object(
+                    mgr, "get_or_create_session_data", return_value=session
+                ):
+                    with patch.object(
+                        mgr, "build_agent_context_prompt", return_value="ctx"
+                    ):
+                        with patch.object(
+                            mgr,
+                            "_wee_augment_system_prompt_with_tools",
+                            return_value="ctx",
+                        ):
+                            with patch.object(
+                                mgr, "_wee_anti_hallucination_prompt", return_value=""
+                            ):
+                                with patch.object(
+                                    mgr, "_wee_load_messages", return_value=[]
+                                ):
                                     try:
                                         mgr.run_wee_native(
                                             "test",
@@ -168,9 +203,9 @@ class TestIssue144OpenRouterEnvVar:
 
             if mock_openai.called:
                 call_kwargs = mock_openai.call_args
-                assert call_kwargs.kwargs.get("api_key") == "sk-or-session-key", (
-                    "session_data api_key should override env vars"
-                )
+                assert (
+                    call_kwargs.kwargs.get("api_key") == "sk-or-session-key"
+                ), "session_data api_key should override env vars"
 
 
 class TestIssue144KeyringFallback:
@@ -189,11 +224,25 @@ class TestIssue144KeyringFallback:
         with _clean_env("OPENROUTER_API_KEY", "WEE_API_KEY", "WEE_API_BASE"):
             with patch("openai.OpenAI", mock_openai):
                 with patch.dict("sys.modules", {"keyring": mock_keyring}):
-                    with patch.object(mgr, "get_or_create_session_data", return_value={}):
-                        with patch.object(mgr, "build_agent_context_prompt", return_value="ctx"):
-                            with patch.object(mgr, "_wee_augment_system_prompt_with_tools", return_value="ctx"):
-                                with patch.object(mgr, "_wee_anti_hallucination_prompt", return_value=""):
-                                    with patch.object(mgr, "_wee_load_messages", return_value=[]):
+                    with patch.object(
+                        mgr, "get_or_create_session_data", return_value={}
+                    ):
+                        with patch.object(
+                            mgr, "build_agent_context_prompt", return_value="ctx"
+                        ):
+                            with patch.object(
+                                mgr,
+                                "_wee_augment_system_prompt_with_tools",
+                                return_value="ctx",
+                            ):
+                                with patch.object(
+                                    mgr,
+                                    "_wee_anti_hallucination_prompt",
+                                    return_value="",
+                                ):
+                                    with patch.object(
+                                        mgr, "_wee_load_messages", return_value=[]
+                                    ):
                                         try:
                                             mgr.run_wee_native(
                                                 "test",
@@ -208,9 +257,9 @@ class TestIssue144KeyringFallback:
 
             if mock_openai.called:
                 call_kwargs = mock_openai.call_args
-                assert call_kwargs.kwargs.get("api_key") == "sk-or-keyring-key", (
-                    "keyring api_key should be used when env var is missing"
-                )
+                assert (
+                    call_kwargs.kwargs.get("api_key") == "sk-or-keyring-key"
+                ), "keyring api_key should be used when env var is missing"
 
 
 class TestIssue144MissingKeyError:
@@ -224,7 +273,9 @@ class TestIssue144MissingKeyError:
         with _clean_env("OPENROUTER_API_KEY", "WEE_API_KEY", "WEE_API_BASE"):
             with patch.dict("sys.modules", {"keyring": mock_keyring}):
                 with patch.object(mgr, "get_or_create_session_data", return_value={}):
-                    with pytest.raises(ValueError, match="OpenRouter API key not found"):
+                    with pytest.raises(
+                        ValueError, match="OpenRouter API key not found"
+                    ):
                         mgr.run_wee_native(
                             "test",
                             "openrouter/meta-llama/llama-4-scout",
@@ -261,7 +312,9 @@ class TestIssue144MissingKeyError:
         with _clean_env("OPENROUTER_API_KEY", "WEE_API_KEY", "WEE_API_BASE"):
             with patch.dict("sys.modules", {"keyring": mock_keyring}):
                 with patch("openai.OpenAI", mock_openai):
-                    with patch.object(mgr, "get_or_create_session_data", return_value={}):
+                    with patch.object(
+                        mgr, "get_or_create_session_data", return_value={}
+                    ):
                         with pytest.raises(ValueError):
                             mgr.run_wee_native(
                                 "test",
@@ -275,9 +328,9 @@ class TestIssue144MissingKeyError:
             # OpenAI should NOT have been called with 'ollama' key
             if mock_openai.called:
                 call_kwargs = mock_openai.call_args
-                assert call_kwargs.kwargs.get("api_key") != "ollama", (
-                    "OpenRouter should not silently default to 'ollama' api_key"
-                )
+                assert (
+                    call_kwargs.kwargs.get("api_key") != "ollama"
+                ), "OpenRouter should not silently default to 'ollama' api_key"
 
 
 class TestIssue144OllamaDefault:
@@ -293,10 +346,20 @@ class TestIssue144OllamaDefault:
         with _clean_env("WEE_API_KEY", "WEE_API_BASE"):
             with patch("openai.OpenAI", mock_openai):
                 with patch.object(mgr, "get_or_create_session_data", return_value={}):
-                    with patch.object(mgr, "build_agent_context_prompt", return_value="ctx"):
-                        with patch.object(mgr, "_wee_augment_system_prompt_with_tools", return_value="ctx"):
-                            with patch.object(mgr, "_wee_anti_hallucination_prompt", return_value=""):
-                                with patch.object(mgr, "_wee_load_messages", return_value=[]):
+                    with patch.object(
+                        mgr, "build_agent_context_prompt", return_value="ctx"
+                    ):
+                        with patch.object(
+                            mgr,
+                            "_wee_augment_system_prompt_with_tools",
+                            return_value="ctx",
+                        ):
+                            with patch.object(
+                                mgr, "_wee_anti_hallucination_prompt", return_value=""
+                            ):
+                                with patch.object(
+                                    mgr, "_wee_load_messages", return_value=[]
+                                ):
                                     try:
                                         mgr.run_wee_native(
                                             "test",
@@ -311,9 +374,9 @@ class TestIssue144OllamaDefault:
 
             if mock_openai.called:
                 call_kwargs = mock_openai.call_args
-                assert call_kwargs.kwargs.get("api_key") == "ollama", (
-                    "Ollama models should default to 'ollama' api_key"
-                )
+                assert (
+                    call_kwargs.kwargs.get("api_key") == "ollama"
+                ), "Ollama models should default to 'ollama' api_key"
 
 
 class TestIssue144OpenRouterBaseUrl:
@@ -330,10 +393,20 @@ class TestIssue144OpenRouterBaseUrl:
             os.environ["OPENROUTER_API_KEY"] = "sk-or-test"
             with patch("openai.OpenAI", mock_openai):
                 with patch.object(mgr, "get_or_create_session_data", return_value={}):
-                    with patch.object(mgr, "build_agent_context_prompt", return_value="ctx"):
-                        with patch.object(mgr, "_wee_augment_system_prompt_with_tools", return_value="ctx"):
-                            with patch.object(mgr, "_wee_anti_hallucination_prompt", return_value=""):
-                                with patch.object(mgr, "_wee_load_messages", return_value=[]):
+                    with patch.object(
+                        mgr, "build_agent_context_prompt", return_value="ctx"
+                    ):
+                        with patch.object(
+                            mgr,
+                            "_wee_augment_system_prompt_with_tools",
+                            return_value="ctx",
+                        ):
+                            with patch.object(
+                                mgr, "_wee_anti_hallucination_prompt", return_value=""
+                            ):
+                                with patch.object(
+                                    mgr, "_wee_load_messages", return_value=[]
+                                ):
                                     try:
                                         mgr.run_wee_native(
                                             "test",
@@ -348,9 +421,9 @@ class TestIssue144OpenRouterBaseUrl:
 
             if mock_openai.called:
                 call_kwargs = mock_openai.call_args
-                assert call_kwargs.kwargs.get("base_url") == "https://openrouter.ai/api/v1", (
-                    "OpenRouter base_url should be https://openrouter.ai/api/v1"
-                )
+                assert (
+                    call_kwargs.kwargs.get("base_url") == "https://openrouter.ai/api/v1"
+                ), "OpenRouter base_url should be https://openrouter.ai/api/v1"
 
     def test_openrouter_model_prefix_stripped(self, mgr):
         """'openrouter/' prefix should be stripped from model name."""
@@ -363,10 +436,20 @@ class TestIssue144OpenRouterBaseUrl:
             os.environ["OPENROUTER_API_KEY"] = "sk-or-test"
             with patch("openai.OpenAI", mock_openai):
                 with patch.object(mgr, "get_or_create_session_data", return_value={}):
-                    with patch.object(mgr, "build_agent_context_prompt", return_value="ctx"):
-                        with patch.object(mgr, "_wee_augment_system_prompt_with_tools", return_value="ctx"):
-                            with patch.object(mgr, "_wee_anti_hallucination_prompt", return_value=""):
-                                with patch.object(mgr, "_wee_load_messages", return_value=[]):
+                    with patch.object(
+                        mgr, "build_agent_context_prompt", return_value="ctx"
+                    ):
+                        with patch.object(
+                            mgr,
+                            "_wee_augment_system_prompt_with_tools",
+                            return_value="ctx",
+                        ):
+                            with patch.object(
+                                mgr, "_wee_anti_hallucination_prompt", return_value=""
+                            ):
+                                with patch.object(
+                                    mgr, "_wee_load_messages", return_value=[]
+                                ):
                                     try:
                                         mgr.run_wee_native(
                                             "test",
@@ -380,13 +463,16 @@ class TestIssue144OpenRouterBaseUrl:
                                         pass
 
             if mock_openai.called:
-                create_kwargs = mock_openai.return_value.chat.completions.create.call_args
-                assert create_kwargs.kwargs.get("model") == "meta-llama/llama-4-scout", (
-                    "openrouter/ prefix should be stripped from model name"
+                create_kwargs = (
+                    mock_openai.return_value.chat.completions.create.call_args
                 )
+                assert (
+                    create_kwargs.kwargs.get("model") == "meta-llama/llama-4-scout"
+                ), "openrouter/ prefix should be stripped from model name"
 
 
 # ── wee_runtime.py: resolve_model_and_endpoint() auth tests ────────────
+
 
 class TestIssue144WeeRuntimeAuth:
     """Test wee_runtime.py resolve_model_and_endpoint() auth handling."""
@@ -424,9 +510,7 @@ class TestIssue144WeeRuntimeAuth:
         wee_rt = importlib.import_module("wee_runtime")
 
         with _clean_env("WEE_API_KEY", "WEE_API_BASE"):
-            model, base, key = wee_rt.resolve_model_and_endpoint(
-                "ollama/gemma4:e4b"
-            )
+            model, base, key = wee_rt.resolve_model_and_endpoint("ollama/gemma4:e4b")
             assert key == "ollama"
             assert model == "gemma4:e4b"
 
@@ -445,10 +529,20 @@ class TestIssue144FreeModelAuth:
             os.environ["OPENROUTER_API_KEY"] = "sk-or-free-test"
             with patch("openai.OpenAI", mock_openai):
                 with patch.object(mgr, "get_or_create_session_data", return_value={}):
-                    with patch.object(mgr, "build_agent_context_prompt", return_value="ctx"):
-                        with patch.object(mgr, "_wee_augment_system_prompt_with_tools", return_value="ctx"):
-                            with patch.object(mgr, "_wee_anti_hallucination_prompt", return_value=""):
-                                with patch.object(mgr, "_wee_load_messages", return_value=[]):
+                    with patch.object(
+                        mgr, "build_agent_context_prompt", return_value="ctx"
+                    ):
+                        with patch.object(
+                            mgr,
+                            "_wee_augment_system_prompt_with_tools",
+                            return_value="ctx",
+                        ):
+                            with patch.object(
+                                mgr, "_wee_anti_hallucination_prompt", return_value=""
+                            ):
+                                with patch.object(
+                                    mgr, "_wee_load_messages", return_value=[]
+                                ):
                                     try:
                                         mgr.run_wee_native(
                                             "test",
@@ -473,7 +567,9 @@ class TestIssue144FreeModelAuth:
         with _clean_env("OPENROUTER_API_KEY", "WEE_API_KEY", "WEE_API_BASE"):
             with patch.dict("sys.modules", {"keyring": mock_keyring}):
                 with patch.object(mgr, "get_or_create_session_data", return_value={}):
-                    with pytest.raises(ValueError, match="OpenRouter API key not found"):
+                    with pytest.raises(
+                        ValueError, match="OpenRouter API key not found"
+                    ):
                         mgr.run_wee_native(
                             "test",
                             "openrouter/google/gemma-3-27b-it:free",
