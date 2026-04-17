@@ -40,6 +40,7 @@ Issues = "https://github.com/n8n-io/n8n-copilot-shim/issues"
 [project.scripts]
 n8n-copilot-shim = "agent_manager:main"
 n8n-telegram-connector = "telegram_connector:main"
+wee-cli = "wee_cli:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["agent_manager.py"]
