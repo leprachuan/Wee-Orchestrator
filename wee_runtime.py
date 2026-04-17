@@ -99,7 +99,7 @@ def resolve_model_and_endpoint(model: str, api_base: str = None, api_key: str = 
             "WEE_API_BASE", "http://192.168.1.101:11434/v1"
         )
     if not resolved_key:
-        # Issue #153: Check OPENROUTER_API_KEY env var for OpenRouter first
+        # Issue #144: Check OPENROUTER_API_KEY env var for OpenRouter first
         if "openrouter" in (resolved_base or "").lower():
             resolved_key = os.environ.get("OPENROUTER_API_KEY")
         if not resolved_key:
@@ -111,7 +111,7 @@ def resolve_model_and_endpoint(model: str, api_base: str = None, api_key: str = 
                 resolved_key = keyring.get_password("openrouter", "api_key")
             except Exception:
                 pass
-        # Issue #153: Raise clear error instead of defaulting to "ollama"
+        # Issue #144: Raise clear error instead of defaulting to "ollama"
         if not resolved_key:
             if "openrouter" in (resolved_base or "").lower():
                 print(
