@@ -467,17 +467,16 @@ class TestWebUIBuildTimingText(unittest.TestCase):
         self.assertIn("completion_tokens", source)
 
     def test_innerHTML_used_not_textContent(self):
-        """Timing div should use innerHTML to render tooltip span."""
+        """Timing div should use DOM API (appendChild) to render timing text."""
         source = self._get_app_js()
-        # Both sites should use innerHTML
         import re
 
-        # Find timing div creation patterns
-        timing_innerHTML = re.findall(r"timingDiv\.innerHTML\s*=\s*_", source)
+        # Find timing div creation patterns using safe DOM API
+        timing_innerHTML = re.findall(r"timingDiv\.appendChild\(", source)
         self.assertGreaterEqual(
             len(timing_innerHTML),
             2,
-            "Expected at least 2 innerHTML assignments for timing divs",
+            "Expected at least 2 appendChild calls for timing divs",
         )
 
     def test_buildTimingText_handles_wee_meta_with_tokens(self):
@@ -501,7 +500,7 @@ class TestWebUIBuildTimingText(unittest.TestCase):
         self.assertIsNotNone(func_match, "buildTimingText function not found")
         func_body = func_match.group(0)
         # title uses template literal ${tooltip} — verify tooltip is built safely
-        self.assertIn("title=", func_body)
+        self.assertIn("setAttribute('title'", func_body)
         self.assertIn("tooltip", func_body)
         self.assertIn("prompt_tokens", func_body)
         self.assertIn("completion_tokens", func_body)
