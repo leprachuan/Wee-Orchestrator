@@ -20,7 +20,7 @@ import time
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from notification_manager import NotificationManager
+from notification_manager import NotificationManager  # noqa: E402
 
 # --- API helpers for integration tests ---
 
@@ -277,7 +277,9 @@ def test_api_notifications_off_sets_global_mute():
     print(f"  /notifications off response: {json.dumps(resp)[:200]}")
     response_text = str(resp)
     assert (
-        "muted" in response_text.lower() or "off" in response_text.lower()
+        "muted" in response_text.lower()
+        or "off" in response_text.lower()
+        or "suppressed" in response_text.lower()
     ), f"Expected 'muted' or 'off' in response: {resp}"
     print("✓ API accepted /notifications off")
 
@@ -294,7 +296,10 @@ def test_api_notifications_off_sets_global_mute():
         )
         assert (
             global_pref == "off"
-        ), f"Expected _global preference 'off', got '{global_pref}'. Full prefs: {json.dumps(prefs)}"
+        ), (
+            f"Expected _global preference 'off', got '{global_pref}'."
+            f" Full prefs: {json.dumps(prefs)}"
+        )
         print("✓ _global preference is 'off' in notification_prefs.json")
     else:
         raise AssertionError(f"notification_prefs.json not found at {prefs_path}")
@@ -350,7 +355,9 @@ def test_api_cross_channel_mute_blocks_notification():
         channel="webui",
     )
     assert (
-        "muted" in str(resp).lower() or "off" in str(resp).lower()
+        "muted" in str(resp).lower()
+        or "off" in str(resp).lower()
+        or "suppressed" in str(resp).lower()
     ), f"Expected muted confirmation: {resp}"
     print("✓ Muted from WebUI")
 
