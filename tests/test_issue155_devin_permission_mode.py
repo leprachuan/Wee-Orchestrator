@@ -5,16 +5,16 @@ Tests verify:
 2. "auto" is never passed to Devin CLI (only normal, dangerous, bypass)
 3. _dispatch_single_runtime() passes mode to run_devin()
 4. Background task dispatch always uses "dangerous" for Devin (non-interactive)
-5. Mode propagation chain: scheduler --mode elevated -> run_devin() -> --permission-mode dangerous
+5. Mode propagation chain: scheduler --mode elevated -> run_devin()
+   -> --permission-mode dangerous
 """
 
 import inspect
-import os
 import re
 import sys
 import unittest
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 sys.path.insert(0, "/opt/n8n-copilot-shim-dev")
 
@@ -49,9 +49,7 @@ def _get_bg_task_source():
 def _strip_comments(source):
     """Remove comment lines from source for clean code-only assertions."""
     lines = source.split("\n")
-    return "\n".join(
-        line for line in lines if not line.strip().startswith("#")
-    )
+    return "\n".join(line for line in lines if not line.strip().startswith("#"))
 
 
 class TestIssue155DevinPermissionMode(unittest.TestCase):
@@ -145,12 +143,8 @@ class TestIssue155ModePropagation(unittest.TestCase):
                 "get_or_create_session_data",
                 return_value={"channel": "api"},
             ),
-            patch.object(
-                mgr, "_resolve_permission_mode", return_value="restricted"
-            ),
-            patch.object(
-                mgr, "_get_devin_session_id", return_value=None
-            ),
+            patch.object(mgr, "_resolve_permission_mode", return_value="restricted"),
+            patch.object(mgr, "_get_devin_session_id", return_value=None),
             patch.object(mgr, "build_agent_context_prompt", return_value="ctx"),
             patch.object(
                 mgr,
@@ -220,7 +214,7 @@ class TestIssue155ModePropagation(unittest.TestCase):
         )
 
     def test_run_devin_explicit_mode_not_overridden_by_session(self):
-        """When mode='elevated' is explicitly passed, session data must NOT override it."""
+        """Explicit mode param must take priority over session data."""
         cmd = self._run_devin_with_mode("elevated")
         perm_idx = cmd.index("--permission-mode")
         actual_perm = cmd[perm_idx + 1]
@@ -231,7 +225,7 @@ class TestIssue155ModePropagation(unittest.TestCase):
         )
 
     def test_run_devin_prompt_mode_elevated_when_no_explicit_mode(self):
-        """When mode=restricted (default) but prompt has /mode elevated, use elevated."""
+        """Prompt /mode elevated must be used when no explicit mode is passed."""
         cmd = self._run_devin_with_mode(None, mock_parse_mode_result="elevated")
         perm_idx = cmd.index("--permission-mode")
         actual_perm = cmd[perm_idx + 1]
@@ -270,12 +264,8 @@ class TestIssue155ModePropagation(unittest.TestCase):
                     "permissions": {"mode": "elevated"},
                 },
             ),
-            patch.object(
-                mgr, "_resolve_permission_mode", return_value="elevated"
-            ),
-            patch.object(
-                mgr, "_get_devin_session_id", return_value=None
-            ),
+            patch.object(mgr, "_resolve_permission_mode", return_value="elevated"),
+            patch.object(mgr, "_get_devin_session_id", return_value=None),
             patch.object(mgr, "build_agent_context_prompt", return_value="ctx"),
             patch.object(
                 mgr,
@@ -317,9 +307,7 @@ class TestIssue155BackgroundTaskDevin(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.source = _get_bg_task_source()
-        assert "runtime ==" in cls.source, (
-            "_run_background_task source not found"
-        )
+        assert "runtime ==" in cls.source, "_run_background_task source not found"
 
     def _get_devin_section(self):
         devin_idx = self.source.find('runtime == "devin"')
@@ -354,9 +342,7 @@ class TestIssue155BackgroundTaskDevin(unittest.TestCase):
         """Background Devin perm should NOT be conditional (was ternary before)."""
         devin_section = self._get_devin_section()
         code_only = _strip_comments(devin_section)
-        ternary = re.findall(
-            r"_devin_perm\s*=.*\bif\b.*\belse\b", code_only
-        )
+        ternary = re.findall(r"_devin_perm\s*=.*\bif\b.*\belse\b", code_only)
         self.assertEqual(
             len(ternary),
             0,
