@@ -250,9 +250,9 @@ class TestWebUIVerboseToggle(unittest.TestCase):
         self.assertIn("meta-verbose", html)
 
     def test_index_html_cache_bust_updated(self):
-        """index.html cache-bust should be v=20260403f027."""
+        """index.html cache-bust should be v=20260417263ef08."""
         html = self._read_file("webui", "dist", "index.html")
-        self.assertIn("v=20260403f027", html)
+        self.assertIn("v=20260417263ef08", html)
 
     def test_app_css_has_verbose_styles(self):
         """app.css should contain verbose toggle CSS rules."""
