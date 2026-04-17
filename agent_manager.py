@@ -6756,10 +6756,15 @@ User Request:
         """
         try:
             from copilot import CopilotClient, SubprocessConfig
-            from copilot.session import (CopilotSession, ElicitationContext,
-                                         ElicitationResult, PermissionHandler,
-                                         SessionEventType, UserInputRequest,
-                                         UserInputResponse)
+            from copilot.session import (
+                CopilotSession,
+                ElicitationContext,
+                ElicitationResult,
+                PermissionHandler,
+                SessionEventType,
+                UserInputRequest,
+                UserInputResponse,
+            )
         except ImportError:
             return (
                 "Error: github-copilot-sdk not installed. "
@@ -7074,9 +7079,14 @@ User Request:
         User must run `claude login` to authenticate first.
         """
         try:
-            from claude_agent_sdk import (AssistantMessage, ClaudeAgentOptions,
-                                          ResultMessage, TextBlock,
-                                          ToolResultBlock, ToolUseBlock)
+            from claude_agent_sdk import (
+                AssistantMessage,
+                ClaudeAgentOptions,
+                ResultMessage,
+                TextBlock,
+                ToolResultBlock,
+                ToolUseBlock,
+            )
             from claude_agent_sdk import query as claude_sdk_query
         except ImportError:
             return "Error: claude-sdk not installed. " "Run: pip install claude-sdk"
@@ -9561,11 +9571,24 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
     import mimetypes
     from enum import Enum
 
-    from fastapi import (FastAPI, File, Header, HTTPException, Query, Request,
-                         UploadFile, WebSocket, WebSocketDisconnect)
+    from fastapi import (
+        FastAPI,
+        File,
+        Header,
+        HTTPException,
+        Query,
+        Request,
+        UploadFile,
+        WebSocket,
+        WebSocketDisconnect,
+    )
     from fastapi.middleware.cors import CORSMiddleware
-    from fastapi.responses import (FileResponse, JSONResponse, Response,
-                                   StreamingResponse)
+    from fastapi.responses import (
+        FileResponse,
+        JSONResponse,
+        Response,
+        StreamingResponse,
+    )
     from fastapi.staticfiles import StaticFiles
     from pydantic import BaseModel, field_validator
 
@@ -14063,9 +14086,17 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
 
     # ── Skills Panel API ──────────────────────────────────────────────────────
 
-    from skill_manager import (apply_update, check_update, delete_origin,
-                               delete_skill, get_origin, get_skill,
-                               scan_agent_skills, scan_skills, set_origin)
+    from skill_manager import (
+        apply_update,
+        check_update,
+        delete_origin,
+        delete_skill,
+        get_origin,
+        get_skill,
+        scan_agent_skills,
+        scan_skills,
+        set_origin,
+    )
 
     @app.get("/api/v1/skills")
     async def list_skills(agent: Optional[str] = None):

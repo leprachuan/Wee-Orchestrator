@@ -417,7 +417,10 @@ class TestDonePayloadIncludesWeeMeta(unittest.TestCase):
         self.assertGreaterEqual(
             len(matches),
             4,
-            f"Expected at least 4 done_payload wee_meta injections, found {len(matches)}",
+            (
+                f"Expected at least 4 done_payload wee_meta injections,"
+                f" found {len(matches)}"
+            ),
         )
 
     def test_stream_options_in_create_kwargs(self):
