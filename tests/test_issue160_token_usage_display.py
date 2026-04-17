@@ -10,12 +10,10 @@ Regression tests covering:
 - WebUI buildTimingText rendering
 """
 
-import json
 import os
 import sys
-import types
 import unittest
-from unittest.mock import MagicMock, patch, PropertyMock
+from unittest.mock import MagicMock
 
 # Add parent dir to path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -23,15 +21,9 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 def _get_session_mgr_class():
     """Import SessionManager from agent_manager without starting the server."""
-    import importlib
-    spec = importlib.util.spec_from_file_location(
-        "agent_manager",
-        os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "agent_manager.py"),
-        submodule_search_locations=[],
-    )
-    # We only need to test _build_wee_meta which is a pure method
+    # We only need to test _build_wee_meta which is a pure method.
     # Rather than importing the full module (which starts FastAPI),
-    # we'll parse just the method
+    # we test via a standalone mock class.
     return None
 
 
@@ -49,11 +41,16 @@ class TestBuildWeeMeta(unittest.TestCase):
             source = f.read()
 
         # Verify the pricing table exists
-        assert "_WEE_MODEL_PRICING" in source, "Pricing table not found in agent_manager.py"
-        assert "_build_wee_meta" in source, "_build_wee_meta not found in agent_manager.py"
+        assert (
+            "_WEE_MODEL_PRICING" in source
+        ), "Pricing table not found in agent_manager.py"
+        assert (
+            "_build_wee_meta" in source
+        ), "_build_wee_meta not found in agent_manager.py"
 
         # Extract pricing dict from source
         import re
+
         pricing_block = re.search(
             r"_WEE_MODEL_PRICING\s*=\s*\{([^}]+)\}",
             source,
@@ -78,10 +75,19 @@ class TestBuildWeeMeta(unittest.TestCase):
         mgr._WEE_MODEL_PRICING = pricing_dict
 
         # Bind the real method logic
-        def build_wee_meta(self_mock, api_base, resolved_model, original_model,
-                           prompt_tokens, completion_tokens, usage_available):
+        def build_wee_meta(
+            self_mock,
+            api_base,
+            resolved_model,
+            original_model,
+            prompt_tokens,
+            completion_tokens,
+            usage_available,
+        ):
             meta = {"runtime": "wee"}
-            is_ollama = "11434" in (api_base or "") or (api_base or "").startswith("http://192.168.1.101")
+            is_ollama = "11434" in (api_base or "") or (api_base or "").startswith(
+                "http://192.168.1.101"
+            )
             is_openrouter = "openrouter" in (api_base or "").lower()
             is_lmstudio = "1234" in (api_base or "")
 
@@ -102,9 +108,11 @@ class TestBuildWeeMeta(unittest.TestCase):
                 for candidate in [original_model, resolved_model]:
                     candidate_lower = candidate.lower() if candidate else ""
                     if candidate_lower.startswith("openrouter/"):
-                        candidate_lower = candidate_lower[len("openrouter/"):]
+                        candidate_lower = candidate_lower[len("openrouter/") :]
                     for key, val in self_mock._WEE_MODEL_PRICING.items():
-                        if key.lower() == candidate_lower or candidate_lower.startswith(key.lower()):
+                        if key.lower() == candidate_lower or candidate_lower.startswith(
+                            key.lower()
+                        ):
                             pricing = val
                             break
                     if pricing:
@@ -137,8 +145,12 @@ class TestBuildWeeMeta(unittest.TestCase):
         """Ollama endpoint should report 'local' cost even with usage data."""
         mgr = self._make_session_mgr()
         meta = mgr._build_wee_meta(
-            "http://192.168.1.101:11434/v1", "gemma4:e4b", "gemma4:e4b",
-            500, 200, True,
+            "http://192.168.1.101:11434/v1",
+            "gemma4:e4b",
+            "gemma4:e4b",
+            500,
+            200,
+            True,
         )
         self.assertEqual(meta["runtime"], "wee")
         self.assertEqual(meta["tokens"], 700)
@@ -150,8 +162,12 @@ class TestBuildWeeMeta(unittest.TestCase):
         """Ollama without usage data should still show 'local'."""
         mgr = self._make_session_mgr()
         meta = mgr._build_wee_meta(
-            "http://192.168.1.101:11434/v1", "llama3.3", "llama3.3",
-            0, 0, False,
+            "http://192.168.1.101:11434/v1",
+            "llama3.3",
+            "llama3.3",
+            0,
+            0,
+            False,
         )
         self.assertEqual(meta["cost_label"], "local")
         self.assertNotIn("tokens", meta)
@@ -166,7 +182,9 @@ class TestBuildWeeMeta(unittest.TestCase):
             "https://openrouter.ai/api/v1",
             "anthropic/claude-sonnet-4",
             "openrouter/anthropic/claude-sonnet-4",
-            1000, 500, True,
+            1000,
+            500,
+            True,
         )
         self.assertEqual(meta["tokens"], 1500)
         # Cost: (1000/1M)*3 + (500/1M)*15 = 0.003 + 0.0075 = 0.0105
@@ -181,7 +199,9 @@ class TestBuildWeeMeta(unittest.TestCase):
             "https://openrouter.ai/api/v1",
             "nvidia/llama-3.1-nemotron-ultra-253b-v1:free",
             "openrouter/nvidia/llama-3.1-nemotron-ultra-253b-v1:free",
-            1000, 500, True,
+            1000,
+            500,
+            True,
         )
         self.assertEqual(meta["tokens"], 1500)
         # Nemotron is in pricing table at (0.00, 0.00), so cost = $0
@@ -198,7 +218,9 @@ class TestBuildWeeMeta(unittest.TestCase):
             "https://openrouter.ai/api/v1",
             "some-unknown/model-v99",
             "openrouter/some-unknown/model-v99",
-            1000, 500, True,
+            1000,
+            500,
+            True,
         )
         self.assertEqual(meta["tokens"], 1500)
         self.assertEqual(meta["cost_label"], "est. N/A")
@@ -210,7 +232,9 @@ class TestBuildWeeMeta(unittest.TestCase):
             "https://openrouter.ai/api/v1",
             "openai/gpt-4o",
             "openrouter/openai/gpt-4o",
-            10000, 5000, True,
+            10000,
+            5000,
+            True,
         )
         self.assertEqual(meta["tokens"], 15000)
         # (10000/1M)*2.50 + (5000/1M)*10.00 = 0.025 + 0.05 = 0.075, >= $0.01 → 2dp
@@ -222,8 +246,12 @@ class TestBuildWeeMeta(unittest.TestCase):
         """LM Studio should report 'local' cost."""
         mgr = self._make_session_mgr()
         meta = mgr._build_wee_meta(
-            "http://localhost:1234/v1", "some-model", "some-model",
-            300, 100, True,
+            "http://localhost:1234/v1",
+            "some-model",
+            "some-model",
+            300,
+            100,
+            True,
         )
         self.assertEqual(meta["tokens"], 400)
         self.assertEqual(meta["cost_label"], "local")
@@ -232,8 +260,12 @@ class TestBuildWeeMeta(unittest.TestCase):
         """LM Studio without usage should show 'local' and no tokens."""
         mgr = self._make_session_mgr()
         meta = mgr._build_wee_meta(
-            "http://localhost:1234/v1", "some-model", "some-model",
-            0, 0, False,
+            "http://localhost:1234/v1",
+            "some-model",
+            "some-model",
+            0,
+            0,
+            False,
         )
         self.assertEqual(meta["cost_label"], "local")
         self.assertNotIn("tokens", meta)
@@ -244,8 +276,12 @@ class TestBuildWeeMeta(unittest.TestCase):
         """Unknown provider should have empty cost_label."""
         mgr = self._make_session_mgr()
         meta = mgr._build_wee_meta(
-            "http://some-custom-api.example.com/v1", "model-x", "model-x",
-            1000, 500, True,
+            "http://some-custom-api.example.com/v1",
+            "model-x",
+            "model-x",
+            1000,
+            500,
+            True,
         )
         self.assertEqual(meta["tokens"], 1500)
         self.assertEqual(meta["cost_label"], "")
@@ -254,8 +290,12 @@ class TestBuildWeeMeta(unittest.TestCase):
         """Unknown provider without usage should return minimal meta."""
         mgr = self._make_session_mgr()
         meta = mgr._build_wee_meta(
-            "http://some-custom-api.example.com/v1", "model-x", "model-x",
-            0, 0, False,
+            "http://some-custom-api.example.com/v1",
+            "model-x",
+            "model-x",
+            0,
+            0,
+            False,
         )
         self.assertEqual(meta, {"runtime": "wee"})
 
@@ -269,7 +309,9 @@ class TestBuildWeeMeta(unittest.TestCase):
             "https://openrouter.ai/api/v1",
             "google/gemini-2.0-flash-001",
             "openrouter/google/gemini-2.0-flash-001",
-            100, 50, True,  # tiny token counts
+            100,
+            50,
+            True,  # tiny token counts
         )
         cost_label = meta["cost_label"]
         self.assertTrue(cost_label.startswith("$"))
@@ -284,7 +326,9 @@ class TestBuildWeeMeta(unittest.TestCase):
             "https://openrouter.ai/api/v1",
             "anthropic/claude-sonnet-4",
             "openrouter/anthropic/claude-sonnet-4",
-            500, 100, True,
+            500,
+            100,
+            True,
         )
         cost_label = meta["cost_label"]
         # (500/1M)*3 + (100/1M)*15 = 0.0015 + 0.0015 = 0.003
@@ -298,7 +342,9 @@ class TestBuildWeeMeta(unittest.TestCase):
             "https://openrouter.ai/api/v1",
             "google/gemini-2.5-pro-preview",
             "openrouter/google/gemini-2.5-pro-preview",
-            100000, 50000, True,
+            100000,
+            50000,
+            True,
         )
         cost_label = meta["cost_label"]
         # (100000/1M)*1.25 + (50000/1M)*10.00 = 0.125 + 0.5 = 0.625
@@ -328,7 +374,9 @@ class TestBuildWeeMeta(unittest.TestCase):
             "https://openrouter.ai/api/v1",
             "openai/gpt-4o",
             "openrouter/openai/gpt-4o",
-            total_prompt, total_completion, usage_available,
+            total_prompt,
+            total_completion,
+            usage_available,
         )
         self.assertEqual(meta["prompt_tokens"], 600)
         self.assertEqual(meta["completion_tokens"], 300)
@@ -363,10 +411,12 @@ class TestDonePayloadIncludesWeeMeta(unittest.TestCase):
 
         # Count occurrences of the wee_meta injection pattern
         import re
-        pattern = r'_wm\s*=\s*session_data\.get\("_wee_meta"\)'
+
+        pattern = r'_wm\s*=\s*session_data\.pop\("_wee_meta",\s*None\)'
         matches = re.findall(pattern, source)
         self.assertGreaterEqual(
-            len(matches), 4,
+            len(matches),
+            4,
             f"Expected at least 4 done_payload wee_meta injections, found {len(matches)}",
         )
 
@@ -399,7 +449,9 @@ class TestWebUIBuildTimingText(unittest.TestCase):
     def _get_app_js(self):
         app_path = os.path.join(
             os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-            "webui", "dist", "app.js",
+            "webui",
+            "dist",
+            "app.js",
         )
         with open(app_path, "r") as f:
             return f.read()
@@ -416,10 +468,12 @@ class TestWebUIBuildTimingText(unittest.TestCase):
         source = self._get_app_js()
         # Both sites should use innerHTML
         import re
+
         # Find timing div creation patterns
         timing_innerHTML = re.findall(r"timingDiv\.innerHTML\s*=\s*_", source)
         self.assertGreaterEqual(
-            len(timing_innerHTML), 2,
+            len(timing_innerHTML),
+            2,
             "Expected at least 2 innerHTML assignments for timing divs",
         )
 
@@ -437,6 +491,7 @@ class TestWebUIBuildTimingText(unittest.TestCase):
         The span title uses fixed format strings, not user input."""
         source = self._get_app_js()
         import re
+
         # Extract just the buildTimingText function body
         pattern = r"function buildTimingText\(.*?\n\}"
         func_match = re.search(pattern, source, re.DOTALL)
@@ -449,15 +504,12 @@ class TestWebUIBuildTimingText(unittest.TestCase):
         self.assertIn("completion_tokens", func_body)
 
 
-
-
-
-
 class TestPricingTable(unittest.TestCase):
     """Verify the pricing table in agent_manager.py."""
 
     def _get_pricing(self):
         import re
+
         am_path = os.path.join(
             os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
             "agent_manager.py",
@@ -475,12 +527,19 @@ class TestPricingTable(unittest.TestCase):
     def test_pricing_has_major_providers(self):
         """Pricing table should cover major model families."""
         pricing = self._get_pricing()
-        for provider in ["google/", "anthropic/", "openai/", "meta-llama/", "deepseek/"]:
+        for provider in [
+            "google/",
+            "anthropic/",
+            "openai/",
+            "meta-llama/",
+            "deepseek/",
+        ]:
             self.assertIn(provider, pricing, f"Missing provider: {provider}")
 
     def test_pricing_values_non_negative(self):
         """All pricing values should be >= 0."""
         import re
+
         pricing = self._get_pricing()
         for line in pricing.strip().split("\n"):
             line = line.strip().rstrip(",")
@@ -491,13 +550,15 @@ class TestPricingTable(unittest.TestCase):
                 vals = m.group(2).split(",")
                 for v in vals:
                     self.assertGreaterEqual(
-                        float(v.strip()), 0,
+                        float(v.strip()),
+                        0,
                         f"Negative price for {m.group(1)}",
                     )
 
     def test_free_model_has_zero_pricing(self):
         """Nemotron free model should have (0.00, 0.00) pricing."""
         import re
+
         pricing = self._get_pricing()
         self.assertIn("nvidia/llama-3.1-nemotron-ultra-253b-v1", pricing)
         m = re.search(
@@ -507,6 +568,88 @@ class TestPricingTable(unittest.TestCase):
         self.assertIsNotNone(m)
         vals = [float(v.strip()) for v in m.group(1).split(",")]
         self.assertEqual(vals, [0.0, 0.0])
+
+
+class TestIssue160StaleMeta(unittest.TestCase):
+    """Regression: _wee_meta must not leak across responses (QA Round 2)."""
+
+    def test_wee_meta_cleared_after_done_event(self):
+        """After a done event consumes _wee_meta via pop(), it must be gone
+        from session_data so the next response in the same session does not
+        re-emit stale token/cost info."""
+        session_data = {
+            "runtime": "wee",
+            "model": "openrouter/anthropic/claude-sonnet-4",
+            "_wee_meta": {
+                "tokens": 500,
+                "prompt_tokens": 300,
+                "completion_tokens": 200,
+                "cost_label": "$0.0042",
+            },
+        }
+
+        # Simulate what the done-event code does: pop _wee_meta
+        _wm = session_data.pop("_wee_meta", None)
+        self.assertIsNotNone(_wm, "_wee_meta should be available on first pop")
+        self.assertEqual(_wm["tokens"], 500)
+
+        # Second access should return None (stale leak prevented)
+        _wm2 = session_data.pop("_wee_meta", None)
+        self.assertIsNone(_wm2, "_wee_meta must be None after first pop — stale leak!")
+
+    def test_wee_meta_absent_when_not_set(self):
+        """If no _wee_meta was set (non-wee runtime), pop returns None."""
+        session_data = {"runtime": "copilot", "model": "claude-sonnet-4.6"}
+        _wm = session_data.pop("_wee_meta", None)
+        self.assertIsNone(_wm)
+
+    def test_done_event_includes_wee_meta_then_clears(self):
+        """Full simulation: build done_evt dict, consume _wee_meta, verify
+        subsequent done event has no wee_meta."""
+        import json as _json
+
+        meta = {
+            "tokens": 1247,
+            "prompt_tokens": 800,
+            "completion_tokens": 447,
+            "cost_label": "$0.0042",
+        }
+        session_data = {
+            "runtime": "wee",
+            "model": "openrouter/anthropic/claude-sonnet-4",
+            "_wee_meta": meta,
+        }
+
+        # First done event
+        _done_evt = {
+            "type": "done",
+            "response": "Hello!",
+            "runtime": session_data.get("runtime", "copilot"),
+            "model": session_data.get("model"),
+        }
+        _wm = session_data.pop("_wee_meta", None)
+        if _wm:
+            _done_evt["wee_meta"] = _wm
+        payload1 = _json.loads(_json.dumps(_done_evt))
+        self.assertIn("wee_meta", payload1)
+        self.assertEqual(payload1["wee_meta"]["tokens"], 1247)
+
+        # Second done event (same session) — must NOT have wee_meta
+        _done_evt2 = {
+            "type": "done",
+            "response": "Second response",
+            "runtime": session_data.get("runtime", "copilot"),
+            "model": session_data.get("model"),
+        }
+        _wm2 = session_data.pop("_wee_meta", None)
+        if _wm2:
+            _done_evt2["wee_meta"] = _wm2
+        payload2 = _json.loads(_json.dumps(_done_evt2))
+        self.assertNotIn(
+            "wee_meta",
+            payload2,
+            "Stale _wee_meta leaked into second response!",
+        )
 
 
 if __name__ == "__main__":
