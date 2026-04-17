@@ -11068,6 +11068,21 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                     cmd.extend(["--api-key", _wee_api_key])
                 cmd.extend(["--system-prompt", context_prompt])
                 cmd.append(prompt)
+            elif runtime == "claude-sdk" or runtime == "copilot-sdk":
+                # SDK runtimes (claude-sdk, copilot-sdk) require in-process execution
+                # so we invoke agent_manager.py which will handle them internally
+                agent_manager_script = os.path.join(
+                    os.path.dirname(os.path.abspath(__file__)), "agent_manager.py"
+                )
+                cmd = [
+                    sys.executable,
+                    agent_manager_script,
+                    "--runtime", runtime,
+                    "--model", model,
+                    "--agent", agent,
+                    context_prompt,
+                    session_id or str(uuid4()),
+                ]
             else:
                 # Default: copilot runtime
                 copilot_bin = (
