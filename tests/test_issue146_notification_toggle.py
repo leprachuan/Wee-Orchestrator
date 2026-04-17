@@ -92,16 +92,22 @@ class TestCreateNotificationGlobalToggle:
     def test_suppressed_when_globally_disabled(self, nm):
         nm.set_global_enabled(False)
         result = nm.create_notification(
-            task_id="bg_test1", description="Test", status="completed",
-            channel="telegram", user_key="telegram:user1",
+            task_id="bg_test1",
+            description="Test",
+            status="completed",
+            channel="telegram",
+            user_key="telegram:user1",
         )
         assert result is None
 
     def test_no_notification_stored_when_suppressed(self, nm):
         nm.set_global_enabled(False)
         nm.create_notification(
-            task_id="bg_test2", description="Test", status="completed",
-            channel="telegram", user_key="telegram:user1",
+            task_id="bg_test2",
+            description="Test",
+            status="completed",
+            channel="telegram",
+            user_key="telegram:user1",
         )
         stored = nm._load()
         assert len(stored) == 0
@@ -109,8 +115,11 @@ class TestCreateNotificationGlobalToggle:
     def test_critical_bypasses_suppression(self, nm):
         nm.set_global_enabled(False)
         result = nm.create_notification(
-            task_id="bg_critical1", description="Heartbeat failure",
-            status="error", channel="telegram", user_key="telegram:user1",
+            task_id="bg_critical1",
+            description="Heartbeat failure",
+            status="error",
+            channel="telegram",
+            user_key="telegram:user1",
             is_critical=True,
         )
         assert result is not None
@@ -121,8 +130,11 @@ class TestCreateNotificationGlobalToggle:
     def test_normal_notification_when_enabled(self, nm):
         nm.set_global_enabled(True)
         result = nm.create_notification(
-            task_id="bg_normal1", description="Normal", status="completed",
-            channel="webui", user_key="webui:user1",
+            task_id="bg_normal1",
+            description="Normal",
+            status="completed",
+            channel="webui",
+            user_key="webui:user1",
         )
         assert result is not None
         stored = nm._load()
@@ -138,6 +150,7 @@ class TestSlashNotifications:
         mgr._bg_identity = None
         mgr.update_session_field = MagicMock()
         from agent_manager import SessionManager
+
         mgr._slash_notifications = SessionManager._slash_notifications.__get__(mgr)
         return mgr
 
@@ -192,10 +205,15 @@ class TestEmitBgNotificationCritical:
             if mock_nm.is_muted("user1"):
                 notify = False
         mock_nm.create_notification(
-            task_id="bg_test", description="test"[:200], status="completed",
-            channel="telegram", user_key="telegram:user1",
-            output_preview=None, error=None,
-            skip_external=not notify, is_critical=is_critical,
+            task_id="bg_test",
+            description="test"[:200],
+            status="completed",
+            channel="telegram",
+            user_key="telegram:user1",
+            output_preview=None,
+            error=None,
+            skip_external=not notify,
+            is_critical=is_critical,
         )
         return mock_nm
 
@@ -246,3 +264,106 @@ class TestNotifyPrefResolution:
         notify_pref = True
         assert notify_pref is True
         mock_nm.is_global_enabled.assert_not_called()
+
+
+# --- Tests for WEE_TASK_NOTIFICATIONS env var (Issue #146 QA Round fix) ---
+
+
+@pytest.fixture
+def env_mgr(tmp_path):
+    """NotificationManager with clean env var state."""
+    mgr = NotificationManager.__new__(NotificationManager)
+    mgr._path = str(tmp_path / "notifications.json")
+    mgr._prefs_path = str(tmp_path / "notification_prefs.json")
+    mgr._global_settings_path = str(tmp_path / "notification_settings.json")
+    mgr._notifications = []
+    mgr._prefs = {}
+    mgr._lock = threading.Lock()
+    mgr._prefs_lock = threading.Lock()
+    mgr._global_settings_lock = threading.Lock()
+    mgr._telegram_send = None
+    orig = os.environ.pop("WEE_TASK_NOTIFICATIONS", None)
+    yield mgr
+    if orig is not None:
+        os.environ["WEE_TASK_NOTIFICATIONS"] = orig
+    else:
+        os.environ.pop("WEE_TASK_NOTIFICATIONS", None)
+
+
+def test_env_var_off_disables(env_mgr):
+    """WEE_TASK_NOTIFICATIONS=off disables notifications."""
+    env_mgr.set_global_enabled(True)
+    os.environ["WEE_TASK_NOTIFICATIONS"] = "off"
+    assert not env_mgr.is_global_enabled()
+
+
+def test_env_var_false_disables(env_mgr):
+    """WEE_TASK_NOTIFICATIONS=false disables notifications."""
+    env_mgr.set_global_enabled(True)
+    os.environ["WEE_TASK_NOTIFICATIONS"] = "false"
+    assert not env_mgr.is_global_enabled()
+
+
+def test_env_var_zero_disables(env_mgr):
+    """WEE_TASK_NOTIFICATIONS=0 disables notifications."""
+    env_mgr.set_global_enabled(True)
+    os.environ["WEE_TASK_NOTIFICATIONS"] = "0"
+    assert not env_mgr.is_global_enabled()
+
+
+def test_env_var_on_enables(env_mgr):
+    """WEE_TASK_NOTIFICATIONS=on enables even if file says disabled."""
+    env_mgr.set_global_enabled(False)
+    os.environ["WEE_TASK_NOTIFICATIONS"] = "on"
+    assert env_mgr.is_global_enabled()
+
+
+def test_env_var_true_enables(env_mgr):
+    """WEE_TASK_NOTIFICATIONS=true enables notifications."""
+    env_mgr.set_global_enabled(False)
+    os.environ["WEE_TASK_NOTIFICATIONS"] = "true"
+    assert env_mgr.is_global_enabled()
+
+
+def test_env_var_empty_falls_through(env_mgr):
+    """Empty env var falls through to file setting."""
+    env_mgr.set_global_enabled(False)
+    os.environ["WEE_TASK_NOTIFICATIONS"] = ""
+    assert not env_mgr.is_global_enabled()
+
+
+def test_env_var_unset_falls_through(env_mgr):
+    """Unset env var falls through to file setting."""
+    env_mgr.set_global_enabled(True)
+    os.environ.pop("WEE_TASK_NOTIFICATIONS", None)
+    assert env_mgr.is_global_enabled()
+
+
+def test_env_var_overrides_file_disable(env_mgr):
+    """Env var ON overrides file disabled."""
+    env_mgr.set_global_enabled(False)
+    os.environ["WEE_TASK_NOTIFICATIONS"] = "yes"
+    assert env_mgr.is_global_enabled()
+
+
+def test_env_var_overrides_file_enable(env_mgr):
+    """Env var OFF overrides file enabled."""
+    env_mgr.set_global_enabled(True)
+    os.environ["WEE_TASK_NOTIFICATIONS"] = "no"
+    assert not env_mgr.is_global_enabled()
+
+
+def test_env_var_case_insensitive(env_mgr):
+    """Env var values are case-insensitive."""
+    os.environ["WEE_TASK_NOTIFICATIONS"] = "OFF"
+    assert not env_mgr.is_global_enabled()
+    os.environ["WEE_TASK_NOTIFICATIONS"] = "ON"
+    assert env_mgr.is_global_enabled()
+    os.environ["WEE_TASK_NOTIFICATIONS"] = "False"
+    assert not env_mgr.is_global_enabled()
+
+
+def test_env_var_whitespace_trimmed(env_mgr):
+    """Env var value with whitespace is trimmed."""
+    os.environ["WEE_TASK_NOTIFICATIONS"] = "  off  "
+    assert not env_mgr.is_global_enabled()

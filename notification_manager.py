@@ -154,7 +154,17 @@ class NotificationManager:
             self._save_global_settings(settings)
 
     def is_global_enabled(self) -> bool:
-        """Return True if global notifications are enabled."""
+        """Return True if global notifications are enabled.
+
+        Checks (in order):
+        1. WEE_TASK_NOTIFICATIONS env var ("off" or "false" disables)
+        2. Persisted setting in notification_settings.json
+        """
+        env_val = os.environ.get("WEE_TASK_NOTIFICATIONS", "").strip().lower()
+        if env_val in ("off", "false", "0", "no"):
+            return False
+        if env_val in ("on", "true", "1", "yes"):
+            return True
         with self._global_settings_lock:
             settings = self._load_global_settings()
         return settings.get("notifications_enabled", True)

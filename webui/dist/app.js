@@ -2960,6 +2960,8 @@ document.addEventListener('DOMContentLoaded', () => {
   notifToggle.addEventListener('change', () => {
     setNotificationsEnabled(notifToggle.checked);
   });
+  // Sync toggle state from backend on page load (Issue #146)
+  syncNotificationToggleFromBackend();
 
   // --- Request Queue ---
   $('btn-toggle-queue').addEventListener('click', toggleQueuePanel);
@@ -4952,6 +4954,21 @@ function isNotificationsEnabled() {
 
 function setNotificationsEnabled(val) {
   localStorage.setItem('wee_notifications_enabled', val ? 'true' : 'false');
+  // Sync to backend global toggle
+  apiRequest('PUT', '/settings/notifications', { notifications_enabled: !!val })
+    .catch(() => { /* best-effort sync */ });
+}
+
+/** Fetch the global notification toggle from the backend and sync localStorage. */
+async function syncNotificationToggleFromBackend() {
+  try {
+    const data = await apiRequest('GET', '/settings/notifications');
+    if (data && typeof data.notifications_enabled === 'boolean') {
+      localStorage.setItem('wee_notifications_enabled', data.notifications_enabled ? 'true' : 'false');
+      const toggle = $('notif-enabled-toggle');
+      if (toggle) toggle.checked = data.notifications_enabled;
+    }
+  } catch { /* backend unavailable — keep localStorage value */ }
 }
 
 async function fetchNotifications() {
