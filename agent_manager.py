@@ -12127,8 +12127,6 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 if permission_mode == "elevated":
                     cmd.extend(["--allow-all-paths", "--yolo"])
 
-
-
             proc_timeout = (timeout or 900) + 30
             env = {
                 **os.environ,
