@@ -1683,7 +1683,7 @@ class SessionManager:
         # Per-session stream buffers for multi-session streaming support.
         # Buffers all chunks so disconnected clients can reconnect and replay.
         # session_id -> _StreamBuffer
-        self._stream_buffers: Dict[str, "_StreamBuffer"] = {}
+        self._stream_buffers: Dict[str, "_StreamBuffer"] = {}  # noqa: F821
 
         # Last subprocess exit code per n8n_session_id (for debugging/monitoring)
         self._last_exit_codes: Dict[str, int] = {}
@@ -2573,11 +2573,11 @@ You can mention an agent in your prompt and it will auto-delegate:
 
     def _slash_schedule(self, argument, session_data, n8n_session_id):
         """Handle /schedule slash command."""
-        if not SCHEDULER_ENABLED:
+        if not self.SCHEDULER_ENABLED:
             return "⚠️ Scheduler is not enabled on this instance."
 
         try:
-            scheduler = _get_scheduler()
+            scheduler = self._get_scheduler()
         except Exception as e:
             return f"⚠️ Scheduler unavailable: {e}"
 
@@ -11997,6 +11997,11 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             # to the correct binary so the chosen runtime actually executes.
             from shutil import which as _which_bin
 
+            # Set agent working directory for all runtimes
+            agent_dir = session_mgr.AGENTS.get(
+                agent, session_mgr.AGENTS.get("orchestrator", {})
+            ).get("path", os.getcwd())
+
             if runtime == "gemini":
                 _gemini_bin = _which_bin("gemini") or "gemini"
                 cmd = [_gemini_bin]
@@ -12117,10 +12122,6 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 if permission_mode == "elevated":
                     cmd.extend(["--allow-all-paths", "--yolo"])
 
-            # Set agent working directory for all runtimes
-            agent_dir = session_mgr.AGENTS.get(
-                agent, session_mgr.AGENTS.get("orchestrator", {})
-            ).get("path", os.getcwd())
 
             proc_timeout = (timeout or 900) + 30
             env = {
