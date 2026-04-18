@@ -6,6 +6,7 @@ Manages session ID mapping between N8N chat sessions and AI backend sessions
 """
 
 import argparse
+import calendar
 import hashlib
 import json
 import logging
@@ -345,8 +346,11 @@ class BackgroundTaskManager:
     """Manages background task lifecycle: creation, tracking, output capture, cleanup."""
 
     MAX_TASKS_PER_USER = int(os.environ.get("BG_MAX_TASKS_PER_USER", "5"))
+    MAX_TOTAL_TASKS = int(os.environ.get("BG_MAX_TOTAL_TASKS", "500"))
     MAX_OUTPUT_LINES = 500
     CLEANUP_AGE_HOURS = int(os.environ.get("BG_CLEANUP_HOURS", "24"))
+    BG_CLEANUP_HOURS = int(os.environ.get("BG_CLEANUP_HOURS", "24"))
+    _cleanup_thread_started = False  # class-level default; instance __init__ overwrites
 
     def __init__(self):
         home = os.path.expanduser("~")
@@ -359,6 +363,24 @@ class BackgroundTaskManager:
         self._lock = threading.Lock()
         self._bg_events = {}  # {origin_session_id: [event_dicts]}
         self._bg_events_lock = threading.Lock()
+        self._cleanup_thread_started = False
+
+    def _start_cleanup_thread(self):
+        """Start a background thread that runs cleanup every 5 minutes."""
+        if self._cleanup_thread_started:
+            return
+        self._cleanup_thread_started = True
+
+        def _cleanup_loop():
+            while True:
+                time.sleep(300)  # 5 minutes
+                try:
+                    self.cleanup_old()
+                except Exception:
+                    pass
+
+        t = threading.Thread(target=_cleanup_loop, daemon=True)
+        t.start()
 
     def _load(self) -> list:
         try:
@@ -368,8 +390,41 @@ class BackgroundTaskManager:
             return []
 
     def _save(self, tasks: list):
-        with open(self._path, "w") as f:
-            json.dump(tasks, f, indent=2, default=str)
+        """Atomic write: write to temp file then rename to avoid corruption."""
+        tmp_path = self._path + ".tmp"
+        try:
+            with open(tmp_path, "w") as f:
+                json.dump(tasks, f, indent=2, default=str)
+            os.replace(tmp_path, self._path)
+        except Exception:
+            # If atomic rename fails, try direct write as fallback
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+            with open(self._path, "w") as f:
+                json.dump(tasks, f, indent=2, default=str)
+
+    def _evict_oldest_terminal(self, tasks: list) -> list:
+        """Evict oldest completed/failed/killed tasks when store exceeds MAX_TOTAL_TASKS."""
+        if len(tasks) <= self.MAX_TOTAL_TASKS:
+            return tasks
+
+        terminal_statuses = {"completed", "failed", "killed"}
+        terminal_tasks = [
+            (i, t)
+            for i, t in enumerate(tasks)
+            if t.get("status") in terminal_statuses
+        ]
+
+        if not terminal_tasks:
+            return tasks
+
+        evict_count = len(tasks) - self.MAX_TOTAL_TASKS
+        terminal_tasks.sort(key=lambda x: x[1].get("completed_at", "") or x[1].get("created_at", ""))
+        evict_indices = {idx for idx, _ in terminal_tasks[:evict_count]}
+
+        return [t for i, t in enumerate(tasks) if i not in evict_indices]
 
     def _user_key(self, channel: str, identity: str) -> str:
         # Strip channel prefix from identity to avoid double-prefixing
@@ -423,8 +478,10 @@ class BackgroundTaskManager:
         }
         with self._lock:
             tasks = self._load()
+            tasks = self._evict_oldest_terminal(tasks)
             tasks.append(task)
             self._save(tasks)
+        self._start_cleanup_thread()
         return task
 
     def get_task(self, task_id: str) -> Optional[dict]:
@@ -605,6 +662,7 @@ class BackgroundTaskManager:
         return False
 
     def cleanup_old(self):
+        """Purge terminal tasks older than CLEANUP_AGE_HOURS and enforce MAX_TOTAL_TASKS cap."""
         cutoff = time.time() - (self.CLEANUP_AGE_HOURS * 3600)
         with self._lock:
             tasks = self._load()
@@ -613,10 +671,13 @@ class BackgroundTaskManager:
                 if t["status"] == "running":
                     kept.append(t)
                     continue
+                if t["status"] == "queued":
+                    kept.append(t)
+                    continue
                 completed = t.get("completed_at")
                 if completed:
                     try:
-                        ct = time.mktime(time.strptime(completed, "%Y-%m-%dT%H:%M:%SZ"))
+                        ct = calendar.timegm(time.strptime(completed, "%Y-%m-%dT%H:%M:%SZ"))
                         if ct > cutoff:
                             kept.append(t)
                             continue
@@ -625,6 +686,8 @@ class BackgroundTaskManager:
                         continue
                 else:
                     kept.append(t)
+            # Enforce total task cap after TTL cleanup
+            kept = self._evict_oldest_terminal(kept)
             if len(kept) < len(tasks):
                 self._save(kept)
 
@@ -12588,7 +12651,12 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         return {"events": events}
 
     @app.get("/api/v1/background-tasks")
-    async def list_background_tasks(request: Request):
+    async def list_background_tasks(
+        request: Request,
+        limit: int = 50,
+        offset: int = 0,
+        status: str = None,
+    ):
         user = await authenticate(
             request,
             authorization=request.headers.get("authorization"),
@@ -12606,6 +12674,14 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                         t["task_id"], "Process terminated unexpectedly"
                     )
                     t["status"] = "failed"
+        # Filter by status if provided
+        if status:
+            tasks = [t for t in tasks if t["status"] == status]
+        # Sort by created_at descending (newest first)
+        tasks.sort(key=lambda t: t.get("created_at", ""), reverse=True)
+        total = len(tasks)
+        # Apply pagination
+        tasks = tasks[offset : offset + limit]
         # Return summary (no full output_lines for list)
         result = []
         for t in tasks:
@@ -12622,7 +12698,12 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                     "error": t.get("error"),
                 }
             )
-        return {"tasks": result}
+        return {
+            "tasks": result,
+            "total": total,
+            "limit": limit,
+            "offset": offset,
+        }
 
     @app.get("/api/v1/background-tasks/{task_id}")
     async def get_background_task(task_id: str, request: Request):
