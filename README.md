@@ -63,6 +63,8 @@ Wee-Orchestrator is a unified AI agent platform that lets you chat with **any AI
 - **⚡ Background Tasks** — Delegate long-running work to background agents with in-thread status updates
 - **🔔 In-Thread Notifications** — Real-time task lifecycle updates (queued → running → complete) in your conversation
 - **📋 Dual-Source TODOs** — Sync TODOs between GitHub Issues (primary) and flat files (fallback) with auto-deduplication
+- **🔧 Expandable Tool Calls** — View tool invocations with collapsible output panels in WebUI; markdown rendering, error highlighting, silent mode support
+- **💰 Token Usage Tracking** — Real-time tracking of prompt/completion tokens and cost estimation across all runtimes; live stats displayed in WebUI footer
 - **🔌 Extensible Skills** — Plugin architecture for adding capabilities (Cisco Meraki, Home Assistant, etc.)
 - **⚙️ Slash Command Registry — Pure-server commands that bypass the LLM for reduced latency; auto-registers with Telegram BotFather for autocomplete; built-in `/secret` command for secure credential management
 
@@ -594,13 +596,69 @@ All AI runtimes in this system are configured with **full tool access** to enabl
 - **Features & Improvements:**
   - OpenRouter integration: Full UI support for cloud-based models with 300s cached discovery & keyring-based API key management (Issue #119)
   - Model grouping in UI: Ollama and OpenRouter models displayed in separate dropdown optgroups
+  - Dynamic OpenRouter model discovery: Live catalog fetch from OpenRouter API with per-provider grouping (Issue #157)
 - **Bug Fixes:**
   - Wrong Ollama port corrected: `11436` → `11434` (Issue #105)
   - `httpx.Timeout(connect=15s)` and `max_retries=0` added to OpenAI client for fast-fail on bad endpoints (Issue #105)
   - Model resolution fixed: `get_models_for_runtime('wee')` returns flat strings; `get_model_from_name()` strips provider prefix (`ollama/`) and prefers exact/shortest match (Issue #105)
 - **Bug Fixes (continued):**
   - OpenRouter 401 auth fixed: `OPENROUTER_API_KEY` env var + keyring resolution replaces silent `'ollama'` fallback; raises clear error when no key found (Issue #153)
-- **Issues:** [#88](../../issues/88), [#105](../../issues/105), [#119](../../issues/119), [#153](../../issues/153)
+- **Issues:** [#88](../../issues/88), [#105](../../issues/105), [#119](../../issues/119), [#153](../../issues/153), [#157](../../issues/157)
+
+
+#### Wee CLI (`wee_cli.py`)
+- **Also Known As:** `wee` — standalone terminal AI assistant
+- **Description:** A user-facing command-line tool for the Wee ecosystem. Similar in style to GitHub Copilot CLI, Claude Code CLI, and Codex CLI. Supports single-shot prompts, interactive REPL, stdin piping, and tool calling via any OpenAI-compatible backend.
+- **Supported Backends:** Same as Wee Native Runtime (Ollama, OpenRouter, LM Studio)
+- **Quick Start:**
+  ```bash
+  # Single-shot
+  python3 wee_cli.py "What is the capital of France?"
+  # Interactive REPL
+  python3 wee_cli.py --interactive
+  # Pipe from stdin
+  echo "summarize this" | python3 wee_cli.py --model ollama/qwen3:8b
+  ```
+- **Key Flags:**
+
+  | Flag | Short | Default | Description |
+  |------|-------|---------|-------------|
+  | `--model` | `-m` | `ollama/qwen3:8b` | Model ID with provider prefix |
+  | `--permission` | `-p` | `restricted` | Tool execution level: `restricted` / `auto` / `elevated` |
+  | `--output` | `-o` | `text` | Output format: `text` / `json` / `markdown` |
+  | `--tools` | `-t` | off | Enable tool calling (bash, python) |
+  | `--interactive` | `-i` | off | Enter interactive REPL mode |
+  | `--system` | `-s` | none | System prompt override |
+  | `--temperature` | `-T` | none | Sampling temperature |
+  | `--timeout` | | 120s | Request timeout |
+  | `--api-key` | `-k` | env/keyring | API key override (prefer env var) |
+  | `--api-base` | `-b` | auto | Custom API base URL |
+  | `--config` | | `~/.wee/config.json` | Config file path |
+
+- **Permission Levels:**
+  - `restricted` (default) — tool calls blocked; safe for untrusted input
+  - `auto` — tool calls confirmed per invocation; suitable for interactive use
+  - `elevated` — tool calls unrestricted; use in trusted automation
+- **Output Formats:**
+  - `text` (default) — plain streamed output
+  - `json` — full response as a JSON object `{"response": "...", "model": "..."}`
+  - `markdown` — rich-rendered markdown via `rich` library (falls back to plain text)
+- **Config File** (`~/.wee/config.json`):
+  ```json
+  {
+    "model": "ollama/qwen3:8b",
+    "system_prompt": "You are a helpful assistant",
+    "tools": false,
+    "permission": "restricted",
+    "output_format": "text"
+  }
+  ```
+- **Environment Variables:**
+  - `WEE_MODEL` — Default model (overridden by `--model`)
+  - `WEE_API_KEY` — API key (prefer over `--api-key` to avoid exposure in `ps aux`)
+  - `WEE_API_BASE` — API base URL override
+- **Implementation:** `wee_cli.py` (re-uses core from `wee_runtime.py`)
+- **Issues:** [#158](../../issues/158)
 
 ### Security Considerations
 
@@ -1290,7 +1348,88 @@ Error responses:
 - Requires API authentication (Bearer token)
 - Per-session settings — each user session has independent configuration
 
+---
 
+### 🔧 Tool Call Visualization
+
+**Issue #115: Inline Expandable Tool Call Blocks**
+
+The WebUI now displays tool invocations with inline expandable blocks in the streaming panel. Each tool call shows a disclosure triangle (▶); clicking expands a scrollable output pane with the full tool result, markdown formatting preserved.
+
+**Features:**
+- ✅ **Expandable blocks** — Click ▶ to expand/collapse tool output
+- ✅ **Markdown rendering** — Tool results support markdown (code blocks, lists, tables)
+- ✅ **Error highlighting** — Failed tool calls shown in red
+- ✅ **Dark/light themes** — CSS automatically adapts to UI theme
+- ✅ **Silent mode integration** — Tool blocks hidden when `silent_mode=true`
+- ✅ **All runtimes supported** — Works with copilot-sdk, claude-sdk, claude, and gemini
+
+**UI Behavior:**
+- Tool started: Shows block with "Running ⌛" spinner
+- Tool completed: Output filled in, user can expand to view result
+- Tool error: Red highlight, error message displayed
+- Silent mode on: Blocks completely hidden from view
+
+**CSS Classes:**
+- `.tc-block` — Container for tool call block
+- `.tc-toggle` — Expand/collapse button (▶)
+- `.tc-output` — Scrollable output pane
+- `.tc-error` — Error state styling
+- `.tc-expanded` — Expanded state
+
+**Related Issues:**
+- [#115](../../issues/115) — Inline Expandable Tool Call Blocks (QA Approved)
+- [#87](../../issues/87) — Streaming + Tool Call support for copilot-sdk and claude-sdk
+
+---
+
+### 💰 Token Usage Tracking & Cost Estimation
+
+**Issue #128: Token Usage Tracking + Cost Estimation + WebUI Footer**
+
+The WebUI now displays real-time token usage statistics in the footer after each message. Tracks cumulative prompt and completion tokens across all runtimes, calculates costs based on per-model pricing, and displays live usage summary.
+
+**Features:**
+- ✅ **Real-time tracking** — Token counts updated after each message
+- ✅ **Multi-runtime support** — Tracks tokens across copilot-sdk, claude-sdk, openrouter, wee (Ollama/OpenRouter/LM Studio)
+- ✅ **Cost estimation** — Calculates costs based on current model pricing
+- ✅ **Accuracy** — ±1% margin within expected pricing for all supported models
+- ✅ **Session-level aggregation** — Cumulative counts show total tokens and estimated costs for entire session
+- ✅ **Per-message tracking** — Individual message metadata includes token counts and partial costs
+- ✅ **WebUI footer display** — Live stats accessible without API calls (cached locally)
+
+**Displayed Metrics:**
+- **Prompt tokens:** Total tokens in all input messages
+- **Completion tokens:** Total tokens in all model responses
+- **Total tokens:** Sum of prompt + completion tokens
+- **Estimated cost:** Calculated from per-model pricing (e.g., $0.15 per 1M input tokens)
+- **Model pricing:** Retrieved from token_calculator.py (based on published pricing)
+
+**Footer Display Format:**
+```
+💰 Tokens: 1,234 prompt + 567 completion = 1,801 total | Est. cost: $0.023 | Model: claude-3.5-sonnet
+```
+
+**Token Calculation Logic:**
+1. Each runtime reports token usage after completing a message
+2. Tokens summed by type (prompt vs completion)
+3. Cost calculated: `(prompt_tokens * model_input_price + completion_tokens * model_output_price) / 1_000_000`
+4. Metadata stored in session history for audit/replay purposes
+5. Wee runtime strips internal `__WEE_META__` before counting to avoid inflating token estimates
+
+**Supported Models:**
+- **Claude (claude-sdk):** claude-3.5-sonnet, claude-3-opus, claude-3-haiku
+- **Copilot (copilot-sdk):** GPT-4o, GPT-4 Turbo, GPT-3.5 Turbo
+- **OpenRouter:** 200+ models with live pricing via OpenRouter API
+- **Wee (Ollama):** Ollama local models (token count via token_calculator.py estimate)
+- **Wee (OpenRouter):** Same as OpenRouter routing
+- **Wee (LM Studio):** LM Studio models (token estimate via calculator)
+
+**Related Issues:**
+- [#128](../../issues/128) — Token Usage Tracking + Cost Estimation + WebUI Footer (QA Approved)
+- [#91](../../issues/91) — Background task permissions (Token tracking uses elevated permissions)
+
+---
 
 **POST /api/v1/query** — Stateless one-shot query endpoint
 
@@ -1488,9 +1627,11 @@ python3 -m unittest discover -s tests -p "test_*.py" -v
 
 ### Test Coverage
 
-The test suite includes **141 tests** across two test files:
+The test suite includes **209 tests** across multiple test files:
 
-**`tests/test_agent_manager.py`** (62 tests) — core functionality:
+**Orchestrator Core Tests**
+
+**`tests/test_agent_manager.py`** (62 tests) — core orchestrator functionality:
 - **Session Management** (5 tests) - Creating, resuming, and persisting sessions
 - **Agent Configuration** (4 tests) - Loading and managing agent configurations
 - **Slash Commands** (9 tests) - All interactive commands (`/help`, `/runtime`, `/model`, `/agent`, `/session`)
@@ -1508,19 +1649,39 @@ The test suite includes **141 tests** across two test files:
 - **Image search** — DuckDuckGo image search integration
 - **Rate limiting** — per-IP sliding window
 
+**Wee Native Runtime Tests**
+
+**`tests/test_wee_runtime_agentic.py`** (68 tests) — wee_runtime.py agentic capabilities:
+- **Model Resolution** (12 tests) - Ollama/OpenRouter prefix stripping, preset resolution, cross-provider parametrization
+- **Tool Definitions** (6 tests) - Schema validation, tool registration, JSON schema correctness
+- **Tool Execution** (11 tests) - Bash/Python execution, error handling, output capture, timeouts
+- **SSH Sanitization** (5 tests) - Word-boundary validation, injection prevention (Issue #111)
+- **CLI Argument Parsing** (3 tests) - Flag handling, defaults, priority resolution
+- **Tool-Calling Loop** (4 tests) - Single/multi-round mocked flows, max rounds enforcement
+- **Permission Levels** (5 tests) - Restricted/auto/elevated access control
+- **Streaming Output** (2 tests) - Empty response handling, newline termination
+- **Error Handling** (4 tests) - API failures, malformed arguments, invalid API base, timeouts
+- **Performance Baselines** (2 tests) - Import time <1s, model resolution <100ms
+- **Ollama Integration** (7 tests) - Live connection, single/multi-turn chat, tool calling
+- **OpenRouter Integration** (7 tests) - Live connection, API key verification, tool calling
+
 ### Test Results
 
-All tests pass with no external CLI dependencies required:
+All tests pass with minimal external dependencies:
 
 ```
-Ran 141 tests in 0.185s
-OK
+Orchestrator: 141 tests, 0.185s
+Wee Runtime: 61 passed, 7 skipped (OpenRouter key), 0 failures
+Total: 202+ passed
 ```
 
-Tests use mocking to isolate functionality and avoid:
+Tests use mocking to isolate orchestrator functionality and avoid:
 - Executing real CLI commands (Copilot, OpenCode, Claude)
 - Modifying user's home directory
-- Making real API calls
+- Making real API calls to runtime providers
+
+Wee runtime tests support both mocked tool-calling loops and optional live integration with Ollama and OpenRouter.
+
 
 ### Adding Tests
 

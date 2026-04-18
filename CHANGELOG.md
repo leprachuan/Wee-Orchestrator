@@ -67,6 +67,171 @@ Both files used `os.environ.get('OPENROUTER_API_KEY', 'ollama')` — the `'ollam
 ### Non-Blocking Findings
 - N-1 (NITPICK): Minor punctuation inconsistency in error message
 - N-2 (NITPICK): PR description lists 1445 total pass vs 1462 actual (minor discrepancy, test suite grew between branch and QA)
+## [Issue #159] Feature: Fallback Runtime/Model for Scheduled Tasks
+**Status:** ❌ QA Rejected (Round 1)  
+**Rejection Date:** 2026-04-15  
+**PR:** #163  
+**Commit:** b5dddef  
+**Blockers:** 1 MAJOR
+**Dispatch:** wee-dev task bg_46083a8f
+
+### QA Findings
+
+**BLOCKER #1: WebUI Edit Form Pre-population Fails**
+- File: `webui/dist/app.js`
+- Issue: Form fails to pre-populate existing fallback_runtime and fallback_model values when editing scheduled task
+- Impact: Users cannot see current fallback configuration, may accidentally clear it
+- Fix: Add fallback fields to form pre-population logic, ensure values load in collapsible section
+
+**MINOR #1: Cannot Clear Fallback via PUT Request**
+- File: `scheduler/management.py` or `agent_manager.py`
+- Issue: API does not support clearing fallback_runtime/fallback_model (cannot set to None)
+- Fix: Support null/empty values in PUT request to clear fallback fields
+
+**MINOR #2: 5 Unused Test Imports**
+- File: `tests/test_issue159_scheduler_fallback.py`
+- Fix: Remove unused imports
+
+**MINOR #3: 1 Unused Test Variable**
+- File: `tests/test_issue159_scheduler_fallback.py`
+- Fix: Remove or use variable
+
+**NITPICK #1: Type Hint Clarity (Non-blocking)**
+- Optional improvement to type hints
+
+### Test Results
+- ✅ 37/37 targeted Issue #159 tests pass
+- ✅ 0 new regressions (1478+ full suite clean)
+- ✅ All 15 regex failure patterns correctly identified
+
+### Implementation Highlights
+- **Core Logic:** ✅ Solid — fallback detection, priority chain, all patterns working
+- **15 Regex Patterns:** Rate limit (429), auth failure (401/403), service unavailable (502/503), timeout, connection errors, SSL failures, quota exceeded, + 8 more
+- **Fallback Priority:** Per-job → global env vars → default fallback
+- **API & Pydantic:** Routes correctly wired, validation working
+- **Test Coverage:** Comprehensive failure scenarios covered
+
+### Files Modified
+- `agent_manager.py` — +6 lines (API route updates)
+- `scheduler/executor.py` — +177/-50 lines (core fallback logic)
+- `scheduler/management.py` — +6 lines (Pydantic fields)
+- `webui/dist/app.js` — +56 lines (form + UI)
+- `tests/test_issue159_scheduler_fallback.py` — +488 lines (37 tests)
+
+### Next State
+- wee-dev assigned to fix BLOCKER #1 + MINORs (task bg_46083a8f)
+- Expected re-submission: 24-48 hours
+- Full approval expected with next QA pass (Round 2) after fixes
+
+---
+
+## [Issue #113] Bug: Wee runtime synthesis caching + tool execution ordering
+**Status:** ❌ QA Rejected  
+**Rejection Date:** 2026-04-12  
+**Blockers:** 2 MAJOR
+**Dispatch:** wee-dev task bg_b1354034 (in progress)
+
+### QA Findings
+
+**BLOCKER #1: Hardcoded Test Path**
+- File: `tests/test_issue113_synthesis.py`
+- Issue: Test uses absolute hardcoded path instead of relative path
+- Impact: Tests fail on any development system outside the primary dev host
+- Fix: Replace hardcoded path with relative path or env var
+
+**BLOCKER #2: Merge Conflict in wee_runtime.py**
+- File: `wee_runtime.py`
+- Issue: Unresolved merge conflict from Issue #128 integration (Token Usage Tracking)
+- Impact: Branch cannot be rebased onto dev without manual conflict resolution
+- Fix: Rebase onto current dev branch and manually resolve conflict
+
+### Test Results
+- ❌ 1207 tests pass (regression suite clean)
+- ❌ 2 blockers prevent QA approval
+
+### Next State
+- wee-dev assigned to fix both blockers (task bg_b1354034)
+- Re-dispatch to wee-qa for approval after fixes merged to dev
+
+---
+
+## [Issue #112] Bug: Wee runtime empty synthesis fallback
+**Status:** ✅ QA Approved & Merged  
+**Verdict Date:** 2026-04-12  
+**Merge Date:** 2026-04-13  
+**Commit:** 34c5876  
+**PR:** #141  
+**Test Results:** 12/12 issue tests pass, 0 regressions
+
+### Summary
+Fixed wee runtime handling of empty synthesis responses. When the LLM generates empty text after tool execution (no visible tokens), the wee runtime now gracefully falls back to the last tool result instead of returning an empty string.
+
+### Implementation Details
+**Fallback Logic (26 lines total):**
+- After the agentic loop completes, if LLM synthesis is empty (whitespace-only or no output)
+- Surface last tool result, truncated to 2000 chars
+- Fallback message: `Tool result:\n{truncated_result}` or `(No response generated)` placeholder
+- Applied in both `agent_manager.py` run_wee_native() and standalone `wee_runtime.py`
+
+### Changes
+- **agent_manager.py:** Added empty-synthesis fallback after agentic loop
+- **wee_runtime.py:** Mirrored fallback logic for CLI standalone execution
+- **tests/test_issue112_empty_synthesis.py:** 10 comprehensive regression tests
+  - Single and multi-tool calls
+  - Whitespace-only synthesis responses
+  - Truncation at 2000 chars
+  - SSE stream buffer edge cases
+  - Thinking-only responses
+
+### QA Verdict
+- ✅ **APPROVED** — All functionality correct, no bugs found
+- ✅ 12/12 issue tests pass
+- ✅ 0 failures, 0 regressions
+- ✅ Fallback verified with multiple tool call scenarios
+
+### Status
+- ✅ Merged to dev (PR #141)
+- Ready for production (dev → main)
+
+---
+
+## [Issue #111] Bug: Wee runtime tool/skill execution audit (Label Sync)
+**Status:** ✅ QA Approved  
+**Verdict Date:** 2026-04-12  
+**PR Status:** Already merged/approved in prior QA pass
+**Label Update:** Added `wee-dev:qa-approved` label
+
+### Summary
+QA pass completed. Prior approval confirmed — label sync only. Issue #111 was already merged and approved in earlier QA pass. No new code changes.
+
+### Note
+- This was a label/tracking sync to ensure GitHub issue reflects current QA status
+- All underlying code was previously verified and approved
+- No re-QA of code required
+
+---
+
+## [Issue #128] Feature: Token Usage Tracking + Cost Estimation + WebUI Footer
+**Status:** ✅ QA Approved — Round 2  
+**Commits:** 3f036e1 (fixes), 9d6ecf5 (regression tests)  
+**Verdict Date:** 2026-04-12  
+**Next State:** Ready for production deployment (dev → main)
+
+### Summary
+Comprehensive token usage tracking across all runtimes (copilot-sdk, claude-sdk, openrouter, wee/ollama/openrouter/lmstudio). Calculates cumulative prompt/completion token counts and cost estimation with per-model pricing. WebUI footer displays live usage stats updated after each message.
+
+### QA Verdict (Round 2)
+- **Blocker B01 (Fixed):** `__WEE_META__` leak fixed — wee runtime now strips metadata before token counting (commit 3f036e1)
+- **Minor M01 (Fixed):** Added `--session-id` tracking support to cost calculator (commit 3f036e1)  
+- **Minor M02 (Non-blocking):** Dead code cosmetic issue — unfixed, no impact on functionality
+
+### Test Results
+- ✅ 31/31 Issue #128 specific tests pass
+- ✅ 3/3 B01 regression tests pass
+- ✅ 1212/1212 full suite pass (9 skipped)
+- ✅ 0 failures, 0 regressions
+- ✅ Token tracking verified across all runtimes
+- ✅ Cost estimation accuracy validated
 
 ---
 
@@ -310,6 +475,322 @@ Added a custom robot leprechaun SVG icon for the wee runtime in the WebUI runtim
   - App.js RUNTIME_ICONS map, fallback list, runtimeIconHTML function
   - Backend API includes wee with icon field
 
+**Status:** ✅ QA Approved  
+**Commits:** 9498a4f  
+**Verdict Date:** 2026-04-12  
+**PR:** #121 (issue/119 → dev)  
+**Next State:** Ready for merge (dev → main)
+
+### Summary
+Complete OpenRouter integration in wee runtime with UI model selection. Adds `OPENROUTER_POPULAR_MODELS` constant (12 curated models), `WEE_MODELS` dict with grouping, `fetch_wee_models()` with 300s TTL cache and keyring API key retrieval, `/api/v1/models` endpoint `group` field, and frontend optgroup rendering for model dropdown.
+
+### Features
+- **Backend:** OpenRouter API key lookup via keyring, 300s cache, graceful fallback to static models
+- **API:** `GET /api/v1/models?runtime=wee` returns 15 models across 2 groups (Ollama + OpenRouter)
+- **Frontend:** Grouped model dropdown with `<optgroup>` headers
+- **Models:** 12 popular OpenRouter models + 3 local Ollama models available
+
+### Test Results
+- ✅ 34/34 Issue #119 specific tests pass
+- ✅ 1176/1176 full suite pass (9 skipped)
+- ✅ 0 failures, 0 regressions
+- ✅ API grouping verified, keyring integration validated
+
+### Files Modified
+- agent_manager.py: `OPENROUTER_POPULAR_MODELS`, `WEE_MODELS`, `fetch_wee_models()`, model endpoint, session dispatch
+- app.js: optgroup rendering for grouped models
+- tests/test_issue119_openrouter.py: 34 comprehensive tests
+
+---
+
+## [Issue #118] Bug Fix: Wee Runtime Model Selection & Ollama Port
+**Status:** ✅ QA Approved  
+**Commits:** fbd6c10  
+**Verdict Date:** 2026-04-12  
+**PR:** #120 (issue/118-119 → dev) — **Note:** PR #121 superset includes this fix  
+**Next State:** Ready for merge (dev → main via PR #121)
+
+### Summary
+Fixed 8 critical bugs in wee runtime model dispatch pipeline:
+1. `get_models_for_runtime('wee')` returned tuples instead of flat strings
+2. `wee` missing from `known_runtimes` in `/api/v1/models`
+3. `get_model_from_name()` crashed on tuple inputs
+4. Session validation allowed stale copilot models on wee runtime
+5. Ollama port 11436→11434 in agent_manager.py
+6. Ollama port 11436→11434 in wee_runtime.py
+7. `static_alias_map` missing `wee` entry
+8. `_get_model_description()` missing wee model mapping
+
+### Root Cause
+Ollama runs on port 11434 (standard), not 11436. Model resolution pipeline had incomplete wee runtime support — missing constants in multiple locations, incorrect port configuration, and incomplete static model mapping.
+
+### Fixes Applied
+- Added `WEE_MODELS` constant with proper structure
+- Corrected Ollama port in both agent_manager.py and wee_runtime.py
+- Fixed `get_models_for_runtime()` to return flat strings via `_static_models_to_dict()`
+- Added `wee` to `known_runtimes`, `static_alias_map`, and `_get_model_description()`
+- Session validation now uses `get_model_from_name()` for wee model verification
+
+### Test Results
+- ✅ 29/29 Issue #118 specific tests pass
+- ✅ 1171/1171 full suite pass (9 skipped)
+- ✅ 0 failures, 0 regressions
+- ✅ All 8 bugs verified fixed, port configuration validated
+
+### API Verification
+`GET /api/v1/models?runtime=wee` returns all 4 models with correct labels:
+- `ollama/gemma4:e4b` — Ollama Gemma 4 E4B (local)
+- `ollama/qwen3` — Ollama Qwen 3 (local)
+- `ollama/granite3.3-tuned` — Ollama Granite 3.3 Tuned (local)
+- `openrouter/meta-llama/llama-4-scout` — Llama 4 Scout via OpenRouter
+
+### Minor Notes
+- `get_model_from_name('', 'wee')` returns truthy for empty string (latent bug, not triggered in production due to short-circuit guard)
+- Debug logging uses `print(..., file=sys.stderr)` on every wee call (adds journal noise, not blocking)
+
+---
+
+## [Issue #115] Feature: Inline Expandable Tool Call Blocks
+**Status:** ✅ QA Approved — Pass 2 (Commit: a85e5b5)  
+**Verdict Date:** 2026-04-12  
+**Next State:** Ready for PR dev→main
+
+### Summary
+WebUI feature for inline expandable tool call blocks with markdown output rendering. Displays tool invocations with collapsible output panels. All 5 MAJOR/MINOR findings from Round 1 QA rejection fixed. Feature fully functional and ready to merge.
+
+### Test Results
+- ✅ 39/39 issue-specific tests pass
+- ✅ 1181/1181 full suite pass
+- ✅ 9 skipped (pre-existing, deterministic)
+- ✅ 0 failures, 0 regressions
+
+### Round 2 Fixes Applied
+1. **app.js L2017:** Restored null guard in `completeToolCallBlock()` — prevents crash when toolId not in DOM
+2. **agent_manager.py L6574:** Added `output` field to copilot-sdk TOOL_EXECUTION_COMPLETE events
+3. **agent_manager.py L6856:** Moved claude-sdk `ToolResultBlock.content` to `output` key (2000 char limit)
+4. **agent_manager.py L5782:** Added `output` extraction from claude runtime `tool_result` blocks
+5. **agent_manager.py L5866:** Bumped gemini output limit from 500 to 2000 characters
+
+---
+
+## [Issue #114] Feature: Wee runtime auto-discover models from API hosts
+**Status:** ❌ QA Rejected — Offline fallback bug (Commit: 4a8b587)
+**Verdict Date:** 2026-04-11  
+**Next State:** wee-dev fixing cache-write ordering bug, will re-dispatch for QA approval
+
+### Summary
+Feature adds dynamic model discovery for `wee` runtime via new `wee_model_discovery.py` module. Core functionality works — Ollama discovery, enriched `/api/v1/wee/models` endpoint, refresh endpoint, TTL cache all verified. **Offline fallback to cached models is broken** due to cache being overwritten before reading old value.
+
+### QA Finding — MAJOR Bug
+**File:** `wee_model_discovery.py`, lines 151–166  
+Root cause: `self._cache[cache_key]` overwritten with empty list *before* reading old cached value. When a host goes offline after being online, the fallback never triggers because the old cache is already replaced with `(now, [])`.
+
+**Required Fixes (wee-dev):**
+1. Save old cache entry before overwriting it
+2. Add regression test: host online → goes offline → verify cached models returned
+3. (MINOR) `discover_all_enriched()` ignores TTL / `force` parameter
+
+### Test Results
+- ✅ 29/29 new tests pass (test_issue114_model_discovery.py)
+- ✅ 1171/1171 full suite pass
+- ✅ 0 failures, 0 regressions
+- ✅ Live API tests: discovery, enriched endpoint, refresh, TTL cache, force bypass all working
+
+---
+
+## [Issue #111] Bug: Wee runtime tool/skill execution audit
+**Status:** ✅ QA Approved (Commit: 502f267)
+
+### Summary
+Fixed critical bugs in wee native runtime tool and skill execution. Corrected argument order in context prompt building, added tool availability declaration to system prompt so local models (Ollama) recognize bash/python tools, and reorganized context prompt build to occur after model resolution.
+
+### Root Causes & Fixes
+
+1. **Wrong Argument Order in build_agent_context_prompt()**
+   - `run_cursor()` and `run_wee_native()` passed arguments in incorrect order to build_agent_context_prompt()
+   - Method expected (model, runtime, agent_name, tools) but received arguments in wrong sequence
+   - Fixed in agent_manager.py: corrected argument order in both function calls
+
+2. **Missing Tool Availability Declaration**
+   - Local models (Ollama, LM Studio) lacked knowledge of available tools (bash, python)
+   - Added `_wee_augment_system_prompt_with_tools()` function to inject [Available Tools] section
+   - System prompt now explicitly lists bash and python tools with usage format
+   - Enables local models to recognize and utilize tool-calling capabilities
+
+3. **Context Prompt Build Timing**
+   - Context prompt was being built before model resolution completed
+   - Moved context prompt build to occur after model is fully resolved
+   - Ensures correct model context is used in tool/skill execution
+
+### Changes
+- **agent_manager.py** — Fixed argument order in run_cursor() and run_wee_native() calls to build_agent_context_prompt()
+- **agent_manager.py** — Added _wee_augment_system_prompt_with_tools() to inject tool availability declaration
+- **agent_manager.py** — Reorganized model resolution and context prompt build sequence
+- **wee_runtime.py** — Aligned tool execution with augmented system prompt format
+
+### Tests
+- **1197 total tests pass**, 9 skipped, 0 failures
+- **7 new regression tests** for tool/skill execution audit
+- Tests validate correct argument ordering, tool availability declaration, and model resolution timing
+- Local model (Ollama) tool-calling verified end-to-end
+
+### QA Notes
+- wee-qa completed comprehensive tool/skill execution verification
+- Tested with various model endpoints (Ollama, LM Studio, OpenRouter)
+- Tool calling validated with bash and python tools on local models
+- System prompt augmentation verified for all runtime configurations
+
+### PR Status
+- Issue #111 approved by QA (commit 502f267 on branch issue/107-108-109)
+- Ready for PR: `issue/107-108-109` → `dev`
+
+---
+
+## [Issue #107] Bug: Wee runtime multi-turn history loss
+**Status:** ✅ QA Approved (Commit: 83eb91e)
+
+### Summary
+Fixed wee native runtime losing conversation history in multi-turn interactions. The runtime now correctly maintains and passes session history between turns, preventing context loss in interactive agent workflows.
+
+### Root Cause & Fix
+- Multi-turn session history was not being preserved between turns in wee_runtime.py
+- Added persistent message history accumulation across session turns
+- Fixed in wee_runtime.py: enhanced session state management to retain full conversation context
+
+### Changes
+- **wee_runtime.py** — Added message history preservation across turns
+- Session history now correctly accumulates and is passed to subsequent API calls
+- Multi-turn agentic loops now maintain full context
+
+### Tests
+- **1165 total tests pass**, 23 new tests added
+- **8 new regression tests** for multi-turn history preservation
+- Live integration tests validate context retention across 10+ turn interactions
+
+### QA Notes
+- wee-qa completed comprehensive multi-turn verification
+- Tested with various model endpoints (Ollama, LM Studio, OpenRouter)
+- Context retention validated in interactive agent workflows
+
+---
+
+## [Issue #108] Bug: Wee runtime tool-call agentic loop
+**Status:** ✅ QA Approved (Commit: 83eb91e)
+
+### Summary
+Fixed wee native runtime's tool-call agentic loop to properly execute and continue through multiple tool calls until completion. The runtime now correctly handles the complete cycle of tool invocation, result processing, and continuation.
+
+### Root Cause & Fix
+- Tool-call agentic loop was not iterating correctly through multiple tool invocations
+- Added proper loop continuation logic and result accumulation
+- Fixed in wee_runtime.py: enhanced tool execution cycle and message streaming
+
+### Changes
+- **wee_runtime.py** — Improved tool-call loop control flow
+- Tool results are now correctly accumulated and fed back into the loop
+- Loop continues until stop_reason indicates completion (no more tool calls)
+
+### Tests
+- **1165 total tests pass**, 23 new tests added
+- **7 new regression tests** for tool-call agentic loop execution
+- Tested with multi-step workflows requiring sequential tool invocations
+
+### QA Notes
+- wee-qa verified tool-call execution through complete agentic loops
+- Tested with complex multi-step workflows and function calls
+- All tool execution patterns validated
+
+---
+
+## [Issue #109] Feature: SSE tool events for wee runtime
+**Status:** ✅ QA Approved (Commit: 83eb91e)
+
+### Summary
+Added Server-Sent Events (SSE) support for tool execution events in wee native runtime. Tool events are now streamed in real-time (TOOL_EXECUTION_START, TOOL_EXECUTION_COMPLETE) providing better observability and client-side progress tracking.
+
+### Feature Implementation
+- Tool execution lifecycle events now emitted as SSE events
+- TOOL_EXECUTION_START: emitted when tool invocation begins
+- TOOL_EXECUTION_COMPLETE: emitted when tool returns results
+- Events include tool name, input parameters, and execution status
+
+### Changes
+- **wee_runtime.py** — Added SSE event emission for tool lifecycle
+- Event streaming matches copilot-sdk and claude-sdk patterns
+- Consistent event naming and format across all runtimes
+
+### Tests
+- **1165 total tests pass**, 23 new tests added
+- **8 new tests** for SSE tool event streaming
+- Events validated for both successful and failed tool invocations
+
+### QA Notes
+- wee-qa verified SSE event emission for all tool types
+- Tested with streaming client consumers
+- Event timing and format consistency validated
+
+---
+
+## [Issue #105] Bug: Wee runtime stall with Ollama gemma4:e4b
+**Status:** ✅ QA Approved (Commit: 07733dc)
+
+### Summary
+Fixed critical wee runtime stall issue when using Ollama models. Identified and resolved three root causes: incorrect Ollama port configuration, missing connection timeout and retry limits causing infinite hangs, and model list format incompatibility with substring matching logic.
+
+### Root Causes & Fixes
+
+1. **Wrong Ollama Port (11436 → 11434)**
+   - Ollama on kubuntu (192.168.1.101) runs on standard port 11434
+   - agent_manager.py and wee_runtime.py had hardcoded port 11436
+   - Now correctly points to port 11434 in both PRESETS configurations
+   - Fixed in agent_manager.py:7630 and wee_runtime.py:20
+
+2. **Missing Connection Timeout & Retry Limits**
+   - OpenAI client had no timeout constraint on hanging connections
+   - Unlimited retries could cause indefinite stalls on connection failures
+   - Now enforced: `httpx.Timeout(connect=15s)` and `max_retries=0`
+   - Enables fail-fast behavior on wrong/unreachable endpoints
+   - Applied to wee_runtime.py initialization
+
+3. **Model List Format & Matching Logic**
+   - `get_models_for_runtime('wee')` was returning tuples instead of flat strings
+   - `get_model_from_name()` Step 2 expected flat strings (line 4095-4108)
+   - Substring matching now prefers exact match over longest match
+   - Fixed in agent_manager.py model resolution functions
+
+### Changes
+- **agent_manager.py:7630** — Updated PRESETS with correct Ollama port 11434
+- **wee_runtime.py:20** — Updated PRESETS with correct Ollama port 11434
+- **wee_runtime.py initialization** — Added httpx.Timeout(connect=15s) and max_retries=0
+- **agent_manager.py model functions** — Fixed model list return format (flat strings) and matching preference (exact > shortest)
+
+### Tests
+- **1157 total tests pass**, 9 skipped, 0 failures
+- **15 new regression tests** specifically for wee runtime Ollama integration
+- Live integration test passed with Ollama gemma4:e4b model
+- All existing tests continue to pass with new fixes
+
+### QA Notes
+- wee-qa completed comprehensive verification of all three fixes
+- Tested with actual Ollama gemma4:e4b model on kubuntu
+- Connection timeout and retry limits validated in isolation
+- Model resolution tested with various model name formats and providers
+
+### Use Cases
+```bash
+# Wee runtime now reliably handles Ollama models
+# Connection fails fast (15s timeout) instead of hanging indefinitely
+curl -X POST -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{"agent": "orchestrator", "runtime": "wee", "model": "ollama/gemma4:e4b", "prompt": "..."}' \
+  https://127.0.0.1:8000/api/v1/background-tasks
+```
+
+### PR Status
+- Issue #105 approved by QA (commit 07733dc on branch issue/105)
+- Ready for PR: `issue/105` → `dev`
+
+---
 
 ## [Issue #100] Feature: GitHub Issues Integration for TODO Endpoints
 **Status:** ✅ QA Approved (Commit: ca21379)

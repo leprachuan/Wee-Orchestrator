@@ -304,16 +304,6 @@ export function AgentSettingsPanel({ onClose }: AgentSettingsPanelProps) {
                       onChange={e => setField('description', e.target.value)}
                     />
                   </div>
-                  <div className="form-group">
-                    <label htmlFor="asp-todo-dir">TODO Directory</label>
-                    <input
-                      id="asp-todo-dir"
-                      type="text"
-                      className="glass-input"
-                      value={draft.todo_dir ?? ''}
-                      onChange={e => setField('todo_dir', e.target.value || undefined)}
-                    />
-                  </div>
                 </div>
               </section>
 

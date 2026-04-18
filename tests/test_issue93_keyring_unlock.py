@@ -1,17 +1,17 @@
 #!/usr/bin/env python3
 """Tests for Issue #93: Keyring unlock via WebUI."""
-import asyncio
+
+import importlib.util as _ilu
 import json
-import os
 import sys
 import unittest
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
 sys.path.insert(0, "/opt/n8n-copilot-shim-dev")
 
 # Import secret_tool by file path to avoid conflict with existing
 # test_secret_tool.py which imports it as a bare module
-import importlib.util as _ilu
+
 _spec = _ilu.spec_from_file_location(
     "secret_tool_mod",
     "/opt/n8n-copilot-shim-dev/secret_tool/secret_tool.py",
@@ -90,12 +90,22 @@ class TestKeyringAPIEndpoints(unittest.TestCase):
     def test_status_calls_secret_tool(self):
         with open("/opt/n8n-copilot-shim-dev/agent_manager.py", "r") as f:
             content = f.read()
-        self.assertIn('_SECRET_TOOL_PATH, "status"', content)
+        import re
+
+        self.assertIsNotNone(
+            re.search(r'_SECRET_TOOL_PATH,\s+"status"', content),
+            "_SECRET_TOOL_PATH should be called with 'status' command",
+        )
 
     def test_unlock_calls_secret_tool(self):
         with open("/opt/n8n-copilot-shim-dev/agent_manager.py", "r") as f:
             content = f.read()
-        self.assertIn('_SECRET_TOOL_PATH, "unlock"', content)
+        import re
+
+        self.assertIsNotNone(
+            re.search(r'_SECRET_TOOL_PATH,\s+"unlock"', content),
+            "_SECRET_TOOL_PATH should be called with 'unlock' command",
+        )
 
     def test_password_sent_via_stdin(self):
         """Password must be sent via stdin, not as CLI arg."""
@@ -103,7 +113,7 @@ class TestKeyringAPIEndpoints(unittest.TestCase):
             content = f.read()
         # Find the unlock endpoint section
         idx = content.find("async def keyring_unlock")
-        section = content[idx:idx + 1500]
+        section = content[idx : idx + 1500]
         self.assertIn("stdin=asyncio.subprocess.PIPE", section)
         self.assertIn(".communicate(", section)
 
@@ -146,9 +156,13 @@ class TestWebUIComponents(unittest.TestCase):
     def test_js_has_keyring_functions(self):
         with open("/opt/n8n-copilot-shim-dev/webui/dist/app.js", "r") as f:
             content = f.read()
-        for fn in ["checkKeyringStatus", "showKeyringUnlockDialog",
-                    "hideKeyringUnlockDialog", "submitKeyringUnlock",
-                    "_initKeyringListeners"]:
+        for fn in [
+            "checkKeyringStatus",
+            "showKeyringUnlockDialog",
+            "hideKeyringUnlockDialog",
+            "submitKeyringUnlock",
+            "_initKeyringListeners",
+        ]:
             self.assertIn(fn, content, f"Missing function: {fn}")
 
     def test_js_calls_check_on_panel_show(self):
@@ -167,10 +181,14 @@ class TestWebUIComponents(unittest.TestCase):
     def test_css_has_keyring_styles(self):
         with open("/opt/n8n-copilot-shim-dev/webui/dist/app.css", "r") as f:
             content = f.read()
-        for cls in [".keyring-banner", ".keyring-banner--locked",
-                    ".keyring-dialog-overlay", ".keyring-dialog",
-                    ".keyring-dialog-feedback--error",
-                    ".keyring-dialog-feedback--success"]:
+        for cls in [
+            ".keyring-banner",
+            ".keyring-banner--locked",
+            ".keyring-dialog-overlay",
+            ".keyring-dialog",
+            ".keyring-dialog-feedback--error",
+            ".keyring-dialog-feedback--success",
+        ]:
             self.assertIn(cls, content, f"Missing CSS class: {cls}")
 
 
@@ -200,6 +218,7 @@ class TestKeyringStatusCheck(unittest.TestCase):
     @patch("secret_tool_mod.subprocess.run")
     def test_status_handles_timeout(self, mock_run):
         import subprocess as sp
+
         mock_run.side_effect = sp.TimeoutExpired(cmd=["secret-tool"], timeout=3)
         _check_keyring_status = _st._check_keyring_status
         with patch("secret_tool_mod.shutil.which", return_value="/usr/bin/secret-tool"):
