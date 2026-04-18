@@ -28,20 +28,28 @@ SCRIPT_BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 # ── Theme constants (F025) ──────────────────────────────────────────────
 _BUILTIN_THEMES = [
     {
-        "name": "emerald", "label": "Emerald",
-        "description": "Default glassmorphism", "builtin": True,
+        "name": "emerald",
+        "label": "Emerald",
+        "description": "Default glassmorphism",
+        "builtin": True,
     },
     {
-        "name": "midnight", "label": "Midnight",
-        "description": "Deep blue ocean", "builtin": True,
+        "name": "midnight",
+        "label": "Midnight",
+        "description": "Deep blue ocean",
+        "builtin": True,
     },
     {
-        "name": "sunrise", "label": "Sunrise",
-        "description": "Warm light mode", "builtin": True,
+        "name": "sunrise",
+        "label": "Sunrise",
+        "description": "Warm light mode",
+        "builtin": True,
     },
     {
-        "name": "cyberpunk", "label": "Cyberpunk",
-        "description": "Neon pink & cyan", "builtin": True,
+        "name": "cyberpunk",
+        "label": "Cyberpunk",
+        "description": "Neon pink & cyan",
+        "builtin": True,
     },
 ]
 _THEME_NAME_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$")
@@ -82,6 +90,7 @@ _CURL_USER_RE = re.compile(
     r"""(-u\s+)(\S+)""",
 )
 
+
 def _sanitize_command_for_display(text: str) -> str:
     """Redact sensitive headers and credentials from command strings for UI display.
 
@@ -109,6 +118,7 @@ def _sanitize_command_for_display(text: str) -> str:
     # curl -u user:password
     text = _CURL_USER_RE.sub(r"\1[REDACTED]", text)
     return text
+
 
 def _sanitize_tool_call_for_display(data: dict) -> dict:
     """Return a shallow copy of a tool_call event dict with sensitive
@@ -181,6 +191,7 @@ class RateLimiter:
                         del self.records[ip][ep]
                 if not self.records[ip]:
                     del self.records[ip]
+
 
 class AuthManager:
     """Manages pairing codes, session tokens, and shared key validation."""
@@ -328,6 +339,7 @@ class AuthManager:
                 if now > entry["expires_at"] or now > absolute_expires_at:
                     del self.session_tokens[token]
         self._save_sessions()
+
 
 class BackgroundTaskManager:
     """Manages background task lifecycle: creation, tracking, output capture, cleanup."""
@@ -482,9 +494,7 @@ class BackgroundTaskManager:
         if not origin_session_id:
             return
         with self._bg_events_lock:
-            self._bg_events.setdefault(
-                origin_session_id, []
-            ).append(event)
+            self._bg_events.setdefault(origin_session_id, []).append(event)
 
     def pop_bg_events(self, session_id):
         """Return and clear pending bg-task events."""
@@ -618,7 +628,6 @@ class BackgroundTaskManager:
             if len(kept) < len(tasks):
                 self._save(kept)
 
-
     def reconcile_stale_tasks(self) -> dict:
         """Reconcile orphaned tasks after a service restart.
 
@@ -694,6 +703,7 @@ class BackgroundTaskManager:
         except OSError:
             pass
 
+
 # Executable resolution
 def find_executable(name: str) -> Optional[str]:
     """Find executable in multiple common locations
@@ -729,64 +739,68 @@ def find_executable(name: str) -> Optional[str]:
 
     return None
 
+
 # Environment-based configuration
 def get_default_agent() -> str:
     """Get default agent from environment or use orchestrator"""
     return os.environ.get("COPILOT_DEFAULT_AGENT", "orchestrator")
 
+
 def get_default_model() -> str:
     """Get default model from environment or use gpt-5-mini"""
     return os.environ.get("COPILOT_DEFAULT_MODEL", "gpt-5-mini")
+
 
 def get_default_runtime() -> str:
     """Get default runtime from environment or use copilot"""
     return os.environ.get("COPILOT_DEFAULT_RUNTIME", "copilot")
 
+
 def check_runtime_available(runtime: str) -> bool:
     """Check if a runtime is available on the system.
-    
+
     Args:
         runtime: Runtime ID (e.g., 'copilot', 'claude', 'copilot-sdk')
-    
+
     Returns:
         True if the runtime is available, False otherwise
     """
     # Map runtime IDs to their executable/module names
     runtime_map = {
-        'copilot': 'copilot',
-        'copilot-sdk': 'copilot',  # Python package
-        'claude': 'claude',
-        'claude-sdk': 'claude-sdk',  # Python package
-        'gemini': 'gemini',
-        'codex': 'codex',
-        'devin': 'devin',
-        'cursor': 'agent',  # Cursor uses 'agent' binary
-        'opencode': 'opencode',
-        'wee': 'openai',  # OpenAI-compatible API (no binary needed),
+        "copilot": "copilot",
+        "copilot-sdk": "copilot",  # Python package
+        "claude": "claude",
+        "claude-sdk": "claude-sdk",  # Python package
+        "gemini": "gemini",
+        "codex": "codex",
+        "devin": "devin",
+        "cursor": "agent",  # Cursor uses 'agent' binary
+        "opencode": "opencode",
+        "wee": "openai",  # OpenAI-compatible API (no binary needed),
     }
-    
+
     executable_name = runtime_map.get(runtime)
     if not executable_name:
         return False
-    
+
     # For Python packages (SDK runtimes), try importing
-    if runtime in ('copilot-sdk', 'claude-sdk', 'wee'):
+    if runtime in ("copilot-sdk", "claude-sdk", "wee"):
         try:
-            if runtime == 'claude-sdk':
+            if runtime == "claude-sdk":
                 # Package is installed as claude_agent_sdk
-                __import__('claude_agent_sdk')
+                __import__("claude_agent_sdk")
             else:
-                module_name = executable_name.replace('-', '_')
+                module_name = executable_name.replace("-", "_")
                 __import__(module_name)
             return True
         except ImportError:
             return False
-    
+
     # For CLI runtimes, check if executable exists
     # First try system PATH
     if shutil.which(executable_name):
         return True
-    
+
     # Search additional common locations
     search_paths = [
         Path.home() / ".local" / "bin" / executable_name,
@@ -794,16 +808,17 @@ def check_runtime_available(runtime: str) -> bool:
         Path("/usr/local/bin") / executable_name,
         Path("/usr/bin") / executable_name,
     ]
-    
+
     for path in search_paths:
         if path.exists() and path.is_file():
             return True
-    
+
     return False
+
 
 def get_available_runtimes() -> List[Dict[str, str]]:
     """Get list of available runtimes on this system.
-    
+
     Returns:
         List of runtime dicts with 'id' and 'label' keys
     """
@@ -819,9 +834,10 @@ def get_available_runtimes() -> List[Dict[str, str]]:
         {"id": "cursor", "label": "cursor", "icon": "🖱️"},
         {"id": "wee", "label": "wee", "icon": "🌿"},
     ]
-    
-    available = [rt for rt in all_runtimes if check_runtime_available(rt['id'])]
+
+    available = [rt for rt in all_runtimes if check_runtime_available(rt["id"])]
     return available
+
 
 def get_command_timeout() -> int:
     """Get command execution timeout from environment or use default 300 seconds"""
@@ -842,6 +858,7 @@ def get_command_timeout() -> int:
             file=sys.stderr,
         )
 
+
 def get_bg_command_timeout() -> int:
     """Get background task timeout from environment or use default 900 seconds (15 minutes)"""
     try:
@@ -852,6 +869,7 @@ def get_bg_command_timeout() -> int:
         return timeout
     except ValueError:
         return 900
+
 
 def estimate_background_timeout(prompt: str, default: int = 900) -> int:
     """Estimate an appropriate timeout for a background task based on the prompt.
@@ -932,6 +950,7 @@ def estimate_background_timeout(prompt: str, default: int = 900) -> int:
             return 120  # 2 min
 
     return default
+
 
 class HistoryManager:
     """Persists per-user chat history in ~/.copilot/chat-history.json."""
@@ -1135,6 +1154,7 @@ class HistoryManager:
             self._save(data)
             return True
 
+
 class RuntimeUsageTracker:
     """Queries GitHub Copilot premium request usage from the billing API."""
 
@@ -1266,6 +1286,7 @@ class RuntimeUsageTracker:
             "period": month,
             "source": "unavailable",
         }
+
 
 class SessionManager:
     """Manages AI CLI sessions (Copilot & OpenCode) for N8N integration"""
@@ -1469,6 +1490,85 @@ class SessionManager:
         ],
     }
 
+    WEE_MODELS = {
+        "Ollama Models": [
+            ("ollama/granite3.3-tuned", "Granite 3.3 Tuned", ["granite", "granite3.3"]),
+            (
+                "ollama/gemma4:e4b",
+                "Gemma 4 E4B (local)",
+                ["gemma4", "gemma", "gemma4-e4b"],
+            ),
+            ("ollama/gemma4:e2b", "Gemma 4 E2B", ["gemma4-e2b"]),
+            (
+                "ollama/gemma4:e4b-nothinker",
+                "Gemma 4 E4B (No Thinker)",
+                ["gemma4-nothinker"],
+            ),
+            ("ollama/gemma4:e2b-nothinker", "Gemma 4 E2B (No Thinker)", []),
+            ("ollama/qwen3:32b", "Qwen 3 32B", ["qwen", "qwen3"]),
+            ("ollama/llama4:scout", "Llama 4 Scout", ["scout", "llama4"]),
+            ("ollama/phi4:14b", "Phi 4 14B", ["phi4", "phi"]),
+            ("ollama/deepseek-r1:32b", "DeepSeek R1 32B", ["deepseek", "deepseek-r1"]),
+            ("ollama/command-r:35b", "Command R 35B", ["command-r"]),
+        ],
+        "OpenRouter Models": [
+            (
+                "openrouter/meta-llama/llama-4-scout",
+                "Llama 4 Scout (OpenRouter)",
+                ["or-scout"],
+            ),
+            (
+                "openrouter/meta-llama/llama-4-maverick",
+                "Llama 4 Maverick (OpenRouter)",
+                ["or-maverick"],
+            ),
+            (
+                "openrouter/google/gemma-3-27b-it:free",
+                "Gemma 3 27B (OpenRouter Free)",
+                ["or-gemma"],
+            ),
+            (
+                "openrouter/qwen/qwen3-32b:free",
+                "Qwen 3 32B (OpenRouter Free)",
+                ["or-qwen"],
+            ),
+            (
+                "openrouter/deepseek/deepseek-r1:free",
+                "DeepSeek R1 (OpenRouter Free)",
+                ["or-deepseek"],
+            ),
+            (
+                "openrouter/microsoft/phi-4-reasoning-plus:free",
+                "Phi 4 Reasoning Plus (OpenRouter Free)",
+                ["or-phi"],
+            ),
+        ],
+    }
+
+    OPENROUTER_PROVIDER_PRIORITY = [
+        "OpenRouter - Anthropic",
+        "OpenRouter - OpenAI",
+        "OpenRouter - Google",
+        "OpenRouter - Meta Llama",
+        "OpenRouter - DeepSeek",
+        "OpenRouter - Qwen",
+    ]
+
+    OPENROUTER_PROVIDER_NAMES = {
+        "anthropic": "Anthropic",
+        "openai": "OpenAI",
+        "meta-llama": "Meta Llama",
+        "google": "Google",
+        "deepseek": "DeepSeek",
+        "qwen": "Qwen",
+        "microsoft": "Microsoft",
+        "mistral": "Mistral",
+        "perplexity": "Perplexity",
+        "fireworks": "Fireworks",
+        "together": "Together",
+        "replicate": "Replicate",
+    }
+
     def __init__(self, config_file: Optional[str] = None, app_env: str = "PROD"):
         # Copilot Paths
         self.copilot_home = Path.home() / ".copilot"
@@ -1557,6 +1657,14 @@ class SessionManager:
         self._env_codex_models = None
         self._env_devin_models = None
         self._env_cursor_models = None
+        self._env_wee_models = None
+        self._openrouter_cache_ts = 0  # TTL timestamp for wee model discovery cache
+        self._openrouter_models_cache: Optional[Dict] = (
+            None  # cached fetch_openrouter_models() result
+        )
+        self._openrouter_models_cache_ts: float = (
+            0  # TTL timestamp for fetch_openrouter_models()
+        )
 
         # Load command timeout from environment
         self.command_timeout = get_command_timeout()
@@ -1575,7 +1683,7 @@ class SessionManager:
         # Per-session stream buffers for multi-session streaming support.
         # Buffers all chunks so disconnected clients can reconnect and replay.
         # session_id -> _StreamBuffer
-        self._stream_buffers: Dict[str, "_StreamBuffer"] = {}
+        self._stream_buffers: Dict[str, "_StreamBuffer"] = {}  # noqa: F821
 
         # Last subprocess exit code per n8n_session_id (for debugging/monitoring)
         self._last_exit_codes: Dict[str, int] = {}
@@ -1630,23 +1738,45 @@ class SessionManager:
         register it below.
         """
         self._register_slash("/help", self._slash_help, "Show available commands")
-        self._register_slash("/status", self._slash_status, "Check status of running query")
-        self._register_slash("/cancel", self._slash_cancel, "Cancel running query")
-        self._register_slash("/capabilities", self._slash_capabilities, "Show agent capabilities")
-        self._register_slash("/runtime", self._slash_runtime, "Manage runtime (list/set/current)")
-        self._register_slash("/agent", self._slash_agent, "Manage agent (list/set/current/invoke)")
-        self._register_slash("/model", self._slash_model, "Manage model (list/set/current)")
-        self._register_slash("/session", self._slash_session, "Manage session (list/reset/info)")
-        self._register_slash("/timeout", self._slash_timeout, "Get/set execution timeout")
-        self._register_slash("/render", self._slash_render, "Get/set output render format")
-        self._register_slash("/notifications", self._slash_notifications, "Toggle background notifications")
-        self._register_slash("/silent", self._slash_silent, "Toggle silent mode (hide tool calls)")
         self._register_slash(
-            "/verbose", self._slash_verbose, "Toggle verbose mode"
+            "/status", self._slash_status, "Check status of running query"
         )
+        self._register_slash("/cancel", self._slash_cancel, "Cancel running query")
+        self._register_slash(
+            "/capabilities", self._slash_capabilities, "Show agent capabilities"
+        )
+        self._register_slash(
+            "/runtime", self._slash_runtime, "Manage runtime (list/set/current)"
+        )
+        self._register_slash(
+            "/agent", self._slash_agent, "Manage agent (list/set/current/invoke)"
+        )
+        self._register_slash(
+            "/model", self._slash_model, "Manage model (list/set/current)"
+        )
+        self._register_slash(
+            "/session", self._slash_session, "Manage session (list/reset/info)"
+        )
+        self._register_slash(
+            "/timeout", self._slash_timeout, "Get/set execution timeout"
+        )
+        self._register_slash(
+            "/render", self._slash_render, "Get/set output render format"
+        )
+        self._register_slash(
+            "/notifications",
+            self._slash_notifications,
+            "Toggle background notifications",
+        )
+        self._register_slash(
+            "/silent", self._slash_silent, "Toggle silent mode (hide tool calls)"
+        )
+        self._register_slash("/verbose", self._slash_verbose, "Toggle verbose mode")
         self._register_slash("/mode", self._slash_mode, "Set permission mode")
         self._register_slash("/schedule", self._slash_schedule, "Manage scheduled jobs")
-        self._register_slash("/background", self._slash_background, "Manage background tasks")
+        self._register_slash(
+            "/background", self._slash_background, "Manage background tasks"
+        )
         self._register_slash("/update", self._slash_update, "Pull latest and restart")
         self._register_slash("/upgrade", self._slash_update, "Pull latest and restart")
         self._register_slash("/pull", self._slash_update, "Pull latest and restart")
@@ -1700,7 +1830,7 @@ class SessionManager:
         """List stored secret names via secret_tool.py."""
         try:
             proc = subprocess.run(
-                [sys.executable, secret_tool, "list", "--backend", "file"],
+                [sys.executable, secret_tool, "list", "--backend", "pass"],
                 capture_output=True,
                 text=True,
                 timeout=10,
@@ -1713,13 +1843,9 @@ class SessionManager:
                 return "\U0001f510 **Secrets:** (none)"
             try:
                 data = json.loads(output)
-                names = (
-                    data if isinstance(data, list) else data.get("names", [])
-                )
+                names = data if isinstance(data, list) else data.get("names", [])
             except json.JSONDecodeError:
-                names = [
-                    ln.strip() for ln in output.splitlines() if ln.strip()
-                ]
+                names = [ln.strip() for ln in output.splitlines() if ln.strip()]
             if not names:
                 return "\U0001f510 **Secrets:** (none)"
             lines = ["\U0001f510 **Stored Secrets:**\n"]
@@ -2161,9 +2287,7 @@ You can mention an agent in your prompt and it will auto-delegate:
             return out
 
         elif argument == "current":
-            return (
-                f"Current Model: `{session_data.get('model')}` ({current_runtime})"
-            )
+            return f"Current Model: `{session_data.get('model')}` ({current_runtime})"
         elif argument.startswith("set "):
             model_name = argument[4:].strip().strip('"')
             model_id = self.get_model_from_name(model_name, effective_rt)
@@ -2246,9 +2370,7 @@ You can mention an agent in your prompt and it will auto-delegate:
                 self.update_session_field(
                     n8n_session_id, "timeout", str(timeout_seconds)
                 )
-                return (
-                    f"✓ Timeout set to `{timeout_seconds}` seconds for this session"
-                )
+                return f"✓ Timeout set to `{timeout_seconds}` seconds for this session"
             except ValueError:
                 return f"❌ Invalid timeout value '{timeout_str}'. Please provide a number (30-600 seconds)"
         else:
@@ -2306,9 +2428,7 @@ You can mention an agent in your prompt and it will auto-delegate:
             return f"🔔 **Background Notifications:** `{status}`"
 
         elif argument in ["on", "all"]:
-            self.update_session_field(
-                n8n_session_id, "notification_preference", "all"
-            )
+            self.update_session_field(n8n_session_id, "notification_preference", "all")
             if self._notification_mgr:
                 # Store under specific identity if available
                 if _notif_identity:
@@ -2316,25 +2436,21 @@ You can mention an agent in your prompt and it will auto-delegate:
                         _notif_identity, _notif_channel, "all"
                     )
                 # Always store global preference so it applies across all channels
-                self._notification_mgr.set_user_pref(
-                    "_global", _notif_channel, "all"
-                )
+                self._notification_mgr.set_user_pref("_global", _notif_channel, "all")
             return "✓ Background task notifications enabled for Telegram/WebEx."
 
         elif argument in ["off", "mute"]:
-            self.update_session_field(
-                n8n_session_id, "notification_preference", "off"
-            )
+            self.update_session_field(n8n_session_id, "notification_preference", "off")
             if self._notification_mgr:
                 if _notif_identity:
                     self._notification_mgr.set_user_pref(
                         _notif_identity, _notif_channel, "off"
                     )
                 # Always store global preference so it applies across all channels
-                self._notification_mgr.set_user_pref(
-                    "_global", _notif_channel, "off"
-                )
-            return "✓ Background task notifications muted for Telegram/WebEx (WebUI only)."
+                self._notification_mgr.set_user_pref("_global", _notif_channel, "off")
+            return (
+                "✓ Background task notifications muted for Telegram/WebEx (WebUI only)."
+            )
         else:
             return "Usage: `/notifications [on|off]` to toggle background task notifications."
 
@@ -2435,9 +2551,7 @@ You can mention an agent in your prompt and it will auto-delegate:
             _cur_perms["mode"] = "restricted"
             self.update_session_field(n8n_session_id, "permissions", _cur_perms)
             self.update_session_field(n8n_session_id, "yolo_mode", "restricted")
-            return (
-                "\u2713 Restricted mode enabled \U0001f512 - normal prompts enabled"
-            )
+            return "\u2713 Restricted mode enabled \U0001f512 - normal prompts enabled"
 
         elif argument == "sandboxed":
             _cur_perms = session_data.get("permissions", {})
@@ -2459,11 +2573,11 @@ You can mention an agent in your prompt and it will auto-delegate:
 
     def _slash_schedule(self, argument, session_data, n8n_session_id):
         """Handle /schedule slash command."""
-        if not SCHEDULER_ENABLED:
+        if not self.SCHEDULER_ENABLED:
             return "⚠️ Scheduler is not enabled on this instance."
 
         try:
-            scheduler = _get_scheduler()
+            scheduler = self._get_scheduler()
         except Exception as e:
             return f"⚠️ Scheduler unavailable: {e}"
 
@@ -2806,7 +2920,9 @@ You can mention an agent in your prompt and it will auto-delegate:
             try:
                 with open(_log_path) as f:
                     tail = f.readlines()[-30:]
-                return f"📋 **Last update log** (`{_log_path}`):\n```\n{''.join(tail)}```"
+                return (
+                    f"📋 **Last update log** (`{_log_path}`):\n```\n{''.join(tail)}```"
+                )
             except FileNotFoundError:
                 return "ℹ️ No update log found. No update has been run yet."
             except Exception as e:
@@ -3305,6 +3421,138 @@ You can mention an agent in your prompt and it will auto-delegate:
             for cat, entries in static_dict.items()
         }
 
+    # Human-readable labels for known OpenRouter provider prefixes
+    OPENROUTER_PROVIDER_NAMES = {
+        "meta-llama": "Meta Llama",
+        "anthropic": "Anthropic",
+        "google": "Google",
+        "openai": "OpenAI",
+        "deepseek": "DeepSeek",
+        "mistralai": "Mistral AI",
+        "qwen": "Qwen",
+        "microsoft": "Microsoft",
+        "nvidia": "NVIDIA",
+        "cohere": "Cohere",
+        "perplexity": "Perplexity",
+        "x-ai": "xAI",
+        "01-ai": "01.AI",
+        "amazon": "Amazon",
+        "nousresearch": "Nous Research",
+        "liquid": "Liquid",
+        "bytedance": "ByteDance",
+    }
+
+    # Priority order for OpenRouter provider groups in the model selector
+    OPENROUTER_PROVIDER_PRIORITY = [
+        "OpenRouter - Anthropic",
+        "OpenRouter - OpenAI",
+        "OpenRouter - Google",
+        "OpenRouter - Meta Llama",
+        "OpenRouter - DeepSeek",
+        "OpenRouter - Mistral AI",
+        "OpenRouter - xAI",
+    ]
+
+    def fetch_openrouter_models(self) -> Dict:
+        """Fetch ALL available models from the OpenRouter API, grouped by provider.
+
+        Returns {category: [(model_id, description, aliases), ...]} where model_id
+        uses the "openrouter/<provider>/<name>" prefix understood by wee_runtime.py.
+
+        Resolution order:
+          1. Per-call 300s TTL cache (self._openrouter_models_cache)
+          2. Live API call to https://openrouter.ai/api/v1/models
+          3. Static WEE_MODELS["OpenRouter Models"] fallback
+
+        Authentication: keyring("openrouter", "api_key") -> OPENROUTER_API_KEY env var
+        """
+        static_fallback = {
+            "OpenRouter Models": list(self.WEE_MODELS.get("OpenRouter Models", []))
+        }
+
+        cache_ttl = 300
+        if (
+            self._openrouter_models_cache is not None
+            and time.time() - self._openrouter_models_cache_ts < cache_ttl
+        ):
+            return self._openrouter_models_cache
+
+        api_key = None
+        try:
+            import keyring as _keyring
+
+            api_key = _keyring.get_password("openrouter", "api_key")
+        except Exception:
+            pass
+        if not api_key:
+            api_key = os.getenv("OPENROUTER_API_KEY")
+
+        if not api_key:
+            print(
+                "[wee] OpenRouter: no API key available, using static fallback",
+                file=sys.stderr,
+            )
+            return static_fallback
+
+        try:
+            import urllib.request as _urlreq
+
+            req = _urlreq.Request(
+                "https://openrouter.ai/api/v1/models",
+                headers={"Authorization": "Bearer " + api_key},
+            )
+            resp = _urlreq.urlopen(req, timeout=15)
+            data = json.loads(resp.read())
+            all_models = data.get("data", [])
+
+            static_aliases = {
+                e[0]: e[2] for e in self.WEE_MODELS.get("OpenRouter Models", [])
+            }
+
+            grouped = {}
+            for m in all_models:
+                mid = m.get("id", "")
+                if not mid:
+                    continue
+                name = m.get("name", mid)
+                or_id = "openrouter/" + mid
+                aliases = static_aliases.get(or_id, [])
+
+                provider_prefix = mid.split("/")[0] if "/" in mid else mid
+                friendly = self.OPENROUTER_PROVIDER_NAMES.get(
+                    provider_prefix,
+                    provider_prefix.replace("-", " ").title(),
+                )
+                category = "OpenRouter - " + friendly
+                grouped.setdefault(category, []).append((or_id, name, aliases))
+
+            if not grouped:
+                return static_fallback
+
+            for cat in grouped:
+                grouped[cat].sort(key=lambda t: t[1].lower())
+
+            ordered = {}
+            for priority_cat in self.OPENROUTER_PROVIDER_PRIORITY:
+                if priority_cat in grouped:
+                    ordered[priority_cat] = grouped.pop(priority_cat)
+            for cat in sorted(grouped):
+                ordered[cat] = grouped[cat]
+
+            total = sum(len(v) for v in ordered.values())
+            print(
+                f"[wee] OpenRouter: discovered {total} models in {len(ordered)} groups",
+                file=sys.stderr,
+            )
+
+            self._openrouter_models_cache = ordered
+            self._openrouter_models_cache_ts = time.time()
+            return ordered
+
+        except Exception as e:
+            print(f"[wee] OpenRouter discovery failed: {e}", file=sys.stderr)
+            return static_fallback
+
     def _get_model_description(self, model_id: str, runtime: str) -> Optional[str]:
         """Look up a human-readable description for a model from static metadata."""
         # First check env-loaded models (if cached)
@@ -3315,7 +3563,7 @@ You can mention an agent in your prompt and it will auto-delegate:
             "codex": self._env_codex_models,
             "devin": self._env_devin_models,
             "cursor": self._env_cursor_models,
-            "wee": {},
+            "wee": self._env_wee_models,
         }
         env_models = env_models_map.get(runtime)
         if env_models:
@@ -3333,7 +3581,7 @@ You can mention an agent in your prompt and it will auto-delegate:
             "opencode": self.OPENCODE_MODELS,
             "devin": self.DEVIN_MODELS,
             "cursor": self.CURSOR_MODELS,
-            "wee": {},
+            "wee": self.WEE_MODELS,
         }
         models_dict = static_map.get(runtime)
         if not models_dict:
@@ -3522,6 +3770,89 @@ You can mention an agent in your prompt and it will auto-delegate:
 
         return self._static_models_to_dict(self.CURSOR_MODELS)
 
+    def fetch_wee_models(self) -> Dict:
+        """Return available wee models: local Ollama + OpenRouter cloud models.
+
+        Resolution order:
+          1. WEE_MODELS_JSON env var (custom model list)
+          2. Live Ollama discovery + live OpenRouter discovery (300s TTL cache)
+          3. Static WEE_MODELS fallback
+        """
+        # Check for env var override first
+        env_models = os.getenv("WEE_MODELS_JSON")
+        if env_models:
+            try:
+                models_dict = json.loads(env_models)
+                normalized = {}
+                for cat, entries in models_dict.items():
+                    normalized[cat] = [
+                        tuple(e) if isinstance(e, list) else e for e in entries
+                    ]
+                self._env_wee_models = normalized
+                return self._static_models_to_dict(normalized)
+            except (json.JSONDecodeError, ValueError):
+                pass
+
+        cache_ttl = 300  # 5 minutes
+
+        # Return cache if still valid
+        if (
+            self._env_wee_models is not None
+            and time.time() - self._openrouter_cache_ts < cache_ttl
+        ):
+            return self._static_models_to_dict(self._env_wee_models)
+
+        # Start with static Ollama models
+        result = {}
+        for cat, entries in self.WEE_MODELS.items():
+            result[cat] = list(entries)
+
+        # Try live Ollama discovery
+        try:
+            import httpx
+
+            resp = httpx.get(
+                "http://192.168.1.101:11434/api/tags",
+                timeout=httpx.Timeout(connect=5.0, read=10.0, write=10.0, pool=10.0),
+            )
+            if resp.status_code == 200:
+                tags = resp.json().get("models", [])
+                ollama_models = [(f"ollama/{t['name']}", t["name"], []) for t in tags]
+                if ollama_models:
+                    # Merge aliases from static WEE_MODELS into discovered models
+                    static_ollama = {
+                        e[0]: e for e in self.WEE_MODELS.get("Ollama Models", [])
+                    }
+                    merged_ollama = []
+                    discovered_ids = set()
+                    for or_id, name, _ in ollama_models:
+                        if or_id in static_ollama:
+                            merged_ollama.append(static_ollama[or_id])
+                        else:
+                            merged_ollama.append((or_id, name, []))
+                        discovered_ids.add(or_id)
+                    # Add static models not found via live discovery (preserves aliases)
+                    for entry in self.WEE_MODELS.get("Ollama Models", []):
+                        if entry[0] not in discovered_ids:
+                            merged_ollama.append(entry)
+                    result["Ollama Models"] = merged_ollama
+        except Exception:
+            pass
+
+        # Try live OpenRouter discovery via fetch_openrouter_models()
+        try:
+            or_models = self.fetch_openrouter_models()
+            if or_models and any(v for v in or_models.values()):
+                # Remove the static OpenRouter Models key and replace with dynamic groups
+                result.pop("OpenRouter Models", None)
+                result.update(or_models)
+        except Exception as e:
+            print(f"[wee] OpenRouter discovery error: {e}", file=sys.stderr)
+
+        self._env_wee_models = result
+        self._openrouter_cache_ts = time.time()
+        return self._static_models_to_dict(result)
+
     def get_models_for_runtime(self, runtime: str) -> Dict:
         """Fetch available models for a runtime, using CLI discovery where possible.
 
@@ -3539,7 +3870,7 @@ You can mention an agent in your prompt and it will auto-delegate:
             "codex": self.fetch_codex_models,
             "devin": self.fetch_devin_models,
             "cursor": self.fetch_cursor_models,
-            "wee": lambda: {"Wee Native": [("ollama/gemma4:e4b", "Ollama Gemma 4 E4B (local)", []), ("openrouter/meta-llama/llama-4-scout", "Llama 4 Scout via OpenRouter", [])]},
+            "wee": self.fetch_wee_models,
         }
         fetcher = dispatch.get(runtime)
         if fetcher is None:
@@ -3709,12 +4040,27 @@ You can mention an agent in your prompt and it will auto-delegate:
                 ):
                     merged["model"] = os.getenv("CURSOR_DEFAULT_MODEL", "auto")
             elif runtime == "wee":
-                if not merged.get("model"):
-                    merged["model"] = os.getenv("WEE_DEFAULT_MODEL", "ollama/gemma4:e4b")
+                current_model = merged.get("model", "")
+                if not current_model or not self.get_model_from_name(
+                    current_model, "wee"
+                ):
+                    merged["model"] = os.getenv(
+                        "WEE_DEFAULT_MODEL", "ollama/gemma4:e4b"
+                    )
 
             # Validate and fix session_id if corrupted
             session_id = merged.get("session_id", "")
-            if runtime in ["claude", "claude-sdk", "gemini", "codex", "copilot", "copilot-sdk", "devin", "cursor", "wee"]:
+            if runtime in [
+                "claude",
+                "claude-sdk",
+                "gemini",
+                "codex",
+                "copilot",
+                "copilot-sdk",
+                "devin",
+                "cursor",
+                "wee",
+            ]:
                 if not session_id or not (len(session_id) == 36 and "-" in session_id):
                     merged["session_id"] = str(uuid4())
             elif runtime == "opencode":
@@ -4056,7 +4402,7 @@ You can mention an agent in your prompt and it will auto-delegate:
         name_lower = name.lower().strip("\"'")
 
         # Ensure env models are loaded/cached by triggering fetch for this runtime
-        if runtime in ("claude", "gemini", "codex", "devin", "cursor"):
+        if runtime in ("claude", "gemini", "codex", "devin", "cursor", "wee"):
             self.get_models_for_runtime(runtime)
 
         # Step 1: check env-loaded or static alias tables for all runtimes that have them.
@@ -4066,6 +4412,7 @@ You can mention an agent in your prompt and it will auto-delegate:
             "codex": self._env_codex_models,
             "devin": self._env_devin_models,
             "cursor": self._env_cursor_models,
+            "wee": self._env_wee_models,
         }
         static_alias_map = {
             "claude": self.CLAUDE_MODELS,
@@ -4074,6 +4421,7 @@ You can mention an agent in your prompt and it will auto-delegate:
             "opencode": self.OPENCODE_MODELS,
             "devin": self.DEVIN_MODELS,
             "cursor": self.CURSOR_MODELS,
+            "wee": self.WEE_MODELS,
         }
 
         # Try env-loaded models first, fall back to static
@@ -4099,12 +4447,20 @@ You can mention an agent in your prompt and it will auto-delegate:
             if m.lower() == name_lower:
                 return m
 
-        # Substring matching with longest-match preference
+        # Exact match with provider prefix stripped (e.g., "gemma4:e4b" matches "ollama/gemma4:e4b")
+        for m in all_models:
+            model_lower = m.lower()
+            if "/" in model_lower:
+                suffix = model_lower.split("/", 1)[1]
+                if suffix == name_lower:
+                    return m
+
+        # Substring matching with shortest-match preference
         matches = [m for m in all_models if name_lower in m.lower()]
         if len(matches) == 1:
             return matches[0]
         if matches:
-            matches.sort(reverse=True)
+            matches.sort(key=len)
             return matches[0]
 
         return None
@@ -4146,7 +4502,9 @@ You can mention an agent in your prompt and it will auto-delegate:
         """
         if prompt_mode != "restricted":
             return prompt_mode
-        perms = session_data.get("permissions") or {}  # Handle None from session template
+        perms = (
+            session_data.get("permissions") or {}
+        )  # Handle None from session template
         if isinstance(perms, dict) and perms.get("mode") in (
             "elevated",
             "restricted",
@@ -5310,17 +5668,14 @@ Do NOT emit status updates for quick operations (< 15 seconds)."""
             _session_data = self.load_session_data(n8n_session_id)
             if not (_session_data or {}).get("memory_injected"):
                 from memory.inject import get_memory_context
+
                 agent_info_mem = self.AGENTS.get(
                     agent, self.AGENTS.get("orchestrator", {})
                 )
-                _mem_ctx = get_memory_context(
-                    agent_path=agent_info_mem.get("path", "")
-                )
+                _mem_ctx = get_memory_context(agent_path=agent_info_mem.get("path", ""))
                 if _mem_ctx:
                     memory_section = f"\n\n{_mem_ctx}\n"
-                    self.update_session_field(
-                        n8n_session_id, "memory_injected", True
-                    )
+                    self.update_session_field(n8n_session_id, "memory_injected", True)
                     print(
                         f"[Memory] Injected {len(_mem_ctx)} chars for "
                         f"session={n8n_session_id} agent={agent}",
@@ -5328,9 +5683,7 @@ Do NOT emit status updates for quick operations (< 15 seconds)."""
                     )
                 else:
                     # No memory files — still mark as injected
-                    self.update_session_field(
-                        n8n_session_id, "memory_injected", True
-                    )
+                    self.update_session_field(n8n_session_id, "memory_injected", True)
         except Exception as _mem_exc:
             print(
                 f"[Memory] Injection skipped: {_mem_exc}",
@@ -5934,7 +6287,12 @@ User Request:
                                                 "name": "shell",
                                                 "input": _oc_run.group(1).strip(),
                                             }
-                                elif runtime in ("copilot", "copilot-sdk", "claude-sdk", "wee"):
+                                elif runtime in (
+                                    "copilot",
+                                    "copilot-sdk",
+                                    "claude-sdk",
+                                    "wee",
+                                ):
                                     # Copilot shows tool calls as "● Description" and shell cmds as "  $ cmd"
                                     import re as _re_tc
 
@@ -6367,7 +6725,7 @@ User Request:
 
         # Expand home path for MCP config file
         mcp_config_path = os.path.expanduser("~/.copilot/mcp-config.json")
-        
+
         cmd = [
             self.copilot_bin,
             "-p",
@@ -6513,7 +6871,9 @@ User Request:
         async def _run_sdk() -> str:
             collected_messages: list = []
 
-            _sdk_config = SubprocessConfig(cli_args=sdk_cli_args) if sdk_cli_args else None
+            _sdk_config = (
+                SubprocessConfig(cli_args=sdk_cli_args) if sdk_cli_args else None
+            )
             _client = CopilotClient(_sdk_config) if _sdk_config else CopilotClient()
             async with _client as client:
                 # Event handler — streams chunks and detects tool calls
@@ -6547,15 +6907,25 @@ User Request:
                         tool_name = "tool"
                         tool_input = ""
                         if hasattr(event, "data"):
-                            tool_name = getattr(event.data, "name", None) or getattr(event.data, "tool_name", None) or "tool"
-                            tool_input = str(getattr(event.data, "input", "") or getattr(event.data, "arguments", "") or "")
+                            tool_name = (
+                                getattr(event.data, "name", None)
+                                or getattr(event.data, "tool_name", None)
+                                or "tool"
+                            )
+                            tool_input = str(
+                                getattr(event.data, "input", "")
+                                or getattr(event.data, "arguments", "")
+                                or ""
+                            )
                         tc_evt = {
                             "event": "started",
                             "id": f"tc_copilot-sdk_{_tool_call_counter[0]}",
                             "name": str(tool_name),
                             "input": tool_input[:200],
                             "runtime": "copilot-sdk",
-                            "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                            "timestamp": time.strftime(
+                                "%Y-%m-%dT%H:%M:%SZ", time.gmtime()
+                            ),
                         }
                         if stream_buffer:
                             stream_buffer.push("tool_call", tc_evt)
@@ -6563,14 +6933,20 @@ User Request:
                     elif event.type == SessionEventType.TOOL_EXECUTION_COMPLETE:
                         tool_name = "tool"
                         if hasattr(event, "data"):
-                            tool_name = getattr(event.data, "name", None) or getattr(event.data, "tool_name", None) or "tool"
+                            tool_name = (
+                                getattr(event.data, "name", None)
+                                or getattr(event.data, "tool_name", None)
+                                or "tool"
+                            )
                         tc_evt = {
                             "event": "completed",
                             "id": f"tc_copilot-sdk_{_tool_call_counter[0]}",
                             "name": str(tool_name),
                             "input": "",
                             "runtime": "copilot-sdk",
-                            "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                            "timestamp": time.strftime(
+                                "%Y-%m-%dT%H:%M:%SZ", time.gmtime()
+                            ),
                         }
                         if stream_buffer:
                             stream_buffer.push("tool_call", tc_evt)
@@ -6579,14 +6955,20 @@ User Request:
                         _tool_call_counter[0] += 1
                         cmd_text = ""
                         if hasattr(event, "data"):
-                            cmd_text = str(getattr(event.data, "command", "") or getattr(event.data, "text", "") or event.data)
+                            cmd_text = str(
+                                getattr(event.data, "command", "")
+                                or getattr(event.data, "text", "")
+                                or event.data
+                            )
                         tc_evt = {
                             "event": "detected",
                             "id": f"tc_copilot-sdk_{_tool_call_counter[0]}",
                             "name": "shell",
                             "input": cmd_text[:200],
                             "runtime": "copilot-sdk",
-                            "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                            "timestamp": time.strftime(
+                                "%Y-%m-%dT%H:%M:%SZ", time.gmtime()
+                            ),
                         }
                         if stream_buffer:
                             stream_buffer.push("tool_call", tc_evt)
@@ -6722,24 +7104,21 @@ User Request:
         """
         try:
             from claude_agent_sdk import (
-                query as claude_sdk_query,
-                ClaudeAgentOptions,
                 AssistantMessage,
-                TextBlock,
+                ClaudeAgentOptions,
                 ResultMessage,
-                ToolUseBlock,
+                TextBlock,
                 ToolResultBlock,
+                ToolUseBlock,
             )
+            from claude_agent_sdk import query as claude_sdk_query
         except ImportError:
-            return (
-                "Error: claude-sdk not installed. "
-                "Run: pip install claude-sdk"
-            )
+            return "Error: claude-sdk not installed. " "Run: pip install claude-sdk"
 
         import asyncio
-
         import io
         import sys
+
         # Parse mode
         if mode is None:
             prompt_parsed, mode = self._parse_mode_command(prompt)
@@ -6836,29 +7215,43 @@ User Request:
                                 _tool_call_counter[0] += 1
                                 tc_evt = {
                                     "event": "detected",
-                                    "id": block.id or f"tc_claude-sdk_{_tool_call_counter[0]}",
+                                    "id": block.id
+                                    or f"tc_claude-sdk_{_tool_call_counter[0]}",
                                     "name": block.name or "tool",
-                                    "input": str(block.input)[:200] if block.input else "",
+                                    "input": (
+                                        str(block.input)[:200] if block.input else ""
+                                    ),
                                     "runtime": "claude-sdk",
-                                    "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                                    "timestamp": time.strftime(
+                                        "%Y-%m-%dT%H:%M:%SZ", time.gmtime()
+                                    ),
                                 }
                                 if stream_buffer:
                                     stream_buffer.push("tool_call", tc_evt)
                             elif isinstance(block, ToolResultBlock):
                                 tc_evt = {
                                     "event": "completed",
-                                    "id": block.tool_use_id or f"tc_claude-sdk_{_tool_call_counter[0]}",
+                                    "id": block.tool_use_id
+                                    or f"tc_claude-sdk_{_tool_call_counter[0]}",
                                     "name": "tool",
-                                    "input": str(block.content)[:200] if block.content else "",
+                                    "input": (
+                                        str(block.content)[:200]
+                                        if block.content
+                                        else ""
+                                    ),
                                     "is_error": getattr(block, "is_error", False),
                                     "runtime": "claude-sdk",
-                                    "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                                    "timestamp": time.strftime(
+                                        "%Y-%m-%dT%H:%M:%SZ", time.gmtime()
+                                    ),
                                 }
                                 if stream_buffer:
                                     stream_buffer.push("tool_call", tc_evt)
                     elif isinstance(message, ResultMessage):
                         if message.session_id:
-                            self.update_session_field(n8n_session_id, "session_id", message.session_id)
+                            self.update_session_field(
+                                n8n_session_id, "session_id", message.session_id
+                            )
                     elif hasattr(message, "content"):
                         for block in getattr(message, "content", []):
                             if hasattr(block, "text"):
@@ -6904,10 +7297,11 @@ User Request:
 
             if loop and loop.is_running():
                 import concurrent.futures
+
                 with concurrent.futures.ThreadPoolExecutor() as pool:
-                    output = pool.submit(
-                        asyncio.run, _run_sdk()
-                    ).result(timeout=effective_timeout)
+                    output = pool.submit(asyncio.run, _run_sdk()).result(
+                        timeout=effective_timeout
+                    )
             else:
                 output = asyncio.run(_run_sdk())
         except (asyncio.TimeoutError, concurrent.futures.TimeoutError):
@@ -7339,6 +7733,7 @@ User Request:
         n8n_session_id: str,
         timeout: Optional[int] = None,
         render_type: str = "text",
+        mode: str = "restricted",
     ) -> str:
         """Execute Devin CLI in non-interactive mode.
 
@@ -7346,13 +7741,23 @@ User Request:
         and allow full system access.
         """
         # Parse /mode command from prompt
-        prompt, mode = self._parse_mode_command(prompt)
+        prompt, parsed_mode = self._parse_mode_command(prompt)
 
         # Get session data once - reuse for mode and channel
         session_data = self.get_or_create_session_data(n8n_session_id)
 
-        # Resolve permission mode from session data (backward compat with yolo_mode)
-        mode = self._resolve_permission_mode(session_data, mode)
+        # Prefer explicitly passed-in mode over re-deriving from session data.
+        # This ensures scheduler/background dispatches with --mode elevated
+        # propagate correctly instead of being lost to session defaults.
+        if mode != "restricted":
+            # Explicit mode was passed in (e.g. from _dispatch_single_runtime)
+            pass
+        elif parsed_mode != "restricted":
+            # /mode command was found in the prompt
+            mode = parsed_mode
+        else:
+            # Fall back to session data resolution
+            mode = self._resolve_permission_mode(session_data, parsed_mode)
 
         agent_dir = self.AGENTS.get(agent, self.AGENTS["orchestrator"])["path"]
         effective_timeout = timeout if timeout is not None else self.command_timeout
@@ -7408,8 +7813,9 @@ User Request:
             context_prompt = context_prompt + sandboxed_instruction
 
         # -p is a boolean flag (print/non-interactive mode); prompt goes after --
-        # Permission mode: dangerous (auto-approve all) for elevated, auto for restricted/sandboxed
-        permission_mode = "dangerous" if mode == "elevated" else "auto"
+        # Permission mode: dangerous (auto-approve all) for elevated, normal for restricted/sandboxed
+        # Devin CLI valid values: normal, dangerous, bypass (NOT "auto")
+        permission_mode = "dangerous" if mode == "elevated" else "normal"
         cmd = [devin_bin, "-p"]
         if model:
             cmd += ["--model", model]
@@ -7482,7 +7888,7 @@ User Request:
 
         # Build context prompt with agent identity
         context_prompt = self.build_agent_context_prompt(
-            prompt, agent, channel, n8n_session_id
+            agent, prompt, n8n_session_id, channel=channel
         )
 
         # Add elevated mode instructions for unrestricted privileged access
@@ -7594,47 +8000,40 @@ User Request:
             openrouter/meta-llama/llama-4-scout - OpenRouter cloud
             gemma4:e4b                - Default endpoint (Ollama)
 
-        Supports real-time streaming to WebUI SSE consumers.
+        Supports:
+            - Real-time streaming to WebUI SSE consumers
+            - Multi-turn conversation history (#108)
+            - Tool-call agentic loop (#107)
+            - SSE streaming of tool execution (#109)
         """
         import json as _json
 
         try:
             from openai import OpenAI
         except ImportError:
-            return (
-                "Error: openai package not installed. "
-                "Run: pip install openai"
-            )
+            return "Error: openai package not installed. " "Run: pip install openai"
 
         session_data = self.get_or_create_session_data(n8n_session_id)
         agent_dir = self.AGENTS.get(agent, self.AGENTS["orchestrator"])["path"]
         effective_timeout = timeout if timeout is not None else self.command_timeout
         channel = session_data.get("channel", "webui")
 
-        # Build context prompt with agent identity
-        context_prompt = self.build_agent_context_prompt(
-            prompt, agent, channel, n8n_session_id
-        )
-
         # -- Resolve model, endpoint, and API key --
-        api_base = session_data.get("api_base") or os.environ.get(
-            "WEE_API_BASE"
-        )
-        api_key = session_data.get("api_key") or os.environ.get(
-            "WEE_API_KEY"
-        )
+        api_base = session_data.get("api_base") or os.environ.get("WEE_API_BASE")
+        api_key = session_data.get("api_key") or os.environ.get("WEE_API_KEY")
 
         # Provider presets
         _PRESETS = {
-            "ollama": ("http://192.168.1.101:11436/v1", "ollama"),
+            "ollama": ("http://192.168.1.101:11434/v1", "ollama"),
             "openrouter": ("https://openrouter.ai/api/v1", None),
             "lmstudio": ("http://localhost:1234/v1", "lm-studio"),
         }
 
         resolved_model = model
+        print(f"[wee-runtime] Session model: {model}", file=sys.stderr)
         for prefix, (preset_base, preset_key) in _PRESETS.items():
             if model.lower().startswith(f"{prefix}/"):
-                resolved_model = model[len(prefix) + 1:]
+                resolved_model = model[len(prefix) + 1 :]
                 if not api_base:
                     api_base = preset_base
                 if not api_key and preset_key:
@@ -7642,16 +8041,28 @@ User Request:
                 break
 
         if not api_base:
-            api_base = "http://192.168.1.101:11436/v1"
+            api_base = "http://192.168.1.101:11434/v1"
         if not api_key:
-            # Try keyring for OpenRouter
+            # Issue #153: Check OPENROUTER_API_KEY env var for OpenRouter models
             if "openrouter" in api_base.lower():
+                api_key = os.environ.get("OPENROUTER_API_KEY")
+            # Try keyring for OpenRouter
+            if not api_key and "openrouter" in api_base.lower():
                 try:
                     import keyring
+
                     api_key = keyring.get_password("openrouter", "api_key")
                 except Exception:
                     pass
+            # Issue #153: Raise clear error instead of defaulting to "ollama"
             if not api_key:
+                if "openrouter" in api_base.lower():
+                    raise ValueError(
+                        "OpenRouter API key not found. Set OPENROUTER_API_KEY "
+                        'env var or store via: python3 -c "import keyring; '
+                        "keyring.set_password('openrouter', 'api_key', "
+                        "'sk-or-...')\".\"."
+                    )
                 api_key = "ollama"
 
         print(
@@ -7660,48 +8071,338 @@ User Request:
             file=sys.stderr,
         )
 
+        # Issue #111: Build context prompt with correct args (after model resolution)
+        base_context_prompt = self.build_agent_context_prompt(
+            agent,
+            prompt,
+            n8n_session_id,
+            render_type=render_type,
+            timeout=effective_timeout,
+            runtime="wee",
+            model=resolved_model,
+            channel=channel,
+        )
+        # Issue #111: Augment system prompt with explicit tool capability section
+        # so models that ignore JSON schemas still know tools are available.
+        context_prompt = self._wee_augment_system_prompt_with_tools(base_context_prompt)
+        # Issue #113: Augment system prompt with anti-hallucination rules
+        context_prompt += self._wee_anti_hallucination_prompt()
+
         # -- Streaming infrastructure --
         stream_buffer = getattr(self, "_stream_buffers", {}).get(n8n_session_id)
 
         # -- Create OpenAI client and call API --
+        # Use httpx.Timeout for granular control: fast connect failure,
+        # generous read timeout for streaming
+        import httpx
+
         client = OpenAI(
             base_url=api_base,
             api_key=api_key,
-            timeout=effective_timeout,
+            timeout=httpx.Timeout(
+                timeout=effective_timeout,
+                connect=15.0,
+            ),
+            max_retries=0,
         )
 
-        messages = []
-        # System prompt from agent context
-        if context_prompt:
-            messages.append({"role": "system", "content": context_prompt})
+        # -- Issue #108: Load conversation history --
+        messages = self._wee_load_messages(n8n_session_id, context_prompt, resume)
         messages.append({"role": "user", "content": prompt})
 
+        # -- Tool definitions for agentic loop (Issue #107) --
+        _WEE_TOOLS = [
+            {
+                "type": "function",
+                "function": {
+                    "name": "bash",
+                    "description": "Execute a bash shell command and return its output.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "command": {
+                                "type": "string",
+                                "description": "The bash command to execute",
+                            }
+                        },
+                        "required": ["command"],
+                    },
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "python",
+                    "description": "Execute Python 3 code and return the output.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "code": {
+                                "type": "string",
+                                "description": "The Python code to execute",
+                            }
+                        },
+                        "required": ["code"],
+                    },
+                },
+            },
+        ]
+
         collected_output = []
+        _tool_call_counter = 0
+        MAX_TOOL_ROUNDS = 10
+        # Issue #160: Track token usage across all rounds
+        _total_prompt_tokens = 0
+        _total_completion_tokens = 0
+        _usage_available = False
+
+        # Issue #160: Track token usage across tool rounds
+        _total_prompt_tokens = 0
+        _total_completion_tokens = 0
+        _usage_available = False
 
         try:
-            stream = client.chat.completions.create(
-                model=resolved_model,
-                messages=messages,
-                stream=True,
-            )
+            for round_num in range(MAX_TOOL_ROUNDS + 1):
+                # Build create kwargs — include tools unless on final safety round
+                create_kwargs = {
+                    "model": resolved_model,
+                    "messages": messages,
+                    "stream": True,
+                    # Issue #160: Request usage stats in streaming response
+                    "stream_options": {"include_usage": True},
+                }
+                if round_num < MAX_TOOL_ROUNDS:
+                    create_kwargs["tools"] = _WEE_TOOLS
 
-            for chunk in stream:
-                if chunk.choices and chunk.choices[0].delta.content:
-                    token = chunk.choices[0].delta.content
-                    collected_output.append(token)
+                try:
+                    stream = client.chat.completions.create(**create_kwargs)
+                except Exception as tools_err:
+                    # Some models/endpoints may not support tools or stream_options
+                    retried = False
+                    if "tools" in create_kwargs:
+                        print(
+                            f"[Wee Native] Tools not supported, retrying without: {tools_err}",
+                            file=sys.stderr,
+                        )
+                        create_kwargs.pop("tools", None)
+                        try:
+                            stream = client.chat.completions.create(**create_kwargs)
+                            retried = True
+                        except Exception:
+                            pass  # fall through to stream_options removal
+                    if not retried and "stream_options" in create_kwargs:
+                        # Issue #160: Ollama/LM Studio may not support stream_options
+                        print(
+                            f"[Wee Native] stream_options not supported, retrying without: {tools_err}",
+                            file=sys.stderr,
+                        )
+                        create_kwargs.pop("stream_options", None)
+                        stream = client.chat.completions.create(**create_kwargs)
+                    elif not retried:
+                        raise
 
-                    # Push to SSE stream buffer for WebUI
+                # Accumulate content and tool calls from streaming response
+                round_content = []
+                tool_calls_acc = {}  # index -> {id, name, arguments}
+
+                for chunk in stream:
+                    # Issue #160: Capture usage stats from final streaming chunk
+                    if hasattr(chunk, "usage") and chunk.usage is not None:
+                        _u = chunk.usage
+                        _total_prompt_tokens += getattr(_u, "prompt_tokens", 0) or 0
+                        _total_completion_tokens += (
+                            getattr(_u, "completion_tokens", 0) or 0
+                        )
+                        _usage_available = True
+
+                    if not chunk.choices:
+                        continue
+                    delta = chunk.choices[0].delta
+
+                    # Content tokens — stream to user
+                    if delta.content:
+                        token = delta.content
+                        round_content.append(token)
+                        if stream_buffer:
+                            stream_buffer.push("chunk", {"text": token})
+
+                    # Tool call deltas (Issue #107)
+                    if getattr(delta, "tool_calls", None):
+                        for tc_delta in delta.tool_calls:
+                            idx = tc_delta.index
+                            if idx not in tool_calls_acc:
+                                _tool_call_counter += 1
+                                tool_calls_acc[idx] = {
+                                    "id": getattr(tc_delta, "id", None)
+                                    or f"tc_wee_{_tool_call_counter}",
+                                    "name": "",
+                                    "arguments": "",
+                                }
+                            if tc_delta.id and not tool_calls_acc[idx]["id"].startswith(
+                                "tc_wee_"
+                            ):
+                                pass  # keep first real id
+                            elif tc_delta.id:
+                                tool_calls_acc[idx]["id"] = tc_delta.id
+                            if tc_delta.function:
+                                if tc_delta.function.name:
+                                    tool_calls_acc[idx]["name"] = tc_delta.function.name
+                                if tc_delta.function.arguments:
+                                    tool_calls_acc[idx][
+                                        "arguments"
+                                    ] += tc_delta.function.arguments
+
+                content_text = "".join(round_content)
+
+                # No tool calls — we have the final answer
+                if not tool_calls_acc:
+                    collected_output.append(content_text)
+                    messages.append({"role": "assistant", "content": content_text})
+                    break
+
+                # -- Tool calls detected (Issues #107 + #109) --
+                print(
+                    f"[Wee Native] Round {round_num + 1}: {len(tool_calls_acc)} tool call(s) detected",
+                    file=sys.stderr,
+                )
+
+                # Build assistant message with tool_calls for conversation history
+                assistant_tool_calls = []
+                for idx in sorted(tool_calls_acc.keys()):
+                    tc = tool_calls_acc[idx]
+                    assistant_tool_calls.append(
+                        {
+                            "id": tc["id"],
+                            "type": "function",
+                            "function": {
+                                "name": tc["name"],
+                                "arguments": tc["arguments"],
+                            },
+                        }
+                    )
+
+                assistant_msg = {
+                    "role": "assistant",
+                    "content": content_text or None,
+                    "tool_calls": assistant_tool_calls,
+                }
+                messages.append(assistant_msg)
+
+                # Execute each tool call and emit SSE events (Issue #109)
+                for tc_entry in assistant_tool_calls:
+                    tc_id = tc_entry["id"]
+                    func_name = tc_entry["function"]["name"]
+                    func_args_str = tc_entry["function"]["arguments"]
+
+                    # Parse arguments
+                    try:
+                        func_args = _json.loads(func_args_str)
+                    except (ValueError, _json.JSONDecodeError):
+                        func_args = {"raw": func_args_str}
+
+                    # Issue #109: Emit tool start event to SSE stream
+                    tc_start_event = {
+                        "id": tc_id,
+                        "name": func_name,
+                        "arguments": func_args,
+                        "status": "running",
+                    }
                     if stream_buffer:
-                        stream_buffer.push("chunk", {"text": token})
+                        stream_buffer.push("tool_call", tc_start_event)
+
+                    print(
+                        f"[Wee Native] Tool: {func_name}({_json.dumps(func_args)[:200]})",
+                        file=sys.stderr,
+                    )
+
+                    # Execute the tool
+                    tool_result = self._wee_execute_tool(func_name, func_args, agent)
+
+                    # Issue #109: Emit tool complete event to SSE stream
+                    tc_done_event = {
+                        "id": tc_id,
+                        "name": func_name,
+                        "arguments": func_args,
+                        "result": tool_result[:2000] if tool_result else "",
+                        "status": "complete",
+                    }
+                    if stream_buffer:
+                        stream_buffer.push("tool_call", tc_done_event)
+
+                    # Append tool result to conversation for next round
+                    messages.append(
+                        {
+                            "role": "tool",
+                            "tool_call_id": tc_id,
+                            "content": tool_result or "No output",
+                        }
+                    )
+
+            else:
+                # All MAX_TOOL_ROUNDS had tool calls with no final text
+                last_tool_results = [
+                    m["content"] for m in messages if m.get("role") == "tool"
+                ]
+                if last_tool_results:
+                    collected_output.append(
+                        "Tool execution completed. Last result:\n"
+                        + last_tool_results[-1][:2000]
+                    )
+                else:
+                    collected_output.append(
+                        "Max tool rounds reached without final response."
+                    )
 
             output = "".join(collected_output)
+
+            # Issue #112: Fallback when LLM generates empty synthesis after tool execution.
+            # Some models (e.g. qwen3:8b) return zero text tokens after processing
+            # tool results, yielding output=''. Surface the last tool result instead.
+            if not output.strip():
+                tool_results = [
+                    m["content"]
+                    for m in messages
+                    if m.get("role") == "tool" and m.get("content")
+                ]
+                if tool_results:
+                    last_result = tool_results[-1]
+                    output = f"Tool execution result:\n{last_result[:4000]}"
+                    print(
+                        f"[Wee Native] Empty synthesis fallback: surfacing last tool result ({len(last_result)} chars)",
+                        file=sys.stderr,
+                    )
+                    if stream_buffer:
+                        stream_buffer.push("chunk", {"text": output})
+                elif any(m.get("role") == "tool" for m in messages):
+                    output = "(Tool executed but produced no output)"
+                    print(
+                        "[Wee Native] Empty synthesis fallback: tool produced no output",
+                        file=sys.stderr,
+                    )
+                    if stream_buffer:
+                        stream_buffer.push("chunk", {"text": output})
+
+            # Issue #108: Persist conversation history
+            self._wee_save_messages(n8n_session_id, messages)
+
+            # Issue #160: Build and store wee_meta with token usage and cost
+            _wee_meta = self._build_wee_meta(
+                api_base,
+                resolved_model,
+                model,
+                _total_prompt_tokens,
+                _total_completion_tokens,
+                _usage_available,
+            )
+            self.update_session_field(n8n_session_id, "_wee_meta", _wee_meta)
 
             # Push done sentinel
             if stream_buffer:
                 stream_buffer.push("done", output)
 
             print(
-                f"[Wee Native] Completed. Output length: {len(output)} chars",
+                f"[Wee Native] Completed. Output length: {len(output)} chars, "
+                f"tokens: {_wee_meta.get('tokens', 'N/A')}",
                 file=sys.stderr,
             )
             return output
@@ -7715,6 +8416,314 @@ User Request:
                 stream_buffer.push("done", error_msg)
 
             return error_msg
+
+    # -- Wee runtime helper methods (Issues #107, #108, #109) --
+
+    # Issue #160: Model pricing per 1M tokens (input, output) in USD
+    _WEE_MODEL_PRICING = {
+        # OpenRouter pricing (per 1M tokens)
+        "google/gemini-2.5-flash-preview": (0.15, 0.60),
+        "google/gemini-2.5-pro-preview": (1.25, 10.00),
+        "google/gemini-2.0-flash-001": (0.10, 0.40),
+        "anthropic/claude-sonnet-4": (3.00, 15.00),
+        "anthropic/claude-3.5-sonnet": (3.00, 15.00),
+        "anthropic/claude-haiku-4": (0.80, 4.00),
+        "anthropic/claude-3.5-haiku": (0.80, 4.00),
+        "openai/gpt-4.1": (2.00, 8.00),
+        "openai/gpt-4.1-mini": (0.40, 1.60),
+        "openai/gpt-4.1-nano": (0.10, 0.40),
+        "openai/gpt-4o": (2.50, 10.00),
+        "openai/gpt-4o-mini": (0.15, 0.60),
+        "meta-llama/llama-4-maverick": (0.20, 0.60),
+        "meta-llama/llama-4-scout": (0.15, 0.40),
+        "meta-llama/llama-3.3-70b-instruct": (0.10, 0.15),
+        "deepseek/deepseek-chat-v3-0324": (0.30, 0.88),
+        "deepseek/deepseek-r1": (0.55, 2.19),
+        "qwen/qwen3-235b-a22b": (0.20, 0.60),
+        "microsoft/mai-ds-r1": (0.55, 2.19),
+        "nvidia/llama-3.1-nemotron-ultra-253b-v1": (0.00, 0.00),
+    }
+
+    def _build_wee_meta(
+        self,
+        api_base: str,
+        resolved_model: str,
+        original_model: str,
+        prompt_tokens: int,
+        completion_tokens: int,
+        usage_available: bool,
+    ) -> dict:
+        """Build wee_meta dict with token usage and estimated cost (Issue #160).
+
+        Returns a dict suitable for inclusion in the SSE done event:
+        {runtime, tokens, prompt_tokens, completion_tokens, cost_label}
+        """
+        meta = {"runtime": "wee"}
+        is_ollama = "11434" in (api_base or "") or (api_base or "").startswith(
+            "http://192.168.1.101"
+        )
+        is_openrouter = "openrouter" in (api_base or "").lower()
+        is_lmstudio = "1234" in (api_base or "")
+
+        if not usage_available:
+            if is_ollama or is_lmstudio:
+                meta["cost_label"] = "local"
+            return meta
+
+        total = prompt_tokens + completion_tokens
+        meta["tokens"] = total
+        meta["prompt_tokens"] = prompt_tokens
+        meta["completion_tokens"] = completion_tokens
+
+        # Determine cost label
+        if is_ollama or is_lmstudio:
+            meta["cost_label"] = "local"
+        elif is_openrouter:
+            # Look up pricing — try full model ID, then with prefix
+            pricing = None
+            for candidate in [original_model, resolved_model]:
+                candidate_lower = candidate.lower() if candidate else ""
+                # Strip openrouter/ prefix if present
+                if candidate_lower.startswith("openrouter/"):
+                    candidate_lower = candidate_lower[len("openrouter/") :]
+                for key, val in self._WEE_MODEL_PRICING.items():
+                    if key.lower() == candidate_lower or candidate_lower.startswith(
+                        key.lower()
+                    ):
+                        pricing = val
+                        break
+                if pricing:
+                    break
+            if pricing:
+                input_cost = (prompt_tokens / 1_000_000) * pricing[0]
+                output_cost = (completion_tokens / 1_000_000) * pricing[1]
+                total_cost = input_cost + output_cost
+                if total_cost < 0.001:
+                    meta["cost_label"] = f"${total_cost:.6f}"
+                elif total_cost < 0.01:
+                    meta["cost_label"] = f"${total_cost:.4f}"
+                else:
+                    meta["cost_label"] = f"${total_cost:.2f}"
+            elif any(":free" in (original_model or "").lower() for _ in [1]):
+                meta["cost_label"] = "free"
+            else:
+                meta["cost_label"] = "est. N/A"
+        else:
+            meta["cost_label"] = ""
+
+        return meta
+
+    def _wee_load_messages(
+        self,
+        n8n_session_id: str,
+        context_prompt: str,
+        resume: bool = True,
+    ) -> list:
+        """Load wee conversation history from session map.
+
+        Issue #108: Ollama is stateless — the full conversation must be
+        included in every request.  This loads persisted messages from the
+        session_map so multi-turn context is preserved.
+        """
+        if resume:
+            session_data = self.load_session_data(n8n_session_id)
+            if session_data and session_data.get("wee_messages"):
+                msgs = list(session_data["wee_messages"])
+                # Always refresh the system prompt to pick up context changes
+                if msgs and msgs[0].get("role") == "system":
+                    msgs[0]["content"] = context_prompt
+                elif context_prompt:
+                    msgs.insert(0, {"role": "system", "content": context_prompt})
+                return msgs
+
+        # Fresh conversation — start with system prompt
+        messages = []
+        if context_prompt:
+            messages.append({"role": "system", "content": context_prompt})
+        return messages
+
+    def _wee_save_messages(self, n8n_session_id: str, messages: list) -> None:
+        """Persist wee conversation history to session map.
+
+        Issue #108: Saves the full message array (system + user + assistant +
+        tool) so the next turn can reconstruct the conversation.
+        Caps at MAX_WEE_MESSAGES to prevent unbounded growth.
+        """
+        MAX_WEE_MESSAGES = 100
+        with self._session_map_lock:
+            session_map = self.load_session_map()
+            if n8n_session_id in session_map:
+                # Keep system prompt + last N messages
+                if len(messages) > MAX_WEE_MESSAGES:
+                    system_msgs = [m for m in messages if m.get("role") == "system"]
+                    non_system = [m for m in messages if m.get("role") != "system"]
+                    saved = (
+                        system_msgs
+                        + non_system[-(MAX_WEE_MESSAGES - len(system_msgs)) :]
+                    )
+                else:
+                    saved = list(messages)
+                # Strip tool_calls from assistant messages for JSON serialization
+                clean = []
+                for m in saved:
+                    if m.get("tool_calls"):
+                        mc = dict(m)
+                        mc["tool_calls"] = [
+                            {
+                                "id": (
+                                    tc.get("id", "")
+                                    if isinstance(tc, dict)
+                                    else getattr(tc, "id", "")
+                                ),
+                                "type": "function",
+                                "function": {
+                                    "name": (
+                                        tc.get("function", {}).get("name", "")
+                                        if isinstance(tc, dict)
+                                        else getattr(
+                                            getattr(tc, "function", None), "name", ""
+                                        )
+                                    ),
+                                    "arguments": (
+                                        tc.get("function", {}).get("arguments", "")
+                                        if isinstance(tc, dict)
+                                        else getattr(
+                                            getattr(tc, "function", None),
+                                            "arguments",
+                                            "",
+                                        )
+                                    ),
+                                },
+                            }
+                            for tc in m["tool_calls"]
+                        ]
+                        clean.append(mc)
+                    else:
+                        clean.append(m)
+                session_map[n8n_session_id]["wee_messages"] = clean
+                self.save_session_map(session_map)
+
+    def _wee_augment_system_prompt_with_tools(self, system_prompt: str) -> str:
+        """Issue #111: Append explicit tool capability declaration to system prompt.
+
+        Many Ollama models ignore JSON tool schemas entirely and respond as if
+        no tools exist. Explicitly stating tool availability in the system
+        prompt text reliably fixes this across all models.
+        """
+        tool_section = (
+            "\n[Available Tools]\n"
+            "You have access to the following tools. ALWAYS use them when the user asks you to\n"
+            "perform any action -- do NOT say you cannot do something that these tools enable.\n"
+            "\n"
+            "**bash** -- Execute a bash shell command and return its output.\n"
+            '  Call: bash tool with {"command": "your shell command here"}\n'
+            "  Use for: running commands, SSH, file operations, checking system state\n"
+            "\n"
+            "**python** -- Execute Python 3 code and return its output.\n"
+            '  Call: python tool with {"code": "your python code here"}\n'
+            "  Use for: data processing, calculations, scripting, file parsing\n"
+            "\n"
+            "CRITICAL: When asked to run a command, SSH somewhere, check system status,\n"
+            "list files, or perform any shell action -- call the bash tool immediately.\n"
+            "NEVER refuse or claim you lack capability. The tools are active and functional."
+        )
+        return system_prompt + tool_section
+
+    def _wee_execute_tool(self, func_name: str, func_args: dict, agent: str) -> str:
+        """Execute a tool call from the wee runtime agentic loop.
+
+        Issue #107: Supports bash and python tools. Issue #111: SSH sanitization wired in.
+        Uses the same _execute_bash_command infrastructure as other runtimes.
+        """
+        try:
+            if func_name == "bash":
+                command = func_args.get("command", "")
+                if not command:
+                    return "Error: No command provided"
+                # Issue #111: Sanitize SSH commands (wire #113 fix)
+                command = self._wee_sanitize_bash_command(command)
+                return self._execute_bash_command(command, agent)
+            elif func_name == "python":
+                code = func_args.get("code", "")
+                if not code:
+                    return "Error: No code provided"
+                agent_info = self.AGENTS.get(agent, self.AGENTS.get("orchestrator"))
+                cwd = agent_info["path"] if agent_info else str(Path.cwd())
+                result = subprocess.run(
+                    [sys.executable, "-c", code],
+                    capture_output=True,
+                    text=True,
+                    timeout=min(self.command_timeout, 120),
+                    cwd=cwd,
+                )
+                output = result.stdout
+                if result.stderr:
+                    output += ("\n" if output else "") + result.stderr
+                if not output.strip():
+                    if result.returncode == 0:
+                        return "✓ Executed successfully (exit code: 0)"
+                    else:
+                        return f"✗ Failed with exit code: {result.returncode}"
+                return output.strip()
+            else:
+                return f"Error: Unknown tool '{func_name}'. Available: bash, python"
+        except subprocess.TimeoutExpired:
+            return f"Error: Tool '{func_name}' timed out"
+        except Exception as e:
+            return f"Error executing {func_name}: {e}"
+
+    # -- Issue #113: SSH command sanitisation and anti-hallucination --
+
+    _SSH_BIN_RE = re.compile(r"\b(ssh|scp|sftp)\b")
+
+    # Issue #111: SSH sanitization wired into _wee_execute_tool (resolves #113 TODO).
+    # The wee runtime now has a full tool execution loop.
+    @staticmethod
+    def _wee_sanitize_bash_command(command: str) -> str:
+        """Auto-inject SSH flags to prevent host key verification failures.
+
+        When a bash command contains an ssh/scp/sftp invocation without
+        StrictHostKeyChecking already set, inject
+        ``-o StrictHostKeyChecking=accept-new`` so first-connect succeeds
+        without manual intervention.  ``accept-new`` is safer than ``no``
+        because it still rejects CHANGED keys (potential MITM).
+
+        Wired into _wee_execute_tool by Issue #111. Called on every bash tool input before
+        execution in the wee runtime tool execution loop.
+        """
+        if not command:
+            return command
+        # Quick check — does the command even mention ssh/scp/sftp?
+        if not SessionManager._SSH_BIN_RE.search(command):
+            return command
+        # Already has StrictHostKeyChecking set — leave it alone
+        if "StrictHostKeyChecking" in command:
+            return command
+
+        # Inject -o StrictHostKeyChecking=accept-new after each ssh/scp/sftp binary
+        def _inject(m):
+            return m.group(0) + " -o StrictHostKeyChecking=accept-new"
+
+        return SessionManager._SSH_BIN_RE.sub(_inject, command, count=0)
+
+    @staticmethod
+    def _wee_anti_hallucination_prompt() -> str:
+        """Issue #113: Return system-prompt section that prevents hallucinated tool output.
+
+        Smaller Ollama models tend to fabricate command output when a tool
+        call fails.  This prompt section explicitly forbids that.
+        """
+        return (
+            "\n\n[CRITICAL — Output Integrity Rules]\n"
+            "1. NEVER fabricate, invent, or hallucinate command output. If a command "
+            "fails or you cannot execute it, report the EXACT error message.\n"
+            "2. NEVER provide example or placeholder output and present it as real. "
+            'If you show an example, clearly label it as "EXAMPLE (not real output)".\n'
+            "3. When a tool call returns an error, relay the error verbatim to the user. "
+            "Do NOT attempt to guess what the successful output would have looked like.\n"
+            "4. For SSH commands: ALWAYS use ``-o StrictHostKeyChecking=accept-new`` to "
+            "avoid host-key verification failures on first connect.\n"
+        )
 
     def _get_cursor_session_id(self, n8n_session_id: str) -> Optional[str]:
         """Return the stored cursor session flag for this n8n session, or None."""
@@ -7853,6 +8862,10 @@ User Request:
             # Cursor session mappings are keyed by n8n_session_id
             key = n8n_session_id if n8n_session_id else session_id
             return (self.cursor_session_dir / f"{key}.json").exists()
+        elif runtime == "wee":
+            # Issue #108: Wee stores conversation history in session_map
+            data = self.load_session_data(n8n_session_id or session_id)
+            return bool(data and data.get("wee_messages"))
         return False
 
     def get_most_recent_session_id(
@@ -8003,11 +9016,7 @@ User Request:
             if self._bg_task_mgr:
                 self._bg_task_mgr.complete_task(task_id, result)
                 task_rec = self._bg_task_mgr.get_task(task_id)
-                o_sid = (
-                    task_rec.get("origin_session_id")
-                    if task_rec
-                    else None
-                )
+                o_sid = task_rec.get("origin_session_id") if task_rec else None
                 if o_sid:
                     self._bg_task_mgr.push_bg_event(
                         o_sid,
@@ -8027,11 +9036,7 @@ User Request:
             if self._bg_task_mgr:
                 self._bg_task_mgr.fail_task(task_id, str(exc))
                 task_rec = self._bg_task_mgr.get_task(task_id)
-                o_sid = (
-                    task_rec.get("origin_session_id")
-                    if task_rec
-                    else None
-                )
+                o_sid = task_rec.get("origin_session_id") if task_rec else None
                 if o_sid:
                     self._bg_task_mgr.push_bg_event(
                         o_sid,
@@ -8154,6 +9159,7 @@ User Request:
                 n8n_session_id,
                 effective_timeout,
                 render_type,
+                mode,
             )
         elif runtime == "cursor":
             result = self.run_cursor(
@@ -8243,7 +9249,9 @@ User Request:
         effective_timeout = self.get_effective_timeout(session_data)
         render_type = self.get_render_type(session_data)
         # Get permission mode from session (backward compat with yolo_mode)
-        _perms = session_data.get("permissions") or {}  # Handle None from session template
+        _perms = (
+            session_data.get("permissions") or {}
+        )  # Handle None from session template
         if isinstance(_perms, dict) and _perms.get("mode") in (
             "elevated",
             "restricted",
@@ -8283,6 +9291,13 @@ User Request:
                 else self.session_exists(
                     "", current_runtime, n8n_session_id=n8n_session_id
                 )
+            )
+        elif current_runtime == "wee":
+            # Issue #108 fix: Wee has no external session_id — history is keyed
+            # by n8n_session_id in session_map.  Must pass n8n_session_id so
+            # session_exists() finds wee_messages regardless of session_id.
+            can_resume = self.session_exists(
+                session_id, current_runtime, n8n_session_id=n8n_session_id
             )
         else:
             can_resume = (
@@ -8348,6 +9363,7 @@ User Request:
 
         return output
 
+
 def _check_command_result(result: str, error_keywords: List[str]) -> None:
     """Helper function to check command results and exit on error
 
@@ -8363,11 +9379,13 @@ def _check_command_result(result: str, error_keywords: List[str]) -> None:
             print(result, file=sys.stderr)
             sys.exit(1)
 
+
 # ---------------------------------------------------------------------------
 # FastAPI Application
 # ---------------------------------------------------------------------------
 
 _api_auth_manager: Optional["AuthManager"] = None
+
 
 def _send_pairing_code(channel: str, identity: str, code: str) -> bool:
     """Deliver a pairing code. Returns True on success, False on failure."""
@@ -8391,10 +9409,16 @@ def _send_pairing_code(channel: str, identity: str, code: str) -> bool:
                     return True
                 except Exception as _exc:
                     last_exc = _exc
-                    print(f"[API] Telegram send attempt {attempt}/3 failed: {_exc}", file=sys.stderr)
+                    print(
+                        f"[API] Telegram send attempt {attempt}/3 failed: {_exc}",
+                        file=sys.stderr,
+                    )
                     if attempt < 3:
                         time.sleep(2)
-            print(f"[API] All 3 Telegram send attempts failed: {last_exc}", file=sys.stderr)
+            print(
+                f"[API] All 3 Telegram send attempts failed: {last_exc}",
+                file=sys.stderr,
+            )
             return False
         elif channel == "webex":
             config_path = os.path.join(script_dir, "webex_config.json")
@@ -8434,6 +9458,7 @@ def _send_pairing_code(channel: str, identity: str, code: str) -> bool:
     except Exception as exc:  # noqa: BLE001
         print(f"[API] Warning: could not send pairing code via {channel}: {exc}")
 
+
 def _get_telegram_username(user_id: str):
     """Look up @username for a numeric Telegram user_id in telegram_config.json.
     Returns the username string (without @), or None if not found."""
@@ -8447,6 +9472,7 @@ def _get_telegram_username(user_id: str):
         return username.lstrip("@") if username else None
     except Exception:
         return None
+
 
 def _ddg_image_search(query: str, max_results: int = 4) -> list:
     """Fetch image results from DuckDuckGo without an API key.
@@ -8504,6 +9530,7 @@ def _ddg_image_search(query: str, max_results: int = 4) -> list:
     except Exception:
         return []
 
+
 def _resolve_telegram_identity(username: str):
     """Reverse-lookup @username in telegram_config.json user_pairings.
     Returns numeric user_id string, or None if not found (user must message bot first).
@@ -8519,6 +9546,7 @@ def _resolve_telegram_identity(username: str):
         return None
     except Exception:
         return None
+
 
 def _compute_bg_task_defaults(session_map, identity, channel):
     """Compute inheritable defaults from existing sessions for a new background task.
@@ -8584,7 +9612,10 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
     )
     from fastapi.middleware.cors import CORSMiddleware
     from fastapi.responses import (
-        FileResponse, JSONResponse, Response, StreamingResponse
+        FileResponse,
+        JSONResponse,
+        Response,
+        StreamingResponse,
     )
     from fastapi.staticfiles import StaticFiles
     from pydantic import BaseModel, field_validator
@@ -8636,6 +9667,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
     session_mgr._bg_task_mgr = bg_task_mgr
     # Expose for testing/introspection (read-only reference)
     import sys as _sys
+
     _sys.modules[__name__]._session_mgr = session_mgr
     usage_tracker = RuntimeUsageTracker()
 
@@ -8857,9 +9889,9 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 raise ValueError("Query must be 10,000 characters or less")
             return v
 
-
     class QueryRequest(BaseModel):
         """One-shot query without session management."""
+
         prompt: str
         runtime: Optional[str] = None
         model: Optional[str] = None
@@ -8872,6 +9904,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             if len(v) > 10000:
                 raise ValueError("Prompt must be 10,000 characters or less")
             return v
+
     # ---- authentication dependency ----
     async def authenticate(
         request: Request,
@@ -9148,7 +10181,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
     @app.get("/api/v1/runtimes")
     async def get_runtimes():
         """Return list of available runtimes on this system.
-        
+
         Only runtimes that are actually installed/available are returned.
         This prevents the WebUI from showing runtimes that cannot be used.
         """
@@ -9174,6 +10207,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             "codex",
             "devin",
             "cursor",
+            "wee",
         }
         if runtime not in known_runtimes:
             return {
@@ -9194,7 +10228,10 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                         session_mgr._get_model_description(model_id, runtime)
                         or model_id
                     )
-                    models.append({"id": model_id, "label": label})
+                    entry = {"id": model_id, "label": label}
+                    if _group:
+                        entry["group"] = _group
+                    models.append(entry)
             return {"runtime": runtime, "models": models}
         except Exception as e:
             return {"runtime": runtime, "models": [], "error": str(e)}
@@ -9460,9 +10497,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
 
         # Strip ANSI escape codes from runtime output (#68)
         _ansi_re = re.compile(
-            r"\x1b\[[0-9;]*[a-zA-Z]"
-            r"|\x1b\][^\x07]*\x07"
-            r"|\x1b\([A-Z0-9]"
+            r"\x1b\[[0-9;]*[a-zA-Z]" r"|\x1b\][^\x07]*\x07" r"|\x1b\([A-Z0-9]"
         )
         if result and isinstance(result, str):
             result = _ansi_re.sub("", result)
@@ -9701,14 +10736,17 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
 
                 session_data = session_mgr.get_or_create_session_data(session_id)
                 runtime = session_data.get("runtime", "copilot")
-                done_payload = _json.dumps(
-                    {
-                        "type": "done",
-                        "response": result,
-                        "runtime": runtime,
-                        "model": session_data.get("model"),
-                    }
-                )
+                _done_evt = {
+                    "type": "done",
+                    "response": result,
+                    "runtime": runtime,
+                    "model": session_data.get("model"),
+                }
+                # Issue #160: Include wee_meta (token usage + cost) if available
+                _wm = session_data.pop("_wee_meta", None)
+                if _wm:
+                    _done_evt["wee_meta"] = _wm
+                done_payload = _json.dumps(_done_evt)
                 yield f"data: {done_payload}\n\n"
                 done_delivered = True
             finally:
@@ -9803,16 +10841,17 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                             session_id
                         )
                         runtime = session_data.get("runtime", "copilot")
-                        done_payload = _json.dumps(
-                            {
-                                "type": "done",
-                                "response": (
-                                    data if isinstance(data, str) else str(data)
-                                ),
-                                "runtime": runtime,
-                                "model": session_data.get("model"),
-                            }
-                        )
+                        _done_evt = {
+                            "type": "done",
+                            "response": (data if isinstance(data, str) else str(data)),
+                            "runtime": runtime,
+                            "model": session_data.get("model"),
+                        }
+                        # Issue #160: Include wee_meta if available
+                        _wm = session_data.pop("_wee_meta", None)
+                        if _wm:
+                            _done_evt["wee_meta"] = _wm
+                        done_payload = _json.dumps(_done_evt)
                         yield f"data: {done_payload}\n\n"
                         return
 
@@ -9821,14 +10860,17 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                     session_data = session_mgr.get_or_create_session_data(session_id)
                     runtime = session_data.get("runtime", "copilot")
                     result = buf.done_result if isinstance(buf.done_result, str) else ""
-                    done_payload = _json.dumps(
-                        {
-                            "type": "done",
-                            "response": result,
-                            "runtime": runtime,
-                            "model": session_data.get("model"),
-                        }
-                    )
+                    _done_evt = {
+                        "type": "done",
+                        "response": result,
+                        "runtime": runtime,
+                        "model": session_data.get("model"),
+                    }
+                    # Issue #160: Include wee_meta if available
+                    _wm = session_data.pop("_wee_meta", None)
+                    if _wm:
+                        _done_evt["wee_meta"] = _wm
+                    done_payload = _json.dumps(_done_evt)
                     yield f"data: {done_payload}\n\n"
                     return
 
@@ -9859,14 +10901,17 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 session_data = session_mgr.get_or_create_session_data(session_id)
                 runtime = session_data.get("runtime", "copilot")
                 result = buf.done_result if isinstance(buf.done_result, str) else ""
-                done_payload = _json.dumps(
-                    {
-                        "type": "done",
-                        "response": result,
-                        "runtime": runtime,
-                        "model": session_data.get("model"),
-                    }
-                )
+                _done_evt = {
+                    "type": "done",
+                    "response": result,
+                    "runtime": runtime,
+                    "model": session_data.get("model"),
+                }
+                # Issue #160: Include wee_meta if available
+                _wm = session_data.pop("_wee_meta", None)
+                if _wm:
+                    _done_evt["wee_meta"] = _wm
+                done_payload = _json.dumps(_done_evt)
                 yield f"data: {done_payload}\n\n"
             finally:
                 buf.remove_consumer(queue)
@@ -10518,9 +11563,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         description: Optional[str] = (
             None  # human-readable task name shown in Agents panel
         )
-        origin_session_id: Optional[str] = (
-            None  # chat session that initiated this task
-        )
+        origin_session_id: Optional[str] = None  # chat session that initiated this task
 
         @field_validator("prompt")
         @classmethod
@@ -10565,9 +11608,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             )
             # Push in-thread event to originating session
             task = bg_task_mgr.get_task(task_id)
-            origin_sid = (
-                task.get("origin_session_id") if task else None
-            )
+            origin_sid = task.get("origin_session_id") if task else None
             if origin_sid:
                 bg_task_mgr.push_bg_event(
                     origin_sid,
@@ -10575,11 +11616,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                         "task_id": task_id,
                         "summary": prompt[:80],
                         "status": status,
-                        "agent": (
-                            task.get("agent", "")
-                            if task
-                            else ""
-                        ),
+                        "agent": (task.get("agent", "") if task else ""),
                         "timestamp": time.strftime(
                             "%Y-%m-%dT%H:%M:%SZ",
                             time.gmtime(),
@@ -10640,17 +11677,13 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                     f"[Command Mode] Run Now job {job_id} failed: exit code {result.returncode}"
                 )
         except _sp.TimeoutExpired:
-            bg_task_mgr.fail_task(
-                task_id, f"Command timed out after {timeout}s"
-            )
+            bg_task_mgr.fail_task(task_id, f"Command timed out after {timeout}s")
             logger.error(
                 f"[Command Mode] Run Now job {job_id} timed out after {timeout}s"
             )
         except Exception as e:
             bg_task_mgr.fail_task(task_id, str(e))
-            logger.error(
-                f"[Command Mode] Run Now job {job_id} exception: {e}"
-            )
+            logger.error(f"[Command Mode] Run Now job {job_id} exception: {e}")
 
         # Save result to scheduler logs/results for consistency
         try:
@@ -10665,9 +11698,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 error=(task_rec or {}).get("error", ""),
             )
             status_label = "succeeded" if success else "failed"
-            sched._log_job(
-                job_id, f"Run Now (command mode) {status_label}"
-            )
+            sched._log_job(job_id, f"Run Now (command mode) {status_label}")
         except Exception as exc:
             logger.warning(
                 f"[Command Mode] Could not save scheduler result for {job_id}: {exc}"
@@ -10971,6 +12002,11 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             # to the correct binary so the chosen runtime actually executes.
             from shutil import which as _which_bin
 
+            # Set agent working directory for all runtimes
+            agent_dir = session_mgr.AGENTS.get(
+                agent, session_mgr.AGENTS.get("orchestrator", {})
+            ).get("path", os.getcwd())
+
             if runtime == "gemini":
                 _gemini_bin = _which_bin("gemini") or "gemini"
                 cmd = [_gemini_bin]
@@ -11023,7 +12059,10 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                     if hasattr(session_mgr, "devin_bin") and session_mgr.devin_bin
                     else (_which_bin("devin") or "devin")
                 )
-                _devin_perm = "dangerous" if permission_mode == "elevated" else "auto"
+                # Devin CLI valid values: normal, dangerous, bypass (NOT "auto").
+                # Background tasks are non-interactive (no human to approve),
+                # so always use "dangerous" to prevent tool call rejections.
+                _devin_perm = "dangerous"
                 cmd = [_devin_bin, "-p", "--permission-mode", _devin_perm]
                 if model:
                     cmd.extend(["--model", model])
@@ -11039,9 +12078,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 if not _cursor_model or not session_mgr.get_model_from_name(
                     _cursor_model, "cursor"
                 ):
-                    _cursor_model = os.environ.get(
-                        "CURSOR_DEFAULT_MODEL", "auto"
-                    )
+                    _cursor_model = os.environ.get("CURSOR_DEFAULT_MODEL", "auto")
                 cmd = [_cursor_bin, "-p", "--trust"]
                 if permission_mode == "elevated":
                     cmd.append("--yolo")
@@ -11055,9 +12092,12 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                     "wee_runtime.py",
                 )
                 cmd = [
-                    sys.executable, _wee_script,
-                    "--model", model,
-                    "--timeout", str(timeout or 300),
+                    sys.executable,
+                    _wee_script,
+                    "--model",
+                    model,
+                    "--timeout",
+                    str(timeout or 300),
                 ]
                 # Resolve api_base and api_key from session/env
                 _wee_api_base = os.environ.get("WEE_API_BASE", "")
@@ -11101,11 +12141,6 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 ]
                 if permission_mode == "elevated":
                     cmd.extend(["--allow-all-paths", "--yolo"])
-
-            # Set agent working directory for all runtimes
-            agent_dir = session_mgr.AGENTS.get(
-                agent, session_mgr.AGENTS.get("orchestrator", {})
-            ).get("path", os.getcwd())
 
             proc_timeout = (timeout or 900) + 30
             env = {
@@ -11493,19 +12528,13 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         }
 
     @app.get("/api/v1/sessions/{session_id}/bg-events")
-    async def get_session_bg_events(
-        session_id: str, request: Request
-    ):
+    async def get_session_bg_events(session_id: str, request: Request):
         """Return and clear pending BG task completion events."""
         await authenticate(
             request,
             authorization=request.headers.get("authorization"),
-            x_user_identity=request.headers.get(
-                "x-user-identity"
-            ),
-            x_auth_channel=request.headers.get(
-                "x-auth-channel"
-            ),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
         )
         events = bg_task_mgr.pop_bg_events(session_id)
         return {"events": events}
@@ -11714,7 +12743,9 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 detail=f"Task is {task['status']}, not running -- cannot steer",
             )
         path = bg_task_mgr.write_steering(task_id, body.instruction)
-        logger.info("[STEER] Steering written for task %s: %s", task_id, body.instruction[:80])
+        logger.info(
+            "[STEER] Steering written for task %s: %s", task_id, body.instruction[:80]
+        )
         return {
             "task_id": task_id,
             "status": "steering_written",
@@ -11916,6 +12947,8 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             mode: Optional[str] = None  # "ai" (default, uses LLM) or "command" (shell)
             task: str = ""
             notify: bool = False
+            fallback_runtime: Optional[str] = None
+            fallback_model: Optional[str] = None
             recurring: bool = True
             timeout: Optional[int] = None  # Execution timeout in seconds (default: 300)
             permission_mode: Optional[str] = (
@@ -11931,6 +12964,8 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             mode: Optional[str] = None  # "ai" (default, uses LLM) or "command" (shell)
             task: Optional[str] = None
             notify: Optional[bool] = None
+            fallback_runtime: Optional[str] = None
+            fallback_model: Optional[str] = None
             recurring: Optional[bool] = None
             enabled: Optional[bool] = None
             timeout: Optional[int] = None  # Execution timeout in seconds
@@ -11996,6 +13031,8 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 agent=body.agent,
                 runtime=body.runtime,
                 model=body.model,
+                fallback_runtime=body.fallback_runtime,
+                fallback_model=body.fallback_model,
                 mode=body.mode,
                 task=body.task,
                 notify=body.notify,
@@ -12030,7 +13067,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 client_ip, "scheduler_write", max_requests=20, window=60
             ):
                 raise HTTPException(status_code=429, detail="Rate limit exceeded")
-            updates = {k: v for k, v in body.model_dump().items() if v is not None}
+            updates = body.model_dump(exclude_unset=True)
             if not updates:
                 raise HTTPException(status_code=400, detail="No fields to update")
             result = _get_scheduler().update_job(job_id, updates)
@@ -12221,554 +13258,6 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         async def get_scheduler_job_logs(job_id: str, request: Request):
             await _require_scheduler_auth(request)
             return _get_scheduler().get_logs(job_id)
-
-    # --- TODO list API ---------------------------------------------------
-    def _resolve_todo_dir(agent_name: str | None) -> Path | None:
-        """Resolve the TODOs/ folder for a given agent.
-
-        Returns the agent-specific TODOs/ directory if it exists, else None.
-        Checks both the new folder-based structure (TODOs/) and falls back to
-        the legacy TODOs.md flat file (returned as None to signal legacy mode).
-        """
-        import json as _json
-
-        default_dir = Path("/opt/fosterbot-home/TODOs")
-        default_md = Path("/opt/fosterbot-home/TODOs.md")
-
-        def _pick(base: Path):
-            """Return folder path or md path for a given base directory."""
-            d = base / "TODOs"
-            if d.is_dir():
-                return d
-            md = base / "TODOs.md"
-            if md.exists():
-                return md
-            return None
-
-        if not agent_name:
-            if default_dir.is_dir():
-                return default_dir
-            return default_md if default_md.exists() else None
-
-        try:
-            agents_file = Path(__file__).parent / "agents.json"
-            agents_data = _json.loads(agents_file.read_text())
-            for a in agents_data.get("agents", []):
-                if a.get("name", "").lower() == agent_name.lower():
-                    agent_path = Path(a.get("path", "/opt"))
-                    result = _pick(agent_path)
-                    if result:
-                        return result
-                    # Also check <agent_path>/fosterbot-home/
-                    result = _pick(agent_path / "fosterbot-home")
-                    if result:
-                        return result
-                    # No TODOs found — return non-existent path so UI shows empty
-                    return agent_path / "TODOs"
-        except Exception:
-            pass
-        return Path(f"/opt/{agent_name}/TODOs")
-
-    def _resolve_todo_file(agent_name: str | None) -> Path:
-        """Legacy resolver — returns a Path (may be dir or md file).
-
-        Kept for backwards compatibility. New code should use _resolve_todo_dir.
-        """
-        result = _resolve_todo_dir(agent_name)
-        if result is None:
-            return Path("/opt/fosterbot-home/TODOs.md")
-        return result
-
-    def _parse_todo_file(todo_path: Path) -> dict | None:
-        """Parse a single TODO file with DUE:/LABELS: header format.
-
-        Returns a dict with description, due, labels, details, notes keys,
-        or None if the file cannot be parsed.
-        """
-        import re as _re
-
-        try:
-            lines = todo_path.read_text().splitlines()
-        except Exception:
-            return None
-
-        due = None
-        labels = []
-        detail_start = 0
-
-        for idx, line in enumerate(lines):
-            if line.startswith("DUE:"):
-                due = line[4:].strip()
-                detail_start = idx + 1
-            elif line.startswith("LABELS:"):
-                raw = line[7:].strip()
-                # Parse {LABEL1},{LABEL2} format
-                labels = [
-                    l.strip().strip("{}")
-                    for l in _re.split(r"[,\s]+", raw)
-                    if l.strip().strip("{}")
-                ]
-                detail_start = idx + 1
-            else:
-                break  # headers must be contiguous at top of file
-
-        # Everything after the headers is the details body
-        details_lines = lines[detail_start:]
-        # Strip leading blank line if present
-        while details_lines and not details_lines[0].strip():
-            details_lines = details_lines[1:]
-        details = "\n".join(details_lines).strip()
-
-        return {
-            "description": todo_path.name,
-            "due": due,
-            "labels": labels,
-            "notes": [],
-            "details": details,
-        }
-
-    def _parse_todos_from_dir(todo_dir: Path, limit: int = 100) -> list:
-        """Read TODOs from the folder-based structure (ACTIVE/ subfolder)."""
-        active_dir = todo_dir / "ACTIVE"
-        if not active_dir.is_dir():
-            return []
-        todos = []
-        for entry in sorted(active_dir.iterdir()):
-            if entry.is_file():
-                parsed = _parse_todo_file(entry)
-                if parsed:
-                    todos.append(parsed)
-                    if len(todos) >= limit:
-                        break
-        return todos
-
-    def _parse_todos_from_md(todo_file: Path, limit: int = 100) -> list:
-        """Parse active TODOs from the markdown file, return up to `limit`.
-
-        Supports both the legacy flat TODOs.md format and the new folder-based
-        structure (when todo_file is actually a directory).
-        """
-        # New folder-based structure
-        if todo_file.is_dir():
-            return _parse_todos_from_dir(todo_file, limit)
-
-        if not todo_file.exists():
-            return []
-        todos = []
-        import re
-
-        current_todo = None
-        in_details = False
-        details_lines = []
-
-        with open(todo_file) as f:
-            for line in f:
-                raw_line = line.rstrip("\n")
-                stripped = raw_line.strip()
-
-                # Check for TODO line
-                todo_line = stripped
-                if todo_line.startswith("- "):
-                    todo_line = todo_line[2:]
-
-                if (
-                    todo_line.startswith("[ ]")
-                    or todo_line.startswith("[X]")
-                    or todo_line.startswith("[x]")
-                ):
-                    # Save previous todo with details if exists
-                    if current_todo:
-                        if details_lines:
-                            current_todo["details"] = "\n".join(details_lines).strip()
-                        todos.append(current_todo)
-                        if len(todos) >= limit:
-                            current_todo = None
-                            break
-
-                    # Only keep active (non-completed) todos for this list
-                    completed = todo_line.startswith("[X]") or todo_line.startswith(
-                        "[x]"
-                    )
-
-                    if not completed:
-                        content = re.sub(r"^\[.\]\s+", "", todo_line)
-                        due = None
-                        due_match = re.search(r"\(due ([^)]+)\)", content)
-                        if due_match:
-                            due = due_match.group(1)
-                        labels = []
-                        label_match = re.search(r"\{([^}]+)\}", content)
-                        if label_match:
-                            labels = [
-                                l.strip() for l in label_match.group(1).split(",")
-                            ]
-                        # Remove due and label markers from description
-                        content = re.sub(r"\s*\(due [^)]+\)", "", content)
-                        content = re.sub(r"\s*\{[^}]+\}", "", content).strip()
-                        current_todo = {
-                            "description": content,
-                            "due": due,
-                            "labels": labels,
-                            "notes": [],
-                            "details": "",
-                        }
-                        in_details = False
-                        details_lines = []
-                    else:
-                        # Completed todo — clear state without adding to active list
-                        current_todo = None
-                        in_details = False
-                        details_lines = []
-
-                elif current_todo:
-                    # Check for Details section (inline bold format: **Details**)
-                    if stripped == "**Details**":
-                        in_details = True
-                        details_lines = []
-                    elif (
-                        in_details
-                        and stripped
-                        and not stripped.startswith("## ")
-                        and not stripped.startswith("- [")
-                    ):
-                        # Collect details until we hit a top-level section (## ) or a todo item
-                        details_lines.append(raw_line)
-                    elif raw_line.startswith("    ") and not in_details:
-                        # This is a note for the current TODO
-                        current_todo["notes"].append(raw_line.strip())
-
-        if current_todo:
-            if details_lines:
-                current_todo["details"] = "\n".join(details_lines).strip()
-            todos.append(current_todo)
-
-        return todos[:limit]
-
-    @app.get("/api/v1/todos")
-    async def get_todos(request: Request, agent: str = None, limit: int = 100):
-        await authenticate(
-            request,
-            authorization=request.headers.get("authorization"),
-            x_user_identity=request.headers.get("x-user-identity"),
-            x_auth_channel=request.headers.get("x-auth-channel"),
-        )
-        limit = min(max(1, limit), 200)
-        todo_path = _resolve_todo_file(agent)
-        todos = _parse_todos_from_md(todo_path, limit)
-        return {
-            "todos": todos,
-            "count": len(todos),
-            "agent": agent or "default",
-            "file": str(todo_path),
-        }
-
-    @app.post("/api/v1/todos")
-    async def create_todo(request: Request):
-        """Create a new TODO in the ACTIVE/ folder."""
-        await authenticate(
-            request,
-            authorization=request.headers.get("authorization"),
-            x_user_identity=request.headers.get("x-user-identity"),
-            x_auth_channel=request.headers.get("x-auth-channel"),
-        )
-        try:
-            body = await request.json()
-        except Exception:
-            return {"success": False, "error": "Invalid JSON body"}
-
-        title = (body.get("title") or "").strip()
-        due_date = (body.get("due_date") or "").strip()
-        labels = body.get("labels") or []
-        details = (body.get("details") or "").strip()
-        agent = body.get("agent")
-
-        if not title:
-            return {"success": False, "error": "Title is required"}
-
-        # Reject path traversal and dangerous chars
-        if (
-            "/" in title
-            or "\\" in title
-            or "\0" in title
-            or ".." in title
-            or "\n" in title
-            or "\r" in title
-        ):
-            return {
-                "success": False,
-                "error": (
-                    "Invalid title: must not contain"
-                    " path separators, traversal"
-                    " sequences, or control characters"
-                ),
-            }
-
-        todo_path = _resolve_todo_file(agent)
-        if not todo_path.is_dir():
-            return {
-                "success": False,
-                "error": "Folder-based TODO dir not found",
-            }
-
-        active_dir = todo_path / "ACTIVE"
-        active_dir.mkdir(parents=True, exist_ok=True)
-
-        target = active_dir / title
-        # Belt-and-suspenders path traversal check
-        resolved = target.resolve()
-        parent = active_dir.resolve()
-        if not resolved.is_relative_to(parent):
-            return {
-                "success": False,
-                "error": "Invalid title: path traversal",
-            }
-
-        if target.exists():
-            return {
-                "success": False,
-                "error": f"TODO {title!r} already exists",
-            }
-
-        # Build file content with headers
-        lines = []
-        if due_date:
-            lines.append(f"DUE: {due_date}")
-        if labels:
-            fmt = ",".join(f"{{{lb}}}" for lb in labels)
-            lines.append(f"LABELS: {fmt}")
-        if details:
-            if lines:
-                lines.append("")
-            lines.append(details)
-
-        file_content = "\n".join(lines) + "\n" if lines else ""
-        target.write_text(file_content)
-
-        return {
-            "success": True,
-            "todo": title,
-            "file": str(target),
-        }
-
-    @app.post("/api/v1/todos/{todo_title}/complete")
-    async def complete_todo(request: Request, todo_title: str):
-        """Mark a TODO as complete by moving it from ACTIVE/ to COMPLETED/."""
-        await authenticate(
-            request,
-            authorization=request.headers.get("authorization"),
-            x_user_identity=request.headers.get("x-user-identity"),
-            x_auth_channel=request.headers.get("x-auth-channel"),
-        )
-        try:
-            body = await request.json()
-            agent = body.get("agent")
-        except Exception:
-            agent = None
-
-        todo_path = _resolve_todo_file(agent)
-        if not todo_path.is_dir():
-            return {"success": False, "error": "Folder-based TODO structure not found"}
-
-        active_dir = todo_path / "ACTIVE"
-        completed_dir = todo_path / "COMPLETED"
-        completed_dir.mkdir(parents=True, exist_ok=True)
-
-        # Find the file (exact match or partial)
-        match = None
-        for entry in active_dir.iterdir():
-            if entry.is_file() and (
-                entry.name == todo_title or todo_title in entry.name
-            ):
-                match = entry
-                break
-
-        if not match:
-            return {
-                "success": False,
-                "error": f"TODO '{todo_title}' not found in ACTIVE/",
-            }
-
-        dest = completed_dir / match.name
-        match.rename(dest)
-        return {"success": True, "moved": str(dest), "todo": match.name}
-
-    @app.patch("/api/v1/todos/{todo_title}")
-    async def update_todo_details(request: Request, todo_title: str):
-        """Update a TODO's label, due date, and/or details."""
-        await authenticate(
-            request,
-            authorization=request.headers.get("authorization"),
-            x_user_identity=request.headers.get("x-user-identity"),
-            x_auth_channel=request.headers.get("x-auth-channel"),
-        )
-
-        try:
-            body = await request.json()
-            details = body.get("details")
-            new_label = body.get("label")
-            new_due = body.get("due_date")
-            agent = body.get("agent")
-
-            todo_path = _resolve_todo_file(agent)
-
-            # --- New folder-based structure ---
-            if todo_path.is_dir():
-                active_dir = todo_path / "ACTIVE"
-                match = None
-                for entry in active_dir.iterdir():
-                    if entry.is_file() and (
-                        entry.name == todo_title or todo_title in entry.name
-                    ):
-                        match = entry
-                        break
-                if not match:
-                    return {
-                        "success": False,
-                        "error": f"TODO '{todo_title}' not found in ACTIVE/",
-                    }
-
-                # Parse existing file content
-                existing = match.read_text().splitlines()
-                header_lines = []
-                body_lines = []
-                in_body = False
-                for line in existing:
-                    if not in_body and (
-                        line.startswith("DUE:") or line.startswith("LABELS:")
-                    ):
-                        header_lines.append(line)
-                    else:
-                        in_body = True
-                        body_lines.append(line)
-
-                # Update DUE: header if new_due provided
-                if new_due is not None:
-                    header_lines = [
-                        h for h in header_lines if not h.startswith("DUE:")
-                    ]
-                    if new_due.strip():
-                        header_lines.insert(0, f"DUE: {new_due.strip()}")
-
-                # Update details body if provided
-                if details is not None:
-                    body_lines = (
-                        ["", details.strip()] if details.strip() else []
-                    )
-
-                new_content = "\n".join(header_lines)
-                if body_lines:
-                    stripped_body = "\n".join(body_lines).strip()
-                    if stripped_body:
-                        new_content += "\n\n" + stripped_body
-                match.write_text(new_content + "\n")
-
-                # Rename file if label changed
-                result_name = match.name
-                if new_label and new_label.strip():
-                    clean = new_label.strip()
-                    # Reject path traversal and dangerous chars
-                    if (
-                        "/" in clean
-                        or "\\" in clean
-                        or "\0" in clean
-                        or ".." in clean
-                        or "\n" in clean
-                        or "\r" in clean
-                    ):
-                        return {
-                            "success": False,
-                            "error": (
-                                "Invalid label: must not"
-                                " contain path separators,"
-                                " traversal sequences,"
-                                " or control characters"
-                            ),
-                        }
-                    new_path = active_dir / clean
-                    # Belt-and-suspenders: verify resolved
-                    # path is inside active_dir
-                    resolved = new_path.resolve()
-                    parent = active_dir.resolve()
-                    if not resolved.is_relative_to(parent):
-                        return {
-                            "success": False,
-                            "error": "Invalid label:"
-                            " path traversal detected",
-                        }
-                    if clean == match.name:
-                        pass  # no rename needed
-                    elif new_path.exists():
-                        lbl = clean
-                        return {
-                            "success": False,
-                            "error": f"A TODO named"
-                            f" {lbl!r} already exists",
-                        }
-                    else:
-                        match.rename(new_path)
-                    result_name = clean
-
-                return {
-                    "success": True,
-                    "updated": True,
-                    "todo": result_name,
-                }
-
-            # --- Legacy flat-file structure ---
-            todo_file = todo_path
-            if not todo_file.exists():
-                return {"success": False, "error": "TODO file not found"}
-
-            content = todo_file.read_text()
-            lines = content.split("\n")
-
-            updated_lines = []
-            i = 0
-            while i < len(lines):
-                line = lines[i]
-                updated_lines.append(line)
-
-                stripped = line.strip()
-                if stripped.startswith("- "):
-                    stripped = stripped[2:]
-
-                if (
-                    stripped.startswith("[ ]") or stripped.startswith("[X]")
-                ) and todo_title in line:
-                    i += 1
-
-                    while i < len(lines) and lines[i].startswith("    "):
-                        updated_lines.append(lines[i])
-                        i += 1
-
-                    if i < len(lines) and (
-                        lines[i].strip() == "### Details"
-                        or lines[i].strip() == "## Details"
-                    ):
-                        i += 1
-                        while (
-                            i < len(lines) and lines[i] and not lines[i].startswith("#")
-                        ):
-                            i += 1
-
-                    if details and details.strip():
-                        updated_lines.append("")
-                        updated_lines.append("### Details")
-                        updated_lines.append("")
-                        updated_lines.extend(details.split("\n"))
-
-                    continue
-
-                i += 1
-
-            todo_file.write_text("\n".join(updated_lines))
-            return {"success": True, "updated": True, "todo": todo_title}
-
-        except Exception as e:
-            import traceback
-
-            traceback.print_exc()
-            return {"success": False, "error": str(e)}
 
     # --- Wee Canvas ───────────────────────────────────────────────────────────
     # In-memory canvas session state: session_id → {components, connections, action_watchers, pending_actions, name, created_at, last_activity}
@@ -13326,13 +13815,21 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         )
         try:
             proc = await asyncio.create_subprocess_exec(
-                sys.executable, _SECRET_TOOL_PATH, "list", "--backend", "file",
+                sys.executable,
+                _SECRET_TOOL_PATH,
+                "list",
+                "--backend",
+                "pass",
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
             stdout, stderr = await proc.communicate()
             if proc.returncode != 0:
-                detail = stdout.decode().strip() or stderr.decode().strip() or "secret-tool list failed"
+                detail = (
+                    stdout.decode().strip()
+                    or stderr.decode().strip()
+                    or "secret-tool list failed"
+                )
                 try:
                     err = json.loads(detail)
                     detail = err.get("message", detail)
@@ -13372,22 +13869,32 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             raise HTTPException(status_code=400, detail="Secret value is required")
         # Validate name: alphanumeric, hyphens, underscores, dots only
 
-        if not re.match(r'^[A-Za-z0-9._-]+$', name):
+        if not re.match(r"^[A-Za-z0-9._-]+$", name):
             raise HTTPException(
                 status_code=400,
                 detail="Secret name may only contain letters, digits, hyphens, underscores, and dots",
             )
         try:
             proc = await asyncio.create_subprocess_exec(
-                sys.executable, _SECRET_TOOL_PATH, "set",
-                "--name", name, "--value-stdin", "--backend", "file",
+                sys.executable,
+                _SECRET_TOOL_PATH,
+                "set",
+                "--name",
+                name,
+                "--value-stdin",
+                "--backend",
+                "pass",
                 stdin=asyncio.subprocess.PIPE,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
             stdout, stderr = await proc.communicate(input=f"{value}\n".encode())
             if proc.returncode != 0:
-                detail = stdout.decode().strip() or stderr.decode().strip() or "secret-tool set failed"
+                detail = (
+                    stdout.decode().strip()
+                    or stderr.decode().strip()
+                    or "secret-tool set failed"
+                )
                 try:
                     err = json.loads(detail)
                     detail = err.get("message", detail)
@@ -13422,15 +13929,22 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             )
         try:
             proc = await asyncio.create_subprocess_exec(
-                sys.executable, _SECRET_TOOL_PATH, "delete",
-                "--name", name, "--backend", "file",
+                sys.executable,
+                _SECRET_TOOL_PATH,
+                "delete",
+                "--name",
+                name,
+                "--backend",
+                "pass",
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
             stdout, stderr = await proc.communicate()
             output = stdout.decode().strip()
             if proc.returncode != 0:
-                detail = output or stderr.decode().strip() or "secret-tool delete failed"
+                detail = (
+                    output or stderr.decode().strip() or "secret-tool delete failed"
+                )
                 try:
                     err = json.loads(detail)
                     detail = err.get("message", detail)
@@ -13461,7 +13975,9 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         )
         try:
             proc = await asyncio.create_subprocess_exec(
-                sys.executable, _SECRET_TOOL_PATH, "status",
+                sys.executable,
+                _SECRET_TOOL_PATH,
+                "status",
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
@@ -13472,8 +13988,10 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                     return json.loads(output)
                 except json.JSONDecodeError:
                     pass
-            return {"status": "unavailable",
-                    "message": output or stderr.decode().strip() or "Unknown error"}
+            return {
+                "status": "unavailable",
+                "message": output or stderr.decode().strip() or "Unknown error",
+            }
         except Exception as e:
             return {"status": "error", "message": str(e)}
 
@@ -13496,14 +14014,14 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             raise HTTPException(status_code=400, detail="password is required")
         try:
             proc = await asyncio.create_subprocess_exec(
-                sys.executable, _SECRET_TOOL_PATH, "unlock",
+                sys.executable,
+                _SECRET_TOOL_PATH,
+                "unlock",
                 stdin=asyncio.subprocess.PIPE,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
-            stdout, stderr = await proc.communicate(
-                input=f"{password}\n".encode()
-            )
+            stdout, stderr = await proc.communicate(input=f"{password}\n".encode())
             output = stdout.decode().strip()
             if proc.returncode == 0 and output:
                 try:
@@ -13526,9 +14044,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
 
     # --- Session Permissions API ---
     @app.patch("/api/v1/sessions/{session_id}/settings")
-    async def update_session_settings(
-        session_id: str, request: Request
-    ):
+    async def update_session_settings(session_id: str, request: Request):
         """F027: Update session settings (e.g. silent_mode toggle)."""
         user = await authenticate(
             request,
@@ -13539,9 +14055,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
 
         data = session_mgr.load_session_data(session_id)
         if not data:
-            raise HTTPException(
-                status_code=404, detail="Session not found"
-            )
+            raise HTTPException(status_code=404, detail="Session not found")
 
         body = await request.json()
         _allowed = {"silent_mode"}
@@ -13554,9 +14068,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                         status_code=422,
                         detail="silent_mode must be boolean",
                     )
-                session_mgr.update_session_field(
-                    session_id, field, val
-                )
+                session_mgr.update_session_field(session_id, field, val)
                 updated[field] = val
 
         if not updated:
@@ -14206,7 +14718,9 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
 
     # --- Memory Promotion ─────────────────────────────────────────────────────
 
-    MEMORY_PROMOTER_SCRIPT = Path("/opt/foster-skills/memory-promoter/memory_promoter.py")
+    MEMORY_PROMOTER_SCRIPT = Path(
+        "/opt/foster-skills/memory-promoter/memory_promoter.py"
+    )
 
     class PromoteMemoryRequest(BaseModel):
         agent: Optional[str] = None
@@ -14323,27 +14837,33 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                         env=env,
                     ),
                 )
-                results.append({
-                    "agent": agent_name,
-                    "agent_path": agent_path,
-                    "status": "ok" if result.returncode == 0 else "error",
-                    "returncode": result.returncode,
-                    "stdout": result.stdout[-500:] if result.stdout else "",
-                    "stderr": result.stderr[-500:] if result.stderr else "",
-                })
+                results.append(
+                    {
+                        "agent": agent_name,
+                        "agent_path": agent_path,
+                        "status": "ok" if result.returncode == 0 else "error",
+                        "returncode": result.returncode,
+                        "stdout": result.stdout[-500:] if result.stdout else "",
+                        "stderr": result.stderr[-500:] if result.stderr else "",
+                    }
+                )
             except subprocess.TimeoutExpired:
-                results.append({
-                    "agent": agent_name,
-                    "agent_path": agent_path,
-                    "status": "timeout",
-                })
+                results.append(
+                    {
+                        "agent": agent_name,
+                        "agent_path": agent_path,
+                        "status": "timeout",
+                    }
+                )
             except Exception as exc:
-                results.append({
-                    "agent": agent_name,
-                    "agent_path": agent_path,
-                    "status": "error",
-                    "error": str(exc),
-                })
+                results.append(
+                    {
+                        "agent": agent_name,
+                        "agent_path": agent_path,
+                        "status": "error",
+                        "error": str(exc),
+                    }
+                )
 
         ok_count = sum(1 for r in results if r["status"] == "ok")
         return {
@@ -14353,8 +14873,6 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             "failed": len(results) - ok_count,
             "results": results,
         }
-
-
 
     # ── Themes API (F025) ─────────────────────────────────────────────
 
@@ -14375,18 +14893,19 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                     continue
                 if any(t["name"] == name for t in themes):
                     continue
-                themes.append({
-                    "name": name,
-                    "label": name.replace("-", " ").replace("_", " ").title(),
-                    "description": "Custom theme",
-                    "builtin": False,
-                    "css": css_file.read_text(encoding="utf-8"),
-                })
+                themes.append(
+                    {
+                        "name": name,
+                        "label": name.replace("-", " ").replace("_", " ").title(),
+                        "description": "Custom theme",
+                        "builtin": False,
+                        "css": css_file.read_text(encoding="utf-8"),
+                    }
+                )
         return {"themes": themes, "count": len(themes)}
 
-
-
         # --- AI Media ─────────────────────────────────────────────────────────────
+
     _ai_media_dir = Path("/tmp/webui_ai_media")
     _ai_media_dir.mkdir(parents=True, exist_ok=True)
     app.mount("/ai-media", StaticFiles(directory=str(_ai_media_dir)), name="ai_media")
@@ -14403,6 +14922,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         app.mount("/static", StaticFiles(directory=str(_static_dir)), name="static")
 
     return app
+
 
 def start_api_server():
     """Load dotenv, create the FastAPI app, and run uvicorn."""
@@ -14467,6 +14987,7 @@ def start_api_server():
     else:
         print(f"[API] Listening on {proto}://{host}:{port}", file=sys.stderr)
         uvicorn.run(app, host=host, port=port, **ssl_kwargs)
+
 
 def main():
     parser = argparse.ArgumentParser(
@@ -14559,7 +15080,17 @@ Examples:
     runtime_group.add_argument(
         "--runtime",
         metavar="NAME",
-        choices=["copilot", "copilot-sdk", "opencode", "claude", "claude-sdk", "gemini", "codex", "devin", "cursor"],
+        choices=[
+            "copilot",
+            "copilot-sdk",
+            "opencode",
+            "claude",
+            "claude-sdk",
+            "gemini",
+            "codex",
+            "devin",
+            "cursor",
+        ],
         help="Set the runtime to use (choices: copilot, copilot-sdk, opencode, claude, claude-sdk, gemini, codex, devin, cursor)",
     )
     runtime_group.add_argument(
@@ -14630,6 +15161,7 @@ Examples:
     # Execute the main prompt
     output = manager.execute(args.prompt, args.session_id)
     print(output)
+
 
 if __name__ == "__main__":
     if "--api" in sys.argv:

@@ -12,6 +12,7 @@ import re
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
+
 try:
     from zoneinfo import ZoneInfo
 except ImportError:
@@ -34,7 +35,7 @@ def _get_local_tz_name() -> str:
         link = os.readlink("/etc/localtime")
         idx = link.find("zoneinfo/")
         if idx >= 0:
-            return link[idx + len("zoneinfo/"):]
+            return link[idx + len("zoneinfo/") :]
     except OSError:
         pass
     try:
@@ -75,7 +76,9 @@ def is_valid_cron(expression: str) -> bool:
         return False
 
 
-def cron_next_run(expression: str, _base_local: Optional[datetime] = None) -> Optional[str]:
+def cron_next_run(
+    expression: str, _base_local: Optional[datetime] = None
+) -> Optional[str]:
     """Get next run time from a cron expression as UTC ISO string.
 
     Cron expressions are interpreted in the server local timezone so that
@@ -606,6 +609,8 @@ class TaskScheduler:
         mode: str = None,
         task: str = "",
         notify: bool = False,
+        fallback_runtime: str = None,
+        fallback_model: str = None,
         recurring: bool = True,
         working_dir: str = None,
         created_by: Optional[Dict] = None,
@@ -670,6 +675,8 @@ class TaskScheduler:
             "cron": cron_expr,
             "working_dir": working_dir,
             "notify": notify,
+            "fallback_runtime": fallback_runtime,
+            "fallback_model": fallback_model,
             "recurring": recurring,
             "created_at": datetime.utcnow().isoformat() + "Z",
             "next_run": next_run,
@@ -718,6 +725,8 @@ class TaskScheduler:
             "schedule",
             "agent",
             "runtime",
+            "fallback_runtime",
+            "fallback_model",
             "task",
             "notify",
             "recurring",

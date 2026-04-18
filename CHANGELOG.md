@@ -1,5 +1,244 @@
 # Changelog
 
+## [Issue #158] Feature: Wee CLI — Standalone Command-Line AI Tool
+**Status:** ✅ QA Approved (Commits: 7622e8d, 2a718be, PR pending dev→main)
+
+### Summary
+Added `wee_cli.py` — a standalone command-line AI assistant for the Wee ecosystem. Similar in style to GitHub Copilot CLI, Claude Code CLI, and Codex CLI. Supports single-shot prompts, interactive REPL, stdin piping, and tool calling via any OpenAI-compatible backend (Ollama, OpenRouter, LM Studio).
+
+### Key Features
+
+#### CLI Flags
+- `--model` / `-m` — Model ID with provider prefix (e.g. `ollama/qwen3:8b`, `openrouter/meta-llama/llama-2-70b`). Default: `$WEE_MODEL` or `ollama/qwen3:8b`.
+- `--permission` / `-p` — Tool execution permission level: `restricted` (default), `auto`, or `elevated`. Controls whether tool calls (bash, python) are allowed and with what scope.
+- `--output` / `-o` — Output format: `text` (default), `json`, or `markdown`. Non-text formats suppress streaming and reformat the full response after completion.
+- `--tools` / `-t` — Enable tool calling (bash, python). Requires explicit flag to avoid accidental execution.
+- `--interactive` / `-i` — Enter interactive REPL mode with readline history.
+- `--api-key` / `-k` — API key override (prefer env var `WEE_API_KEY` to avoid key exposure in `ps aux`).
+- `--api-base` / `-b` — Custom API base URL override.
+- `--system` / `-s` — System prompt override.
+- `--temperature` / `-T` — Sampling temperature.
+- `--timeout` — Request timeout in seconds (default: 120).
+- `--config` — Config file path (default: `~/.wee/config.json`).
+
+#### Usage Examples
+```bash
+# Single-shot prompt
+wee "What is the capital of France?"
+
+# With specific model
+wee --model openrouter/meta-llama/llama-2-70b "Explain quantum computing"
+
+# Tool calling with elevated permissions
+wee --tools --permission elevated "List all Python files in /opt"
+
+# JSON output (suppresses streaming, formats full response as JSON)
+wee --output json "What are the first 5 Fibonacci numbers?"
+
+# Markdown output with rich rendering
+wee --output markdown "Write a Python quicksort"
+
+# Interactive REPL
+wee --interactive
+
+# Pipe from stdin
+echo "summarize this" | wee --model ollama/qwen3:8b
+
+# Custom system prompt
+wee --system "You are a bash expert" "How do I tail a log file?"
+```
+
+#### Config File Support
+Persistent configuration via `~/.wee/config.json`:
+```json
+{
+  "model": "ollama/qwen3:8b",
+  "system_prompt": "You are a helpful assistant",
+  "tools": false,
+  "permission": "restricted",
+  "output_format": "text"
+}
+```
+Settings priority: CLI arg > env var > config file > built-in default.
+
+#### Permission Levels
+| Level | Tool Calls | Use Case |
+|-------|-----------|----------|
+| `restricted` (default) | Blocked | Safe for untrusted input |
+| `auto` | Confirmed per-call | Interactive use |
+| `elevated` | Unrestricted | Trusted automation |
+
+### Root Cause (Implementation Gap)
+The Wee ecosystem had `wee_runtime.py` for background subprocess use but lacked a user-facing CLI entry point. Users had no `wee` command they could run directly from the terminal.
+
+### Solution
+
+#### Core Architecture
+- `wee_cli.py` — standalone entrypoint, re-uses `wee_runtime.py` core functions (`resolve_model_and_endpoint`, `execute_tool`, `_WEE_TOOLS`, `MAX_TOOL_ROUNDS`)
+- `chat_stream()` — streaming chat loop with tool-call support and token usage tracking
+- `run_interactive()` — REPL with readline history (`~/.wee/history`), `/help`, `/model`, `/clear` slash commands
+- `run_single_shot()` — non-interactive single prompt execution
+
+#### Key Bug Fixes (QA Rounds 1–3)
+- **M-1 (Round 3, commit 7622e8d):** `run_interactive()` now correctly passes `permission` kwarg to `chat_stream()` (was silently defaulting to `"auto"` regardless of CLI flag)
+- **Round 2:** `--permission` default changed from `"auto"` to `"restricted"` for safer out-of-box behavior; output format wired end-to-end
+- **Round 1:** Unused imports removed, flake8 clean
+
+### Files Changed
+- `wee_cli.py` — new file, ~700 LOC
+- `tests/test_issue158_wee_cli.py` — 63 regression tests
+- `tests/test_issue158_permission_regression.py` — 1 regression test added by wee-qa (commit 2a718be)
+
+### Tests
+- 63 new regression tests covering:
+  - All CLI flags and their defaults
+  - Permission propagation through `run_interactive()` → `chat_stream()`
+  - Output format modes (text, json, markdown)
+  - Tool enabling/disabling
+  - Config file loading and priority resolution
+  - Stdin piping
+  - Interactive REPL slash commands
+  - Token usage tracking
+- Total: 1598 passed, 0 regressions
+
+### QA History
+- **Round 1:** REJECT — unused imports, default permission "auto" instead of "restricted"
+- **Round 2:** REJECT — M-1 BLOCKER: permission kwarg not passed from `run_interactive()` to `chat_stream()`
+- **Round 3:** APPROVE — all findings resolved; regression test added by wee-qa (commit 2a718be)
+
+---
+## [Issue #158 Supplement] Comprehensive Agentic Runtime Test Suite
+**Status:** ✅ QA Complete (Commit: 8e2c0a7, branch: issue/158)
+
+### Summary
+Comprehensive test suite for `wee_runtime.py` agentic capabilities. Validates model resolution, tool calling, streaming, permissions, and live provider integration across Ollama and OpenRouter.
+
+### Test Coverage (68 total tests)
+
+#### Unit Tests (54 tests — no API calls)
+- **Model Resolution (12 tests):** Ollama/OpenRouter prefix stripping, preset resolution, bare model names, cross-provider parametrization
+- **Tool Definitions (6 tests):** Schema validation, tool registration, JSON schema correctness
+- **Tool Execution (11 tests):** Bash/Python execution, error handling, output capture, timeouts
+- **SSH Sanitization (5 tests):** Issue #111 — word-boundary validation, injection prevention
+- **CLI Argument Parsing (3 tests):** Flag handling, defaults, priority resolution
+- **Tool-Calling Loop (4 tests):** Single/multi-round mocked flows, max rounds enforcement, tool call validation
+- **Permission Levels (5 tests):** Restricted/auto/elevated access control, tool blocking
+- **Streaming Output (2 tests):** Empty response handling, newline termination
+- **Error Handling (4 tests):** API failures, malformed arguments, invalid API base, timeouts
+- **Performance Baseline (2 tests):** Import time <1s, model resolution <100ms
+
+#### Live Integration Tests (14 tests — Ollama + OpenRouter)
+- **Ollama Basic (3 tests):** Connection validation, single-turn chat, response parsing
+- **Ollama Tool Calling (4 tests):** Tool execution flows, multi-round chains, tool result synthesis
+- **OpenRouter Basic (4 tests):** Connection validation, API key verification, model listing
+- **OpenRouter Tool Calling (3 tests):** Tool execution flows, rate-limit handling, fallback scenarios
+
+### Key Validations
+✓ 3-round message chain verification (tool call → API → result → synthesis)  
+✓ Per-round API call count validation  
+✓ Streaming edge cases (empty synthesis, malformed responses)  
+✓ wee_tools JSON schema compliance  
+✓ Runtime constants bounds checking  
+✓ SSH command sanitization for bash execution  
+✓ Permission-level enforcement across all operations  
+
+### Files Added/Modified
+- `tests/test_wee_runtime_agentic.py` — 932 lines, 68 test cases
+- `tests/README_AGENTIC_TESTS.md` — comprehensive test documentation with quick-start guide
+- `scripts/run_agentic_tests.sh` — runner script for unit/live test filtering
+
+### Test Results
+- **Unit Tests:** 54/54 pass
+- **Live Ollama Tests:** 7/7 pass (requires Ollama on 192.168.1.101:11434)
+- **Live OpenRouter Tests:** 4/4 skipped (no OPENROUTER_API_KEY in test environment)
+- **Total:** 61 passed, 7 skipped, 0 failures
+
+### Usage
+```bash
+# All tests
+pytest tests/test_wee_runtime_agentic.py -v
+
+# Unit only (fast, no API calls)
+./scripts/run_agentic_tests.sh --unit
+
+# Live Ollama only
+./scripts/run_agentic_tests.sh --ollama
+
+# Live OpenRouter only (requires OPENROUTER_API_KEY)
+./scripts/run_agentic_tests.sh --openrouter
+```
+
+## [Issue #155] Bug: Devin Runtime Invalid Permission Mode causes Protocol Error
+**Status:** QA Approved (Commit: a8311c5, Branch: issue/155)
+
+### Summary
+Fixed two root causes causing Devin runtime Protocol error when permission mode was set to "auto" (not a valid Devin CLI value).
+
+### Root Cause 1: Invalid --permission-mode auto
+Devin CLI only accepts normal, dangerous, bypass.
+- run_devin(): Changed "auto" to "normal" for restricted/sandboxed sessions
+- _run_background_task(): Unconditional "dangerous" for background tasks (always non-interactive)
+
+### Root Cause 2: mode Param Not Propagated to run_devin()
+- Added mode: str = "restricted" parameter to run_devin() signature
+- Mode priority: explicit param > /mode in prompt > session data
+- _dispatch_single_runtime() now correctly passes mode to run_devin()
+
+### Files Changed
+- agent_manager.py -- permission mode fix, mode param propagation
+- tests/test_issue155_devin_permission_mode.py -- 17 new regression tests
+
+### Tests
+- 17 regression tests covering all fix paths
+- Full suite: 1448 passed, 34 pre-existing failures, 0 new regressions
+
+---
+
+## [Issue #153] Bug Fix: OpenRouter 401 Authentication Error
+**Status:** ✅ QA Approved (Commit: 1dae171, PR #154)
+
+### Summary
+Fixed silent 401 failures when using OpenRouter models in the wee runtime. Both `agent_manager.py` and `wee_runtime.py` were falling back to the local Ollama API key (`ollama`) as the Bearer token for OpenRouter requests. OpenRouter rejects this with HTTP 401 "Missing Authentication header". The fix adds proper `OPENROUTER_API_KEY` environment variable and keyring resolution, raising a clear error instead of silently using an invalid default.
+
+### Root Cause
+Both files used `os.environ.get('OPENROUTER_API_KEY', 'ollama')` — the `'ollama'` default is not a valid OpenRouter Bearer token.
+
+### Solution
+
+#### Key Resolution Order (after fix)
+1. `OPENROUTER_API_KEY` (explicit kwarg)
+2. `WEE_OPENROUTER_KEY` env var
+3. `OPENROUTER_API_KEY` env var
+4. keyring: `openrouter_api_key`
+5. Raise `ValueError` / `RuntimeError` — never `'ollama'` for OpenRouter
+
+#### agent_manager.py Changes
+- `_resolve_openrouter_key()` helper: env var first, then keyring lookup
+- `run_openrouter_model()`: uses resolver instead of hardcoded default
+- Raises `ValueError` with clear message when no key found
+
+#### wee_runtime.py Changes
+- `_get_openrouter_key()` helper: same env var → keyring resolution chain
+- OpenRouter request builder: uses helper, raises `RuntimeError` on missing key
+- Removed silent `'ollama'` fallback
+
+### Files Changed
+- `agent_manager.py` — `_resolve_openrouter_key()`, updated OpenRouter key resolution
+- `wee_runtime.py` — `_get_openrouter_key()`, updated OpenRouter request builder
+- `tests/test_issue153_openrouter_auth.py` — 16 regression tests
+
+### Tests
+- 16 new regression tests covering:
+  - Env var key resolution in both files
+  - Keyring fallback when env var absent
+  - `ValueError`/`RuntimeError` raised when no key found
+  - `'ollama'` string rejected as OpenRouter key
+  - Key priority ordering
+- Total: 1462 passed, 0 regressions
+
+### Non-Blocking Findings
+- N-1 (NITPICK): Minor punctuation inconsistency in error message
+- N-2 (NITPICK): PR description lists 1445 total pass vs 1462 actual (minor discrepancy, test suite grew between branch and QA)
 ## [Issue #159] Feature: Fallback Runtime/Model for Scheduled Tasks
 **Status:** ❌ QA Rejected (Round 1)  
 **Rejection Date:** 2026-04-15  
@@ -169,6 +408,245 @@ Comprehensive token usage tracking across all runtimes (copilot-sdk, claude-sdk,
 ---
 
 ## [Issue #119] Feature: Wire Up OpenRouter in Wee Runtime UI
+**Status:** ✅ QA Approved (Commit: 168a958, PR #121)
+
+### Summary
+Integrated OpenRouter as a primary model source for the wee runtime alongside Ollama. The wee runtime UI now displays OpenRouter models (llama-4-scout/maverick, gemma-3, qwen3, deepseek-r1, phi-4) grouped separately from Ollama models, with full model selection and execution support. Added 300-second cached model discovery with keyring-based API key storage and static fallback on network errors.
+
+### Root Cause (Integration Gap)
+The wee runtime model picker only showed Ollama models. OpenRouter integration existed in the backend but wasn't wired into the UI model dropdown or static model dispatch table.
+
+### Solution
+
+#### WEE_MODELS Constant Expansion
+- Added OpenRouter models (6 models): llama-4-scout, llama-4-maverick, gemma-3, qwen3, deepseek-r1, phi-4
+- Total wee model catalog: 16 models across 2 categories (Ollama + OpenRouter)
+- Each model includes cost label + group field for UI grouping
+
+#### OpenRouter Discovery & Caching
+- `_fetch_openrouter_pricing()` — Fetches model catalog from OpenRouter API (OPENROUTER_API_KEY env var)
+- 300-second TTL cache to minimize API calls
+- Keyring vault storage for API key (no secrets in env vars)
+- Static fallback on network error (prevents UI model picker from breaking)
+
+#### WebUI Model Grouping
+- `optgroup` rendering in app.js model dropdown
+  - "Ollama Models" group
+  - "OpenRouter Models" group
+- Group field populated in /api/v1/models endpoint
+- Smooth fallback when group data unavailable
+
+#### Model Dispatch Wiring
+- OpenRouter models added to `static_alias_map` (enables model name resolution)
+- OpenRouter models added to `env_alias_map` (enables env-override resolution)
+- `fetch_wee_models()` now returns both Ollama + OpenRouter in single list
+- Session model validation handles OpenRouter model selection
+
+### Files Changed
+- `agent_manager.py` — WEE_MODELS expansion, _fetch_openrouter_pricing(), keyring API key handling, optgroup support in /api/v1/models
+- `webui/dist/app.js` — optgroup rendering for model categories
+- `tests/test_issue119_openrouter.py` — 35 new regression tests
+
+### Tests
+- 35 new tests covering:
+  - OpenRouter model discovery & caching
+  - Keyring-based API key storage
+  - Static fallback on network error
+  - Model grouping in UI
+  - Session model validation with OpenRouter models
+- Total: 1432 passed, 35 new issue tests, 0 regressions
+
+### Non-Blocking Finding
+- M-1 (MINOR): When OpenRouter HTTPS call fails (network error) while keyring API key is configured, live Ollama results may be discarded if synthesis times out. Acceptable trade-off — graceful degradation to static model list takes priority.
+
+---
+
+
+## [Issue #118] Bug: Wee Runtime Ignores Selected Ollama Model
+**Status:** Implementation complete — 30 new tests, 1324 total pass (0 new regressions)
+
+### Problem
+When using the wee runtime, selecting any model (e.g., gemma4, qwen) in the UI model switcher had no effect — Ollama always ran `granite3.3-tuned` (the default). The selected model was dropped because "wee" was missing from multiple model dispatch/validation/resolution paths in `agent_manager.py`.
+
+### Root Causes (8 bugs)
+1. **No WEE_MODELS constant** — Unlike other runtimes (claude, gemini, codex, etc.), `wee` had no static model catalog. The dispatch table used an inline lambda with a hardcoded subset.
+2. **"wee" not in `known_runtimes`** — `/api/v1/models?runtime=wee` returned "Unknown runtime" error, so the UI model picker was empty.
+3. **"wee" not in `static_alias_map`** — `get_model_from_name()` couldn't resolve wee model aliases (gemma, granite, qwen) to full model IDs.
+4. **`_get_model_description` had empty dict for "wee"** — All wee models showed raw IDs instead of human-readable labels.
+5. **No `fetch_wee_models()` method** — No live Ollama discovery; models were hardcoded in a lambda.
+6. **Session validation didn't check model validity** — When switching to wee, stale copilot models (e.g., gpt-5-mini) persisted without validation.
+7. **No `WEE_MODELS_JSON` env var support** — Unlike other runtimes, wee had no env override for custom model lists.
+8. **No `_env_wee_models` caching** — Env-provided models weren't cached for alias/description resolution.
+
+### Solution
+
+#### WEE_MODELS Constant
+- Added `WEE_MODELS` class constant with 16 models across 2 categories:
+  - **Ollama Models** (10): gemma4 variants, granite3.3, qwen, llama-scout, hermes3
+  - **OpenRouter Models** (6): llama-4-scout/maverick, gemma-3, qwen3, deepseek-r1, phi-4
+
+#### fetch_wee_models() Method
+- Resolution order: `WEE_MODELS_JSON` env var → live Ollama discovery → static fallback
+- Live discovery via `httpx.get("http://192.168.1.101:11434/api/tags")`
+- Env models cached in `_env_wee_models` for alias/description resolution
+
+#### Model Dispatch Wiring
+- "wee" added to `known_runtimes` set (enables `/api/v1/models?runtime=wee`)
+- "wee" added to `static_alias_map` (enables alias resolution)
+- "wee" added to `env_alias_map` (enables env-override resolution)
+- `_get_model_description` references `WEE_MODELS` (enables human labels)
+- Session validation uses `get_model_from_name()` check (replaces empty-string check)
+- Debug logging added to `run_wee_native()` for model tracing
+
+### Files Changed
+- `agent_manager.py`: WEE_MODELS constant, fetch_wee_models(), 6 wiring fixes, debug logging
+- `tests/test_issue118_model_selection.py`: 30 new regression tests
+- `tests/test_issue105_wee_runtime_stall.py`: Updated model category assertions for new structure
+
+### Tests
+- 30 new tests covering all 8 bug fixes
+- Also fixes 19 previously-failing issue97 tests
+- Full suite: 1324 passed, 33 failed (all pre-existing), 9 skipped
+
+
+## [Issue #105] Bug: Wee Runtime Stalls with Ollama gemma4:e4b
+**Status:** QA Approved — Commit 07733dc on `issue/105` branch — 15 new tests, 1157 total pass
+
+### Problem
+The `wee` runtime stalled indefinitely when routing to Ollama. Three root causes identified:
+
+1. **Wrong Ollama port** — `agent_manager.py` and `wee_runtime.py` used port `11436` instead of the standard `11434`, causing all Ollama requests to silently fail.
+2. **Missing connect timeout** — OpenAI client had no `httpx.Timeout(connect=...)` and `max_retries` defaulted to 2, causing long stalls (retry backoff) instead of fast-fail when connecting to a wrong/unavailable endpoint.
+3. **Broken model resolution** — `get_models_for_runtime('wee')` returned tuples instead of flat strings; `get_model_from_name()` used longest-match instead of exact-match after stripping provider prefix (`ollama/`), causing model names to resolve incorrectly.
+
+### Solution
+
+#### Fix 1 — Correct Ollama Port
+- `agent_manager.py` PRESETS: `http://192.168.1.101:11434/v1` (was `11436`)
+- `wee_runtime.py` PRESETS: `http://192.168.1.101:11434/v1` (was `11436`)
+
+#### Fix 2 — httpx Timeout + max_retries=0
+- OpenAI client now initialized with `httpx.Timeout(connect=15.0, read=300.0, write=30.0, pool=10.0)`
+- `max_retries=0` prevents retry backoff masking connection errors
+
+#### Fix 3 — Model Resolution
+- `get_models_for_runtime('wee')` returns flat strings (not tuples)
+- `get_model_from_name()` Step 2 strips provider prefix (`ollama/`, `openrouter/`, `lmstudio/`) before matching; prefers exact match, then shortest match — not longest
+- E2E test confirms `ollama/gemma4:e4b` routes to Ollama at `192.168.1.101:11434` correctly
+
+### Files Changed
+- `agent_manager.py` — port fix, timeout/retries, model resolution (3 locations)
+- `wee_runtime.py` — port fix, timeout/retries
+- `tests/test_issue105_wee_ollama_stall.py` — 15 new tests
+
+### Known Gap (Pre-existing, not introduced by this fix)
+- `GET /api/v1/models?runtime=wee` returns an "unknown runtime" error — unrelated to this fix, tracked separately
+
+
+## [Issue #93] Bug: No way to unlock secret store via WebUI
+**Status:** QA Pending — Commit 423668a on `issue/93` branch — 26 new tests, 1129 total pass
+### [Issue #128] Feature: Token Usage Tracking + Cost Estimation + WebUI Footer
+**Status:** ✅ Implemented
+
+### Summary
+Adds end-to-end token usage tracking for the wee runtime: token counts are captured from the OpenAI streaming API, costs are calculated using OpenRouter pricing (with 1h cache), and displayed in the WebUI message footer. Usage is logged to a JSONL file and exposed via a new `/api/v1/usage` endpoint.
+
+### Changes
+
+**wee_runtime.py (standalone CLI)**
+- Added `stream_options={"include_usage": True}` to OpenAI streaming calls
+- Parses `chunk.usage` from final streaming chunk (prompt/completion/total tokens)
+- `fetch_openrouter_pricing()` — fetches model pricing from OpenRouter API, caches 1h in `/tmp/openrouter_pricing.json`
+- `calculate_cost()` — returns `(cost_usd, label)` where label is `local`, `free`, or `$X.XXXX`
+- `log_token_usage()` — appends entry to `~/.copilot/logs/token_usage.jsonl`
+- Outputs `__WEE_META__ {...}` line at end of stream (stripped by backend before sending to UI)
+- Fixed Ollama port: 11436 → 11434
+
+**agent_manager.py (backend)**
+- `_fetch_openrouter_pricing()` — same 1h-cached pricing fetch (for interactive sessions)
+- `_calculate_wee_cost()` — cost+label for wee/ollama/openrouter models
+- `_calculate_anthropic_cost()` — cost+label for claude-sdk models
+- `_get_cost_label()` — formats cost as `$0.0001` or `free`
+- `_log_token_usage()` — appends to `logs/token_usage.jsonl`
+- `run_wee_native()` — captures usage from final streaming chunk, stores `wee_meta` in session
+- `run_claude_sdk()` — captures usage from `ResultMessage`, stores `wee_meta` in session
+- SSE `done_payload` — includes `wee_meta` (tokens, cost, model), cleared after send
+- **GET /api/v1/usage** — aggregates JSONL log by model; supports `?period=today|7d|30d`
+
+**webui/dist/app.js (frontend)**
+- `buildTimingText(elapsedSec, weeMeta)` helper — returns footer string:
+  - Paid: `Generated in 3.4s · 229 tokens · $0.0001`
+  - Free: `Generated in 3.4s · 229 tokens · free`
+  - Local (Ollama): `Generated in 3.4s · 229 tokens · local`
+  - No data: `Generated in 3.4s`
+- Streaming done path updated to pass `evt.wee_meta` to `buildTimingText`
+- `renderMessage()` signature updated with `weeMeta` param; timing block uses `buildTimingText`
+
+**Tests**
+- `tests/test_issue128_token_usage.py` — 28 new tests
+- `tests/test_wee_native_runtime.py` — fixed Ollama port assertion (11436 → 11434)
+- Total: 1170 passed, 9 skipped (no regressions)
+
+
+# [Issue #100] Feature: GitHub Issues Integration for TODO Endpoints
+
+## [Issue #115] Feature: Inline Expandable Tool Call Blocks
+**Status:** ✅ QA Approved (Commit: a85e5b5)
+
+### Summary
+Tool call events (started/completed) from all runtimes (copilot-sdk, claude-sdk, claude, gemini) now emit inline expandable blocks in the WebUI streaming panel. Each block shows a ▶ disclosure triangle; clicking expands a scrollable output pane showing the tool result. Silent mode hides all tool-call blocks. CSS handles error highlighting and dark/light themes.
+
+### Changes
+- **app.js** — `insertToolCallBlock()` creates collapsible TC block; `completeToolCallBlock()` fills output and toggles expand/collapse. Null guard restored to prevent crash on late/duplicate events.
+- **agent_manager.py (copilot-sdk)** — `TOOL_EXECUTION_COMPLETE` event now includes `output` field extracted from `event.data.output/result/content` (up to 2000 chars)
+- **agent_manager.py (claude-sdk)** — `ToolResultBlock` handler now populates `output` field (was incorrectly putting content in `input` with 200-char limit)
+- **agent_manager.py (claude runtime)** — `tool_result` block SSE event now includes `output` field with list-join support (up to 2000 chars)
+- **agent_manager.py (gemini)** — Tool output truncation raised from `[:500]` to `[:2000]`
+- **app.css** — `.tc-block`, `.tc-toggle`, `.tc-output`, `.tc-error`, `.tc-expanded` styles; silent mode hides `.tc-block`
+
+### QA Round 2 Fixes (Commit a85e5b5)
+- M-1: Restored `if (!row) return;` null guard in `completeToolCallBlock`
+- M-2: Added `output` field to copilot-sdk `TOOL_EXECUTION_COMPLETE` event
+- M-3: claude-sdk `ToolResultBlock` — moved content to `output` field, cleared `input`, raised limit to 2000
+- M-4: claude runtime `tool_result` — added `_tr_content` extraction with list-join to `output` field
+- m-5 (MINOR): gemini `[:500]` → `[:2000]` confirmed applied
+
+### Tests
+- **39 new tests** in `tests/test_issue115_expandable_tool_calls.py`
+  - `TestSanitizeToolCallOutput` — sanitizer passthrough and truncation
+  - `TestCopilotSdkToolOutput` — output field extraction, fallbacks, 2000-char limit
+  - `TestClaudeSdkToolOutput` — list content join, string content, empty content
+  - `TestClaudeRuntimeToolResult` — list/string/error tool_result handling
+  - `TestGeminiOutputLimit` — confirms 2000-char limit
+  - `TestFrontendToolCallBlockStructure` — started/completed event handling, expand/collapse, markdown preservation
+  - `TestCssExpandableStyles` — all CSS rules verified
+  - `TestSilentModeIntegration` — silent mode hides tool call blocks
+
+### Test Results
+- **1181 total tests pass**, 9 skipped, 0 failures (no regressions)
+- All 39 Issue #115 tests pass (100%)
+- No BLOCKERs, no MAJORs, no MINORs
+
+
+## [Issue #126] Feature: Wee Runtime Icon (Robot Leprechaun SVG)
+**Status:** ✅ Implemented (Commits: b772237, d0cb1d1)
+
+### Summary
+Added a custom robot leprechaun SVG icon for the wee runtime in the WebUI runtime switcher. The icon features a tall top hat with wide brim, rounded robot head with circular eye cutouts, and a pill-shaped mouth — all using the evenodd fill rule for clean transparency.
+
+### Changes
+- **webui/dist/assets/runtime-icons/wee.svg** — New 430-byte SVG icon
+  - Tall top hat crown (9x6.5) + wide brim (18x2)
+  - Rounded robot head (14x13, rx=3) with circular eye cutouts (r=2)
+  - Pill-shaped mouth using evenodd path rule
+  - No hardcoded colors — inherits from CSS filters like other runtime icons
+- **webui/dist/app.js** — Already registered in RUNTIME_ICONS map and fallback list (prior commit)
+- **agent_manager.py** — Wee already included in get_available_runtimes() with leaf icon emoji
+- **tests/test_issue126_wee_icon.py** — 10 new regression tests
+  - SVG existence, validity, viewBox, size, no hardcoded fills
+  - App.js RUNTIME_ICONS map, fallback list, runtimeIconHTML function
+  - Backend API includes wee with icon field
+
 **Status:** ✅ QA Approved  
 **Commits:** 9498a4f  
 **Verdict Date:** 2026-04-12  
