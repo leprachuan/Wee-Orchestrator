@@ -1673,6 +1673,10 @@ class SessionManager:
         # candidates for cleanup.  Defaults to 30 min; override via env var.
         self.session_idle_timeout = int(os.environ.get("SESSION_IDLE_TIMEOUT", "1800"))
 
+        # Session map TTL — entries inactive longer than this are evicted on every save.
+        # Defaults to 30 days; override via SESSION_MAP_TTL_DAYS env var.
+        self.session_map_ttl = int(os.environ.get("SESSION_MAP_TTL_DAYS", "30")) * 86400
+
         # Lock for session map file read-modify-write to prevent TOCTOU races
         self._session_map_lock = threading.Lock()
 
@@ -3892,8 +3896,36 @@ You can mention an agent in your prompt and it will auto-delegate:
         except (json.JSONDecodeError, IOError):
             return {}
 
+    def _prune_session_map_ttl(self, session_map: dict) -> dict:
+        """Return a copy of session_map with entries older than session_map_ttl removed.
+
+        An entry is considered inactive if its ``last_activity`` timestamp is
+        older than ``self.session_map_ttl`` seconds.  Entries that lack a
+        ``last_activity`` field are kept so legacy data is not silently dropped.
+        """
+        now = time.time()
+        cutoff = now - self.session_map_ttl
+        pruned = {}
+        evicted = 0
+        for key, entry in session_map.items():
+            last_activity = (
+                entry.get("last_activity") if isinstance(entry, dict) else None
+            )
+            if last_activity is not None and last_activity < cutoff:
+                evicted += 1
+                continue
+            pruned[key] = entry
+        if evicted:
+            print(
+                f"[SessionMap] TTL evicted {evicted} inactive entries "
+                f"(threshold {self.session_map_ttl / 86400:.0f}d)",
+                file=__import__('sys').stderr,
+            )
+        return pruned
+
     def save_session_map(self, session_map: dict):
         """Save the N8N -> Session ID mapping (caller must hold _session_map_lock)"""
+        session_map = self._prune_session_map_ttl(session_map)
         with open(self.session_map_file, "w") as f:
             json.dump(session_map, f, indent=2)
 
