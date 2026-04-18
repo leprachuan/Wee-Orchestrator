@@ -9430,13 +9430,28 @@ def _send_pairing_code(channel: str, identity: str, code: str) -> bool:
                 or os.getenv("WEBEX_BOT_TOKEN", "")
             )
             msg = f"Your pairing code is: **{code}**\nIt expires in 5 minutes."
-            # If identity looks like an email, use toPersonEmail; otherwise treat as roomId
+            # Route to the correct WebEx target based on identity format:
+            #   email       → toPersonEmail
+            #   person ID   → toPersonId  (base64 of ciscospark://us/PEOPLE/...)
+            #   anything else → roomId
             import re as _re
+            import base64 as _b64
 
             if _re.match(r"[^@]+@[^@]+\.[^@]+", identity):
                 payload = {"toPersonEmail": identity, "text": msg, "markdown": msg}
             else:
-                payload = {"roomId": identity, "text": msg, "markdown": msg}
+                # Detect WebEx person IDs (base64-encoded ciscospark://us/PEOPLE/...)
+                _is_person_id = False
+                try:
+                    _padded = identity + "=" * (-len(identity) % 4)
+                    _decoded = _b64.b64decode(_padded).decode("utf-8", errors="replace")
+                    _is_person_id = "/PEOPLE/" in _decoded
+                except Exception:
+                    pass
+                if _is_person_id:
+                    payload = {"toPersonId": identity, "text": msg, "markdown": msg}
+                else:
+                    payload = {"roomId": identity, "text": msg, "markdown": msg}
             import requests as _req
 
             resp = _req.post(
@@ -9457,6 +9472,7 @@ def _send_pairing_code(channel: str, identity: str, code: str) -> bool:
             return True
     except Exception as exc:  # noqa: BLE001
         print(f"[API] Warning: could not send pairing code via {channel}: {exc}")
+        return False
 
 
 def _get_telegram_username(user_id: str):
