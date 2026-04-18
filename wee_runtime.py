@@ -7,6 +7,9 @@ Supports Ollama, OpenRouter, LM Studio, and any OpenAI-compatible API.
 Issue #107: Tool-calling agentic loop — detects tool calls, executes bash/python,
 re-sends results to model, and streams the final response.
 
+Issue #112: Empty synthesis fallback — if LLM returns no text after tool execution,
+surfaces last tool result instead of empty response.
+
 Usage:
     python3 wee_runtime.py --model MODEL --api-base URL [--api-key KEY] "PROMPT"
     python3 wee_runtime.py --model ollama/qwen3:8b --tools "ask what day it is"
