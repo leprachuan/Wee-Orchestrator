@@ -50,6 +50,56 @@ def _referenced_backend_sessions(*map_files: Path) -> set:
     return referenced
 
 
+def prune_stale_session_map_entries(
+    session_map_files: list,
+    ttl_days: int = 30,
+) -> None:
+    """Evict session map entries whose last_activity is older than ttl_days.
+
+    This is a separate sweep that complements the backend-session cleanup:
+    even when a backend session directory has already been removed (or never
+    existed for cloud-backed runtimes), the n8n-session-map entry will be
+    pruned once the user has been idle for ttl_days days.
+
+    Entries without a ``last_activity`` field are left untouched so legacy
+    data is not silently discarded.
+    """
+    now = time.time()
+    cutoff = now - ttl_days * 86400
+
+    for session_map_file in session_map_files:
+        if not session_map_file.exists():
+            continue
+        try:
+            session_map = _load_json(session_map_file)
+            if not session_map:
+                continue
+
+            keys_to_evict = []
+            for key, entry in session_map.items():
+                if not isinstance(entry, dict):
+                    continue
+                last_activity = entry.get("last_activity")
+                if last_activity is not None and last_activity < cutoff:
+                    keys_to_evict.append(key)
+
+            if not keys_to_evict:
+                continue
+
+            for key in keys_to_evict:
+                del session_map[key]
+
+            with open(session_map_file, "w") as f:
+                json.dump(session_map, f, indent=2)
+
+            print(
+                f"[{_ts()}] TTL evicted {len(keys_to_evict)} session map entries "
+                f"from {session_map_file.name} (threshold {ttl_days}d)"
+            )
+        except Exception as exc:
+            print(f"[{_ts()}] Error pruning {session_map_file.name}: {exc}")
+
+
 def cleanup_sessions():
     """Remove stale sessions from session-state directory and references."""
     copilot_home = Path.home() / ".copilot"
@@ -163,6 +213,11 @@ def cleanup_sessions():
                 )
         except Exception as exc:
             print(f"[{_ts()}] Error cleaning {session_map_file.name}: {exc}")
+
+    # Prune session map entries by TTL (30 days by default) — independent
+    # of whether the backend session directory exists.
+    ttl_days = int(os.environ.get("SESSION_MAP_TTL_DAYS", "30"))
+    prune_stale_session_map_entries(session_map_files, ttl_days=ttl_days)
 
     # Summary log
     total_dirs = sum(1 for d in session_state_dir.iterdir() if d.is_dir())
