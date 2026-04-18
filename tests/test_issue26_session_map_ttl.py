@@ -26,7 +26,6 @@ import sys
 import tempfile
 import time
 from pathlib import Path
-from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -34,6 +33,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
+
 
 def _make_entry(last_activity):
     """Build a minimal session map entry dict."""
@@ -70,6 +70,7 @@ def session_mgr():
 
 # ── _prune_session_map_ttl() ──────────────────────────────────────────────────
 
+
 class TestPruneSessionMapTtl:
     """Direct unit tests for _prune_session_map_ttl()."""
 
@@ -99,17 +100,13 @@ class TestPruneSessionMapTtl:
 
     def test_string_legacy_entry_is_kept(self, session_mgr):
         """Old-format string-only session map entries are kept (no last_activity)."""
-        result = session_mgr._prune_session_map_ttl(
-            {"legacy_str": "some-session-uuid"}
-        )
+        result = session_mgr._prune_session_map_ttl({"legacy_str": "some-session-uuid"})
         assert "legacy_str" in result
 
     def test_multiple_stale_entries_all_evicted(self, session_mgr):
         """All stale entries are removed in a single pass."""
         stale_ts = time.time() - (35 * 86400)
-        session_map = {
-            f"stale_{i}": _make_entry(stale_ts) for i in range(5)
-        }
+        session_map = {f"stale_{i}": _make_entry(stale_ts) for i in range(5)}
         result = session_mgr._prune_session_map_ttl(session_map)
         assert len(result) == 0
 
@@ -145,6 +142,7 @@ class TestPruneSessionMapTtl:
 
 # ── save_session_map() ────────────────────────────────────────────────────────
 
+
 class TestSaveSessionMapPrunes:
     """save_session_map() must evict stale entries before writing to disk."""
 
@@ -157,6 +155,7 @@ class TestSaveSessionMapPrunes:
         }
 
         import threading
+
         session_mgr._session_map_lock = threading.Lock()
         session_mgr.save_session_map(session_map)
 
@@ -173,6 +172,7 @@ class TestSaveSessionMapPrunes:
         }
 
         import threading
+
         session_mgr._session_map_lock = threading.Lock()
         session_mgr.save_session_map(session_map)
 
@@ -183,7 +183,9 @@ class TestSaveSessionMapPrunes:
         """The original session_map passed to save_session_map must be unmodified."""
         stale_ts = time.time() - (31 * 86400)
         original = {"stale": _make_entry(stale_ts)}
-        import copy, threading
+        import copy
+        import threading
+
         before = copy.deepcopy(original)
         session_mgr._session_map_lock = threading.Lock()
         session_mgr.save_session_map(original)
@@ -193,12 +195,16 @@ class TestSaveSessionMapPrunes:
 
 # ── Unbounded-growth regression ───────────────────────────────────────────────
 
+
 class TestNoBoundedGrowthRegression:
     """Reproduces the original bug: session map must not grow without bound."""
 
     def test_session_map_does_not_grow_unbounded(self, session_mgr, tmp_path):
-        """Writing 100 old sessions over time must leave the map empty, not 100-large."""
+        """Writing 100 old sessions over time must leave the map empty,
+
+        not 100-large."""
         import threading
+
         session_mgr._session_map_lock = threading.Lock()
         session_mgr.session_map_file = tmp_path / "test-session-map.json"
         session_mgr.session_map_file.write_text("{}")
@@ -210,12 +216,13 @@ class TestNoBoundedGrowthRegression:
 
         written = json.loads(session_mgr.session_map_file.read_text())
         # All 100 stale sessions must have been pruned
-        assert len(written) == 0, (
-            f"Session map grew to {len(written)} entries — TTL eviction not working"
-        )
+        assert (
+            len(written) == 0
+        ), f"Session map grew to {len(written)} entries — TTL eviction not working"
 
 
 # ── session-cleanup.py ────────────────────────────────────────────────────────
+
 
 class TestCleanupScriptTtlPruning:
     """prune_stale_session_map_entries() in session-cleanup.py."""
@@ -223,6 +230,7 @@ class TestCleanupScriptTtlPruning:
     def _load_script(self):
         """Import prune_stale_session_map_entries from the cleanup script."""
         import importlib.util
+
         script = Path(__file__).parent.parent / "scripts" / "session-cleanup.py"
         spec = importlib.util.spec_from_file_location("session_cleanup", script)
         mod = importlib.util.module_from_spec(spec)
