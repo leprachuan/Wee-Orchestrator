@@ -14,11 +14,8 @@ from unittest.mock import MagicMock, patch
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from agent_bot_manager import TelegramAgentBot  # noqa: E402
-from agent_bot_manager import (  # noqa: E402
-    AgentBotManager,
-    WebExAgentBot,
-    resolve_secret,
-)
+from agent_bot_manager import (AgentBotManager, WebExAgentBot,  # noqa: E402
+                               resolve_secret)
 
 # ---------------------------------------------------------------------------
 # resolve_secret
@@ -780,3 +777,273 @@ class TestSessionIdFormat:
         bot._execute_via_api("hi", "wx_devops_p1", "p1")
         create_call = mock_post.call_args_list[0]
         assert create_call[1]["json"]["session_id"] == "wx_devops_p1"
+
+
+class TestHotReloadConfigChange:
+    """Regression: hot-reload must restart bots when config values change."""
+
+    def _make_agents_json(self, agents, tmpdir):
+        path = os.path.join(tmpdir, "agents.json")
+        with open(path, "w") as f:
+            json.dump({"agents": agents}, f)
+        return path
+
+    @patch("agent_bot_manager.resolve_secret", return_value="fake_token")
+    def test_hot_reload_restarts_on_allowed_users_change(self, mock_secret):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = self._make_agents_json(
+                [
+                    {
+                        "name": "smarthome",
+                        "path": "/opt/smarthome",
+                        "bots": {
+                            "telegram": {
+                                "token_secret": "SH_TG",
+                                "allowed_users": ["123"],
+                            }
+                        },
+                    }
+                ],
+                tmpdir,
+            )
+            mgr = AgentBotManager(agents_json_path=path)
+            with patch.object(TelegramAgentBot, "start"):
+                mgr._last_mtime = 0.0
+                mgr._check_reload()
+                assert "smarthome" in mgr._telegram_bots
+            time.sleep(0.1)
+            with open(path, "w") as f:
+                json.dump(
+                    {
+                        "agents": [
+                            {
+                                "name": "smarthome",
+                                "path": "/opt/smarthome",
+                                "bots": {
+                                    "telegram": {
+                                        "token_secret": "SH_TG",
+                                        "allowed_users": ["456", "789"],
+                                    }
+                                },
+                            }
+                        ]
+                    },
+                    f,
+                )
+            with patch.object(TelegramAgentBot, "stop") as mock_stop:
+                with patch.object(TelegramAgentBot, "start") as mock_start2:
+                    mgr._check_reload()
+                    mock_stop.assert_called_once()
+                    assert mock_start2.call_count == 1
+                    assert "smarthome" in mgr._telegram_bots
+
+    @patch("agent_bot_manager.resolve_secret", return_value="fake_token")
+    def test_hot_reload_restarts_on_token_secret_change(self, mock_secret):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = self._make_agents_json(
+                [
+                    {
+                        "name": "devops",
+                        "path": "/opt/devops",
+                        "bots": {"telegram": {"token_secret": "OLD_SECRET"}},
+                    }
+                ],
+                tmpdir,
+            )
+            mgr = AgentBotManager(agents_json_path=path)
+            with patch.object(TelegramAgentBot, "start"):
+                mgr._last_mtime = 0.0
+                mgr._check_reload()
+                assert "devops" in mgr._telegram_bots
+            time.sleep(0.1)
+            with open(path, "w") as f:
+                json.dump(
+                    {
+                        "agents": [
+                            {
+                                "name": "devops",
+                                "path": "/opt/devops",
+                                "bots": {"telegram": {"token_secret": "NEW_SECRET"}},
+                            }
+                        ]
+                    },
+                    f,
+                )
+            with patch.object(TelegramAgentBot, "stop") as mock_stop:
+                with patch.object(TelegramAgentBot, "start") as mock_start2:
+                    mgr._check_reload()
+                    mock_stop.assert_called_once()
+                    assert mock_start2.call_count == 1
+
+    @patch("agent_bot_manager.resolve_secret", return_value="fake_token")
+    def test_hot_reload_restarts_webex_on_queue_name_change(self, mock_secret):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = self._make_agents_json(
+                [
+                    {
+                        "name": "devops",
+                        "path": "/opt/devops",
+                        "bots": {
+                            "webex": {"token_secret": "DO_WX", "queue_name": "v1"}
+                        },
+                    }
+                ],
+                tmpdir,
+            )
+            mgr = AgentBotManager(agents_json_path=path)
+            with patch.object(WebExAgentBot, "start"):
+                mgr._last_mtime = 0.0
+                mgr._check_reload()
+                assert "devops" in mgr._webex_bots
+            time.sleep(0.1)
+            with open(path, "w") as f:
+                json.dump(
+                    {
+                        "agents": [
+                            {
+                                "name": "devops",
+                                "path": "/opt/devops",
+                                "bots": {
+                                    "webex": {
+                                        "token_secret": "DO_WX",
+                                        "queue_name": "v2",
+                                    }
+                                },
+                            }
+                        ]
+                    },
+                    f,
+                )
+            with patch.object(WebExAgentBot, "stop") as mock_stop:
+                with patch.object(WebExAgentBot, "start") as mock_start2:
+                    mgr._check_reload()
+                    mock_stop.assert_called_once()
+                    assert mock_start2.call_count == 1
+
+    @patch("agent_bot_manager.resolve_secret", return_value="fake_token")
+    def test_hot_reload_no_restart_when_config_unchanged(self, mock_secret):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = self._make_agents_json(
+                [
+                    {
+                        "name": "smarthome",
+                        "path": "/opt/smarthome",
+                        "bots": {
+                            "telegram": {
+                                "token_secret": "SH_TG",
+                                "allowed_users": ["123"],
+                            }
+                        },
+                    }
+                ],
+                tmpdir,
+            )
+            mgr = AgentBotManager(agents_json_path=path)
+            with patch.object(TelegramAgentBot, "start"):
+                mgr._last_mtime = 0.0
+                mgr._check_reload()
+                assert "smarthome" in mgr._telegram_bots
+            time.sleep(0.1)
+            with open(path, "w") as f:
+                json.dump(
+                    {
+                        "agents": [
+                            {
+                                "name": "smarthome",
+                                "path": "/opt/smarthome",
+                                "bots": {
+                                    "telegram": {
+                                        "token_secret": "SH_TG",
+                                        "allowed_users": ["123"],
+                                    }
+                                },
+                            }
+                        ]
+                    },
+                    f,
+                )
+            with patch.object(TelegramAgentBot, "stop") as mock_stop:
+                with patch.object(TelegramAgentBot, "start") as mock_start2:
+                    mgr._check_reload()
+                    mock_stop.assert_not_called()
+                    mock_start2.assert_not_called()
+
+
+class TestAllowedUsersInheritance:
+    """Regression: allowed_users must inherit from global config when omitted."""
+
+    def _make_agents_json(self, agents, tmpdir):
+        path = os.path.join(tmpdir, "agents.json")
+        with open(path, "w") as f:
+            json.dump({"agents": agents}, f)
+        return path
+
+    @patch("agent_bot_manager.resolve_secret", return_value="fake_token")
+    def test_allowed_users_inherits_from_global(self, mock_secret):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = self._make_agents_json(
+                [
+                    {
+                        "name": "smarthome",
+                        "path": "/opt/smarthome",
+                        "bots": {"telegram": {"token_secret": "SH_TG"}},
+                    }
+                ],
+                tmpdir,
+            )
+            mgr = AgentBotManager(
+                agents_json_path=path, global_tg_allowed_users=["111", "222"]
+            )
+            mgr._last_mtime = 0.0
+            with patch.object(TelegramAgentBot, "start"):
+                mgr._check_reload()
+                assert "smarthome" in mgr._telegram_bots
+                bot = mgr._telegram_bots["smarthome"]
+                assert bot.allowed_users == [111, 222]
+
+    @patch("agent_bot_manager.resolve_secret", return_value="fake_token")
+    def test_allowed_users_explicit_overrides_global(self, mock_secret):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = self._make_agents_json(
+                [
+                    {
+                        "name": "smarthome",
+                        "path": "/opt/smarthome",
+                        "bots": {
+                            "telegram": {
+                                "token_secret": "SH_TG",
+                                "allowed_users": ["999"],
+                            }
+                        },
+                    }
+                ],
+                tmpdir,
+            )
+            mgr = AgentBotManager(
+                agents_json_path=path, global_tg_allowed_users=["111", "222"]
+            )
+            mgr._last_mtime = 0.0
+            with patch.object(TelegramAgentBot, "start"):
+                mgr._check_reload()
+                bot = mgr._telegram_bots["smarthome"]
+                assert bot.allowed_users == [999]
+
+    def test_allowed_users_empty_when_no_global_and_no_explicit(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = self._make_agents_json(
+                [
+                    {
+                        "name": "smarthome",
+                        "path": "/opt/smarthome",
+                        "bots": {"telegram": {"token_secret": "SH_TG"}},
+                    }
+                ],
+                tmpdir,
+            )
+            mgr = AgentBotManager(agents_json_path=path)
+            mgr._last_mtime = 0.0
+            with patch("agent_bot_manager.resolve_secret", return_value="fake_token"):
+                with patch.object(TelegramAgentBot, "start"):
+                    mgr._check_reload()
+                    bot = mgr._telegram_bots["smarthome"]
+                    assert bot.allowed_users == []

@@ -7,6 +7,8 @@ and starts dedicated polling threads for each agent that has a `bots` config.
 Messages are routed directly to the assigned agent — no orchestrator hop.
 
 Hot-reloads when agents.json changes (file mtime polling).
+Restarts affected bot threads when config values change (token_secret,
+allowed_users, queue_name).
 
 Usage:
     python3 agent_bot_manager.py [--config agents.json] [--poll-interval 30]
@@ -643,11 +645,39 @@ class WebExAgentBot:
         logger.info("Stopped WebEx bot for agent '%s'", self.agent_name)
 
 
+def _config_signature(bot_type: str, cfg: Dict) -> str:
+    """Create a deterministic signature for a bot config.
+
+    Used to detect config changes (token_secret, allowed_users, queue_name)
+    so we can restart affected bot threads on hot-reload.
+    """
+    if bot_type == "telegram":
+        return json.dumps(
+            {
+                "token_secret": cfg.get("token_secret", ""),
+                "allowed_users": sorted(cfg.get("allowed_users", [])),
+            },
+            sort_keys=True,
+        )
+    elif bot_type == "webex":
+        return json.dumps(
+            {
+                "token_secret": cfg.get("token_secret", ""),
+                "queue_name": cfg.get("queue_name", ""),
+            },
+            sort_keys=True,
+        )
+    return ""
+
+
 class AgentBotManager:
     """Manages per-agent Telegram and WebEx bot threads.
 
     Reads agents.json, resolves tokens, starts bots, and hot-reloads
     when the config file changes.
+
+    Hot-reload detects config changes (token_secret, allowed_users,
+    queue_name) and restarts affected bot threads.
     """
 
     def __init__(
@@ -656,13 +686,16 @@ class AgentBotManager:
         api_url: str = DEFAULT_API_URL,
         api_shared_key: str = DEFAULT_API_SHARED_KEY,
         reload_interval: int = 30,
+        global_tg_allowed_users: Optional[List[str]] = None,
     ):
         self.agents_json_path = Path(agents_json_path)
         self.api_url = api_url
         self.api_shared_key = api_shared_key
         self.reload_interval = reload_interval
+        self.global_tg_allowed_users = global_tg_allowed_users
         self._telegram_bots: Dict[str, TelegramAgentBot] = {}
         self._webex_bots: Dict[str, WebExAgentBot] = {}
+        self._bot_config_sigs: Dict[str, str] = {}  # agent+type -> config signature
         self._last_mtime: float = 0.0
         self._running = False
         self._lock = threading.Lock()
@@ -690,8 +723,20 @@ class AgentBotManager:
                 }
         return configs
 
+    def _resolve_allowed_users(self, tg_cfg: Dict) -> Optional[List[str]]:
+        """Resolve allowed_users, inheriting from global config when omitted."""
+        if "allowed_users" in tg_cfg:
+            return tg_cfg["allowed_users"]
+        if self.global_tg_allowed_users:
+            return self.global_tg_allowed_users
+        return None
+
     def _sync_bots(self, configs: Dict[str, Dict]):
-        """Start/stop bots to match current config."""
+        """Start/stop/restart bots to match current config.
+
+        Detects config changes (token_secret, allowed_users, queue_name)
+        and restarts affected bot threads.
+        """
         with self._lock:
             current_tg = set(self._telegram_bots.keys())
             current_wx = set(self._webex_bots.keys())
@@ -706,77 +751,117 @@ class AgentBotManager:
                 if "webex" in bots:
                     desired_wx.add(agent_name)
 
-            # Stop removed Telegram bots
+            # --- Telegram bots: stop removed, restart changed, start new ---
             for name in current_tg - desired_tg:
                 logger.info("Stopping removed Telegram bot: %s", name)
                 self._telegram_bots[name].stop()
                 del self._telegram_bots[name]
+                self._bot_config_sigs.pop(f"tg:{name}", None)
 
-            # Stop removed WebEx bots
-            for name in current_wx - desired_wx:
-                logger.info("Stopping removed WebEx bot: %s", name)
-                self._webex_bots[name].stop()
-                del self._webex_bots[name]
+            # Restart Telegram bots whose config changed
+            for name in current_tg & desired_tg:
+                tg_cfg = configs[name]["bots"]["telegram"]
+                new_sig = _config_signature("telegram", tg_cfg)
+                old_sig = self._bot_config_sigs.get(f"tg:{name}")
+                if new_sig != old_sig:
+                    logger.info(
+                        "Config changed for Telegram bot '%s' — restarting", name
+                    )
+                    self._telegram_bots[name].stop()
+                    del self._telegram_bots[name]
+                    self._bot_config_sigs.pop(f"tg:{name}", None)
+                    # Fall through to start below
+                    self._start_telegram_bot(name, tg_cfg)
+                # else: config unchanged, keep running
 
             # Start new Telegram bots
             for name in desired_tg - current_tg:
                 tg_cfg = configs[name]["bots"]["telegram"]
-                token_secret = tg_cfg.get("token_secret", "")
-                if not token_secret:
-                    logger.warning(
-                        "Agent '%s' has telegram bot config but no token_secret",
-                        name,
-                    )
-                    continue
-                token = resolve_secret(token_secret)
-                if not token:
-                    logger.warning(
-                        "Failed to resolve token for agent '%s' "
-                        "(secret: %s) — skipping",
-                        name,
-                        token_secret,
-                    )
-                    continue
-                allowed = tg_cfg.get("allowed_users")
-                bot = TelegramAgentBot(
-                    agent_name=name,
-                    token=token,
-                    allowed_users=allowed,
-                    api_url=self.api_url,
-                    api_shared_key=self.api_shared_key,
-                )
-                bot.start()
-                self._telegram_bots[name] = bot
+                self._start_telegram_bot(name, tg_cfg)
+
+            # --- WebEx bots: stop removed, restart changed, start new ---
+            for name in current_wx - desired_wx:
+                logger.info("Stopping removed WebEx bot: %s", name)
+                self._webex_bots[name].stop()
+                del self._webex_bots[name]
+                self._bot_config_sigs.pop(f"wx:{name}", None)
+
+            # Restart WebEx bots whose config changed
+            for name in current_wx & desired_wx:
+                wx_cfg = configs[name]["bots"]["webex"]
+                new_sig = _config_signature("webex", wx_cfg)
+                old_sig = self._bot_config_sigs.get(f"wx:{name}")
+                if new_sig != old_sig:
+                    logger.info("Config changed for WebEx bot '%s' — restarting", name)
+                    self._webex_bots[name].stop()
+                    del self._webex_bots[name]
+                    self._bot_config_sigs.pop(f"wx:{name}", None)
+                    self._start_webex_bot(name, wx_cfg)
 
             # Start new WebEx bots
             for name in desired_wx - current_wx:
                 wx_cfg = configs[name]["bots"]["webex"]
-                token_secret = wx_cfg.get("token_secret", "")
-                if not token_secret:
-                    logger.warning(
-                        "Agent '%s' has webex bot config but no token_secret",
-                        name,
-                    )
-                    continue
-                token = resolve_secret(token_secret)
-                if not token:
-                    logger.warning(
-                        "Failed to resolve token for agent '%s' "
-                        "(secret: %s) — skipping",
-                        name,
-                        token_secret,
-                    )
-                    continue
-                queue_name = wx_cfg.get("queue_name")
-                bot = WebExAgentBot(
-                    agent_name=name,
-                    token=token,
-                    queue_name=queue_name,
-                    api_url=self.api_url,
-                    api_shared_key=self.api_shared_key,
-                )
-                bot.start()
-                self._webex_bots[name] = bot
+                self._start_webex_bot(name, wx_cfg)
+
+    def _start_telegram_bot(self, name: str, tg_cfg: Dict):
+        """Start a new Telegram bot for an agent."""
+        token_secret = tg_cfg.get("token_secret", "")
+        if not token_secret:
+            logger.warning(
+                "Agent '%s' has telegram bot config but no token_secret",
+                name,
+            )
+            return
+        token = resolve_secret(token_secret)
+        if not token:
+            logger.warning(
+                "Failed to resolve token for agent '%s' " "(secret: %s) — skipping",
+                name,
+                token_secret,
+            )
+            return
+        allowed = self._resolve_allowed_users(tg_cfg)
+        bot = TelegramAgentBot(
+            agent_name=name,
+            token=token,
+            allowed_users=allowed,
+            api_url=self.api_url,
+            api_shared_key=self.api_shared_key,
+        )
+        bot.start()
+        self._telegram_bots[name] = bot
+        self._bot_config_sigs[f"tg:{name}"] = _config_signature("telegram", tg_cfg)
+        logger.info("Started Telegram bot for agent: %s", name)
+
+    def _start_webex_bot(self, name: str, wx_cfg: Dict):
+        """Start a new WebEx bot for an agent."""
+        token_secret = wx_cfg.get("token_secret", "")
+        if not token_secret:
+            logger.warning(
+                "Agent '%s' has webex bot config but no token_secret",
+                name,
+            )
+            return
+        token = resolve_secret(token_secret)
+        if not token:
+            logger.warning(
+                "Failed to resolve token for agent '%s' " "(secret: %s) — skipping",
+                name,
+                token_secret,
+            )
+            return
+        queue_name = wx_cfg.get("queue_name")
+        bot = WebExAgentBot(
+            agent_name=name,
+            token=token,
+            queue_name=queue_name,
+            api_url=self.api_url,
+            api_shared_key=self.api_shared_key,
+        )
+        bot.start()
+        self._webex_bots[name] = bot
+        self._bot_config_sigs[f"wx:{name}"] = _config_signature("webex", wx_cfg)
+        logger.info("Started WebEx bot for agent: %s", name)
 
     def _check_reload(self):
         """Check if agents.json changed and reload if so."""

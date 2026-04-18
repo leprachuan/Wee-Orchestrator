@@ -1287,6 +1287,9 @@ class TestOllamaLiveExpanded(unittest.TestCase):
 class TestOpenRouterLiveExpanded(unittest.TestCase):
     """Additional live OpenRouter integration tests."""
 
+    @skip_openrouter
+    @skip_openrouter
+    @skip_openrouter
     def test_text_generation_returns_content(self):
         """OpenRouter model returns non-empty text response."""
         result = run_wee_cli(
@@ -1297,6 +1300,9 @@ class TestOpenRouterLiveExpanded(unittest.TestCase):
         self.assertEqual(result.returncode, 0, f"stderr: {result.stderr}")
         self.assertGreater(len(result.stdout.strip()), 0)
 
+    @skip_openrouter
+    @skip_openrouter
+    @skip_openrouter
     def test_system_prompt_applied(self):
         """OpenRouter respects system prompt instructions."""
         result = run_wee_cli(
@@ -1310,6 +1316,10 @@ class TestOpenRouterLiveExpanded(unittest.TestCase):
         # Allow 2-5 words (models may add punctuation/newlines)
         self.assertLessEqual(len(words), 8, f"Too verbose: {result.stdout[:100]}")
 
+    @skip_openrouter
+    @skip_openrouter
+    @skip_openrouter
+    @skip_openrouter
     def test_temperature_accepted(self):
         """OpenRouter accepts temperature=0 without error."""
         result = run_wee_cli(
