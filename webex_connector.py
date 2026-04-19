@@ -1848,8 +1848,8 @@ class WebEXConnector:
                     f"Failed to connect to RabbitMQ, retrying in {retry_delay}s...",
                     file=sys.stderr,
                 )
-                import time
-                time.sleep(retry_delay)
+                if self.shutdown_event.wait(retry_delay):
+                    break
                 retry_delay = min(retry_delay * 2, max_delay)
             if not self.running:
                 return

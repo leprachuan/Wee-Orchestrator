@@ -334,3 +334,25 @@ def test_issue_25_webex_shutdown_requeues_undispatched_message(webex_connector):
 
     channel.basic_ack.assert_not_called()
     channel.basic_nack.assert_called_once_with(delivery_tag="tag-2", requeue=True)
+
+
+def test_issue_25_webex_shutdown_interrupts_reconnect_backoff(webex_connector):
+    connect_started = threading.Event()
+
+    def fake_connect():
+        connect_started.set()
+        return False
+
+    with (
+        patch.object(webex_connector, "connect_rabbitmq", side_effect=fake_connect),
+        patch.object(webex_connector, "disconnect_rabbitmq"),
+        patch.object(webex_connector, "start_cleanup_background_task"),
+    ):
+        worker = threading.Thread(target=webex_connector.listen_to_queue, daemon=True)
+        worker.start()
+
+        assert connect_started.wait(timeout=1)
+        webex_connector._handle_shutdown_signal(signal.SIGTERM, None)
+
+        worker.join(timeout=1)
+        assert worker.is_alive() is False
