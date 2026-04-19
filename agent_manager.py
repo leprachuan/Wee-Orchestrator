@@ -27,6 +27,12 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 from uuid import uuid4
 
+from session_manager_components import (
+    CliCommandHandler,
+    RuntimeExecutor,
+    StreamingManager,
+)
+
 # Dynamically determine the repo base directory (works regardless of where repo is cloned)
 SCRIPT_BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -1837,13 +1843,11 @@ class SessionManager:
         self._session_map_cache: Optional[Dict] = None
 
         # Per-session streaming queues: session_id -> (asyncio.Queue, event_loop)
-        # Populated by the /stream API endpoint; read by _execute_subprocess_with_tracking.
-        self._stream_queues: Dict[str, tuple] = {}
-
-        # Per-session stream buffers for multi-session streaming support.
-        # Buffers all chunks so disconnected clients can reconnect and replay.
-        # session_id -> _StreamBuffer
-        self._stream_buffers: Dict[str, "_StreamBuffer"] = {}  # noqa: F821
+        # Streaming manager: per-session queues and replay buffers.
+        self.streaming_manager = StreamingManager()
+        # Keep dict refs so existing API handler code keeps working unchanged.
+        self._stream_queues = self.streaming_manager._queues
+        self._stream_buffers = self.streaming_manager._buffers
 
         # Last subprocess exit code per n8n_session_id (for debugging/monitoring)
         self._last_exit_codes: Dict[str, int] = {}
@@ -1853,11 +1857,14 @@ class SessionManager:
         self._live_status: Dict[str, Dict] = {}
         self._live_status_lock = threading.Lock()
 
-        # Slash command registry (F020): maps command -> {handler, description}
-        # Commands with a handler callable bypass the LLM entirely.
-        # Commands with handler=None are handled by the legacy if/elif chain.
-        self._slash_command_registry: Dict[str, dict] = {}
+        # CLI command handler (F020) — slash command registry + dispatcher.
+        self.cli_handler = CliCommandHandler()
+        # Keep registry ref for backward compat with callers using the raw dict.
+        self._slash_command_registry = self.cli_handler._registry
+        # Runtime executor — strategy registry for per-runtime dispatch.
+        self.runtime_executor = RuntimeExecutor()
         self._init_slash_commands()
+        self._register_runtime_executors()
 
     # ── Live status helpers for mobile channel progress (F004) ──────────
 
@@ -1882,11 +1889,8 @@ class SessionManager:
     # ── Slash command registry (F020) ───────────────────────────────────
 
     def _register_slash(self, command: str, handler, description: str):
-        """Register a slash command in the registry."""
-        self._slash_command_registry[command] = {
-            "handler": handler,
-            "description": description,
-        }
+        """Register a slash command via the CLI handler."""
+        self.cli_handler.register(command, handler, description)
 
     def _init_slash_commands(self):
         """Initialize the slash command registry.
@@ -1948,10 +1952,7 @@ class SessionManager:
 
     def get_slash_commands(self) -> Dict[str, str]:
         """Return a dict of all registered slash commands and descriptions."""
-        return {
-            cmd: entry["description"]
-            for cmd, entry in self._slash_command_registry.items()
-        }
+        return self.cli_handler.list_commands()
 
     def _slash_secret(self, argument, session_data, n8n_session_id):
         """Handle /secret slash command. Values never touch the LLM."""
@@ -6051,22 +6052,15 @@ User Request:
             with self._lock:
                 return len(self._consumers) > 0
 
-    def _get_or_create_stream_buffer(self, session_id: str) -> "_StreamBuffer":
+    def _get_or_create_stream_buffer(self, session_id: str):
         """Get existing buffer for session or create a new one."""
-        buf = self._stream_buffers.get(session_id)
-        if buf is None:
-            buf = self._StreamBuffer()
-            self._stream_buffers[session_id] = buf
-        return buf
+        return self.streaming_manager.get_or_create_buffer(session_id)
 
     def _register_stream(
         self, session_id: str, queue, loop  # asyncio.Queue, asyncio.AbstractEventLoop
     ) -> None:
         """Register an asyncio queue for the /stream endpoint to receive chunks."""
-        self._stream_queues[session_id] = (queue, loop)
-        # Also create/get the stream buffer and add this queue as a consumer
-        buf = self._get_or_create_stream_buffer(session_id)
-        buf.add_consumer(queue, loop)
+        self.streaming_manager.register_stream(session_id, queue, loop)
 
     def _unregister_stream(self, session_id: str, queue=None) -> None:
         """Remove the streaming queue for a session.
@@ -6076,25 +6070,15 @@ User Request:
         ``_stream_queues`` entry is removed regardless so that new streams
         can register without conflict.
         """
-        self._stream_queues.pop(session_id, None)
-        buf = self._stream_buffers.get(session_id)
-        if buf and queue is not None:
-            buf.remove_consumer(queue)
+        self.streaming_manager.unregister_stream(session_id, queue)
 
     def _cleanup_stream_buffer(self, session_id: str) -> None:
         """Remove the stream buffer entirely (called after query completes)."""
-        self._stream_buffers.pop(session_id, None)
+        self.streaming_manager.cleanup_buffer(session_id)
 
     def _cleanup_stale_stream_buffers(self, max_age: float = 600.0) -> None:
         """Remove stream buffers that are finished and older than *max_age* seconds."""
-        now = time.time()
-        stale = [
-            sid
-            for sid, buf in self._stream_buffers.items()
-            if buf.finished and (now - buf.created_at) > max_age
-        ]
-        for sid in stale:
-            self._stream_buffers.pop(sid, None)
+        self.streaming_manager.cleanup_stale_buffers(max_age)
 
     # ------------------------------------------------------------------
 
@@ -9365,126 +9349,62 @@ User Request:
         # Touch before dispatch to keep session alive during long operations
         self.touch_session(n8n_session_id)
 
-        if runtime == "copilot":
-            result = self.run_copilot(
-                prompt,
-                model,
-                agent,
-                session_id if can_resume else None,
-                can_resume,
-                n8n_session_id,
-                effective_timeout,
-                render_type,
-            )
-        elif runtime == "copilot-sdk":
-            result = self.run_copilot_sdk(
-                prompt,
-                model,
-                agent,
-                session_id if can_resume else None,
-                can_resume,
-                n8n_session_id,
-                effective_timeout,
-                render_type,
-                mode,
-            )
-        elif runtime == "opencode":
-            result = self.run_opencode(
-                prompt,
-                model,
-                agent,
-                session_id if can_resume else None,
-                can_resume,
-                n8n_session_id,
-                effective_timeout,
-                render_type,
-            )
-        elif runtime == "claude":
-            result = self.run_claude(
-                prompt,
-                model,
-                agent,
-                session_id if can_resume else None,
-                can_resume,
-                n8n_session_id,
-                effective_timeout,
-                render_type,
-                mode,
-            )
-        elif runtime == "claude-sdk":
-            result = self.run_claude_sdk(
-                prompt,
-                model,
-                agent,
-                session_id if can_resume else None,
-                can_resume,
-                n8n_session_id,
-                effective_timeout,
-                render_type,
-                mode,
-            )
-        elif runtime == "gemini":
-            result = self.run_gemini(
-                prompt,
-                model,
-                agent,
-                session_id if can_resume else None,
-                can_resume,
-                n8n_session_id,
-                effective_timeout,
-                render_type,
-            )
-        elif runtime == "codex":
-            result = self.run_codex(
-                prompt,
-                model,
-                agent,
-                session_id if can_resume else None,
-                can_resume,
-                n8n_session_id,
-                effective_timeout,
-                render_type,
-            )
-        elif runtime == "devin":
-            result = self.run_devin(
-                prompt,
-                model,
-                agent,
-                session_id if can_resume else None,
-                can_resume,
-                n8n_session_id,
-                effective_timeout,
-                render_type,
-                mode,
-            )
-        elif runtime == "cursor":
-            result = self.run_cursor(
-                prompt,
-                model,
-                agent,
-                session_id if can_resume else None,
-                can_resume,
-                n8n_session_id,
-                effective_timeout,
-                render_type,
-            )
-        elif runtime == "wee":
-            result = self.run_wee_native(
-                prompt,
-                model,
-                agent,
-                session_id if can_resume else None,
-                can_resume,
-                n8n_session_id,
-                effective_timeout,
-                render_type,
-            )
-        else:
+        handler = self.runtime_executor.get(runtime)
+        if handler is None:
             return f"Error: Unknown runtime '{runtime}'"
+
+        result = handler(
+            prompt,
+            model,
+            agent,
+            session_id if can_resume else None,
+            can_resume,
+            n8n_session_id,
+            effective_timeout,
+            render_type,
+            mode,
+        )
 
         # Touch after dispatch to record completion activity
         self.touch_session(n8n_session_id)
         return result
+
+    def _register_runtime_executors(self) -> None:
+        """Populate runtime_executor with per-runtime handler wrappers.
+
+        Wrappers have a uniform signature:
+            handler(prompt, model, agent, session_id, can_resume,
+                    n8n_session_id, timeout, render_type, mode)
+        Runtimes that do not accept *mode* receive it but ignore it.
+        """
+
+        def _mode_handler(fn):
+            def _h(pr, mo, ag, si, re, ns, to, rt, md):
+                return fn(pr, mo, ag, si, re, ns, to, rt, md)
+            return _h
+
+        def _no_mode_handler(fn):
+            def _h(pr, mo, ag, si, re, ns, to, rt, md):
+                return fn(pr, mo, ag, si, re, ns, to, rt)
+            return _h
+
+        for rt, fn in [
+            ("copilot-sdk", self.run_copilot_sdk),
+            ("claude", self.run_claude),
+            ("claude-sdk", self.run_claude_sdk),
+            ("devin", self.run_devin),
+        ]:
+            self.runtime_executor.register(rt, _mode_handler(fn))
+
+        for rt, fn in [
+            ("copilot", self.run_copilot),
+            ("opencode", self.run_opencode),
+            ("gemini", self.run_gemini),
+            ("codex", self.run_codex),
+            ("cursor", self.run_cursor),
+            ("wee", self.run_wee_native),
+        ]:
+            self.runtime_executor.register(rt, _no_mode_handler(fn))
 
     def execute(self, prompt: str, n8n_session_id: str) -> str:
         """Main execution logic"""
