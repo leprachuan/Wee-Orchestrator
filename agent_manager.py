@@ -366,7 +366,7 @@ class BackgroundTaskManager:
 
     def _start_cleanup_thread(self):
         """Start a background thread that runs cleanup every 5 minutes."""
-        if self._cleanup_thread_started:
+        if getattr(self, "_cleanup_thread_started", False):
             return
         self._cleanup_thread_started = True
 
@@ -383,7 +383,7 @@ class BackgroundTaskManager:
 
     def _load(self) -> list:
         """Return in-memory cache if populated; load from disk only on cold start."""
-        if self._tasks_cache is not None:
+        if getattr(self, "_tasks_cache", None) is not None:
             return self._tasks_cache
         try:
             with open(self._path, "r") as f:
