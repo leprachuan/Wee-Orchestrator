@@ -1,6 +1,7 @@
 """Regression tests for Issue #21: scheduler path traversal and workdir validation."""
 
 import importlib.util
+import json
 import os
 import sys
 import tempfile
@@ -74,6 +75,47 @@ class TestIssue21SchedulerPathValidation(unittest.TestCase):
                 self.assertTrue(result["success"])
                 self.assertEqual(result["result"], "expected-log")
 
+    def test_issue_21_schedule_task_sanitizes_traversal_name_before_logging(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            allowed_root = tmp_path / "allowed"
+            allowed_root.mkdir()
+            with patch.dict(
+                os.environ, self._scheduler_env(tmp_path, allowed_root), clear=False
+            ):
+                scheduler = TaskScheduler()
+
+                result = scheduler.schedule_task(
+                    name="../../escape",
+                    schedule="in 5 minutes",
+                    mode="command",
+                    task="pwd",
+                    working_dir=str(allowed_root),
+                )
+
+                self.assertTrue(result["success"])
+                self.assertEqual(result["result"]["id"], "escape")
+                self.assertFalse((tmp_path / "escape.log").exists())
+                self.assertTrue((scheduler.logs_dir / "escape.log").exists())
+
+    def test_issue_21_get_results_rejects_path_traversal_job_id(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            allowed_root = tmp_path / "allowed"
+            allowed_root.mkdir()
+            with patch.dict(
+                os.environ, self._scheduler_env(tmp_path, allowed_root), clear=False
+            ):
+                scheduler = TaskScheduler()
+
+                secret = tmp_path / "secret.jsonl"
+                secret.write_text(json.dumps({"success": True}) + "\n")
+
+                result = scheduler.get_results("../secret")
+
+                self.assertFalse(result["success"])
+                self.assertIn("Invalid job ID", result["message"])
+
     def test_issue_21_update_job_rejects_working_dir_outside_allowlist(self):
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
@@ -128,6 +170,34 @@ class TestIssue21SchedulerPathValidation(unittest.TestCase):
 
                 self.assertTrue(result["success"])
                 self.assertEqual(result["result"]["working_dir"], str(nested))
+
+    def test_issue_21_results_api_rejects_path_traversal_job_id(self):
+        from fastapi.testclient import TestClient
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            allowed_root = tmp_path / "allowed"
+            allowed_root.mkdir()
+            env = {
+                **self._scheduler_env(tmp_path, allowed_root),
+                "API_SHARED_KEY": "test_key_123",
+                "APP_ENV": "DEV",
+                "API_PORT": "8099",
+            }
+            with patch.dict(os.environ, env, clear=False):
+                agent_manager = _load_module(
+                    "issue21_agent_manager", REPO / "agent_manager.py"
+                )
+                app = agent_manager.create_api_app()
+                client = TestClient(app)
+
+                response = client.get(
+                    "/api/v1/scheduler/jobs/%2E%2E%2Fsecret/results",
+                    headers={"Authorization": "Bearer shared_test_key_123"},
+                )
+
+                self.assertEqual(response.status_code, 404)
+                self.assertNotIn("secret", response.text.lower())
 
 
 if __name__ == "__main__":
