@@ -1471,7 +1471,7 @@ class WebEXConnector:
                                 room_id,
                                 "⚠️ Could not transcribe audio file. Please send as text instead.",
                             )
-                            return
+                            return True
                     else:
                         # Non-audio file - handle normally
                         # Sanitize filename - remove spaces and special chars for shell safety

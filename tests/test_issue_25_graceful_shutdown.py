@@ -509,3 +509,56 @@ def test_issue_25_webex_shutdown_waits_without_default_timeout(webex_connector):
         waiter.join(timeout=1)
         assert waiter.is_alive() is False
         assert wait_finished.is_set() is True
+
+
+def test_issue_25_webex_audio_transcription_failure_is_acked(webex_connector):
+    message = {
+        "personId": "person-1",
+        "personEmail": "user@example.com",
+        "roomId": "room-1",
+        "text": "",
+        "files": ["https://files.example/audio.wav"],
+    }
+    callback_holder = {}
+    channel = MagicMock()
+    method = MagicMock(delivery_tag="tag-audio")
+    webex_connector.rabbitmq_channel = channel
+    webex_connector.rabbitmq_connection = MagicMock(is_closed=False)
+    webex_connector.running = True
+
+    def fake_basic_consume(*, queue, on_message_callback):
+        callback_holder["callback"] = on_message_callback
+
+    def fake_start_consuming():
+        callback_holder["callback"](
+            channel, method, None, json.dumps(message).encode()
+        )
+        webex_connector.running = False
+
+    channel.basic_consume.side_effect = fake_basic_consume
+    channel.start_consuming.side_effect = fake_start_consuming
+
+    with (
+        patch.object(webex_connector, "connect_rabbitmq", return_value=True),
+        patch.object(webex_connector, "start_cleanup_background_task"),
+        patch.object(webex_connector, "disconnect_rabbitmq"),
+        patch.object(
+            webex_connector,
+            "download_file",
+            return_value=("/tmp/audio.wav", "audio.wav"),
+        ),
+        patch("webex_connector.audio_transcriber.is_audio_file", return_value=True),
+        patch(
+            "webex_connector.audio_transcriber.transcribe",
+            return_value=(None, "mock-backend"),
+        ),
+        patch.object(webex_connector, "send_message") as send_message_mock,
+    ):
+        webex_connector.listen_to_queue()
+
+    send_message_mock.assert_called_once_with(
+        "room-1",
+        "⚠️ Could not transcribe audio file. Please send as text instead.",
+    )
+    channel.basic_ack.assert_called_once_with(delivery_tag="tag-audio")
+    channel.basic_nack.assert_not_called()
