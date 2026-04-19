@@ -7,15 +7,26 @@ dispatching them through the LLM pipeline.
 """
 
 import asyncio
+import importlib.util
 import json
 import os
 import sys
 import time
 import unittest
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+REPO = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(REPO))
+
+
+def _load_module(name: str, path: Path):
+    spec = importlib.util.spec_from_file_location(name, path)
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    sys.modules[name] = module
+    spec.loader.exec_module(module)
+    return module
 
 
 class TestRunNowCommandMode(unittest.TestCase):
@@ -165,8 +176,13 @@ class TestRunCommandTaskExecution(unittest.TestCase):
         end = content.find("\n    def ", start + 1)
         func_body = content[start:end]
 
-        # Should use shell=True (like executor's _execute_command_mode)
-        self.assertIn("shell=True", func_body, "Should use shell=True")
+        # Should parse argv safely instead of using shell=True
+        self.assertIn(
+            "_split_command_args(command)",
+            func_body,
+            "Should parse commands into argv before execution",
+        )
+        self.assertNotIn("shell=True", func_body, "Should not use shell=True")
 
         # Should use capture_output=True
         self.assertIn(
@@ -233,7 +249,7 @@ class TestRunNowAPIIntegration(unittest.TestCase):
     def setUpClass(cls):
         """Create a test FastAPI app."""
         os.environ.setdefault("SCHEDULER_ALLOWED_TELEGRAM", "testuser")
-        os.environ.setdefault("ALLOWED_SHARED_KEYS", "test_key_123")
+        os.environ.setdefault("API_SHARED_KEY", "test_key_123")
 
     def _get_test_client(self):
         """Get a test client for the API."""
@@ -250,14 +266,14 @@ class TestRunNowAPIIntegration(unittest.TestCase):
     def test_run_now_command_mode_via_api(self):
         """POST /api/v1/scheduler/jobs/{id}/run should execute command directly."""
         try:
-            from agent_manager import create_api_app
             from httpx import ASGITransport, AsyncClient
         except ImportError:
             self.skipTest("httpx not available")
 
+        agent_manager = _load_module("issue96_agent_manager_api", REPO / "agent_manager.py")
+        create_api_app = agent_manager.create_api_app
         app = create_api_app()
 
-        # Mock the scheduler to return a command-mode job
         mock_job = {
             "id": "test_cmd_job",
             "name": "Test Command",
@@ -267,33 +283,49 @@ class TestRunNowAPIIntegration(unittest.TestCase):
             "working_dir": "/tmp",
             "notify": False,
         }
+        mock_scheduler = MagicMock()
+        mock_scheduler.get_job.return_value = {"success": True, "result": mock_job}
+        mock_scheduler.run_job.return_value = {"success": True}
+        fake_loop = MagicMock()
 
         with patch.object(
             app.state.bg_task_mgr, "create_task", return_value={}
-        ) as mock_create:
+        ) as mock_create, patch(
+            "scheduler.management.TaskScheduler", return_value=mock_scheduler
+        ), patch.object(
+            agent_manager._api_auth_manager, "validate_shared_key", return_value=True
+        ), patch(
+            "asyncio.get_running_loop", return_value=fake_loop
+        ):
 
             async def _run():
                 transport = ASGITransport(app=app)
                 async with AsyncClient(
                     transport=transport, base_url="https://test"
                 ) as client:
-                    # We need to mock _get_scheduler
-                    with patch(
-                        "agent_manager._get_scheduler_for_test",
-                        return_value=None,
-                    ):
-                        response = await client.post(
-                            f"/api/v1/scheduler/jobs/test_cmd_job/run",
-                            headers={
-                                "Authorization": "Bearer test_key_123",
-                            },
-                        )
-                        return response
+                    return await client.post(
+                        "/api/v1/scheduler/jobs/test_cmd_job/run",
+                        headers={
+                            "Authorization": "Bearer shared_test_key_123",
+                            "X-User-Identity": "testuser",
+                            "X-Auth-Channel": "telegram",
+                        },
+                    )
 
-            # This test verifies the structural change exists; full E2E
-            # requires a running scheduler with real jobs
-            # The code-level tests above verify correctness
-            pass
+            response = asyncio.run(_run())
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertTrue(body["success"])
+        self.assertEqual(body["job_id"], "test_cmd_job")
+        self.assertEqual(body["mode"], "command")
+        self.assertEqual(body["status"], "running")
+        mock_scheduler.get_job.assert_called_once_with("test_cmd_job")
+        mock_scheduler.run_job.assert_called_once_with("test_cmd_job")
+        mock_create.assert_called_once()
+        self.assertEqual(mock_create.call_args.kwargs["runtime"], "shell")
+        self.assertEqual(mock_create.call_args.kwargs["agent"], "command")
+        fake_loop.run_in_executor.assert_called_once()
 
     def test_ai_mode_still_uses_background_task(self):
         """AI mode jobs should still be dispatched via _run_background_task."""
