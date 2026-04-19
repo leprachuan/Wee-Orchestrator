@@ -1418,14 +1418,34 @@ class SessionManager:
     GEMINI_MODELS = {
         "Google Models": [
             (
+                "gemini-3.1-pro",
+                "Gemini 3.1 Pro",
+                ["pro-3.1", "gemini-3-pro", "pro-3"],
+            ),
+            (
+                "gemini-3.1-flash-live",
+                "Gemini 3.1 Flash Live",
+                ["flash-live-3.1", "gemini-3.1-flash", "flash-3.1"],
+            ),
+            (
+                "gemini-3.1-flash-lite",
+                "Gemini 3.1 Flash Lite",
+                ["flash-lite-3.1"],
+            ),
+            (
+                "gemini-3-deep-think",
+                "Gemini 3 Deep Think",
+                ["deep-think", "thinking"],
+            ),
+            (
                 "gemini-3-pro-preview",
                 "Gemini 3 Pro (Preview)",
-                ["gemini-3-pro", "pro-3"],
+                ["pro-3-preview"],
             ),
             (
                 "gemini-3-flash-preview",
                 "Gemini 3 Flash (Preview)",
-                ["gemini-3-flash", "flash-3"],
+                ["flash-3-preview"],
             ),
             (
                 "gemini-2.5-pro",
@@ -1455,6 +1475,7 @@ class SessionManager:
             ("gemini-1.5-pro-latest", "Gemini 1.5 Pro", ["gemini-1.5-pro"]),
             ("gemini-1.5-flash-latest", "Gemini 1.5 Flash", ["gemini-1.5-flash"]),
             ("gemini-2.0-flash-001", "Gemini 2.0 Flash", ["gemini-2.0-flash"]),
+            ("gemini-3.1-pro-latest", "Gemini 3.1 Pro (Latest)", ["gemini-3.1-pro"]),
         ],
     }
 
@@ -4497,12 +4518,13 @@ You can mention an agent in your prompt and it will auto-delegate:
         name_lower = name.lower().strip("\"'")
 
         # Ensure env models are loaded/cached by triggering fetch for this runtime
-        if runtime in ("claude", "gemini", "codex", "devin", "cursor", "wee"):
+        if runtime in ("claude", "claude-sdk", "gemini", "codex", "devin", "cursor", "wee"):
             self.get_models_for_runtime(runtime)
 
         # Step 1: check env-loaded or static alias tables for all runtimes that have them.
         env_alias_map = {
             "claude": self._env_claude_models,
+            "claude-sdk": self._env_claude_models,
             "gemini": self._env_gemini_models,
             "codex": self._env_codex_models,
             "devin": self._env_devin_models,
@@ -4511,6 +4533,7 @@ You can mention an agent in your prompt and it will auto-delegate:
         }
         static_alias_map = {
             "claude": self.CLAUDE_MODELS,
+            "claude-sdk": self.CLAUDE_MODELS,
             "gemini": self.GEMINI_MODELS,
             "codex": self.CODEX_MODELS,
             "opencode": self.OPENCODE_MODELS,
@@ -7674,10 +7697,9 @@ User Request:
         cmd = ["gemini"]
         if mode == "elevated":
             cmd.append("--yolo")
-        # Use stream-json for structured tool call parsing when streaming
-        stream_info = self._stream_queues.get(n8n_session_id)
-        if stream_info:
-            cmd.extend(["-o", "stream-json"])
+        # Always use stream-json for structured output to ensure clean response extraction
+        # and consistent tool call tracking.
+        cmd.extend(["-o", "stream-json"])
         cmd.append(context_prompt)
 
         # Note: Gemini CLI appears to have model handling issues with specified model names
@@ -12159,6 +12181,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                     context_prompt,
                     "--output-format",
                     "stream-json",
+                    "--verbose",
                     "--model",
                     model,
                     "--permission-mode",
