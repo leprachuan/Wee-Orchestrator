@@ -10247,10 +10247,10 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 await asyncio.sleep(300)
                 auth_mgr.cleanup_expired()
                 rate_limiter.cleanup()
-                bg_task_mgr.cleanup_old()
+                await asyncio.to_thread(bg_task_mgr.cleanup_old)
                 # Periodic reconciliation: promote queued tasks if slots available
                 try:
-                    _all = bg_task_mgr.list_all_tasks()
+                    _all = await asyncio.to_thread(bg_task_mgr.list_all_tasks)
                     _queued_periodic = [t for t in _all if t["status"] == "queued"]
                     _queued_periodic.sort(key=lambda t: t.get("created_at", ""))
                     for _qt in _queued_periodic:
@@ -10262,11 +10262,15 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                             "max_concurrent",
                             BackgroundTaskManager.MAX_TASKS_PER_USER,
                         )
-                        _rn = bg_task_mgr.count_running(_ch, _uid, _agent)
+                        _rn = await asyncio.to_thread(
+                            bg_task_mgr.count_running, _ch, _uid, _agent
+                        )
                         if _rn >= _mc:
                             continue
                         _nsid = str(uuid4())
-                        bg_task_mgr.promote_queued_task(_qt["task_id"], _nsid)
+                        await asyncio.to_thread(
+                            bg_task_mgr.promote_queued_task, _qt["task_id"], _nsid
+                        )
                         print(
                             f"[Periodic] Promoting queued task {_qt['task_id']}",
                             flush=True,
@@ -10321,7 +10325,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                     )
 
         # Reconcile orphaned tasks from previous process lifetime
-        _reconcile_result = bg_task_mgr.reconcile_stale_tasks()
+        _reconcile_result = await asyncio.to_thread(bg_task_mgr.reconcile_stale_tasks)
         if _reconcile_result["stale_running"] or _reconcile_result["queued_ready"]:
             print(
                 f"[Startup] Task reconciliation: "
@@ -10330,7 +10334,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 flush=True,
             )
             # Promote queued tasks that now have available slots
-            _all_tasks = bg_task_mgr.list_all_tasks()
+            _all_tasks = await asyncio.to_thread(bg_task_mgr.list_all_tasks)
             _queued = [t for t in _all_tasks if t["status"] == "queued"]
             _queued.sort(key=lambda t: t.get("created_at", ""))
             for _qt in _queued:
@@ -10341,11 +10345,15 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 _max_conc = _agent_config.get(
                     "max_concurrent", BackgroundTaskManager.MAX_TASKS_PER_USER
                 )
-                _running_now = bg_task_mgr.count_running(_channel, _identity, _agent)
+                _running_now = await asyncio.to_thread(
+                    bg_task_mgr.count_running, _channel, _identity, _agent
+                )
                 if _running_now >= _max_conc:
                     continue
                 _new_sid = str(uuid4())
-                bg_task_mgr.promote_queued_task(_qt["task_id"], _new_sid)
+                await asyncio.to_thread(
+                    bg_task_mgr.promote_queued_task, _qt["task_id"], _new_sid
+                )
                 print(
                     f"[Startup] Promoting queued task {_qt['task_id']} → running",
                     flush=True,
@@ -12694,7 +12702,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         # Resolve agent/runtime/model — default to user's current session config
         # Determine defaults by searching for ANY session for this identity across all channels
         # to inherit preferences (like notification_preference).
-        session_map = session_mgr.load_session_map()
+        session_map = await asyncio.to_thread(session_mgr.load_session_map)
         # Inherit only safe fields (never 'agent') from prior sessions — see issue #75
         defaults = _compute_bg_task_defaults(session_map, identity, channel)
 

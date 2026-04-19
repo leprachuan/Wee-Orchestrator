@@ -650,6 +650,59 @@ class TestIssue170BackgroundTaskAPI(unittest.TestCase):
         self.assertEqual(resp.json()["task_id"], "task-42")
         mocked.assert_awaited()
 
+    def test_create_endpoint_offloads_session_map_lookup_to_worker_thread(self):
+        def _fail_if_called_directly():
+            raise AssertionError("create endpoint must offload load_session_map")
+
+        with patch.object(
+            self.agent_manager._session_mgr,
+            "load_session_map",
+            side_effect=_fail_if_called_directly,
+        ) as mocked_load:
+
+            async def _to_thread(func, *args, **kwargs):
+                if func is mocked_load:
+                    return {}
+                if (
+                    getattr(func, "__self__", None) is self.bg_mgr
+                    and func.__func__ is BackgroundTaskManager.count_running
+                ):
+                    return 999
+                if (
+                    getattr(func, "__self__", None) is self.bg_mgr
+                    and func.__func__ is BackgroundTaskManager.create_task
+                ):
+                    return func(*args, **kwargs)
+                if (
+                    getattr(func, "__self__", None) is self.bg_mgr
+                    and func.__func__ is BackgroundTaskManager.count_queued
+                ):
+                    return 1
+                raise AssertionError(f"Unexpected to_thread target: {func}")
+
+            with patch(
+                "asyncio.to_thread", new=AsyncMock(side_effect=_to_thread)
+            ) as mocked_to_thread:
+                resp = self.client.post(
+                    "/api/v1/background-tasks",
+                    headers=self.auth,
+                    json={
+                        "prompt": "Issue 170 create path regression",
+                        "agent": "wee-dev",
+                        "runtime": "copilot",
+                        "model": "claude-haiku-4.5",
+                    },
+                )
+
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.json()["status"], "queued")
+        self.assertIn("task_id", resp.json())
+        mocked_to_thread.assert_awaited()
+        self.assertFalse(
+            mocked_load.called,
+            "load_session_map() ran directly instead of through asyncio.to_thread",
+        )
+
     def test_health_endpoint_avoids_session_map_disk_reads(self):
         with patch.object(
             self.agent_manager._session_mgr,
