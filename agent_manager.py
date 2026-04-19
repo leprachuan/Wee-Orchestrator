@@ -5087,7 +5087,7 @@ You can mention an agent in your prompt and it will auto-delegate:
         return "\n".join(result)
 
     def _execute_bash_command(self, command: str, agent: str = "orchestrator") -> str:
-        """Execute a bash command directly without hitting any runtime
+        """Execute a direct command without an implicit shell.
 
         Args:
             command: The bash command to execute (without the ! prefix)
@@ -5135,6 +5135,50 @@ You can mention an agent in your prompt and it will auto-delegate:
 
         except ValueError as e:
             return f"Error: {e}"
+        except subprocess.TimeoutExpired:
+            return f"Error: Command timed out after {self.command_timeout} seconds"
+        except Exception as e:
+            return f"Error executing command: {str(e)}"
+
+    def _execute_shell_command(self, command: str, agent: str = "orchestrator") -> str:
+        """Execute a trusted shell command with full bash semantics.
+
+        This is reserved for agent-authored shell tool calls that rely on pipes,
+        redirects, and command chaining. User-controlled scheduler command mode
+        must continue to use argv parsing via _execute_bash_command.
+        """
+        if not command:
+            return "Error: No command provided. Usage: !<command>"
+
+        agent_info = self.AGENTS.get(agent)
+        if not agent_info:
+            agent_dir = str(Path.cwd())
+        else:
+            agent_dir = agent_info["path"]
+
+        print(f"[Shell] Executing in {agent_dir}: {command}", file=sys.stderr)
+
+        try:
+            result = subprocess.run(
+                ["bash", "-o", "pipefail", "-c", command],
+                capture_output=True,
+                text=True,
+                timeout=self.command_timeout,
+                cwd=agent_dir,
+            )
+
+            output = result.stdout
+            if result.stderr:
+                output += result.stderr
+
+            if not output.strip():
+                if result.returncode == 0:
+                    output = f"✓ Command executed successfully (exit code: 0)"
+                else:
+                    output = f"✗ Command failed with exit code: {result.returncode}"
+
+            return output.strip()
+
         except subprocess.TimeoutExpired:
             return f"Error: Command timed out after {self.command_timeout} seconds"
         except Exception as e:
@@ -8931,6 +8975,8 @@ User Request:
                     return "Error: No command provided"
                 # Issue #111: Sanitize SSH commands (wire #113 fix)
                 command = self._wee_sanitize_bash_command(command)
+                if self._SHELL_GRAMMAR_RE.search(command):
+                    return self._execute_shell_command(command, agent)
                 return self._execute_bash_command(command, agent)
             elif func_name == "python":
                 code = func_args.get("code", "")
@@ -8964,6 +9010,7 @@ User Request:
     # -- Issue #113: SSH command sanitisation and anti-hallucination --
 
     _SSH_BIN_RE = re.compile(r"\b(ssh|scp|sftp)\b")
+    _SHELL_GRAMMAR_RE = re.compile(r"(\|\||&&|[|;<>`]|[$][(]|\n)")
 
     # Issue #111: SSH sanitization wired into _wee_execute_tool (resolves #113 TODO).
     # The wee runtime now has a full tool execution loop.

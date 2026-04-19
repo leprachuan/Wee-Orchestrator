@@ -94,6 +94,19 @@ class TestIssue20ShellInjection(unittest.TestCase):
         result = mgr._execute_bash_command("echo 'unterminated", "orchestrator")
         self.assertIn("Invalid command syntax", result)
 
+    def test_issue_20_wee_bash_tool_preserves_pipe_semantics(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            mgr = _build_manager(tmp_path)
+
+            result = mgr._wee_execute_tool(
+                "bash",
+                {"command": "printf 'alpha\\nbeta\\n' | head -n 1"},
+                "orchestrator",
+            )
+
+            self.assertEqual(result, "alpha")
+
 
 if __name__ == "__main__":
     unittest.main()
