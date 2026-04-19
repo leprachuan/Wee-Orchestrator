@@ -10,6 +10,7 @@ import logging
 import mimetypes
 import os
 import re
+import signal
 import sys
 import threading
 import time
@@ -202,12 +203,87 @@ class TelegramConnector:
         self.offset = 0
         self.running = False
         self.user_rate_limiter = ConnectorRateLimiter()
+        self.shutdown_event = threading.Event()
+        self._active_request_lock = threading.Lock()
+        self._active_requests = 0
+        self._active_requests_drained = threading.Event()
+        self._active_requests_drained.set()
+        self.shutdown_timeout = float(
+            os.environ.get("CONNECTOR_SHUTDOWN_TIMEOUT_SECONDS", "30")
+        )
 
         if not self.config.config.get("allowed_users"):
             print(
                 "⚠️  WARNING: allowed_users is empty — ALL Telegram users can interact with this bot!",
                 file=sys.stderr,
             )
+
+    def _install_signal_handlers(self):
+        """Install SIGTERM/SIGINT handlers when running on the main thread."""
+        for sig in (signal.SIGTERM, signal.SIGINT):
+            try:
+                signal.signal(sig, self._handle_shutdown_signal)
+            except ValueError:
+                logger.debug("Skipping %s handler outside main thread", sig)
+
+    def _handle_shutdown_signal(self, signum, _frame):
+        """Stop taking new work and let in-flight requests finish."""
+        signame = signal.Signals(signum).name
+        print(
+            f"\nReceived {signame}; draining active Telegram requests before shutdown...",
+            file=sys.stderr,
+        )
+        self._request_shutdown(signame)
+
+    def _request_shutdown(self, reason: str = "shutdown"):
+        """Mark the connector as shutting down."""
+        if self.shutdown_event.is_set():
+            return
+        self.shutdown_event.set()
+        self.running = False
+        print(f"[INFO] Telegram connector shutdown requested: {reason}", file=sys.stderr)
+
+    def _begin_active_request(self) -> bool:
+        """Track a request that must complete before shutdown finishes."""
+        with self._active_request_lock:
+            if self.shutdown_event.is_set():
+                return False
+            self._active_requests += 1
+            self._active_requests_drained.clear()
+            return True
+
+    def _finish_active_request(self):
+        """Mark a tracked request as complete."""
+        with self._active_request_lock:
+            if self._active_requests > 0:
+                self._active_requests -= 1
+            if self._active_requests == 0:
+                self._active_requests_drained.set()
+
+    def _wait_for_active_requests(
+        self, component: str = "Telegram connector", timeout: Optional[float] = None
+    ) -> bool:
+        """Wait for tracked in-flight requests to finish."""
+        wait_timeout = self.shutdown_timeout if timeout is None else timeout
+        with self._active_request_lock:
+            pending = self._active_requests
+
+        if pending <= 0:
+            return True
+
+        print(
+            f"[INFO] {component} waiting for {pending} active request(s) to finish...",
+            file=sys.stderr,
+        )
+        drained = self._active_requests_drained.wait(wait_timeout)
+        if not drained:
+            with self._active_request_lock:
+                remaining = self._active_requests
+            print(
+                f"[WARN] {component} shutdown timed out with {remaining} active request(s) still running",
+                file=sys.stderr,
+            )
+        return drained
 
     def _get_user_rate_limit_settings(self) -> Tuple[int, int]:
         """Return connector-side per-user rate limit settings."""
@@ -1157,6 +1233,12 @@ class TelegramConnector:
 
     def handle_message(self, update: Dict):
         """Process incoming Telegram message"""
+        if not self._begin_active_request():
+            print(
+                "[INFO] Ignoring Telegram update while shutdown is in progress",
+                file=sys.stderr,
+            )
+            return
         try:
             message = update.get("message", {})
 
@@ -1434,6 +1516,8 @@ class TelegramConnector:
         except Exception as e:
             print(f"Error handling message: {e}", file=sys.stderr)
             self.send_message(chat_id, f"❌ Error: {str(e)[:100]}")
+        finally:
+            self._finish_active_request()
 
     def _handle_command(self, chat_id: int, user_id: int, command: str):
         """Handle Telegram commands - DEPRECATED: Commands now pass to agent_manager"""
@@ -1633,6 +1717,8 @@ class TelegramConnector:
 
     def run(self, poll_interval: int = 1):
         """Start polling for messages"""
+        self._install_signal_handlers()
+        self.shutdown_event.clear()
         self.running = True
         print(f"Starting Telegram connector with token: {self.token[:20]}...")
 
@@ -1644,22 +1730,26 @@ class TelegramConnector:
             while self.running:
                 updates = self.get_updates()
                 for update in updates:
+                    if self.shutdown_event.is_set():
+                        break
                     if "message" in update:
                         self.handle_message(update)
                     elif "callback_query" in update:
                         # Handle button callbacks if needed
                         pass
 
-                if not updates:
+                if not updates and self.running:
                     time.sleep(poll_interval)
 
         except KeyboardInterrupt:
-            print("\nShutting down Telegram connector...")
-            self.running = False
+            self._request_shutdown("KeyboardInterrupt")
+        finally:
+            self._wait_for_active_requests()
 
     def stop(self):
         """Stop the connector"""
-        self.running = False
+        self._request_shutdown("stop()")
+        self._wait_for_active_requests()
 
 
 def main():

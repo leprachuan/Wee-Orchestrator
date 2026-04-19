@@ -10,6 +10,7 @@ import logging
 import mimetypes
 import os
 import re
+import signal
 import ssl
 import sys
 import threading
@@ -184,12 +185,106 @@ class WebEXConnector:
         self.rabbitmq_channel = None
         self.cleanup_thread = None
         self.user_rate_limiter = ConnectorRateLimiter()
+        self.shutdown_event = threading.Event()
+        self._active_request_lock = threading.Lock()
+        self._active_requests = 0
+        self._active_requests_drained = threading.Event()
+        self._active_requests_drained.set()
+        self.shutdown_timeout = float(
+            os.environ.get("CONNECTOR_SHUTDOWN_TIMEOUT_SECONDS", "30")
+        )
 
         if not self.config.config.get("allowed_users"):
             print(
                 "⚠️  WARNING: allowed_users is empty — ALL WebEx users can interact with this bot!",
                 file=sys.stderr,
             )
+
+    def _install_signal_handlers(self):
+        """Install SIGTERM/SIGINT handlers when running on the main thread."""
+        for sig in (signal.SIGTERM, signal.SIGINT):
+            try:
+                signal.signal(sig, self._handle_shutdown_signal)
+            except ValueError:
+                logger.debug("Skipping %s handler outside main thread", sig)
+
+    def _handle_shutdown_signal(self, signum, _frame):
+        """Stop consuming new messages and let in-flight requests finish."""
+        signame = signal.Signals(signum).name
+        print(
+            f"\nReceived {signame}; draining active WebEX requests before shutdown...",
+            file=sys.stderr,
+        )
+        self._request_shutdown(signame)
+
+    def _request_shutdown(self, reason: str = "shutdown"):
+        """Mark the connector as shutting down and stop queue consumption."""
+        if self.shutdown_event.is_set():
+            return
+        self.shutdown_event.set()
+        self.running = False
+        print(f"[INFO] WebEX connector shutdown requested: {reason}", file=sys.stderr)
+        self._stop_consuming_async()
+
+    def _begin_active_request(self) -> bool:
+        """Track a request that must complete before shutdown finishes."""
+        with self._active_request_lock:
+            if self.shutdown_event.is_set():
+                return False
+            self._active_requests += 1
+            self._active_requests_drained.clear()
+            return True
+
+    def _finish_active_request(self):
+        """Mark a tracked request as complete."""
+        with self._active_request_lock:
+            if self._active_requests > 0:
+                self._active_requests -= 1
+            if self._active_requests == 0:
+                self._active_requests_drained.set()
+
+    def _wait_for_active_requests(
+        self, component: str = "WebEX connector", timeout: Optional[float] = None
+    ) -> bool:
+        """Wait for tracked in-flight requests to finish."""
+        wait_timeout = self.shutdown_timeout if timeout is None else timeout
+        with self._active_request_lock:
+            pending = self._active_requests
+
+        if pending <= 0:
+            return True
+
+        print(
+            f"[INFO] {component} waiting for {pending} active request(s) to finish...",
+            file=sys.stderr,
+        )
+        drained = self._active_requests_drained.wait(wait_timeout)
+        if not drained:
+            with self._active_request_lock:
+                remaining = self._active_requests
+            print(
+                f"[WARN] {component} shutdown timed out with {remaining} active request(s) still running",
+                file=sys.stderr,
+            )
+        return drained
+
+    def _stop_consuming(self):
+        """Stop RabbitMQ consumption on the current channel if possible."""
+        try:
+            if self.rabbitmq_channel and getattr(self.rabbitmq_channel, "is_open", True):
+                self.rabbitmq_channel.stop_consuming()
+        except Exception as e:
+            print(f"[WARN] Failed to stop RabbitMQ consumption: {e}", file=sys.stderr)
+
+    def _stop_consuming_async(self):
+        """Request consumer shutdown from any thread."""
+        try:
+            if self.rabbitmq_connection and not self.rabbitmq_connection.is_closed:
+                self.rabbitmq_connection.add_callback_threadsafe(self._stop_consuming)
+            else:
+                self._stop_consuming()
+        except Exception:
+            self._stop_consuming()
 
     def _get_user_rate_limit_settings(self) -> Tuple[int, int]:
         """Return connector-side per-user rate limit settings."""
@@ -1251,6 +1346,12 @@ class WebEXConnector:
 
     def handle_message(self, message_data: Dict):
         """Process incoming WebEX message from RabbitMQ"""
+        if not self._begin_active_request():
+            print(
+                "[INFO] Ignoring WebEX message while shutdown is in progress",
+                file=sys.stderr,
+            )
+            return
         try:
             person_id = message_data.get("personId")
             room_id = message_data.get("roomId")
@@ -1499,6 +1600,8 @@ class WebEXConnector:
             print(f"Error handling message: {e}", file=sys.stderr)
             if room_id:
                 self.send_message(room_id, f"❌ Error: {str(e)[:100]}")
+        finally:
+            self._finish_active_request()
 
     def _execute_command(
         self,
@@ -1669,6 +1772,8 @@ class WebEXConnector:
 
     def listen_to_queue(self, poll_interval: int = 1):
         """Listen to RabbitMQ queue for WebEX messages"""
+        self._install_signal_handlers()
+        self.shutdown_event.clear()
         self.running = True
         print(
             f"Starting WebEX connector, listening to queue: {self.config.config['rabbitmq_queue']}"
@@ -1753,14 +1858,15 @@ class WebEXConnector:
             self.rabbitmq_channel.start_consuming()
 
         except KeyboardInterrupt:
-            print("\nShutting down WebEX connector...")
-            self.running = False
+            self._request_shutdown("KeyboardInterrupt")
         finally:
+            self._wait_for_active_requests()
             self.disconnect_rabbitmq()
 
     def stop(self):
         """Stop the connector"""
-        self.running = False
+        self._request_shutdown("stop()")
+        self._wait_for_active_requests()
         self.disconnect_rabbitmq()
 
 
