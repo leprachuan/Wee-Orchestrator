@@ -6,6 +6,8 @@ Manages session ID mapping between N8N chat sessions and AI backend sessions
 """
 
 import argparse
+import calendar
+import copy
 import hashlib
 import json
 import logging
@@ -13,6 +15,7 @@ import os
 import re
 import shlex
 import secrets as _secrets
+import shlex
 import shutil
 import signal
 import subprocess
@@ -361,6 +364,8 @@ class BackgroundTaskManager:
     MAX_TASKS_PER_USER = int(os.environ.get("BG_MAX_TASKS_PER_USER", "5"))
     MAX_TOTAL_TASKS = int(os.environ.get("BG_MAX_TOTAL_TASKS", "500"))
     MAX_OUTPUT_LINES = 500
+    MAX_TOOL_CALLS = 200
+    MAX_TOOL_FIELD_CHARS = int(os.environ.get("BG_MAX_TOOL_FIELD_CHARS", "4000"))
     CLEANUP_AGE_HOURS = int(os.environ.get("BG_CLEANUP_HOURS", "24"))
     BG_CLEANUP_HOURS = int(os.environ.get("BG_CLEANUP_HOURS", "24"))
 
@@ -504,9 +509,9 @@ class BackgroundTaskManager:
 
     def get_task(self, task_id: str) -> Optional[dict]:
         with self._lock:
-            for t in self._load():
+            for t in self._load_unlocked():
                 if t["task_id"] == task_id:
-                    return t
+                    return copy.deepcopy(t)
         return None
 
     def _identity_matches(self, task: dict, channel: str, identity: str) -> bool:
@@ -522,13 +527,61 @@ class BackgroundTaskManager:
     def list_tasks(self, channel: str, identity: str) -> list:
         with self._lock:
             return [
-                t for t in self._load() if self._identity_matches(t, channel, identity)
+                copy.deepcopy(t)
+                for t in self._load_unlocked()
+                if self._identity_matches(t, channel, identity)
             ]
 
     def list_all_tasks(self) -> list:
         """Return all tasks regardless of identity/channel."""
         with self._lock:
-            return list(self._load())
+            return copy.deepcopy(self._load_unlocked())
+
+    def list_task_summaries(
+        self,
+        limit: int = 50,
+        offset: int = 0,
+        status: Optional[str] = None,
+        reconcile_running: bool = False,
+    ) -> Tuple[list, int]:
+        """Return paginated task summaries without large transcript payloads."""
+        with self._lock:
+            tasks = list(self._load_unlocked())
+            if reconcile_running:
+                changed = False
+                completed_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+                for task in tasks:
+                    if task.get("status") != "running" or not task.get("pid"):
+                        continue
+                    try:
+                        os.kill(task["pid"], 0)
+                    except ProcessLookupError:
+                        task["status"] = "failed"
+                        task["error"] = "Process terminated unexpectedly"
+                        task["completed_at"] = completed_at
+                        changed = True
+                if changed:
+                    self._save_unlocked(tasks)
+            if status:
+                tasks = [t for t in tasks if t.get("status") == status]
+            tasks.sort(key=lambda t: t.get("created_at", ""), reverse=True)
+            total = len(tasks)
+            page = tasks[offset : offset + limit]
+            summaries = [
+                {
+                    "task_id": t["task_id"],
+                    "agent": t["agent"],
+                    "runtime": t["runtime"],
+                    "model": t["model"],
+                    "prompt": (t.get("prompt") or "")[:200],
+                    "status": t["status"],
+                    "created_at": t["created_at"],
+                    "completed_at": t.get("completed_at"),
+                    "error": t.get("error"),
+                }
+                for t in page
+            ]
+            return summaries, total
 
     def count_running(self, channel: str, identity: str, agent: str = None) -> int:
         tasks = self.list_tasks(channel, identity)
@@ -578,16 +631,16 @@ class BackgroundTaskManager:
 
     def update_task(self, task_id: str, **fields):
         with self._lock:
-            tasks = self._load()
+            tasks = self._load_unlocked()
             for t in tasks:
                 if t["task_id"] == task_id:
                     t.update(fields)
                     break
-            self._save(tasks)
+            self._save_unlocked(tasks)
 
     def append_output(self, task_id: str, line: str):
         with self._lock:
-            tasks = self._load()
+            tasks = self._load_unlocked()
             for t in tasks:
                 if t["task_id"] == task_id:
                     t["output_lines"].append(line)
@@ -595,36 +648,35 @@ class BackgroundTaskManager:
                     if len(t["output_lines"]) > self.MAX_OUTPUT_LINES:
                         t["output_lines"] = t["output_lines"][-self.MAX_OUTPUT_LINES :]
                     break
-            self._save(tasks)
-
-    MAX_TOOL_CALLS = 200
+            self._save_unlocked(tasks)
 
     def append_tool_call(self, task_id: str, tool_call: dict):
         """Append a new tool call event to the task."""
         with self._lock:
-            tasks = self._load()
+            tasks = self._load_unlocked()
             for t in tasks:
                 if t["task_id"] == task_id:
                     if "tool_calls" not in t:
                         t["tool_calls"] = []
-                    t["tool_calls"].append(tool_call)
+                    t["tool_calls"].append(self._trim_tool_call(tool_call))
                     if len(t["tool_calls"]) > self.MAX_TOOL_CALLS:
                         t["tool_calls"] = t["tool_calls"][-self.MAX_TOOL_CALLS :]
                     break
-            self._save(tasks)
+            self._save_unlocked(tasks)
 
     def update_tool_call(self, task_id: str, call_id: str, **fields):
         """Update an existing tool call by its id."""
         with self._lock:
-            tasks = self._load()
+            tasks = self._load_unlocked()
             for t in tasks:
                 if t["task_id"] == task_id:
                     for tc in t.get("tool_calls", []):
                         if tc.get("id") == call_id:
                             tc.update(fields)
+                            tc.update(self._trim_tool_call(tc))
                             break
                     break
-            self._save(tasks)
+            self._save_unlocked(tasks)
 
     def complete_task(self, task_id: str, final_response: str):
         self.update_task(
@@ -671,11 +723,11 @@ class BackgroundTaskManager:
 
     def delete_task(self, task_id: str) -> bool:
         with self._lock:
-            tasks = self._load()
+            tasks = self._load_unlocked()
             before = len(tasks)
             tasks = [t for t in tasks if t["task_id"] != task_id]
             if len(tasks) < before:
-                self._save(tasks)
+                self._save_unlocked(tasks)
                 return True
         return False
 
@@ -707,7 +759,7 @@ class BackgroundTaskManager:
             # Enforce total task cap after TTL cleanup
             kept = self._evict_oldest_terminal(kept)
             if len(kept) < len(tasks):
-                self._save(kept)
+                self._save_unlocked(kept)
 
     def reconcile_stale_tasks(self) -> dict:
         """Reconcile orphaned tasks after a service restart.
@@ -718,7 +770,7 @@ class BackgroundTaskManager:
         now_str = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
         reconciled = {"stale_running": 0, "queued_ready": 0}
         with self._lock:
-            tasks = self._load()
+            tasks = self._load_unlocked()
             changed = False
             for t in tasks:
                 if t["status"] == "running":
@@ -737,7 +789,7 @@ class BackgroundTaskManager:
                         reconciled["stale_running"] += 1
                         changed = True
             if changed:
-                self._save(tasks)
+                self._save_unlocked(tasks)
             # Count queued tasks that are now promotable
             reconciled["queued_ready"] = sum(
                 1 for t in tasks if t["status"] == "queued"
@@ -1436,14 +1488,34 @@ class SessionManager:
     GEMINI_MODELS = {
         "Google Models": [
             (
+                "gemini-3.1-pro",
+                "Gemini 3.1 Pro",
+                ["pro-3.1", "gemini-3-pro", "pro-3"],
+            ),
+            (
+                "gemini-3.1-flash-live",
+                "Gemini 3.1 Flash Live",
+                ["flash-live-3.1", "gemini-3.1-flash", "flash-3.1"],
+            ),
+            (
+                "gemini-3.1-flash-lite",
+                "Gemini 3.1 Flash Lite",
+                ["flash-lite-3.1"],
+            ),
+            (
+                "gemini-3-deep-think",
+                "Gemini 3 Deep Think",
+                ["deep-think", "thinking"],
+            ),
+            (
                 "gemini-3-pro-preview",
                 "Gemini 3 Pro (Preview)",
-                ["gemini-3-pro", "pro-3"],
+                ["pro-3-preview"],
             ),
             (
                 "gemini-3-flash-preview",
                 "Gemini 3 Flash (Preview)",
-                ["gemini-3-flash", "flash-3"],
+                ["flash-3-preview"],
             ),
             (
                 "gemini-2.5-pro",
@@ -1473,6 +1545,7 @@ class SessionManager:
             ("gemini-1.5-pro-latest", "Gemini 1.5 Pro", ["gemini-1.5-pro"]),
             ("gemini-1.5-flash-latest", "Gemini 1.5 Flash", ["gemini-1.5-flash"]),
             ("gemini-2.0-flash-001", "Gemini 2.0 Flash", ["gemini-2.0-flash"]),
+            ("gemini-3.1-pro-latest", "Gemini 3.1 Pro (Latest)", ["gemini-3.1-pro"]),
         ],
     }
 
@@ -1760,6 +1833,7 @@ class SessionManager:
 
         # Lock for session map file read-modify-write to prevent TOCTOU races
         self._session_map_lock = threading.Lock()
+        self._session_map_cache: Optional[Dict] = None
 
         # Per-session streaming queues: session_id -> (asyncio.Queue, event_loop)
         # Populated by the /stream API endpoint; read by _execute_subprocess_with_tracking.
@@ -3971,13 +4045,16 @@ You can mention an agent in your prompt and it will auto-delegate:
     def load_session_map(self) -> Dict:
         """Load the N8N -> Session ID mapping"""
         if not self.session_map_file.exists():
+            self._session_map_cache = {}
             return {}
 
         try:
             with open(self.session_map_file, "r") as f:
-                return json.load(f)
+                data = json.load(f)
         except (json.JSONDecodeError, IOError):
-            return {}
+            data = {}
+        self._session_map_cache = data
+        return data
 
     def _prune_session_map_ttl(self, session_map: dict) -> dict:
         """Return a copy of session_map with entries older than session_map_ttl removed.
@@ -4011,6 +4088,14 @@ You can mention an agent in your prompt and it will auto-delegate:
         session_map = self._prune_session_map_ttl(session_map)
         with open(self.session_map_file, "w") as f:
             json.dump(session_map, f, indent=2)
+        self._session_map_cache = dict(session_map)
+
+    def get_cached_session_count(self) -> int:
+        """Return the in-memory session count without touching disk."""
+        cached = getattr(self, "_session_map_cache", None)
+        if not isinstance(cached, dict):
+            return 0
+        return len(cached)
 
     def load_session_data(self, n8n_session_id: str) -> Optional[Dict]:
         """
@@ -4517,12 +4602,13 @@ You can mention an agent in your prompt and it will auto-delegate:
         name_lower = name.lower().strip("\"'")
 
         # Ensure env models are loaded/cached by triggering fetch for this runtime
-        if runtime in ("claude", "gemini", "codex", "devin", "cursor", "wee"):
+        if runtime in ("claude", "claude-sdk", "gemini", "codex", "devin", "cursor", "wee"):
             self.get_models_for_runtime(runtime)
 
         # Step 1: check env-loaded or static alias tables for all runtimes that have them.
         env_alias_map = {
             "claude": self._env_claude_models,
+            "claude-sdk": self._env_claude_models,
             "gemini": self._env_gemini_models,
             "codex": self._env_codex_models,
             "devin": self._env_devin_models,
@@ -4531,6 +4617,7 @@ You can mention an agent in your prompt and it will auto-delegate:
         }
         static_alias_map = {
             "claude": self.CLAUDE_MODELS,
+            "claude-sdk": self.CLAUDE_MODELS,
             "gemini": self.GEMINI_MODELS,
             "codex": self.CODEX_MODELS,
             "opencode": self.OPENCODE_MODELS,
@@ -4936,6 +5023,7 @@ You can mention an agent in your prompt and it will auto-delegate:
         print(f"[Shell] Executing in {agent_dir}: {command}", file=sys.stderr)
 
         try:
+            argv = _split_command_args(command)
             # Execute the command with the configured timeout
             argv = _split_command_args(command)
             result = subprocess.run(
@@ -4952,6 +5040,52 @@ You can mention an agent in your prompt and it will auto-delegate:
                 output += result.stderr
 
             # If there's no output, indicate success
+            if not output.strip():
+                if result.returncode == 0:
+                    output = f"✓ Command executed successfully (exit code: 0)"
+                else:
+                    output = f"✗ Command failed with exit code: {result.returncode}"
+
+            return output.strip()
+
+        except ValueError as e:
+            return f"Error: {e}"
+        except subprocess.TimeoutExpired:
+            return f"Error: Command timed out after {self.command_timeout} seconds"
+        except Exception as e:
+            return f"Error executing command: {str(e)}"
+
+    def _execute_shell_command(self, command: str, agent: str = "orchestrator") -> str:
+        """Execute a trusted shell command with full bash semantics.
+
+        This is reserved for agent-authored shell tool calls that rely on pipes,
+        redirects, and command chaining. User-controlled scheduler command mode
+        must continue to use argv parsing via _execute_bash_command.
+        """
+        if not command:
+            return "Error: No command provided. Usage: !<command>"
+
+        agent_info = self.AGENTS.get(agent)
+        if not agent_info:
+            agent_dir = str(Path.cwd())
+        else:
+            agent_dir = agent_info["path"]
+
+        print(f"[Shell] Executing in {agent_dir}: {command}", file=sys.stderr)
+
+        try:
+            result = subprocess.run(
+                ["bash", "-o", "pipefail", "-c", command],
+                capture_output=True,
+                text=True,
+                timeout=self.command_timeout,
+                cwd=agent_dir,
+            )
+
+            output = result.stdout
+            if result.stderr:
+                output += result.stderr
+
             if not output.strip():
                 if result.returncode == 0:
                     output = f"✓ Command executed successfully (exit code: 0)"
@@ -7738,10 +7872,9 @@ User Request:
         cmd = ["gemini"]
         if mode == "elevated":
             cmd.append("--yolo")
-        # Use stream-json for structured tool call parsing when streaming
-        stream_info = self._stream_queues.get(n8n_session_id)
-        if stream_info:
-            cmd.extend(["-o", "stream-json"])
+        # Always use stream-json for structured output to ensure clean response extraction
+        # and consistent tool call tracking.
+        cmd.extend(["-o", "stream-json"])
         cmd.append(context_prompt)
 
         # Note: Gemini CLI appears to have model handling issues with specified model names
@@ -10136,10 +10269,10 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 await asyncio.sleep(300)
                 auth_mgr.cleanup_expired()
                 rate_limiter.cleanup()
-                bg_task_mgr.cleanup_old()
+                await asyncio.to_thread(bg_task_mgr.cleanup_old)
                 # Periodic reconciliation: promote queued tasks if slots available
                 try:
-                    _all = bg_task_mgr.list_all_tasks()
+                    _all = await asyncio.to_thread(bg_task_mgr.list_all_tasks)
                     _queued_periodic = [t for t in _all if t["status"] == "queued"]
                     _queued_periodic.sort(key=lambda t: t.get("created_at", ""))
                     for _qt in _queued_periodic:
@@ -10151,11 +10284,15 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                             "max_concurrent",
                             BackgroundTaskManager.MAX_TASKS_PER_USER,
                         )
-                        _rn = bg_task_mgr.count_running(_ch, _uid, _agent)
+                        _rn = await asyncio.to_thread(
+                            bg_task_mgr.count_running, _ch, _uid, _agent
+                        )
                         if _rn >= _mc:
                             continue
                         _nsid = str(uuid4())
-                        bg_task_mgr.promote_queued_task(_qt["task_id"], _nsid)
+                        await asyncio.to_thread(
+                            bg_task_mgr.promote_queued_task, _qt["task_id"], _nsid
+                        )
                         print(
                             f"[Periodic] Promoting queued task {_qt['task_id']}",
                             flush=True,
@@ -10210,7 +10347,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                     )
 
         # Reconcile orphaned tasks from previous process lifetime
-        _reconcile_result = bg_task_mgr.reconcile_stale_tasks()
+        _reconcile_result = await asyncio.to_thread(bg_task_mgr.reconcile_stale_tasks)
         if _reconcile_result["stale_running"] or _reconcile_result["queued_ready"]:
             print(
                 f"[Startup] Task reconciliation: "
@@ -10219,7 +10356,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 flush=True,
             )
             # Promote queued tasks that now have available slots
-            _all_tasks = bg_task_mgr.list_all_tasks()
+            _all_tasks = await asyncio.to_thread(bg_task_mgr.list_all_tasks)
             _queued = [t for t in _all_tasks if t["status"] == "queued"]
             _queued.sort(key=lambda t: t.get("created_at", ""))
             for _qt in _queued:
@@ -10230,11 +10367,15 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 _max_conc = _agent_config.get(
                     "max_concurrent", BackgroundTaskManager.MAX_TASKS_PER_USER
                 )
-                _running_now = bg_task_mgr.count_running(_channel, _identity, _agent)
+                _running_now = await asyncio.to_thread(
+                    bg_task_mgr.count_running, _channel, _identity, _agent
+                )
                 if _running_now >= _max_conc:
                     continue
                 _new_sid = str(uuid4())
-                bg_task_mgr.promote_queued_task(_qt["task_id"], _new_sid)
+                await asyncio.to_thread(
+                    bg_task_mgr.promote_queued_task, _qt["task_id"], _new_sid
+                )
                 print(
                     f"[Startup] Promoting queued task {_qt['task_id']} → running",
                     flush=True,
@@ -12230,6 +12371,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                     context_prompt,
                     "--output-format",
                     "stream-json",
+                    "--verbose",
                     "--model",
                     model,
                     "--permission-mode",
@@ -12586,7 +12728,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         # Resolve agent/runtime/model — default to user's current session config
         # Determine defaults by searching for ANY session for this identity across all channels
         # to inherit preferences (like notification_preference).
-        session_map = session_mgr.load_session_map()
+        session_map = await asyncio.to_thread(session_mgr.load_session_map)
         # Inherit only safe fields (never 'agent') from prior sessions — see issue #75
         defaults = _compute_bg_task_defaults(session_map, identity, channel)
 
@@ -12622,14 +12764,17 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         effective_prompt = body.prompt
 
         # Check concurrent limit — queue instead of rejecting
-        running = bg_task_mgr.count_running(channel, identity, agent)
+        running = await asyncio.to_thread(
+            bg_task_mgr.count_running, channel, identity, agent
+        )
         agent_config = session_mgr.AGENTS.get(agent, {})
         max_concurrent = agent_config.get(
             "max_concurrent", BackgroundTaskManager.MAX_TASKS_PER_USER
         )
         if running >= max_concurrent:
             # Queue the task — it will be promoted when a running task finishes
-            task = bg_task_mgr.create_task(
+            task = await asyncio.to_thread(
+                bg_task_mgr.create_task,
                 task_id=task_id,
                 session_id=session_id,
                 user_identity=identity,
@@ -12643,7 +12788,9 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 notify=notify_pref,
                 origin_session_id=body.origin_session_id,
             )
-            queue_pos = bg_task_mgr.count_queued(channel, identity)
+            queue_pos = await asyncio.to_thread(
+                bg_task_mgr.count_queued, channel, identity
+            )
             print(
                 f"[API] Task {task_id} queued (position {queue_pos}, {running}/{BackgroundTaskManager.MAX_TASKS_PER_USER} slots full)"
             )
@@ -12660,7 +12807,8 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             }
 
         # Create task record (running immediately)
-        task = bg_task_mgr.create_task(
+        task = await asyncio.to_thread(
+            bg_task_mgr.create_task,
             task_id=task_id,
             session_id=session_id,
             user_identity=identity,
@@ -12784,7 +12932,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             x_user_identity=request.headers.get("x-user-identity"),
             x_auth_channel=request.headers.get("x-auth-channel"),
         )
-        task = bg_task_mgr.get_task(task_id)
+        task = await asyncio.to_thread(bg_task_mgr.get_task, task_id)
         if not task:
             raise HTTPException(status_code=404, detail="Task not found")
         # Return detail with last 50 output lines
@@ -12814,7 +12962,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             x_user_identity=request.headers.get("x-user-identity"),
             x_auth_channel=request.headers.get("x-auth-channel"),
         )
-        task = bg_task_mgr.get_task(task_id)
+        task = await asyncio.to_thread(bg_task_mgr.get_task, task_id)
         if not task:
             raise HTTPException(status_code=404, detail="Task not found")
         return {
@@ -12834,7 +12982,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             x_user_identity=request.headers.get("x-user-identity"),
             x_auth_channel=request.headers.get("x-auth-channel"),
         )
-        task = bg_task_mgr.get_task(task_id)
+        task = await asyncio.to_thread(bg_task_mgr.get_task, task_id)
         if not task:
             raise HTTPException(status_code=404, detail="Task not found")
         return {
@@ -12855,7 +13003,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             x_user_identity=request.headers.get("x-user-identity"),
             x_auth_channel=request.headers.get("x-auth-channel"),
         )
-        task = bg_task_mgr.get_task(task_id)
+        task = await asyncio.to_thread(bg_task_mgr.get_task, task_id)
         if not task:
             raise HTTPException(status_code=404, detail="Task not found")
         return {
@@ -12875,19 +13023,23 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             x_user_identity=request.headers.get("x-user-identity"),
             x_auth_channel=request.headers.get("x-auth-channel"),
         )
-        task = bg_task_mgr.get_task(task_id)
+        task = await asyncio.to_thread(bg_task_mgr.get_task, task_id)
         if not task:
             raise HTTPException(status_code=404, detail="Task not found")
 
         if task["status"] in ("running", "queued"):
             was_running = task["status"] == "running"
-            bg_task_mgr.kill_task(task_id)
+            await asyncio.to_thread(bg_task_mgr.kill_task, task_id)
             # If a running task was killed, promote the next queued task
             if was_running:
-                next_q = bg_task_mgr.get_next_queued(user["channel"], user["identity"])
+                next_q = await asyncio.to_thread(
+                    bg_task_mgr.get_next_queued, user["channel"], user["identity"]
+                )
                 if next_q:
                     new_sid = str(uuid4())
-                    bg_task_mgr.promote_queued_task(next_q["task_id"], new_sid)
+                    await asyncio.to_thread(
+                        bg_task_mgr.promote_queued_task, next_q["task_id"], new_sid
+                    )
                     print(
                         f"[BG] Kill triggered promotion of queued task {next_q['task_id']}"
                     )
@@ -12909,7 +13061,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                     )
             return {"task_id": task_id, "action": "killed"}
         else:
-            bg_task_mgr.delete_task(task_id)
+            await asyncio.to_thread(bg_task_mgr.delete_task, task_id)
             return {"task_id": task_id, "action": "deleted"}
 
     # --- Background Task Steering ---
@@ -12934,7 +13086,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             x_user_identity=request.headers.get("x-user-identity"),
             x_auth_channel=request.headers.get("x-auth-channel"),
         )
-        task = bg_task_mgr.get_task(task_id)
+        task = await asyncio.to_thread(bg_task_mgr.get_task, task_id)
         if not task:
             raise HTTPException(status_code=404, detail="Task not found")
         if task["status"] != "running":
@@ -12942,7 +13094,9 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 status_code=409,
                 detail=f"Task is {task['status']}, not running -- cannot steer",
             )
-        path = bg_task_mgr.write_steering(task_id, body.instruction)
+        path = await asyncio.to_thread(
+            bg_task_mgr.write_steering, task_id, body.instruction
+        )
         logger.info(
             "[STEER] Steering written for task %s: %s", task_id, body.instruction[:80]
         )
@@ -12961,10 +13115,10 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             x_user_identity=request.headers.get("x-user-identity"),
             x_auth_channel=request.headers.get("x-auth-channel"),
         )
-        task = bg_task_mgr.get_task(task_id)
+        task = await asyncio.to_thread(bg_task_mgr.get_task, task_id)
         if not task:
             raise HTTPException(status_code=404, detail="Task not found")
-        content = bg_task_mgr.read_steering(task_id)
+        content = await asyncio.to_thread(bg_task_mgr.read_steering, task_id)
         return {
             "task_id": task_id,
             "has_steering": content is not None,

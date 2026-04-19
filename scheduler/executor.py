@@ -48,6 +48,19 @@ _DRIFT_EVENT_HISTORY = 50  # keep last N drift events for diagnostics
 _MAX_NOTIFICATION_LENGTH = 200
 
 
+def _split_command_args(command: str) -> list[str]:
+    """Parse a command string into argv without invoking a shell."""
+    if not isinstance(command, str) or not command.strip():
+        raise ValueError("No command provided")
+    try:
+        argv = shlex.split(command, posix=True)
+    except ValueError as exc:
+        raise ValueError(f"Invalid command syntax: {exc}") from exc
+    if not argv:
+        raise ValueError("No command provided")
+    return argv
+
+
 def _brief_notification(icon: str, job_name: str, verb: str) -> str:
     """Return a one-line notification capped at _MAX_NOTIFICATION_LENGTH."""
     msg = f"{icon} {job_name} — {verb}"
@@ -681,6 +694,18 @@ class TaskSchedulerExecutor:
                     )
 
                 return None
+        except ValueError as e:
+            error_str = str(e)
+            self._log_job(job_id, f"Invalid command: {error_str}")
+            self._save_result(job_id, job["name"], success=False, error=error_str)
+            logger.error(f"Job {job_id} has invalid command syntax: {e}")
+
+            if notify:
+                self._notify_creator(
+                    job,
+                    _brief_notification("⚠️", job["name"], "error"),
+                )
+            return None
 
         except subprocess.TimeoutExpired:
             timeout_mins = timeout / 60
