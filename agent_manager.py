@@ -9,6 +9,7 @@ import argparse
 import calendar
 import copy
 import hashlib
+import hmac
 import json
 import logging
 import os
@@ -241,7 +242,7 @@ class AuthManager:
         """Validate a Bearer token as a shared key. Expects 'shared_<key>'."""
         if not token.startswith("shared_"):
             return False
-        return token[7:] == self.shared_key
+        return hmac.compare_digest(token[7:], self.shared_key)
 
     def _load_sessions(self):
         """Load persisted sessions from file on startup."""
