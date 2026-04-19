@@ -7,6 +7,7 @@ Handles user pairing, message routing, and configuration
 
 import json
 import logging
+import math
 import mimetypes
 import os
 import re
@@ -210,6 +211,9 @@ class TelegramConnector:
         self._active_requests_drained.set()
         self.shutdown_timeout = float(
             os.environ.get("CONNECTOR_SHUTDOWN_TIMEOUT_SECONDS", "30")
+        )
+        self.poll_slice_timeout = max(
+            1.0, float(os.environ.get("TELEGRAM_POLL_SLICE_TIMEOUT_SECONDS", "5"))
         )
 
         if not self.config.config.get("allowed_users"):
@@ -482,22 +486,37 @@ class TelegramConnector:
 
     def get_updates(self, timeout: int = 30) -> List[Dict]:
         """Fetch new messages from Telegram"""
-        try:
-            response = requests.get(
-                f"{self.api_url}/getUpdates",
-                params={"offset": self.offset, "timeout": timeout},
-                timeout=timeout + 5,
-            )
-            response.raise_for_status()
-            updates = response.json().get("result", [])
+        deadline = time.monotonic() + max(0, timeout)
 
-            if updates:
-                self.offset = updates[-1]["update_id"] + 1
+        while self.running and not self.shutdown_event.is_set():
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return []
 
-            return updates
-        except Exception as e:
-            print(f"Error fetching updates: {e}", file=sys.stderr)
-            return []
+            poll_timeout = min(self.poll_slice_timeout, remaining)
+            server_timeout = max(1, math.ceil(poll_timeout))
+
+            try:
+                response = requests.get(
+                    f"{self.api_url}/getUpdates",
+                    params={"offset": self.offset, "timeout": server_timeout},
+                    timeout=poll_timeout + 5,
+                )
+                response.raise_for_status()
+                updates = response.json().get("result", [])
+
+                if updates:
+                    self.offset = updates[-1]["update_id"] + 1
+                    return updates
+            except requests.exceptions.ReadTimeout:
+                continue
+            except Exception as e:
+                if self.shutdown_event.is_set() or not self.running:
+                    return []
+                print(f"Error fetching updates: {e}", file=sys.stderr)
+                return []
+
+        return []
 
     def sanitize_telegram_html(self, text: str) -> str:
         """Sanitize HTML to only contain Telegram-supported tags.
@@ -1239,11 +1258,29 @@ class TelegramConnector:
                 file=sys.stderr,
             )
             return
+        chat_id = None
+        user_id = None
         try:
             message = update.get("message", {})
+            sender = message.get("from") or {}
+            chat = message.get("chat") or {}
+            chat_id = chat.get("id")
+            user_id = sender.get("id")
 
             # Ignore messages from bots (including this bot) to avoid handling bot-sent updates which can cause duplicate responses
-            if message.get("from", {}).get("is_bot"):
+            if sender.get("is_bot"):
+                return
+
+            if user_id is None or chat_id is None:
+                print(
+                    f"[DEBUG] Incomplete Telegram message: {message}",
+                    file=sys.stderr,
+                )
+                return
+
+            # Reject unauthorized users before file downloads or transcription work.
+            if not self.config.is_user_allowed(user_id):
+                self.send_message(chat_id, "❌ You are not authorized to use this bot.")
                 return
 
             # Handle files with optional caption
@@ -1253,9 +1290,6 @@ class TelegramConnector:
             # Check for document or photo
             if "document" in message:
                 document = message["document"]
-                user_id = message["from"]["id"]
-                chat_id = message["chat"]["id"]
-
                 file_path = self.download_file(document["file_id"], user_id)
                 print(
                     f"[DEBUG] Document detected, file_path: {file_path}",
@@ -1272,9 +1306,6 @@ class TelegramConnector:
             elif "photo" in message:
                 # Telegram sends photos as arrays, get largest
                 photos = message["photo"]
-                user_id = message["from"]["id"]
-                chat_id = message["chat"]["id"]
-
                 largest_photo = photos[-1]  # Last is highest quality
                 file_path = self.download_file(largest_photo["file_id"], user_id)
                 print(
@@ -1290,9 +1321,6 @@ class TelegramConnector:
                     return
             elif "voice" in message or "audio" in message or "video_note" in message:
                 # Voice messages, audio files, and video notes → transcribe
-                user_id = message["from"]["id"]
-                chat_id = message["chat"]["id"]
-
                 if "voice" in message:
                     file_id = message["voice"]["file_id"]
                     duration = message["voice"].get("duration", 0)
@@ -1338,15 +1366,8 @@ class TelegramConnector:
                 # No text, no file - ignore
                 return
 
-            user_id = message["from"]["id"]
-            chat_id = message["chat"]["id"]
-            user_name = message["from"].get("username", f"user_{user_id}")
+            user_name = sender.get("username", f"user_{user_id}")
             # text already set from above (may be from file or message.text)
-
-            # Check if user is allowed
-            if not self.config.is_user_allowed(user_id):
-                self.send_message(chat_id, "❌ You are not authorized to use this bot.")
-                return
 
             # Get or create user session
             session_info = self.config.get_user_session(user_id)
@@ -1515,7 +1536,8 @@ class TelegramConnector:
 
         except Exception as e:
             print(f"Error handling message: {e}", file=sys.stderr)
-            self.send_message(chat_id, f"❌ Error: {str(e)[:100]}")
+            if chat_id is not None:
+                self.send_message(chat_id, f"❌ Error: {str(e)[:100]}")
         finally:
             self._finish_active_request()
 

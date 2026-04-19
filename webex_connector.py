@@ -445,6 +445,7 @@ class WebEXConnector:
             self.rabbitmq_channel.queue_declare(
                 queue=self.config.config["rabbitmq_queue"], durable=True
             )
+            self.rabbitmq_channel.basic_qos(prefetch_count=1)
 
             ssl_info = " (SSL/TLS enabled)" if use_ssl else ""
             print(
@@ -1344,20 +1345,28 @@ class WebEXConnector:
             )
             self.send_file(room_id, file_path, caption)
 
-    def handle_message(self, message_data: Dict):
-        """Process incoming WebEX message from RabbitMQ"""
+    def handle_message(self, message_data: Dict) -> bool:
+        """Process incoming WebEX message from RabbitMQ."""
         if not self._begin_active_request():
             print(
                 "[INFO] Ignoring WebEX message while shutdown is in progress",
                 file=sys.stderr,
             )
-            return
+            return False
         try:
             person_id = message_data.get("personId")
             room_id = message_data.get("roomId")
             text = message_data.get("text", "").strip()
             person_email = message_data.get("personEmail", "unknown")
             files = message_data.get("files", [])
+
+            if not person_id or not room_id:
+                print(f"[DEBUG] Incomplete message: {message_data}", file=sys.stderr)
+                return True
+
+            if not self.config.is_user_allowed(person_id):
+                self.send_message(room_id, "❌ You are not authorized to use this bot.")
+                return True
 
             # Handle files with optional caption
             file_path = None
@@ -1427,16 +1436,11 @@ class WebEXConnector:
                         print(f"[DEBUG] File query: {text[:200]}", file=sys.stderr)
                 else:
                     self.send_message(room_id, "❌ Failed to download file")
-                    return
+                    return True
 
-            if not person_id or not room_id or not text:
+            if not text:
                 print(f"[DEBUG] Incomplete message: {message_data}", file=sys.stderr)
-                return
-
-            # Check if user is allowed
-            if not self.config.is_user_allowed(person_id):
-                self.send_message(room_id, "❌ You are not authorized to use this bot.")
-                return
+                return True
 
             # Get or create user session
             session_info = self.config.get_user_session(person_id)
@@ -1539,7 +1543,7 @@ class WebEXConnector:
                     allowed, rate_limit_message = self._check_user_rate_limit(person_id)
                     if not allowed:
                         self.send_message(room_id, rate_limit_message)
-                        return
+                        return True
                     timeout = self.config.get_user_timeout(person_id)
                     response = self._execute_command(
                         text, session_id, timeout, user_identity=person_id
@@ -1573,7 +1577,7 @@ class WebEXConnector:
                     allowed, rate_limit_message = self._check_user_rate_limit(person_id)
                     if not allowed:
                         self.send_message(room_id, rate_limit_message)
-                        return
+                        return True
                     timeout = self.config.get_user_timeout(person_id)
                     response = self._execute_command(
                         text, session_id, timeout, user_identity=person_id
@@ -1584,7 +1588,7 @@ class WebEXConnector:
                     allowed, rate_limit_message = self._check_user_rate_limit(person_id)
                     if not allowed:
                         self.send_message(room_id, rate_limit_message)
-                        return
+                        return True
                     timeout = self.config.get_user_timeout(person_id)
                     response, status_msg_id = self._query_agent_with_status(
                         text,
@@ -1595,11 +1599,13 @@ class WebEXConnector:
                         timeout,
                     )
                     self.send_response(room_id, response, status_msg_id)
+            return True
 
         except Exception as e:
             print(f"Error handling message: {e}", file=sys.stderr)
-            if room_id:
+            if "room_id" in locals() and room_id:
                 self.send_message(room_id, f"❌ Error: {str(e)[:100]}")
+            return not self.shutdown_event.is_set()
         finally:
             self._finish_active_request()
 
@@ -1782,12 +1788,7 @@ class WebEXConnector:
         try:
 
             def callback(ch, method, properties, body):
-                """Handle message from queue - ack immediately to prevent stuck messages"""
-                # ACK immediately upon receipt to prevent stuck/unacked messages in RabbitMQ.
-                # All failures after this point are logged but the message is already removed
-                # from the queue, eliminating infinite retry loops and queue buildup.
-                ch.basic_ack(delivery_tag=method.delivery_tag)
-
+                """Handle a RabbitMQ delivery and ack only after processing."""
                 try:
                     message_data = json.loads(body.decode())
                 except (json.JSONDecodeError, UnicodeDecodeError) as e:
@@ -1799,6 +1800,7 @@ class WebEXConnector:
                         f"[ERROR] Raw body (first 500 chars): {body[:500]}",
                         file=sys.stderr,
                     )
+                    ch.basic_ack(delivery_tag=method.delivery_tag)
                     return
 
                 try:
@@ -1820,16 +1822,24 @@ class WebEXConnector:
                             file=sys.stderr,
                         )
 
-                    self.handle_message(message_data)
+                    handled = self.handle_message(message_data)
+                    if handled:
+                        ch.basic_ack(delivery_tag=method.delivery_tag)
+                    else:
+                        ch.basic_nack(delivery_tag=method.delivery_tag, requeue=True)
                 except Exception as e:
                     import traceback
 
                     tb_str = traceback.format_exc()
                     print(
-                        "[ERROR] Exception processing WebEX message (message already acked, discarding):",
+                        "[ERROR] Exception processing WebEX message:",
                         file=sys.stderr,
                     )
                     print(tb_str, file=sys.stderr)
+                    if self.shutdown_event.is_set():
+                        ch.basic_nack(delivery_tag=method.delivery_tag, requeue=True)
+                    else:
+                        ch.basic_ack(delivery_tag=method.delivery_tag)
 
             retry_delay = 30
             max_delay = 300
