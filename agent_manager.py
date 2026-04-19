@@ -25,6 +25,13 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 from uuid import uuid4
 
+from session_manager_components import (
+    CliCommandHandler,
+    RuntimeExecutionRequest,
+    RuntimeExecutorRegistry,
+    StreamingManager,
+)
+
 # Dynamically determine the repo base directory (works regardless of where repo is cloned)
 SCRIPT_BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -1911,14 +1918,15 @@ class SessionManager:
         self._session_map_lock = threading.Lock()
         self._session_map_cache: Optional[Dict] = None
 
-        # Per-session streaming queues: session_id -> (asyncio.Queue, event_loop)
-        # Populated by the /stream API endpoint; read by _execute_subprocess_with_tracking.
-        self._stream_queues: Dict[str, tuple] = {}
+        # Collaborators extracted from the former monolithic SessionManager.
+        self.cli_commands = CliCommandHandler(self)
+        self.streaming = StreamingManager(self)
+        self.runtime_executors = RuntimeExecutorRegistry(self)
 
-        # Per-session stream buffers for multi-session streaming support.
-        # Buffers all chunks so disconnected clients can reconnect and replay.
-        # session_id -> _StreamBuffer
-        self._stream_buffers: Dict[str, "_StreamBuffer"] = {}  # noqa: F821
+        # Keep the legacy attributes as aliases for compatibility with the API
+        # layer and existing tests while the internals delegate to helpers.
+        self._stream_queues = self.streaming.stream_queues
+        self._stream_buffers = self.streaming.stream_buffers
 
         # Last subprocess exit code per n8n_session_id (for debugging/monitoring)
         self._last_exit_codes: Dict[str, int] = {}
@@ -1930,8 +1938,7 @@ class SessionManager:
 
         # Slash command registry (F020): maps command -> {handler, description}
         # Commands with a handler callable bypass the LLM entirely.
-        # Commands with handler=None are handled by the legacy if/elif chain.
-        self._slash_command_registry: Dict[str, dict] = {}
+        self._slash_command_registry = self.cli_commands.registry
         self._init_slash_commands()
 
     # ── Live status helpers for mobile channel progress (F004) ──────────
@@ -1958,10 +1965,7 @@ class SessionManager:
 
     def _register_slash(self, command: str, handler, description: str):
         """Register a slash command in the registry."""
-        self._slash_command_registry[command] = {
-            "handler": handler,
-            "description": description,
-        }
+        self.cli_commands.register(command, handler, description)
 
     def _init_slash_commands(self):
         """Initialize the slash command registry.
@@ -1972,61 +1976,11 @@ class SessionManager:
         command, create a ``_slash_<name>`` method and
         register it below.
         """
-        self._register_slash("/help", self._slash_help, "Show available commands")
-        self._register_slash(
-            "/status", self._slash_status, "Check status of running query"
-        )
-        self._register_slash("/cancel", self._slash_cancel, "Cancel running query")
-        self._register_slash(
-            "/capabilities", self._slash_capabilities, "Show agent capabilities"
-        )
-        self._register_slash(
-            "/runtime", self._slash_runtime, "Manage runtime (list/set/current)"
-        )
-        self._register_slash(
-            "/agent", self._slash_agent, "Manage agent (list/set/current/invoke)"
-        )
-        self._register_slash(
-            "/model", self._slash_model, "Manage model (list/set/current)"
-        )
-        self._register_slash(
-            "/session", self._slash_session, "Manage session (list/reset/info)"
-        )
-        self._register_slash(
-            "/timeout", self._slash_timeout, "Get/set execution timeout"
-        )
-        self._register_slash(
-            "/render", self._slash_render, "Get/set output render format"
-        )
-        self._register_slash(
-            "/notifications",
-            self._slash_notifications,
-            "Toggle background notifications",
-        )
-        self._register_slash(
-            "/silent", self._slash_silent, "Toggle silent mode (hide tool calls)"
-        )
-        self._register_slash("/verbose", self._slash_verbose, "Toggle verbose mode")
-        self._register_slash("/mode", self._slash_mode, "Set permission mode")
-        self._register_slash("/schedule", self._slash_schedule, "Manage scheduled jobs")
-        self._register_slash(
-            "/background", self._slash_background, "Manage background tasks"
-        )
-        self._register_slash("/update", self._slash_update, "Pull latest and restart")
-        self._register_slash("/upgrade", self._slash_update, "Pull latest and restart")
-        self._register_slash("/pull", self._slash_update, "Pull latest and restart")
-        self._register_slash(
-            "/secret",
-            self._slash_secret,
-            "Manage secrets (set/delete/list)",
-        )
+        self.cli_commands.initialize_default_commands()
 
     def get_slash_commands(self) -> Dict[str, str]:
         """Return a dict of all registered slash commands and descriptions."""
-        return {
-            cmd: entry["description"]
-            for cmd, entry in self._slash_command_registry.items()
-        }
+        return self.cli_commands.get_commands()
 
     def _slash_secret(self, argument, session_data, n8n_session_id):
         """Handle /secret slash command. Values never touch the LLM."""
@@ -4639,14 +4593,7 @@ You can mention an agent in your prompt and it will auto-delegate:
 
     def parse_slash_command(self, prompt: str) -> Tuple[Optional[str], Optional[str]]:
         """Parse slash commands from the prompt."""
-        if not prompt.startswith("/"):
-            return None, None
-
-        parts = prompt.split(None, 1)
-        command = parts[0].lower()
-        argument = parts[1] if len(parts) > 1 else None
-
-        return command, argument
+        return self.cli_commands.parse_slash_command(prompt)
 
     def get_model_from_name(self, name: str, runtime: str) -> Optional[str]:
         """Convert model name/alias to full model ID based on runtime.
@@ -6063,20 +6010,13 @@ User Request:
 
     def _get_or_create_stream_buffer(self, session_id: str) -> "_StreamBuffer":
         """Get existing buffer for session or create a new one."""
-        buf = self._stream_buffers.get(session_id)
-        if buf is None:
-            buf = self._StreamBuffer()
-            self._stream_buffers[session_id] = buf
-        return buf
+        return self.streaming.get_or_create_stream_buffer(session_id)
 
     def _register_stream(
         self, session_id: str, queue, loop  # asyncio.Queue, asyncio.AbstractEventLoop
     ) -> None:
         """Register an asyncio queue for the /stream endpoint to receive chunks."""
-        self._stream_queues[session_id] = (queue, loop)
-        # Also create/get the stream buffer and add this queue as a consumer
-        buf = self._get_or_create_stream_buffer(session_id)
-        buf.add_consumer(queue, loop)
+        self.streaming.register_stream(session_id, queue, loop)
 
     def _unregister_stream(self, session_id: str, queue=None) -> None:
         """Remove the streaming queue for a session.
@@ -6086,25 +6026,15 @@ User Request:
         ``_stream_queues`` entry is removed regardless so that new streams
         can register without conflict.
         """
-        self._stream_queues.pop(session_id, None)
-        buf = self._stream_buffers.get(session_id)
-        if buf and queue is not None:
-            buf.remove_consumer(queue)
+        self.streaming.unregister_stream(session_id, queue=queue)
 
     def _cleanup_stream_buffer(self, session_id: str) -> None:
         """Remove the stream buffer entirely (called after query completes)."""
-        self._stream_buffers.pop(session_id, None)
+        self.streaming.cleanup_stream_buffer(session_id)
 
     def _cleanup_stale_stream_buffers(self, max_age: float = 600.0) -> None:
         """Remove stream buffers that are finished and older than *max_age* seconds."""
-        now = time.time()
-        stale = [
-            sid
-            for sid, buf in self._stream_buffers.items()
-            if buf.finished and (now - buf.created_at) > max_age
-        ]
-        for sid in stale:
-            self._stream_buffers.pop(sid, None)
+        self.streaming.cleanup_stale_stream_buffers(max_age=max_age)
 
     # ------------------------------------------------------------------
 
@@ -6119,840 +6049,17 @@ User Request:
         n8n_session_id: str,
         use_pty: bool = False,
     ) -> str:
-        """Execute a subprocess with PID tracking.
-
-        When a streaming queue is registered for *n8n_session_id* (via
-        _register_stream), stdout chunks are pushed to the queue in real-time
-        so the /stream SSE endpoint can forward them to the browser.  A
-        ``('done', '')`` sentinel is pushed when the process exits.
-
-        Without a queue the behaviour is identical to the original
-        communicate()-based approach (blocking, full-output return).
-
-        When *use_pty* is True and streaming is active, stdout is connected to
-        a pseudo-terminal so that runtimes whose binaries buffer stdout (e.g.
-        the Rust-based Devin CLI) flush output incrementally.
-        """
-        import threading as _threading
-
-        stream_info = self._stream_queues.get(n8n_session_id)
-        # Get the stream buffer — pushes go through the buffer which
-        # broadcasts to all connected consumer queues.
-        stream_buffer = self._stream_buffers.get(n8n_session_id)
-
-        # Allocate a PTY for stdout when streaming + use_pty are both active.
-        # This tricks compiled binaries into line-buffering their output.
-        _pty_master = None
-        if use_pty and stream_info:
-            import pty as _pty_mod
-
-            _pty_master, _pty_slave = _pty_mod.openpty()
-
-            # Configure PTY for clean streaming:
-            # 1. Set a reasonable window size so programs don't get confused by 0×0
-            # 2. Disable output post-processing (OPOST/ONLCR) to avoid extra \r
-            # 3. Disable echo to prevent input echo artifacts
-            try:
-                import fcntl as _fcntl_mod
-                import struct as _struct_mod
-                import termios as _termios_mod
-
-                # Set window size to 120 cols × 40 rows
-                _ws = _struct_mod.pack("HHHH", 40, 120, 0, 0)
-                _fcntl_mod.ioctl(_pty_master, _termios_mod.TIOCSWINSZ, _ws)
-                # Disable output processing and echo on the slave
-                _attrs = _termios_mod.tcgetattr(_pty_slave)
-                _attrs[1] &= ~_termios_mod.OPOST  # no output processing (\n stays \n)
-                _attrs[3] &= ~_termios_mod.ECHO  # no echo
-                _termios_mod.tcsetattr(_pty_slave, _termios_mod.TCSANOW, _attrs)
-            except Exception:
-                pass  # non-fatal; streaming still works with defaults
-
-        try:
-            # Set WEE_SESSION_ID so agents can use wee_executor.py
-            _sub_env = {**os.environ, "WEE_SESSION_ID": n8n_session_id}
-            if _pty_master is not None:
-                process = subprocess.Popen(
-                    cmd,
-                    stdin=subprocess.DEVNULL,
-                    stdout=_pty_slave,
-                    stderr=subprocess.PIPE,
-                    cwd=cwd,
-                    env=_sub_env,
-                )
-                os.close(_pty_slave)
-            else:
-                process = subprocess.Popen(
-                    cmd,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                    text=True,
-                    cwd=cwd,
-                    bufsize=1,  # line-buffered for faster streaming chunk delivery
-                    env=_sub_env,
-                )
-
-            self.track_running_query(
-                n8n_session_id, process.pid, runtime, agent, prompt
-            )
-
-            if stream_info:
-                # ── Streaming path ──────────────────────────────────────────
-                # Read stdout and push each chunk through the stream buffer
-                # which broadcasts to all connected SSE consumers.
-                # stderr is drained in a background thread to avoid blocking.
-                queue, loop = stream_info
-                stderr_buf: list = []
-
-                def _drain_stderr() -> None:
-                    try:
-                        raw = process.stderr.read()
-                        stderr_buf.append(
-                            raw.decode("utf-8", errors="replace")
-                            if isinstance(raw, bytes)
-                            else raw
-                        )
-                    except Exception:
-                        pass
-
-                stderr_thread = _threading.Thread(target=_drain_stderr, daemon=True)
-                stderr_thread.start()
-
-                stdout_chunks: list = []
-
-                if _pty_master is not None:
-                    # ── PTY streaming path ──────────────────────────────────
-                    # Read from the PTY master fd for incremental output from
-                    # runtimes whose compiled binaries buffer stdout when not
-                    # connected to a TTY (e.g. the Rust-based Devin CLI).
-                    import codecs as _codecs
-                    import re as _re
-
-                    _ansi_escape = _re.compile(
-                        r"\x1b\[[0-9;]*[a-zA-Z]"  # CSI sequences
-                        r"|\x1b\][^\x07]*\x07"  # OSC sequences
-                        r"|\x1b\([A-Z0-9]"  # charset selection
-                    )
-                    # Tool call detection for PTY-based runtimes (Devin, etc.)
-                    _pty_tool_counter = [0]
-                    _pty_tool_pattern = _re.compile(
-                        r"(?:\[TOOL_CALL\]|\bCalling\s+tool|\bUsing\s+tool(?:\:|_)|Tool|Running|Executing|USING_TOOL)[\s:_]*(\w[\w\.]*)\s*(.*)",
-                        _re.IGNORECASE,
-                    )
-                    # Incremental decoder avoids garbled output when a
-                    # multi-byte UTF-8 character is split across reads.
-                    _utf8_decoder = _codecs.getincrementaldecoder("utf-8")("replace")
-                    try:
-                        while True:
-                            try:
-                                data = os.read(_pty_master, 4096)
-                            except OSError:
-                                # EIO when the slave side is closed (process exited)
-                                break
-                            if not data:
-                                break
-                            text = _utf8_decoder.decode(data, final=False)
-                            text = _ansi_escape.sub("", text)
-                            stdout_chunks.append(text)
-                            if text.strip():
-                                # Detect tool calls from PTY output
-                                for pty_line in text.split("\n"):
-                                    _m = _pty_tool_pattern.match(pty_line.strip())
-                                    if _m:
-                                        _pty_tool_counter[0] += 1
-                                        _tc_evt = {
-                                            "event": "detected",
-                                            "id": f"tc_{runtime}_{_pty_tool_counter[0]}",
-                                            "name": _m.group(1),
-                                            "input": _m.group(2).strip(),
-                                            "runtime": runtime,
-                                            "timestamp": time.strftime(
-                                                "%Y-%m-%dT%H:%M:%SZ", time.gmtime()
-                                            ),
-                                        }
-                                        if stream_buffer:
-                                            stream_buffer.push("tool_call", _tc_evt)
-                                        else:
-                                            loop.call_soon_threadsafe(
-                                                queue.put_nowait, ("tool_call", _tc_evt)
-                                            )
-                                if stream_buffer:
-                                    stream_buffer.push("chunk", text)
-                                else:
-                                    loop.call_soon_threadsafe(
-                                        queue.put_nowait, ("chunk", text)
-                                    )
-                    except Exception:
-                        pass
-                    finally:
-                        try:
-                            os.close(_pty_master)
-                        except OSError:
-                            pass
-                        stderr_thread.join(timeout=5)
-                        process.wait()
-                else:
-                    # ── Pipe streaming path ─────────────────────────────────
-                    import json as _json
-
-                    _claude_text_block_count = 0  # track text blocks for separators
-                    _active_tool_calls = {}  # index → {id, name, input_parts}
-                    _tool_call_counter = [0]  # mutable counter for non-Claude runtimes
-                    try:
-                        for line in process.stdout:
-                            stdout_chunks.append(line)
-                            if runtime == "claude":
-                                # Parse stream-json output and push text deltas + tool calls
-                                try:
-                                    obj = _json.loads(line.strip())
-                                    evt_type = obj.get("type")
-                                    if evt_type == "stream_event":
-                                        event = obj.get("event") or {}
-                                        inner_type = event.get("type", "")
-                                        if inner_type == "content_block_start":
-                                            cb = event.get("content_block") or {}
-                                            cb_type = cb.get("type")
-                                            cb_index = event.get("index", 0)
-                                            if cb_type == "text":
-                                                # Push newline separator between text blocks
-                                                if _claude_text_block_count > 0:
-                                                    if stream_buffer:
-                                                        stream_buffer.push(
-                                                            "chunk", {"text": "\n\n"}
-                                                        )
-                                                    else:
-                                                        loop.call_soon_threadsafe(
-                                                            queue.put_nowait,
-                                                            ("chunk", {"text": "\n\n"}),
-                                                        )
-                                                _claude_text_block_count += 1
-                                            elif cb_type == "tool_use":
-                                                tool_id = cb.get(
-                                                    "id", f"tool_{cb_index}"
-                                                )
-                                                tool_name = cb.get("name", "unknown")
-                                                _active_tool_calls[cb_index] = {
-                                                    "id": tool_id,
-                                                    "name": tool_name,
-                                                    "input_parts": [],
-                                                    "started_at": time.strftime(
-                                                        "%Y-%m-%dT%H:%M:%SZ",
-                                                        time.gmtime(),
-                                                    ),
-                                                }
-                                                tc_event = {
-                                                    "event": "start",
-                                                    "id": tool_id,
-                                                    "name": tool_name,
-                                                    "index": cb_index,
-                                                }
-                                                if stream_buffer:
-                                                    stream_buffer.push(
-                                                        "tool_call", tc_event
-                                                    )
-                                                else:
-                                                    loop.call_soon_threadsafe(
-                                                        queue.put_nowait,
-                                                        ("tool_call", tc_event),
-                                                    )
-                                        elif inner_type == "content_block_delta":
-                                            delta = event.get("delta") or {}
-                                            delta_type = delta.get("type")
-                                            cb_index = event.get("index", 0)
-                                            if delta_type == "text_delta":
-                                                text = delta.get("text", "")
-                                                if text:
-                                                    if stream_buffer:
-                                                        stream_buffer.push(
-                                                            "chunk", {"text": text}
-                                                        )
-                                                    else:
-                                                        loop.call_soon_threadsafe(
-                                                            queue.put_nowait,
-                                                            ("chunk", {"text": text}),
-                                                        )
-                                            elif delta_type == "input_json_delta":
-                                                partial = delta.get("partial_json", "")
-                                                if cb_index in _active_tool_calls:
-                                                    _active_tool_calls[cb_index][
-                                                        "input_parts"
-                                                    ].append(partial)
-                                                    tc_event = {
-                                                        "event": "input_delta",
-                                                        "id": _active_tool_calls[
-                                                            cb_index
-                                                        ]["id"],
-                                                        "partial_json": partial,
-                                                    }
-                                                    if stream_buffer:
-                                                        stream_buffer.push(
-                                                            "tool_call", tc_event
-                                                        )
-                                                    else:
-                                                        loop.call_soon_threadsafe(
-                                                            queue.put_nowait,
-                                                            ("tool_call", tc_event),
-                                                        )
-                                        elif inner_type == "content_block_stop":
-                                            cb_index = event.get("index", 0)
-                                            if cb_index in _active_tool_calls:
-                                                tc_info = _active_tool_calls.pop(
-                                                    cb_index
-                                                )
-                                                full_input = "".join(
-                                                    tc_info["input_parts"]
-                                                )
-                                                try:
-                                                    parsed_input = (
-                                                        _json.loads(full_input)
-                                                        if full_input
-                                                        else {}
-                                                    )
-                                                except (ValueError, KeyError):
-                                                    parsed_input = full_input
-                                                tc_event = {
-                                                    "event": "input_complete",
-                                                    "id": tc_info["id"],
-                                                    "name": tc_info["name"],
-                                                    "input": parsed_input,
-                                                    "started_at": tc_info["started_at"],
-                                                }
-                                                if stream_buffer:
-                                                    stream_buffer.push(
-                                                        "tool_call", tc_event
-                                                    )
-                                                else:
-                                                    loop.call_soon_threadsafe(
-                                                        queue.put_nowait,
-                                                        ("tool_call", tc_event),
-                                                    )
-                                    elif evt_type == "assistant":
-                                        # Parse tool results from assistant messages
-                                        msg = obj.get("message") or {}
-                                        for block in msg.get("content") or []:
-                                            if block.get("type") == "tool_result":
-                                                tc_event = {
-                                                    "event": "result",
-                                                    "id": block.get("tool_use_id", ""),
-                                                    "is_error": block.get(
-                                                        "is_error", False
-                                                    ),
-                                                }
-                                                if stream_buffer:
-                                                    stream_buffer.push(
-                                                        "tool_call", tc_event
-                                                    )
-                                                else:
-                                                    loop.call_soon_threadsafe(
-                                                        queue.put_nowait,
-                                                        ("tool_call", tc_event),
-                                                    )
-                                except (ValueError, KeyError, AttributeError):
-                                    pass
-                            else:
-                                # Non-Claude runtimes: detect tool call patterns from text
-                                _line_str = (
-                                    line
-                                    if isinstance(line, str)
-                                    else line.decode("utf-8", errors="replace")
-                                )
-                                _line_stripped = _line_str.strip()
-                                _tc_detected = None
-
-                                # Gemini stream-json: parse structured JSON events
-                                if runtime == "gemini" and _line_stripped.startswith(
-                                    "{"
-                                ):
-                                    try:
-                                        _gobj = _json.loads(_line_stripped)
-                                        _gtype = _gobj.get("type", "")
-                                        if (
-                                            _gtype == "message"
-                                            and _gobj.get("role") == "assistant"
-                                        ):
-                                            _content = _gobj.get("content", "")
-                                            if _content:
-                                                if stream_buffer:
-                                                    stream_buffer.push(
-                                                        "chunk", _content
-                                                    )
-                                                else:
-                                                    loop.call_soon_threadsafe(
-                                                        queue.put_nowait,
-                                                        ("chunk", _content),
-                                                    )
-                                            continue
-                                        elif _gtype == "tool_use":
-                                            _tool_call_counter[0] += 1
-                                            tc_event = {
-                                                "event": "detected",
-                                                "id": _gobj.get(
-                                                    "tool_id",
-                                                    f"tc_gemini_{_tool_call_counter[0]}",
-                                                ),
-                                                "name": _gobj.get("tool_name", "tool"),
-                                                "input": _json.dumps(
-                                                    _gobj.get("parameters", {})
-                                                ),
-                                                "runtime": "gemini",
-                                                "timestamp": _gobj.get(
-                                                    "timestamp",
-                                                    time.strftime(
-                                                        "%Y-%m-%dT%H:%M:%SZ",
-                                                        time.gmtime(),
-                                                    ),
-                                                ),
-                                            }
-                                            if stream_buffer:
-                                                stream_buffer.push(
-                                                    "tool_call", tc_event
-                                                )
-                                            else:
-                                                loop.call_soon_threadsafe(
-                                                    queue.put_nowait,
-                                                    ("tool_call", tc_event),
-                                                )
-                                            continue
-                                        elif _gtype == "tool_result":
-                                            tc_event = {
-                                                "event": "result",
-                                                "id": _gobj.get("tool_id", ""),
-                                                "status": _gobj.get(
-                                                    "status", "completed"
-                                                ),
-                                                "output": _gobj.get("output", "")[:500],
-                                            }
-                                            if stream_buffer:
-                                                stream_buffer.push(
-                                                    "tool_call", tc_event
-                                                )
-                                            else:
-                                                loop.call_soon_threadsafe(
-                                                    queue.put_nowait,
-                                                    ("tool_call", tc_event),
-                                                )
-                                            continue
-                                        elif _gtype in ("init", "result"):
-                                            continue  # skip metadata
-                                    except (ValueError, KeyError):
-                                        pass
-
-                                if runtime == "opencode":
-                                    # OpenCode tool invocation: "| ToolName args..."
-                                    import re as _re_tc
-
-                                    _oc_match = _re_tc.match(
-                                        r"^\|\s+(\w+)\b(.*)", _line_stripped
-                                    )
-                                    if _oc_match:
-                                        _oc_tool = _oc_match.group(1)
-                                        _oc_known = {
-                                            "Glob",
-                                            "Read",
-                                            "Write",
-                                            "Bash",
-                                            "Edit",
-                                            "bash",
-                                            "grep",
-                                            "find",
-                                            "Fetch",
-                                            "ListDir",
-                                            "Search",
-                                            "TodoRead",
-                                            "TodoWrite",
-                                            "WebFetch",
-                                            "Shell",
-                                            "Patch",
-                                            "MultiEdit",
-                                            "LS",
-                                            "Cat",
-                                            "Sed",
-                                            "Awk",
-                                            "Mv",
-                                            "Cp",
-                                            "Rm",
-                                            "Mkdir",
-                                        }
-                                        if (
-                                            _oc_tool in _oc_known
-                                            or _oc_tool[0].isupper()
-                                        ):
-                                            _tc_detected = {
-                                                "name": _oc_tool,
-                                                "input": _oc_match.group(2).strip(),
-                                            }
-                                    if not _tc_detected:
-                                        _oc_run = _re_tc.match(
-                                            r"^(?:Running|Executing|>)\s+(.+)",
-                                            _line_stripped,
-                                        )
-                                        if _oc_run:
-                                            _tc_detected = {
-                                                "name": "shell",
-                                                "input": _oc_run.group(1).strip(),
-                                            }
-                                elif runtime in (
-                                    "copilot",
-                                    "copilot-sdk",
-                                    "claude-sdk",
-                                    "wee",
-                                ):
-                                    # Copilot shows tool calls as "● Description" and shell cmds as "  $ cmd"
-                                    import re as _re_tc
-
-                                    # Tool call start: "● <description> [(+N)]"
-                                    _cp_tool_match = _re_tc.match(
-                                        r"^[●⬤]\s+(.+?)(?:\s+\(\+\d+\))?$",
-                                        _line_stripped,
-                                    )
-                                    if _cp_tool_match:
-                                        _desc = _cp_tool_match.group(1).strip()
-                                        # Infer tool name from description
-                                        if any(
-                                            kw in _desc.lower()
-                                            for kw in ["read", "view", "open"]
-                                        ):
-                                            _tool_name = "read"
-                                        elif any(
-                                            kw in _desc.lower()
-                                            for kw in [
-                                                "create",
-                                                "write",
-                                                "save",
-                                                "edit",
-                                                "update",
-                                                "modify",
-                                            ]
-                                        ):
-                                            _tool_name = "write"
-                                        elif any(
-                                            kw in _desc.lower()
-                                            for kw in ["delete", "remove", "rm"]
-                                        ):
-                                            _tool_name = "shell"
-                                        elif any(
-                                            kw in _desc.lower()
-                                            for kw in [
-                                                "list",
-                                                "ls",
-                                                "find",
-                                                "search",
-                                                "glob",
-                                            ]
-                                        ):
-                                            _tool_name = "glob"
-                                        elif any(
-                                            kw in _desc.lower()
-                                            for kw in [
-                                                "run",
-                                                "exec",
-                                                "install",
-                                                "deploy",
-                                                "build",
-                                                "test",
-                                            ]
-                                        ):
-                                            _tool_name = "shell"
-                                        elif any(
-                                            kw in _desc.lower()
-                                            for kw in [
-                                                "fetch",
-                                                "curl",
-                                                "http",
-                                                "api",
-                                                "download",
-                                            ]
-                                        ):
-                                            _tool_name = "web_fetch"
-                                        else:
-                                            _tool_name = "tool"
-                                        _tc_detected = {
-                                            "name": _tool_name,
-                                            "input": _desc,
-                                        }
-                                    else:
-                                        # Shell command line: "  $ <command>"
-                                        _cp_cmd_match = _re_tc.match(
-                                            r"^\$\s+(.+)", _line_stripped
-                                        )
-                                        if _cp_cmd_match:
-                                            _tc_detected = {
-                                                "name": "shell",
-                                                "input": _cp_cmd_match.group(1).strip(),
-                                            }
-                                        # Also catch "Running/Calling/Using" patterns as fallback
-                                        elif not _cp_tool_match:
-                                            _cp_legacy = _re_tc.match(
-                                                r"^(?:Running|Calling|Using)\s+(\w+)\s*(.*)",
-                                                _line_stripped,
-                                            )
-                                            if _cp_legacy:
-                                                _tc_detected = {
-                                                    "name": _cp_legacy.group(1),
-                                                    "input": _cp_legacy.group(
-                                                        2
-                                                    ).strip(),
-                                                }
-                                        # Suppress box-drawing context lines (│ cmd, └ N lines, ├ ...)
-                                        # These are tool output annotations that appear after the ● line.
-                                        # Pushing them as chunks destroys the spinning gear block in the UI.
-                                        if not _tc_detected and _re_tc.match(
-                                            r"^[│├└─]\s", _line_stripped
-                                        ):
-                                            continue
-                                elif runtime == "codex":
-                                    # Codex exec tool call patterns
-                                    import re as _re_tc
-
-                                    _cx_match = _re_tc.match(
-                                        r"^(?:Calling function|Tool|Executing|Running):\s*(\w[\w.]*)\s*(.*)",
-                                        _line_stripped,
-                                        _re_tc.IGNORECASE,
-                                    )
-                                    if _cx_match:
-                                        _tc_detected = {
-                                            "name": _cx_match.group(1),
-                                            "input": _cx_match.group(2).strip(),
-                                        }
-                                    if not _tc_detected:
-                                        # Shell command: "$ command" or "> command"
-                                        _cx_cmd = _re_tc.match(
-                                            r"^[$>]\s+(.+)", _line_stripped
-                                        )
-                                        if _cx_cmd:
-                                            _tc_detected = {
-                                                "name": "shell",
-                                                "input": _cx_cmd.group(1).strip(),
-                                            }
-                                    if not _tc_detected:
-                                        # Function-call syntax: "read_file(path=...)"
-                                        _cx_fn = _re_tc.match(
-                                            r"^(\w+)\((.+)\)\s*$", _line_stripped
-                                        )
-                                        if _cx_fn and any(
-                                            kw in _cx_fn.group(1).lower()
-                                            for kw in [
-                                                "read",
-                                                "write",
-                                                "shell",
-                                                "bash",
-                                                "exec",
-                                                "search",
-                                                "list",
-                                                "create",
-                                                "edit",
-                                                "patch",
-                                                "apply",
-                                            ]
-                                        ):
-                                            _tc_detected = {
-                                                "name": _cx_fn.group(1),
-                                                "input": _cx_fn.group(2).strip(),
-                                            }
-                                elif runtime == "gemini":
-                                    import re as _re_tc
-
-                                    # "✦ Calling tool_name(args)" or "Calling tool_name(args)"
-                                    _gm_match = _re_tc.match(
-                                        r"^[✦*]?\s*(?:Calling|Using tool|Function call|Running)\s+(\w[\w.]*)\s*(.*)",
-                                        _line_stripped,
-                                        _re_tc.IGNORECASE,
-                                    )
-                                    if _gm_match:
-                                        _tc_detected = {
-                                            "name": _gm_match.group(1),
-                                            "input": _gm_match.group(2).strip(),
-                                        }
-                                    if not _tc_detected:
-                                        # "⚡ tool_name(args)" or "tool_name(args)"
-                                        _gm_fn = _re_tc.match(
-                                            r"^[⚡✦*]?\s*(\w+)\((.+)\)\s*$",
-                                            _line_stripped,
-                                        )
-                                        if _gm_fn and any(
-                                            kw in _gm_fn.group(1).lower()
-                                            for kw in [
-                                                "read",
-                                                "write",
-                                                "shell",
-                                                "bash",
-                                                "exec",
-                                                "search",
-                                                "list",
-                                                "create",
-                                                "edit",
-                                                "file",
-                                                "run",
-                                                "cat",
-                                                "ls",
-                                                "find",
-                                                "grep",
-                                                "save",
-                                                "update",
-                                                "delete",
-                                                "fetch",
-                                                "curl",
-                                                "get",
-                                                "put",
-                                            ]
-                                        ):
-                                            _tc_detected = {
-                                                "name": _gm_fn.group(1),
-                                                "input": _gm_fn.group(2).strip(),
-                                            }
-                                    if not _tc_detected:
-                                        # "$ command" or "> command" or "Running command: cmd"
-                                        _gm_cmd = _re_tc.match(
-                                            r"^(?:[$>]\s+(.+)|Running\s+command:\s*(.+))",
-                                            _line_stripped,
-                                            _re_tc.IGNORECASE,
-                                        )
-                                        if _gm_cmd:
-                                            _cmd_text = (
-                                                _gm_cmd.group(1)
-                                                or _gm_cmd.group(2)
-                                                or ""
-                                            ).strip()
-                                            if _cmd_text:
-                                                _tc_detected = {
-                                                    "name": "shell",
-                                                    "input": _cmd_text,
-                                                }
-
-                                if _tc_detected:
-                                    _tool_call_counter[0] += 1
-                                    tc_event = {
-                                        "event": "detected",
-                                        "id": f"tc_{runtime}_{_tool_call_counter[0]}",
-                                        "name": _tc_detected["name"],
-                                        "input": _tc_detected.get("input", ""),
-                                        "runtime": runtime,
-                                        "timestamp": time.strftime(
-                                            "%Y-%m-%dT%H:%M:%SZ", time.gmtime()
-                                        ),
-                                    }
-                                    if stream_buffer:
-                                        stream_buffer.push("tool_call", tc_event)
-                                    else:
-                                        loop.call_soon_threadsafe(
-                                            queue.put_nowait, ("tool_call", tc_event)
-                                        )
-
-                                else:
-                                    # Detect [STATUS_UPDATE: ...] markers (F004)
-                                    _su_match = None
-                                    try:
-                                        _su_line = (
-                                            line
-                                            if isinstance(line, str)
-                                            else line.decode("utf-8", errors="replace")
-                                        )
-                                        _su_match = re.search(
-                                            r"\[STATUS_UPDATE[:\s]*(.+?)\]", _su_line
-                                        )
-                                    except Exception:
-                                        pass
-                                    if _su_match:
-                                        self.set_live_status(
-                                            n8n_session_id, _su_match.group(1).strip()
-                                        )
-                                    else:
-                                        # Only push as text chunk when NOT a tool call/status line
-                                        if stream_buffer:
-                                            stream_buffer.push("chunk", line)
-                                        else:
-                                            loop.call_soon_threadsafe(
-                                                queue.put_nowait, ("chunk", line)
-                                            )
-                    except Exception:
-                        pass
-                    finally:
-                        self.clear_live_status(n8n_session_id)
-                        process.stdout.close()
-                        stderr_thread.join(timeout=5)
-                        process.wait()
-
-                output = "".join(stdout_chunks) + (
-                    "".join(stderr_buf) if stderr_buf else ""
-                )
-                self.update_query_output(n8n_session_id, output)
-                # Record exit code for debugging subprocess errors.
-                # successful responses that discuss rate-limit topics (false positives).
-                self._last_exit_codes[n8n_session_id] = (
-                    process.returncode if process.returncode is not None else 0
-                )
-                # Signal the SSE generator that the subprocess is finished
-                if stream_buffer:
-                    stream_buffer.push("done", output)
-                else:
-                    loop.call_soon_threadsafe(queue.put_nowait, ("done", ""))
-                return output
-
-            else:
-                # ── Blocking path with live status capture (F004) ────────────
-                # Read stdout line-by-line instead of communicate() so we can
-                # capture [STATUS_UPDATE: ...] markers in real-time for mobile
-                # channel progress updates.
-                import threading as _thr_bl
-
-                _status_pattern = re.compile(r"\[STATUS_UPDATE[:\s]*(.+?)\]")
-                _stderr_buf_bl: list = []
-
-                def _drain_stderr_bl():
-                    try:
-                        for _err_ln in process.stderr:
-                            _stderr_buf_bl.append(_err_ln)
-                    except Exception:
-                        pass
-
-                _stderr_t = _thr_bl.Thread(target=_drain_stderr_bl, daemon=True)
-                _stderr_t.start()
-
-                _stdout_lines_bl: list = []
-                try:
-                    for _line_bl in process.stdout:
-                        _stdout_lines_bl.append(_line_bl)
-                        _su_m = _status_pattern.search(_line_bl)
-                        if _su_m:
-                            self.set_live_status(n8n_session_id, _su_m.group(1).strip())
-
-                    # Wait for process to fully exit
-                    try:
-                        process.wait(timeout=timeout)
-                    except subprocess.TimeoutExpired:
-                        process.kill()
-                        process.wait()
-                        self.clear_live_status(n8n_session_id)
-                        timeout_min = timeout / 60
-                        return f"Error: Command timed out (exceeded {timeout}s / {timeout_min:.1f}min)"
-                    finally:
-                        _stderr_t.join(timeout=5)
-
-                    output = "".join(_stdout_lines_bl) + "".join(_stderr_buf_bl)
-                    # Strip STATUS_UPDATE markers from final output
-                    output = re.sub(r"\[STATUS_UPDATE[:\s]*[^\]]*\]\s*\n?", "", output)
-                    self.update_query_output(n8n_session_id, output)
-                    self._last_exit_codes[n8n_session_id] = (
-                        process.returncode if process.returncode is not None else 0
-                    )
-                    return output
-                finally:
-                    self.clear_live_status(n8n_session_id)
-                    self.clear_running_query(n8n_session_id)
-
-        except Exception as e:
-            self.clear_running_query(n8n_session_id)
-            return f"Error: Failed to execute command: {e}"
-        finally:
-            # clear_running_query is idempotent; ensure it runs for streaming path too
-            if stream_info:
-                self.clear_running_query(n8n_session_id)
-            # Ensure PTY master fd is cleaned up even on unexpected errors
-            if _pty_master is not None:
-                try:
-                    os.close(_pty_master)
-                except OSError:
-                    pass
+        """Execute a subprocess with PID tracking and streaming support."""
+        return self.streaming.execute_subprocess_with_tracking(
+            cmd,
+            cwd,
+            timeout,
+            runtime,
+            agent,
+            prompt,
+            n8n_session_id,
+            use_pty=use_pty,
+        )
 
     def run_copilot(
         self,
@@ -9374,123 +8481,19 @@ User Request:
         """Dispatch prompt to a single runtime and return the output."""
         # Touch before dispatch to keep session alive during long operations
         self.touch_session(n8n_session_id)
-
-        if runtime == "copilot":
-            result = self.run_copilot(
-                prompt,
-                model,
-                agent,
-                session_id if can_resume else None,
-                can_resume,
-                n8n_session_id,
-                effective_timeout,
-                render_type,
-            )
-        elif runtime == "copilot-sdk":
-            result = self.run_copilot_sdk(
-                prompt,
-                model,
-                agent,
-                session_id if can_resume else None,
-                can_resume,
-                n8n_session_id,
-                effective_timeout,
-                render_type,
-                mode,
-            )
-        elif runtime == "opencode":
-            result = self.run_opencode(
-                prompt,
-                model,
-                agent,
-                session_id if can_resume else None,
-                can_resume,
-                n8n_session_id,
-                effective_timeout,
-                render_type,
-            )
-        elif runtime == "claude":
-            result = self.run_claude(
-                prompt,
-                model,
-                agent,
-                session_id if can_resume else None,
-                can_resume,
-                n8n_session_id,
-                effective_timeout,
-                render_type,
-                mode,
-            )
-        elif runtime == "claude-sdk":
-            result = self.run_claude_sdk(
-                prompt,
-                model,
-                agent,
-                session_id if can_resume else None,
-                can_resume,
-                n8n_session_id,
-                effective_timeout,
-                render_type,
-                mode,
-            )
-        elif runtime == "gemini":
-            result = self.run_gemini(
-                prompt,
-                model,
-                agent,
-                session_id if can_resume else None,
-                can_resume,
-                n8n_session_id,
-                effective_timeout,
-                render_type,
-            )
-        elif runtime == "codex":
-            result = self.run_codex(
-                prompt,
-                model,
-                agent,
-                session_id if can_resume else None,
-                can_resume,
-                n8n_session_id,
-                effective_timeout,
-                render_type,
-            )
-        elif runtime == "devin":
-            result = self.run_devin(
-                prompt,
-                model,
-                agent,
-                session_id if can_resume else None,
-                can_resume,
-                n8n_session_id,
-                effective_timeout,
-                render_type,
-                mode,
-            )
-        elif runtime == "cursor":
-            result = self.run_cursor(
-                prompt,
-                model,
-                agent,
-                session_id if can_resume else None,
-                can_resume,
-                n8n_session_id,
-                effective_timeout,
-                render_type,
-            )
-        elif runtime == "wee":
-            result = self.run_wee_native(
-                prompt,
-                model,
-                agent,
-                session_id if can_resume else None,
-                can_resume,
-                n8n_session_id,
-                effective_timeout,
-                render_type,
-            )
-        else:
-            return f"Error: Unknown runtime '{runtime}'"
+        request = RuntimeExecutionRequest(
+            runtime=runtime,
+            prompt=prompt,
+            model=model,
+            agent=agent,
+            session_id=session_id,
+            can_resume=can_resume,
+            n8n_session_id=n8n_session_id,
+            effective_timeout=effective_timeout,
+            render_type=render_type,
+            mode=mode,
+        )
+        result = self.runtime_executors.execute(request)
 
         # Touch after dispatch to record completion activity
         self.touch_session(n8n_session_id)
