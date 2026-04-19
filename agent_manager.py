@@ -1528,6 +1528,13 @@ class SessionManager:
     # Note: Claude Code CLI does not support dynamic model listing via flag.
     # We use CLI aliases (sonnet, haiku, opus) as primary IDs to let the CLI resolve to the latest versions.
     CLAUDE_MODELS = {
+        "Special": [
+            (
+                "auto",
+                "Auto-select Best Model",
+                ["auto"],
+            ),
+        ],
         "Anthropic Models": [
             (
                 "sonnet",
@@ -3458,7 +3465,7 @@ You can mention an agent in your prompt and it will auto-delegate:
                     for m in models
                     if any(
                         kw in m.lower()
-                        for kw in ["gpt", "claude", "gemini", "o1", "o3", "o4"]
+                        for kw in ["gpt", "claude", "gemini", "o1", "o3", "o4", "auto"]
                     )
                 ]
 
@@ -3495,6 +3502,9 @@ You can mention an agent in your prompt and it will auto-delegate:
                 # copilot CLI no longer lists models in --help (choices removed in newer versions).
                 # Return the static fallback list so /model list and /model set still work.
                 return {
+                    "Special": [
+                        "auto",
+                    ],
                     "Claude Models": [
                         "claude-sonnet-4.6",
                         "claude-opus-4.6",
@@ -3520,7 +3530,9 @@ You can mention an agent in your prompt and it will auto-delegate:
             categorized = {}
             for m in models:
                 cat = "Other Models"
-                if "claude" in m.lower():
+                if m.lower() == "auto":
+                    cat = "Special"
+                elif "claude" in m.lower():
                     cat = "Claude Models"
                 elif "gpt" in m.lower() or re.match(r"^o\d", m.lower()):
                     cat = "GPT Models"
