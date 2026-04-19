@@ -1164,15 +1164,34 @@ class TelegramConnector:
             if message.get("from", {}).get("is_bot"):
                 return
 
+            user_id = message.get("from", {}).get("id")
+            chat_id = message.get("chat", {}).get("id")
+            if not user_id or not chat_id:
+                return
+
+            # Check if user is allowed before connector-side file work.
+            if not self.config.is_user_allowed(user_id):
+                self.send_message(chat_id, "❌ You are not authorized to use this bot.")
+                return
+
             # Handle files with optional caption
             file_path = None
             text = message.get("text", "") or message.get("caption", "")
+            rate_limit_checked = False
+
+            if any(
+                key in message
+                for key in ("document", "photo", "voice", "audio", "video_note")
+            ):
+                allowed, rate_limit_message = self._check_user_rate_limit(user_id)
+                if not allowed:
+                    self.send_message(chat_id, rate_limit_message)
+                    return
+                rate_limit_checked = True
 
             # Check for document or photo
             if "document" in message:
                 document = message["document"]
-                user_id = message["from"]["id"]
-                chat_id = message["chat"]["id"]
 
                 file_path = self.download_file(document["file_id"], user_id)
                 print(
@@ -1190,8 +1209,6 @@ class TelegramConnector:
             elif "photo" in message:
                 # Telegram sends photos as arrays, get largest
                 photos = message["photo"]
-                user_id = message["from"]["id"]
-                chat_id = message["chat"]["id"]
 
                 largest_photo = photos[-1]  # Last is highest quality
                 file_path = self.download_file(largest_photo["file_id"], user_id)
@@ -1208,9 +1225,6 @@ class TelegramConnector:
                     return
             elif "voice" in message or "audio" in message or "video_note" in message:
                 # Voice messages, audio files, and video notes → transcribe
-                user_id = message["from"]["id"]
-                chat_id = message["chat"]["id"]
-
                 if "voice" in message:
                     file_id = message["voice"]["file_id"]
                     duration = message["voice"].get("duration", 0)
@@ -1256,15 +1270,8 @@ class TelegramConnector:
                 # No text, no file - ignore
                 return
 
-            user_id = message["from"]["id"]
-            chat_id = message["chat"]["id"]
             user_name = message["from"].get("username", f"user_{user_id}")
             # text already set from above (may be from file or message.text)
-
-            # Check if user is allowed
-            if not self.config.is_user_allowed(user_id):
-                self.send_message(chat_id, "❌ You are not authorized to use this bot.")
-                return
 
             # Get or create user session
             session_info = self.config.get_user_session(user_id)
@@ -1378,10 +1385,13 @@ class TelegramConnector:
                     self.send_message(chat_id, result)
                 else:
                     # Regular slash commands - get user timeout
-                    allowed, rate_limit_message = self._check_user_rate_limit(user_id)
-                    if not allowed:
-                        self.send_message(chat_id, rate_limit_message)
-                        return
+                    if not rate_limit_checked:
+                        allowed, rate_limit_message = self._check_user_rate_limit(
+                            user_id
+                        )
+                        if not allowed:
+                            self.send_message(chat_id, rate_limit_message)
+                            return
                     timeout = self.config.get_user_timeout(user_id)
                     response = self._execute_command(
                         text, session_id, timeout, user_identity=str(user_id)
@@ -1402,10 +1412,13 @@ class TelegramConnector:
                 # Check for bash command (!)
                 if text.startswith("!"):
                     # Bash commands - get user timeout
-                    allowed, rate_limit_message = self._check_user_rate_limit(user_id)
-                    if not allowed:
-                        self.send_message(chat_id, rate_limit_message)
-                        return
+                    if not rate_limit_checked:
+                        allowed, rate_limit_message = self._check_user_rate_limit(
+                            user_id
+                        )
+                        if not allowed:
+                            self.send_message(chat_id, rate_limit_message)
+                            return
                     timeout = self.config.get_user_timeout(user_id)
                     response = self._execute_command(
                         text, session_id, timeout, user_identity=str(user_id)
@@ -1413,10 +1426,13 @@ class TelegramConnector:
                     self.send_message(chat_id, response)
                 else:
                     # Route regular messages to agent_manager with status updates
-                    allowed, rate_limit_message = self._check_user_rate_limit(user_id)
-                    if not allowed:
-                        self.send_message(chat_id, rate_limit_message)
-                        return
+                    if not rate_limit_checked:
+                        allowed, rate_limit_message = self._check_user_rate_limit(
+                            user_id
+                        )
+                        if not allowed:
+                            self.send_message(chat_id, rate_limit_message)
+                            return
                     timeout = self.config.get_user_timeout(user_id)
                     response, status_msg_id = self._query_agent_with_status(
                         text,

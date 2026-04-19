@@ -1258,6 +1258,23 @@ class WebEXConnector:
             person_email = message_data.get("personEmail", "unknown")
             files = message_data.get("files", [])
 
+            if not person_id or not room_id:
+                print(f"[DEBUG] Incomplete message: {message_data}", file=sys.stderr)
+                return
+
+            # Check if user is allowed before connector-side file work.
+            if not self.config.is_user_allowed(person_id):
+                self.send_message(room_id, "❌ You are not authorized to use this bot.")
+                return
+
+            rate_limit_checked = False
+            if files:
+                allowed, rate_limit_message = self._check_user_rate_limit(person_id)
+                if not allowed:
+                    self.send_message(room_id, rate_limit_message)
+                    return
+                rate_limit_checked = True
+
             # Handle files with optional caption
             file_path = None
             file_name = None
@@ -1330,11 +1347,6 @@ class WebEXConnector:
 
             if not person_id or not room_id or not text:
                 print(f"[DEBUG] Incomplete message: {message_data}", file=sys.stderr)
-                return
-
-            # Check if user is allowed
-            if not self.config.is_user_allowed(person_id):
-                self.send_message(room_id, "❌ You are not authorized to use this bot.")
                 return
 
             # Get or create user session
@@ -1435,10 +1447,13 @@ class WebEXConnector:
                     )
                 else:
                     # Regular slash commands
-                    allowed, rate_limit_message = self._check_user_rate_limit(person_id)
-                    if not allowed:
-                        self.send_message(room_id, rate_limit_message)
-                        return
+                    if not rate_limit_checked:
+                        allowed, rate_limit_message = self._check_user_rate_limit(
+                            person_id
+                        )
+                        if not allowed:
+                            self.send_message(room_id, rate_limit_message)
+                            return
                     timeout = self.config.get_user_timeout(person_id)
                     response = self._execute_command(
                         text, session_id, timeout, user_identity=person_id
@@ -1469,10 +1484,13 @@ class WebEXConnector:
             else:
                 # Check for bash command (!)
                 if text.startswith("!"):
-                    allowed, rate_limit_message = self._check_user_rate_limit(person_id)
-                    if not allowed:
-                        self.send_message(room_id, rate_limit_message)
-                        return
+                    if not rate_limit_checked:
+                        allowed, rate_limit_message = self._check_user_rate_limit(
+                            person_id
+                        )
+                        if not allowed:
+                            self.send_message(room_id, rate_limit_message)
+                            return
                     timeout = self.config.get_user_timeout(person_id)
                     response = self._execute_command(
                         text, session_id, timeout, user_identity=person_id
@@ -1480,10 +1498,13 @@ class WebEXConnector:
                     self.send_message(room_id, response)
                 else:
                     # Route regular messages to agent_manager with status updates
-                    allowed, rate_limit_message = self._check_user_rate_limit(person_id)
-                    if not allowed:
-                        self.send_message(room_id, rate_limit_message)
-                        return
+                    if not rate_limit_checked:
+                        allowed, rate_limit_message = self._check_user_rate_limit(
+                            person_id
+                        )
+                        if not allowed:
+                            self.send_message(room_id, rate_limit_message)
+                            return
                     timeout = self.config.get_user_timeout(person_id)
                     response, status_msg_id = self._query_agent_with_status(
                         text,
