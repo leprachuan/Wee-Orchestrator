@@ -7,6 +7,7 @@ Manages session ID mapping between N8N chat sessions and AI backend sessions
 
 import argparse
 import calendar
+import copy
 import hashlib
 import json
 import logging
@@ -348,6 +349,8 @@ class BackgroundTaskManager:
     MAX_TASKS_PER_USER = int(os.environ.get("BG_MAX_TASKS_PER_USER", "5"))
     MAX_TOTAL_TASKS = int(os.environ.get("BG_MAX_TOTAL_TASKS", "500"))
     MAX_OUTPUT_LINES = 500
+    MAX_TOOL_CALLS = 200
+    MAX_TOOL_FIELD_CHARS = int(os.environ.get("BG_MAX_TOOL_FIELD_CHARS", "4000"))
     CLEANUP_AGE_HOURS = int(os.environ.get("BG_CLEANUP_HOURS", "24"))
     BG_CLEANUP_HOURS = int(os.environ.get("BG_CLEANUP_HOURS", "24"))
     _cleanup_thread_started = False  # class-level default; instance __init__ overwrites
@@ -360,10 +363,13 @@ class BackgroundTaskManager:
         api_port = os.environ.get("API_PORT", "8001")
         env_suffix = "-dev" if api_port == "8001" else ""
         self._path = os.path.join(copilot_dir, f"background-tasks{env_suffix}.json")
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
         self._bg_events = {}  # {origin_session_id: [event_dicts]}
         self._bg_events_lock = threading.Lock()
         self._cleanup_thread_started = False
+        self._tasks_cache = None
+        self._cache_mtime_ns = None
+        self._cache_size = None
 
     def _start_cleanup_thread(self):
         """Start a background thread that runs cleanup every 5 minutes."""
@@ -383,18 +389,57 @@ class BackgroundTaskManager:
         t.start()
 
     def _load(self) -> list:
+        with self._lock:
+            return copy.deepcopy(self._load_unlocked())
+
+    def _ensure_cache_state(self):
+        if not hasattr(self, "_tasks_cache"):
+            self._tasks_cache = None
+        if not hasattr(self, "_cache_mtime_ns"):
+            self._cache_mtime_ns = None
+        if not hasattr(self, "_cache_size"):
+            self._cache_size = None
+
+    def _load_unlocked(self, force: bool = False) -> list:
+        self._ensure_cache_state()
+        if not force and self._tasks_cache is not None:
+            try:
+                stat = os.stat(self._path)
+                if (
+                    self._cache_mtime_ns == stat.st_mtime_ns
+                    and self._cache_size == stat.st_size
+                ):
+                    return self._tasks_cache
+            except FileNotFoundError:
+                if self._cache_mtime_ns is None:
+                    return self._tasks_cache
         try:
             with open(self._path, "r") as f:
-                return json.load(f)
+                tasks = json.load(f)
         except (FileNotFoundError, json.JSONDecodeError):
-            return []
+            tasks = []
+        self._tasks_cache = tasks
+        try:
+            stat = os.stat(self._path)
+            self._cache_mtime_ns = stat.st_mtime_ns
+            self._cache_size = stat.st_size
+        except FileNotFoundError:
+            self._cache_mtime_ns = None
+            self._cache_size = None
+        return self._tasks_cache
 
     def _save(self, tasks: list):
+        with self._lock:
+            self._save_unlocked(tasks)
+
+    def _save_unlocked(self, tasks: list):
         """Atomic write: write to temp file then rename to avoid corruption."""
+        self._ensure_cache_state()
+        normalized = self._normalize_tasks(tasks)
         tmp_path = self._path + ".tmp"
         try:
             with open(tmp_path, "w") as f:
-                json.dump(tasks, f, indent=2, default=str)
+                json.dump(normalized, f, indent=2, default=str)
             os.replace(tmp_path, self._path)
         except Exception:
             # If atomic rename fails, try direct write as fallback
@@ -403,7 +448,77 @@ class BackgroundTaskManager:
             except OSError:
                 pass
             with open(self._path, "w") as f:
-                json.dump(tasks, f, indent=2, default=str)
+                json.dump(normalized, f, indent=2, default=str)
+        self._tasks_cache = normalized
+        try:
+            stat = os.stat(self._path)
+            self._cache_mtime_ns = stat.st_mtime_ns
+            self._cache_size = stat.st_size
+        except FileNotFoundError:
+            self._cache_mtime_ns = None
+            self._cache_size = None
+
+    def _normalize_tasks(self, tasks: list) -> list:
+        normalized = []
+        for task in tasks:
+            current = dict(task)
+            if isinstance(current.get("output_lines"), list):
+                current["output_lines"] = current["output_lines"][-self.MAX_OUTPUT_LINES :]
+            else:
+                current["output_lines"] = []
+
+            tool_calls = current.get("tool_calls") or []
+            if not isinstance(tool_calls, list):
+                tool_calls = []
+            current["tool_calls"] = [
+                self._trim_tool_call(tc) for tc in tool_calls[-self.MAX_TOOL_CALLS :]
+            ]
+            normalized.append(current)
+        return normalized
+
+    def _trim_tool_call(self, tool_call: dict) -> dict:
+        trimmed = dict(tool_call or {})
+        for key in ("id", "name", "status", "runtime", "timestamp"):
+            value = trimmed.get(key)
+            if value is not None and not isinstance(value, str):
+                trimmed[key] = str(value)
+        for key in ("input", "output", "error"):
+            value = trimmed.get(key)
+            if value is None:
+                continue
+            if not isinstance(value, str):
+                value = json.dumps(value, default=str)
+            if len(value) > self.MAX_TOOL_FIELD_CHARS:
+                value = value[: self.MAX_TOOL_FIELD_CHARS] + "...[truncated]"
+            trimmed[key] = value
+        return trimmed
+
+    def _terminal_cutoff(self) -> float:
+        return time.time() - (self.CLEANUP_AGE_HOURS * 3600)
+
+    def _prune_terminal_tasks(self, tasks: list, cutoff: float = None) -> list:
+        terminal_statuses = {"completed", "failed", "killed"}
+        cutoff = self._terminal_cutoff() if cutoff is None else cutoff
+        kept = []
+        for task in tasks:
+            status = task.get("status")
+            if status not in terminal_statuses:
+                kept.append(task)
+                continue
+            completed = task.get("completed_at")
+            if not completed:
+                kept.append(task)
+                continue
+            try:
+                completed_ts = calendar.timegm(
+                    time.strptime(completed, "%Y-%m-%dT%H:%M:%SZ")
+                )
+            except (ValueError, OverflowError):
+                kept.append(task)
+                continue
+            if completed_ts > cutoff:
+                kept.append(task)
+        return kept
 
     def _evict_oldest_terminal(self, tasks: list) -> list:
         """Evict oldest completed/failed/killed tasks when store exceeds MAX_TOTAL_TASKS."""
@@ -425,6 +540,9 @@ class BackgroundTaskManager:
         evict_indices = {idx for idx, _ in terminal_tasks[:evict_count]}
 
         return [t for i, t in enumerate(tasks) if i not in evict_indices]
+
+    def _prune_tasks(self, tasks: list) -> list:
+        return self._evict_oldest_terminal(self._prune_terminal_tasks(tasks))
 
     def _user_key(self, channel: str, identity: str) -> str:
         # Strip channel prefix from identity to avoid double-prefixing
@@ -477,18 +595,18 @@ class BackgroundTaskManager:
             "origin_session_id": origin_session_id,
         }
         with self._lock:
-            tasks = self._load()
-            tasks = self._evict_oldest_terminal(tasks)
+            tasks = self._prune_tasks(self._load_unlocked())
             tasks.append(task)
-            self._save(tasks)
+            tasks = self._evict_oldest_terminal(tasks)
+            self._save_unlocked(tasks)
         self._start_cleanup_thread()
         return task
 
     def get_task(self, task_id: str) -> Optional[dict]:
         with self._lock:
-            for t in self._load():
+            for t in self._load_unlocked():
                 if t["task_id"] == task_id:
-                    return t
+                    return copy.deepcopy(t)
         return None
 
     def _identity_matches(self, task: dict, channel: str, identity: str) -> bool:
@@ -504,13 +622,42 @@ class BackgroundTaskManager:
     def list_tasks(self, channel: str, identity: str) -> list:
         with self._lock:
             return [
-                t for t in self._load() if self._identity_matches(t, channel, identity)
+                copy.deepcopy(t)
+                for t in self._load_unlocked()
+                if self._identity_matches(t, channel, identity)
             ]
 
     def list_all_tasks(self) -> list:
         """Return all tasks regardless of identity/channel."""
         with self._lock:
-            return list(self._load())
+            return copy.deepcopy(self._load_unlocked())
+
+    def list_task_summaries(
+        self, limit: int = 50, offset: int = 0, status: Optional[str] = None
+    ) -> Tuple[list, int]:
+        """Return paginated task summaries without large transcript payloads."""
+        with self._lock:
+            tasks = list(self._load_unlocked())
+            if status:
+                tasks = [t for t in tasks if t.get("status") == status]
+            tasks.sort(key=lambda t: t.get("created_at", ""), reverse=True)
+            total = len(tasks)
+            page = tasks[offset : offset + limit]
+            summaries = [
+                {
+                    "task_id": t["task_id"],
+                    "agent": t["agent"],
+                    "runtime": t["runtime"],
+                    "model": t["model"],
+                    "prompt": t["prompt"][:200],
+                    "status": t["status"],
+                    "created_at": t["created_at"],
+                    "completed_at": t.get("completed_at"),
+                    "error": t.get("error"),
+                }
+                for t in page
+            ]
+            return summaries, total
 
     def count_running(self, channel: str, identity: str, agent: str = None) -> int:
         tasks = self.list_tasks(channel, identity)
@@ -560,16 +707,16 @@ class BackgroundTaskManager:
 
     def update_task(self, task_id: str, **fields):
         with self._lock:
-            tasks = self._load()
+            tasks = self._load_unlocked()
             for t in tasks:
                 if t["task_id"] == task_id:
                     t.update(fields)
                     break
-            self._save(tasks)
+            self._save_unlocked(tasks)
 
     def append_output(self, task_id: str, line: str):
         with self._lock:
-            tasks = self._load()
+            tasks = self._load_unlocked()
             for t in tasks:
                 if t["task_id"] == task_id:
                     t["output_lines"].append(line)
@@ -577,36 +724,35 @@ class BackgroundTaskManager:
                     if len(t["output_lines"]) > self.MAX_OUTPUT_LINES:
                         t["output_lines"] = t["output_lines"][-self.MAX_OUTPUT_LINES :]
                     break
-            self._save(tasks)
-
-    MAX_TOOL_CALLS = 200
+            self._save_unlocked(tasks)
 
     def append_tool_call(self, task_id: str, tool_call: dict):
         """Append a new tool call event to the task."""
         with self._lock:
-            tasks = self._load()
+            tasks = self._load_unlocked()
             for t in tasks:
                 if t["task_id"] == task_id:
                     if "tool_calls" not in t:
                         t["tool_calls"] = []
-                    t["tool_calls"].append(tool_call)
+                    t["tool_calls"].append(self._trim_tool_call(tool_call))
                     if len(t["tool_calls"]) > self.MAX_TOOL_CALLS:
                         t["tool_calls"] = t["tool_calls"][-self.MAX_TOOL_CALLS :]
                     break
-            self._save(tasks)
+            self._save_unlocked(tasks)
 
     def update_tool_call(self, task_id: str, call_id: str, **fields):
         """Update an existing tool call by its id."""
         with self._lock:
-            tasks = self._load()
+            tasks = self._load_unlocked()
             for t in tasks:
                 if t["task_id"] == task_id:
                     for tc in t.get("tool_calls", []):
                         if tc.get("id") == call_id:
                             tc.update(fields)
+                            tc.update(self._trim_tool_call(tc))
                             break
                     break
-            self._save(tasks)
+            self._save_unlocked(tasks)
 
     def complete_task(self, task_id: str, final_response: str):
         self.update_task(
@@ -653,43 +799,21 @@ class BackgroundTaskManager:
 
     def delete_task(self, task_id: str) -> bool:
         with self._lock:
-            tasks = self._load()
+            tasks = self._load_unlocked()
             before = len(tasks)
             tasks = [t for t in tasks if t["task_id"] != task_id]
             if len(tasks) < before:
-                self._save(tasks)
+                self._save_unlocked(tasks)
                 return True
         return False
 
     def cleanup_old(self):
         """Purge terminal tasks older than CLEANUP_AGE_HOURS and enforce MAX_TOTAL_TASKS cap."""
-        cutoff = time.time() - (self.CLEANUP_AGE_HOURS * 3600)
         with self._lock:
-            tasks = self._load()
-            kept = []
-            for t in tasks:
-                if t["status"] == "running":
-                    kept.append(t)
-                    continue
-                if t["status"] == "queued":
-                    kept.append(t)
-                    continue
-                completed = t.get("completed_at")
-                if completed:
-                    try:
-                        ct = calendar.timegm(time.strptime(completed, "%Y-%m-%dT%H:%M:%SZ"))
-                        if ct > cutoff:
-                            kept.append(t)
-                            continue
-                    except (ValueError, OverflowError):
-                        kept.append(t)
-                        continue
-                else:
-                    kept.append(t)
-            # Enforce total task cap after TTL cleanup
-            kept = self._evict_oldest_terminal(kept)
+            tasks = self._load_unlocked()
+            kept = self._prune_tasks(tasks)
             if len(kept) < len(tasks):
-                self._save(kept)
+                self._save_unlocked(kept)
 
     def reconcile_stale_tasks(self) -> dict:
         """Reconcile orphaned tasks after a service restart.
@@ -700,7 +824,7 @@ class BackgroundTaskManager:
         now_str = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
         reconciled = {"stale_running": 0, "queued_ready": 0}
         with self._lock:
-            tasks = self._load()
+            tasks = self._load_unlocked()
             changed = False
             for t in tasks:
                 if t["status"] == "running":
@@ -719,7 +843,7 @@ class BackgroundTaskManager:
                         reconciled["stale_running"] += 1
                         changed = True
             if changed:
-                self._save(tasks)
+                self._save_unlocked(tasks)
             # Count queued tasks that are now promotable
             reconciled["queued_ready"] = sum(
                 1 for t in tasks if t["status"] == "queued"
@@ -12686,6 +12810,8 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             x_user_identity=request.headers.get("x-user-identity"),
             x_auth_channel=request.headers.get("x-auth-channel"),
         )
+        limit = max(1, min(limit, 200))
+        offset = max(0, offset)
         tasks = bg_task_mgr.list_all_tasks()
         # Check if running tasks are still alive
         for t in tasks:
@@ -12697,30 +12823,9 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                         t["task_id"], "Process terminated unexpectedly"
                     )
                     t["status"] = "failed"
-        # Filter by status if provided
-        if status:
-            tasks = [t for t in tasks if t["status"] == status]
-        # Sort by created_at descending (newest first)
-        tasks.sort(key=lambda t: t.get("created_at", ""), reverse=True)
-        total = len(tasks)
-        # Apply pagination
-        tasks = tasks[offset : offset + limit]
-        # Return summary (no full output_lines for list)
-        result = []
-        for t in tasks:
-            result.append(
-                {
-                    "task_id": t["task_id"],
-                    "agent": t["agent"],
-                    "runtime": t["runtime"],
-                    "model": t["model"],
-                    "prompt": t["prompt"][:200],
-                    "status": t["status"],
-                    "created_at": t["created_at"],
-                    "completed_at": t.get("completed_at"),
-                    "error": t.get("error"),
-                }
-            )
+        result, total = bg_task_mgr.list_task_summaries(
+            limit=limit, offset=offset, status=status
+        )
         return {
             "tasks": result,
             "total": total,

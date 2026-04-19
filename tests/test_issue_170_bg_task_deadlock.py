@@ -199,6 +199,52 @@ class TestIssue170BackgroundTaskDeadlock(unittest.TestCase):
         self.assertEqual(len(result), 300)
         self.assertLess(elapsed, 1.0, f"list_all_tasks took {elapsed:.3f}s (should be <1s)")
 
+    def test_issue_170_task_store_uses_cached_reads(self):
+        """Repeated reads should hit the in-memory cache, not reopen the JSON file."""
+        mgr = self._make_manager(max_total_tasks=500)
+        mgr._save([self._make_task(f"task-{i}") for i in range(20)])
+        mgr = self._make_manager(max_total_tasks=500)
+
+        real_open = open
+        call_count = {"reads": 0}
+
+        def counting_open(path, mode="r", *args, **kwargs):
+            if path == self.temp_file and "r" in mode:
+                call_count["reads"] += 1
+            return real_open(path, mode, *args, **kwargs)
+
+        with patch("builtins.open", side_effect=counting_open):
+            first = mgr.list_all_tasks()
+            second = mgr.list_all_tasks()
+
+        self.assertEqual(len(first), 20)
+        self.assertEqual(len(second), 20)
+        self.assertEqual(
+            call_count["reads"],
+            1,
+            "BackgroundTaskManager reparsed the task file instead of serving cached data",
+        )
+
+    def test_issue_170_list_task_summaries_paginates_without_details(self):
+        """Summary pagination should omit large transcript payloads."""
+        mgr = self._make_manager(max_total_tasks=500)
+        tasks = []
+        for i in range(5):
+            task = self._make_task(f"task-{i}")
+            task["output_lines"] = [f"line {j}" for j in range(500)]
+            task["tool_calls"] = [
+                {"id": f"tc-{i}", "name": "tool", "input": "x" * 5000, "status": "completed"}
+            ]
+            tasks.append(task)
+        mgr._save(tasks)
+
+        page, total = mgr.list_task_summaries(limit=2, offset=1)
+
+        self.assertEqual(total, 5)
+        self.assertEqual(len(page), 2)
+        self.assertNotIn("output_lines", page[0])
+        self.assertNotIn("tool_calls", page[0])
+
     # --- Test 3: Cleanup old tasks ---
 
     def test_cleanup_purges_old_terminal_tasks(self):
@@ -292,6 +338,38 @@ class TestIssue170BackgroundTaskDeadlock(unittest.TestCase):
         self.assertLessEqual(len(task["output_lines"]), mgr.MAX_OUTPUT_LINES)
         # Should keep the last MAX_OUTPUT_LINES
         self.assertEqual(task["output_lines"][-1], "line-599")
+
+    def test_issue_170_tool_call_fields_are_trimmed_at_write_time(self):
+        """Stored tool-call payloads should be truncated before they bloat the task file."""
+        mgr = self._make_manager()
+        mgr.MAX_TOOL_FIELD_CHARS = 128
+
+        mgr.create_task(
+            task_id="task-1",
+            session_id="session-1",
+            user_identity="test-user",
+            channel="test",
+            agent="test-agent",
+            runtime="test",
+            model="test-model",
+            prompt="Test",
+        )
+
+        mgr.append_tool_call(
+            "task-1",
+            {
+                "id": "call-1",
+                "name": "tool",
+                "input": "x" * 512,
+                "output": {"result": "y" * 512},
+                "status": "completed",
+            },
+        )
+
+        task = mgr.get_task("task-1")
+        self.assertLessEqual(len(task["tool_calls"]), mgr.MAX_TOOL_CALLS)
+        self.assertTrue(task["tool_calls"][0]["input"].endswith("...[truncated]"))
+        self.assertTrue(task["tool_calls"][0]["output"].endswith("...[truncated]"))
 
     # --- Test 6: Pagination ---
 
