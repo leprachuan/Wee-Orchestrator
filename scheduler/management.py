@@ -24,6 +24,7 @@ except ImportError:
     croniter = None
 
 logger = logging.getLogger(__name__)
+_SAFE_JOB_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 
 
 def _get_local_tz_name() -> str:
@@ -525,6 +526,45 @@ class TaskScheduler:
         # Run migration on first load
         self._migrate_jobs_to_cron()
 
+    def _validate_job_id(self, job_id: str) -> Tuple[bool, Optional[str]]:
+        """Reject path traversal and other unsafe scheduler job IDs."""
+        if not isinstance(job_id, str) or not job_id.strip():
+            return False, "Invalid job ID"
+        if not _SAFE_JOB_ID_RE.fullmatch(job_id):
+            return False, f"Invalid job ID '{job_id}'"
+        return True, None
+
+    def _allowed_working_dirs(self) -> List[Path]:
+        """Return the resolved working directory allowlist roots."""
+        raw = os.getenv("SCHEDULER_ALLOWED_WORKDIRS", "/opt")
+        roots = []
+        for entry in raw.split(os.pathsep):
+            value = entry.strip()
+            if not value:
+                continue
+            roots.append(Path(value).expanduser().resolve(strict=False))
+        return roots or [Path("/opt").resolve(strict=False)]
+
+    def _validate_working_dir(self, working_dir: str) -> Tuple[bool, Optional[str]]:
+        """Allow only absolute working directories under configured roots."""
+        if not isinstance(working_dir, str) or not working_dir.strip():
+            return False, "working_dir must be a non-empty string"
+
+        candidate = Path(working_dir).expanduser()
+        if not candidate.is_absolute():
+            return False, "working_dir must be an absolute path"
+
+        resolved = candidate.resolve(strict=False)
+        for allowed_root in self._allowed_working_dirs():
+            try:
+                resolved.relative_to(allowed_root)
+                return True, None
+            except ValueError:
+                continue
+
+        allowed = ", ".join(str(path) for path in self._allowed_working_dirs())
+        return False, f"working_dir must be under an allowed root: {allowed}"
+
     def _init_jobs_file(self):
         """Initialize jobs.json if it doesn't exist."""
         if not self.jobs_file.exists():
@@ -642,6 +682,9 @@ class TaskScheduler:
             runtime = os.getenv("SCHEDULER_DEFAULT_RUNTIME", "claude")
         if working_dir is None:
             working_dir = "/opt"
+        valid_workdir, workdir_error = self._validate_working_dir(working_dir)
+        if not valid_workdir:
+            return {"success": False, "message": workdir_error}
 
         jobs = self._load_jobs()
         job_id = name.lower().replace(" ", "-")
@@ -720,6 +763,10 @@ class TaskScheduler:
 
     def update_job(self, job_id: str, updates: Dict) -> Dict:
         """Update fields of an existing job."""
+        valid_job_id, job_id_error = self._validate_job_id(job_id)
+        if not valid_job_id:
+            return {"success": False, "message": job_id_error}
+
         allowed = {
             "name",
             "schedule",
@@ -757,6 +804,13 @@ class TaskScheduler:
                     if cron_val and is_valid_cron(cron_val):
                         job["cron"] = cron_val
                         job["next_run"] = cron_next_run(cron_val)
+
+                if "working_dir" in updates:
+                    valid_workdir, workdir_error = self._validate_working_dir(
+                        updates["working_dir"]
+                    )
+                    if not valid_workdir:
+                        return {"success": False, "message": workdir_error}
 
                 job.update(updates)
                 self._save_jobs(jobs)
@@ -829,6 +883,10 @@ class TaskScheduler:
 
     def get_logs(self, job_id: str) -> Dict:
         """Get scheduler logs for a job."""
+        valid_job_id, job_id_error = self._validate_job_id(job_id)
+        if not valid_job_id:
+            return {"success": False, "message": job_id_error}
+
         log_file = self.logs_dir / f"{job_id}.log"
         if log_file.exists():
             return {
