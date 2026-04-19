@@ -946,13 +946,14 @@ class TelegramConnector:
                     # Retry without HTML parse_mode if caption failed
                     if caption:
                         data.pop("parse_mode", None)
+                        f.seek(0)
                         resp = requests.post(
                             f"{self.api_url}/sendDocument",
                             data=data,
                             files={
                                 "document": (
                                     filename or Path(file_path).name,
-                                    open(file_path, "rb"),
+                                    f,
                                     mime_type,
                                 )
                             },
