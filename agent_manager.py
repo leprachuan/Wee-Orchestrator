@@ -359,6 +359,7 @@ class BackgroundTaskManager:
         env_suffix = "-dev" if api_port == "8001" else ""
         self._path = os.path.join(copilot_dir, f"background-tasks{env_suffix}.json")
         self._lock = threading.Lock()
+        self._tasks_cache = None  # in-memory cache; avoids disk I/O on every API call
         self._bg_events = {}  # {origin_session_id: [event_dicts]}
         self._bg_events_lock = threading.Lock()
         self._cleanup_thread_started = False
@@ -381,14 +382,19 @@ class BackgroundTaskManager:
         t.start()
 
     def _load(self) -> list:
+        """Return in-memory cache if populated; load from disk only on cold start."""
+        if self._tasks_cache is not None:
+            return self._tasks_cache
         try:
             with open(self._path, "r") as f:
-                return json.load(f)
+                self._tasks_cache = json.load(f)
         except (FileNotFoundError, json.JSONDecodeError):
-            return []
+            self._tasks_cache = []
+        return self._tasks_cache
 
     def _save(self, tasks: list):
-        """Atomic write: write to temp file then rename to avoid corruption."""
+        """Update in-memory cache and atomically flush to disk."""
+        self._tasks_cache = tasks  # fast path: subsequent reads skip disk
         tmp_path = self._path + ".tmp"
         try:
             with open(tmp_path, "w") as f:
@@ -10254,6 +10260,8 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
 
     @app.get("/api/v1/health")
     async def health():
+        # Do NOT call load_session_map() or any disk I/O here —
+        # health must return immediately regardless of task store size.
         return {
             "status": "ok",
             "uptime_seconds": time.time() - _start_time,
@@ -10261,7 +10269,6 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             "environment": APP_ENV,
             "agents_loaded": len(session_mgr.AGENTS),
             "scheduler_enabled": SCHEDULER_ENABLED,
-            "active_sessions": len(session_mgr.load_session_map()),
         }
 
     @app.get("/api/v1/config")

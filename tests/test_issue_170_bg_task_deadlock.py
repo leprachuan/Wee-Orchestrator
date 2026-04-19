@@ -423,5 +423,148 @@ class TestIssue170AsyncIO(unittest.TestCase):
         self.assertEqual(len(results), 50)  # 5 threads × 10 reads
 
 
+
+class TestIssue170InMemoryCache(unittest.TestCase):
+    """Test in-memory cache behavior — no disk I/O on repeated reads."""
+
+    def setUp(self):
+        self.temp_dir = tempfile.mkdtemp()
+        self.temp_file = os.path.join(self.temp_dir, "background-tasks-test.json")
+
+    def _make_manager(self):
+        mgr = BackgroundTaskManager()
+        mgr._path = self.temp_file
+        mgr._cleanup_thread_started = True
+        return mgr
+
+    def _make_task(self, task_id, status="completed"):
+        now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        return {
+            "task_id": task_id,
+            "session_id": f"session-{task_id}",
+            "user_key": f"test_{task_id}",
+            "channel": "test",
+            "user_identity": task_id,
+            "agent": "test-agent",
+            "runtime": "test",
+            "model": "test-model",
+            "prompt": f"Test task {task_id}",
+            "status": status,
+            "pid": 0,
+            "created_at": now,
+            "started_at": now if status == "running" else None,
+            "completed_at": now if status != "running" else None,
+            "output_lines": [],
+            "tool_calls": [],
+            "final_response": None,
+            "error": None,
+            "timeout": 900,
+            "notify": True,
+            "origin_session_id": None,
+        }
+
+    def test_cache_populated_after_first_load(self):
+        """_tasks_cache should be non-None after first _load() call."""
+        mgr = self._make_manager()
+        self.assertIsNone(mgr._tasks_cache)
+        with mgr._lock:
+            mgr._load()
+        self.assertIsNotNone(mgr._tasks_cache)
+
+    def test_repeated_reads_use_cache_not_disk(self):
+        """After first load, _load() must not touch the file (cache hit)."""
+        mgr = self._make_manager()
+        tasks = [self._make_task("task-1")]
+        mgr._save(tasks)
+        # Cache is now warm
+
+        # Delete the file to prove subsequent reads use cache
+        os.unlink(self.temp_file)
+
+        with mgr._lock:
+            result = mgr._load()
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0]["task_id"], "task-1")
+
+    def test_list_all_tasks_uses_cache(self):
+        """list_all_tasks() should return correct results from in-memory cache."""
+        mgr = self._make_manager()
+        for i in range(50):
+            mgr.create_task(
+                task_id=f"cached-{i}",
+                session_id=f"session-{i}",
+                user_identity="user",
+                channel="test",
+                agent="agent",
+                runtime="test",
+                model="test",
+                prompt=f"Task {i}",
+            )
+
+        # Cache is warm after creates; delete file to force prove cache is used
+        os.unlink(self.temp_file)
+
+        result = mgr.list_all_tasks()
+        self.assertEqual(len(result), 50)
+
+    def test_save_updates_cache(self):
+        """_save() must update _tasks_cache so subsequent reads are fast."""
+        mgr = self._make_manager()
+        tasks1 = [self._make_task("task-before")]
+        mgr._save(tasks1)
+        self.assertEqual(mgr._tasks_cache[0]["task_id"], "task-before")
+
+        tasks2 = [self._make_task("task-after")]
+        mgr._save(tasks2)
+        self.assertEqual(mgr._tasks_cache[0]["task_id"], "task-after")
+
+    def test_list_all_tasks_fast_with_cache(self):
+        """list_all_tasks should be <10ms with warm cache (no disk I/O)."""
+        mgr = self._make_manager()
+        tasks = [self._make_task(f"t-{i}") for i in range(500)]
+        mgr._save(tasks)
+
+        start = time.time()
+        for _ in range(100):
+            mgr.list_all_tasks()
+        elapsed = (time.time() - start) / 100  # avg per call
+
+        self.assertLess(elapsed, 0.01, f"list_all_tasks avg {elapsed*1000:.1f}ms (should be <10ms with cache)")
+
+
+class TestIssue170HealthEndpoint(unittest.TestCase):
+    """Health endpoint must not read task store or session map."""
+
+    def test_health_response_has_no_active_sessions(self):
+        """Health endpoint must not call load_session_map (blocking disk I/O)."""
+        import agent_manager as am
+        src_path = am.__file__
+        with open(src_path, 'r') as f:
+            src = f.read()
+
+        # Extract the health handler body
+        health_start = src.find('async def health():')
+        health_end = src.find('\n    @app.', health_start + 1)
+        health_src = src[health_start:health_end]
+
+        # Strip comment lines before checking for prohibited calls
+        code_lines = [
+            line for line in health_src.splitlines()
+            if line.strip() and not line.strip().startswith('#')
+        ]
+        code_only = '\n'.join(code_lines)
+
+        self.assertNotIn(
+            'load_session_map()',
+            code_only,
+            "Health endpoint must not call load_session_map() — blocking disk I/O"
+        )
+        self.assertNotIn(
+            'active_sessions',
+            code_only,
+            "Health endpoint must not include active_sessions (requires blocking disk read)"
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
