@@ -1640,24 +1640,11 @@ class SessionManager:
     # CODEX models configuration (from copilot CLI --model choices)
     CODEX_MODELS = {
         "OpenAI Models": [
-            ("gpt-5.4", "GPT-5.4", ["gpt-5.4", "gpt-5.4-pro"]),
-            ("gpt-5.4-mini", "GPT-5.4 Mini", ["gpt-5.4-mini"]),
-            ("gpt-5.3-codex", "GPT-5.3 Codex", ["gpt-5.3", "codex-latest"]),
-            ("gpt-5.2-codex", "GPT-5.2 Codex", ["gpt-5.2-codex"]),
-            ("gpt-5.2", "GPT-5.2", ["gpt-5.2"]),
-            ("gpt-5.1-codex-max", "GPT-5.1 Codex Max", ["gpt-5.1", "codex-max"]),
-            ("gpt-5.1-codex", "GPT-5.1 Codex", ["codex"]),
-            ("gpt-5.1", "GPT-5.1", []),
-            ("gpt-5.1-codex-mini", "GPT-5.1 Codex Mini", ["codex-mini"]),
-            ("gpt-5-mini", "GPT-5 Mini", ["gpt-5", "mini"]),
-            ("gpt-4.1", "GPT-4.1", ["gpt-4"]),
-        ],
-        "US Frontier Models (Comparison)": [
-            ("gpt-4o", "GPT-4o (Omni)", ["gpt-4o-latest"]),
-            ("gpt-4o-mini", "GPT-4o Mini", ["gpt-4o-mini-latest"]),
-            ("gpt-4-turbo", "GPT-4 Turbo", ["gpt-4-turbo-latest"]),
-            ("o1-preview", "OpenAI o1-preview", ["o1-preview-2024-09-12"]),
-            ("o1-mini", "OpenAI o1-mini", ["o1-mini-2024-09-12"]),
+            ("gpt-5.4", "gpt-5.4", ["gpt-5.4"]),
+            ("gpt-5.4-mini", "GPT-5.4-Mini", ["gpt-5.4-mini"]),
+            ("gpt-5.3-codex", "gpt-5.3-codex", ["gpt-5.3-codex"]),
+            ("gpt-5.2", "gpt-5.2", ["gpt-5.2"]),
+            ("codex-auto-review", "Codex Auto Review", ["codex-auto-review"]),
         ],
     }
 
@@ -3478,14 +3465,8 @@ You can mention an agent in your prompt and it will auto-delegate:
                 "gpt-5.4",
                 "gpt-5.4-mini",
                 "gpt-5.3-codex",
-                "gpt-5.2-codex",
                 "gpt-5.2",
-                "gpt-5.1-codex-max",
-                "gpt-5.1-codex",
-                "gpt-5.1",
-                "gpt-5.1-codex-mini",
-                "gpt-5-mini",
-                "gpt-4.1",
+                "codex-auto-review",
             ],
             "Google Models": [
                 "gemini-3-pro-preview",
@@ -3542,14 +3523,8 @@ You can mention an agent in your prompt and it will auto-delegate:
                     "gpt-5.4",
                     "gpt-5.4-mini",
                     "gpt-5.3-codex",
-                    "gpt-5.2-codex",
                     "gpt-5.2",
-                    "gpt-5.1-codex-max",
-                    "gpt-5.1-codex",
-                    "gpt-5.1",
-                    "gpt-5.1-codex-mini",
-                    "gpt-5-mini",
-                    "gpt-4.1",
+                    "codex-auto-review",
                 ]
                 found_fallbacks = [m for m in fallback_models if m in result.stdout]
                 if found_fallbacks:
@@ -3579,14 +3554,8 @@ You can mention an agent in your prompt and it will auto-delegate:
                         "gpt-5.4",
                         "gpt-5.4-mini",
                         "gpt-5.3-codex",
-                        "gpt-5.2-codex",
                         "gpt-5.2",
-                        "gpt-5.1-codex-max",
-                        "gpt-5.1-codex",
-                        "gpt-5.1",
-                        "gpt-5.1-codex-mini",
-                        "gpt-5-mini",
-                        "gpt-4.1",
+                        "codex-auto-review",
                     ],
                     "Google Models": [
                         "gemini-3-pro-preview",
