@@ -8261,7 +8261,7 @@ User Request:
         if not api_base:
             api_base = "http://192.168.1.101:11434/v1"
         if not api_key:
-            # Issue #153: Check OPENROUTER_API_KEY env var for OpenRouter models
+            # Issue #144: Check OPENROUTER_API_KEY env var for OpenRouter models
             if "openrouter" in api_base.lower():
                 api_key = os.environ.get("OPENROUTER_API_KEY")
             # Try keyring for OpenRouter
@@ -8272,14 +8272,14 @@ User Request:
                     api_key = keyring.get_password("openrouter", "api_key")
                 except Exception:
                     pass
-            # Issue #153: Raise clear error instead of defaulting to "ollama"
+            # Issue #144: Raise clear error instead of defaulting to "ollama"
             if not api_key:
                 if "openrouter" in api_base.lower():
                     raise ValueError(
                         "OpenRouter API key not found. Set OPENROUTER_API_KEY "
                         'env var or store via: python3 -c "import keyring; '
                         "keyring.set_password('openrouter', 'api_key', "
-                        "'sk-or-...')\".\"."
+                        "'sk-or-...')\""
                     )
                 api_key = "ollama"
 
