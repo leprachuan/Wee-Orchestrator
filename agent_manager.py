@@ -435,7 +435,8 @@ class BackgroundTaskManager:
     def _save_unlocked(self, tasks: list):
         """Atomic write: write to temp file then rename to avoid corruption."""
         self._ensure_cache_state()
-        normalized = self._normalize_tasks(tasks)
+        retained = self._prune_tasks(tasks)
+        normalized = self._normalize_tasks(retained)
         tmp_path = self._path + ".tmp"
         try:
             with open(tmp_path, "w") as f:

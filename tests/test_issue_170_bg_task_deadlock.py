@@ -17,7 +17,7 @@ import tempfile
 import threading
 import time
 import unittest
-from unittest.mock import patch, MagicMock
+from unittest.mock import AsyncMock, patch
 
 # Add parent directory to path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -106,11 +106,14 @@ class TestIssue170BackgroundTaskDeadlock(unittest.TestCase):
 
         # Verify total tasks <= MAX_TOTAL_TASKS
         loaded = mgr._load()
-        self.assertLessEqual(len(loaded), mgr.MAX_TOTAL_TASKS + 1)  # +1 for the new task
+        self.assertEqual(len(loaded), mgr.MAX_TOTAL_TASKS)
 
         # Verify the new task exists
         task_ids = [t["task_id"] for t in loaded]
         self.assertIn("task-new", task_ids)
+        self.assertNotIn("task-0", task_ids)
+        self.assertNotIn("task-1", task_ids)
+        self.assertNotIn("task-2", task_ids)
 
     def test_never_evicts_running_tasks(self):
         """Running tasks must never be evicted, even when over cap."""
@@ -394,6 +397,20 @@ class TestIssue170BackgroundTaskDeadlock(unittest.TestCase):
         self.assertTrue(task["tool_calls"][0]["input"].endswith("...[truncated]"))
         self.assertTrue(task["tool_calls"][0]["output"].endswith("...[truncated]"))
 
+    def test_issue_170_save_enforces_cap_without_create_task(self):
+        """Any persisted save should trim terminal tasks down to MAX_TOTAL_TASKS."""
+        mgr = self._make_manager(max_total_tasks=10)
+
+        tasks = [self._make_task(f"task-{i}") for i in range(12)]
+        mgr._save(tasks)
+
+        loaded = mgr._load()
+        self.assertEqual(len(loaded), mgr.MAX_TOTAL_TASKS)
+        loaded_ids = [task["task_id"] for task in loaded]
+        self.assertNotIn("task-0", loaded_ids)
+        self.assertNotIn("task-1", loaded_ids)
+        self.assertIn("task-11", loaded_ids)
+
     # --- Test 6: Pagination ---
 
     def test_eviction_respects_max_total(self):
@@ -522,6 +539,115 @@ class TestIssue170AsyncIO(unittest.TestCase):
 
         self.assertEqual(len(errors), 0, f"Errors during concurrent reads: {errors}")
         self.assertEqual(len(results), 50)  # 5 threads × 10 reads
+
+
+os.environ.setdefault("API_SHARED_KEY", "test_key_123")
+os.environ.setdefault("APP_ENV", "DEV")
+os.environ.setdefault("API_PORT", "8099")
+
+
+class TestIssue170BackgroundTaskAPI(unittest.TestCase):
+    """FastAPI regression coverage for Issue #170 async background-task endpoints."""
+
+    @classmethod
+    def setUpClass(cls):
+        from fastapi.testclient import TestClient
+
+        agent_manager = sys.modules[BackgroundTaskManager.__module__]
+
+        cls._tmp_dir = tempfile.mkdtemp()
+        cls._tmp_file = os.path.join(cls._tmp_dir, "background-tasks-api.json")
+        cls._captured = []
+        original_init = BackgroundTaskManager.__init__
+
+        def _capturing_init(self_inner, *args, **kwargs):
+            original_init(self_inner, *args, **kwargs)
+            self_inner._path = cls._tmp_file
+            self_inner._cleanup_thread_started = True
+            cls._captured.append(self_inner)
+
+        cls._telegram_patch = patch.object(
+            agent_manager,
+            "_resolve_telegram_identity",
+            side_effect=lambda identity: identity,
+        )
+        cls._telegram_patch.start()
+        cls._send_pairing_patch = patch.object(
+            agent_manager,
+            "_send_pairing_code",
+            return_value=True,
+        )
+        cls._send_pairing_patch.start()
+
+        with patch.object(BackgroundTaskManager, "__init__", _capturing_init):
+            cls.app = agent_manager.create_api_app()
+
+        cls.client = TestClient(cls.app)
+        session_token = agent_manager._api_auth_manager.verify_pairing_code(
+            agent_manager._api_auth_manager.generate_pairing_code(
+                "issue170-test-user", "telegram"
+            ),
+            "issue170-test-user",
+        )
+        cls.auth = {
+            "Authorization": f"Bearer {session_token}",
+        }
+        cls.bg_mgr = cls._captured[0]
+
+    @classmethod
+    def tearDownClass(cls):
+        cls._telegram_patch.stop()
+        cls._send_pairing_patch.stop()
+        if os.path.exists(cls._tmp_file):
+            os.unlink(cls._tmp_file)
+        os.rmdir(cls._tmp_dir)
+
+    def setUp(self):
+        self.bg_mgr._save([])
+
+    def _create_task(self, task_id: str, status: str = "completed") -> dict:
+        return self.bg_mgr.create_task(
+            task_id=task_id,
+            session_id=f"session-{task_id}",
+            user_identity="test-user",
+            channel="telegram",
+            agent="wee-dev",
+            runtime="copilot",
+            model="claude-haiku-4.5",
+            prompt=f"Task {task_id}",
+            status=status,
+        )
+
+    def test_list_endpoint_offloads_summary_reads_to_worker_thread(self):
+        self._create_task("task-1")
+
+        async def _to_thread(func, *args, **kwargs):
+            self.assertIs(func.__self__, self.bg_mgr)
+            self.assertIs(func.__func__, BackgroundTaskManager.list_task_summaries)
+            return func(*args, **kwargs)
+
+        with patch("asyncio.to_thread", new=AsyncMock(side_effect=_to_thread)) as mocked:
+            resp = self.client.get("/api/v1/background-tasks?limit=1", headers=self.auth)
+
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.json()["total"], 1)
+        mocked.assert_awaited()
+
+    def test_detail_endpoint_offloads_task_reads_to_worker_thread(self):
+        self._create_task("task-42", status="running")
+
+        async def _to_thread(func, *args, **kwargs):
+            self.assertIs(func.__self__, self.bg_mgr)
+            self.assertIs(func.__func__, BackgroundTaskManager.get_task)
+            self.assertEqual(args, ("task-42",))
+            return func(*args, **kwargs)
+
+        with patch("asyncio.to_thread", new=AsyncMock(side_effect=_to_thread)) as mocked:
+            resp = self.client.get("/api/v1/background-tasks/task-42", headers=self.auth)
+
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.json()["task_id"], "task-42")
+        mocked.assert_awaited()
 
 
 if __name__ == "__main__":
