@@ -86,7 +86,7 @@
       "path": "/opt/wee-dev",
       "dispatch_config": {
         "runtime": "copilot",
-        "model": "claude-sonnet-4.6",
+        "model": "auto",
         "vendor": "Anthropic Claude (Sonnet 4.6)",
         "permission_mode": "elevated",
         "yolo": true,
@@ -126,7 +126,7 @@
       "path": "/opt/wee-qa",
       "dispatch_config": {
         "runtime": "copilot",
-        "model": "gpt-5.4-mini",
+        "model": "auto",
         "vendor": "OpenAI (GPT-5.4-mini via Copilot)",
         "permission_mode": "elevated",
         "yolo": true,
