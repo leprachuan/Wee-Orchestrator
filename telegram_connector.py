@@ -209,9 +209,7 @@ class TelegramConnector:
         self._active_requests = 0
         self._active_requests_drained = threading.Event()
         self._active_requests_drained.set()
-        self.shutdown_timeout = float(
-            os.environ.get("CONNECTOR_SHUTDOWN_TIMEOUT_SECONDS", "30")
-        )
+        self.shutdown_timeout = self._load_shutdown_timeout()
         self.poll_slice_timeout = max(
             1.0, float(os.environ.get("TELEGRAM_POLL_SLICE_TIMEOUT_SECONDS", "5"))
         )
@@ -238,6 +236,17 @@ class TelegramConnector:
             file=sys.stderr,
         )
         self._request_shutdown(signame)
+
+    def _load_shutdown_timeout(self) -> Optional[float]:
+        """Return an optional shutdown drain timeout from the environment."""
+        raw_timeout = os.environ.get("CONNECTOR_SHUTDOWN_TIMEOUT_SECONDS", "").strip()
+        if not raw_timeout:
+            return None
+
+        timeout = float(raw_timeout)
+        if timeout <= 0:
+            return None
+        return timeout
 
     def _request_shutdown(self, reason: str = "shutdown"):
         """Mark the connector as shutting down."""

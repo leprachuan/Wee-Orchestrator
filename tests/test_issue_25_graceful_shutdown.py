@@ -223,6 +223,65 @@ def test_issue_25_telegram_shutdown_interrupts_poll_loop(telegram_connector):
         assert worker.is_alive() is False
 
 
+def test_issue_25_telegram_shutdown_waits_without_default_timeout(
+    telegram_connector,
+):
+    update = {
+        "message": {
+            "from": {"id": 42, "username": "tester", "is_bot": False},
+            "chat": {"id": 1001},
+            "text": "hello",
+        }
+    }
+    started = threading.Event()
+    release = threading.Event()
+    wait_started = threading.Event()
+    wait_finished = threading.Event()
+
+    def blocking_query(*_args, **_kwargs):
+        started.set()
+        assert release.wait(timeout=2)
+        return ("done", None)
+
+    def wait_for_shutdown_drain():
+        wait_started.set()
+        assert telegram_connector._wait_for_active_requests("telegram test") is True
+        wait_finished.set()
+
+    telegram_connector.running = True
+
+    with (
+        patch.object(telegram_connector, "send_typing"),
+        patch.object(
+            telegram_connector,
+            "_query_agent_with_status",
+            side_effect=blocking_query,
+        ),
+        patch.object(telegram_connector, "send_response"),
+        patch.object(telegram_connector, "send_message"),
+    ):
+        worker = threading.Thread(
+            target=telegram_connector.handle_message, args=(update,), daemon=True
+        )
+        worker.start()
+        assert started.wait(timeout=1)
+
+        telegram_connector._handle_shutdown_signal(signal.SIGTERM, None)
+        assert telegram_connector.shutdown_timeout is None
+
+        waiter = threading.Thread(target=wait_for_shutdown_drain, daemon=True)
+        waiter.start()
+        assert wait_started.wait(timeout=1)
+        time.sleep(0.1)
+        assert wait_finished.is_set() is False
+
+        release.set()
+        worker.join(timeout=1)
+        waiter.join(timeout=1)
+        assert waiter.is_alive() is False
+        assert wait_finished.is_set() is True
+
+
 def test_issue_25_telegram_unauthorized_media_rejected_before_download(
     telegram_connector,
 ):
@@ -356,3 +415,66 @@ def test_issue_25_webex_shutdown_interrupts_reconnect_backoff(webex_connector):
 
         worker.join(timeout=1)
         assert worker.is_alive() is False
+
+
+def test_issue_25_webex_shutdown_waits_without_default_timeout(webex_connector):
+    message = {
+        "personId": "person-1",
+        "personEmail": "user@example.com",
+        "roomId": "room-1",
+        "text": "hello",
+        "files": [],
+    }
+    started = threading.Event()
+    release = threading.Event()
+    wait_started = threading.Event()
+    wait_finished = threading.Event()
+
+    def blocking_query(*_args, **_kwargs):
+        started.set()
+        assert release.wait(timeout=2)
+        return ("done", None)
+
+    def wait_for_shutdown_drain():
+        wait_started.set()
+        assert webex_connector._wait_for_active_requests("webex test") is True
+        wait_finished.set()
+
+    webex_connector.running = True
+    webex_connector.rabbitmq_channel = MagicMock()
+    webex_connector.rabbitmq_channel.is_open = True
+    webex_connector.rabbitmq_connection = MagicMock()
+    webex_connector.rabbitmq_connection.is_closed = False
+    webex_connector.rabbitmq_connection.add_callback_threadsafe.side_effect = (
+        lambda callback: callback()
+    )
+
+    with (
+        patch.object(
+            webex_connector,
+            "_query_agent_with_status",
+            side_effect=blocking_query,
+        ),
+        patch.object(webex_connector, "send_response"),
+        patch.object(webex_connector, "send_message"),
+    ):
+        worker = threading.Thread(
+            target=webex_connector.handle_message, args=(message,), daemon=True
+        )
+        worker.start()
+        assert started.wait(timeout=1)
+
+        webex_connector._handle_shutdown_signal(signal.SIGTERM, None)
+        assert webex_connector.shutdown_timeout is None
+
+        waiter = threading.Thread(target=wait_for_shutdown_drain, daemon=True)
+        waiter.start()
+        assert wait_started.wait(timeout=1)
+        time.sleep(0.1)
+        assert wait_finished.is_set() is False
+
+        release.set()
+        worker.join(timeout=1)
+        waiter.join(timeout=1)
+        assert waiter.is_alive() is False
+        assert wait_finished.is_set() is True
