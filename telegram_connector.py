@@ -7,21 +7,22 @@ Handles user pairing, message routing, and configuration
 
 import json
 import logging
+import math
 import mimetypes
 import os
 import re
+import signal
 import sys
 import threading
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional
 
 import requests
 
 import agent_manager
 import audio_transcriber
-from connector_rate_limiter import ConnectorRateLimiter
 
 logger = logging.getLogger(__name__)
 
@@ -201,7 +202,15 @@ class TelegramConnector:
 
         self.offset = 0
         self.running = False
-        self.user_rate_limiter = ConnectorRateLimiter()
+        self.shutdown_event = threading.Event()
+        self._active_request_lock = threading.Lock()
+        self._active_requests = 0
+        self._active_requests_drained = threading.Event()
+        self._active_requests_drained.set()
+        self.shutdown_timeout = self._load_shutdown_timeout()
+        self.poll_slice_timeout = max(
+            1.0, float(os.environ.get("TELEGRAM_POLL_SLICE_TIMEOUT_SECONDS", "5"))
+        )
 
         if not self.config.config.get("allowed_users"):
             print(
@@ -209,38 +218,83 @@ class TelegramConnector:
                 file=sys.stderr,
             )
 
-    def _get_user_rate_limit_settings(self) -> Tuple[int, int]:
-        """Return connector-side per-user rate limit settings."""
-        max_requests = self.config.config.get(
-            "user_rate_limit_max_requests",
-            int(os.environ.get("CONNECTOR_USER_RATE_LIMIT_MAX_REQUESTS", "20")),
-        )
-        window_seconds = self.config.config.get(
-            "user_rate_limit_window_seconds",
-            int(os.environ.get("CONNECTOR_USER_RATE_LIMIT_WINDOW_SECONDS", "60")),
-        )
-        return max(1, int(max_requests)), max(1, int(window_seconds))
+    def _install_signal_handlers(self):
+        """Install SIGTERM/SIGINT handlers when running on the main thread."""
+        for sig in (signal.SIGTERM, signal.SIGINT):
+            try:
+                signal.signal(sig, self._handle_shutdown_signal)
+            except ValueError:
+                logger.debug("Skipping %s handler outside main thread", sig)
 
-    def _check_user_rate_limit(self, user_id: int) -> Tuple[bool, Optional[str]]:
-        """Check whether this user can issue another agent-bound request."""
-        max_requests, window_seconds = self._get_user_rate_limit_settings()
-        allowed, retry_after = self.user_rate_limiter.check(
-            str(user_id), "agent_requests", max_requests, window_seconds
+    def _handle_shutdown_signal(self, signum, _frame):
+        """Stop taking new work and let in-flight requests finish."""
+        signame = signal.Signals(signum).name
+        print(
+            f"\nReceived {signame}; draining active Telegram requests before shutdown...",
+            file=sys.stderr,
         )
-        if allowed:
-            return True, None
+        self._request_shutdown(signame)
 
-        logger.warning(
-            "Telegram connector rate limit hit for user %s (%s requests/%ss)",
-            user_id,
-            max_requests,
-            window_seconds,
+    def _load_shutdown_timeout(self) -> Optional[float]:
+        """Return an optional shutdown drain timeout from the environment."""
+        raw_timeout = os.environ.get("CONNECTOR_SHUTDOWN_TIMEOUT_SECONDS", "").strip()
+        if not raw_timeout:
+            return None
+
+        timeout = float(raw_timeout)
+        if timeout <= 0:
+            return None
+        return timeout
+
+    def _request_shutdown(self, reason: str = "shutdown"):
+        """Mark the connector as shutting down."""
+        if self.shutdown_event.is_set():
+            return
+        self.shutdown_event.set()
+        self.running = False
+        print(f"[INFO] Telegram connector shutdown requested: {reason}", file=sys.stderr)
+
+    def _begin_active_request(self) -> bool:
+        """Track a request that must complete before shutdown finishes."""
+        with self._active_request_lock:
+            if self.shutdown_event.is_set():
+                return False
+            self._active_requests += 1
+            self._active_requests_drained.clear()
+            return True
+
+    def _finish_active_request(self):
+        """Mark a tracked request as complete."""
+        with self._active_request_lock:
+            if self._active_requests > 0:
+                self._active_requests -= 1
+            if self._active_requests == 0:
+                self._active_requests_drained.set()
+
+    def _wait_for_active_requests(
+        self, component: str = "Telegram connector", timeout: Optional[float] = None
+    ) -> bool:
+        """Wait for tracked in-flight requests to finish."""
+        wait_timeout = self.shutdown_timeout if timeout is None else timeout
+        with self._active_request_lock:
+            pending = self._active_requests
+
+        if pending <= 0:
+            return True
+
+        print(
+            f"[INFO] {component} waiting for {pending} active request(s) to finish...",
+            file=sys.stderr,
         )
-        return (
-            False,
-            "⚠️ Rate limit exceeded. Please wait "
-            f"{retry_after} seconds before sending another request.",
-        )
+        drained = self._active_requests_drained.wait(wait_timeout)
+        if not drained:
+            with self._active_request_lock:
+                remaining = self._active_requests
+            print(
+                f"[WARN] {component} shutdown timed out with {remaining} active request(s) still running",
+                file=sys.stderr,
+            )
+        return drained
 
     def get_session_manager(self, session_id: str):
         """Get or create SessionManager for session_id"""
@@ -406,22 +460,37 @@ class TelegramConnector:
 
     def get_updates(self, timeout: int = 30) -> List[Dict]:
         """Fetch new messages from Telegram"""
-        try:
-            response = requests.get(
-                f"{self.api_url}/getUpdates",
-                params={"offset": self.offset, "timeout": timeout},
-                timeout=timeout + 5,
-            )
-            response.raise_for_status()
-            updates = response.json().get("result", [])
+        deadline = time.monotonic() + max(0, timeout)
 
-            if updates:
-                self.offset = updates[-1]["update_id"] + 1
+        while self.running and not self.shutdown_event.is_set():
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return []
 
-            return updates
-        except Exception as e:
-            print(f"Error fetching updates: {e}", file=sys.stderr)
-            return []
+            poll_timeout = min(self.poll_slice_timeout, remaining)
+            server_timeout = max(1, math.ceil(poll_timeout))
+
+            try:
+                response = requests.get(
+                    f"{self.api_url}/getUpdates",
+                    params={"offset": self.offset, "timeout": server_timeout},
+                    timeout=poll_timeout + 5,
+                )
+                response.raise_for_status()
+                updates = response.json().get("result", [])
+
+                if updates:
+                    self.offset = updates[-1]["update_id"] + 1
+                    return updates
+            except requests.exceptions.ReadTimeout:
+                continue
+            except Exception as e:
+                if self.shutdown_event.is_set() or not self.running:
+                    return []
+                print(f"Error fetching updates: {e}", file=sys.stderr)
+                return []
+
+        return []
 
     def sanitize_telegram_html(self, text: str) -> str:
         """Sanitize HTML to only contain Telegram-supported tags.
@@ -1157,19 +1226,32 @@ class TelegramConnector:
 
     def handle_message(self, update: Dict):
         """Process incoming Telegram message"""
+        if not self._begin_active_request():
+            print(
+                "[INFO] Ignoring Telegram update while shutdown is in progress",
+                file=sys.stderr,
+            )
+            return
+        chat_id = None
+        user_id = None
         try:
             message = update.get("message", {})
+            sender = message.get("from") or {}
+            chat = message.get("chat") or {}
+            chat_id = chat.get("id")
+            user_id = sender.get("id")
 
             # Ignore messages from bots (including this bot) to avoid handling bot-sent updates which can cause duplicate responses
-            if message.get("from", {}).get("is_bot"):
+            if sender.get("is_bot"):
                 return
 
-            user_id = message.get("from", {}).get("id")
-            chat_id = message.get("chat", {}).get("id")
-            if not user_id or not chat_id:
+            if user_id is None or chat_id is None:
+                print(
+                    f"[DEBUG] Incomplete Telegram message: {message}",
+                    file=sys.stderr,
+                )
                 return
 
-            # Check if user is allowed before connector-side file work.
             if not self.config.is_user_allowed(user_id):
                 self.send_message(chat_id, "❌ You are not authorized to use this bot.")
                 return
@@ -1177,21 +1259,12 @@ class TelegramConnector:
             # Handle files with optional caption
             file_path = None
             text = message.get("text", "") or message.get("caption", "")
-            rate_limit_checked = False
-
-            if any(
-                key in message
-                for key in ("document", "photo", "voice", "audio", "video_note")
-            ):
-                allowed, rate_limit_message = self._check_user_rate_limit(user_id)
-                if not allowed:
-                    self.send_message(chat_id, rate_limit_message)
-                    return
-                rate_limit_checked = True
 
             # Check for document or photo
             if "document" in message:
                 document = message["document"]
+                user_id = message["from"]["id"]
+                chat_id = message["chat"]["id"]
 
                 file_path = self.download_file(document["file_id"], user_id)
                 print(
@@ -1209,6 +1282,8 @@ class TelegramConnector:
             elif "photo" in message:
                 # Telegram sends photos as arrays, get largest
                 photos = message["photo"]
+                user_id = message["from"]["id"]
+                chat_id = message["chat"]["id"]
 
                 largest_photo = photos[-1]  # Last is highest quality
                 file_path = self.download_file(largest_photo["file_id"], user_id)
@@ -1225,6 +1300,9 @@ class TelegramConnector:
                     return
             elif "voice" in message or "audio" in message or "video_note" in message:
                 # Voice messages, audio files, and video notes → transcribe
+                user_id = message["from"]["id"]
+                chat_id = message["chat"]["id"]
+
                 if "voice" in message:
                     file_id = message["voice"]["file_id"]
                     duration = message["voice"].get("duration", 0)
@@ -1270,7 +1348,7 @@ class TelegramConnector:
                 # No text, no file - ignore
                 return
 
-            user_name = message["from"].get("username", f"user_{user_id}")
+            user_name = sender.get("username", f"user_{user_id}")
             # text already set from above (may be from file or message.text)
 
             # Get or create user session
@@ -1385,13 +1463,6 @@ class TelegramConnector:
                     self.send_message(chat_id, result)
                 else:
                     # Regular slash commands - get user timeout
-                    if not rate_limit_checked:
-                        allowed, rate_limit_message = self._check_user_rate_limit(
-                            user_id
-                        )
-                        if not allowed:
-                            self.send_message(chat_id, rate_limit_message)
-                            return
                     timeout = self.config.get_user_timeout(user_id)
                     response = self._execute_command(
                         text, session_id, timeout, user_identity=str(user_id)
@@ -1412,13 +1483,6 @@ class TelegramConnector:
                 # Check for bash command (!)
                 if text.startswith("!"):
                     # Bash commands - get user timeout
-                    if not rate_limit_checked:
-                        allowed, rate_limit_message = self._check_user_rate_limit(
-                            user_id
-                        )
-                        if not allowed:
-                            self.send_message(chat_id, rate_limit_message)
-                            return
                     timeout = self.config.get_user_timeout(user_id)
                     response = self._execute_command(
                         text, session_id, timeout, user_identity=str(user_id)
@@ -1426,13 +1490,6 @@ class TelegramConnector:
                     self.send_message(chat_id, response)
                 else:
                     # Route regular messages to agent_manager with status updates
-                    if not rate_limit_checked:
-                        allowed, rate_limit_message = self._check_user_rate_limit(
-                            user_id
-                        )
-                        if not allowed:
-                            self.send_message(chat_id, rate_limit_message)
-                            return
                     timeout = self.config.get_user_timeout(user_id)
                     response, status_msg_id = self._query_agent_with_status(
                         text,
@@ -1449,7 +1506,10 @@ class TelegramConnector:
 
         except Exception as e:
             print(f"Error handling message: {e}", file=sys.stderr)
-            self.send_message(chat_id, f"❌ Error: {str(e)[:100]}")
+            if chat_id is not None:
+                self.send_message(chat_id, f"❌ Error: {str(e)[:100]}")
+        finally:
+            self._finish_active_request()
 
     def _handle_command(self, chat_id: int, user_id: int, command: str):
         """Handle Telegram commands - DEPRECATED: Commands now pass to agent_manager"""
@@ -1649,6 +1709,8 @@ class TelegramConnector:
 
     def run(self, poll_interval: int = 1):
         """Start polling for messages"""
+        self._install_signal_handlers()
+        self.shutdown_event.clear()
         self.running = True
         print(f"Starting Telegram connector with token: {self.token[:20]}...")
 
@@ -1660,22 +1722,26 @@ class TelegramConnector:
             while self.running:
                 updates = self.get_updates()
                 for update in updates:
+                    if self.shutdown_event.is_set():
+                        break
                     if "message" in update:
                         self.handle_message(update)
                     elif "callback_query" in update:
                         # Handle button callbacks if needed
                         pass
 
-                if not updates:
+                if not updates and self.running:
                     time.sleep(poll_interval)
 
         except KeyboardInterrupt:
-            print("\nShutting down Telegram connector...")
-            self.running = False
+            self._request_shutdown("KeyboardInterrupt")
+        finally:
+            self._wait_for_active_requests()
 
     def stop(self):
         """Stop the connector"""
-        self.running = False
+        self._request_shutdown("stop()")
+        self._wait_for_active_requests()
 
 
 def main():

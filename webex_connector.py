@@ -10,13 +10,14 @@ import logging
 import mimetypes
 import os
 import re
+import signal
 import ssl
 import sys
 import threading
 import time
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional
 from urllib.parse import unquote
 
 import pika
@@ -24,7 +25,6 @@ import requests
 
 import agent_manager
 import audio_transcriber
-from connector_rate_limiter import ConnectorRateLimiter
 
 logger = logging.getLogger(__name__)
 
@@ -183,7 +183,12 @@ class WebEXConnector:
         self.rabbitmq_connection = None
         self.rabbitmq_channel = None
         self.cleanup_thread = None
-        self.user_rate_limiter = ConnectorRateLimiter()
+        self.shutdown_event = threading.Event()
+        self._active_request_lock = threading.Lock()
+        self._active_requests = 0
+        self._active_requests_drained = threading.Event()
+        self._active_requests_drained.set()
+        self.shutdown_timeout = self._load_shutdown_timeout()
 
         if not self.config.config.get("allowed_users"):
             print(
@@ -191,38 +196,102 @@ class WebEXConnector:
                 file=sys.stderr,
             )
 
-    def _get_user_rate_limit_settings(self) -> Tuple[int, int]:
-        """Return connector-side per-user rate limit settings."""
-        max_requests = self.config.config.get(
-            "user_rate_limit_max_requests",
-            int(os.environ.get("CONNECTOR_USER_RATE_LIMIT_MAX_REQUESTS", "20")),
-        )
-        window_seconds = self.config.config.get(
-            "user_rate_limit_window_seconds",
-            int(os.environ.get("CONNECTOR_USER_RATE_LIMIT_WINDOW_SECONDS", "60")),
-        )
-        return max(1, int(max_requests)), max(1, int(window_seconds))
+    def _install_signal_handlers(self):
+        """Install SIGTERM/SIGINT handlers when running on the main thread."""
+        for sig in (signal.SIGTERM, signal.SIGINT):
+            try:
+                signal.signal(sig, self._handle_shutdown_signal)
+            except ValueError:
+                logger.debug("Skipping %s handler outside main thread", sig)
 
-    def _check_user_rate_limit(self, person_id: str) -> Tuple[bool, Optional[str]]:
-        """Check whether this user can issue another agent-bound request."""
-        max_requests, window_seconds = self._get_user_rate_limit_settings()
-        allowed, retry_after = self.user_rate_limiter.check(
-            person_id, "agent_requests", max_requests, window_seconds
+    def _handle_shutdown_signal(self, signum, _frame):
+        """Stop consuming new messages and let in-flight requests finish."""
+        signame = signal.Signals(signum).name
+        print(
+            f"\nReceived {signame}; draining active WebEX requests before shutdown...",
+            file=sys.stderr,
         )
-        if allowed:
-            return True, None
+        self._request_shutdown(signame)
 
-        logger.warning(
-            "WebEx connector rate limit hit for user %s (%s requests/%ss)",
-            person_id,
-            max_requests,
-            window_seconds,
+    def _load_shutdown_timeout(self) -> Optional[float]:
+        """Return an optional shutdown drain timeout from the environment."""
+        raw_timeout = os.environ.get("CONNECTOR_SHUTDOWN_TIMEOUT_SECONDS", "").strip()
+        if not raw_timeout:
+            return None
+
+        timeout = float(raw_timeout)
+        if timeout <= 0:
+            return None
+        return timeout
+
+    def _request_shutdown(self, reason: str = "shutdown"):
+        """Mark the connector as shutting down and stop queue consumption."""
+        if self.shutdown_event.is_set():
+            return
+        self.shutdown_event.set()
+        self.running = False
+        print(f"[INFO] WebEX connector shutdown requested: {reason}", file=sys.stderr)
+        self._stop_consuming_async()
+
+    def _begin_active_request(self) -> bool:
+        """Track a request that must complete before shutdown finishes."""
+        with self._active_request_lock:
+            if self.shutdown_event.is_set():
+                return False
+            self._active_requests += 1
+            self._active_requests_drained.clear()
+            return True
+
+    def _finish_active_request(self):
+        """Mark a tracked request as complete."""
+        with self._active_request_lock:
+            if self._active_requests > 0:
+                self._active_requests -= 1
+            if self._active_requests == 0:
+                self._active_requests_drained.set()
+
+    def _wait_for_active_requests(
+        self, component: str = "WebEX connector", timeout: Optional[float] = None
+    ) -> bool:
+        """Wait for tracked in-flight requests to finish."""
+        wait_timeout = self.shutdown_timeout if timeout is None else timeout
+        with self._active_request_lock:
+            pending = self._active_requests
+
+        if pending <= 0:
+            return True
+
+        print(
+            f"[INFO] {component} waiting for {pending} active request(s) to finish...",
+            file=sys.stderr,
         )
-        return (
-            False,
-            "⚠️ Rate limit exceeded. Please wait "
-            f"{retry_after} seconds before sending another request.",
-        )
+        drained = self._active_requests_drained.wait(wait_timeout)
+        if not drained:
+            with self._active_request_lock:
+                remaining = self._active_requests
+            print(
+                f"[WARN] {component} shutdown timed out with {remaining} active request(s) still running",
+                file=sys.stderr,
+            )
+        return drained
+
+    def _stop_consuming(self):
+        """Stop RabbitMQ consumption on the current channel if possible."""
+        try:
+            if self.rabbitmq_channel and getattr(self.rabbitmq_channel, "is_open", True):
+                self.rabbitmq_channel.stop_consuming()
+        except Exception as e:
+            print(f"[WARN] Failed to stop RabbitMQ consumption: {e}", file=sys.stderr)
+
+    def _stop_consuming_async(self):
+        """Request consumer shutdown from any thread."""
+        try:
+            if self.rabbitmq_connection and not self.rabbitmq_connection.is_closed:
+                self.rabbitmq_connection.add_callback_threadsafe(self._stop_consuming)
+            else:
+                self._stop_consuming()
+        except Exception:
+            self._stop_consuming()
 
     def get_session_manager(self, session_id: str):
         """Get or create SessionManager for session_id"""
@@ -343,13 +412,75 @@ class WebEXConnector:
                 connection_attempts=3,
                 retry_delay=2,
             )
-            self.rabbitmq_connection = pika.BlockingConnection(parameters)
-            self.rabbitmq_channel = self.rabbitmq_connection.channel()
+            result = {}
+            connected = threading.Event()
 
-            # Declare queue (durable)
-            self.rabbitmq_channel.queue_declare(
-                queue=self.config.config["rabbitmq_queue"], durable=True
+            def establish_connection():
+                connection = None
+                try:
+                    connection = pika.BlockingConnection(parameters)
+                    if self.shutdown_event.is_set():
+                        try:
+                            connection.close()
+                        except Exception:
+                            pass
+                        result["connected"] = False
+                        return
+
+                    channel = connection.channel()
+                    if self.shutdown_event.is_set():
+                        try:
+                            connection.close()
+                        except Exception:
+                            pass
+                        result["connected"] = False
+                        return
+
+                    channel.queue_declare(
+                        queue=self.config.config["rabbitmq_queue"], durable=True
+                    )
+                    channel.basic_qos(prefetch_count=1)
+
+                    if self.shutdown_event.is_set():
+                        try:
+                            connection.close()
+                        except Exception:
+                            pass
+                        result["connected"] = False
+                        return
+
+                    result["connection"] = connection
+                    result["channel"] = channel
+                    result["connected"] = True
+                except Exception as e:
+                    result["error"] = e
+                    result["connected"] = False
+                finally:
+                    connected.set()
+
+            worker = threading.Thread(
+                target=establish_connection,
+                name="webex-rabbitmq-connect",
+                daemon=True,
             )
+            worker.start()
+
+            while not connected.wait(timeout=0.1):
+                if self.shutdown_event.is_set():
+                    print(
+                        "[INFO] RabbitMQ connection attempt interrupted by shutdown",
+                        file=sys.stderr,
+                    )
+                    return False
+
+            if result.get("connected"):
+                self.rabbitmq_connection = result["connection"]
+                self.rabbitmq_channel = result["channel"]
+            else:
+                error = result.get("error")
+                if error:
+                    print(f"❌ Error connecting to RabbitMQ: {error}", file=sys.stderr)
+                return False
 
             ssl_info = " (SSL/TLS enabled)" if use_ssl else ""
             print(
@@ -1249,31 +1380,20 @@ class WebEXConnector:
             )
             self.send_file(room_id, file_path, caption)
 
-    def handle_message(self, message_data: Dict):
-        """Process incoming WebEX message from RabbitMQ"""
+    def handle_message(self, message_data: Dict) -> bool:
+        """Process incoming WebEX message from RabbitMQ."""
+        if not self._begin_active_request():
+            print(
+                "[INFO] Ignoring WebEX message while shutdown is in progress",
+                file=sys.stderr,
+            )
+            return False
         try:
             person_id = message_data.get("personId")
             room_id = message_data.get("roomId")
             text = message_data.get("text", "").strip()
             person_email = message_data.get("personEmail", "unknown")
             files = message_data.get("files", [])
-
-            if not person_id or not room_id:
-                print(f"[DEBUG] Incomplete message: {message_data}", file=sys.stderr)
-                return
-
-            # Check if user is allowed before connector-side file work.
-            if not self.config.is_user_allowed(person_id):
-                self.send_message(room_id, "❌ You are not authorized to use this bot.")
-                return
-
-            rate_limit_checked = False
-            if files:
-                allowed, rate_limit_message = self._check_user_rate_limit(person_id)
-                if not allowed:
-                    self.send_message(room_id, rate_limit_message)
-                    return
-                rate_limit_checked = True
 
             # Handle files with optional caption
             file_path = None
@@ -1307,7 +1427,7 @@ class WebEXConnector:
                                 room_id,
                                 "⚠️ Could not transcribe audio file. Please send as text instead.",
                             )
-                            return
+                            return True
                     else:
                         # Non-audio file - handle normally
                         # Sanitize filename - remove spaces and special chars for shell safety
@@ -1343,11 +1463,19 @@ class WebEXConnector:
                         print(f"[DEBUG] File query: {text[:200]}", file=sys.stderr)
                 else:
                     self.send_message(room_id, "❌ Failed to download file")
-                    return
+                    return True
 
-            if not person_id or not room_id or not text:
+            if not person_id or not room_id:
                 print(f"[DEBUG] Incomplete message: {message_data}", file=sys.stderr)
-                return
+                return True
+
+            if not self.config.is_user_allowed(person_id):
+                self.send_message(room_id, "❌ You are not authorized to use this bot.")
+                return True
+
+            if not text:
+                print(f"[DEBUG] Incomplete message: {message_data}", file=sys.stderr)
+                return True
 
             # Get or create user session
             session_info = self.config.get_user_session(person_id)
@@ -1447,13 +1575,6 @@ class WebEXConnector:
                     )
                 else:
                     # Regular slash commands
-                    if not rate_limit_checked:
-                        allowed, rate_limit_message = self._check_user_rate_limit(
-                            person_id
-                        )
-                        if not allowed:
-                            self.send_message(room_id, rate_limit_message)
-                            return
                     timeout = self.config.get_user_timeout(person_id)
                     response = self._execute_command(
                         text, session_id, timeout, user_identity=person_id
@@ -1484,13 +1605,6 @@ class WebEXConnector:
             else:
                 # Check for bash command (!)
                 if text.startswith("!"):
-                    if not rate_limit_checked:
-                        allowed, rate_limit_message = self._check_user_rate_limit(
-                            person_id
-                        )
-                        if not allowed:
-                            self.send_message(room_id, rate_limit_message)
-                            return
                     timeout = self.config.get_user_timeout(person_id)
                     response = self._execute_command(
                         text, session_id, timeout, user_identity=person_id
@@ -1498,13 +1612,6 @@ class WebEXConnector:
                     self.send_message(room_id, response)
                 else:
                     # Route regular messages to agent_manager with status updates
-                    if not rate_limit_checked:
-                        allowed, rate_limit_message = self._check_user_rate_limit(
-                            person_id
-                        )
-                        if not allowed:
-                            self.send_message(room_id, rate_limit_message)
-                            return
                     timeout = self.config.get_user_timeout(person_id)
                     response, status_msg_id = self._query_agent_with_status(
                         text,
@@ -1515,11 +1622,15 @@ class WebEXConnector:
                         timeout,
                     )
                     self.send_response(room_id, response, status_msg_id)
+            return True
 
         except Exception as e:
             print(f"Error handling message: {e}", file=sys.stderr)
             if room_id:
                 self.send_message(room_id, f"❌ Error: {str(e)[:100]}")
+            return not self.shutdown_event.is_set()
+        finally:
+            self._finish_active_request()
 
     def _execute_command(
         self,
@@ -1690,6 +1801,8 @@ class WebEXConnector:
 
     def listen_to_queue(self, poll_interval: int = 1):
         """Listen to RabbitMQ queue for WebEX messages"""
+        self._install_signal_handlers()
+        self.shutdown_event.clear()
         self.running = True
         print(
             f"Starting WebEX connector, listening to queue: {self.config.config['rabbitmq_queue']}"
@@ -1698,12 +1811,7 @@ class WebEXConnector:
         try:
 
             def callback(ch, method, properties, body):
-                """Handle message from queue - ack immediately to prevent stuck messages"""
-                # ACK immediately upon receipt to prevent stuck/unacked messages in RabbitMQ.
-                # All failures after this point are logged but the message is already removed
-                # from the queue, eliminating infinite retry loops and queue buildup.
-                ch.basic_ack(delivery_tag=method.delivery_tag)
-
+                """Handle a RabbitMQ delivery and ack only after processing."""
                 try:
                     message_data = json.loads(body.decode())
                 except (json.JSONDecodeError, UnicodeDecodeError) as e:
@@ -1715,6 +1823,7 @@ class WebEXConnector:
                         f"[ERROR] Raw body (first 500 chars): {body[:500]}",
                         file=sys.stderr,
                     )
+                    ch.basic_ack(delivery_tag=method.delivery_tag)
                     return
 
                 try:
@@ -1736,16 +1845,21 @@ class WebEXConnector:
                             file=sys.stderr,
                         )
 
-                    self.handle_message(message_data)
+                    handled = self.handle_message(message_data)
+                    if handled:
+                        ch.basic_ack(delivery_tag=method.delivery_tag)
+                    else:
+                        ch.basic_nack(delivery_tag=method.delivery_tag, requeue=True)
                 except Exception as e:
                     import traceback
 
                     tb_str = traceback.format_exc()
-                    print(
-                        "[ERROR] Exception processing WebEX message (message already acked, discarding):",
-                        file=sys.stderr,
-                    )
+                    print("[ERROR] Exception processing WebEX message:", file=sys.stderr)
                     print(tb_str, file=sys.stderr)
+                    if self.shutdown_event.is_set():
+                        ch.basic_nack(delivery_tag=method.delivery_tag, requeue=True)
+                    else:
+                        ch.basic_ack(delivery_tag=method.delivery_tag)
 
             retry_delay = 30
             max_delay = 300
@@ -1754,8 +1868,8 @@ class WebEXConnector:
                     f"Failed to connect to RabbitMQ, retrying in {retry_delay}s...",
                     file=sys.stderr,
                 )
-                import time
-                time.sleep(retry_delay)
+                if self.shutdown_event.wait(retry_delay):
+                    break
                 retry_delay = min(retry_delay * 2, max_delay)
             if not self.running:
                 return
@@ -1774,14 +1888,15 @@ class WebEXConnector:
             self.rabbitmq_channel.start_consuming()
 
         except KeyboardInterrupt:
-            print("\nShutting down WebEX connector...")
-            self.running = False
+            self._request_shutdown("KeyboardInterrupt")
         finally:
+            self._wait_for_active_requests()
             self.disconnect_rabbitmq()
 
     def stop(self):
         """Stop the connector"""
-        self.running = False
+        self._request_shutdown("stop()")
+        self._wait_for_active_requests()
         self.disconnect_rabbitmq()
 
 
