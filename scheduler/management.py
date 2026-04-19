@@ -24,6 +24,7 @@ except ImportError:
     croniter = None
 
 logger = logging.getLogger(__name__)
+_SAFE_JOB_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 
 
 def _get_local_tz_name() -> str:
@@ -525,6 +526,87 @@ class TaskScheduler:
         # Run migration on first load
         self._migrate_jobs_to_cron()
 
+    def _validate_job_id(self, job_id: str) -> Tuple[bool, Optional[str]]:
+        """Reject path traversal and other unsafe scheduler job IDs."""
+        if not isinstance(job_id, str) or not job_id.strip():
+            return False, "Invalid job ID"
+        if not _SAFE_JOB_ID_RE.fullmatch(job_id):
+            return False, f"Invalid job ID '{job_id}'"
+        return True, None
+
+    def _build_job_id(
+        self, name: str, existing_ids: Optional[set] = None
+    ) -> Tuple[Optional[str], Optional[str]]:
+        """Generate a safe scheduler job ID from a user-facing task name."""
+        if not isinstance(name, str) or not name.strip():
+            return None, "Task name must be a non-empty string"
+
+        candidate = re.sub(r"\s+", "-", name.strip().lower())
+        candidate = re.sub(r"[^a-z0-9._-]+", "-", candidate)
+        candidate = candidate.lstrip(".-_")
+        candidate = re.sub(r"-{2,}", "-", candidate)
+
+        if not candidate or not any(ch.isalnum() for ch in candidate):
+            return None, "Task name must contain at least one alphanumeric character"
+
+        valid_job_id, job_id_error = self._validate_job_id(candidate)
+        if not valid_job_id:
+            return None, job_id_error
+
+        existing = existing_ids or set()
+        base_id = candidate
+        counter = 2
+        while candidate in existing:
+            candidate = f"{base_id}-{counter}"
+            counter += 1
+
+        return candidate, None
+
+    def _log_file_for_job(self, job_id: str) -> Path:
+        """Return the validated log file path for a scheduler job."""
+        valid_job_id, job_id_error = self._validate_job_id(job_id)
+        if not valid_job_id:
+            raise ValueError(job_id_error)
+        return self.logs_dir / f"{job_id}.log"
+
+    def _results_file_for_job(self, job_id: str) -> Path:
+        """Return the validated results file path for a scheduler job."""
+        valid_job_id, job_id_error = self._validate_job_id(job_id)
+        if not valid_job_id:
+            raise ValueError(job_id_error)
+        return self.results_dir / f"{job_id}.jsonl"
+
+    def _allowed_working_dirs(self) -> List[Path]:
+        """Return the resolved working directory allowlist roots."""
+        raw = os.getenv("SCHEDULER_ALLOWED_WORKDIRS", "/opt")
+        roots = []
+        for entry in raw.split(os.pathsep):
+            value = entry.strip()
+            if not value:
+                continue
+            roots.append(Path(value).expanduser().resolve(strict=False))
+        return roots or [Path("/opt").resolve(strict=False)]
+
+    def _validate_working_dir(self, working_dir: str) -> Tuple[bool, Optional[str]]:
+        """Allow only absolute working directories under configured roots."""
+        if not isinstance(working_dir, str) or not working_dir.strip():
+            return False, "working_dir must be a non-empty string"
+
+        candidate = Path(working_dir).expanduser()
+        if not candidate.is_absolute():
+            return False, "working_dir must be an absolute path"
+
+        resolved = candidate.resolve(strict=False)
+        for allowed_root in self._allowed_working_dirs():
+            try:
+                resolved.relative_to(allowed_root)
+                return True, None
+            except ValueError:
+                continue
+
+        allowed = ", ".join(str(path) for path in self._allowed_working_dirs())
+        return False, f"working_dir must be under an allowed root: {allowed}"
+
     def _init_jobs_file(self):
         """Initialize jobs.json if it doesn't exist."""
         if not self.jobs_file.exists():
@@ -642,16 +724,16 @@ class TaskScheduler:
             runtime = os.getenv("SCHEDULER_DEFAULT_RUNTIME", "claude")
         if working_dir is None:
             working_dir = "/opt"
+        valid_workdir, workdir_error = self._validate_working_dir(working_dir)
+        if not valid_workdir:
+            return {"success": False, "message": workdir_error}
 
         jobs = self._load_jobs()
-        job_id = name.lower().replace(" ", "-")
-
-        existing_ids = {j["id"] for j in jobs["jobs"]}
-        base_id = job_id
-        counter = 2
-        while job_id in existing_ids:
-            job_id = f"{base_id}-{counter}"
-            counter += 1
+        job_id, job_id_error = self._build_job_id(
+            name, {j["id"] for j in jobs["jobs"]}
+        )
+        if not job_id:
+            return {"success": False, "message": job_id_error}
 
         # Convert schedule to cron if not already provided
         if cron and is_valid_cron(cron):
@@ -720,6 +802,10 @@ class TaskScheduler:
 
     def update_job(self, job_id: str, updates: Dict) -> Dict:
         """Update fields of an existing job."""
+        valid_job_id, job_id_error = self._validate_job_id(job_id)
+        if not valid_job_id:
+            return {"success": False, "message": job_id_error}
+
         allowed = {
             "name",
             "schedule",
@@ -757,6 +843,13 @@ class TaskScheduler:
                     if cron_val and is_valid_cron(cron_val):
                         job["cron"] = cron_val
                         job["next_run"] = cron_next_run(cron_val)
+
+                if "working_dir" in updates:
+                    valid_workdir, workdir_error = self._validate_working_dir(
+                        updates["working_dir"]
+                    )
+                    if not valid_workdir:
+                        return {"success": False, "message": workdir_error}
 
                 job.update(updates)
                 self._save_jobs(jobs)
@@ -829,7 +922,10 @@ class TaskScheduler:
 
     def get_logs(self, job_id: str) -> Dict:
         """Get scheduler logs for a job."""
-        log_file = self.logs_dir / f"{job_id}.log"
+        try:
+            log_file = self._log_file_for_job(job_id)
+        except ValueError as exc:
+            return {"success": False, "message": str(exc)}
         if log_file.exists():
             return {
                 "success": True,
@@ -840,7 +936,10 @@ class TaskScheduler:
 
     def get_results(self, job_id: str, limit: int = 20) -> Dict:
         """Get execution results for a job (newest first)."""
-        results_file = self.results_dir / f"{job_id}.jsonl"
+        try:
+            results_file = self._results_file_for_job(job_id)
+        except ValueError as exc:
+            return {"success": False, "message": str(exc)}
         if not results_file.exists():
             return {"success": True, "result": [], "message": "No results yet"}
 
@@ -872,7 +971,10 @@ class TaskScheduler:
         error: str = "",
     ) -> Dict:
         """Save execution result to job results file (JSONL format)."""
-        result_file = self.results_dir / f"{job_id}.jsonl"
+        try:
+            result_file = self._results_file_for_job(job_id)
+        except ValueError as exc:
+            return {"success": False, "message": str(exc)}
         timestamp = datetime.utcnow().isoformat() + "Z"
         result = {
             "timestamp": timestamp,
@@ -978,7 +1080,11 @@ class TaskScheduler:
 
     def _log(self, job_id: str, message: str):
         """Log to job-specific log file."""
-        log_file = self.logs_dir / f"{job_id}.log"
+        try:
+            log_file = self._log_file_for_job(job_id)
+        except ValueError:
+            logger.warning("Refused to write scheduler log for invalid job_id=%r", job_id)
+            return
         timestamp = datetime.utcnow().isoformat() + "Z"
         with open(log_file, "a") as f:
             f.write(f"[{timestamp}] {message}\n")
