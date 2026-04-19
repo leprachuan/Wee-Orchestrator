@@ -245,6 +245,29 @@ class TestIssue170BackgroundTaskDeadlock(unittest.TestCase):
         self.assertNotIn("output_lines", page[0])
         self.assertNotIn("tool_calls", page[0])
 
+    def test_issue_170_list_task_summaries_reconciles_stale_running_tasks(self):
+        """Paginated reads should mark dead running tasks failed in the same pass."""
+        mgr = self._make_manager(max_total_tasks=500)
+        stale = self._make_task("stale-running", status="running")
+        stale["pid"] = 999999
+        stale["started_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        stale["completed_at"] = None
+        mgr._save([stale])
+
+        page, total = mgr.list_task_summaries(limit=10, offset=0, reconcile_running=True)
+
+        self.assertEqual(total, 1)
+        self.assertEqual(page[0]["task_id"], "stale-running")
+        self.assertEqual(page[0]["status"], "failed")
+
+        reloaded = mgr.get_task("stale-running")
+        self.assertEqual(reloaded["status"], "failed")
+        self.assertEqual(
+            reloaded["error"],
+            "Process terminated unexpectedly",
+        )
+        self.assertIsNotNone(reloaded["completed_at"])
+
     # --- Test 3: Cleanup old tasks ---
 
     def test_cleanup_purges_old_terminal_tasks(self):

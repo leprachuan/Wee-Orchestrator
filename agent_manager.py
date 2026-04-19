@@ -633,11 +633,30 @@ class BackgroundTaskManager:
             return copy.deepcopy(self._load_unlocked())
 
     def list_task_summaries(
-        self, limit: int = 50, offset: int = 0, status: Optional[str] = None
+        self,
+        limit: int = 50,
+        offset: int = 0,
+        status: Optional[str] = None,
+        reconcile_running: bool = False,
     ) -> Tuple[list, int]:
         """Return paginated task summaries without large transcript payloads."""
         with self._lock:
             tasks = list(self._load_unlocked())
+            if reconcile_running:
+                changed = False
+                completed_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+                for task in tasks:
+                    if task.get("status") != "running" or not task.get("pid"):
+                        continue
+                    try:
+                        os.kill(task["pid"], 0)
+                    except ProcessLookupError:
+                        task["status"] = "failed"
+                        task["error"] = "Process terminated unexpectedly"
+                        task["completed_at"] = completed_at
+                        changed = True
+                if changed:
+                    self._save_unlocked(tasks)
             if status:
                 tasks = [t for t in tasks if t.get("status") == status]
             tasks.sort(key=lambda t: t.get("created_at", ""), reverse=True)
@@ -649,7 +668,7 @@ class BackgroundTaskManager:
                     "agent": t["agent"],
                     "runtime": t["runtime"],
                     "model": t["model"],
-                    "prompt": t["prompt"][:200],
+                    "prompt": (t.get("prompt") or "")[:200],
                     "status": t["status"],
                     "created_at": t["created_at"],
                     "completed_at": t.get("completed_at"),
@@ -12698,14 +12717,17 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         effective_prompt = body.prompt
 
         # Check concurrent limit — queue instead of rejecting
-        running = bg_task_mgr.count_running(channel, identity, agent)
+        running = await asyncio.to_thread(
+            bg_task_mgr.count_running, channel, identity, agent
+        )
         agent_config = session_mgr.AGENTS.get(agent, {})
         max_concurrent = agent_config.get(
             "max_concurrent", BackgroundTaskManager.MAX_TASKS_PER_USER
         )
         if running >= max_concurrent:
             # Queue the task — it will be promoted when a running task finishes
-            task = bg_task_mgr.create_task(
+            task = await asyncio.to_thread(
+                bg_task_mgr.create_task,
                 task_id=task_id,
                 session_id=session_id,
                 user_identity=identity,
@@ -12719,7 +12741,9 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 notify=notify_pref,
                 origin_session_id=body.origin_session_id,
             )
-            queue_pos = bg_task_mgr.count_queued(channel, identity)
+            queue_pos = await asyncio.to_thread(
+                bg_task_mgr.count_queued, channel, identity
+            )
             print(
                 f"[API] Task {task_id} queued (position {queue_pos}, {running}/{BackgroundTaskManager.MAX_TASKS_PER_USER} slots full)"
             )
@@ -12736,7 +12760,8 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             }
 
         # Create task record (running immediately)
-        task = bg_task_mgr.create_task(
+        task = await asyncio.to_thread(
+            bg_task_mgr.create_task,
             task_id=task_id,
             session_id=session_id,
             user_identity=identity,
@@ -12812,19 +12837,12 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         )
         limit = max(1, min(limit, 200))
         offset = max(0, offset)
-        tasks = bg_task_mgr.list_all_tasks()
-        # Check if running tasks are still alive
-        for t in tasks:
-            if t["status"] == "running" and t.get("pid"):
-                try:
-                    os.kill(t["pid"], 0)
-                except ProcessLookupError:
-                    bg_task_mgr.fail_task(
-                        t["task_id"], "Process terminated unexpectedly"
-                    )
-                    t["status"] = "failed"
-        result, total = bg_task_mgr.list_task_summaries(
-            limit=limit, offset=offset, status=status
+        result, total = await asyncio.to_thread(
+            bg_task_mgr.list_task_summaries,
+            limit,
+            offset,
+            status,
+            True,
         )
         return {
             "tasks": result,
@@ -12841,7 +12859,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             x_user_identity=request.headers.get("x-user-identity"),
             x_auth_channel=request.headers.get("x-auth-channel"),
         )
-        task = bg_task_mgr.get_task(task_id)
+        task = await asyncio.to_thread(bg_task_mgr.get_task, task_id)
         if not task:
             raise HTTPException(status_code=404, detail="Task not found")
         # Return detail with last 50 output lines
@@ -12871,7 +12889,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             x_user_identity=request.headers.get("x-user-identity"),
             x_auth_channel=request.headers.get("x-auth-channel"),
         )
-        task = bg_task_mgr.get_task(task_id)
+        task = await asyncio.to_thread(bg_task_mgr.get_task, task_id)
         if not task:
             raise HTTPException(status_code=404, detail="Task not found")
         return {
@@ -12891,7 +12909,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             x_user_identity=request.headers.get("x-user-identity"),
             x_auth_channel=request.headers.get("x-auth-channel"),
         )
-        task = bg_task_mgr.get_task(task_id)
+        task = await asyncio.to_thread(bg_task_mgr.get_task, task_id)
         if not task:
             raise HTTPException(status_code=404, detail="Task not found")
         return {
@@ -12912,7 +12930,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             x_user_identity=request.headers.get("x-user-identity"),
             x_auth_channel=request.headers.get("x-auth-channel"),
         )
-        task = bg_task_mgr.get_task(task_id)
+        task = await asyncio.to_thread(bg_task_mgr.get_task, task_id)
         if not task:
             raise HTTPException(status_code=404, detail="Task not found")
         return {
@@ -12932,19 +12950,23 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             x_user_identity=request.headers.get("x-user-identity"),
             x_auth_channel=request.headers.get("x-auth-channel"),
         )
-        task = bg_task_mgr.get_task(task_id)
+        task = await asyncio.to_thread(bg_task_mgr.get_task, task_id)
         if not task:
             raise HTTPException(status_code=404, detail="Task not found")
 
         if task["status"] in ("running", "queued"):
             was_running = task["status"] == "running"
-            bg_task_mgr.kill_task(task_id)
+            await asyncio.to_thread(bg_task_mgr.kill_task, task_id)
             # If a running task was killed, promote the next queued task
             if was_running:
-                next_q = bg_task_mgr.get_next_queued(user["channel"], user["identity"])
+                next_q = await asyncio.to_thread(
+                    bg_task_mgr.get_next_queued, user["channel"], user["identity"]
+                )
                 if next_q:
                     new_sid = str(uuid4())
-                    bg_task_mgr.promote_queued_task(next_q["task_id"], new_sid)
+                    await asyncio.to_thread(
+                        bg_task_mgr.promote_queued_task, next_q["task_id"], new_sid
+                    )
                     print(
                         f"[BG] Kill triggered promotion of queued task {next_q['task_id']}"
                     )
@@ -12966,7 +12988,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                     )
             return {"task_id": task_id, "action": "killed"}
         else:
-            bg_task_mgr.delete_task(task_id)
+            await asyncio.to_thread(bg_task_mgr.delete_task, task_id)
             return {"task_id": task_id, "action": "deleted"}
 
     # --- Background Task Steering ---
@@ -12991,7 +13013,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             x_user_identity=request.headers.get("x-user-identity"),
             x_auth_channel=request.headers.get("x-auth-channel"),
         )
-        task = bg_task_mgr.get_task(task_id)
+        task = await asyncio.to_thread(bg_task_mgr.get_task, task_id)
         if not task:
             raise HTTPException(status_code=404, detail="Task not found")
         if task["status"] != "running":
@@ -12999,7 +13021,9 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 status_code=409,
                 detail=f"Task is {task['status']}, not running -- cannot steer",
             )
-        path = bg_task_mgr.write_steering(task_id, body.instruction)
+        path = await asyncio.to_thread(
+            bg_task_mgr.write_steering, task_id, body.instruction
+        )
         logger.info(
             "[STEER] Steering written for task %s: %s", task_id, body.instruction[:80]
         )
@@ -13018,10 +13042,10 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             x_user_identity=request.headers.get("x-user-identity"),
             x_auth_channel=request.headers.get("x-auth-channel"),
         )
-        task = bg_task_mgr.get_task(task_id)
+        task = await asyncio.to_thread(bg_task_mgr.get_task, task_id)
         if not task:
             raise HTTPException(status_code=404, detail="Task not found")
-        content = bg_task_mgr.read_steering(task_id)
+        content = await asyncio.to_thread(bg_task_mgr.read_steering, task_id)
         return {
             "task_id": task_id,
             "has_steering": content is not None,
