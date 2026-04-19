@@ -583,6 +583,7 @@ class TestIssue170BackgroundTaskAPI(unittest.TestCase):
             cls.app = agent_manager.create_api_app()
 
         cls.client = TestClient(cls.app)
+        cls.agent_manager = agent_manager
         session_token = agent_manager._api_auth_manager.verify_pairing_code(
             agent_manager._api_auth_manager.generate_pairing_code(
                 "issue170-test-user", "telegram"
@@ -648,6 +649,18 @@ class TestIssue170BackgroundTaskAPI(unittest.TestCase):
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(resp.json()["task_id"], "task-42")
         mocked.assert_awaited()
+
+    def test_health_endpoint_avoids_session_map_disk_reads(self):
+        with patch.object(
+            self.agent_manager._session_mgr,
+            "load_session_map",
+            side_effect=AssertionError("health must not read session_map"),
+        ) as mocked:
+            resp = self.client.get("/api/v1/health")
+
+        self.assertEqual(resp.status_code, 200)
+        self.assertIn("active_sessions", resp.json())
+        mocked.assert_not_called()
 
 
 if __name__ == "__main__":

@@ -1907,6 +1907,7 @@ class SessionManager:
 
         # Lock for session map file read-modify-write to prevent TOCTOU races
         self._session_map_lock = threading.Lock()
+        self._session_map_cache: Optional[Dict] = None
 
         # Per-session streaming queues: session_id -> (asyncio.Queue, event_loop)
         # Populated by the /stream API endpoint; read by _execute_subprocess_with_tracking.
@@ -4116,13 +4117,16 @@ You can mention an agent in your prompt and it will auto-delegate:
     def load_session_map(self) -> Dict:
         """Load the N8N -> Session ID mapping"""
         if not self.session_map_file.exists():
+            self._session_map_cache = {}
             return {}
 
         try:
             with open(self.session_map_file, "r") as f:
-                return json.load(f)
+                data = json.load(f)
         except (json.JSONDecodeError, IOError):
-            return {}
+            data = {}
+        self._session_map_cache = data
+        return data
 
     def _prune_session_map_ttl(self, session_map: dict) -> dict:
         """Return a copy of session_map with entries older than session_map_ttl removed.
@@ -4156,6 +4160,14 @@ You can mention an agent in your prompt and it will auto-delegate:
         session_map = self._prune_session_map_ttl(session_map)
         with open(self.session_map_file, "w") as f:
             json.dump(session_map, f, indent=2)
+        self._session_map_cache = dict(session_map)
+
+    def get_cached_session_count(self) -> int:
+        """Return the in-memory session count without touching disk."""
+        cached = getattr(self, "_session_map_cache", None)
+        if not isinstance(cached, dict):
+            return 0
+        return len(cached)
 
     def load_session_data(self, n8n_session_id: str) -> Optional[Dict]:
         """
@@ -10429,7 +10441,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             "environment": APP_ENV,
             "agents_loaded": len(session_mgr.AGENTS),
             "scheduler_enabled": SCHEDULER_ENABLED,
-            "active_sessions": len(session_mgr.load_session_map()),
+            "active_sessions": session_mgr.get_cached_session_count(),
         }
 
     @app.get("/api/v1/config")
