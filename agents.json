@@ -85,9 +85,9 @@
       "description": "Wee Orchestrator developer agent - handles feature development, bug fixes, and testing exclusively on the dev environment (192.168.1.100)",
       "path": "/opt/wee-dev",
       "dispatch_config": {
-        "runtime": "codex",
-        "model": "gpt-5.4",
-        "vendor": "OpenAI Codex (GPT-5.4)",
+        "runtime": "copilot",
+        "model": "claude-sonnet-4.6",
+        "vendor": "Anthropic Claude (Sonnet 4.6)",
         "permission_mode": "elevated",
         "yolo": true,
         "timeout": 3600
