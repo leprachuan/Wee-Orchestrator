@@ -1,3 +1,64 @@
+## [Issue #148] Bug/Feature: QA Gate — wee-dev must not pick up next issue until wee-qa approves
+**Status:** 🔄 Implementation complete, QA pending
+**Branch:** `issue/148`
+
+### Problem
+The task scheduler dispatched wee-dev on a 15-minute cadence with no awareness of whether a PR was awaiting QA review. This caused code churn: wee-qa could reject a PR while wee-dev had already started the next issue, creating merge conflicts, overlapping changes, and compounding bugs.
+
+### Root Causes (3 bugs)
+
+#### Bug 1 — Stalled in-progress falls through to new issue
+When `active_item` was "in-progress" and the wee-dev process had died, the dispatch script logged the stall but did NOT set `next_item` or return. The code fell through to "Pick next work item" where `elif actionable:` picked a NEW queued issue instead of re-dispatching the stalled one.
+
+#### Bug 2 — PID vs Task ID mismatch on dev host
+`has_running_wee_dev_task()` only checked `wee_dev_pid` from the lock file. On the dev host, dispatch uses the background task API which stores `wee_dev_task_id` (not PID). The running check always returned False on dev, bypassing the gate entirely.
+
+#### Bug 3 — No catch-all QA gate
+After all specific checks (qa-review handler, wee-dev running check), there was no generic gate to prevent new issue dispatch when ANY issue was in-flight (in-progress, qa-review, or qa-failed state).
+
+### Solution
+
+#### New module: `scheduler/qa_gate.py`
+Reusable QA gate that checks three layers:
+1. **Lock file state** — blocks on `qa-review`, `qa-gate-blocked`, `wee-dev-running`
+2. **GitHub labels** — queries issues with `wee-dev:qa-review` or `wee-dev:in-progress` labels
+3. **Open PRs** — detects open PRs from `issue/*` branches
+
+Primary entry point: `is_wee_dev_gated()` → returns `(gated: bool, reason: str, details: dict)`
+
+#### `scheduler/executor.py` — gate_check integration
+- New `_check_gate()` method on `TaskSchedulerExecutor`
+- Jobs can declare `"gate_check": "wee_dev_qa"` in jobs.json
+- Gate checked before job execution in `check_and_execute()` — blocked jobs are skipped with logging
+- Fail-open: unknown gates or gate exceptions allow execution (never silently block all jobs)
+- Registry pattern: `_GATE_REGISTRY["wee_dev_qa"] = is_wee_dev_gated`
+
+#### `dispatch_wee_dev_work_queue.py` — 3 bug fixes
+1. **Stalled in-progress fix:** After detecting stalled in-progress, explicitly sets `next_item = active_item` to re-dispatch the SAME issue
+2. **Task ID check:** `has_running_wee_dev_task()` now checks both `wee_dev_pid` (subprocess) AND `wee_dev_task_id` (API dispatch via `_is_bg_task_running()`)
+3. **Catch-all gate:** Before "Pick next work item", if ANY active item is in `ACTIVE_STATUSES`, blocks new dispatch with `qa-gate-blocked` lock state and returns 0
+
+### Files Changed
+- `scheduler/qa_gate.py` — **NEW** (188 lines) — Reusable QA gate module
+- `scheduler/executor.py` — Added `_check_gate()` method + gate_check registry + import
+- `scripts/dispatch_wee_dev_work_queue.py` — Fixed version of dispatch script (in-repo copy)
+- `/opt/bin/dispatch_wee_dev_work_queue.py` — Live dispatch script on dev host (patched)
+
+### Tests
+- `tests/test_issue148_qa_gate.py` — **37 tests** across 8 test classes:
+  - `TestQaGateReadLock` (3) — lock file parsing
+  - `TestQaGateCheckBlockingIssues` (5) — GitHub label checks
+  - `TestQaGateCheckOpenPRs` (2) — PR detection
+  - `TestIsWeeDevGated` (8) — primary gate entry point
+  - `TestExecutorGateCheck` (5) — scheduler integration
+  - `TestDispatchQAGateFixes` (5) — dispatch logic fixes
+  - `TestHasRunningWeeDevTask` (4) — PID + task_id running check
+  - `TestQAGateIntegrationScenarios` (5) — end-to-end scenarios
+
+### Deployment Notes
+To activate the gate for the `wee-dev-work-queue-runner` scheduler job, add `"gate_check": "wee_dev_qa"` to the job config in `.task-scheduler/jobs.json`.
+
+
 # Changelog
 
 ## [Issue #166] Feature: Per-Agent Telegram/WebEx Bots
