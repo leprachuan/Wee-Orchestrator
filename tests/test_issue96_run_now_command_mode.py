@@ -165,8 +165,13 @@ class TestRunCommandTaskExecution(unittest.TestCase):
         end = content.find("\n    def ", start + 1)
         func_body = content[start:end]
 
-        # Should use shell=True (like executor's _execute_command_mode)
-        self.assertIn("shell=True", func_body, "Should use shell=True")
+        # Should parse argv safely instead of using shell=True
+        self.assertIn(
+            "_split_command_args(command)",
+            func_body,
+            "Should parse commands into argv before execution",
+        )
+        self.assertNotIn("shell=True", func_body, "Should not use shell=True")
 
         # Should use capture_output=True
         self.assertIn(

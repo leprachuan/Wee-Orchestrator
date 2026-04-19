@@ -14,6 +14,7 @@ import logging
 import os
 import re
 import secrets as _secrets
+import shlex
 import shutil
 import signal
 import subprocess
@@ -148,6 +149,19 @@ def _sanitize_tool_call_for_display(data: dict) -> dict:
                 new_inp[field] = _sanitize_command_for_display(new_inp[field])
         sanitized["input"] = new_inp
     return sanitized
+
+
+def _split_command_args(command: str) -> List[str]:
+    """Parse a command string into argv without an implicit shell."""
+    if not isinstance(command, str) or not command.strip():
+        raise ValueError("No command provided")
+    try:
+        argv = shlex.split(command, posix=True)
+    except ValueError as exc:
+        raise ValueError(f"Invalid command syntax: {exc}") from exc
+    if not argv:
+        raise ValueError("No command provided")
+    return argv
 
 
 def _resolve_silent_default(channel: str) -> bool:
@@ -5095,10 +5109,10 @@ You can mention an agent in your prompt and it will auto-delegate:
         print(f"[Shell] Executing in {agent_dir}: {command}", file=sys.stderr)
 
         try:
+            argv = _split_command_args(command)
             # Execute the command with the configured timeout
             result = subprocess.run(
-                command,
-                shell=True,
+                argv,
                 capture_output=True,
                 text=True,
                 timeout=self.command_timeout,
@@ -5119,6 +5133,8 @@ You can mention an agent in your prompt and it will auto-delegate:
 
             return output.strip()
 
+        except ValueError as e:
+            return f"Error: {e}"
         except subprocess.TimeoutExpired:
             return f"Error: Command timed out after {self.command_timeout} seconds"
         except Exception as e:
@@ -11948,12 +11964,12 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         )
 
         try:
+            argv = _split_command_args(command)
             result = _sp.run(
-                command,
+                argv,
                 capture_output=True,
                 text=True,
                 timeout=timeout,
-                shell=True,
                 cwd=working_dir,
             )
 
@@ -11973,6 +11989,9 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 logger.error(
                     f"[Command Mode] Run Now job {job_id} failed: exit code {result.returncode}"
                 )
+        except ValueError as e:
+            bg_task_mgr.fail_task(task_id, str(e))
+            logger.error(f"[Command Mode] Run Now job {job_id} invalid command: {e}")
         except _sp.TimeoutExpired:
             bg_task_mgr.fail_task(task_id, f"Command timed out after {timeout}s")
             logger.error(
