@@ -16,7 +16,7 @@ import threading
 import time
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 from urllib.parse import unquote
 
 import pika
@@ -24,6 +24,7 @@ import requests
 
 import agent_manager
 import audio_transcriber
+from connector_rate_limiter import ConnectorRateLimiter
 
 logger = logging.getLogger(__name__)
 
@@ -182,12 +183,46 @@ class WebEXConnector:
         self.rabbitmq_connection = None
         self.rabbitmq_channel = None
         self.cleanup_thread = None
+        self.user_rate_limiter = ConnectorRateLimiter()
 
         if not self.config.config.get("allowed_users"):
             print(
                 "⚠️  WARNING: allowed_users is empty — ALL WebEx users can interact with this bot!",
                 file=sys.stderr,
             )
+
+    def _get_user_rate_limit_settings(self) -> Tuple[int, int]:
+        """Return connector-side per-user rate limit settings."""
+        max_requests = self.config.config.get(
+            "user_rate_limit_max_requests",
+            int(os.environ.get("CONNECTOR_USER_RATE_LIMIT_MAX_REQUESTS", "20")),
+        )
+        window_seconds = self.config.config.get(
+            "user_rate_limit_window_seconds",
+            int(os.environ.get("CONNECTOR_USER_RATE_LIMIT_WINDOW_SECONDS", "60")),
+        )
+        return max(1, int(max_requests)), max(1, int(window_seconds))
+
+    def _check_user_rate_limit(self, person_id: str) -> Tuple[bool, Optional[str]]:
+        """Check whether this user can issue another agent-bound request."""
+        max_requests, window_seconds = self._get_user_rate_limit_settings()
+        allowed, retry_after = self.user_rate_limiter.check(
+            person_id, "agent_requests", max_requests, window_seconds
+        )
+        if allowed:
+            return True, None
+
+        logger.warning(
+            "WebEx connector rate limit hit for user %s (%s requests/%ss)",
+            person_id,
+            max_requests,
+            window_seconds,
+        )
+        return (
+            False,
+            "⚠️ Rate limit exceeded. Please wait "
+            f"{retry_after} seconds before sending another request.",
+        )
 
     def get_session_manager(self, session_id: str):
         """Get or create SessionManager for session_id"""
@@ -1400,6 +1435,10 @@ class WebEXConnector:
                     )
                 else:
                     # Regular slash commands
+                    allowed, rate_limit_message = self._check_user_rate_limit(person_id)
+                    if not allowed:
+                        self.send_message(room_id, rate_limit_message)
+                        return
                     timeout = self.config.get_user_timeout(person_id)
                     response = self._execute_command(
                         text, session_id, timeout, user_identity=person_id
@@ -1430,6 +1469,10 @@ class WebEXConnector:
             else:
                 # Check for bash command (!)
                 if text.startswith("!"):
+                    allowed, rate_limit_message = self._check_user_rate_limit(person_id)
+                    if not allowed:
+                        self.send_message(room_id, rate_limit_message)
+                        return
                     timeout = self.config.get_user_timeout(person_id)
                     response = self._execute_command(
                         text, session_id, timeout, user_identity=person_id
@@ -1437,6 +1480,10 @@ class WebEXConnector:
                     self.send_message(room_id, response)
                 else:
                     # Route regular messages to agent_manager with status updates
+                    allowed, rate_limit_message = self._check_user_rate_limit(person_id)
+                    if not allowed:
+                        self.send_message(room_id, rate_limit_message)
+                        return
                     timeout = self.config.get_user_timeout(person_id)
                     response, status_msg_id = self._query_agent_with_status(
                         text,
