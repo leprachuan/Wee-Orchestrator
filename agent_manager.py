@@ -13,6 +13,7 @@ import json
 import logging
 import os
 import re
+import shlex
 import secrets as _secrets
 import shlex
 import shutil
@@ -367,7 +368,6 @@ class BackgroundTaskManager:
     MAX_TOOL_FIELD_CHARS = int(os.environ.get("BG_MAX_TOOL_FIELD_CHARS", "4000"))
     CLEANUP_AGE_HOURS = int(os.environ.get("BG_CLEANUP_HOURS", "24"))
     BG_CLEANUP_HOURS = int(os.environ.get("BG_CLEANUP_HOURS", "24"))
-    _cleanup_thread_started = False  # class-level default; instance __init__ overwrites
 
     def __init__(self):
         home = os.path.expanduser("~")
@@ -377,17 +377,15 @@ class BackgroundTaskManager:
         api_port = os.environ.get("API_PORT", "8001")
         env_suffix = "-dev" if api_port == "8001" else ""
         self._path = os.path.join(copilot_dir, f"background-tasks{env_suffix}.json")
-        self._lock = threading.RLock()
+        self._lock = threading.Lock()
+        self._tasks_cache = None  # in-memory cache; avoids disk I/O on every API call
         self._bg_events = {}  # {origin_session_id: [event_dicts]}
         self._bg_events_lock = threading.Lock()
         self._cleanup_thread_started = False
-        self._tasks_cache = None
-        self._cache_mtime_ns = None
-        self._cache_size = None
 
     def _start_cleanup_thread(self):
         """Start a background thread that runs cleanup every 5 minutes."""
-        if self._cleanup_thread_started:
+        if getattr(self, "_cleanup_thread_started", False):
             return
         self._cleanup_thread_started = True
 
@@ -403,58 +401,23 @@ class BackgroundTaskManager:
         t.start()
 
     def _load(self) -> list:
-        with self._lock:
-            return copy.deepcopy(self._load_unlocked())
-
-    def _ensure_cache_state(self):
-        if not hasattr(self, "_tasks_cache"):
-            self._tasks_cache = None
-        if not hasattr(self, "_cache_mtime_ns"):
-            self._cache_mtime_ns = None
-        if not hasattr(self, "_cache_size"):
-            self._cache_size = None
-
-    def _load_unlocked(self, force: bool = False) -> list:
-        self._ensure_cache_state()
-        if not force and self._tasks_cache is not None:
-            try:
-                stat = os.stat(self._path)
-                if (
-                    self._cache_mtime_ns == stat.st_mtime_ns
-                    and self._cache_size == stat.st_size
-                ):
-                    return self._tasks_cache
-            except FileNotFoundError:
-                if self._cache_mtime_ns is None:
-                    return self._tasks_cache
+        """Return in-memory cache if populated; load from disk only on cold start."""
+        if getattr(self, "_tasks_cache", None) is not None:
+            return self._tasks_cache
         try:
             with open(self._path, "r") as f:
-                tasks = json.load(f)
+                self._tasks_cache = json.load(f)
         except (FileNotFoundError, json.JSONDecodeError):
-            tasks = []
-        self._tasks_cache = tasks
-        try:
-            stat = os.stat(self._path)
-            self._cache_mtime_ns = stat.st_mtime_ns
-            self._cache_size = stat.st_size
-        except FileNotFoundError:
-            self._cache_mtime_ns = None
-            self._cache_size = None
+            self._tasks_cache = []
         return self._tasks_cache
 
     def _save(self, tasks: list):
-        with self._lock:
-            self._save_unlocked(tasks)
-
-    def _save_unlocked(self, tasks: list):
-        """Atomic write: write to temp file then rename to avoid corruption."""
-        self._ensure_cache_state()
-        retained = self._prune_tasks(tasks)
-        normalized = self._normalize_tasks(retained)
+        """Update in-memory cache and atomically flush to disk."""
+        self._tasks_cache = tasks  # fast path: subsequent reads skip disk
         tmp_path = self._path + ".tmp"
         try:
             with open(tmp_path, "w") as f:
-                json.dump(normalized, f, indent=2, default=str)
+                json.dump(tasks, f, indent=2, default=str)
             os.replace(tmp_path, self._path)
         except Exception:
             # If atomic rename fails, try direct write as fallback
@@ -463,77 +426,7 @@ class BackgroundTaskManager:
             except OSError:
                 pass
             with open(self._path, "w") as f:
-                json.dump(normalized, f, indent=2, default=str)
-        self._tasks_cache = normalized
-        try:
-            stat = os.stat(self._path)
-            self._cache_mtime_ns = stat.st_mtime_ns
-            self._cache_size = stat.st_size
-        except FileNotFoundError:
-            self._cache_mtime_ns = None
-            self._cache_size = None
-
-    def _normalize_tasks(self, tasks: list) -> list:
-        normalized = []
-        for task in tasks:
-            current = dict(task)
-            if isinstance(current.get("output_lines"), list):
-                current["output_lines"] = current["output_lines"][-self.MAX_OUTPUT_LINES :]
-            else:
-                current["output_lines"] = []
-
-            tool_calls = current.get("tool_calls") or []
-            if not isinstance(tool_calls, list):
-                tool_calls = []
-            current["tool_calls"] = [
-                self._trim_tool_call(tc) for tc in tool_calls[-self.MAX_TOOL_CALLS :]
-            ]
-            normalized.append(current)
-        return normalized
-
-    def _trim_tool_call(self, tool_call: dict) -> dict:
-        trimmed = dict(tool_call or {})
-        for key in ("id", "name", "status", "runtime", "timestamp"):
-            value = trimmed.get(key)
-            if value is not None and not isinstance(value, str):
-                trimmed[key] = str(value)
-        for key in ("input", "output", "error"):
-            value = trimmed.get(key)
-            if value is None:
-                continue
-            if not isinstance(value, str):
-                value = json.dumps(value, default=str)
-            if len(value) > self.MAX_TOOL_FIELD_CHARS:
-                value = value[: self.MAX_TOOL_FIELD_CHARS] + "...[truncated]"
-            trimmed[key] = value
-        return trimmed
-
-    def _terminal_cutoff(self) -> float:
-        return time.time() - (self.CLEANUP_AGE_HOURS * 3600)
-
-    def _prune_terminal_tasks(self, tasks: list, cutoff: float = None) -> list:
-        terminal_statuses = {"completed", "failed", "killed"}
-        cutoff = self._terminal_cutoff() if cutoff is None else cutoff
-        kept = []
-        for task in tasks:
-            status = task.get("status")
-            if status not in terminal_statuses:
-                kept.append(task)
-                continue
-            completed = task.get("completed_at")
-            if not completed:
-                kept.append(task)
-                continue
-            try:
-                completed_ts = calendar.timegm(
-                    time.strptime(completed, "%Y-%m-%dT%H:%M:%SZ")
-                )
-            except (ValueError, OverflowError):
-                kept.append(task)
-                continue
-            if completed_ts > cutoff:
-                kept.append(task)
-        return kept
+                json.dump(tasks, f, indent=2, default=str)
 
     def _evict_oldest_terminal(self, tasks: list) -> list:
         """Evict oldest completed/failed/killed tasks when store exceeds MAX_TOTAL_TASKS."""
@@ -555,9 +448,6 @@ class BackgroundTaskManager:
         evict_indices = {idx for idx, _ in terminal_tasks[:evict_count]}
 
         return [t for i, t in enumerate(tasks) if i not in evict_indices]
-
-    def _prune_tasks(self, tasks: list) -> list:
-        return self._evict_oldest_terminal(self._prune_terminal_tasks(tasks))
 
     def _user_key(self, channel: str, identity: str) -> str:
         # Strip channel prefix from identity to avoid double-prefixing
@@ -610,10 +500,10 @@ class BackgroundTaskManager:
             "origin_session_id": origin_session_id,
         }
         with self._lock:
-            tasks = self._prune_tasks(self._load_unlocked())
-            tasks.append(task)
+            tasks = self._load()
             tasks = self._evict_oldest_terminal(tasks)
-            self._save_unlocked(tasks)
+            tasks.append(task)
+            self._save(tasks)
         self._start_cleanup_thread()
         return task
 
@@ -843,9 +733,31 @@ class BackgroundTaskManager:
 
     def cleanup_old(self):
         """Purge terminal tasks older than CLEANUP_AGE_HOURS and enforce MAX_TOTAL_TASKS cap."""
+        cutoff = time.time() - (self.CLEANUP_AGE_HOURS * 3600)
         with self._lock:
-            tasks = self._load_unlocked()
-            kept = self._prune_tasks(tasks)
+            tasks = self._load()
+            kept = []
+            for t in tasks:
+                if t["status"] == "running":
+                    kept.append(t)
+                    continue
+                if t["status"] == "queued":
+                    kept.append(t)
+                    continue
+                completed = t.get("completed_at")
+                if completed:
+                    try:
+                        ct = time.mktime(time.strptime(completed, "%Y-%m-%dT%H:%M:%SZ"))
+                        if ct > cutoff:
+                            kept.append(t)
+                            continue
+                    except (ValueError, OverflowError):
+                        kept.append(t)
+                        continue
+                else:
+                    kept.append(t)
+            # Enforce total task cap after TTL cleanup
+            kept = self._evict_oldest_terminal(kept)
             if len(kept) < len(tasks):
                 self._save_unlocked(kept)
 
@@ -3651,6 +3563,8 @@ You can mention an agent in your prompt and it will auto-delegate:
                 models_by_provider[provider].append(line)
 
             return models_by_provider
+        except ValueError as e:
+            return f"Error: {e}"
         except subprocess.TimeoutExpired:
             print(
                 f"[Error] opencode models command timed out after {self.command_timeout}s",
@@ -5111,6 +5025,7 @@ You can mention an agent in your prompt and it will auto-delegate:
         try:
             argv = _split_command_args(command)
             # Execute the command with the configured timeout
+            argv = _split_command_args(command)
             result = subprocess.run(
                 argv,
                 capture_output=True,
@@ -5135,6 +5050,50 @@ You can mention an agent in your prompt and it will auto-delegate:
 
         except ValueError as e:
             return f"Error: {e}"
+        except subprocess.TimeoutExpired:
+            return f"Error: Command timed out after {self.command_timeout} seconds"
+        except Exception as e:
+            return f"Error executing command: {str(e)}"
+
+    def _execute_shell_command(self, command: str, agent: str = "orchestrator") -> str:
+        """Execute a trusted shell command with full bash semantics.
+
+        This is reserved for agent-authored shell tool calls that rely on pipes,
+        redirects, and command chaining. User-controlled scheduler command mode
+        must continue to use argv parsing via _execute_bash_command.
+        """
+        if not command:
+            return "Error: No command provided. Usage: !<command>"
+
+        agent_info = self.AGENTS.get(agent)
+        if not agent_info:
+            agent_dir = str(Path.cwd())
+        else:
+            agent_dir = agent_info["path"]
+
+        print(f"[Shell] Executing in {agent_dir}: {command}", file=sys.stderr)
+
+        try:
+            result = subprocess.run(
+                ["bash", "-o", "pipefail", "-c", command],
+                capture_output=True,
+                text=True,
+                timeout=self.command_timeout,
+                cwd=agent_dir,
+            )
+
+            output = result.stdout
+            if result.stderr:
+                output += result.stderr
+
+            if not output.strip():
+                if result.returncode == 0:
+                    output = f"✓ Command executed successfully (exit code: 0)"
+                else:
+                    output = f"✗ Command failed with exit code: {result.returncode}"
+
+            return output.strip()
+
         except subprocess.TimeoutExpired:
             return f"Error: Command timed out after {self.command_timeout} seconds"
         except Exception as e:
@@ -10505,6 +10464,8 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
 
     @app.get("/api/v1/health")
     async def health():
+        # Do NOT call load_session_map() or any disk I/O here —
+        # health must return immediately regardless of task store size.
         return {
             "status": "ok",
             "uptime_seconds": time.time() - _start_time,
@@ -10512,7 +10473,6 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             "environment": APP_ENV,
             "agents_loaded": len(session_mgr.AGENTS),
             "scheduler_enabled": SCHEDULER_ENABLED,
-            "active_sessions": session_mgr.get_cached_session_count(),
         }
 
     @app.get("/api/v1/config")
@@ -12922,15 +12882,41 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             x_user_identity=request.headers.get("x-user-identity"),
             x_auth_channel=request.headers.get("x-auth-channel"),
         )
-        limit = max(1, min(limit, 200))
-        offset = max(0, offset)
-        result, total = await asyncio.to_thread(
-            bg_task_mgr.list_task_summaries,
-            limit,
-            offset,
-            status,
-            True,
-        )
+        tasks = bg_task_mgr.list_all_tasks()
+        # Check if running tasks are still alive
+        for t in tasks:
+            if t["status"] == "running" and t.get("pid"):
+                try:
+                    os.kill(t["pid"], 0)
+                except ProcessLookupError:
+                    bg_task_mgr.fail_task(
+                        t["task_id"], "Process terminated unexpectedly"
+                    )
+                    t["status"] = "failed"
+        # Filter by status if provided
+        if status:
+            tasks = [t for t in tasks if t["status"] == status]
+        # Sort by created_at descending (newest first)
+        tasks.sort(key=lambda t: t.get("created_at", ""), reverse=True)
+        total = len(tasks)
+        # Apply pagination
+        tasks = tasks[offset : offset + limit]
+        # Return summary (no full output_lines for list)
+        result = []
+        for t in tasks:
+            result.append(
+                {
+                    "task_id": t["task_id"],
+                    "agent": t["agent"],
+                    "runtime": t["runtime"],
+                    "model": t["model"],
+                    "prompt": t["prompt"][:200],
+                    "status": t["status"],
+                    "created_at": t["created_at"],
+                    "completed_at": t.get("completed_at"),
+                    "error": t.get("error"),
+                }
+            )
         return {
             "tasks": result,
             "total": total,

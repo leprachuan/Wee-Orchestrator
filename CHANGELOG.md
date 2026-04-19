@@ -1,196 +1,24 @@
 # Changelog
 
-## [Issue #158] Feature: Wee CLI — Standalone Command-Line AI Tool
-**Status:** ✅ QA Approved (Commits: 7622e8d, 2a718be, PR pending dev→main)
+## [Issue #166] Feature: Per-Agent Telegram/WebEx Bots
+**Status:** QA Approved Round 2 (Commit: 8479c6f, Branch: issue/166)
 
 ### Summary
-Added `wee_cli.py` — a standalone command-line AI assistant for the Wee ecosystem. Similar in style to GitHub Copilot CLI, Claude Code CLI, and Codex CLI. Supports single-shot prompts, interactive REPL, stdin piping, and tool calling via any OpenAI-compatible backend (Ollama, OpenRouter, LM Studio).
+Adds agent_bot_manager.py — standalone manager that reads agents.json and
+automatically starts per-agent Telegram or WebEx bots. Hot-reloads on config change.
 
-### Key Features
+### Setup
+Create /opt/n8n-copilot-shim/agent-bot-manager.env (gitignored):
+  API_SHARED_KEY=<your-api-key>
 
-#### CLI Flags
-- `--model` / `-m` — Model ID with provider prefix (e.g. `ollama/qwen3:8b`, `openrouter/meta-llama/llama-2-70b`). Default: `$WEE_MODEL` or `ollama/qwen3:8b`.
-- `--permission` / `-p` — Tool execution permission level: `restricted` (default), `auto`, or `elevated`. Controls whether tool calls (bash, python) are allowed and with what scope.
-- `--output` / `-o` — Output format: `text` (default), `json`, or `markdown`. Non-text formats suppress streaming and reformat the full response after completion.
-- `--tools` / `-t` — Enable tool calling (bash, python). Requires explicit flag to avoid accidental execution.
-- `--interactive` / `-i` — Enter interactive REPL mode with readline history.
-- `--api-key` / `-k` — API key override (prefer env var `WEE_API_KEY` to avoid key exposure in `ps aux`).
-- `--api-base` / `-b` — Custom API base URL override.
-- `--system` / `-s` — System prompt override.
-- `--temperature` / `-T` — Sampling temperature.
-- `--timeout` — Request timeout in seconds (default: 120).
-- `--config` — Config file path (default: `~/.wee/config.json`).
-
-#### Usage Examples
-```bash
-# Single-shot prompt
-wee "What is the capital of France?"
-
-# With specific model
-wee --model openrouter/meta-llama/llama-2-70b "Explain quantum computing"
-
-# Tool calling with elevated permissions
-wee --tools --permission elevated "List all Python files in /opt"
-
-# JSON output (suppresses streaming, formats full response as JSON)
-wee --output json "What are the first 5 Fibonacci numbers?"
-
-# Markdown output with rich rendering
-wee --output markdown "Write a Python quicksort"
-
-# Interactive REPL
-wee --interactive
-
-# Pipe from stdin
-echo "summarize this" | wee --model ollama/qwen3:8b
-
-# Custom system prompt
-wee --system "You are a bash expert" "How do I tail a log file?"
-```
-
-#### Config File Support
-Persistent configuration via `~/.wee/config.json`:
-```json
-{
-  "model": "ollama/qwen3:8b",
-  "system_prompt": "You are a helpful assistant",
-  "tools": false,
-  "permission": "restricted",
-  "output_format": "text"
-}
-```
-Settings priority: CLI arg > env var > config file > built-in default.
-
-#### Permission Levels
-| Level | Tool Calls | Use Case |
-|-------|-----------|----------|
-| `restricted` (default) | Blocked | Safe for untrusted input |
-| `auto` | Confirmed per-call | Interactive use |
-| `elevated` | Unrestricted | Trusted automation |
-
-### Root Cause (Implementation Gap)
-The Wee ecosystem had `wee_runtime.py` for background subprocess use but lacked a user-facing CLI entry point. Users had no `wee` command they could run directly from the terminal.
-
-### Solution
-
-#### Core Architecture
-- `wee_cli.py` — standalone entrypoint, re-uses `wee_runtime.py` core functions (`resolve_model_and_endpoint`, `execute_tool`, `_WEE_TOOLS`, `MAX_TOOL_ROUNDS`)
-- `chat_stream()` — streaming chat loop with tool-call support and token usage tracking
-- `run_interactive()` — REPL with readline history (`~/.wee/history`), `/help`, `/model`, `/clear` slash commands
-- `run_single_shot()` — non-interactive single prompt execution
-
-#### Key Bug Fixes (QA Rounds 1–3)
-- **M-1 (Round 3, commit 7622e8d):** `run_interactive()` now correctly passes `permission` kwarg to `chat_stream()` (was silently defaulting to `"auto"` regardless of CLI flag)
-- **Round 2:** `--permission` default changed from `"auto"` to `"restricted"` for safer out-of-box behavior; output format wired end-to-end
-- **Round 1:** Unused imports removed, flake8 clean
-
-### Files Changed
-- `wee_cli.py` — new file, ~700 LOC
-- `tests/test_issue158_wee_cli.py` — 63 regression tests
-- `tests/test_issue158_permission_regression.py` — 1 regression test added by wee-qa (commit 2a718be)
+### Security
+- API key via EnvironmentFile (not in ExecStart args)
+- DEFAULT_API_SHARED_KEY defaults to empty; main() fails fast on missing key
+- Bot tokens from keyring at runtime, never hardcoded
 
 ### Tests
-- 63 new regression tests covering:
-  - All CLI flags and their defaults
-  - Permission propagation through `run_interactive()` → `chat_stream()`
-  - Output format modes (text, json, markdown)
-  - Tool enabling/disabling
-  - Config file loading and priority resolution
-  - Stdin piping
-  - Interactive REPL slash commands
-  - Token usage tracking
-- Total: 1598 passed, 0 regressions
-
-### QA History
-- **Round 1:** REJECT — unused imports, default permission "auto" instead of "restricted"
-- **Round 2:** REJECT — M-1 BLOCKER: permission kwarg not passed from `run_interactive()` to `chat_stream()`
-- **Round 3:** APPROVE — all findings resolved; regression test added by wee-qa (commit 2a718be)
-
----
-## [Issue #158 Supplement] Comprehensive Agentic Runtime Test Suite
-**Status:** ✅ QA Complete (Commit: 8e2c0a7, branch: issue/158)
-
-### Summary
-Comprehensive test suite for `wee_runtime.py` agentic capabilities. Validates model resolution, tool calling, streaming, permissions, and live provider integration across Ollama and OpenRouter.
-
-### Test Coverage (68 total tests)
-
-#### Unit Tests (54 tests — no API calls)
-- **Model Resolution (12 tests):** Ollama/OpenRouter prefix stripping, preset resolution, bare model names, cross-provider parametrization
-- **Tool Definitions (6 tests):** Schema validation, tool registration, JSON schema correctness
-- **Tool Execution (11 tests):** Bash/Python execution, error handling, output capture, timeouts
-- **SSH Sanitization (5 tests):** Issue #111 — word-boundary validation, injection prevention
-- **CLI Argument Parsing (3 tests):** Flag handling, defaults, priority resolution
-- **Tool-Calling Loop (4 tests):** Single/multi-round mocked flows, max rounds enforcement, tool call validation
-- **Permission Levels (5 tests):** Restricted/auto/elevated access control, tool blocking
-- **Streaming Output (2 tests):** Empty response handling, newline termination
-- **Error Handling (4 tests):** API failures, malformed arguments, invalid API base, timeouts
-- **Performance Baseline (2 tests):** Import time <1s, model resolution <100ms
-
-#### Live Integration Tests (14 tests — Ollama + OpenRouter)
-- **Ollama Basic (3 tests):** Connection validation, single-turn chat, response parsing
-- **Ollama Tool Calling (4 tests):** Tool execution flows, multi-round chains, tool result synthesis
-- **OpenRouter Basic (4 tests):** Connection validation, API key verification, model listing
-- **OpenRouter Tool Calling (3 tests):** Tool execution flows, rate-limit handling, fallback scenarios
-
-### Key Validations
-✓ 3-round message chain verification (tool call → API → result → synthesis)  
-✓ Per-round API call count validation  
-✓ Streaming edge cases (empty synthesis, malformed responses)  
-✓ wee_tools JSON schema compliance  
-✓ Runtime constants bounds checking  
-✓ SSH command sanitization for bash execution  
-✓ Permission-level enforcement across all operations  
-
-### Files Added/Modified
-- `tests/test_wee_runtime_agentic.py` — 932 lines, 68 test cases
-- `tests/README_AGENTIC_TESTS.md` — comprehensive test documentation with quick-start guide
-- `scripts/run_agentic_tests.sh` — runner script for unit/live test filtering
-
-### Test Results
-- **Unit Tests:** 54/54 pass
-- **Live Ollama Tests:** 7/7 pass (requires Ollama on 192.168.1.101:11434)
-- **Live OpenRouter Tests:** 4/4 skipped (no OPENROUTER_API_KEY in test environment)
-- **Total:** 61 passed, 7 skipped, 0 failures
-
-### Usage
-```bash
-# All tests
-pytest tests/test_wee_runtime_agentic.py -v
-
-# Unit only (fast, no API calls)
-./scripts/run_agentic_tests.sh --unit
-
-# Live Ollama only
-./scripts/run_agentic_tests.sh --ollama
-
-# Live OpenRouter only (requires OPENROUTER_API_KEY)
-./scripts/run_agentic_tests.sh --openrouter
-```
-
-## [Issue #155] Bug: Devin Runtime Invalid Permission Mode causes Protocol Error
-**Status:** QA Approved (Commit: a8311c5, Branch: issue/155)
-
-### Summary
-Fixed two root causes causing Devin runtime Protocol error when permission mode was set to "auto" (not a valid Devin CLI value).
-
-### Root Cause 1: Invalid --permission-mode auto
-Devin CLI only accepts normal, dangerous, bypass.
-- run_devin(): Changed "auto" to "normal" for restricted/sandboxed sessions
-- _run_background_task(): Unconditional "dangerous" for background tasks (always non-interactive)
-
-### Root Cause 2: mode Param Not Propagated to run_devin()
-- Added mode: str = "restricted" parameter to run_devin() signature
-- Mode priority: explicit param > /mode in prompt > session data
-- _dispatch_single_runtime() now correctly passes mode to run_devin()
-
-### Files Changed
-- agent_manager.py -- permission mode fix, mode param propagation
-- tests/test_issue155_devin_permission_mode.py -- 17 new regression tests
-
-### Tests
-- 17 regression tests covering all fix paths
-- Full suite: 1448 passed, 34 pre-existing failures, 0 new regressions
+- 57 regression tests (tests/test_issue166_agent_bot_manager.py)
+- 0 regressions against full suite
 
 ---
 
@@ -1700,6 +1528,21 @@ compatibility with the existing `copilot` CLI runtime.
 
 
 ### Added
+
+#### F025 (Enhanced): Custom Themes API — wee-qa Fix Round 2
+- **Status**: 🔄 QA Submitted (commit 6d45763 on dev)
+- **Commit**: 6d45763
+- Adds custom theme support via `/api/v1/themes` endpoint with CSS embedded in listing response
+- **B01 (BLOCKER) Fix**: Removed `/api/v1/themes/{name}/css` endpoint entirely.
+  - CSS content now embedded as `css` field in each custom theme object in the themes list response.
+  - `loadCustomThemes()` caches CSS content in `_customThemeCSS` map (populated via the already-authenticated themes list call).
+  - `applyTheme()` now injects custom CSS via `<style id="custom-theme-style">` element instead of `<link href="...">`.
+  - `<link>` elements cannot send `Authorization` headers — the root cause of always-401 custom theme loading.
+  - After `loadCustomThemes()` completes, re-applies current theme if it's custom (handles localStorage-persisted custom themes on page load).
+- **M01 Fix**: `name == "custom.css"` dead code → corrected to `name == "custom"` (stem of `custom.css.template` is `custom.css` but `.template` files don't match `*.css` glob).
+- **M02 Fix**: E501 violation on `fastapi.responses` import line — split to multi-line parenthesized import form.
+- **M03 Fix**: `innerHTML` with server data in `loadCustomThemes()` → replaced with explicit DOM element creation using `textContent` for label/description fields.
+- **Testing**: Replaced `TestGetThemeCSS` (9 tests, endpoint removed) with `TestCustomThemeCSSInListing` (4 new tests: css in listing, builtins have no css field, endpoint returns 404, traversal regex). 17 themes tests pass; full suite 857 passed, 9 skipped.
 
 #### #69: BLOCKERS.md Template for Structured wee-dev Blocker Tracking
 - **Status**: ✅ QA Approved (commit 6d2aade on dev)
