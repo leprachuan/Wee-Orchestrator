@@ -5992,65 +5992,6 @@ User Request:
 {prompt}"""
         return context
 
-    # ------------------------------------------------------------------ streaming
-
-    class _StreamBuffer:
-        """Thread-safe buffer that stores stream chunks and broadcasts to consumers.
-
-        Supports multiple concurrent SSE consumers per session.  When a client
-        disconnects and reconnects, the reconnect endpoint replays buffered
-        chunks and then subscribes to live updates.
-        """
-
-        def __init__(self):
-            self.chunks: list = []  # [(kind, data), ...]
-            self.finished: bool = False
-            self.done_result: Optional[str] = None
-            self.created_at: float = time.time()
-            self._consumers: list = []  # [(queue, loop, start_index)]
-            self._lock = threading.Lock()
-
-        def push(self, kind, data):
-            """Push a chunk from the subprocess thread.  Appends to buffer and
-            forwards to all registered consumer queues."""
-            with self._lock:
-                idx = len(self.chunks)
-                self.chunks.append((kind, data))
-                if kind == "done":
-                    self.finished = True
-                    self.done_result = data
-                for q, lp, start_idx in self._consumers:
-                    if idx >= start_idx:
-                        try:
-                            lp.call_soon_threadsafe(q.put_nowait, (kind, data))
-                        except Exception:
-                            pass
-
-        def add_consumer(self, queue, loop):
-            """Register a new SSE consumer.  Returns the replay index — the
-            caller should replay ``self.chunks[:replay_index]`` before draining
-            the queue."""
-            with self._lock:
-                replay_index = len(self.chunks)
-                self._consumers.append((queue, loop, replay_index))
-                return replay_index
-
-        def remove_consumer(self, queue):
-            """Remove a consumer queue (e.g. on SSE disconnect)."""
-            with self._lock:
-                self._consumers = [
-                    (q, lp, si) for q, lp, si in self._consumers if q is not queue
-                ]
-
-        def get_replay_chunks(self, up_to: int):
-            """Return a copy of buffered chunks up to *up_to* index."""
-            with self._lock:
-                return list(self.chunks[:up_to])
-
-        def has_consumers(self) -> bool:
-            """True if at least one SSE consumer is connected."""
-            with self._lock:
-                return len(self._consumers) > 0
 
     def _get_or_create_stream_buffer(self, session_id: str):
         """Get existing buffer for session or create a new one."""
@@ -9379,13 +9320,14 @@ User Request:
         """
 
         def _mode_handler(fn):
-            def _h(pr, mo, ag, si, re, ns, to, rt, md):
-                return fn(pr, mo, ag, si, re, ns, to, rt, md)
+            """Pass-through wrapper for API uniformity — all runtime dispatch uses the same 9-arg signature."""
+            def _h(prompt, model, agent, session_id, can_resume, n8n_session_id, timeout, render_type, mode):
+                return fn(prompt, model, agent, session_id, can_resume, n8n_session_id, timeout, render_type, mode)
             return _h
 
         def _no_mode_handler(fn):
-            def _h(pr, mo, ag, si, re, ns, to, rt, md):
-                return fn(pr, mo, ag, si, re, ns, to, rt)
+            def _h(prompt, model, agent, session_id, can_resume, n8n_session_id, timeout, render_type, _mode):
+                return fn(prompt, model, agent, session_id, can_resume, n8n_session_id, timeout, render_type)
             return _h
 
         for rt, fn in [
