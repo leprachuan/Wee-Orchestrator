@@ -417,6 +417,37 @@ def test_issue_25_webex_shutdown_interrupts_reconnect_backoff(webex_connector):
         assert worker.is_alive() is False
 
 
+def test_issue_25_webex_shutdown_interrupts_connection_establishment(
+    webex_connector,
+):
+    connect_started = threading.Event()
+    release_connect = threading.Event()
+
+    def slow_blocking_connection(_parameters):
+        connect_started.set()
+        assert release_connect.wait(timeout=2)
+        raise RuntimeError("connect aborted for test")
+
+    with (
+        patch(
+            "webex_connector.pika.BlockingConnection",
+            side_effect=slow_blocking_connection,
+        ),
+        patch.object(webex_connector, "disconnect_rabbitmq"),
+        patch.object(webex_connector, "start_cleanup_background_task"),
+    ):
+        worker = threading.Thread(target=webex_connector.listen_to_queue, daemon=True)
+        worker.start()
+
+        assert connect_started.wait(timeout=1)
+        webex_connector._handle_shutdown_signal(signal.SIGTERM, None)
+
+        worker.join(timeout=1)
+        assert worker.is_alive() is False
+
+        release_connect.set()
+
+
 def test_issue_25_webex_shutdown_waits_without_default_timeout(webex_connector):
     message = {
         "personId": "person-1",

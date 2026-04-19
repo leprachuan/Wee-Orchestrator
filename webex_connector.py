@@ -447,14 +447,76 @@ class WebEXConnector:
                 connection_attempts=3,
                 retry_delay=2,
             )
-            self.rabbitmq_connection = pika.BlockingConnection(parameters)
-            self.rabbitmq_channel = self.rabbitmq_connection.channel()
+            result = {}
+            connected = threading.Event()
 
-            # Declare queue (durable)
-            self.rabbitmq_channel.queue_declare(
-                queue=self.config.config["rabbitmq_queue"], durable=True
+            def establish_connection():
+                connection = None
+                try:
+                    connection = pika.BlockingConnection(parameters)
+                    if self.shutdown_event.is_set():
+                        try:
+                            connection.close()
+                        except Exception:
+                            pass
+                        result["connected"] = False
+                        return
+
+                    channel = connection.channel()
+                    if self.shutdown_event.is_set():
+                        try:
+                            connection.close()
+                        except Exception:
+                            pass
+                        result["connected"] = False
+                        return
+
+                    # Declare queue (durable)
+                    channel.queue_declare(
+                        queue=self.config.config["rabbitmq_queue"], durable=True
+                    )
+                    channel.basic_qos(prefetch_count=1)
+
+                    if self.shutdown_event.is_set():
+                        try:
+                            connection.close()
+                        except Exception:
+                            pass
+                        result["connected"] = False
+                        return
+
+                    result["connection"] = connection
+                    result["channel"] = channel
+                    result["connected"] = True
+                except Exception as e:
+                    result["error"] = e
+                    result["connected"] = False
+                finally:
+                    connected.set()
+
+            worker = threading.Thread(
+                target=establish_connection,
+                name="webex-rabbitmq-connect",
+                daemon=True,
             )
-            self.rabbitmq_channel.basic_qos(prefetch_count=1)
+            worker.start()
+
+            while not connected.wait(timeout=0.1):
+                if self.shutdown_event.is_set():
+                    print(
+                        "[INFO] RabbitMQ connection attempt interrupted by shutdown",
+                        file=sys.stderr,
+                    )
+                    return False
+
+            if result.get("connected"):
+                self.rabbitmq_connection = result["connection"]
+                self.rabbitmq_channel = result["channel"]
+            else:
+                error = result.get("error")
+                if error:
+                    print(f"❌ Error connecting to RabbitMQ: {error}", file=sys.stderr)
+                return False
 
             ssl_info = " (SSL/TLS enabled)" if use_ssl else ""
             print(
