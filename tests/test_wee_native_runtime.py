@@ -43,6 +43,7 @@ def _make_mgr():
         }
     }
     mgr._stream_buffers = {}
+    mgr.session_map_file = Path("/tmp/wee_test_session_map.json")
     return mgr
 
 
@@ -67,7 +68,9 @@ def _run_wee_native_test(mgr, test_session, model="ollama/gemma4:e4b", **kwargs)
     })
     with patch.object(mgr, "get_or_create_session_data", return_value=session_data):
         with patch.object(mgr, "build_agent_context_prompt", return_value="You are a helpful assistant."):
-            return mgr.run_wee_native(**defaults)
+            with patch.object(mgr, "load_session_map", return_value=dict(mgr.session_map)):
+                with patch.object(mgr, "save_session_map"):
+                    return mgr.run_wee_native(**defaults)
 
 
 class TestWeeRuntimeRegistration(unittest.TestCase):
