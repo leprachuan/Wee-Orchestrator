@@ -80,6 +80,7 @@ def _create_test_manager():
     }
     mgr._stream_buffers = {}
     mgr.session_map_file = Path("/tmp/wee_test_session_map_107.json")
+    mgr.session_map_ttl = 30 * 86400
     return mgr
 
 
