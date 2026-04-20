@@ -1706,28 +1706,18 @@ class SessionManager:
         ],
     }
 
-    OPENROUTER_PROVIDER_PRIORITY = [
-        "OpenRouter - Anthropic",
-        "OpenRouter - OpenAI",
-        "OpenRouter - Google",
-        "OpenRouter - Meta Llama",
-        "OpenRouter - DeepSeek",
-        "OpenRouter - Qwen",
-    ]
-
-    OPENROUTER_PROVIDER_NAMES = {
-        "anthropic": "Anthropic",
-        "openai": "OpenAI",
-        "meta-llama": "Meta Llama",
-        "google": "Google",
-        "deepseek": "DeepSeek",
-        "qwen": "Qwen",
-        "microsoft": "Microsoft",
-        "mistral": "Mistral",
-        "perplexity": "Perplexity",
-        "fireworks": "Fireworks",
-        "together": "Together",
-        "replicate": "Replicate",
+    # Popular OpenRouter models — sorted first in dynamic discovery (Issue #142)
+    OPENROUTER_POPULAR_MODELS = {
+        "meta-llama/llama-4-scout",
+        "meta-llama/llama-4-maverick",
+        "google/gemma-3-27b-it:free",
+        "qwen/qwen3-32b:free",
+        "deepseek/deepseek-r1:free",
+        "microsoft/phi-4-reasoning-plus:free",
+        "anthropic/claude-sonnet-4",
+        "anthropic/claude-haiku-4",
+        "google/gemini-2.5-flash-preview",
+        "openai/gpt-4.1-mini",
     }
 
     def __init__(self, config_file: Optional[str] = None, app_env: str = "PROD"):
@@ -1818,10 +1808,8 @@ class SessionManager:
         self._env_codex_models = None
         self._env_devin_models = None
         self._env_cursor_models = None
-        self._env_wee_models = None  # Cache for dynamically-discovered wee models
-        self._openrouter_cache_ts = 0  # TTL timestamp for OpenRouter discovery cache
-        self._ollama_models_cache: list = []  # Live-discovered Ollama model names
-        self._ollama_cache_ts: float = 0  # TTL timestamp for Ollama discovery (60s)
+        self._env_wee_models = None
+        self._openrouter_cache_ts = 0.0
 
         # Load command timeout from environment
         self.command_timeout = get_command_timeout()
@@ -3976,139 +3964,133 @@ You can mention an agent in your prompt and it will auto-delegate:
 
         return self._static_models_to_dict(self.CURSOR_MODELS)
 
+    def fetch_wee_models(self) -> Dict:
+        """Return available wee models: live Ollama + live OpenRouter (Issue #142).
 
-    def _fetch_ollama_models_live(self) -> list:
-        """Query Ollama /api/tags and return list of model name strings (60s TTL cache).
-
-        Issue #124: Replace hardcoded 3-model list with live discovery from kubuntu.
-        Returns model names suitable for ollama/<name> ID format.
+        Resolution order:
+          1. WEE_MODELS_JSON env var (custom model list)
+          2. Live Ollama discovery + live OpenRouter discovery (300s TTL cache)
+          3. Static WEE_MODELS fallback
         """
         import time as _time
-        import urllib.request as _urllib_req
 
-        ollama_ttl = 60
-        if self._ollama_models_cache and _time.time() - self._ollama_cache_ts < ollama_ttl:
-            return self._ollama_models_cache
+        # Check for env var override first
+        env_models = os.getenv("WEE_MODELS_JSON")
+        if env_models:
+            try:
+                models_dict = json.loads(env_models)
+                normalized = {}
+                for cat, entries in models_dict.items():
+                    normalized[cat] = [
+                        tuple(e) if isinstance(e, list) else e for e in entries
+                    ]
+                self._env_wee_models = normalized
+                return self._static_models_to_dict(normalized)
+            except (json.JSONDecodeError, ValueError):
+                pass
 
-        ollama_url = os.environ.get("WEE_OLLAMA_HOST", "http://192.168.1.101:11434") + "/api/tags"
-        try:
-            req = _urllib_req.Request(ollama_url)
-            resp = _urllib_req.urlopen(req, timeout=5)
-            data = json.loads(resp.read())
-            names = [m["name"] for m in data.get("models", []) if m.get("name")]
-            self._ollama_models_cache = names
-            self._ollama_cache_ts = _time.time()
-            print(
-                f"[wee] Ollama: discovered {len(names)} models from {ollama_url}",
-                file=sys.stderr,
-            )
-            return names
-        except Exception as e:
-            print(f"[wee] Ollama discovery failed ({ollama_url}): {e}", file=sys.stderr)
-            # Return cached data even if stale, or empty list
-            return self._ollama_models_cache or []
+        cache_ttl = 300  # 5 minutes
 
-    def fetch_wee_models(self) -> Dict:
-        """Return available wee models: local Ollama (live) + OpenRouter cloud models.
-
-        Issue #124: Ollama models are fetched live from kubuntu (60s TTL cache).
-        OpenRouter models are fetched live and cached for 300s.
-        Falls back to the static WEE_MODELS list on any error.
-        """
-        _OLLAMA_BASE = "http://192.168.1.101:11434"
-        _OPENROUTER_MODELS = [
-            "openrouter/meta-llama/llama-4-scout",
-            "openrouter/meta-llama/llama-4-maverick",
-            "openrouter/anthropic/claude-3.5-haiku",
-            "openrouter/google/gemini-2.5-flash",
-            "openrouter/mistralai/mistral-small-2603",
-            "openrouter/qwen/qwen-2.5-72b-instruct",
-        ]
-        _OLLAMA_FALLBACK = [
-            "ollama/gemma4:e4b",
-            "ollama/gemma4:latest",
-            "ollama/qwen3.5:latest",
-        ]
-
-        or_cache_ttl = 300  # 5 minutes for OpenRouter
-
-        # Return cache if still valid (OpenRouter cache governs full refresh)
+        # Return cached result if still valid
         if (
             self._env_wee_models is not None
-            and _time.time() - self._openrouter_cache_ts < or_cache_ttl
+            and _time.time() - self._openrouter_cache_ts < cache_ttl
         ):
-            # Even when OR cache is valid, refresh Ollama section if its 60s TTL expired
-            ollama_names = self._fetch_ollama_models_live()
-            if ollama_names:
-                _static_ollama = {
-                    mid: (desc, aliases)
-                    for mid, desc, aliases in self.WEE_MODELS.get("Wee Native (Ollama)", [])
-                }
-                ollama_entries = []
-                for name in ollama_names:
-                    oid = f"ollama/{name}"
-                    if oid in _static_ollama:
-                        desc, aliases = _static_ollama[oid]
-                    else:
-                        desc, aliases = f"Ollama {name} (local)", []
-                    ollama_entries.append((oid, desc, aliases))
-                self._env_wee_models["Wee Native (Ollama)"] = ollama_entries
             return self._static_models_to_dict(self._env_wee_models)
 
-        # Build fresh result: live Ollama + static OpenRouter stubs as fallback
-        result = {}
-
-        # Issue #124: Live Ollama discovery replaces hardcoded 3-model list
-        ollama_names = self._fetch_ollama_models_live()
-        if ollama_names:
-            # Build lookup from static WEE_MODELS to preserve curated descriptions
-            _static_ollama = {
-                mid: (desc, aliases)
-                for mid, desc, aliases in self.WEE_MODELS.get("Wee Native (Ollama)", [])
-            }
-            ollama_entries = []
-            for name in ollama_names:
-                oid = f"ollama/{name}"
-                if oid in _static_ollama:
-                    desc, aliases = _static_ollama[oid]
-                else:
-                    desc, aliases = f"Ollama {name} (local)", []
-                ollama_entries.append((oid, desc, aliases))
-            result["Wee Native (Ollama)"] = ollama_entries
-        else:
-            # Fall back to static Ollama entries if discovery fails
-            result["Wee Native (Ollama)"] = list(
-                self.WEE_MODELS.get("Wee Native (Ollama)", [])
-            )
-
-        # Copy static OpenRouter entries as initial values (overwritten below if live succeeds)
+        # Start with static model lists as fallback
+        result = {"Ollama Models": [], "OpenRouter Models": []}
         for cat, entries in self.WEE_MODELS.items():
-            if "Ollama" not in cat:
-                result[cat] = list(entries)
+            result[cat] = list(entries)
 
-        # Try live OpenRouter discovery
+        # Live Ollama discovery (Issue #142: return all installed models)
         try:
-            import urllib.request as _urlreq
-            import json as _json
-            req = _urlreq.Request(
-                f"{_OLLAMA_BASE}/api/tags",
-                headers={"Accept": "application/json"},
+            import httpx
+            resp = httpx.get(
+                "http://192.168.1.101:11434/api/tags",
+                timeout=httpx.Timeout(connect=5.0, read=10.0, write=10.0, pool=10.0),
             )
-            with _urlreq.urlopen(req, timeout=5) as resp:
-                data = _json.loads(resp.read().decode())
-            for m in data.get("models", []):
-                name = m.get("name", "")
-                if name:
-                    ollama_models.append(f"ollama/{name}")
-        except Exception as e:
-            print(
-                "[wee] OpenRouter discovery failed: %s — using live Ollama + static OR list" % e,
-                file=sys.stderr,
-            )
-            # Return result with live Ollama (already populated) + static OpenRouter fallback
-            self._env_wee_models = result
-            self._openrouter_cache_ts = _time.time()
-            return self._static_models_to_dict(result)
+            if resp.status_code == 200:
+                tags = resp.json().get("models", [])
+                static_ollama = {e[0]: e for e in self.WEE_MODELS.get("Ollama Models", [])}
+                merged_ollama = []
+                discovered_ids = set()
+                for t in tags:
+                    or_id = "ollama/" + t["name"]
+                    if or_id in static_ollama:
+                        merged_ollama.append(static_ollama[or_id])
+                    else:
+                        merged_ollama.append((or_id, t["name"], []))
+                    discovered_ids.add(or_id)
+                # Add static models not found in live discovery (preserves aliases)
+                for entry in self.WEE_MODELS.get("Ollama Models", []):
+                    if entry[0] not in discovered_ids:
+                        merged_ollama.append(entry)
+                if merged_ollama:
+                    result["Ollama Models"] = merged_ollama
+                    print(
+                        "[wee] Ollama: discovered %d models" % len(tags),
+                        file=sys.stderr,
+                    )
+        except Exception as ollama_err:
+            print("[wee] Ollama discovery failed: %s" % ollama_err, file=sys.stderr)
+
+        # Live OpenRouter discovery — show ALL available models (Issue #142)
+        try:
+            api_key = None
+            try:
+                import keyring
+                api_key = keyring.get_password("openrouter", "api_key")
+            except Exception:
+                pass
+            if not api_key:
+                api_key = os.getenv("OPENROUTER_API_KEY")
+
+            if api_key:
+                import urllib.request
+                req = urllib.request.Request(
+                    "https://openrouter.ai/api/v1/models",
+                    headers={"Authorization": "Bearer " + api_key},
+                )
+                resp = urllib.request.urlopen(req, timeout=10)
+                data = json.loads(resp.read())
+                all_models = data.get("data", [])
+
+                popular = self.OPENROUTER_POPULAR_MODELS
+                static_aliases = {e[0]: e[2] for e in self.WEE_MODELS.get("OpenRouter Models", [])}
+                discovered_popular = []
+                discovered_rest = []
+                for m in all_models:
+                    mid = m.get("id", "")
+                    if not mid:
+                        continue
+                    name = m.get("name", mid)
+                    or_id = "openrouter/" + mid
+                    aliases = static_aliases.get(or_id, [])
+                    entry = (or_id, name, aliases)
+                    if mid in popular:
+                        discovered_popular.append(entry)
+                    else:
+                        discovered_rest.append(entry)
+                discovered_popular.sort(key=lambda t: t[1])
+                discovered_rest.sort(key=lambda t: t[1])
+                merged_or = discovered_popular + discovered_rest
+                if merged_or:
+                    result["OpenRouter Models"] = merged_or
+                print(
+                    "[wee] OpenRouter: discovered %d models (%d popular + %d other)"
+                    % (len(merged_or), len(discovered_popular), len(discovered_rest)),
+                    file=sys.stderr,
+                )
+            else:
+                print("[wee] OpenRouter: no API key, using static list", file=sys.stderr)
+
+        except Exception as or_err:
+            print("[wee] OpenRouter discovery failed: %s" % or_err, file=sys.stderr)
+
+        self._env_wee_models = result
+        self._openrouter_cache_ts = _time.time()
+        return self._static_models_to_dict(result)
 
     def get_models_for_runtime(self, runtime: str) -> Dict:
         """Fetch available models for a runtime, using CLI discovery where possible.
@@ -4755,6 +4737,17 @@ You can mention an agent in your prompt and it will auto-delegate:
 
         # Substring matching with shortest-match preference
         matches = [m for m in all_models if name_lower in m.lower()]
+        
+        # Issue #142 B01: For wee runtime, exclude multi-namespace models from substring
+        # matching (e.g., "openrouter/openai/gpt-5-mini" has 2+ slashes = multi-namespace)
+        if runtime == "wee" and matches:
+            single_ns = [m for m in matches if m.count("/") == 1]
+            # If multi-namespace models exist, don't use any substring matches for wee
+            has_multi_ns = any(m.count("/") >= 2 for m in matches)
+            if has_multi_ns:
+                # Don't use substring matching when multi-namespace models are present
+                matches = single_ns if single_ns else []
+        
         if len(matches) == 1:
             return matches[0]
         if matches:
@@ -6440,9 +6433,13 @@ User Request:
                                         msg = obj.get("message") or {}
                                         for block in msg.get("content") or []:
                                             if block.get("type") == "tool_result":
+                                                _tr_content = block.get("content", "")
+                                                if isinstance(_tr_content, list):
+                                                    _tr_content = " ".join(b.get("text", str(b)) if isinstance(b, dict) else str(b) for b in _tr_content)
                                                 tc_event = {
                                                     "event": "result",
                                                     "id": block.get("tool_use_id", ""),
+                                                    "output": str(_tr_content)[:2000],
                                                     "is_error": block.get(
                                                         "is_error", False
                                                     ),
@@ -6529,7 +6526,7 @@ User Request:
                                                 "status": _gobj.get(
                                                     "status", "completed"
                                                 ),
-                                                "output": _gobj.get("output", "")[:500],
+                                                "output": _gobj.get("output", "")[:2000],
                                             }
                                             if stream_buffer:
                                                 stream_buffer.push(
@@ -7246,16 +7243,14 @@ User Request:
                     elif event.type == SessionEventType.TOOL_EXECUTION_COMPLETE:
                         tool_name = "tool"
                         if hasattr(event, "data"):
-                            tool_name = (
-                                getattr(event.data, "name", None)
-                                or getattr(event.data, "tool_name", None)
-                                or "tool"
-                            )
+                            tool_name = getattr(event.data, "name", None) or getattr(event.data, "tool_name", None) or "tool"
+                        tool_output = str(getattr(event.data, "output", "") or getattr(event.data, "result", "") or getattr(event.data, "content", "") or "")[:2000] if hasattr(event, "data") else ""
                         tc_evt = {
                             "event": "completed",
                             "id": f"tc_copilot-sdk_{_tool_call_counter[0]}",
                             "name": str(tool_name),
                             "input": "",
+                            "output": tool_output,
                             "runtime": "copilot-sdk",
                             "timestamp": time.strftime(
                                 "%Y-%m-%dT%H:%M:%SZ", time.gmtime()
@@ -7542,16 +7537,16 @@ User Request:
                                 if stream_buffer:
                                     stream_buffer.push("tool_call", tc_evt)
                             elif isinstance(block, ToolResultBlock):
+                                _block_content = block.content
+                                if isinstance(_block_content, list):
+                                    _block_content = " ".join(getattr(b, "text", str(b)) for b in _block_content)
                                 tc_evt = {
                                     "event": "completed",
                                     "id": block.tool_use_id
                                     or f"tc_claude-sdk_{_tool_call_counter[0]}",
                                     "name": "tool",
-                                    "input": (
-                                        str(block.content)[:200]
-                                        if block.content
-                                        else ""
-                                    ),
+                                    "input": "",
+                                    "output": str(_block_content)[:2000] if _block_content else "",
                                     "is_error": getattr(block, "is_error", False),
                                     "runtime": "claude-sdk",
                                     "timestamp": time.strftime(
@@ -8328,23 +8323,12 @@ User Request:
             print(f'[TokenUsage] Could not fetch OpenRouter pricing: {e}', file=sys.stderr)
             return {}
 
-    def _calculate_wee_cost(
-        self, model: str, prompt_tokens: int, completion_tokens: int, pricing: dict
-    ):
-        """Calculate cost and label for wee runtime (Ollama/OpenRouter)."""
-        model_lower = model.lower()
-        if model_lower.startswith('ollama/') or '192.168' in model_lower:
-            return 0.0, 'local'
-        bare_model = model
-        for prefix in ('openrouter/', 'lmstudio/', 'wee/'):
-            if model_lower.startswith(prefix):
-                bare_model = model[len(prefix):]
-                break
-        if bare_model not in pricing:
-            return 0.0, 'free'
-        p = pricing[bare_model]
-        cost = (prompt_tokens * p['prompt']) + (completion_tokens * p['completion'])
-        return cost, self._get_cost_label(cost)
+        session_data = self.get_or_create_session_data(n8n_session_id)
+        # Issue #142: Retrieve background task ID for tool call tracking in Tasks panel
+        bg_task_id = session_data.get("bg_task_id")
+        agent_dir = self.AGENTS.get(agent, self.AGENTS["orchestrator"])["path"]
+        effective_timeout = timeout if timeout is not None else self.command_timeout
+        channel = session_data.get("channel", "webui")
 
     def _calculate_anthropic_cost(self, model: str, prompt_tokens: int, completion_tokens: int):
         """Calculate cost for Anthropic / claude-sdk models."""
@@ -8599,9 +8583,141 @@ User Request:
                 if stream_buffer:
                     stream_buffer.push("chunk", {"text": _fb_msg})
 
-            api_base, api_key, resolved_model = self._wee_resolve_endpoint(
-                _attempt_model, _sess_api_base, _sess_api_key
-            )
+                # Build assistant message with tool_calls for conversation history
+                assistant_tool_calls = []
+                for idx in sorted(tool_calls_acc.keys()):
+                    tc = tool_calls_acc[idx]
+                    assistant_tool_calls.append({
+                        "id": tc["id"],
+                        "type": "function",
+                        "function": {
+                            "name": tc["name"],
+                            "arguments": tc["arguments"],
+                        },
+                    })
+
+                assistant_msg = {
+                    "role": "assistant",
+                    "content": content_text or None,
+                    "tool_calls": assistant_tool_calls,
+                }
+                messages.append(assistant_msg)
+
+                # Execute each tool call and emit SSE events (Issue #109)
+                for tc_entry in assistant_tool_calls:
+                    tc_id = tc_entry["id"]
+                    func_name = tc_entry["function"]["name"]
+                    func_args_str = tc_entry["function"]["arguments"]
+
+                    # Parse arguments
+                    try:
+                        func_args = _json.loads(func_args_str)
+                    except (ValueError, _json.JSONDecodeError):
+                        func_args = {"raw": func_args_str}
+
+                    # Issue #109 / #142: Emit tool start event to SSE stream
+                    tc_start_event = {
+                        "id": tc_id,
+                        "name": func_name,
+                        "event": "detected",
+                        "input": func_args,
+                        "status": "running",
+                    }
+                    if stream_buffer:
+                        stream_buffer.push("tool_call", tc_start_event)
+
+                    # Issue #142: Track tool call in bg_task_mgr for Tasks panel
+                    if bg_task_id and self._bg_task_mgr:
+                        self._bg_task_mgr.append_tool_call(bg_task_id, {
+                            "id": tc_id,
+                            "name": func_name,
+                            "input": _json.dumps(func_args) if isinstance(func_args, dict) else str(func_args),
+                            "status": "running",
+                            "runtime": "wee",
+                            "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                        })
+
+                    print(
+                        f"[Wee Native] Tool: {func_name}({_json.dumps(func_args)[:200]})",
+                        file=sys.stderr,
+                    )
+
+                    # Execute the tool
+                    tool_result = self._wee_execute_tool(func_name, func_args, agent)
+
+                    # Issue #109 / #142: Emit tool complete event to SSE stream
+                    tc_done_event = {
+                        "id": tc_id,
+                        "name": func_name,
+                        "event": "result",
+                        "input": func_args,
+                        "output": tool_result[:2000] if tool_result else "",
+                        "status": "complete",
+                    }
+                    if stream_buffer:
+                        stream_buffer.push("tool_call", tc_done_event)
+
+                    # Issue #142: Update tool call completion in bg_task_mgr
+                    if bg_task_id and self._bg_task_mgr:
+                        self._bg_task_mgr.update_tool_call(
+                            bg_task_id,
+                            tc_id,
+                            status="completed",
+                            output=str(tool_result[:500]) if tool_result else "",
+                        )
+
+                    # Append tool result to conversation for next round
+                    messages.append({
+                        "role": "tool",
+                        "tool_call_id": tc_id,
+                        "content": tool_result or "No output",
+                    })
+
+            else:
+                # All MAX_TOOL_ROUNDS had tool calls with no final text
+                last_tool_results = [m["content"] for m in messages if m.get("role") == "tool"]
+                if last_tool_results:
+                    collected_output.append(
+                        "Tool execution completed. Last result:\n" + last_tool_results[-1][:2000]
+                    )
+                else:
+                    collected_output.append("Max tool rounds reached without final response.")
+
+            output = "".join(collected_output)
+
+            # Issue #112: Fallback when LLM generates empty synthesis after tool execution.
+            # Some models (e.g. qwen3:8b) return zero text tokens after processing
+            # tool results, yielding output=''. Surface the last tool result instead.
+            if not output.strip():
+                tool_results = [
+                    m["content"] for m in messages
+                    if m.get("role") == "tool" and m.get("content")
+                ]
+                if tool_results:
+                    last_result = tool_results[-1]
+                    output = f"Tool execution result:\n{last_result[:4000]}"
+                    print(
+                        f"[Wee Native] Empty synthesis fallback: surfacing last tool result ({len(last_result)} chars)",
+                        file=sys.stderr,
+                    )
+                    if stream_buffer:
+                        stream_buffer.push("chunk", {"text": output})
+                elif any(m.get("role") == "tool" for m in messages):
+                    output = "(Tool executed but produced no output)"
+                    print(
+                        "[Wee Native] Empty synthesis fallback: tool produced no output",
+                        file=sys.stderr,
+                    )
+                    if stream_buffer:
+                        stream_buffer.push("chunk", {"text": output})
+
+            # Issue #108: Persist conversation history
+            self._wee_save_messages(n8n_session_id, messages)
+
+            # Push done sentinel
+            if stream_buffer:
+                stream_buffer.push("done", output)
+
             print(
                 "[Wee Native] model=" + resolved_model + " api_base=" + api_base
                 + " session=" + n8n_session_id[:8] + "..."
@@ -9257,6 +9373,8 @@ User Request:
         # Background tasks run unattended — grant elevated permissions so
         # SDK runtimes (copilot-sdk, claude-sdk) don't block on approval gates
         self.update_session_field(session_id, "permissions", {"mode": "elevated"})
+        # Issue #142: Store task_id so run_wee_native can track tool calls
+        self.update_session_field(session_id, "bg_task_id", task_id)
         if timeout is not None:
             self.update_session_field(session_id, "timeout", timeout)
         try:
@@ -10441,7 +10559,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                         session_mgr._get_model_description(model_id, runtime)
                         or model_id
                     )
-                    models.append({"id": model_id, "label": label, "group": group_name})
+                    models.append({"id": model_id, "label": label, "group": _group})
             return {"runtime": runtime, "models": models}
         except Exception as e:
             return {"runtime": runtime, "models": [], "error": str(e)}
@@ -12433,8 +12551,36 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             start_time = time.time()
 
             for line in process.stdout:
-                stdout_lines.append(line)
                 line_text = line.rstrip("\n\r")
+
+                # Issue #142: Handle wee runtime structured tool call events
+                # These JSON lines are for tool tracking only — skip them from output
+                if runtime == "wee" and line_text.strip().startswith('{"__wee_tc__"'):
+                    try:
+                        _wee_tc = _json.loads(line_text.strip())
+                        if _wee_tc.get("__wee_tc__") == "start":
+                            _tool_call_counter += 1
+                            _tc_input = _wee_tc.get("input", {})
+                            bg_task_mgr.append_tool_call(task_id, {
+                                "id": _wee_tc.get("id", f"bg_{task_id[:8]}_{_tool_call_counter}"),
+                                "name": _wee_tc.get("name", "tool"),
+                                "input": _json.dumps(_tc_input) if isinstance(_tc_input, dict) else str(_tc_input),
+                                "status": "running",
+                                "runtime": "wee",
+                                "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                            })
+                        elif _wee_tc.get("__wee_tc__") == "done":
+                            bg_task_mgr.update_tool_call(
+                                task_id,
+                                _wee_tc.get("id", ""),
+                                status="completed",
+                                output=str(_wee_tc.get("output", ""))[:500],
+                            )
+                    except (ValueError, KeyError, TypeError):
+                        pass
+                    continue  # Don't include tool-tracking JSON in output
+
+                stdout_lines.append(line)
 
                 # Append to output_lines for live log viewing
                 if line_text:

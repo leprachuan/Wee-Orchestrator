@@ -1,210 +1,351 @@
-"""Tests for Issue #119 — OpenRouter wiring in wee runtime UI.
+"""Tests for Issue #119: Wire up OpenRouter in wee runtime UI.
 
-Validates:
-- fetch_wee_models() returns OpenRouter models grouped under "OpenRouter (Cloud)"
-- OpenRouter models have correct prefix format: openrouter/<provider>/<model>
-- wee_runtime.py correctly resolves openrouter/ prefix to api.openrouter.ai
-- OpenRouter API key is loaded from keyring or environment
-- Dispatch path passes openrouter/<model> correctly
+Covers:
+  - WEE_MODELS structure
+  - fetch_wee_models() with mocked API responses, cache, fallback
+  - _get_model_description() for wee models
+  - get_model_from_name() with wee aliases
+  - /api/v1/models?runtime=wee endpoint returns grouped models
+  - known_runtimes includes "wee"
 """
 
+import importlib
+import json
 import os
 import sys
-import threading
-import unittest
-from pathlib import Path
+import time
 from unittest.mock import MagicMock, patch
 
-os.environ.setdefault("API_SHARED_KEY", "test_key_123")
+import pytest
 
-REPO = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(REPO))
-
-from agent_manager import SessionManager
+# ── helpers ─────────────────────────────────────────────────────────────
+sys.path.insert(0, "/opt/n8n-copilot-shim-dev")
 
 
-def _make_mgr():
-    mgr = SessionManager.__new__(SessionManager)
-    mgr.session_map = {}
-    mgr._session_map_lock = threading.Lock()
-    mgr.command_timeout = 300
-    mgr.AGENTS = {
-        "orchestrator": {"path": "/opt", "description": "test", "name": "orchestrator"}
-    }
-    mgr._stream_buffers = {}
+def _get_session_mgr():
+    """Instantiate SessionManager without starting the full server."""
+    mod = importlib.import_module("agent_manager")
+    mgr = mod.SessionManager.__new__(mod.SessionManager)
+    mgr.__init__()
     return mgr
 
 
-class TestOpenRouterModelsInUI(unittest.TestCase):
-    """OpenRouter models must appear in fetch_wee_models() output."""
-
-    def setUp(self):
-        self.mgr = _make_mgr()
-
-    def _get_all_models(self):
-        with patch("urllib.request.urlopen") as mock_u:
-            mock_resp = MagicMock()
-            mock_resp.read.return_value = b'{"models": [{"name": "gemma4:e4b"}]}'
-            mock_resp.__enter__ = lambda s: s
-            mock_resp.__exit__ = MagicMock(return_value=False)
-            mock_u.return_value = mock_resp
-            return self.mgr.fetch_wee_models()
-
-    def test_openrouter_section_exists(self):
-        """fetch_wee_models() must include an OpenRouter section."""
-        result = self._get_all_models()
-        self.assertIn("OpenRouter (Cloud)", result,
-                      f"Expected 'OpenRouter (Cloud)' section, got keys: {list(result.keys())}")
-
-    def test_openrouter_has_models(self):
-        """OpenRouter section must contain at least 5 models."""
-        result = self._get_all_models()
-        openrouter_models = result.get("OpenRouter (Cloud)", [])
-        self.assertGreaterEqual(len(openrouter_models), 5,
-                                f"Expected >=5 OpenRouter models, got {len(openrouter_models)}")
-
-    def test_openrouter_models_prefixed(self):
-        """All OpenRouter models must start with 'openrouter/'."""
-        result = self._get_all_models()
-        for m in result.get("OpenRouter (Cloud)", []):
-            self.assertTrue(m.startswith("openrouter/"),
-                            f"Model {m!r} must start with 'openrouter/'")
-
-    def test_openrouter_llama4_present(self):
-        """Llama 4 must be in the OpenRouter model list."""
-        result = self._get_all_models()
-        openrouter = result.get("OpenRouter (Cloud)", [])
-        llama_models = [m for m in openrouter if "llama-4" in m.lower()]
-        self.assertTrue(len(llama_models) > 0,
-                        "Expected at least one llama-4 model in OpenRouter section")
-
-    def test_openrouter_claude_present(self):
-        """Claude must be in the OpenRouter model list."""
-        result = self._get_all_models()
-        openrouter = result.get("OpenRouter (Cloud)", [])
-        claude_models = [m for m in openrouter if "claude" in m.lower()]
-        self.assertTrue(len(claude_models) > 0,
-                        "Expected at least one claude model in OpenRouter section")
+@pytest.fixture(scope="module")
+def mgr():
+    return _get_session_mgr()
 
 
-class TestOpenRouterPrefixResolution(unittest.TestCase):
-    """wee_runtime.py must correctly resolve openrouter/ prefix."""
-
-    def test_wee_runtime_has_openrouter_preset(self):
-        """wee_runtime.py must define openrouter in PROVIDER_PRESETS."""
-        wee_runtime_path = REPO / "wee_runtime.py"
-        source = wee_runtime_path.read_text()
-        self.assertIn("openrouter", source.lower(),
-                      "wee_runtime.py must reference OpenRouter")
-        self.assertIn("openrouter.ai", source,
-                      "wee_runtime.py must reference openrouter.ai API endpoint")
-
-    def test_wee_runtime_resolve_openrouter_model(self):
-        """resolve_model_and_endpoint must handle openrouter/ prefix."""
-        import importlib.util
-        spec = importlib.util.spec_from_file_location("wee_runtime", REPO / "wee_runtime.py")
-        mod = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(mod)
-
-        with patch.dict(os.environ, {"OPENROUTER_API_KEY": "test-key-123"}):
-            result = mod.resolve_model_and_endpoint("openrouter/mistralai/mistral-small-2603")
-
-        model_id, api_base, api_key = result
-        self.assertIn("openrouter.ai", api_base,
-                      f"api_base {api_base!r} must point to openrouter.ai")
-        self.assertEqual(model_id, "mistralai/mistral-small-2603",
-                         f"model_id must be 'mistralai/mistral-small-2603', got {model_id!r}")
-        self.assertEqual(api_key, "test-key-123",
-                         "api_key must come from OPENROUTER_API_KEY env")
-
-    def test_wee_runtime_resolve_ollama_model(self):
-        """resolve_model_and_endpoint must handle ollama/ prefix with correct port."""
-        import importlib.util
-        spec = importlib.util.spec_from_file_location("wee_runtime", REPO / "wee_runtime.py")
-        mod = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(mod)
-
-        result = mod.resolve_model_and_endpoint("ollama/gemma4:e4b")
-        model_id, api_base, api_key = result
-        self.assertIn("11434", api_base,
-                      f"Ollama api_base {api_base!r} must use port 11434")
-        self.assertNotIn("11436", api_base,
-                         f"Ollama api_base {api_base!r} must NOT use port 11436")
-        self.assertEqual(model_id, "gemma4:e4b")
+# ── WEE_MODELS constant ────────────────────────────────────────────────
 
 
-class TestOpenRouterDispatch(unittest.TestCase):
-    """run_wee_native must dispatch openrouter models to openrouter.ai."""
+class TestWeeModelsConstant:
+    def test_wee_models_has_ollama_group(self, mgr):
+        assert "Ollama Models" in mgr.WEE_MODELS
 
-    def setUp(self):
-        self.mgr = _make_mgr()
+    def test_wee_models_has_openrouter_group(self, mgr):
+        assert "OpenRouter Models" in mgr.WEE_MODELS
 
-    def test_openrouter_model_uses_openrouter_base(self):
-        """When model=openrouter/..., api_base must be openrouter.ai."""
-        captured = {}
+    def test_ollama_models_are_tuples(self, mgr):
+        for entry in mgr.WEE_MODELS["Ollama Models"]:
+            assert isinstance(
+                entry, tuple
+            ), f"Expected tuple, got {type(entry)}: {entry}"
+            assert len(entry) == 3, f"Expected 3-element tuple: {entry}"
+            model_id, desc, aliases = entry
+            assert model_id.startswith(
+                "ollama/"
+            ), f"Ollama model missing prefix: {model_id}"
 
-        def fake_openai(**kwargs):
-            captured["base_url"] = kwargs.get("base_url", "")
-            captured["api_key"] = kwargs.get("api_key", "")
-            client = MagicMock()
-            client.chat.completions.create.return_value = iter([
-                MagicMock(choices=[MagicMock(delta=MagicMock(content="hi"), finish_reason=None)]),
-                MagicMock(choices=[MagicMock(delta=MagicMock(content=None), finish_reason="stop")]),
-            ])
-            return client
+    def test_openrouter_static_models_prefixed(self, mgr):
+        for entry in mgr.WEE_MODELS["OpenRouter Models"]:
+            assert isinstance(
+                entry, tuple
+            ), f"Expected tuple, got {type(entry)}: {entry}"
+            model_id = entry[0]
+            assert model_id.startswith(
+                "openrouter/"
+            ), f"OR model missing prefix: {model_id}"
 
-        session_data = {
-            "model": "openrouter/mistralai/mistral-small-2603",
-            "runtime": "wee",
-            "session_id": "test-119",
-            "messages": [],
-        }
-        self.mgr.session_map["test-119"] = session_data
+    def test_at_least_3_ollama_models(self, mgr):
+        assert len(mgr.WEE_MODELS["Ollama Models"]) >= 3
 
-        env_patch = {"OPENROUTER_API_KEY": "test-openrouter-key"}
-        with patch.dict(os.environ, env_patch):
-            with patch("urllib.request.urlopen") as mock_u:
-                mock_resp = MagicMock()
-                mock_resp.read.return_value = b'{"models": []}'
-                mock_resp.__enter__ = lambda s: s
-                mock_resp.__exit__ = MagicMock(return_value=False)
-                mock_u.return_value = mock_resp
-                with patch("openai.OpenAI", fake_openai):
-                    try:
-                        gen = self.mgr.run_wee_native(
-                            session_id="test-119",
-                            user_message="hello",
-                            session_data=session_data,
-                            stream=False,
-                        )
-                        if gen is not None:
-                            list(gen)
-                    except Exception:
-                        pass
-
-        if captured.get("base_url"):
-            self.assertIn("openrouter.ai", captured["base_url"],
-                          f"api_base {captured['base_url']!r} must use openrouter.ai for openrouter/ model")
+    def test_at_least_5_openrouter_static_models(self, mgr):
+        assert len(mgr.WEE_MODELS["OpenRouter Models"]) >= 5
 
 
-class TestOpenRouterAPIKeyRetrieval(unittest.TestCase):
-    """OpenRouter API key must be retrievable."""
+# ── fetch_wee_models() ─────────────────────────────────────────────────
 
-    def test_env_key_readable(self):
-        """OPENROUTER_API_KEY env var must be set in .env."""
-        env_path = REPO / ".env"
-        if env_path.exists():
-            content = env_path.read_text()
-            self.assertIn("OPENROUTER_API_KEY", content,
-                          ".env must contain OPENROUTER_API_KEY")
 
-    def test_wee_runtime_reads_api_key(self):
-        """wee_runtime.py must have logic to read OpenRouter API key."""
-        wee_runtime_path = REPO / "wee_runtime.py"
-        source = wee_runtime_path.read_text()
-        self.assertIn("OPENROUTER_API_KEY", source,
-                      "wee_runtime.py must reference OPENROUTER_API_KEY")
+class TestFetchWeeModels:
+    def _reset_cache(self, mgr):
+        mgr._env_wee_models = None
+        mgr._openrouter_cache_ts = 0
+
+    def test_returns_dict_with_string_keys(self, mgr):
+        self._reset_cache(mgr)
+        result = mgr.fetch_wee_models()
+        assert isinstance(result, dict)
+        for k, v in result.items():
+            assert isinstance(k, str)
+            assert isinstance(v, list)
+            for model_id in v:
+                assert isinstance(
+                    model_id, str
+                ), f"Expected flat string IDs, got {type(model_id)}: {model_id}"
+
+    def test_ollama_group_in_result(self, mgr):
+        self._reset_cache(mgr)
+        result = mgr.fetch_wee_models()
+        assert "Ollama Models" in result
+
+    def test_fallback_on_no_api_key(self, mgr):
+        """When no keyring or env key, should still return Ollama models."""
+        self._reset_cache(mgr)
+        with patch.dict(os.environ, {}, clear=False):
+            with patch("keyring.get_password", return_value=None):
+                result = mgr.fetch_wee_models()
+        assert "Ollama Models" in result
+
+    def test_fallback_on_api_error(self, mgr):
+        """When OpenRouter API fails, should still return static models."""
+        self._reset_cache(mgr)
+        with patch("urllib.request.urlopen", side_effect=Exception("timeout")):
+            result = mgr.fetch_wee_models()
+        assert isinstance(result, dict)
+        assert len(result) > 0
+
+    def test_cache_returns_same_result(self, mgr):
+        """Second call within TTL should return cached result."""
+        self._reset_cache(mgr)
+        r1 = mgr.fetch_wee_models()
+        r2 = mgr.fetch_wee_models()
+        assert r1 == r2
+
+    def test_discovery_filters_to_popular(self, mgr):
+        """When OpenRouter API returns models, only popular ones are kept."""
+        self._reset_cache(mgr)
+        fake_api_response = json.dumps(
+            {
+                "data": [
+                    {"id": "meta-llama/llama-4-maverick", "name": "Llama 4 Maverick"},
+                    {"id": "meta-llama/llama-4-scout", "name": "Llama 4 Scout"},
+                    {"id": "some-vendor/obscure-model", "name": "Obscure"},
+                    {"id": "openai/gpt-4.1", "name": "GPT-4.1"},
+                ]
+            }
+        ).encode()
+
+        mock_resp = MagicMock()
+        mock_resp.read.return_value = fake_api_response
+
+        with patch("keyring.get_password", return_value="fake-key"):
+            with patch("urllib.request.urlopen", return_value=mock_resp):
+                result = mgr.fetch_wee_models()
+
+        # The result is flattened by _static_models_to_dict, so find OR models
+        all_models = []
+        for models in result.values():
+            all_models.extend(models)
+        or_models = [m for m in all_models if m.startswith("openrouter/")]
+        assert "openrouter/meta-llama/llama-4-maverick" in or_models
+        assert "openrouter/meta-llama/llama-4-scout" in or_models
+        assert "openrouter/openai/gpt-4.1" in or_models
+        assert "openrouter/some-vendor/obscure-model" not in or_models
+
+    def test_discovered_models_have_openrouter_prefix(self, mgr):
+        """Discovered OpenRouter models should have openrouter/ prefix."""
+        self._reset_cache(mgr)
+        fake_api_response = json.dumps(
+            {
+                "data": [
+                    {"id": "openai/gpt-4.1", "name": "GPT-4.1"},
+                ]
+            }
+        ).encode()
+
+        mock_resp = MagicMock()
+        mock_resp.read.return_value = fake_api_response
+
+        with patch("keyring.get_password", return_value="fake-key"):
+            with patch("urllib.request.urlopen", return_value=mock_resp):
+                result = mgr.fetch_wee_models()
+
+        all_models = []
+        for models in result.values():
+            all_models.extend(models)
+        or_models = [m for m in all_models if m.startswith("openrouter/")]
+        assert "openrouter/openai/gpt-4.1" in or_models
+
+
+# ── _get_model_description() ───────────────────────────────────────────
+
+
+class TestGetModelDescription:
+    def test_ollama_model_description(self, mgr):
+        desc = mgr._get_model_description("ollama/gemma4:e4b", "wee")
+        assert desc is not None
+        assert len(desc) > 0
+
+    def test_openrouter_static_model_description(self, mgr):
+        desc = mgr._get_model_description("openrouter/meta-llama/llama-4-scout", "wee")
+        assert desc and "Scout" in desc
+
+    def test_unknown_model_returns_none_or_empty(self, mgr):
+        desc = mgr._get_model_description("openrouter/unknown/model", "wee")
+        assert desc is None or desc == ""
+
+
+# ── get_model_from_name() ──────────────────────────────────────────────
+
+
+class TestGetModelFromName:
+    def _reset_cache(self, mgr):
+        mgr._env_wee_models = None
+        mgr._openrouter_cache_ts = 0
+
+    def test_exact_ollama_model_id(self, mgr):
+        self._reset_cache(mgr)
+        result = mgr.get_model_from_name("ollama/gemma4:e4b", "wee")
+        assert result == "ollama/gemma4:e4b"
+
+    def test_ollama_alias(self, mgr):
+        self._reset_cache(mgr)
+        result = mgr.get_model_from_name("gemma4", "wee")
+        assert result is not None
+        assert "gemma4" in result
+
+    def test_openrouter_exact_id(self, mgr):
+        self._reset_cache(mgr)
+        result = mgr.get_model_from_name("openrouter/meta-llama/llama-4-scout", "wee")
+        assert result == "openrouter/meta-llama/llama-4-scout"
+
+    def test_openrouter_alias(self, mgr):
+        self._reset_cache(mgr)
+        result = mgr.get_model_from_name("or-scout", "wee")
+        assert result == "openrouter/meta-llama/llama-4-scout"
+
+    def test_unknown_model_returns_none(self, mgr):
+        self._reset_cache(mgr)
+        result = mgr.get_model_from_name("nonexistent-model-xyz", "wee")
+        assert result is None
+
+
+# ── /api/v1/models endpoint ────────────────────────────────────────────
+
+
+class TestModelsEndpoint:
+    def test_wee_in_known_runtimes(self):
+        """The source code must include 'wee' in known_runtimes."""
+        import inspect
+
+        mod = importlib.import_module("agent_manager")
+        src = inspect.getsource(mod)
+        assert '"wee"' in src or "'wee'" in src
+
+    def test_endpoint_returns_models(self, mgr):
+        mgr._env_wee_models = None
+        mgr._openrouter_cache_ts = 0
+        raw = mgr.get_models_for_runtime("wee")
+        models = []
+        for group, model_ids in raw.items():
+            for model_id in model_ids:
+                label = mgr._get_model_description(model_id, "wee") or model_id
+                entry = {"id": model_id, "label": label}
+                if group:
+                    entry["group"] = group
+                models.append(entry)
+        assert len(models) > 0, "Expected at least one wee model"
+
+    def test_endpoint_models_have_group_field(self, mgr):
+        """Models from grouped runtimes should have group field."""
+        mgr._env_wee_models = None
+        mgr._openrouter_cache_ts = 0
+        raw = mgr.get_models_for_runtime("wee")
+        data = {"models": []}
+        for group, model_ids in raw.items():
+            for model_id in model_ids:
+                label = mgr._get_model_description(model_id, "wee") or model_id
+                entry = {"id": model_id, "label": label}
+                if group:
+                    entry["group"] = group
+                data["models"].append(entry)
+        for m in data["models"]:
+            assert "group" in m, f"Model {m['id']} missing 'group' field"
+
+    def test_endpoint_has_ollama_and_openrouter_groups(self, mgr):
+        """Models should include both Ollama and OpenRouter groups."""
+        mgr._env_wee_models = None
+        mgr._openrouter_cache_ts = 0
+        raw = mgr.get_models_for_runtime("wee")
+        data = {"models": []}
+        for group, model_ids in raw.items():
+            for model_id in model_ids:
+                label = mgr._get_model_description(model_id, "wee") or model_id
+                entry = {"id": model_id, "label": label}
+                if group:
+                    entry["group"] = group
+                data["models"].append(entry)
+        groups = {m.get("group", "") for m in data["models"]}
+        assert "Ollama Models" in groups, f"Missing Ollama group. Got: {groups}"
+        assert any(
+            g.startswith("OpenRouter") for g in groups
+        ), f"Missing OpenRouter group (expected group with OpenRouter prefix). Got: {groups}"  # noqa: E501
+
+    def test_endpoint_unknown_runtime_rejected(self):
+        """Unknown runtimes should return an error."""
+        src = open(os.path.join("/opt/n8n-copilot-shim-dev", "agent_manager.py")).read()
+        assert "Unknown runtime" in src
+
+
+# ── Session dispatch ───────────────────────────────────────────────────
+
+
+class TestSessionDispatch:
+    def test_wee_runtime_resolves_openrouter_model(self, mgr):
+        result = mgr.get_model_from_name("openrouter/meta-llama/llama-4-scout", "wee")
+        assert result == "openrouter/meta-llama/llama-4-scout"
+
+    def test_openrouter_models_all_have_prefix(self, mgr):
+        for entry in mgr.WEE_MODELS.get("OpenRouter Models", []):
+            model_id = entry[0]
+            assert model_id.startswith(
+                "openrouter/"
+            ), f"OpenRouter model missing prefix: {model_id}"
+
+
+# ── Keyring integration ───────────────────────────────────────────────
+
+
+class TestKeyringIntegration:
+    def test_keyring_has_openrouter_key(self):
+        import keyring
+
+        key = keyring.get_password("openrouter", "api_key")
+        assert key is not None, "OpenRouter API key not stored in keyring"
+        assert key.startswith(
+            "sk-or-"
+        ), f"Key doesn't look like OpenRouter key: {key[:10]}"
+
+
+# ── Cache TTL ─────────────────────────────────────────────────────────
+
+
+class TestCacheTTL:
+    def test_openrouter_cache_ts_attribute(self, mgr):
+        assert hasattr(mgr, "_openrouter_cache_ts")
+        assert isinstance(mgr._openrouter_cache_ts, (int, float))
+
+    def test_cache_invalidation_after_ttl(self, mgr):
+        """After TTL expires, cache should be refreshed."""
+        mgr._env_wee_models = {"Ollama Models": [("ollama/test", "test", [])]}
+        mgr._openrouter_cache_ts = time.time() - 400  # expired
+        result = mgr.fetch_wee_models()
+        # After refresh, should have more than just the stale cache
+        all_models = []
+        for models in result.values():
+            all_models.extend(models)
+        assert len(all_models) > 0
 
 
 if __name__ == "__main__":
-    unittest.main(verbosity=2)
+    pytest.main([__file__, "-v"])

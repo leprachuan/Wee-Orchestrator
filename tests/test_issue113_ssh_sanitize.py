@@ -7,10 +7,10 @@ Tests cover:
 """
 
 import os
-import re
+
 import sys
 import unittest
-from unittest.mock import MagicMock, patch
+
 
 # ---------------------------------------------------------------------------
 # Standalone wee_runtime tests
@@ -18,7 +18,7 @@ from unittest.mock import MagicMock, patch
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from wee_runtime import (
+from wee_runtime import (  # noqa: E402
     _ANTI_HALLUCINATION_PROMPT,
     _SSH_BIN_RE,
     sanitize_bash_command,
@@ -157,7 +157,7 @@ class TestSessionManagerSanitize(unittest.TestCase):
             # Try to import just the class without starting the server
             import importlib
             import importlib.util
-            spec = importlib.util.spec_from_file_location(
+            spec = importlib.util.spec_from_file_location(  # noqa: F841
                 "agent_manager_mod",
                 "/opt/n8n-copilot-shim-dev/agent_manager.py",
                 submodule_search_locations=[],
@@ -221,11 +221,11 @@ class TestKnownHostsInfrastructure(unittest.TestCase):
         result = subprocess.run(
             ["ssh", "-o", "StrictHostKeyChecking=no", "-o", "BatchMode=yes",
              "root@192.168.1.100",
-             "ssh -o StrictHostKeyChecking=accept-new -o BatchMode=yes root@192.168.1.100 echo SSH_LOOPBACK_OK"],
+             "ssh -o StrictHostKeyChecking=accept-new -o BatchMode=yes root@192.168.1.100 echo SSH_LOOPBACK_OK"],  # noqa: E501
             capture_output=True, text=True, timeout=15,
         )
         self.assertIn("SSH_LOOPBACK_OK", result.stdout,
-                       f"Loopback SSH failed: {result.stderr}")
+                       f"Loopback SSH failed: {result.stderr}")  # noqa: E127
 
 
 if __name__ == "__main__":

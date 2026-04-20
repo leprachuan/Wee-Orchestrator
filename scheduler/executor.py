@@ -12,7 +12,6 @@ import json
 import logging
 import os
 import re
-import shlex
 import subprocess
 import sys
 import time
@@ -671,18 +670,6 @@ class TaskSchedulerExecutor:
                 logger.error(f"Job {job_id} failed with code {result.returncode}")
                 return None, error_msg
 
-        except ValueError as e:
-            error_str = str(e)
-            self._log_job(job_id, f"Invalid command: {error_str}")
-            self._save_result(job_id, job["name"], success=False, error=error_str)
-            logger.error(f"Job {job_id} (command mode) invalid command: {e}")
-
-            if notify:
-                self._notify_creator(
-                    job,
-                    _brief_notification("⚠️", job["name"], "error"),
-                )
-            return None
         except subprocess.TimeoutExpired:
             timeout_mins = timeout / 60
             error_msg = f"Execution timed out ({timeout_mins:.1f} minutes)"

@@ -1598,7 +1598,7 @@ async function sendMessageStreaming(query, sessionId) {
               if (_timingText) {
                 const timingDiv = document.createElement('div');
                 timingDiv.className = 'message-timing';
-                timingDiv.appendChild(_timingText);
+                timingDiv.innerHTML = _timingText;
                 streamBubble.appendChild(timingDiv);
               }
               streamBubble.appendChild(createTtsButton(streamBubble));
@@ -1988,12 +1988,8 @@ function buildTimingText(elapsedSec, weeMeta) {
       tooltip = `Input: ${pTokens.toLocaleString()} tokens\nOutput: ${cTokens.toLocaleString()} tokens\nTotal: ${tokenStr} tokens`;
       if (costLabel && costLabel.startsWith('$')) tooltip += `\nEst. cost: ${costLabel}`;
     }
-    if (base) frag.appendChild(document.createTextNode(`⏱️ ${base} · `));
-    const span = document.createElement('span');
-    span.setAttribute('title', tooltip);
-    span.textContent = `${tokenStr} tokens${costStr}`;
-    frag.appendChild(span);
-    return frag;
+    const span = `<span title="${tooltip}">${tokenStr} tokens${costStr}</span>`;
+    return base ? `⏱️ ${base} · ${span}` : span;
   }
   if (base) frag.appendChild(document.createTextNode(`⏱️ ${base}`));
   return frag.childNodes.length ? frag : null;
@@ -2060,7 +2056,7 @@ async function renderMessage(role, content, files = [], timing = null, weeMeta =
     if (_rmTimingText) {
       const timingDiv = document.createElement('div');
       timingDiv.className = 'message-timing';
-      timingDiv.appendChild(_rmTimingText);
+      timingDiv.innerHTML = _rmTimingText;
       bubble.appendChild(timingDiv);
     }
   }

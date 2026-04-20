@@ -18,7 +18,7 @@ import tempfile
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from notification_manager import NotificationManager
+from notification_manager import NotificationManager  # noqa: E402  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -136,7 +136,8 @@ class TestCreateNotification:
         assert len(notifs) == 1
 
     def test_skip_external_suppresses_external(self):
-        """When skip_external=True, _notify_telegram/_notify_webex must NOT be called."""
+        """When skip_external=True, _notify_telegram and _notify_webex must NOT be
+        called."""
         mgr = _make_mgr()
         calls = []
         mgr._notify_telegram = lambda n: calls.append("telegram")
