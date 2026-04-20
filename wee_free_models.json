@@ -1,0 +1,17 @@
+{
+  "free_model_fallback_chain": [
+    "openrouter/free",
+    "openrouter/google/gemma-4-31b-it:free",
+    "openrouter/meta-llama/llama-3.3-70b-instruct:free",
+    "openrouter/google/gemma-3-27b-it:free",
+    "openrouter/nousresearch/hermes-3-llama-3.1-405b:free",
+    "openrouter/nvidia/nemotron-3-super-120b-a12b:free",
+    "openrouter/qwen/qwen3-next-80b-a3b-instruct:free",
+    "openrouter/openai/gpt-oss-120b:free",
+    "openrouter/google/gemma-3-12b-it:free",
+    "openrouter/meta-llama/llama-3.2-3b-instruct:free",
+    "openrouter/google/gemma-3-4b-it:free"
+  ],
+  "max_retries_per_model": 3,
+  "retry_backoff_seconds": [2, 5, 10]
+}

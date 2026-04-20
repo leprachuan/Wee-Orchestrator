@@ -8,119 +8,30 @@ Ollama discovery and curated OpenRouter models. 21 new tests, 1163 total pass.
 
 # Changelog
 
-## [Issue #123, #124] Wee runtime tool calling + live Ollama discovery
-**Status:** Verified (Branch: issue/123-124, PR #127)
+## [Issue #123] Bug Fix: Wee Runtime Tool Calling Returns {no response}
+**Status:** 🔧 In QA Review (Commit: 6c14696)
 
-### Summary
-Issue #123: Wee runtime tool call agentic loop verified working end-to-end.
-Issue #124: Replaced hardcoded 3-model Ollama list with live discovery from kubuntu.
+**Root Cause:** The `dev` branch `run_wee_native()` made a single streaming API call with NO `tools` parameter. When a model requested a tool call (e.g. `bash` for `df -h`), Ollama returned chunks with `content: ""` and a `tool_calls` delta, but the code only checked `delta.content` and ignored tool calls entirely — resulting in empty output shown as `{no response}` in the WebUI.
 
-### Fixes
-- Added _fetch_ollama_models_live() with 60s TTL, queries /api/tags on kubuntu
-- Static descriptions from WEE_MODELS preserved; auto-generated for new models
-- Independent TTL caches: Ollama (60s) and OpenRouter (300s)
-- WEE_OLLAMA_HOST env var for configuring Ollama endpoint
-- /api/v1/models?runtime=wee returns 19 live models (was 3 hardcoded)
+**6 Bugs Fixed:**
+1. No tool definitions passed to Ollama API (`tools` parameter missing)
+2. No tool call detection in streaming response loop
+3. No tool execution after detecting tool calls
+4. No conversation history persistence (Ollama is stateless)
+5. Wrong Ollama port: 11436 → 11434
+6. Wrong `build_agent_context_prompt` argument order
 
-### Verification
-- Tool calls: disk usage query via wee+gemma4:e4b returns real df output
-- /api/v1/models?runtime=wee: 19 Ollama models + OpenRouter groups
-- 19 new tests, 1250 total pass, 0 failures
+**Added:**
+- Full agentic tool loop in `run_wee_native()` (max 10 rounds)
+- `_wee_execute_tool()` — bash, python, file_read, file_write
+- `_wee_load_messages()` / `_wee_save_messages()` — conversation history persistence
+- `_wee_augment_system_prompt_with_tools()` — system prompt tool capability declaration
+- Wee case in `session_exists()` for message-based session detection
+- Full tool-calling support in standalone `wee_runtime.py`
+- 41 regression tests (`test_issue123_tool_calling.py`)
+- Updated 3 pre-existing tests for port fix compatibility
 
-## [Wee Runtime Fix] End-to-end Ollama + OpenRouter + Tool Calling
-**Status:** ✅ Verified (Branch: issue/wee-runtime-fix, PR #122)
-
-### Summary
-Fixed the Wee Runtime to work end-to-end through the WebUI with both Ollama and OpenRouter providers, including streaming tool calls. Merged QA-approved feature branches and fixed remaining integration gaps.
-
-### Fixes
-1. **Ollama port 11436→11434** — Fixed in wee_runtime.py and agent_manager.py PROVIDER_PRESETS
-2. **Merged tool calling support** — From QA-approved #107/#108/#109 (multi-turn tool loop, conversation history, SSE streaming)
-3. **Merged OpenRouter UI integration** — From QA-approved #119 (model switcher groups, live discovery with TTL cache)
-4. **Added 6 free OpenRouter models** — gemma-3-27b:free, gemma-4-31b:free, llama-3.3-70b:free, nemotron-120b:free, nemotron-nano-9b:free, qwen3-coder:free
-5. **Fixed OpenRouter API key propagation** — Added OPENROUTER_API_KEY env var fallback when keyring lookup fails
-
-### Verification
-- Ollama gemma4:e4b: CLI ✅ API ✅ SSE streaming ✅ Tool calls ✅
-- OpenRouter nemotron free: CLI ✅ API ✅ SSE streaming ✅ Tool calls ✅
-- Model switcher shows 3 groups (Ollama, OpenRouter, OpenRouter Free) ✅
-- 1231 tests pass, 9 skipped ✅
-
-
-## [Issue #107] Bug: Wee runtime tool calling returns no response
-**Status:** ✅ QA Approved (Commit: 000bda8)
-
-### Summary
-Fixed critical bug in wee native runtime where tool-calling agentic loops returned empty responses. Root cause: Ollama port misconfiguration (11436 instead of standard 11434) caused connection timeouts appearing as "no response". Additionally improved safety handling when tool calls exhaust max rounds and added full tool-calling support to standalone CLI mode.
-
-### Root Cause & Fixes
-
-1. **Wrong Ollama Port (11436 → 11434)**
-   - Ollama on kubuntu (192.168.1.101) runs on standard port 11434
-   - agent_manager.py and wee_runtime.py had hardcoded port 11436
-   - Now correctly points to port 11434 in both PRESETS configurations
-   - Fixed in agent_manager.py:7630 and wee_runtime.py:20 (2 locations each)
-
-2. **Tool-Call Agentic Loop Safety Net**
-   - When all MAX_TOOL_ROUNDS produce tool calls without final text response, now returns last tool result instead of empty string
-   - Prevents empty response output while maintaining agentic flow
-
-3. **Full Tool-Calling Support in Standalone CLI**
-   - Added complete agentic loop to wee_runtime.py standalone CLI mode (--tools flag)
-   - Supports tool detection, execution (bash/python), follow-up requests
-   - Enables background task support with proper tool call handling
-
-### Changes
-- **agent_manager.py** — Fixed Ollama port 11436→11434 (2 locations in PRESETS)
-- **wee_runtime.py** — Fixed port, enhanced tool-call loop with max-rounds safety net, added full agentic loop to CLI mode
-- **tests/test_issue107_tool_calling.py** — 21 new comprehensive regression tests
-
-### Test Coverage
-- **1186 total tests pass**, 9 skipped, 0 failures
-- **21 new regression tests** covering:
-  - Port correctness validation
-  - Tool call delta detection
-  - Tool execution (bash/python)
-  - Full agentic loop with mocked OpenAI
-  - Max-rounds fallback behavior
-  - Tools-not-supported retry logic
-  - Standalone CLI tool execution
-
-### QA Notes
-- wee-qa verified complete tool-calling workflows
-- Tested with Ollama and LM Studio endpoints on correct ports
-- Agentic loops tested with multi-step workflows
-- All edge cases validated: max-rounds, empty responses, tool execution failures
-
----
-
-## [Issue #119] Feature: Wire up OpenRouter in wee runtime UI
-**Status:** In QA Review
-
-### Summary
-Wired up OpenRouter as a cloud model provider in the wee runtime UI. Users can now select
-OpenRouter models (Llama 4, Claude, Gemini, GPT-4.1, DeepSeek, etc.) from the WebUI model
-switcher when using the wee runtime, alongside local Ollama models.
-
-### Changes
-- **Backend (agent_manager.py)**
-  - Added OPENROUTER_POPULAR_MODELS set with 12 curated popular model IDs
-  - Added WEE_MODELS dict constant with static Ollama + OpenRouter model groups
-  - Added fetch_wee_models() method with OpenRouter API discovery, 300s TTL cache, static fallback
-  - Fixed pre-existing bug: wee dispatch was returning raw tuples instead of flat IDs
-  - Updated /api/v1/models endpoint with group field for UI grouping
-  - Updated _get_model_description() and get_model_from_name() with wee model entries
-  - Added wee to known_runtimes in /api/v1/models endpoint
-
-- **WebUI (webui/dist/app.js)**
-  - populateModelDropdown: renders optgroup elements when models have group info
-  - meta-model dynamic load: adds group separator headers between model groups
-
-- **Keyring**
-  - OpenRouter API key stored in keyring-vault on both dev and prod hosts
-  - fetch_wee_models() reads key from keyring first, falls back to env var
-
-- **Tests** (34 new tests in tests/test_issue119_openrouter.py)
+**Tests:** 1183 passed, 9 skipped (41 new)
 
 ## [Issue #100] Feature: GitHub Issues Integration for TODO Endpoints
 **Status:** ✅ QA Approved (Commit: ca21379)
