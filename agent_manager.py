@@ -3562,51 +3562,6 @@ You can mention an agent in your prompt and it will auto-delegate:
             return self._static_models_to_dict(self.OPENCODE_MODELS)
 
 
-    # Curated popular OpenRouter model IDs for auto-discovery filtering
-    OPENROUTER_POPULAR_MODELS = {
-        "meta-llama/llama-4-maverick",
-        "meta-llama/llama-4-scout",
-        "google/gemma-3-27b-it:free",
-        "google/gemma-4-31b-it:free",
-        "meta-llama/llama-3.3-70b-instruct:free",
-        "nvidia/nemotron-3-super-120b-a12b:free",
-        "nvidia/nemotron-nano-9b-v2:free",
-        "qwen/qwen3-coder:free",
-        "anthropic/claude-sonnet-4.6",
-        "anthropic/claude-opus-4.6",
-        "google/gemini-3.1-flash-lite-preview",
-        "google/gemini-3.1-pro-preview-customtools",
-        "openai/gpt-4.1",
-        "openai/gpt-4.1-mini",
-        "deepseek/deepseek-v3.2",
-        "qwen/qwen3.6-plus",
-        "mistralai/mistral-small-2603",
-        "cohere/command-r-plus-08-2024",
-    }
-
-    WEE_MODELS = {
-        "Wee Native (Ollama)": [
-            ("ollama/gemma4:e4b", "Ollama Gemma 4 E4B (local)", ["gemma4", "gemma"]),
-            ("ollama/qwen3", "Ollama Qwen 3 (local)", ["qwen3", "qwen"]),
-            ("ollama/granite3.3-tuned", "Ollama Granite 3.3 Tuned (local)", ["granite", "granite3.3"]),
-        ],
-        "Wee Native (OpenRouter)": [
-            ("openrouter/meta-llama/llama-4-maverick", "Llama 4 Maverick via OpenRouter", ["llama-4-maverick", "maverick"]),
-            ("openrouter/meta-llama/llama-4-scout", "Llama 4 Scout via OpenRouter", ["llama-4-scout", "scout"]),
-            ("openrouter/anthropic/claude-sonnet-4.6", "Claude Sonnet 4.6 via OpenRouter", ["or-claude-sonnet"]),
-            ("openrouter/google/gemini-3.1-flash-lite-preview", "Gemini 3.1 Flash Lite via OpenRouter", ["or-gemini-flash"]),
-            ("openrouter/openai/gpt-4.1", "GPT-4.1 via OpenRouter", ["or-gpt-4.1"]),
-            ("openrouter/deepseek/deepseek-v3.2", "DeepSeek V3.2 via OpenRouter", ["or-deepseek"]),
-        ],
-        "Wee Native (OpenRouter Free)": [
-            ("openrouter/google/gemma-3-27b-it:free", "Gemma 3 27B FREE via OpenRouter", ["gemma-3-free", "gemma-free"]),
-            ("openrouter/google/gemma-4-31b-it:free", "Gemma 4 31B FREE via OpenRouter", ["gemma-4-free"]),
-            ("openrouter/meta-llama/llama-3.3-70b-instruct:free", "Llama 3.3 70B FREE via OpenRouter", ["llama-free"]),
-            ("openrouter/nvidia/nemotron-3-super-120b-a12b:free", "Nemotron 3 Super 120B FREE via OpenRouter", ["nemotron-free"]),
-            ("openrouter/nvidia/nemotron-nano-9b-v2:free", "Nemotron Nano 9B FREE via OpenRouter", ["nemotron-nano-free"]),
-            ("openrouter/qwen/qwen3-coder:free", "Qwen3 Coder FREE via OpenRouter", ["qwen3-free", "qwen-free"]),
-        ],
-    }
 
     def _static_models_to_dict(self, static_dict: Dict) -> Dict:
         """Convert static model config {cat: [(id, desc, aliases)...]} to {cat: [id,...]}."""
@@ -4062,28 +4017,10 @@ You can mention an agent in your prompt and it will auto-delegate:
                 discovered_rest = []
                 for m in all_models:
                     mid = m.get("id", "")
-                    if not mid:
-                        continue
-                    name = m.get("name", mid)
-                    or_id = "openrouter/" + mid
-                    aliases = static_aliases.get(or_id, [])
-                    entry = (or_id, name, aliases)
-                    if mid in popular:
-                        discovered_popular.append(entry)
-                    else:
-                        discovered_rest.append(entry)
-                discovered_popular.sort(key=lambda t: t[1])
-                discovered_rest.sort(key=lambda t: t[1])
-                merged_or = discovered_popular + discovered_rest
-                if merged_or:
-                    result["OpenRouter Models"] = merged_or
-                print(
-                    "[wee] OpenRouter: discovered %d models (%d popular + %d other)"
-                    % (len(merged_or), len(discovered_popular), len(discovered_rest)),
-                    file=sys.stderr,
-                )
-            else:
-                print("[wee] OpenRouter: no API key, using static list", file=sys.stderr)
+                    if mid:
+                        name = m.get("name", mid)
+                        or_id = "openrouter/" + mid
+                        discovered.append((or_id, name + " (OpenRouter)", []))
 
         except Exception as or_err:
             print("[wee] OpenRouter discovery failed: %s" % or_err, file=sys.stderr)
@@ -4727,27 +4664,24 @@ You can mention an agent in your prompt and it will auto-delegate:
             if m.lower() == name_lower:
                 return m
 
-        # Exact match with provider prefix stripped (e.g., "gemma4:e4b" matches "ollama/gemma4:e4b")
+        # Exact match with "ollama/" prefix stripped (e.g., "gemma4:e4b" matches "ollama/gemma4:e4b").
+        # Intentionally only strips the ollama/ prefix -- not arbitrary provider prefixes --
+        # so bare names like "gpt-5-mini" never accidentally match "openrouter/openai/gpt-5-mini".
         for m in all_models:
             model_lower = m.lower()
-            if "/" in model_lower:
-                suffix = model_lower.split("/", 1)[1]
+            if model_lower.startswith("ollama/"):
+                suffix = model_lower[len("ollama/"):]
                 if suffix == name_lower:
                     return m
 
-        # Substring matching with shortest-match preference
-        matches = [m for m in all_models if name_lower in m.lower()]
-        
-        # Issue #142 B01: For wee runtime, exclude multi-namespace models from substring
-        # matching (e.g., "openrouter/openai/gpt-5-mini" has 2+ slashes = multi-namespace)
-        if runtime == "wee" and matches:
-            single_ns = [m for m in matches if m.count("/") == 1]
-            # If multi-namespace models exist, don't use any substring matches for wee
-            has_multi_ns = any(m.count("/") >= 2 for m in matches)
-            if has_multi_ns:
-                # Don't use substring matching when multi-namespace models are present
-                matches = single_ns if single_ns else []
-        
+        # Substring matching with shortest-match preference.
+        # For wee runtime, bare names without an openrouter/ prefix are scoped to Ollama models
+        # only -- prevents accidental matches against the full OpenRouter catalog (350+ models).
+        if runtime == "wee" and not name_lower.startswith("openrouter/"):
+            candidate_models = [m for m in all_models if not m.lower().startswith("openrouter/")]
+        else:
+            candidate_models = all_models
+        matches = [m for m in candidate_models if name_lower in m.lower()]
         if len(matches) == 1:
             return matches[0]
         if matches:

@@ -7,6 +7,42 @@ tuple entries in model list breaking model resolution. Added fetch_wee_models() 
 Ollama discovery and curated OpenRouter models. 21 new tests, 1163 total pass.
 
 # Changelog
+## [Issue #145] Feature: All OpenRouter Models in Model Listing
+**Status:** ✅ QA Approved (Commit: d79f0d0, PR #149)
+
+### Summary
+Removed the hardcoded `OPENROUTER_POPULAR_MODELS` filter from `fetch_wee_models()`, enabling the wee runtime to discover and display all OpenRouter models (350+). Previously, only ~12 popular models were shown; now users can select from the full OpenRouter catalog.
+
+### Root Cause (Feature Gap)
+The `fetch_wee_models()` method filtered OpenRouter API responses through a hardcoded `OPENROUTER_POPULAR_MODELS` set (~12 models), preventing access to the full catalog (350+ models).
+
+### Solution
+
+#### Remove OPENROUTER_POPULAR_MODELS Filter
+- Deleted hardcoded `OPENROUTER_POPULAR_MODELS` constant
+- Updated `fetch_wee_models()` to include all OpenRouter models
+- Users can now select from full OpenRouter catalog
+
+#### Fix: Bare Name Matching Scope (B01 Regression Fix)
+- When 350+ OpenRouter models became available, old prefix-stripping logic accidentally matched stale model names like 'gpt-5-mini' to OpenRouter models
+- Fix: Restrict prefix-stripping to 'ollama/' only
+- Fix: Scope substring matching for wee to non-OpenRouter models unless query has 'openrouter/' prefix
+- Result: Stale Copilot model names no longer accidentally resolve to OpenRouter models
+
+### Files Changed
+- `agent_manager.py` — Removed filter constant, updated fetch_wee_models(), restrict prefix-stripping, scope substring matching
+
+### Tests
+- 13 new tests in test_issue145_openrouter_model_listing.py covering:
+  - Full OpenRouter catalog discovery
+  - Removal of OPENROUTER_POPULAR_MODELS filter
+  - Bare name matching scope fix (regression test for B01)
+  - Model selection validation
+- Total: 1463 passed, 13 new issue tests, 0 regressions
+- Fixed regression: `TestSessionValidationWee::test_stale_copilot_model_replaced` (B01 from Issue #142)
+
+---
+
 
 ## [Issue #153] Bug Fix: OpenRouter 401 Authentication Error
 **Status:** ✅ QA Approved (Commit: 1dae171, PR #154)
