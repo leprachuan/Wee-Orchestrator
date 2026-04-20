@@ -3974,80 +3974,55 @@ You can mention an agent in your prompt and it will auto-delegate:
 
         return self._static_models_to_dict(self.CURSOR_MODELS)
 
-
     def fetch_wee_models(self) -> Dict:
-        """Return available wee models: local Ollama + OpenRouter cloud models.
+        """Fetch available models for the Wee native runtime.
 
-        Queries OpenRouter GET /api/v1/models, filters to
-        OPENROUTER_POPULAR_MODELS, and caches for 300s. Falls back
-        to the static WEE_MODELS list on any error.
+        Dynamically queries Ollama on the local network for available models and
+        returns them with the 'ollama/' prefix. Also includes a curated list of
+        popular OpenRouter cloud models. Falls back to a minimal static list if
+        Ollama is unreachable.
         """
-        import time as _time
+        _OLLAMA_BASE = "http://192.168.1.101:11434"
+        _OPENROUTER_MODELS = [
+            "openrouter/meta-llama/llama-4-scout",
+            "openrouter/meta-llama/llama-4-maverick",
+            "openrouter/anthropic/claude-3.5-haiku",
+            "openrouter/google/gemini-2.5-flash",
+            "openrouter/mistralai/mistral-small-2603",
+            "openrouter/qwen/qwen-2.5-72b-instruct",
+        ]
+        _OLLAMA_FALLBACK = [
+            "ollama/gemma4:e4b",
+            "ollama/gemma4:latest",
+            "ollama/qwen3.5:latest",
+        ]
 
-        cache_ttl = 300  # 5 minutes
-
-        # Return cache if still valid
-        if (
-            self._env_wee_models is not None
-            and _time.time() - self._openrouter_cache_ts < cache_ttl
-        ):
-            return self._static_models_to_dict(self._env_wee_models)
-
-        # Start with static Ollama models
-        result = {}
-        for cat, entries in self.WEE_MODELS.items():
-            result[cat] = list(entries)
-
-        # Try live OpenRouter discovery
+        ollama_models = []
         try:
-            api_key = None
-            try:
-                import keyring
-                api_key = keyring.get_password("openrouter", "api_key")
-            except Exception:
-                pass
-            if not api_key:
-                api_key = os.environ.get("OPENROUTER_API_KEY")
-
-            if not api_key:
-                print("[wee] No OpenRouter API key -- using static list", file=sys.stderr)
-                return self._static_models_to_dict(self.WEE_MODELS)
-
-            import urllib.request
-            req = urllib.request.Request(
-                "https://openrouter.ai/api/v1/models",
-                headers={"Authorization": "Bearer " + api_key},
+            import urllib.request as _urlreq
+            import json as _json
+            req = _urlreq.Request(
+                f"{_OLLAMA_BASE}/api/tags",
+                headers={"Accept": "application/json"},
             )
-            resp = urllib.request.urlopen(req, timeout=10)
-            data = json.loads(resp.read())
-            all_models = data.get("data", [])
-
-            discovered = []
-            for m in all_models:
-                mid = m.get("id", "")
-                if mid in self.OPENROUTER_POPULAR_MODELS:
-                    name = m.get("name", mid)
-                    or_id = "openrouter/" + mid
-                    discovered.append((or_id, name + " (OpenRouter)", []))
-
-            if discovered:
-                discovered.sort(key=lambda t: t[1])
-                result["Wee Native (OpenRouter)"] = discovered
-                print(
-                    "[wee] OpenRouter: discovered %d models" % len(discovered),
-                    file=sys.stderr,
-                )
-
-            self._env_wee_models = result
-            self._openrouter_cache_ts = _time.time()
-            return self._static_models_to_dict(result)
-
+            with _urlreq.urlopen(req, timeout=5) as resp:
+                data = _json.loads(resp.read().decode())
+            for m in data.get("models", []):
+                name = m.get("name", "")
+                if name:
+                    ollama_models.append(f"ollama/{name}")
         except Exception as e:
             print(
-                "[wee] OpenRouter discovery failed, using static list: %s" % e,
+                f"[wee] Ollama model discovery failed, using fallback: {e}",
                 file=sys.stderr,
             )
-            return self._static_models_to_dict(self.WEE_MODELS)
+            ollama_models = list(_OLLAMA_FALLBACK)
+
+        result: Dict = {}
+        if ollama_models:
+            result["Ollama (Local)"] = ollama_models
+        result["OpenRouter (Cloud)"] = list(_OPENROUTER_MODELS)
+        return result
 
     def get_models_for_runtime(self, runtime: str) -> Dict:
         """Fetch available models for a runtime, using CLI discovery where possible.
@@ -8343,16 +8318,15 @@ User Request:
         stream_buffer = getattr(self, "_stream_buffers", {}).get(n8n_session_id)
 
         # -- Create OpenAI client and call API --
-        # Use httpx.Timeout for granular control: fast connect failure,
-        # generous read timeout for streaming
-        import httpx
-
+        import httpx as _httpx_wee
         client = OpenAI(
             base_url=api_base,
             api_key=api_key,
-            timeout=httpx.Timeout(
-                timeout=effective_timeout,
+            timeout=_httpx_wee.Timeout(
                 connect=15.0,
+                read=float(effective_timeout),
+                write=30.0,
+                pool=15.0,
             ),
             max_retries=0,
         )
@@ -10186,6 +10160,9 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             models = []
             for group_name, model_ids in raw.items():
                 for model_id in model_ids:
+                    # Support both flat strings and (id, desc, aliases) tuples
+                    if isinstance(model_id, tuple):
+                        model_id = model_id[0]
                     label = (
                         session_mgr._get_model_description(model_id, runtime)
                         or model_id

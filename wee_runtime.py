@@ -182,14 +182,15 @@ def main():
         )
         sys.exit(1)
 
-    import httpx
-
+    import httpx as _httpx_wee
     client = OpenAI(
         base_url=api_base,
         api_key=api_key,
-        timeout=httpx.Timeout(
-            timeout=float(args.timeout),
+        timeout=_httpx_wee.Timeout(
             connect=15.0,
+            read=float(args.timeout),
+            write=30.0,
+            pool=15.0,
         ),
         max_retries=0,
     )
