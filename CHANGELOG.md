@@ -8,6 +8,30 @@ Ollama discovery and curated OpenRouter models. 21 new tests, 1163 total pass.
 
 # Changelog
 
+## [Issue #125] Feature: Wee Runtime — 429 Retry with Exponential Backoff + Free Model Fallback Chain
+**Status:** 🔧 In QA Review (Commit: 8bfd992)
+
+**Problem:** Free OpenRouter models (`:free` suffix) crash immediately on `429 - Provider returned error` instead of retrying or falling back to alternative models.
+
+**3-Layer Solution:**
+1. **Layer 1 — openrouter/free as primary:** Built-in OpenRouter auto-router selects whichever free model is available
+2. **Layer 2 — Retry with exponential backoff:** Up to 3 retries on 429 (2s, 5s, 10s). Only retries on 429, not auth errors or 5xx
+3. **Layer 3 — Manual fallback chain:** If retries exhausted, iterates through ordered model list from wee_free_models.json
+
+**Added:**
+- `_wee_is_free_model()` — detects openrouter/free or :free suffix models
+- `_wee_load_free_config()` — loads wee_free_models.json with hardcoded defaults
+- `_wee_run_attempt()` — single model attempt with 429 retry loop and backoff
+- 429 retry loop in `run_wee_native()` with SSE status messages
+- Fallback chain in `run_wee_native()` — iterates alternative free models on 429 exhaustion
+- `wee_free_models.json` — configurable fallback chain (11 models) + retry settings
+- Full retry/fallback in standalone `wee_runtime.py` — `_call_with_retry()`, `run_with_fallback()`, `is_free_openrouter_model()`, `load_free_model_config()`
+- Cleaned up stale files (agent_manager.py.bak, logs/wee_executor.log) and updated .gitignore
+- 38 regression tests (test_issue125_429_retry.py)
+
+**Tests:** 37 passed, 1 skipped
+
+
 ## [Issue #123] Bug Fix: Wee Runtime Tool Calling Returns {no response}
 **Status:** 🔧 In QA Review (Commit: 6c14696)
 

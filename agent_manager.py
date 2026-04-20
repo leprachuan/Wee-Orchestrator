@@ -8401,6 +8401,17 @@ User Request:
         # -- Streaming infrastructure --
         stream_buffer = getattr(self, "_stream_buffers", {}).get(n8n_session_id)
 
+        # -- Issue #125: Free model 429 retry + fallback chain --
+        _free_cfg = self._wee_load_free_config()
+        _max_retries_429 = _free_cfg.get("max_retries_per_model", 3)
+        _backoff_429 = _free_cfg.get("retry_backoff_seconds", [2, 5, 10])
+        _is_free_model_req = self._wee_is_free_model(model)
+        if _is_free_model_req:
+            _chain_raw = _free_cfg.get("free_model_fallback_chain", [])
+            _attempt_chain = [model] + [m for m in _chain_raw if m.lower() != model.lower()]
+        else:
+            _attempt_chain = [model]
+
         # -- Create OpenAI client and call API --
         import httpx as _httpx_wee
         client = OpenAI(
@@ -8473,7 +8484,30 @@ User Request:
                     create_kwargs["tools"] = _WEE_TOOLS
 
                 try:
-                    stream = client.chat.completions.create(**create_kwargs)
+                    # Issue #125: 429 retry loop for free models
+                    _429_exhausted = False
+                    for _retry_429 in range(_max_retries_429 if _is_free_model_req else 1):
+                        try:
+                            stream = client.chat.completions.create(**create_kwargs)
+                            break  # success
+                        except Exception as _retry_e:
+                            _e_str = str(_retry_e)
+                            if ("429" in _e_str or "rate limit" in _e_str.lower()) and _is_free_model_req:
+                                if _retry_429 < _max_retries_429 - 1:
+                                    import time as _429_time
+                                    _wait = _backoff_429[_retry_429] if _retry_429 < len(_backoff_429) else (_backoff_429[-1] if _backoff_429 else 5)
+                                    _retry_msg = f"\n⚠️ Rate limited, retrying in {_wait}s... ({_retry_429 + 1}/{_max_retries_429})\n"
+                                    if stream_buffer:
+                                        stream_buffer.push("chunk", {"text": _retry_msg})
+                                    print(f"[Wee Native] {_retry_msg.strip()}", file=sys.stderr)
+                                    _429_time.sleep(_wait)
+                                else:
+                                    _429_exhausted = True
+                                    break
+                            else:
+                                raise
+                    if _429_exhausted:
+                        raise Exception(f"429 exhausted after {_max_retries_429} retries")
                 except Exception as tools_err:
                     # Some models/endpoints may not support tools — retry without
                     if "tools" in create_kwargs:
@@ -8632,6 +8666,34 @@ User Request:
             return output
 
         except Exception as e:
+            _e_str = str(e)
+            _is_429 = "429" in _e_str or "rate limit" in _e_str.lower() or "429 exhausted" in _e_str
+            if _is_free_model_req and _is_429:
+                # Try next model in fallback chain
+                _cur_idx = _attempt_chain.index(model) if model in _attempt_chain else 0
+                for _fi, _fallback_model in enumerate(_attempt_chain):
+                    if _fallback_model.lower() == model.lower():
+                        _cur_idx = _fi
+                        break
+                if _cur_idx + 1 < len(_attempt_chain):
+                    _next_model = _attempt_chain[_cur_idx + 1]
+                    _fb_msg = f"\n⚠️ Still rate limited, falling back to {_next_model.split('/')[-1]}...\n"
+                    print(f"[Wee Native] {_fb_msg.strip()}", file=sys.stderr)
+                    if stream_buffer:
+                        stream_buffer.push("chunk", {"text": _fb_msg})
+                    # Recurse with next model (single fallback step)
+                    return self.run_wee_native(
+                        prompt=prompt, model=_next_model, agent=agent,
+                        session_id=session_id, resume=resume,
+                        n8n_session_id=n8n_session_id, timeout=timeout,
+                        render_type=render_type,
+                    )
+                else:
+                    _done_msg = "\n❌ All free model fallbacks exhausted. Please try again later or switch to a paid model."
+                    if stream_buffer:
+                        stream_buffer.push("done", _done_msg)
+                    return _done_msg
+
             error_msg = f"Error: Wee native runtime failed: {e}"
             print(f"[Wee Native] {error_msg}", file=sys.stderr)
 
@@ -8780,6 +8842,112 @@ User Request:
             return f"Error: Tool '{func_name}' timed out"
         except Exception as e:
             return f"Error executing {func_name}: {e}"
+
+
+    @staticmethod
+    def _wee_is_free_model(model: str) -> bool:
+        """Return True if model is an OpenRouter free model (openrouter/free or ends with :free)."""
+        m = model.lower()
+        return m == "openrouter/free" or (m.startswith("openrouter/") and m.endswith(":free"))
+
+    @staticmethod
+    def _wee_load_free_config(config_path=None) -> dict:
+        """Load wee_free_models.json; fall back to hardcoded defaults if absent."""
+        _defaults = {
+            "free_model_fallback_chain": ["openrouter/free"],
+            "max_retries_per_model": 3,
+            "retry_backoff_seconds": [2, 5, 10],
+        }
+        if config_path is None:
+            config_path = Path(__file__).parent / "wee_free_models.json"
+        try:
+            with open(config_path) as f:
+                data = json.load(f)
+            result = dict(_defaults)
+            result.update(data)
+            return result
+        except (FileNotFoundError, json.JSONDecodeError, OSError):
+            return dict(_defaults)
+
+    def _wee_run_attempt(
+        self,
+        client,
+        resolved_model: str,
+        messages: list,
+        stream_buffer,
+        n8n_session_id: str,
+        agent: str,
+        wee_tools: list,
+        max_retries: int,
+        backoff: list,
+        attempt_model: str,
+    ):
+        """Try one model with 429 retry+backoff. Returns (output, is_429_exhausted)."""
+        import time as _time
+
+        create_kwargs = {"stream": True}
+        if wee_tools:
+            create_kwargs["tools"] = wee_tools
+            create_kwargs["tool_choice"] = "auto"
+
+        last_exc = None
+        attempts = max(max_retries, 1)
+        for attempt in range(attempts):
+            try:
+                stream = client.chat.completions.create(
+                    model=resolved_model,
+                    messages=messages,
+                    **create_kwargs,
+                )
+                collected = []
+                tool_calls_acc = {}
+                for chunk in stream:
+                    if not chunk.choices:
+                        continue
+                    delta = chunk.choices[0].delta
+                    if delta.content:
+                        collected.append(delta.content)
+                    if delta.tool_calls:
+                        for tc in delta.tool_calls:
+                            idx = getattr(tc, "index", 0) or 0
+                            if idx not in tool_calls_acc:
+                                tool_calls_acc[idx] = {"id": "", "name": "", "args": ""}
+                            if tc.id:
+                                tool_calls_acc[idx]["id"] += tc.id
+                            if tc.function:
+                                if tc.function.name:
+                                    tool_calls_acc[idx]["name"] += tc.function.name
+                                if tc.function.arguments:
+                                    tool_calls_acc[idx]["args"] += tc.function.arguments
+
+                output = "".join(collected)
+
+                if tool_calls_acc and wee_tools:
+                    for tc_data in tool_calls_acc.values():
+                        try:
+                            func_args = json.loads(tc_data["args"] or "{}")
+                        except json.JSONDecodeError:
+                            func_args = {}
+                        result = self._wee_execute_tool(tc_data["name"], func_args, agent)
+                        messages.append({
+                            "role": "tool",
+                            "tool_call_id": tc_data["id"],
+                            "content": result,
+                        })
+
+                self._wee_save_messages(n8n_session_id, messages)
+                return output, False
+
+            except Exception as e:
+                err_str = str(e)
+                if "429" not in err_str and "rate limit" not in err_str.lower():
+                    return f"Error: {err_str}", False
+                last_exc = e
+                if attempt < attempts - 1:
+                    wait = backoff[attempt] if attempt < len(backoff) else (backoff[-1] if backoff else 5)
+                    _time.sleep(wait)
+
+        return None, True
 
 
     def _get_cursor_session_id(self, n8n_session_id: str) -> Optional[str]:

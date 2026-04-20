@@ -341,6 +341,7 @@ def main():
     parser.add_argument("--timeout", type=int, default=300, help="Request timeout in seconds")
     parser.add_argument("--temperature", type=float, default=None, help="Sampling temperature")
     parser.add_argument("--tools", action="store_true", help="Enable tool calling (bash, python)")
+    parser.add_argument("--session-id", default="", help="Session ID for usage logging")
     parser.add_argument("prompt", help="User prompt")
     args = parser.parse_args()
 
