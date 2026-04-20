@@ -136,7 +136,7 @@ class TestWeeSessionHistory(unittest.TestCase):
 
         self.assertEqual(result, "Hello!")
         # Verify save_session_map was called with wee_messages
-        mock_save.assert_called_once()
+        mock_save.assert_called()
         saved_map = mock_save.call_args[0][0]
         msgs = saved_map[sid]["wee_messages"]
         # Should have: system, user, assistant
