@@ -1438,6 +1438,10 @@ class RuntimeUsageTracker:
 class SessionManager:
     """Manages AI CLI sessions (Copilot & OpenCode) for N8N integration"""
 
+    # Default TTL (overridden in __init__ from env); class-level attr prevents
+    # AttributeError in tests that bypass __init__ via __new__.
+    session_map_ttl: int = int(os.environ.get("SESSION_MAP_TTL_DAYS", "30")) * 86400
+
     # Query tracking constants
     MAX_PROMPT_LENGTH = 200  # Maximum chars to store from prompt
     MAX_OUTPUT_LENGTH = 500  # Maximum chars to store from output
@@ -14544,6 +14548,9 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         settings = notification_mgr.get_global_settings()
         settings["available"] = True
         return settings
+
+    class NotificationSettingsRequest(BaseModel):
+        notifications_enabled: bool
 
     @app.put("/api/v1/settings/notifications")
     async def set_notification_settings(
