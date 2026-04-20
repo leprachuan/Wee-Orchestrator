@@ -1,11 +1,11 @@
 """Tests for Issue #128: Token usage tracking + cost estimation + WebUI footer."""
 import json
-import os
+
 import sys
 import time
 import tempfile
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch, mock_open
+from unittest.mock import patch, mock_open
 import pytest
 
 # Add dev path
@@ -22,7 +22,7 @@ class TestTokenHelpers:
         import importlib
         self.am_mod = importlib.import_module('agent_manager')
         # Mock minimal required setup to get a usable instance
-        with patch.object(self.am_mod.SessionManager, '__init__', lambda self, *a, **kw: None):
+        with patch.object(self.am_mod.SessionManager, '__init__', lambda self, *a, **kw: None):  # noqa: E501
             self.mgr = self.am_mod.SessionManager.__new__(self.am_mod.SessionManager)
         # Set required attributes
         self.mgr.logs_dir = Path(tempfile.mkdtemp())
@@ -35,7 +35,7 @@ class TestTokenHelpers:
 
     def test_calculate_wee_cost_openrouter_no_pricing(self):
         """Models with no pricing in cache should return free."""
-        cost, label = self.mgr._calculate_wee_cost('openrouter/some-model', 1000, 500, {})
+        cost, label = self.mgr._calculate_wee_cost('openrouter/some-model', 1000, 500, {})  # noqa: E501
         assert cost == 0.0
         assert label == 'free'
 
@@ -70,7 +70,7 @@ class TestTokenHelpers:
 
     def test_calculate_anthropic_cost_unknown(self):
         """Unknown Anthropic model should return default pricing."""
-        cost, label = self.mgr._calculate_anthropic_cost('claude-unknown-model', 100, 100)
+        cost, label = self.mgr._calculate_anthropic_cost('claude-unknown-model', 100, 100)  # noqa: E501
         assert cost >= 0.0
         assert isinstance(label, str)
 
@@ -242,7 +242,7 @@ class TestWeeRuntime:
         """Pricing should be cached to /tmp/openrouter_pricing.json."""
         mock_data = {
             'data': [
-                {'id': 'google/gemini-flash-1.5', 'pricing': {'prompt': '0.000000075', 'completion': '0.0000003'}}
+                {'id': 'google/gemini-flash-1.5', 'pricing': {'prompt': '0.000000075', 'completion': '0.0000003'}}  # noqa: E501
             ]
         }
         with patch('builtins.open', mock_open(read_data=json.dumps(mock_data))), \
@@ -265,8 +265,8 @@ class TestWeeRuntime:
 
     def test_calculate_cost_paid_model(self):
         """Paid model should multiply token counts by per-token price."""
-        pricing = {'google/gemini-flash-1.5': {'prompt': 0.000000075, 'completion': 0.0000003}}
-        cost, label = self.wr.calculate_cost('openrouter/google/gemini-flash-1.5', 1000, 500, pricing)
+        pricing = {'google/gemini-flash-1.5': {'prompt': 0.000000075, 'completion': 0.0000003}}  # noqa: E501
+        cost, label = self.wr.calculate_cost('openrouter/google/gemini-flash-1.5', 1000, 500, pricing)  # noqa: E501
         expected = (1000 * 0.000000075) + (500 * 0.0000003)
         assert abs(cost - expected) < 1e-12
         assert label.startswith('$')
@@ -330,7 +330,7 @@ class TestAppJsUpdate:
 
     def test_renderMessage_accepts_weeMeta(self):
         """renderMessage should accept weeMeta as 5th param."""
-        assert 'renderMessage(role, content, files = [], timing = null, weeMeta = null)' in self.app_js
+        assert 'renderMessage(role, content, files = [], timing = null, weeMeta = null)' in self.app_js  # noqa: E501
 
     def test_renderMessage_timing_uses_buildTimingText(self):
         """renderMessage timing block should use buildTimingText."""

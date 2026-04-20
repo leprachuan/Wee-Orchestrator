@@ -5,13 +5,10 @@ the sanitizer handles the output field, and the frontend rendering
 preserves tool blocks across markdown application.
 """
 
-import json
-import sys
 import os
-import time
-import importlib
+import sys
 import unittest
-from unittest.mock import MagicMock, patch, AsyncMock
+from unittest.mock import MagicMock
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -21,6 +18,7 @@ class TestSanitizeToolCallOutput(unittest.TestCase):
 
     def setUp(self):
         import agent_manager as am
+
         self.sanitize = am._sanitize_tool_call_for_display
 
     def test_output_field_sanitized(self):
@@ -29,7 +27,7 @@ class TestSanitizeToolCallOutput(unittest.TestCase):
             "event": "completed",
             "id": "tc_1",
             "name": "bash",
-            "input": "curl -H 'Authorization: Bearer sk-secret123' https://api.example.com",
+            "input": "curl -H 'Authorization: Bearer sk-secret123' https://api.example.com",  # noqa: E501
             "output": "Response with Bearer sk-secret123 in it",
         }
         result = self.sanitize(data)
@@ -158,13 +156,13 @@ class TestClaudeSdkToolOutput(unittest.TestCase):
 
     def test_list_content_joined(self):
         """List content blocks should be joined with spaces."""
+
         class FakeBlock:
             def __init__(self, text):
                 self.text = text
+
         block_content = [FakeBlock("line 1"), FakeBlock("line 2")]
-        _result_content = " ".join(
-            getattr(b, "text", str(b)) for b in block_content
-        )
+        _result_content = " ".join(getattr(b, "text", str(b)) for b in block_content)
         self.assertEqual(_result_content, "line 1 line 2")
 
     def test_empty_content_returns_empty(self):
@@ -194,7 +192,12 @@ class TestClaudeRuntimeToolResult(unittest.TestCase):
 
     def test_string_tool_result_content(self):
         """String content in tool_result should become output."""
-        block = {"type": "tool_result", "tool_use_id": "t1", "content": "result text", "is_error": False}
+        block = {
+            "type": "tool_result",
+            "tool_use_id": "t1",
+            "content": "result text",
+            "is_error": False,
+        }
         _tr_content = block.get("content", "")
         if isinstance(_tr_content, list):
             _tr_content = " ".join(
@@ -262,8 +265,16 @@ class TestFrontendToolCallBlockStructure(unittest.TestCase):
     def test_tc_block_wrapper_expected(self):
         """insertToolCallBlock should create tc-block > tc-line + tc-output."""
         # This is a structural test — validates the expected HTML pattern
-        expected_classes = ['tc-block', 'tc-line', 'tc-toggle', 'tc-spinner',
-                           'tc-name', 'tc-input', 'tc-status', 'tc-output']
+        expected_classes = [
+            "tc-block",
+            "tc-line",
+            "tc-toggle",
+            "tc-spinner",
+            "tc-name",
+            "tc-input",
+            "tc-status",
+            "tc-output",
+        ]
         # Read the actual app.js and verify these classes exist
         with open("/opt/n8n-copilot-shim-dev/webui/dist/app.js") as f:
             js_content = f.read()

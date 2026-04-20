@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Tests for issue #74: dispatch_wee_dev_work_queue uses subprocess instead of public API."""
+"""Tests for issue #74: dispatch_wee_dev_work_queue uses subprocess instead of public API."""  # noqa: E501
+
 import importlib.util
 import json
 import os
 import subprocess
-import sys
 import types
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -38,6 +38,7 @@ def tmp_lock(tmp_path, disp):
 
 # _is_pid_alive tests
 
+
 def test_is_pid_alive_current_process(disp):
     assert disp._is_pid_alive(os.getpid()) is True
 
@@ -54,19 +55,26 @@ def test_is_pid_alive_dead_process(disp):
 
 # dispatch_via_subprocess tests
 
+
 def test_dispatch_via_subprocess_returns_pid(disp, tmp_path):
-    with patch.object(disp, "DISPATCH_LOG_DIR", tmp_path), \
-         patch("subprocess.Popen") as mock_popen:
+    with (
+        patch.object(disp, "DISPATCH_LOG_DIR", tmp_path),
+        patch("subprocess.Popen") as mock_popen,
+    ):
         mock_proc = MagicMock()
         mock_proc.pid = 12345
         mock_popen.return_value = mock_proc
-        pid = disp.dispatch_via_subprocess("wee-dev", "test prompt", "claude-opus-4.6", 3600)
+        pid = disp.dispatch_via_subprocess(
+            "wee-dev", "test prompt", "claude-opus-4.6", 3600
+        )
     assert pid == 12345
 
 
 def test_dispatch_via_subprocess_uses_start_new_session(disp, tmp_path):
-    with patch.object(disp, "DISPATCH_LOG_DIR", tmp_path), \
-         patch("subprocess.Popen") as mock_popen:
+    with (
+        patch.object(disp, "DISPATCH_LOG_DIR", tmp_path),
+        patch("subprocess.Popen") as mock_popen,
+    ):
         mock_proc = MagicMock()
         mock_proc.pid = 42
         mock_popen.return_value = mock_proc
@@ -76,8 +84,10 @@ def test_dispatch_via_subprocess_uses_start_new_session(disp, tmp_path):
 
 
 def test_dispatch_via_subprocess_calls_agent_manager(disp, tmp_path):
-    with patch.object(disp, "DISPATCH_LOG_DIR", tmp_path), \
-         patch("subprocess.Popen") as mock_popen:
+    with (
+        patch.object(disp, "DISPATCH_LOG_DIR", tmp_path),
+        patch("subprocess.Popen") as mock_popen,
+    ):
         mock_proc = MagicMock()
         mock_proc.pid = 99
         mock_popen.return_value = mock_proc
@@ -87,8 +97,10 @@ def test_dispatch_via_subprocess_calls_agent_manager(disp, tmp_path):
 
 
 def test_dispatch_via_subprocess_passes_agent_and_model(disp, tmp_path):
-    with patch.object(disp, "DISPATCH_LOG_DIR", tmp_path), \
-         patch("subprocess.Popen") as mock_popen:
+    with (
+        patch.object(disp, "DISPATCH_LOG_DIR", tmp_path),
+        patch("subprocess.Popen") as mock_popen,
+    ):
         mock_proc = MagicMock()
         mock_proc.pid = 7
         mock_popen.return_value = mock_proc
@@ -101,9 +113,11 @@ def test_dispatch_via_subprocess_passes_agent_and_model(disp, tmp_path):
 
 
 def test_dispatch_via_subprocess_no_api_call(disp, tmp_path):
-    with patch.object(disp, "DISPATCH_LOG_DIR", tmp_path), \
-         patch("subprocess.Popen") as mock_popen, \
-         patch.object(disp, "api_request") as mock_api:
+    with (
+        patch.object(disp, "DISPATCH_LOG_DIR", tmp_path),
+        patch("subprocess.Popen") as mock_popen,
+        patch.object(disp, "api_request") as mock_api,
+    ):
         mock_proc = MagicMock()
         mock_proc.pid = 1
         mock_popen.return_value = mock_proc
@@ -112,6 +126,7 @@ def test_dispatch_via_subprocess_no_api_call(disp, tmp_path):
 
 
 # dispatch_wee_dev tests
+
 
 @pytest.fixture()
 def sample_item():
@@ -126,24 +141,27 @@ def sample_item():
 
 
 def test_dispatch_wee_dev_returns_pid_dict(disp, sample_item):
-    with patch.object(disp, "DRY_RUN", False), \
-         patch.object(disp, "dispatch_via_subprocess", return_value=1001):
+    with (
+        patch.object(disp, "DRY_RUN", False),
+        patch.object(disp, "dispatch_via_subprocess", return_value=1001),
+    ):
         result = disp.dispatch_wee_dev(sample_item)
     assert "pid" in result
     assert result["pid"] == 1001
 
 
 def test_dispatch_wee_dev_no_background_task_api(disp, sample_item):
-    with patch.object(disp, "DRY_RUN", False), \
-         patch.object(disp, "dispatch_via_subprocess", return_value=2002), \
-         patch.object(disp, "api_request") as mock_api:
+    with (
+        patch.object(disp, "DRY_RUN", False),
+        patch.object(disp, "dispatch_via_subprocess", return_value=2002),
+        patch.object(disp, "api_request") as mock_api,
+    ):
         disp.dispatch_wee_dev(sample_item)
     mock_api.assert_not_called()
 
 
 def test_dispatch_wee_dev_dry_run(disp, sample_item):
-    with patch.object(disp, "DRY_RUN", True), \
-         patch("subprocess.Popen") as mock_popen:
+    with patch.object(disp, "DRY_RUN", True), patch("subprocess.Popen") as mock_popen:
         result = disp.dispatch_wee_dev(sample_item)
     mock_popen.assert_not_called()
     assert result == {"pid": -1}
@@ -157,8 +175,10 @@ def test_dispatch_wee_dev_uses_opus_model(disp, sample_item):
         captured["agent"] = agent
         return 555
 
-    with patch.object(disp, "DRY_RUN", False), \
-         patch.object(disp, "dispatch_via_subprocess", side_effect=fake_dispatch):
+    with (
+        patch.object(disp, "DRY_RUN", False),
+        patch.object(disp, "dispatch_via_subprocess", side_effect=fake_dispatch),
+    ):
         disp.dispatch_wee_dev(sample_item)
 
     assert captured["agent"] == "wee-dev"
@@ -167,18 +187,23 @@ def test_dispatch_wee_dev_uses_opus_model(disp, sample_item):
 
 # dispatch_wee_qa tests
 
+
 def test_dispatch_wee_qa_returns_pid_dict(disp, sample_item):
-    with patch.object(disp, "DRY_RUN", False), \
-         patch.object(disp, "dispatch_via_subprocess", return_value=3003):
+    with (
+        patch.object(disp, "DRY_RUN", False),
+        patch.object(disp, "dispatch_via_subprocess", return_value=3003),
+    ):
         result = disp.dispatch_wee_qa(sample_item)
     assert "pid" in result
     assert result["pid"] == 3003
 
 
 def test_dispatch_wee_qa_no_background_task_api(disp, sample_item):
-    with patch.object(disp, "DRY_RUN", False), \
-         patch.object(disp, "dispatch_via_subprocess", return_value=4004), \
-         patch.object(disp, "api_request") as mock_api:
+    with (
+        patch.object(disp, "DRY_RUN", False),
+        patch.object(disp, "dispatch_via_subprocess", return_value=4004),
+        patch.object(disp, "api_request") as mock_api,
+    ):
         disp.dispatch_wee_qa(sample_item)
     mock_api.assert_not_called()
 
@@ -191,8 +216,10 @@ def test_dispatch_wee_qa_uses_sonnet_model(disp, sample_item):
         captured["agent"] = agent
         return 999
 
-    with patch.object(disp, "DRY_RUN", False), \
-         patch.object(disp, "dispatch_via_subprocess", side_effect=fake_dispatch):
+    with (
+        patch.object(disp, "DRY_RUN", False),
+        patch.object(disp, "dispatch_via_subprocess", side_effect=fake_dispatch),
+    ):
         disp.dispatch_wee_qa(sample_item)
 
     assert captured["agent"] == "wee-qa"
@@ -200,6 +227,7 @@ def test_dispatch_wee_qa_uses_sonnet_model(disp, sample_item):
 
 
 # has_running tests
+
 
 def test_has_running_wee_dev_no_lock(disp, tmp_lock):
     assert not disp.has_running_wee_dev_task()
@@ -227,17 +255,22 @@ def test_has_running_wee_qa_no_pid_key(disp, tmp_lock):
 
 # Lock file / no-API-POST tests
 
+
 def test_dispatch_wee_dev_result_has_pid_not_task_id(disp, sample_item):
-    with patch.object(disp, "DRY_RUN", False), \
-         patch.object(disp, "dispatch_via_subprocess", return_value=8888):
+    with (
+        patch.object(disp, "DRY_RUN", False),
+        patch.object(disp, "dispatch_via_subprocess", return_value=8888),
+    ):
         result = disp.dispatch_wee_dev(sample_item)
     assert "task_id" not in result
     assert "pid" in result
 
 
 def test_dispatch_wee_qa_result_has_pid_not_task_id(disp, sample_item):
-    with patch.object(disp, "DRY_RUN", False), \
-         patch.object(disp, "dispatch_via_subprocess", return_value=7777):
+    with (
+        patch.object(disp, "DRY_RUN", False),
+        patch.object(disp, "dispatch_via_subprocess", return_value=7777),
+    ):
         result = disp.dispatch_wee_qa(sample_item)
     assert "task_id" not in result
     assert "pid" in result
@@ -251,11 +284,15 @@ def test_background_tasks_url_not_posted_to(disp, sample_item):
             posted_urls.append(url)
         return {}
 
-    with patch.object(disp, "DRY_RUN", False), \
-         patch.object(disp, "dispatch_via_subprocess", return_value=1), \
-         patch.object(disp, "api_request", side_effect=fake_api):
+    with (
+        patch.object(disp, "DRY_RUN", False),
+        patch.object(disp, "dispatch_via_subprocess", return_value=1),
+        patch.object(disp, "api_request", side_effect=fake_api),
+    ):
         disp.dispatch_wee_dev(sample_item)
         disp.dispatch_wee_qa(sample_item)
 
     bg_url = disp.BACKGROUND_TASKS_URL
-    assert bg_url not in posted_urls, "BACKGROUND_TASKS_URL was POSTed to — session leakage bug still present"
+    assert (
+        bg_url not in posted_urls
+    ), "BACKGROUND_TASKS_URL was POSTed to — session leakage bug still present"

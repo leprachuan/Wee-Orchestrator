@@ -1717,28 +1717,18 @@ class SessionManager:
         ],
     }
 
-    OPENROUTER_PROVIDER_PRIORITY = [
-        "OpenRouter - Anthropic",
-        "OpenRouter - OpenAI",
-        "OpenRouter - Google",
-        "OpenRouter - Meta Llama",
-        "OpenRouter - DeepSeek",
-        "OpenRouter - Qwen",
-    ]
-
-    OPENROUTER_PROVIDER_NAMES = {
-        "anthropic": "Anthropic",
-        "openai": "OpenAI",
-        "meta-llama": "Meta Llama",
-        "google": "Google",
-        "deepseek": "DeepSeek",
-        "qwen": "Qwen",
-        "microsoft": "Microsoft",
-        "mistral": "Mistral",
-        "perplexity": "Perplexity",
-        "fireworks": "Fireworks",
-        "together": "Together",
-        "replicate": "Replicate",
+    # Popular OpenRouter models — sorted first in dynamic discovery (Issue #142)
+    OPENROUTER_POPULAR_MODELS = {
+        "meta-llama/llama-4-scout",
+        "meta-llama/llama-4-maverick",
+        "google/gemma-3-27b-it:free",
+        "qwen/qwen3-32b:free",
+        "deepseek/deepseek-r1:free",
+        "microsoft/phi-4-reasoning-plus:free",
+        "anthropic/claude-sonnet-4",
+        "anthropic/claude-haiku-4",
+        "google/gemini-2.5-flash-preview",
+        "openai/gpt-4.1-mini",
     }
 
     def __init__(self, config_file: Optional[str] = None, app_env: str = "PROD"):
@@ -1830,13 +1820,7 @@ class SessionManager:
         self._env_devin_models = None
         self._env_cursor_models = None
         self._env_wee_models = None
-        self._openrouter_cache_ts = 0  # TTL timestamp for wee model discovery cache
-        self._openrouter_models_cache: Optional[Dict] = (
-            None  # cached fetch_openrouter_models() result
-        )
-        self._openrouter_models_cache_ts: float = (
-            0  # TTL timestamp for fetch_openrouter_models()
-        )
+        self._openrouter_cache_ts = 0.0
 
         # Load command timeout from environment
         self.command_timeout = get_command_timeout()
@@ -2002,7 +1986,7 @@ class SessionManager:
         """List stored secret names via secret_tool.py."""
         try:
             proc = subprocess.run(
-                [sys.executable, secret_tool, "list", "--backend", "pass"],
+                [sys.executable, secret_tool, "list", "--backend", "file"],
                 capture_output=True,
                 text=True,
                 timeout=10,
@@ -2577,39 +2561,37 @@ You can mention an agent in your prompt and it will auto-delegate:
             )
 
     def _slash_notifications(self, argument, session_data, n8n_session_id):
-        """Handle /notifications slash command."""
+        """Handle /notifications slash command.
+
+        Controls the **global** notification toggle which suppresses ALL
+        background task completion notifications (Telegram, WebEx, and WebUI)
+        when disabled.  Critical alerts (heartbeat, crashes) are never
+        suppressed.
+        """
+        _notif_identity = session_data.get("identity", "") or ""
+        _notif_channel = session_data.get("channel", "webui")
+
         if not argument:
             argument = "current"
 
-        # Resolve identity for per-user preference store
-        _notif_identity = self._bg_identity or session_data.get("identity")
-        _notif_channel = session_data.get("channel", "webui")
-
         if argument == "current":
-            # Check global preference first, then per-identity, then session
             if self._notification_mgr:
-                if self._notification_mgr.is_muted("_global"):
-                    pref = "off"
-                elif _notif_identity:
-                    pref = self._notification_mgr.get_user_pref(_notif_identity)
-                else:
-                    pref = session_data.get("notification_preference", "all")
+                enabled = self._notification_mgr.is_global_enabled()
             else:
-                pref = session_data.get("notification_preference", "all")
-            status = "ON (All updates)" if pref == "all" else "OFF (WebUI only)"
+                enabled = session_data.get("notification_preference", "all") != "off"
+            status = "ON (all channels)" if enabled else "OFF (suppressed)"
             return f"🔔 **Background Notifications:** `{status}`"
 
         elif argument in ["on", "all"]:
             self.update_session_field(n8n_session_id, "notification_preference", "all")
             if self._notification_mgr:
-                # Store under specific identity if available
                 if _notif_identity:
                     self._notification_mgr.set_user_pref(
                         _notif_identity, _notif_channel, "all"
                     )
-                # Always store global preference so it applies across all channels
                 self._notification_mgr.set_user_pref("_global", _notif_channel, "all")
-            return "✓ Background task notifications enabled for Telegram/WebEx."
+                self._notification_mgr.set_global_enabled(True)
+            return "✓ Background task notifications enabled for all channels."
 
         elif argument in ["off", "mute"]:
             self.update_session_field(n8n_session_id, "notification_preference", "off")
@@ -2618,10 +2600,11 @@ You can mention an agent in your prompt and it will auto-delegate:
                     self._notification_mgr.set_user_pref(
                         _notif_identity, _notif_channel, "off"
                     )
-                # Always store global preference so it applies across all channels
                 self._notification_mgr.set_user_pref("_global", _notif_channel, "off")
+                self._notification_mgr.set_global_enabled(False)
             return (
-                "✓ Background task notifications muted for Telegram/WebEx (WebUI only)."
+                "✓ Background task notifications suppressed globally.\n"
+                "Critical alerts (heartbeat, crashes) will still be delivered."
             )
         else:
             return "Usage: `/notifications [on|off]` to toggle background task notifications."
@@ -3588,6 +3571,8 @@ You can mention an agent in your prompt and it will auto-delegate:
             print(f"Error fetching opencode models: {e}", file=sys.stderr)
             return self._static_models_to_dict(self.OPENCODE_MODELS)
 
+
+
     def _static_models_to_dict(self, static_dict: Dict) -> Dict:
         """Convert static model config {cat: [(id, desc, aliases)...]} to {cat: [id,...]}."""
         return {
@@ -3945,13 +3930,15 @@ You can mention an agent in your prompt and it will auto-delegate:
         return self._static_models_to_dict(self.CURSOR_MODELS)
 
     def fetch_wee_models(self) -> Dict:
-        """Return available wee models: local Ollama + OpenRouter cloud models.
+        """Return available wee models: live Ollama + live OpenRouter (Issue #142).
 
         Resolution order:
           1. WEE_MODELS_JSON env var (custom model list)
           2. Live Ollama discovery + live OpenRouter discovery (300s TTL cache)
           3. Static WEE_MODELS fallback
         """
+        import time as _time
+
         # Check for env var override first
         env_models = os.getenv("WEE_MODELS_JSON")
         if env_models:
@@ -3969,62 +3956,87 @@ You can mention an agent in your prompt and it will auto-delegate:
 
         cache_ttl = 300  # 5 minutes
 
-        # Return cache if still valid
+        # Return cached result if still valid
         if (
             self._env_wee_models is not None
-            and time.time() - self._openrouter_cache_ts < cache_ttl
+            and _time.time() - self._openrouter_cache_ts < cache_ttl
         ):
             return self._static_models_to_dict(self._env_wee_models)
 
-        # Start with static Ollama models
-        result = {}
+        # Start with static model lists as fallback
+        result = {"Ollama Models": [], "OpenRouter Models": []}
         for cat, entries in self.WEE_MODELS.items():
             result[cat] = list(entries)
 
-        # Try live Ollama discovery
+        # Live Ollama discovery (Issue #142: return all installed models)
         try:
             import httpx
-
             resp = httpx.get(
                 "http://192.168.1.101:11434/api/tags",
                 timeout=httpx.Timeout(connect=5.0, read=10.0, write=10.0, pool=10.0),
             )
             if resp.status_code == 200:
                 tags = resp.json().get("models", [])
-                ollama_models = [(f"ollama/{t['name']}", t["name"], []) for t in tags]
-                if ollama_models:
-                    # Merge aliases from static WEE_MODELS into discovered models
-                    static_ollama = {
-                        e[0]: e for e in self.WEE_MODELS.get("Ollama Models", [])
-                    }
-                    merged_ollama = []
-                    discovered_ids = set()
-                    for or_id, name, _ in ollama_models:
-                        if or_id in static_ollama:
-                            merged_ollama.append(static_ollama[or_id])
-                        else:
-                            merged_ollama.append((or_id, name, []))
-                        discovered_ids.add(or_id)
-                    # Add static models not found via live discovery (preserves aliases)
-                    for entry in self.WEE_MODELS.get("Ollama Models", []):
-                        if entry[0] not in discovered_ids:
-                            merged_ollama.append(entry)
+                static_ollama = {e[0]: e for e in self.WEE_MODELS.get("Ollama Models", [])}
+                merged_ollama = []
+                discovered_ids = set()
+                for t in tags:
+                    or_id = "ollama/" + t["name"]
+                    if or_id in static_ollama:
+                        merged_ollama.append(static_ollama[or_id])
+                    else:
+                        merged_ollama.append((or_id, t["name"], []))
+                    discovered_ids.add(or_id)
+                # Add static models not found in live discovery (preserves aliases)
+                for entry in self.WEE_MODELS.get("Ollama Models", []):
+                    if entry[0] not in discovered_ids:
+                        merged_ollama.append(entry)
+                if merged_ollama:
                     result["Ollama Models"] = merged_ollama
-        except Exception:
-            pass
+                    print(
+                        "[wee] Ollama: discovered %d models" % len(tags),
+                        file=sys.stderr,
+                    )
+        except Exception as ollama_err:
+            print("[wee] Ollama discovery failed: %s" % ollama_err, file=sys.stderr)
 
-        # Try live OpenRouter discovery via fetch_openrouter_models()
+        # Live OpenRouter discovery — show ALL available models (Issue #142)
         try:
-            or_models = self.fetch_openrouter_models()
-            if or_models and any(v for v in or_models.values()):
-                # Remove the static OpenRouter Models key and replace with dynamic groups
-                result.pop("OpenRouter Models", None)
-                result.update(or_models)
-        except Exception as e:
-            print(f"[wee] OpenRouter discovery error: {e}", file=sys.stderr)
+            api_key = None
+            try:
+                import keyring
+                api_key = keyring.get_password("openrouter", "api_key")
+            except Exception:
+                pass
+            if not api_key:
+                api_key = os.getenv("OPENROUTER_API_KEY")
+
+            if api_key:
+                import urllib.request
+                req = urllib.request.Request(
+                    "https://openrouter.ai/api/v1/models",
+                    headers={"Authorization": "Bearer " + api_key},
+                )
+                resp = urllib.request.urlopen(req, timeout=10)
+                data = json.loads(resp.read())
+                all_models = data.get("data", [])
+
+                popular = self.OPENROUTER_POPULAR_MODELS
+                static_aliases = {e[0]: e[2] for e in self.WEE_MODELS.get("OpenRouter Models", [])}
+                discovered_popular = []
+                discovered_rest = []
+                for m in all_models:
+                    mid = m.get("id", "")
+                    if mid:
+                        name = m.get("name", mid)
+                        or_id = "openrouter/" + mid
+                        discovered.append((or_id, name + " (OpenRouter)", []))
+
+        except Exception as or_err:
+            print("[wee] OpenRouter discovery failed: %s" % or_err, file=sys.stderr)
 
         self._env_wee_models = result
-        self._openrouter_cache_ts = time.time()
+        self._openrouter_cache_ts = _time.time()
         return self._static_models_to_dict(result)
 
     def get_models_for_runtime(self, runtime: str) -> Dict:
@@ -4670,16 +4682,24 @@ You can mention an agent in your prompt and it will auto-delegate:
             if m.lower() == name_lower:
                 return m
 
-        # Exact match with provider prefix stripped (e.g., "gemma4:e4b" matches "ollama/gemma4:e4b")
+        # Exact match with "ollama/" prefix stripped (e.g., "gemma4:e4b" matches "ollama/gemma4:e4b").
+        # Intentionally only strips the ollama/ prefix -- not arbitrary provider prefixes --
+        # so bare names like "gpt-5-mini" never accidentally match "openrouter/openai/gpt-5-mini".
         for m in all_models:
             model_lower = m.lower()
-            if "/" in model_lower:
-                suffix = model_lower.split("/", 1)[1]
+            if model_lower.startswith("ollama/"):
+                suffix = model_lower[len("ollama/"):]
                 if suffix == name_lower:
                     return m
 
-        # Substring matching with shortest-match preference
-        matches = [m for m in all_models if name_lower in m.lower()]
+        # Substring matching with shortest-match preference.
+        # For wee runtime, bare names without an openrouter/ prefix are scoped to Ollama models
+        # only -- prevents accidental matches against the full OpenRouter catalog (350+ models).
+        if runtime == "wee" and not name_lower.startswith("openrouter/"):
+            candidate_models = [m for m in all_models if not m.lower().startswith("openrouter/")]
+        else:
+            candidate_models = all_models
+        matches = [m for m in candidate_models if name_lower in m.lower()]
         if len(matches) == 1:
             return matches[0]
         if matches:
@@ -6364,9 +6384,13 @@ User Request:
                                         msg = obj.get("message") or {}
                                         for block in msg.get("content") or []:
                                             if block.get("type") == "tool_result":
+                                                _tr_content = block.get("content", "")
+                                                if isinstance(_tr_content, list):
+                                                    _tr_content = " ".join(b.get("text", str(b)) if isinstance(b, dict) else str(b) for b in _tr_content)
                                                 tc_event = {
                                                     "event": "result",
                                                     "id": block.get("tool_use_id", ""),
+                                                    "output": str(_tr_content)[:2000],
                                                     "is_error": block.get(
                                                         "is_error", False
                                                     ),
@@ -6453,7 +6477,7 @@ User Request:
                                                 "status": _gobj.get(
                                                     "status", "completed"
                                                 ),
-                                                "output": _gobj.get("output", "")[:500],
+                                                "output": _gobj.get("output", "")[:2000],
                                             }
                                             if stream_buffer:
                                                 stream_buffer.push(
@@ -7170,16 +7194,14 @@ User Request:
                     elif event.type == SessionEventType.TOOL_EXECUTION_COMPLETE:
                         tool_name = "tool"
                         if hasattr(event, "data"):
-                            tool_name = (
-                                getattr(event.data, "name", None)
-                                or getattr(event.data, "tool_name", None)
-                                or "tool"
-                            )
+                            tool_name = getattr(event.data, "name", None) or getattr(event.data, "tool_name", None) or "tool"
+                        tool_output = str(getattr(event.data, "output", "") or getattr(event.data, "result", "") or getattr(event.data, "content", "") or "")[:2000] if hasattr(event, "data") else ""
                         tc_evt = {
                             "event": "completed",
                             "id": f"tc_copilot-sdk_{_tool_call_counter[0]}",
                             "name": str(tool_name),
                             "input": "",
+                            "output": tool_output,
                             "runtime": "copilot-sdk",
                             "timestamp": time.strftime(
                                 "%Y-%m-%dT%H:%M:%SZ", time.gmtime()
@@ -7466,16 +7488,16 @@ User Request:
                                 if stream_buffer:
                                     stream_buffer.push("tool_call", tc_evt)
                             elif isinstance(block, ToolResultBlock):
+                                _block_content = block.content
+                                if isinstance(_block_content, list):
+                                    _block_content = " ".join(getattr(b, "text", str(b)) for b in _block_content)
                                 tc_evt = {
                                     "event": "completed",
                                     "id": block.tool_use_id
                                     or f"tc_claude-sdk_{_tool_call_counter[0]}",
                                     "name": "tool",
-                                    "input": (
-                                        str(block.content)[:200]
-                                        if block.content
-                                        else ""
-                                    ),
+                                    "input": "",
+                                    "output": str(_block_content)[:2000] if _block_content else "",
                                     "is_error": getattr(block, "is_error", False),
                                     "runtime": "claude-sdk",
                                     "timestamp": time.strftime(
@@ -8213,58 +8235,150 @@ User Request:
 
         return self.strip_metadata(output, "cursor")
 
-    def run_wee_native(
-        self,
-        prompt: str,
-        model: str,
-        agent: str,
-        session_id: Optional[str],
-        resume: bool,
-        n8n_session_id: str,
-        timeout: Optional[int] = None,
-        render_type: str = "text",
-    ) -> str:
-        """Execute via Wee Native runtime - OpenAI-compatible chat completions.
+    # ── Issue #128: Token usage tracking helpers ─────────────────────────────
 
-        Connects to any OpenAI-compatible API endpoint (Ollama, OpenRouter,
-        LM Studio, etc.) using the openai Python package. No external CLI
-        binary required.
-
-        Model format: [provider/]model_name
-        Examples:
-            ollama/gemma4:e4b         - Ollama on Kubuntu
-            openrouter/meta-llama/llama-4-scout - OpenRouter cloud
-            gemma4:e4b                - Default endpoint (Ollama)
-
-        Supports:
-            - Real-time streaming to WebUI SSE consumers
-            - Multi-turn conversation history (#108)
-            - Tool-call agentic loop (#107)
-            - SSE streaming of tool execution (#109)
-        """
+    def _fetch_openrouter_pricing(self) -> dict:
+        """Fetch and cache OpenRouter model pricing (1h TTL)."""
+        import time as _time
         import json as _json
+        import urllib.request
 
+        cache_path = Path('/tmp/openrouter_pricing.json')
+        now = _time.time()
+        if cache_path.exists() and (now - cache_path.stat().st_mtime) < 3600:
+            try:
+                with open(cache_path) as f:
+                    return _json.load(f)
+            except Exception:
+                pass
         try:
-            from openai import OpenAI
-        except ImportError:
-            return "Error: openai package not installed. " "Run: pip install openai"
+            with urllib.request.urlopen(
+                'https://openrouter.ai/api/v1/models', timeout=10
+            ) as resp:
+                data = _json.loads(resp.read().decode())
+            pricing = {}
+            for model_info in data.get('data', []):
+                mid = model_info.get('id', '')
+                p = model_info.get('pricing', {})
+                try:
+                    pricing[mid] = {
+                        'prompt': float(p.get('prompt', 0) or 0),
+                        'completion': float(p.get('completion', 0) or 0),
+                    }
+                except (ValueError, TypeError):
+                    pass
+            with open(cache_path, 'w') as f:
+                _json.dump(pricing, f)
+            return pricing
+        except Exception as e:
+            print(f'[TokenUsage] Could not fetch OpenRouter pricing: {e}', file=sys.stderr)
+            return {}
 
         session_data = self.get_or_create_session_data(n8n_session_id)
+        # Issue #142: Retrieve background task ID for tool call tracking in Tasks panel
+        bg_task_id = session_data.get("bg_task_id")
         agent_dir = self.AGENTS.get(agent, self.AGENTS["orchestrator"])["path"]
         effective_timeout = timeout if timeout is not None else self.command_timeout
         channel = session_data.get("channel", "webui")
 
-        # -- Resolve model, endpoint, and API key --
-        api_base = session_data.get("api_base") or os.environ.get("WEE_API_BASE")
-        api_key = session_data.get("api_key") or os.environ.get("WEE_API_KEY")
+    def _calculate_anthropic_cost(self, model: str, prompt_tokens: int, completion_tokens: int):
+        """Calculate cost for Anthropic / claude-sdk models."""
+        ANTHROPIC_PRICING = {
+            'claude-haiku-4-5':  (0.80, 4.00),
+            'claude-haiku-4':    (0.80, 4.00),
+            'claude-haiku':      (0.80, 4.00),
+            'claude-sonnet-4-5': (3.00, 15.00),
+            'claude-sonnet-4':   (3.00, 15.00),
+            'claude-sonnet':     (3.00, 15.00),
+            'claude-opus-4-5':   (15.00, 75.00),
+            'claude-opus-4':     (15.00, 75.00),
+            'claude-opus':       (15.00, 75.00),
+        }
+        model_lower = model.lower()
+        input_price, output_price = 3.00, 15.00
+        for key, (inp, out) in ANTHROPIC_PRICING.items():
+            if key in model_lower:
+                input_price, output_price = inp, out
+                break
+        cost = (prompt_tokens * input_price / 1_000_000) + (completion_tokens * output_price / 1_000_000)
+        return cost, self._get_cost_label(cost)
 
-        # Provider presets
+    def _get_cost_label(self, cost_usd: float) -> str:
+        """Format cost as display label."""
+        if cost_usd == 0.0:
+            return 'free'
+        if cost_usd < 0.00001:
+            return f'${cost_usd:.8f}'.rstrip('0')
+        if cost_usd < 0.001:
+            return f'${cost_usd:.6f}'.rstrip('0')
+        return f'${cost_usd:.4f}'.rstrip('0').rstrip('.')
+
+    def _log_token_usage(
+        self,
+        session_id: str,
+        model: str,
+        runtime: str,
+        provider: str,
+        prompt_tokens: int,
+        completion_tokens: int,
+        total_tokens: int,
+        cost_usd: float,
+        duration_ms: int,
+    ):
+        """Append a usage entry to logs/token_usage.jsonl."""
+        import time as _time
+        import json as _json
+        try:
+            self.logs_dir.mkdir(parents=True, exist_ok=True)
+            entry = {
+                'timestamp': _time.time(),
+                'session_id': session_id,
+                'model': model,
+                'runtime': runtime,
+                'provider': provider,
+                'prompt_tokens': prompt_tokens,
+                'completion_tokens': completion_tokens,
+                'total_tokens': total_tokens,
+                'cost_usd': cost_usd,
+                'duration_ms': duration_ms,
+            }
+            with open(self.logs_dir / 'token_usage.jsonl', 'a') as f:
+                f.write(_json.dumps(entry) + '\n')
+        except Exception as e:
+            print(f'[TokenUsage] Failed to log usage: {e}', file=sys.stderr)
+
+    # ── End Issue #128 helpers ─────────────────────────────────────────────────
+
+
+    # ---- Issue #125 helpers ------------------------------------------------
+
+    def _wee_load_free_config(self) -> dict:
+        """Load wee_free_models.json config. Returns defaults if file missing."""
+        import json as _json
+        config_path = Path(__file__).parent / "wee_free_models.json"
+        try:
+            with open(config_path) as f:
+                return _json.load(f)
+        except (FileNotFoundError, _json.JSONDecodeError):
+            return {
+                "max_retries_per_model": 3,
+                "retry_backoff_seconds": [2, 5, 10],
+                "free_model_fallback_chain": [],
+            }
+
+    def _wee_is_free_model(self, model: str) -> bool:
+        """Return True if model is an OpenRouter :free model."""
+        return ":free" in model.lower() and "openrouter" in model.lower()
+
+    def _wee_resolve_endpoint(self, model, session_api_base, session_api_key):
+        """Resolve (api_base, api_key, resolved_model) for a wee model string."""
         _PRESETS = {
             "ollama": ("http://192.168.1.101:11434/v1", "ollama"),
             "openrouter": ("https://openrouter.ai/api/v1", None),
             "lmstudio": ("http://localhost:1234/v1", "lm-studio"),
         }
-
+        api_base = session_api_base or os.environ.get("WEE_API_BASE")
+        api_key = session_api_key or os.environ.get("WEE_API_KEY")
         resolved_model = model
         print(f"[wee-runtime] Session model: {model}", file=sys.stderr)
         for prefix, (preset_base, preset_key) in _PRESETS.items():
@@ -8275,11 +8389,9 @@ User Request:
                 if not api_key and preset_key:
                     api_key = preset_key
                 break
-
         if not api_base:
             api_base = "http://192.168.1.101:11434/v1"
         if not api_key:
-            # Issue #153: Check OPENROUTER_API_KEY env var for OpenRouter models
             if "openrouter" in api_base.lower():
                 api_key = os.environ.get("OPENROUTER_API_KEY")
             # Try keyring for OpenRouter
@@ -8290,232 +8402,150 @@ User Request:
                     api_key = keyring.get_password("openrouter", "api_key")
                 except Exception:
                     pass
-            # Issue #153: Raise clear error instead of defaulting to "ollama"
+                if not api_key:
+                    api_key = os.environ.get("OPENROUTER_API_KEY")
             if not api_key:
                 if "openrouter" in api_base.lower():
                     raise ValueError(
                         "OpenRouter API key not found. Set OPENROUTER_API_KEY "
                         'env var or store via: python3 -c "import keyring; '
                         "keyring.set_password('openrouter', 'api_key', "
-                        "'sk-or-...')\".\"."
+                        "'sk-or-...')\""
                     )
                 api_key = "ollama"
+        return api_base, api_key, resolved_model
 
-        print(
-            f"[Wee Native] model={resolved_model} api_base={api_base} "
-            f"session={n8n_session_id[:8]}...",
-            file=sys.stderr,
-        )
+    # ---- End Issue #125 helpers ---------------------------------------------
 
-        # Issue #111: Build context prompt with correct args (after model resolution)
-        base_context_prompt = self.build_agent_context_prompt(
-            agent,
-            prompt,
-            n8n_session_id,
-            render_type=render_type,
-            timeout=effective_timeout,
-            runtime="wee",
-            model=resolved_model,
-            channel=channel,
-        )
-        # Issue #111: Augment system prompt with explicit tool capability section
-        # so models that ignore JSON schemas still know tools are available.
-        context_prompt = self._wee_augment_system_prompt_with_tools(base_context_prompt)
-        # Issue #113: Augment system prompt with anti-hallucination rules
-        context_prompt += self._wee_anti_hallucination_prompt()
 
-        # -- Streaming infrastructure --
-        stream_buffer = getattr(self, "_stream_buffers", {}).get(n8n_session_id)
+    # ---- Issue #125 helpers ------------------------------------------------
 
-        # -- Create OpenAI client and call API --
-        # Use httpx.Timeout for granular control: fast connect failure,
-        # generous read timeout for streaming
-        import httpx
+    def _wee_load_free_config(self) -> dict:
+        """Load wee_free_models.json config. Returns defaults if file missing."""
+        import json as _json
+        config_path = Path(__file__).parent / "wee_free_models.json"
+        try:
+            with open(config_path) as f:
+                return _json.load(f)
+        except (FileNotFoundError, _json.JSONDecodeError):
+            return {
+                "max_retries_per_model": 3,
+                "retry_backoff_seconds": [2, 5, 10],
+                "free_model_fallback_chain": [],
+            }
 
-        client = OpenAI(
-            base_url=api_base,
-            api_key=api_key,
-            timeout=httpx.Timeout(
-                timeout=effective_timeout,
-                connect=15.0,
-            ),
-            max_retries=0,
-        )
+    def _wee_is_free_model(self, model: str) -> bool:
+        """Return True if model is an OpenRouter :free model."""
+        return ":free" in model.lower() and "openrouter" in model.lower()
 
-        # -- Issue #108: Load conversation history --
-        messages = self._wee_load_messages(n8n_session_id, context_prompt, resume)
-        messages.append({"role": "user", "content": prompt})
+    def _wee_resolve_endpoint(self, model, session_api_base, session_api_key):
+        """Resolve (api_base, api_key, resolved_model) for a wee model string."""
+        _PRESETS = {
+            "ollama": ("http://192.168.1.101:11434/v1", "ollama"),
+            "openrouter": ("https://openrouter.ai/api/v1", None),
+            "lmstudio": ("http://localhost:1234/v1", "lm-studio"),
+        }
+        api_base = session_api_base or os.environ.get("WEE_API_BASE")
+        api_key = session_api_key or os.environ.get("WEE_API_KEY")
+        resolved_model = model
+        for prefix, (preset_base, preset_key) in _PRESETS.items():
+            if model.lower().startswith(f"{prefix}/"):
+                resolved_model = model[len(prefix) + 1:]
+                if not api_base:
+                    api_base = preset_base
+                if not api_key and preset_key:
+                    api_key = preset_key
+                break
+        if not api_base:
+            api_base = "http://192.168.1.101:11434/v1"
+        if not api_key:
+            if "openrouter" in api_base.lower():
+                try:
+                    import keyring
+                    api_key = keyring.get_password("openrouter", "api_key")
+                except Exception:
+                    pass
+            if not api_key:
+                api_key = "ollama"
+        return api_base, api_key, resolved_model
 
-        # -- Tool definitions for agentic loop (Issue #107) --
-        _WEE_TOOLS = [
-            {
-                "type": "function",
-                "function": {
-                    "name": "bash",
-                    "description": "Execute a bash shell command and return its output.",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "command": {
-                                "type": "string",
-                                "description": "The bash command to execute",
-                            }
-                        },
-                        "required": ["command"],
-                    },
-                },
-            },
-            {
-                "type": "function",
-                "function": {
-                    "name": "python",
-                    "description": "Execute Python 3 code and return the output.",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "code": {
-                                "type": "string",
-                                "description": "The Python code to execute",
-                            }
-                        },
-                        "required": ["code"],
-                    },
-                },
-            },
-        ]
+    # ---- End Issue #125 helpers ---------------------------------------------
 
-        collected_output = []
-        _tool_call_counter = 0
-        MAX_TOOL_ROUNDS = 10
-        # Issue #160: Track token usage across all rounds
-        _total_prompt_tokens = 0
-        _total_completion_tokens = 0
-        _usage_available = False
+    def run_wee_native(
+        self,
+        prompt: str,
+        model: str,
+        agent: str,
+        session_id,
+        resume: bool,
+        n8n_session_id: str,
+        timeout=None,
+        render_type: str = "text",
+    ) -> str:
+        """Execute via Wee Native runtime - OpenAI-compatible chat completions.
 
-        # Issue #160: Track token usage across tool rounds
-        _total_prompt_tokens = 0
-        _total_completion_tokens = 0
-        _usage_available = False
+        Issue #125: 429 retry with backoff + iterative model fallback chain.
+        Uses a for-loop over fallback models — no recursion (fixes B01).
+        Fallback switches are streamed to user for visibility (fixes B02).
+        time.sleep is safe: sync function runs in thread-pool worker (M01).
+        """
+        import json as _json
+        import time as _time
 
         try:
-            for round_num in range(MAX_TOOL_ROUNDS + 1):
-                # Build create kwargs — include tools unless on final safety round
-                create_kwargs = {
-                    "model": resolved_model,
-                    "messages": messages,
-                    "stream": True,
-                    # Issue #160: Request usage stats in streaming response
-                    "stream_options": {"include_usage": True},
-                }
-                if round_num < MAX_TOOL_ROUNDS:
-                    create_kwargs["tools"] = _WEE_TOOLS
+            from openai import OpenAI
+        except ImportError:
+            return "Error: openai package not installed. Run: pip install openai"
 
-                try:
-                    stream = client.chat.completions.create(**create_kwargs)
-                except Exception as tools_err:
-                    # Some models/endpoints may not support tools or stream_options
-                    retried = False
-                    if "tools" in create_kwargs:
-                        print(
-                            f"[Wee Native] Tools not supported, retrying without: {tools_err}",
-                            file=sys.stderr,
-                        )
-                        create_kwargs.pop("tools", None)
-                        try:
-                            stream = client.chat.completions.create(**create_kwargs)
-                            retried = True
-                        except Exception:
-                            pass  # fall through to stream_options removal
-                    if not retried and "stream_options" in create_kwargs:
-                        # Issue #160: Ollama/LM Studio may not support stream_options
-                        print(
-                            f"[Wee Native] stream_options not supported, retrying without: {tools_err}",
-                            file=sys.stderr,
-                        )
-                        create_kwargs.pop("stream_options", None)
-                        stream = client.chat.completions.create(**create_kwargs)
-                    elif not retried:
-                        raise
+        session_data = self.get_or_create_session_data(n8n_session_id)
+        effective_timeout = timeout if timeout is not None else self.command_timeout
+        channel = session_data.get("channel", "webui")
+        context_prompt = self.build_agent_context_prompt(prompt, agent, channel, n8n_session_id)
+        _sess_api_base = session_data.get("api_base")
+        _sess_api_key = session_data.get("api_key")
 
-                # Accumulate content and tool calls from streaming response
-                round_content = []
-                tool_calls_acc = {}  # index -> {id, name, arguments}
+        # Issue #125: build iterative fallback chain (B01: no recursion)
+        _free_cfg = self._wee_load_free_config()
+        _max_retries = _free_cfg.get("max_retries_per_model", 3)
+        _backoff = _free_cfg.get("retry_backoff_seconds", [2, 5, 10])
+        _is_free = self._wee_is_free_model(model)
+        if _is_free:
+            _chain_raw = _free_cfg.get("free_model_fallback_chain", [])
+            _chain = [model] + [m for m in _chain_raw if m.lower() != model.lower()]
+        else:
+            _chain = [model]
 
-                for chunk in stream:
-                    # Issue #160: Capture usage stats from final streaming chunk
-                    if hasattr(chunk, "usage") and chunk.usage is not None:
-                        _u = chunk.usage
-                        _total_prompt_tokens += getattr(_u, "prompt_tokens", 0) or 0
-                        _total_completion_tokens += (
-                            getattr(_u, "completion_tokens", 0) or 0
-                        )
-                        _usage_available = True
+        stream_buffer = getattr(self, "_stream_buffers", {}).get(n8n_session_id)
 
-                    if not chunk.choices:
-                        continue
-                    delta = chunk.choices[0].delta
-
-                    # Content tokens — stream to user
-                    if delta.content:
-                        token = delta.content
-                        round_content.append(token)
-                        if stream_buffer:
-                            stream_buffer.push("chunk", {"text": token})
-
-                    # Tool call deltas (Issue #107)
-                    if getattr(delta, "tool_calls", None):
-                        for tc_delta in delta.tool_calls:
-                            idx = tc_delta.index
-                            if idx not in tool_calls_acc:
-                                _tool_call_counter += 1
-                                tool_calls_acc[idx] = {
-                                    "id": getattr(tc_delta, "id", None)
-                                    or f"tc_wee_{_tool_call_counter}",
-                                    "name": "",
-                                    "arguments": "",
-                                }
-                            if tc_delta.id and not tool_calls_acc[idx]["id"].startswith(
-                                "tc_wee_"
-                            ):
-                                pass  # keep first real id
-                            elif tc_delta.id:
-                                tool_calls_acc[idx]["id"] = tc_delta.id
-                            if tc_delta.function:
-                                if tc_delta.function.name:
-                                    tool_calls_acc[idx]["name"] = tc_delta.function.name
-                                if tc_delta.function.arguments:
-                                    tool_calls_acc[idx][
-                                        "arguments"
-                                    ] += tc_delta.function.arguments
-
-                content_text = "".join(round_content)
-
-                # No tool calls — we have the final answer
-                if not tool_calls_acc:
-                    collected_output.append(content_text)
-                    messages.append({"role": "assistant", "content": content_text})
-                    break
-
-                # -- Tool calls detected (Issues #107 + #109) --
-                print(
-                    f"[Wee Native] Round {round_num + 1}: {len(tool_calls_acc)} tool call(s) detected",
-                    file=sys.stderr,
+        for _chain_idx, _attempt_model in enumerate(_chain):
+            if _chain_idx > 0:
+                # B02: surface fallback model switch to user
+                _fb_short = _attempt_model.split("/")[-1]
+                _fb_msg = (
+                    "\n\u26a0\ufe0f Rate limited \u2014 switching to fallback model "
+                    + _fb_short
+                    + " ("
+                    + str(_chain_idx)
+                    + "/"
+                    + str(len(_chain) - 1)
+                    + ")...\n"
                 )
+                print("[Wee Native] " + _fb_msg.strip(), file=sys.stderr)
+                if stream_buffer:
+                    stream_buffer.push("chunk", {"text": _fb_msg})
 
                 # Build assistant message with tool_calls for conversation history
                 assistant_tool_calls = []
                 for idx in sorted(tool_calls_acc.keys()):
                     tc = tool_calls_acc[idx]
-                    assistant_tool_calls.append(
-                        {
-                            "id": tc["id"],
-                            "type": "function",
-                            "function": {
-                                "name": tc["name"],
-                                "arguments": tc["arguments"],
-                            },
-                        }
-                    )
+                    assistant_tool_calls.append({
+                        "id": tc["id"],
+                        "type": "function",
+                        "function": {
+                            "name": tc["name"],
+                            "arguments": tc["arguments"],
+                        },
+                    })
 
                 assistant_msg = {
                     "role": "assistant",
@@ -8536,15 +8566,27 @@ User Request:
                     except (ValueError, _json.JSONDecodeError):
                         func_args = {"raw": func_args_str}
 
-                    # Issue #109: Emit tool start event to SSE stream
+                    # Issue #109 / #142: Emit tool start event to SSE stream
                     tc_start_event = {
                         "id": tc_id,
                         "name": func_name,
-                        "arguments": func_args,
+                        "event": "detected",
+                        "input": func_args,
                         "status": "running",
                     }
                     if stream_buffer:
                         stream_buffer.push("tool_call", tc_start_event)
+
+                    # Issue #142: Track tool call in bg_task_mgr for Tasks panel
+                    if bg_task_id and self._bg_task_mgr:
+                        self._bg_task_mgr.append_tool_call(bg_task_id, {
+                            "id": tc_id,
+                            "name": func_name,
+                            "input": _json.dumps(func_args) if isinstance(func_args, dict) else str(func_args),
+                            "status": "running",
+                            "runtime": "wee",
+                            "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                        })
 
                     print(
                         f"[Wee Native] Tool: {func_name}({_json.dumps(func_args)[:200]})",
@@ -8554,40 +8596,43 @@ User Request:
                     # Execute the tool
                     tool_result = self._wee_execute_tool(func_name, func_args, agent)
 
-                    # Issue #109: Emit tool complete event to SSE stream
+                    # Issue #109 / #142: Emit tool complete event to SSE stream
                     tc_done_event = {
                         "id": tc_id,
                         "name": func_name,
-                        "arguments": func_args,
-                        "result": tool_result[:2000] if tool_result else "",
+                        "event": "result",
+                        "input": func_args,
+                        "output": tool_result[:2000] if tool_result else "",
                         "status": "complete",
                     }
                     if stream_buffer:
                         stream_buffer.push("tool_call", tc_done_event)
 
+                    # Issue #142: Update tool call completion in bg_task_mgr
+                    if bg_task_id and self._bg_task_mgr:
+                        self._bg_task_mgr.update_tool_call(
+                            bg_task_id,
+                            tc_id,
+                            status="completed",
+                            output=str(tool_result[:500]) if tool_result else "",
+                        )
+
                     # Append tool result to conversation for next round
-                    messages.append(
-                        {
-                            "role": "tool",
-                            "tool_call_id": tc_id,
-                            "content": tool_result or "No output",
-                        }
-                    )
+                    messages.append({
+                        "role": "tool",
+                        "tool_call_id": tc_id,
+                        "content": tool_result or "No output",
+                    })
 
             else:
                 # All MAX_TOOL_ROUNDS had tool calls with no final text
-                last_tool_results = [
-                    m["content"] for m in messages if m.get("role") == "tool"
-                ]
+                last_tool_results = [m["content"] for m in messages if m.get("role") == "tool"]
                 if last_tool_results:
                     collected_output.append(
-                        "Tool execution completed. Last result:\n"
-                        + last_tool_results[-1][:2000]
+                        "Tool execution completed. Last result:\n" + last_tool_results[-1][:2000]
                     )
                 else:
-                    collected_output.append(
-                        "Max tool rounds reached without final response."
-                    )
+                    collected_output.append("Max tool rounds reached without final response.")
 
             output = "".join(collected_output)
 
@@ -8596,8 +8641,7 @@ User Request:
             # tool results, yielding output=''. Surface the last tool result instead.
             if not output.strip():
                 tool_results = [
-                    m["content"]
-                    for m in messages
+                    m["content"] for m in messages
                     if m.get("role") == "tool" and m.get("content")
                 ]
                 if tool_results:
@@ -8621,133 +8665,133 @@ User Request:
             # Issue #108: Persist conversation history
             self._wee_save_messages(n8n_session_id, messages)
 
-            # Issue #160: Build and store wee_meta with token usage and cost
-            _wee_meta = self._build_wee_meta(
-                api_base,
-                resolved_model,
-                model,
-                _total_prompt_tokens,
-                _total_completion_tokens,
-                _usage_available,
-            )
-            self.update_session_field(n8n_session_id, "_wee_meta", _wee_meta)
-
             # Push done sentinel
             if stream_buffer:
                 stream_buffer.push("done", output)
 
             print(
-                f"[Wee Native] Completed. Output length: {len(output)} chars, "
-                f"tokens: {_wee_meta.get('tokens', 'N/A')}",
+                "[Wee Native] model=" + resolved_model + " api_base=" + api_base
+                + " session=" + n8n_session_id[:8] + "..."
+                + " (chain " + str(_chain_idx + 1) + "/" + str(len(_chain)) + ")",
                 file=sys.stderr,
             )
-            return output
 
-        except Exception as e:
-            error_msg = f"Error: Wee native runtime failed: {e}"
-            print(f"[Wee Native] {error_msg}", file=sys.stderr)
+            import httpx as _httpx_wee
+            client = OpenAI(
+                base_url=api_base,
+                api_key=api_key,
+                timeout=_httpx_wee.Timeout(
+                    connect=15.0, read=float(effective_timeout), write=30.0, pool=15.0
+                ),
+                max_retries=0,
+            )
+            messages = []
+            if context_prompt:
+                messages.append({"role": "system", "content": context_prompt})
+            messages.append({"role": "user", "content": prompt})
 
-            # Push error as done sentinel
-            if stream_buffer:
-                stream_buffer.push("done", error_msg)
+            collected_output = []
+            _got_429 = False
+            _wee_start = _time.time()
+            _last_usage = [None]
+            _max_attempts = _max_retries if _is_free else 1
 
-            return error_msg
+            for _retry in range(_max_attempts):
+                try:
+                    stream = client.chat.completions.create(
+                        model=resolved_model,
+                        messages=messages,
+                        stream=True,
+                        stream_options={"include_usage": True},
+                    )
+                    for chunk in stream:
+                        if chunk.choices and chunk.choices[0].delta.content:
+                            token = chunk.choices[0].delta.content
+                            collected_output.append(token)
+                            if stream_buffer:
+                                stream_buffer.push("chunk", {"text": token})
+                        if hasattr(chunk, "usage") and chunk.usage is not None:
+                            _last_usage[0] = chunk.usage
+                    _got_429 = False
+                    break  # success
 
-    # -- Wee runtime helper methods (Issues #107, #108, #109) --
+                except Exception as _e:
+                    _e_str = str(_e)
+                    _is_rate_limit = "429" in _e_str or "rate limit" in _e_str.lower()
+                    if _is_rate_limit and _is_free:
+                        _got_429 = True
+                        if _retry < _max_attempts - 1:
+                            _wait = (
+                                _backoff[_retry] if _retry < len(_backoff)
+                                else (_backoff[-1] if _backoff else 5)
+                            )
+                            _retry_msg = (
+                                "\n\u26a0\ufe0f Rate limited, retrying in "
+                                + str(_wait)
+                                + "s ("
+                                + str(_retry + 1)
+                                + "/"
+                                + str(_max_attempts)
+                                + ")...\n"
+                            )
+                            print("[Wee Native] " + _retry_msg.strip(), file=sys.stderr)
+                            if stream_buffer:
+                                stream_buffer.push("chunk", {"text": _retry_msg})
+                            # M01: time.sleep is correct here — sync function in thread-pool worker
+                            _time.sleep(_wait)
+                    else:
+                        error_msg = "Error: Wee native runtime failed: " + str(_e)
+                        print("[Wee Native] " + error_msg, file=sys.stderr)
+                        if stream_buffer:
+                            stream_buffer.push("done", error_msg)
+                        return error_msg
 
-    # Issue #160: Model pricing per 1M tokens (input, output) in USD
-    _WEE_MODEL_PRICING = {
-        # OpenRouter pricing (per 1M tokens)
-        "google/gemini-2.5-flash-preview": (0.15, 0.60),
-        "google/gemini-2.5-pro-preview": (1.25, 10.00),
-        "google/gemini-2.0-flash-001": (0.10, 0.40),
-        "anthropic/claude-sonnet-4": (3.00, 15.00),
-        "anthropic/claude-3.5-sonnet": (3.00, 15.00),
-        "anthropic/claude-haiku-4": (0.80, 4.00),
-        "anthropic/claude-3.5-haiku": (0.80, 4.00),
-        "openai/gpt-4.1": (2.00, 8.00),
-        "openai/gpt-4.1-mini": (0.40, 1.60),
-        "openai/gpt-4.1-nano": (0.10, 0.40),
-        "openai/gpt-4o": (2.50, 10.00),
-        "openai/gpt-4o-mini": (0.15, 0.60),
-        "meta-llama/llama-4-maverick": (0.20, 0.60),
-        "meta-llama/llama-4-scout": (0.15, 0.40),
-        "meta-llama/llama-3.3-70b-instruct": (0.10, 0.15),
-        "deepseek/deepseek-chat-v3-0324": (0.30, 0.88),
-        "deepseek/deepseek-r1": (0.55, 2.19),
-        "qwen/qwen3-235b-a22b": (0.20, 0.60),
-        "microsoft/mai-ds-r1": (0.55, 2.19),
-        "nvidia/llama-3.1-nemotron-ultra-253b-v1": (0.00, 0.00),
-    }
+            if not _got_429:
+                output = "".join(collected_output)
+                try:
+                    _duration_ms = int((_time.time() - _wee_start) * 1000)
+                    if _last_usage[0] is not None:
+                        _u = _last_usage[0]
+                        _pt = getattr(_u, "prompt_tokens", 0) or 0
+                        _ct = getattr(_u, "completion_tokens", 0) or 0
+                        _total = getattr(_u, "total_tokens", _pt + _ct)
+                        _provider = (
+                            "ollama" if "192.168" in api_base else
+                            "openrouter" if "openrouter" in api_base else "wee"
+                        )
+                        _pricing = self._fetch_openrouter_pricing() if _provider == "openrouter" else {}
+                        _cost_usd, _cost_label = self._calculate_wee_cost(
+                            _attempt_model, _pt, _ct, _pricing
+                        )
+                        self.update_session_field(n8n_session_id, "wee_meta", {
+                            "tokens": _total, "prompt_tokens": _pt,
+                            "completion_tokens": _ct, "cost_usd": _cost_usd,
+                            "cost_label": _cost_label, "model": _attempt_model, "runtime": "wee",
+                        })
+                        self._log_token_usage(
+                            session_id=n8n_session_id, model=_attempt_model, runtime="wee",
+                            provider=_provider, prompt_tokens=_pt, completion_tokens=_ct,
+                            total_tokens=_total, cost_usd=_cost_usd, duration_ms=_duration_ms,
+                        )
+                except Exception as _meta_err:
+                    print("[Wee Native] wee_meta error: " + str(_meta_err), file=sys.stderr)
 
-    def _build_wee_meta(
-        self,
-        api_base: str,
-        resolved_model: str,
-        original_model: str,
-        prompt_tokens: int,
-        completion_tokens: int,
-        usage_available: bool,
-    ) -> dict:
-        """Build wee_meta dict with token usage and estimated cost (Issue #160).
+                if stream_buffer:
+                    stream_buffer.push("done", output)
+                print("[Wee Native] Completed. Output length: " + str(len(output)) + " chars", file=sys.stderr)
+                return output
+            # _got_429=True — continue outer loop to next fallback model
 
-        Returns a dict suitable for inclusion in the SSE done event:
-        {runtime, tokens, prompt_tokens, completion_tokens, cost_label}
-        """
-        meta = {"runtime": "wee"}
-        is_ollama = "11434" in (api_base or "") or (api_base or "").startswith(
-            "http://192.168.1.101"
+        # B01: all models exhausted — iterative approach, no stack overflow
+        exhausted_msg = (
+            "\n\u274c All free model fallbacks exhausted. "
+            "Please try again later or switch to a paid model.\n"
         )
-        is_openrouter = "openrouter" in (api_base or "").lower()
-        is_lmstudio = "1234" in (api_base or "")
+        print("[Wee Native] " + exhausted_msg.strip(), file=sys.stderr)
+        if stream_buffer:
+            stream_buffer.push("done", exhausted_msg)
+        return exhausted_msg
 
-        if not usage_available:
-            if is_ollama or is_lmstudio:
-                meta["cost_label"] = "local"
-            return meta
-
-        total = prompt_tokens + completion_tokens
-        meta["tokens"] = total
-        meta["prompt_tokens"] = prompt_tokens
-        meta["completion_tokens"] = completion_tokens
-
-        # Determine cost label
-        if is_ollama or is_lmstudio:
-            meta["cost_label"] = "local"
-        elif is_openrouter:
-            # Look up pricing — try full model ID, then with prefix
-            pricing = None
-            for candidate in [original_model, resolved_model]:
-                candidate_lower = candidate.lower() if candidate else ""
-                # Strip openrouter/ prefix if present
-                if candidate_lower.startswith("openrouter/"):
-                    candidate_lower = candidate_lower[len("openrouter/") :]
-                for key, val in self._WEE_MODEL_PRICING.items():
-                    if key.lower() == candidate_lower or candidate_lower.startswith(
-                        key.lower()
-                    ):
-                        pricing = val
-                        break
-                if pricing:
-                    break
-            if pricing:
-                input_cost = (prompt_tokens / 1_000_000) * pricing[0]
-                output_cost = (completion_tokens / 1_000_000) * pricing[1]
-                total_cost = input_cost + output_cost
-                if total_cost < 0.001:
-                    meta["cost_label"] = f"${total_cost:.6f}"
-                elif total_cost < 0.01:
-                    meta["cost_label"] = f"${total_cost:.4f}"
-                else:
-                    meta["cost_label"] = f"${total_cost:.2f}"
-            elif any(":free" in (original_model or "").lower() for _ in [1]):
-                meta["cost_label"] = "free"
-            else:
-                meta["cost_label"] = "est. N/A"
-        else:
-            meta["cost_label"] = ""
-
-        return meta
 
     def _wee_load_messages(
         self,
@@ -8757,9 +8801,9 @@ User Request:
     ) -> list:
         """Load wee conversation history from session map.
 
-        Issue #108: Ollama is stateless — the full conversation must be
-        included in every request.  This loads persisted messages from the
-        session_map so multi-turn context is preserved.
+        Ollama is stateless — the full conversation must be included in every
+        request. This loads persisted messages from the session_map so
+        multi-turn context is preserved.
         """
         if resume:
             session_data = self.load_session_data(n8n_session_id)
@@ -8781,8 +8825,8 @@ User Request:
     def _wee_save_messages(self, n8n_session_id: str, messages: list) -> None:
         """Persist wee conversation history to session map.
 
-        Issue #108: Saves the full message array (system + user + assistant +
-        tool) so the next turn can reconstruct the conversation.
+        Saves the full message array (system + user + assistant + tool)
+        so the next turn can reconstruct the conversation.
         Caps at MAX_WEE_MESSAGES to prevent unbounded growth.
         """
         MAX_WEE_MESSAGES = 100
@@ -8793,10 +8837,7 @@ User Request:
                 if len(messages) > MAX_WEE_MESSAGES:
                     system_msgs = [m for m in messages if m.get("role") == "system"]
                     non_system = [m for m in messages if m.get("role") != "system"]
-                    saved = (
-                        system_msgs
-                        + non_system[-(MAX_WEE_MESSAGES - len(system_msgs)) :]
-                    )
+                    saved = system_msgs + non_system[-(MAX_WEE_MESSAGES - len(system_msgs)):]
                 else:
                     saved = list(messages)
                 # Strip tool_calls from assistant messages for JSON serialization
@@ -8806,29 +8847,15 @@ User Request:
                         mc = dict(m)
                         mc["tool_calls"] = [
                             {
-                                "id": (
-                                    tc.get("id", "")
-                                    if isinstance(tc, dict)
-                                    else getattr(tc, "id", "")
-                                ),
+                                "id": tc.get("id", "") if isinstance(tc, dict) else getattr(tc, "id", ""),
                                 "type": "function",
                                 "function": {
-                                    "name": (
-                                        tc.get("function", {}).get("name", "")
-                                        if isinstance(tc, dict)
-                                        else getattr(
-                                            getattr(tc, "function", None), "name", ""
-                                        )
-                                    ),
-                                    "arguments": (
-                                        tc.get("function", {}).get("arguments", "")
-                                        if isinstance(tc, dict)
-                                        else getattr(
-                                            getattr(tc, "function", None),
-                                            "arguments",
-                                            "",
-                                        )
-                                    ),
+                                    "name": (tc.get("function", {}).get("name", "")
+                                             if isinstance(tc, dict)
+                                             else getattr(getattr(tc, "function", None), "name", "")),
+                                    "arguments": (tc.get("function", {}).get("arguments", "")
+                                                  if isinstance(tc, dict)
+                                                  else getattr(getattr(tc, "function", None), "arguments", "")),
                                 },
                             }
                             for tc in m["tool_calls"]
@@ -8840,7 +8867,7 @@ User Request:
                 self.save_session_map(session_map)
 
     def _wee_augment_system_prompt_with_tools(self, system_prompt: str) -> str:
-        """Issue #111: Append explicit tool capability declaration to system prompt.
+        """Append explicit tool capability declaration to system prompt.
 
         Many Ollama models ignore JSON tool schemas entirely and respond as if
         no tools exist. Explicitly stating tool availability in the system
@@ -8852,11 +8879,11 @@ User Request:
             "perform any action -- do NOT say you cannot do something that these tools enable.\n"
             "\n"
             "**bash** -- Execute a bash shell command and return its output.\n"
-            '  Call: bash tool with {"command": "your shell command here"}\n'
+            "  Call: bash tool with {\"command\": \"your shell command here\"}\n"
             "  Use for: running commands, SSH, file operations, checking system state\n"
             "\n"
             "**python** -- Execute Python 3 code and return its output.\n"
-            '  Call: python tool with {"code": "your python code here"}\n'
+            "  Call: python tool with {\"code\": \"your python code here\"}\n"
             "  Use for: data processing, calculations, scripting, file parsing\n"
             "\n"
             "CRITICAL: When asked to run a command, SSH somewhere, check system status,\n"
@@ -8868,18 +8895,14 @@ User Request:
     def _wee_execute_tool(self, func_name: str, func_args: dict, agent: str) -> str:
         """Execute a tool call from the wee runtime agentic loop.
 
-        Issue #107: Supports bash and python tools. Issue #111: SSH sanitization wired in.
-        Uses the same _execute_bash_command infrastructure as other runtimes.
+        Supports bash and python tools. Uses the same _execute_bash_command
+        infrastructure as other runtimes.
         """
         try:
             if func_name == "bash":
                 command = func_args.get("command", "")
                 if not command:
                     return "Error: No command provided"
-                # Issue #111: Sanitize SSH commands (wire #113 fix)
-                command = self._wee_sanitize_bash_command(command)
-                if self._SHELL_GRAMMAR_RE.search(command):
-                    return self._execute_shell_command(command, agent)
                 return self._execute_bash_command(command, agent)
             elif func_name == "python":
                 code = func_args.get("code", "")
@@ -8899,9 +8922,9 @@ User Request:
                     output += ("\n" if output else "") + result.stderr
                 if not output.strip():
                     if result.returncode == 0:
-                        return "✓ Executed successfully (exit code: 0)"
+                        return "\u2713 Executed successfully (exit code: 0)"
                     else:
-                        return f"✗ Failed with exit code: {result.returncode}"
+                        return f"\u2717 Failed with exit code: {result.returncode}"
                 return output.strip()
             else:
                 return f"Error: Unknown tool '{func_name}'. Available: bash, python"
@@ -8910,59 +8933,112 @@ User Request:
         except Exception as e:
             return f"Error executing {func_name}: {e}"
 
-    # -- Issue #113: SSH command sanitisation and anti-hallucination --
-
-    _SSH_BIN_RE = re.compile(r"\b(ssh|scp|sftp)\b")
-    _SHELL_GRAMMAR_RE = re.compile(r"(\|\||&&|[|;<>`]|[$][(]|\n)")
-
-    # Issue #111: SSH sanitization wired into _wee_execute_tool (resolves #113 TODO).
-    # The wee runtime now has a full tool execution loop.
-    @staticmethod
-    def _wee_sanitize_bash_command(command: str) -> str:
-        """Auto-inject SSH flags to prevent host key verification failures.
-
-        When a bash command contains an ssh/scp/sftp invocation without
-        StrictHostKeyChecking already set, inject
-        ``-o StrictHostKeyChecking=accept-new`` so first-connect succeeds
-        without manual intervention.  ``accept-new`` is safer than ``no``
-        because it still rejects CHANGED keys (potential MITM).
-
-        Wired into _wee_execute_tool by Issue #111. Called on every bash tool input before
-        execution in the wee runtime tool execution loop.
-        """
-        if not command:
-            return command
-        # Quick check — does the command even mention ssh/scp/sftp?
-        if not SessionManager._SSH_BIN_RE.search(command):
-            return command
-        # Already has StrictHostKeyChecking set — leave it alone
-        if "StrictHostKeyChecking" in command:
-            return command
-
-        # Inject -o StrictHostKeyChecking=accept-new after each ssh/scp/sftp binary
-        def _inject(m):
-            return m.group(0) + " -o StrictHostKeyChecking=accept-new"
-
-        return SessionManager._SSH_BIN_RE.sub(_inject, command, count=0)
 
     @staticmethod
-    def _wee_anti_hallucination_prompt() -> str:
-        """Issue #113: Return system-prompt section that prevents hallucinated tool output.
+    def _wee_is_free_model(model: str) -> bool:
+        """Return True if model is an OpenRouter free model (openrouter/free or ends with :free)."""
+        m = model.lower()
+        return m == "openrouter/free" or (m.startswith("openrouter/") and m.endswith(":free"))
 
-        Smaller Ollama models tend to fabricate command output when a tool
-        call fails.  This prompt section explicitly forbids that.
-        """
-        return (
-            "\n\n[CRITICAL — Output Integrity Rules]\n"
-            "1. NEVER fabricate, invent, or hallucinate command output. If a command "
-            "fails or you cannot execute it, report the EXACT error message.\n"
-            "2. NEVER provide example or placeholder output and present it as real. "
-            'If you show an example, clearly label it as "EXAMPLE (not real output)".\n'
-            "3. When a tool call returns an error, relay the error verbatim to the user. "
-            "Do NOT attempt to guess what the successful output would have looked like.\n"
-            "4. For SSH commands: ALWAYS use ``-o StrictHostKeyChecking=accept-new`` to "
-            "avoid host-key verification failures on first connect.\n"
-        )
+    @staticmethod
+    def _wee_load_free_config(config_path=None) -> dict:
+        """Load wee_free_models.json; fall back to hardcoded defaults if absent."""
+        _defaults = {
+            "free_model_fallback_chain": ["openrouter/free"],
+            "max_retries_per_model": 3,
+            "retry_backoff_seconds": [2, 5, 10],
+        }
+        if config_path is None:
+            config_path = Path(__file__).parent / "wee_free_models.json"
+        try:
+            with open(config_path) as f:
+                data = json.load(f)
+            result = dict(_defaults)
+            result.update(data)
+            return result
+        except (FileNotFoundError, json.JSONDecodeError, OSError):
+            return dict(_defaults)
+
+    def _wee_run_attempt(
+        self,
+        client,
+        resolved_model: str,
+        messages: list,
+        stream_buffer,
+        n8n_session_id: str,
+        agent: str,
+        wee_tools: list,
+        max_retries: int,
+        backoff: list,
+        attempt_model: str,
+    ):
+        """Try one model with 429 retry+backoff. Returns (output, is_429_exhausted)."""
+        import time as _time
+
+        create_kwargs = {"stream": True}
+        if wee_tools:
+            create_kwargs["tools"] = wee_tools
+            create_kwargs["tool_choice"] = "auto"
+
+        last_exc = None
+        attempts = max(max_retries, 1)
+        for attempt in range(attempts):
+            try:
+                stream = client.chat.completions.create(
+                    model=resolved_model,
+                    messages=messages,
+                    **create_kwargs,
+                )
+                collected = []
+                tool_calls_acc = {}
+                for chunk in stream:
+                    if not chunk.choices:
+                        continue
+                    delta = chunk.choices[0].delta
+                    if delta.content:
+                        collected.append(delta.content)
+                    if delta.tool_calls:
+                        for tc in delta.tool_calls:
+                            idx = getattr(tc, "index", 0) or 0
+                            if idx not in tool_calls_acc:
+                                tool_calls_acc[idx] = {"id": "", "name": "", "args": ""}
+                            if tc.id:
+                                tool_calls_acc[idx]["id"] += tc.id
+                            if tc.function:
+                                if tc.function.name:
+                                    tool_calls_acc[idx]["name"] += tc.function.name
+                                if tc.function.arguments:
+                                    tool_calls_acc[idx]["args"] += tc.function.arguments
+
+                output = "".join(collected)
+
+                if tool_calls_acc and wee_tools:
+                    for tc_data in tool_calls_acc.values():
+                        try:
+                            func_args = json.loads(tc_data["args"] or "{}")
+                        except json.JSONDecodeError:
+                            func_args = {}
+                        result = self._wee_execute_tool(tc_data["name"], func_args, agent)
+                        messages.append({
+                            "role": "tool",
+                            "tool_call_id": tc_data["id"],
+                            "content": result,
+                        })
+
+                self._wee_save_messages(n8n_session_id, messages)
+                return output, False
+
+            except Exception as e:
+                err_str = str(e)
+                if "429" not in err_str and "rate limit" not in err_str.lower():
+                    return f"Error: {err_str}", False
+                last_exc = e
+                if attempt < attempts - 1:
+                    wait = backoff[attempt] if attempt < len(backoff) else (backoff[-1] if backoff else 5)
+                    _time.sleep(wait)
+
+        return None, True
+
 
     def _get_cursor_session_id(self, n8n_session_id: str) -> Optional[str]:
         """Return the stored cursor session flag for this n8n session, or None."""
@@ -9102,7 +9178,7 @@ User Request:
             key = n8n_session_id if n8n_session_id else session_id
             return (self.cursor_session_dir / f"{key}.json").exists()
         elif runtime == "wee":
-            # Issue #108: Wee stores conversation history in session_map
+            # Issue #123: Wee stores conversation history in session_map
             data = self.load_session_data(n8n_session_id or session_id)
             return bool(data and data.get("wee_messages"))
         return False
@@ -9248,6 +9324,8 @@ User Request:
         # Background tasks run unattended — grant elevated permissions so
         # SDK runtimes (copilot-sdk, claude-sdk) don't block on approval gates
         self.update_session_field(session_id, "permissions", {"mode": "elevated"})
+        # Issue #142: Store task_id so run_wee_native can track tool calls
+        self.update_session_field(session_id, "bg_task_id", task_id)
         if timeout is not None:
             self.update_session_field(session_id, "timeout", timeout)
         try:
@@ -10465,16 +10543,16 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 None, session_mgr.get_models_for_runtime, runtime
             )
             models = []
-            for _group, model_ids in raw.items():
+            for group_name, model_ids in raw.items():
                 for model_id in model_ids:
+                    # Support both flat strings and (id, desc, aliases) tuples
+                    if isinstance(model_id, tuple):
+                        model_id = model_id[0]
                     label = (
                         session_mgr._get_model_description(model_id, runtime)
                         or model_id
                     )
-                    entry = {"id": model_id, "label": label}
-                    if _group:
-                        entry["group"] = _group
-                    models.append(entry)
+                    models.append({"id": model_id, "label": label, "group": _group})
             return {"runtime": runtime, "models": models}
         except Exception as e:
             return {"runtime": runtime, "models": [], "error": str(e)}
@@ -11862,18 +11940,20 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         output_preview=None,
         error=None,
         notify: bool = True,
+        is_critical: bool = False,
     ):
-        """Emit a background task completion notification via notification_mgr."""
+        """Emit a background task completion notification via notification_mgr.
+
+        When ``is_critical`` is True the notification bypasses the global
+        suppression toggle (used for heartbeat alerts and system crashes).
+        """
         if notification_mgr is None:
             return
         try:
-            # Re-check per-identity AND global mute preference at emit time
-            # (user may have muted after the task was created, or muted from
-            # a different channel whose identity doesn't match).
-            if notify:
-                if notification_mgr.is_muted(
-                    user_identity
-                ) or notification_mgr.is_muted("_global"):
+            # Re-check per-identity mute preference at emit time
+            # (user may have muted after the task was created).
+            if notify and not is_critical:
+                if notification_mgr.is_muted(user_identity):
                     notify = False
 
             user_key = bg_task_mgr._user_key(channel, user_identity)
@@ -11886,6 +11966,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 output_preview=output_preview,
                 error=error,
                 skip_external=not notify,
+                is_critical=is_critical,
             )
             # Push in-thread event to originating session
             task = bg_task_mgr.get_task(task_id)
@@ -12471,8 +12552,36 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             start_time = time.time()
 
             for line in process.stdout:
-                stdout_lines.append(line)
                 line_text = line.rstrip("\n\r")
+
+                # Issue #142: Handle wee runtime structured tool call events
+                # These JSON lines are for tool tracking only — skip them from output
+                if runtime == "wee" and line_text.strip().startswith('{"__wee_tc__"'):
+                    try:
+                        _wee_tc = _json.loads(line_text.strip())
+                        if _wee_tc.get("__wee_tc__") == "start":
+                            _tool_call_counter += 1
+                            _tc_input = _wee_tc.get("input", {})
+                            bg_task_mgr.append_tool_call(task_id, {
+                                "id": _wee_tc.get("id", f"bg_{task_id[:8]}_{_tool_call_counter}"),
+                                "name": _wee_tc.get("name", "tool"),
+                                "input": _json.dumps(_tc_input) if isinstance(_tc_input, dict) else str(_tc_input),
+                                "status": "running",
+                                "runtime": "wee",
+                                "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                            })
+                        elif _wee_tc.get("__wee_tc__") == "done":
+                            bg_task_mgr.update_tool_call(
+                                task_id,
+                                _wee_tc.get("id", ""),
+                                status="completed",
+                                output=str(_wee_tc.get("output", ""))[:500],
+                            )
+                    except (ValueError, KeyError, TypeError):
+                        pass
+                    continue  # Don't include tool-tracking JSON in output
+
+                stdout_lines.append(line)
 
                 # Append to output_lines for live log viewing
                 if line_text:
@@ -12709,12 +12818,12 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         )
 
         # Determine notification preference:
-        #   body override > global mute > per-identity store > session default > True
+        #   body override > global toggle > per-identity store > session default > True
         notify_pref = body.notify
         if notify_pref is None:
             if notification_mgr:
-                # Global mute takes priority (covers cross-channel identity mismatch)
-                if notification_mgr.is_muted("_global"):
+                # Global toggle takes priority (Issue #146)
+                if not notification_mgr.is_global_enabled():
                     notify_pref = False
                 # Per-identity store is authoritative
                 elif notification_mgr.is_muted(identity):
@@ -13180,6 +13289,51 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         user_key = bg_task_mgr._user_key(user["channel"], user["identity"])
         deleted = notification_mgr.delete_all_read(user_key)
         return {"deleted": deleted}
+
+    # --- Global Notification Settings (Issue #146) ---
+
+    class NotificationSettingsRequest(BaseModel):
+        notifications_enabled: bool
+
+    @app.get("/api/v1/settings/notifications")
+    async def get_notification_settings(request: Request):
+        """Return the global notification toggle state."""
+        await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        if notification_mgr is None:
+            return {"notifications_enabled": True, "available": False}
+        settings = notification_mgr.get_global_settings()
+        settings["available"] = True
+        return settings
+
+    @app.put("/api/v1/settings/notifications")
+    async def set_notification_settings(
+        body: NotificationSettingsRequest, request: Request
+    ):
+        """Set the global notification toggle."""
+        await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        if notification_mgr is None:
+            raise HTTPException(
+                status_code=503, detail="Notification manager unavailable"
+            )
+        notification_mgr.set_global_enabled(body.notifications_enabled)
+        return {
+            "notifications_enabled": body.notifications_enabled,
+            "message": (
+                "Notifications enabled for all channels"
+                if body.notifications_enabled
+                else "Notifications suppressed globally (critical alerts still delivered)"
+            ),
+        }
 
     # --- Task Scheduler ---
     if SCHEDULER_ENABLED:

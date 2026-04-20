@@ -20,6 +20,9 @@ _NOTIF_FILE = os.path.join(os.path.expanduser("~"), ".copilot", "notifications.j
 _PREFS_FILE = os.path.join(
     os.path.expanduser("~"), ".copilot", "notification_prefs.json"
 )
+_GLOBAL_SETTINGS_FILE = os.path.join(
+    os.path.expanduser("~"), ".copilot", "notification_settings.json"
+)
 _MAX_NOTIFICATIONS = 200
 _MAX_NOTIFICATION_LENGTH = 200
 
@@ -30,8 +33,10 @@ class NotificationManager:
     def __init__(self, notif_file: str = _NOTIF_FILE, prefs_file: str = _PREFS_FILE):
         self._path = notif_file
         self._prefs_path = prefs_file
+        self._global_settings_path = _GLOBAL_SETTINGS_FILE
         self._lock = threading.Lock()
         self._prefs_lock = threading.Lock()
+        self._global_settings_lock = threading.Lock()
         os.makedirs(os.path.dirname(self._path), exist_ok=True)
 
     # ---- Per-identity notification preferences ----
@@ -114,6 +119,61 @@ class NotificationManager:
         """Convenience: True when external notifications should be suppressed."""
         return self.get_user_pref(identity) == "off"
 
+    # ---- Global notification toggle ----
+
+    def _load_global_settings(self) -> dict:
+        try:
+            with open(self._global_settings_path) as f:
+                return json.load(f)
+        except (FileNotFoundError, json.JSONDecodeError):
+            return {"notifications_enabled": True}
+
+    def _save_global_settings(self, settings: dict):
+        import tempfile
+
+        settings_dir = os.path.dirname(self._global_settings_path)
+        os.makedirs(settings_dir, exist_ok=True)
+        tmp_fd, tmp_path = tempfile.mkstemp(dir=settings_dir, suffix=".tmp")
+        try:
+            with os.fdopen(tmp_fd, "w") as f:
+                json.dump(settings, f, indent=2)
+            os.replace(tmp_path, self._global_settings_path)
+        except Exception as e:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+            print(f"[NotificationManager] FAILED to save global settings: {e}")
+
+    def set_global_enabled(self, enabled: bool):
+        """Set the global notifications toggle. Persists across restarts."""
+        with self._global_settings_lock:
+            settings = self._load_global_settings()
+            settings["notifications_enabled"] = enabled
+            settings["updated_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+            self._save_global_settings(settings)
+
+    def is_global_enabled(self) -> bool:
+        """Return True if global notifications are enabled.
+
+        Checks (in order):
+        1. WEE_TASK_NOTIFICATIONS env var ("off" or "false" disables)
+        2. Persisted setting in notification_settings.json
+        """
+        env_val = os.environ.get("WEE_TASK_NOTIFICATIONS", "").strip().lower()
+        if env_val in ("off", "false", "0", "no"):
+            return False
+        if env_val in ("on", "true", "1", "yes"):
+            return True
+        with self._global_settings_lock:
+            settings = self._load_global_settings()
+        return settings.get("notifications_enabled", True)
+
+    def get_global_settings(self) -> dict:
+        """Return the full global notification settings dict (for API)."""
+        with self._global_settings_lock:
+            return self._load_global_settings()
+
     def _load(self) -> list:
         try:
             with open(self._path) as f:
@@ -148,8 +208,23 @@ class NotificationManager:
         output_preview: Optional[str] = None,
         error: Optional[str] = None,
         skip_external: bool = False,
-    ) -> dict:
-        """Create a notification and route it appropriately."""
+        is_critical: bool = False,
+    ) -> Optional[dict]:
+        """Create a notification and route it appropriately.
+
+        When the global notifications toggle is off AND ``is_critical`` is
+        False, the notification is completely suppressed — no WebUI storage,
+        no Telegram/WebEx delivery.  Critical notifications (heartbeat
+        alerts, system crashes) always go through regardless of the toggle.
+        """
+        # Global suppression: skip everything for non-critical notifications
+        if not is_critical and not self.is_global_enabled():
+            print(
+                f"[NotificationManager] Suppressed notification for {task_id} "
+                "(global notifications disabled)"
+            )
+            return None
+
         notif_id = f"notif_{uuid4().hex[:12]}"
         notification = {
             "notification_id": notif_id,
@@ -178,7 +253,7 @@ class NotificationManager:
         # skip_external was not explicitly set (covers identity mismatch and
         # late-mute edge cases).
         if not skip_external:
-            if self.is_muted("_global"):
+            if not is_critical and self.is_muted("_global"):
                 skip_external = True
             elif self.is_muted(user_key):
                 skip_external = True
@@ -192,29 +267,29 @@ class NotificationManager:
             if chan == "telegram":
                 if not identity_unknown:
                     print(
-                        f"[NotificationManager] Routing Telegram notification for {task_id} to {ukey}"
+                        f"[NotificationManager] Routing Telegram notification for {task_id} to {ukey}"  # noqa: E501
                     )
                     self._notify_telegram(notification)
                 else:
                     print(
-                        f"[NotificationManager] Broadcasting Telegram notification for {task_id} (identity unknown)"
+                        f"[NotificationManager] Broadcasting Telegram notification for {task_id} (identity unknown)"  # noqa: E501
                     )
                     self._notify_telegram_broadcast(notification)
             elif chan == "webex":
                 if not identity_unknown:
                     print(
-                        f"[NotificationManager] Routing WebEx notification for {task_id} to {ukey}"
+                        f"[NotificationManager] Routing WebEx notification for {task_id} to {ukey}"  # noqa: E501
                     )
                     self._notify_webex(notification)
                 else:
                     print(
-                        f"[NotificationManager] Broadcasting WebEx notification for {task_id} (identity unknown)"
+                        f"[NotificationManager] Broadcasting WebEx notification for {task_id} (identity unknown)"  # noqa: E501
                     )
                     self._notify_webex_broadcast(notification)
             # webui/api/other channels: no external push needed (WebUI polls)
         else:
             print(
-                f"[NotificationManager] Skipping external notification for {task_id} (skip_external=True)"
+                f"[NotificationManager] Skipping external notification for {task_id} (skip_external=True)"  # noqa: E501
             )
 
         return notification
@@ -343,7 +418,7 @@ class NotificationManager:
                     connector.send_message(chat_id, msg)
                 except Exception as e:
                     print(
-                        f"[NotificationManager] Telegram broadcast to {chat_id} failed: {e}",
+                        f"[NotificationManager] Telegram broadcast to {chat_id} failed: {e}",  # noqa: E501
                         file=sys.stderr,
                     )
         except Exception as e:
@@ -404,7 +479,7 @@ class NotificationManager:
                     connector.send_message(person_id, msg)
                 except Exception as e:
                     print(
-                        f"[NotificationManager] WebEx broadcast to {person_id} failed: {e}",
+                        f"[NotificationManager] WebEx broadcast to {person_id} failed: {e}",  # noqa: E501
                         file=sys.stderr,
                     )
         except Exception as e:

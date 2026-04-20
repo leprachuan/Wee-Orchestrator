@@ -1598,7 +1598,7 @@ async function sendMessageStreaming(query, sessionId) {
               if (_timingText) {
                 const timingDiv = document.createElement('div');
                 timingDiv.className = 'message-timing';
-                timingDiv.appendChild(_timingText);
+                timingDiv.innerHTML = _timingText;
                 streamBubble.appendChild(timingDiv);
               }
               streamBubble.appendChild(createTtsButton(streamBubble));
@@ -1988,12 +1988,8 @@ function buildTimingText(elapsedSec, weeMeta) {
       tooltip = `Input: ${pTokens.toLocaleString()} tokens\nOutput: ${cTokens.toLocaleString()} tokens\nTotal: ${tokenStr} tokens`;
       if (costLabel && costLabel.startsWith('$')) tooltip += `\nEst. cost: ${costLabel}`;
     }
-    if (base) frag.appendChild(document.createTextNode(`⏱️ ${base} · `));
-    const span = document.createElement('span');
-    span.setAttribute('title', tooltip);
-    span.textContent = `${tokenStr} tokens${costStr}`;
-    frag.appendChild(span);
-    return frag;
+    const span = `<span title="${tooltip}">${tokenStr} tokens${costStr}</span>`;
+    return base ? `⏱️ ${base} · ${span}` : span;
   }
   if (base) frag.appendChild(document.createTextNode(`⏱️ ${base}`));
   return frag.childNodes.length ? frag : null;
@@ -2060,7 +2056,7 @@ async function renderMessage(role, content, files = [], timing = null, weeMeta =
     if (_rmTimingText) {
       const timingDiv = document.createElement('div');
       timingDiv.className = 'message-timing';
-      timingDiv.appendChild(_rmTimingText);
+      timingDiv.innerHTML = _rmTimingText;
       bubble.appendChild(timingDiv);
     }
   }
@@ -2351,6 +2347,8 @@ document.addEventListener('DOMContentLoaded', () => {
   notifToggle.addEventListener('change', () => {
     setNotificationsEnabled(notifToggle.checked);
   });
+  // Sync toggle state from backend on page load (Issue #146)
+  syncNotificationToggleFromBackend();
 
   // --- Request Queue ---
   $('btn-toggle-queue').addEventListener('click', toggleQueuePanel);
@@ -4330,6 +4328,21 @@ function isNotificationsEnabled() {
 
 function setNotificationsEnabled(val) {
   localStorage.setItem('wee_notifications_enabled', val ? 'true' : 'false');
+  // Sync to backend global toggle
+  apiRequest('PUT', '/settings/notifications', { notifications_enabled: !!val })
+    .catch(() => { /* best-effort sync */ });
+}
+
+/** Fetch the global notification toggle from the backend and sync localStorage. */
+async function syncNotificationToggleFromBackend() {
+  try {
+    const data = await apiRequest('GET', '/settings/notifications');
+    if (data && typeof data.notifications_enabled === 'boolean') {
+      localStorage.setItem('wee_notifications_enabled', data.notifications_enabled ? 'true' : 'false');
+      const toggle = $('notif-enabled-toggle');
+      if (toggle) toggle.checked = data.notifications_enabled;
+    }
+  } catch { /* backend unavailable — keep localStorage value */ }
 }
 
 async function fetchNotifications() {

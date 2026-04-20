@@ -1,7 +1,7 @@
 """Regression tests for Issue #126: Wee runtime icon in runtime switcher."""
 
 import os
-import re
+
 import unittest
 import xml.etree.ElementTree as ET
 
@@ -72,6 +72,7 @@ class TestRuntimesApiIncludesWee(unittest.TestCase):
     def test_get_available_runtimes_includes_wee(self):
         """get_available_runtimes() must return a wee entry."""
         import sys
+
         sys.path.insert(0, BASE_DIR)
         from agent_manager import get_available_runtimes
 
@@ -82,6 +83,7 @@ class TestRuntimesApiIncludesWee(unittest.TestCase):
     def test_wee_runtime_has_icon_emoji(self):
         """Wee runtime entry should include an icon field."""
         import sys
+
         sys.path.insert(0, BASE_DIR)
         from agent_manager import get_available_runtimes
 
