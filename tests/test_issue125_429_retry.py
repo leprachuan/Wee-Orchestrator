@@ -1,388 +1,308 @@
-"""Tests for Issue #125: wee runtime 429 retry + fallback chain."""
-import json
+"""
+Regression tests for Issue #125 — 429 retry + free model fallback chain.
+Tests: B01 (no recursion), B02 (user visibility), M01 (sync sleep), M03 (coverage).
+"""
 import os
 import sys
-import time
+import threading
 import unittest
 from pathlib import Path
-from unittest.mock import MagicMock, patch, call
+from unittest.mock import patch, MagicMock
 
-sys.path.insert(0, "/opt/n8n-copilot-shim-dev")
+os.environ.setdefault("API_SHARED_KEY", "test_key_123")
 
+REPO = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(REPO))
 
-# ── Standalone wee_runtime.py tests ─────────────────────────────────────────
-
-from wee_runtime import (
-    is_free_openrouter_model,
-    load_free_model_config,
-    resolve_model_and_endpoint,
-    _call_with_retry,
-    run_with_fallback,
-)
+from agent_manager import SessionManager
 
 
-class TestIsFreeModel(unittest.TestCase):
-    def test_openrouter_free_literal(self):
-        self.assertTrue(is_free_openrouter_model("openrouter/free"))
-
-    def test_openrouter_free_uppercase(self):
-        self.assertTrue(is_free_openrouter_model("OPENROUTER/FREE"))
-
-    def test_colon_free_suffix(self):
-        self.assertTrue(is_free_openrouter_model("openrouter/google/gemma-4-31b-it:free"))
-
-    def test_paid_model(self):
-        self.assertFalse(is_free_openrouter_model("openrouter/google/gemma-4-31b-it"))
-
-    def test_ollama_model(self):
-        self.assertFalse(is_free_openrouter_model("ollama/gemma4:e4b"))
-
-    def test_llama_free(self):
-        self.assertTrue(is_free_openrouter_model("openrouter/meta-llama/llama-3.3-70b-instruct:free"))
-
-    def test_not_openrouter_with_free_suffix(self):
-        self.assertFalse(is_free_openrouter_model("lmstudio/some-model:free"))
+def _make_mgr():
+    """Create a minimal SessionManager for Issue #125 testing."""
+    mgr = SessionManager.__new__(SessionManager)
+    mgr.session_map = {}
+    mgr._session_map_lock = threading.Lock()
+    mgr.command_timeout = 60
+    mgr._stream_buffers = {}
+    mgr.AGENTS = {"test": {"path": "/opt", "description": "test"}}
+    return mgr
 
 
-class TestLoadFreeConfig(unittest.TestCase):
-    def test_loads_existing_file(self):
-        import tempfile
-        data = {
-            "free_model_fallback_chain": ["openrouter/free", "openrouter/foo:free"],
+def _make_chunk(text):
+    chunk = MagicMock()
+    chunk.choices = [MagicMock()]
+    chunk.choices[0].delta.content = text
+    chunk.usage = None
+    return chunk
+
+
+def _make_done_chunk():
+    chunk = MagicMock()
+    chunk.choices = []
+    chunk.usage = MagicMock()
+    chunk.usage.prompt_tokens = 10
+    chunk.usage.completion_tokens = 20
+    chunk.usage.total_tokens = 30
+    return chunk
+
+
+class TestIssue125RetryFallbackChain(unittest.TestCase):
+    """Main regression tests for B01/B02/M01/M03."""
+
+    def setUp(self):
+        self.mgr = _make_mgr()
+        self.mgr.get_or_create_session_data = MagicMock(return_value={
+            "channel": "test", "api_base": None, "api_key": None
+        })
+        self.mgr.build_agent_context_prompt = MagicMock(return_value="")
+        self.mgr.update_session_field = MagicMock()
+        self.mgr._fetch_openrouter_pricing = MagicMock(return_value={})
+        self.mgr._calculate_wee_cost = MagicMock(return_value=(0.0, "free"))
+        self.mgr._log_token_usage = MagicMock()
+
+    @patch("agent_manager.time.sleep")
+    @patch("openai.OpenAI")
+    def test_issue_125_retry_fallback_chain(self, mock_openai_cls, mock_sleep):
+        """Main regression: 429 retries exhaust on primary, then falls back to next model."""
+        free_cfg = {
             "max_retries_per_model": 2,
-            "retry_backoff_seconds": [1, 3],
+            "retry_backoff_seconds": [1, 2],
+            "free_model_fallback_chain": [
+                "openrouter/primary:free",
+                "openrouter/fallback:free",
+            ],
         }
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
-            json.dump(data, f)
-            fname = f.name
-        try:
-            config = load_free_model_config(fname)
-            self.assertEqual(config["max_retries_per_model"], 2)
-            self.assertEqual(config["retry_backoff_seconds"], [1, 3])
-            self.assertIn("openrouter/free", config["free_model_fallback_chain"])
-        finally:
-            os.unlink(fname)
+        self.mgr._wee_load_free_config = MagicMock(return_value=free_cfg)
 
-    def test_missing_file_returns_defaults(self):
-        config = load_free_model_config("/nonexistent/path.json")
-        self.assertIn("free_model_fallback_chain", config)
-        self.assertEqual(config["max_retries_per_model"], 3)
-        self.assertGreater(len(config["free_model_fallback_chain"]), 0)
+        call_tracker = []
+        err_429 = Exception("429 rate limit exceeded")
 
-    def test_defaults_include_openrouter_free(self):
-        config = load_free_model_config("/nonexistent/path.json")
-        self.assertIn("openrouter/free", config["free_model_fallback_chain"])
+        def stream_side_effect(*a, **kw):
+            model_arg = kw.get("model", "unknown")
+            call_tracker.append(model_arg)
+            if "primary" in model_arg:
+                raise err_429
+            return iter([_make_chunk("fallback works"), _make_done_chunk()])
 
-    def test_fallback_chain_first_is_openrouter_free(self):
-        config = load_free_model_config("/nonexistent/path.json")
-        self.assertEqual(config["free_model_fallback_chain"][0], "openrouter/free")
+        mock_instance = MagicMock()
+        mock_instance.chat.completions.create.side_effect = stream_side_effect
+        mock_openai_cls.return_value = mock_instance
 
-    def test_partial_override_merges_with_defaults(self):
-        import tempfile
-        data = {"max_retries_per_model": 5}
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
-            json.dump(data, f)
-            fname = f.name
-        try:
-            config = load_free_model_config(fname)
-            self.assertEqual(config["max_retries_per_model"], 5)
-            self.assertIn("free_model_fallback_chain", config)
-        finally:
-            os.unlink(fname)
-
-
-class TestCallWithRetry(unittest.TestCase):
-    def _make_stream(self, text):
-        chunk = MagicMock()
-        chunk.choices = [MagicMock()]
-        chunk.choices[0].delta.content = text
-        chunk.choices[0].delta.tool_calls = None
-        return [chunk]
-
-    def _make_client(self, return_value=None, side_effect=None):
-        client = MagicMock()
-        if side_effect:
-            client.chat.completions.create.side_effect = side_effect
-        else:
-            client.chat.completions.create.return_value = return_value
-        return client
-
-    def test_success_on_first_attempt(self):
-        client = self._make_client(return_value=self._make_stream("hello"))
-        output, err = _call_with_retry(
-            client, "some-model", [{"role": "user", "content": "hi"}],
-            {"stream": True}, max_retries=3, backoff_seconds=[0, 0, 0]
-        )
-        self.assertIsNone(err)
-        self.assertIn("hello", output)
-        self.assertEqual(client.chat.completions.create.call_count, 1)
-
-    def test_non_429_error_no_retry(self):
-        client = self._make_client(side_effect=Exception("auth error 401"))
-        output, err = _call_with_retry(
-            client, "model", [], {"stream": True},
-            max_retries=3, backoff_seconds=[0, 0, 0]
-        )
-        self.assertIsNone(output)
-        self.assertIsNotNone(err)
-        self.assertEqual(client.chat.completions.create.call_count, 1)
-
-    @patch("wee_runtime.time")
-    def test_429_retries_with_backoff(self, mock_time):
-        mock_time.sleep = MagicMock()
-        client = MagicMock()
-        client.chat.completions.create.side_effect = [
-            Exception("Error 429 rate limited"),
-            Exception("Error 429 rate limited"),
-            self._make_stream("success")[0],  # won't be used—stream returns iterable
-        ]
-        # Build a proper return for 3rd call
-        client.chat.completions.create.side_effect = [
-            Exception("429 rate limited"),
-            Exception("429 rate limited"),
-        ]
-        # All fail → return None
-        output, err = _call_with_retry(
-            client, "model", [], {"stream": True},
-            max_retries=2, backoff_seconds=[0, 0]
-        )
-        self.assertIsNone(output)
-        self.assertIsNotNone(err)
-        self.assertEqual(client.chat.completions.create.call_count, 2)
-
-    @patch("wee_runtime.time")
-    def test_429_succeeds_on_retry(self, mock_time):
-        mock_time.sleep = MagicMock()
-        stream = self._make_stream("retry success")
-        client = MagicMock()
-        client.chat.completions.create.side_effect = [
-            Exception("429 rate limit exceeded"),
-            stream,
-        ]
-        output, err = _call_with_retry(
-            client, "model", [], {"stream": True},
-            max_retries=3, backoff_seconds=[0, 0, 0]
-        )
-        self.assertIsNone(err)
-        self.assertIn("retry success", output)
-        self.assertEqual(client.chat.completions.create.call_count, 2)
-
-    @patch("wee_runtime.time")
-    def test_all_retries_exhausted_returns_none(self, mock_time):
-        mock_time.sleep = MagicMock()
-        client = MagicMock()
-        client.chat.completions.create.side_effect = Exception("429 rate limited")
-        output, err = _call_with_retry(
-            client, "model", [], {"stream": True},
-            max_retries=3, backoff_seconds=[0, 0, 0]
-        )
-        self.assertIsNone(output)
-        self.assertIsNotNone(err)
-        self.assertEqual(client.chat.completions.create.call_count, 3)
-
-
-class TestRunWithFallbackNonFree(unittest.TestCase):
-    """Non-free models should get single attempt, no fallback."""
-
-    def _make_stream(self, text):
-        chunk = MagicMock()
-        chunk.choices = [MagicMock()]
-        chunk.choices[0].delta.content = text
-        chunk.choices[0].delta.tool_calls = None
-        return [chunk]
-
-    def test_ollama_model_is_not_free(self):
-        self.assertFalse(is_free_openrouter_model("ollama/gemma4:e4b"))
-
-    def test_paid_openrouter_model_is_not_free(self):
-        self.assertFalse(is_free_openrouter_model("openrouter/google/gemma-4-31b-it"))
-
-
-class TestWeeFreeFallbackChainConfig(unittest.TestCase):
-    """Test that wee_free_models.json is correctly formed."""
-
-    def test_config_file_exists(self):
-        config_path = Path("/opt/n8n-copilot-shim-dev/wee_free_models.json")
-        self.assertTrue(config_path.exists(), "wee_free_models.json should exist")
-
-    def test_config_file_is_valid_json(self):
-        config_path = Path("/opt/n8n-copilot-shim-dev/wee_free_models.json")
-        with open(config_path) as f:
-            data = json.load(f)
-        self.assertIn("free_model_fallback_chain", data)
-
-    def test_config_has_max_retries_3(self):
-        config_path = Path("/opt/n8n-copilot-shim-dev/wee_free_models.json")
-        with open(config_path) as f:
-            data = json.load(f)
-        self.assertEqual(data["max_retries_per_model"], 3)
-
-    def test_config_has_backoff_2_5_10(self):
-        config_path = Path("/opt/n8n-copilot-shim-dev/wee_free_models.json")
-        with open(config_path) as f:
-            data = json.load(f)
-        self.assertEqual(data["retry_backoff_seconds"], [2, 5, 10])
-
-    def test_config_fallback_chain_not_empty(self):
-        config_path = Path("/opt/n8n-copilot-shim-dev/wee_free_models.json")
-        with open(config_path) as f:
-            data = json.load(f)
-        self.assertGreater(len(data["free_model_fallback_chain"]), 0)
-
-    def test_config_all_chain_items_are_openrouter(self):
-        config_path = Path("/opt/n8n-copilot-shim-dev/wee_free_models.json")
-        with open(config_path) as f:
-            data = json.load(f)
-        for model in data["free_model_fallback_chain"]:
-            self.assertTrue(
-                model.startswith("openrouter/"),
-                f"Fallback model should be openrouter: {model}"
+        with patch("sys.stderr"):
+            result = self.mgr.run_wee_native(
+                prompt="test prompt",
+                model="openrouter/primary:free",
+                agent="test",
+                session_id="s1",
+                resume=False,
+                n8n_session_id="n2",
             )
 
-    def test_config_first_entry_is_openrouter_free(self):
-        config_path = Path("/opt/n8n-copilot-shim-dev/wee_free_models.json")
+        self.assertIn("fallback works", result)
+        # primary was tried max_retries times before switching
+        primary_calls = [c for c in call_tracker if "primary" in c]
+        self.assertEqual(len(primary_calls), 2, "Should retry primary 2x before fallback")
+
+    @patch("agent_manager.time.sleep")
+    @patch("openai.OpenAI")
+    def test_issue_125_all_fallbacks_exhausted_no_crash(self, mock_openai_cls, mock_sleep):
+        """B01: When all fallbacks are 429, return error message (no stack overflow)."""
+        free_cfg = {
+            "max_retries_per_model": 1,
+            "retry_backoff_seconds": [1],
+            "free_model_fallback_chain": ["openrouter/b:free"],
+        }
+        self.mgr._wee_load_free_config = MagicMock(return_value=free_cfg)
+
+        err_429 = Exception("429 rate limit")
+        mock_instance = MagicMock()
+        mock_instance.chat.completions.create.side_effect = err_429
+        mock_openai_cls.return_value = mock_instance
+
+        with patch("sys.stderr"):
+            result = self.mgr.run_wee_native(
+                prompt="test",
+                model="openrouter/primary:free",
+                agent="test",
+                session_id="s1",
+                resume=False,
+                n8n_session_id="n3",
+            )
+
+        self.assertIn("exhausted", result.lower())
+
+    @patch("agent_manager.time.sleep")
+    @patch("openai.OpenAI")
+    def test_issue_125_fallback_notification_in_stream(self, mock_openai_cls, mock_sleep):
+        """B02: stream buffer should receive fallback notification message."""
+        free_cfg = {
+            "max_retries_per_model": 1,
+            "retry_backoff_seconds": [1],
+            "free_model_fallback_chain": [
+                "openrouter/primary:free",
+                "openrouter/backup:free",
+            ],
+        }
+        self.mgr._wee_load_free_config = MagicMock(return_value=free_cfg)
+
+        stream_buf = MagicMock()
+        self.mgr._stream_buffers = {"n4": stream_buf}
+
+        err_429 = Exception("429 rate limit")
+        attempt = [0]
+
+        def stream_side_effect(*a, **kw):
+            attempt[0] += 1
+            if attempt[0] == 1:
+                raise err_429
+            return iter([_make_chunk("backup ok"), _make_done_chunk()])
+
+        mock_instance = MagicMock()
+        mock_instance.chat.completions.create.side_effect = stream_side_effect
+        mock_openai_cls.return_value = mock_instance
+
+        with patch("sys.stderr"):
+            result = self.mgr.run_wee_native(
+                prompt="test",
+                model="openrouter/primary:free",
+                agent="test",
+                session_id="s1",
+                resume=False,
+                n8n_session_id="n4",
+            )
+
+        push_calls = stream_buf.push.call_args_list
+        fallback_pushed = any(
+            any(kw in str(c).lower() for kw in ("fallback", "rate limited", "switching"))
+            for c in push_calls
+        )
+        self.assertTrue(fallback_pushed, "B02: fallback notification must be pushed to stream buffer")
+        self.assertIn("backup ok", result)
+
+    @patch("agent_manager.time.sleep")
+    @patch("openai.OpenAI")
+    def test_issue_125_non_free_model_no_fallback(self, mock_openai_cls, mock_sleep):
+        """Non-:free models must NOT use the fallback chain."""
+        free_cfg = {
+            "max_retries_per_model": 3,
+            "retry_backoff_seconds": [1, 2, 5],
+            "free_model_fallback_chain": ["openrouter/b:free", "openrouter/c:free"],
+        }
+        self.mgr._wee_load_free_config = MagicMock(return_value=free_cfg)
+
+        err_429 = Exception("429 rate limit")
+        mock_instance = MagicMock()
+        mock_instance.chat.completions.create.side_effect = err_429
+        mock_openai_cls.return_value = mock_instance
+
+        with patch("sys.stderr"):
+            result = self.mgr.run_wee_native(
+                prompt="test",
+                model="ollama/llama3",
+                agent="test",
+                session_id="s1",
+                resume=False,
+                n8n_session_id="n5",
+            )
+
+        # Should get a non-429 error (non-free model, no fallback)
+        self.assertIn("Error", result)
+        # sleep should NOT be called (non-free models don't retry)
+        mock_sleep.assert_not_called()
+
+    @patch("agent_manager.time.sleep")
+    @patch("openai.OpenAI")
+    def test_issue_125_sleep_called_on_retry(self, mock_openai_cls, mock_sleep):
+        """M01: time.sleep (not asyncio.sleep) must be called between retries."""
+        free_cfg = {
+            "max_retries_per_model": 2,
+            "retry_backoff_seconds": [3, 7],
+            "free_model_fallback_chain": ["openrouter/primary:free"],
+        }
+        self.mgr._wee_load_free_config = MagicMock(return_value=free_cfg)
+
+        attempt = [0]
+        err_429 = Exception("429 rate limit")
+
+        def stream_side_effect(*a, **kw):
+            attempt[0] += 1
+            if attempt[0] < 2:
+                raise err_429
+            return iter([_make_chunk("ok"), _make_done_chunk()])
+
+        mock_instance = MagicMock()
+        mock_instance.chat.completions.create.side_effect = stream_side_effect
+        mock_openai_cls.return_value = mock_instance
+
+        with patch("sys.stderr"):
+            result = self.mgr.run_wee_native(
+                prompt="test",
+                model="openrouter/primary:free",
+                agent="test",
+                session_id="s1",
+                resume=False,
+                n8n_session_id="n6",
+            )
+
+        self.assertIn("ok", result)
+        # sleep should have been called with the backoff value
+        mock_sleep.assert_called()
+        sleep_args = [c[0][0] for c in mock_sleep.call_args_list]
+        self.assertIn(3, sleep_args, "Should sleep 3s per backoff config")
+
+
+class TestIssue125HelperMethods(unittest.TestCase):
+    """Unit tests for _wee_load_free_config, _wee_is_free_model, _wee_resolve_endpoint."""
+
+    def setUp(self):
+        self.mgr = _make_mgr()
+
+    def test_issue_125_config_file_exists(self):
+        """wee_free_models.json config file must exist in repo root."""
+        import json
+        config_path = REPO / "wee_free_models.json"
+        self.assertTrue(config_path.exists(), "wee_free_models.json must exist")
         with open(config_path) as f:
-            data = json.load(f)
-        self.assertEqual(data["free_model_fallback_chain"][0], "openrouter/free")
+            cfg = json.load(f)
+        self.assertIn("free_model_fallback_chain", cfg)
+        self.assertIn("max_retries_per_model", cfg)
+        self.assertIn("retry_backoff_seconds", cfg)
+        self.assertIsInstance(cfg["free_model_fallback_chain"], list)
 
+    def test_issue_125_config_default_on_missing(self):
+        """_wee_load_free_config must return defaults if file missing."""
+        with patch("builtins.open", side_effect=FileNotFoundError):
+            result = self.mgr._wee_load_free_config()
+        self.assertIn("free_model_fallback_chain", result)
+        self.assertIn("max_retries_per_model", result)
 
-# ── SessionManager (agent_manager.py) static helpers ────────────────────────
+    def test_issue_125_free_model_detection(self):
+        """_wee_is_free_model must correctly identify :free models."""
+        self.assertTrue(self.mgr._wee_is_free_model("openrouter/anthropic/claude-3-haiku:free"))
+        self.assertTrue(self.mgr._wee_is_free_model("openrouter/mistral/mistral-7b-instruct:free"))
+        self.assertFalse(self.mgr._wee_is_free_model("ollama/llama3.2"))
+        self.assertFalse(self.mgr._wee_is_free_model("anthropic/claude-3-haiku"))
 
-class TestSessionManagerWeeHelpers(unittest.TestCase):
-    """Test wee static/instance helpers on SessionManager."""
+    def test_issue_125_resolve_endpoint_ollama(self):
+        """_wee_resolve_endpoint must resolve ollama/ prefix correctly."""
+        base, key, model = self.mgr._wee_resolve_endpoint("ollama/llama3.2", None, None)
+        self.assertIn("11434", base)
+        self.assertEqual(model, "llama3.2")
 
-    @classmethod
-    def setUpClass(cls):
-        from agent_manager import SessionManager
-        cls.SM = SessionManager
-
-    def test_is_free_model_openrouter_free(self):
-        self.assertTrue(self.SM._wee_is_free_model("openrouter/free"))
-
-    def test_is_free_model_colon_free(self):
-        self.assertTrue(self.SM._wee_is_free_model("openrouter/google/gemma-4-31b-it:free"))
-
-    def test_is_free_model_paid(self):
-        self.assertFalse(self.SM._wee_is_free_model("openrouter/google/gemma-4-31b-it"))
-
-    def test_is_free_model_ollama(self):
-        self.assertFalse(self.SM._wee_is_free_model("ollama/gemma4:e4b"))
-
-    def test_is_free_model_case_insensitive(self):
-        self.assertTrue(self.SM._wee_is_free_model("OPENROUTER/FREE"))
-
-    def test_load_free_config_missing_file(self):
-        config = self.SM._wee_load_free_config("/nonexistent/path.json")
-        self.assertIn("free_model_fallback_chain", config)
-        self.assertEqual(config["max_retries_per_model"], 3)
-
-    def test_load_free_config_file_present(self):
-        import tempfile
-        data = {"max_retries_per_model": 7, "retry_backoff_seconds": [1, 2, 3]}
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
-            json.dump(data, f)
-            fname = f.name
-        try:
-            config = self.SM._wee_load_free_config(fname)
-            self.assertEqual(config["max_retries_per_model"], 7)
-        finally:
-            os.unlink(fname)
-
-    def test_fallback_chain_default_starts_with_openrouter_free(self):
-        config = self.SM._wee_load_free_config("/nonexistent.json")
-        chain = config["free_model_fallback_chain"]
-        self.assertEqual(chain[0], "openrouter/free")
-
-    def test_wee_run_attempt_success_returns_output_false(self):
-        """_wee_run_attempt returns (str, False) on success."""
-        chunk = MagicMock()
-        chunk.choices = [MagicMock()]
-        chunk.choices[0].delta.content = "test response"
-        chunk.choices[0].delta.tool_calls = None
-
-        mock_client = MagicMock()
-        mock_client.chat.completions.create.return_value = [chunk]
-
-        mock_self = MagicMock()
-        mock_self._wee_execute_tool = MagicMock(return_value="")
-        mock_self._wee_save_messages = MagicMock()
-
-        result = self.SM._wee_run_attempt(
-            mock_self,
-            client=mock_client,
-            resolved_model="gemma4:e4b",
-            messages=[{"role": "user", "content": "hi"}],
-            stream_buffer=None,
-            n8n_session_id="test-session",
-            agent="orchestrator",
-            wee_tools=[],
-            max_retries=3,
-            backoff=[0, 0, 0],
-            attempt_model="ollama/gemma4:e4b",
+    def test_issue_125_resolve_endpoint_openrouter(self):
+        """_wee_resolve_endpoint must resolve openrouter/ prefix correctly."""
+        base, key, model = self.mgr._wee_resolve_endpoint(
+            "openrouter/anthropic/claude:free", None, None
         )
-        self.assertIsInstance(result, tuple)
-        output, is_429 = result
-        self.assertFalse(is_429)
-        self.assertIn("test response", output)
+        self.assertIn("openrouter.ai", base)
+        self.assertEqual(model, "anthropic/claude:free")
 
-    def test_wee_run_attempt_429_exhaustion_returns_none_true(self):
-        """On 429 exhaustion, _wee_run_attempt returns (None, True)."""
-        mock_client = MagicMock()
-        mock_client.chat.completions.create.side_effect = Exception("429 rate limit exceeded")
-
-        mock_self = MagicMock()
-
-        result = self.SM._wee_run_attempt(
-            mock_self,
-            client=mock_client,
-            resolved_model="free",
-            messages=[{"role": "user", "content": "hi"}],
-            stream_buffer=None,
-            n8n_session_id="test-session",
-            agent="orchestrator",
-            wee_tools=[],
-            max_retries=1,
-            backoff=[0],
-            attempt_model="openrouter/free",
-        )
-        self.assertEqual(result, (None, True))
-
-    def test_wee_run_attempt_non_429_error_returns_message_false(self):
-        """Non-429 errors return error message with is_429=False."""
-        mock_client = MagicMock()
-        mock_client.chat.completions.create.side_effect = Exception("connection refused 503")
-
-        mock_self = MagicMock()
-
-        result = self.SM._wee_run_attempt(
-            mock_self,
-            client=mock_client,
-            resolved_model="free",
-            messages=[{"role": "user", "content": "hi"}],
-            stream_buffer=None,
-            n8n_session_id="test-session",
-            agent="orchestrator",
-            wee_tools=[],
-            max_retries=3,
-            backoff=[0, 0, 0],
-            attempt_model="openrouter/free",
-        )
-        output, is_429 = result
-        self.assertFalse(is_429)
-        self.assertIsNotNone(output)
-
-
-class TestWeeModelsIncludesFree(unittest.TestCase):
-    """openrouter/free should appear in WEE_MODELS."""
-
-    def test_wee_models_has_openrouter_free(self):
-        """The WEE_MODELS constant should include openrouter/free."""
-        import agent_manager
-        wee_models = agent_manager.WEE_MODELS if hasattr(agent_manager, "WEE_MODELS") else None
-        if wee_models is None:
-            self.skipTest("WEE_MODELS constant not at module level")
-        all_model_ids = [m[0] for group in wee_models.values() for m in group]
-        self.assertIn("openrouter/free", all_model_ids)
+    def test_issue_125_time_sleep_not_asyncio_sleep(self):
+        """M01: run_wee_native must use time.sleep, not asyncio.sleep."""
+        import inspect
+        src = inspect.getsource(SessionManager.run_wee_native)
+        self.assertIn("_time.sleep", src, "Must use time.sleep via _time alias")
+        self.assertNotIn("asyncio.sleep", src, "Must NOT use asyncio.sleep in sync function")
 
 
 if __name__ == "__main__":

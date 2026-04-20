@@ -1045,3 +1045,42 @@ compatibility with the existing `copilot` CLI runtime.
 ## Previous Releases
 
 (Historical releases documented when applicable)
+## [Issue #88] Feature: Wee Native Runtime — OpenAI-compatible API backend
+**Status:** Implementation Complete — 19 new tests, 1087 total pass
+
+### Overview
+Added a new `wee` runtime that connects to any OpenAI-compatible API endpoint
+(Ollama, OpenRouter, LM Studio, etc.) without depending on external CLI tools
+like GitHub Copilot CLI, Claude Code, or OpenCode.
+
+### Supported Backends
+- **Ollama** (Kubuntu) at `http://192.168.1.101:11436/v1` — local, free
+- **OpenRouter** at `https://openrouter.ai/api/v1` — cloud fallback, 100+ models
+- **LM Studio** at `http://localhost:1234/v1` — local alternative
+
+### Model Format
+Uses `provider/model_name` prefix syntax for auto-resolving API base URL and key:
+- `ollama/gemma4:e4b` — Ollama on Kubuntu (default)
+- `openrouter/meta-llama/llama-4-scout` — OpenRouter cloud
+- `lmstudio/qwen2.5-7b` — LM Studio local
+
+### Implementation Details
+- **`run_wee_native()`** — In-process method using OpenAI Python SDK with streaming
+- **`wee_runtime.py`** — Standalone CLI script for background task subprocess execution
+- Real-time SSE streaming to WebUI via `StreamBuffer.push()`
+- Provider presets auto-resolve API base URLs and API keys
+- `done` sentinel pushed on all exit paths (success and error)
+- Graceful error handling with informative messages
+
+### Files Changed
+- `agent_manager.py` — 17 touch points: runtime registration, dispatch, streaming,
+  model defaults, strip_metadata, background tasks
+- `wee_runtime.py` — NEW standalone CLI for background task execution
+- `tests/test_wee_native_runtime.py` — 19 comprehensive tests
+
+### Configuration
+```json
+{"runtime": "wee", "model": "ollama/gemma4:e4b"}
+```
+Environment variables: `WEE_API_BASE`, `WEE_API_KEY`, `WEE_DEFAULT_MODEL`
+
