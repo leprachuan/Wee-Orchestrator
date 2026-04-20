@@ -595,6 +595,7 @@ All AI runtimes in this system are configured with **full tool access** to enabl
 
 - **Features & Improvements:**
   - OpenRouter integration: Full UI support for cloud-based models with 300s cached discovery & keyring-based API key management (Issue #119)
+  - Global notification toggle: Suppress all background task notifications with `/notifications off`; critical alerts always deliver (Issue #146)
   - Model grouping in UI: Ollama and OpenRouter models displayed in separate dropdown optgroups
   - All OpenRouter models in model listing: Removed hardcoded filter to show 350+ OpenRouter models instead of ~12 (Issue #145)
 
@@ -602,7 +603,9 @@ All AI runtimes in this system are configured with **full tool access** to enabl
   - Wrong Ollama port corrected: `11436` → `11434` (Issue #105)
   - `httpx.Timeout(connect=15s)` and `max_retries=0` added to OpenAI client for fast-fail on bad endpoints (Issue #105)
   - Model resolution fixed: `get_models_for_runtime('wee')` returns flat strings; `get_model_from_name()` strips provider prefix (`ollama/`) and prefers exact/shortest match (Issue #105)
-- **Issues:** [#88](../../issues/88), [#105](../../issues/105), [#119](../../issues/119), [#145](../../issues/145)
+- **Bug Fixes (continued):**
+  - OpenRouter 401 auth fixed: `OPENROUTER_API_KEY` env var + keyring resolution replaces silent `'ollama'` fallback; raises clear error when no key found (Issue #153)
+- **Issues:** [#88](../../issues/88), [#105](../../issues/105), [#119](../../issues/119), [#146](../../issues/146), [#153](../../issues/153)
 
 ### Security Considerations
 
@@ -1726,6 +1729,117 @@ The scheduler is resilient to system clock adjustments (NTP corrections, manual 
 | `POST` | `/api/v1/scheduler/jobs/{id}/resume` | Resume a paused job |
 | `GET` | `/api/v1/scheduler/jobs/{id}/results` | Retrieve execution results |
 | `GET` | `/api/v1/scheduler/jobs/{id}/logs` | Retrieve execution logs |
+| `POST` | `/api/v1/scheduler/jobs/{id}/run` | Trigger job execution immediately |
+
+## Run Now Endpoint Documentation
+
+The `/api/v1/scheduler/jobs/{job_id}/run` endpoint (added in Issue #96) allows
+triggering job execution immediately, bypassing the normal schedule.
+
+### Mode Behavior
+
+Jobs can run in two modes:
+
+#### Command Mode (`mode: "command"`)
+Executes shell commands directly via subprocess:
+- No LLM invocation — direct shell execution
+- Input: `task` field contains the shell command
+- Output: stdout/stderr captured in task results
+- Working directory: `working_dir` field (default: `/opt`)
+- Timeout: `timeout` field applies
+- Results: Saved to scheduler logs/results
+
+#### AI Mode (`mode: "ai"` or default)
+Executes through the LLM pipeline:
+- Input: `task` field is a prompt for the AI
+- AI processes and executes the prompt
+- Results: Background task with full response
+- Backward compatible (default if `mode` not specified)
+
+### Examples
+
+**POST /api/v1/scheduler/jobs/{job_id}/run** — Trigger job execution immediately
+
+Command-mode request (execute shell command):
+```bash
+curl -X POST "http://localhost:8000/api/v1/scheduler/jobs/backup-db-1/run" \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json"
+```
+
+If job has:
+```json
+{
+  "id": "backup-db-1",
+  "name": "Backup Database",
+  "mode": "command",
+  "task": "pg_dump mydb | gzip > /backup/mydb_$(date +%Y%m%d).sql.gz",
+  "working_dir": "/opt/backups",
+  "timeout": 600
+}
+```
+
+Response (200 OK):
+```json
+{
+  "success": true,
+  "task_id": "sched_backup-db-1_a7f2k9",
+  "job_id": "backup-db-1",
+  "mode": "command",
+  "status": "running",
+  "agent": "command",
+  "runtime": "shell"
+}
+```
+
+AI-mode request (execute through LLM):
+```bash
+curl -X POST "http://localhost:8000/api/v1/scheduler/jobs/summary-daily-1/run" \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json"
+```
+
+If job has:
+```json
+{
+  "id": "summary-daily-1",
+  "name": "Daily Summary",
+  "mode": "ai",
+  "agent": "orchestrator",
+  "runtime": "claude",
+  "model": "claude-opus-4.6",
+  "task": "Summarize system health from /opt/HEARTBEAT.md and report any issues",
+  "timeout": 300
+}
+```
+
+Response (200 OK):
+```json
+{
+  "success": true,
+  "task_id": "sched_summary-daily-1_b4c3x2",
+  "job_id": "summary-daily-1",
+  "mode": "ai",
+  "status": "running",
+  "agent": "orchestrator",
+  "runtime": "claude"
+}
+```
+
+### Error Handling
+
+- **Job not found:** 404 with message "Not found"
+- **Rate limit exceeded:** 429 (max 20 requests/min per IP)
+- **Authentication failed:** 401 (invalid or missing bearer token)
+- **Scheduler unavailable:** 503 (scheduler daemon offline)
+
+### Result Retrieval
+
+After triggering a job, retrieve results via:
+- `GET /api/v1/scheduler/jobs/{job_id}/results` — Last execution results
+- `GET /api/v1/scheduler/jobs/{job_id}/logs` — Execution logs
+- `/api/v1/background-tasks/{task_id}` — Real-time background task status
+
 
 ### TODO Management
 

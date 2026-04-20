@@ -1,47 +1,115 @@
-## [Issue #118] Fix: wee runtime model selection
-## [Issue #119] Feature: OpenRouter models in wee runtime
-**Status:** Implemented (Commit: 50e874f) - PR #120
-
-Root causes fixed: Ollama port 11436->11434, empty model list (wee not in known_runtimes),
-tuple entries in model list breaking model resolution. Added fetch_wee_models() with dynamic
-Ollama discovery and curated OpenRouter models. 21 new tests, 1163 total pass.
-
-# Changelog
-## [Issue #145] Feature: All OpenRouter Models in Model Listing
-**Status:** ✅ QA Approved (Commit: d79f0d0, PR #149)
+## [Issue #146] Feature: Global Toggle to Suppress Background Task Notifications
+**Status:** ✅ QA Approved (Commit: 69f29db, PR #150)
 
 ### Summary
-Removed the hardcoded `OPENROUTER_POPULAR_MODELS` filter from `fetch_wee_models()`, enabling the wee runtime to discover and display all OpenRouter models (350+). Previously, only ~12 popular models were shown; now users can select from the full OpenRouter catalog.
+Implemented a global notification toggle allowing users to suppress all background task completion notifications across all channels (Telegram, WebEx, WebUI) with a single command. Critical system alerts (heartbeat, crashes) are always delivered regardless of toggle state. Toggle state persists in `~/.copilot/notification_settings.json` and is controlled via `/notifications` slash command or REST API.
 
-### Root Cause (Feature Gap)
-The `fetch_wee_models()` method filtered OpenRouter API responses through a hardcoded `OPENROUTER_POPULAR_MODELS` set (~12 models), preventing access to the full catalog (350+ models).
+### Problem
+Users had per-identity notification muting but no global toggle to suppress ALL background task notifications at once. The per-identity system was fragmented and confusing (using a `_global` special identity hack). Users wanted a simple way to mute all non-critical notifications system-wide.
+
+### Root Causes
+1. **No single global toggle** — Notification suppression was per-identity only, scattered across multiple code paths
+2. **Fragmented state management** — `_global` special identity hack was non-standard and hard to maintain
+3. **No persistence** — Notification preferences reset between sessions (settings were in-memory only)
+4. **No API endpoint** — Users couldn't programmatically control notification settings
+5. **No critical bypass** — No way to guarantee critical alerts always reach users regardless of settings
 
 ### Solution
 
-#### Remove OPENROUTER_POPULAR_MODELS Filter
-- Deleted hardcoded `OPENROUTER_POPULAR_MODELS` constant
-- Updated `fetch_wee_models()` to include all OpenRouter models
-- Users can now select from full OpenRouter catalog
+#### Global Settings Persistence
+- Added `notification_settings.json` stored in `~/.copilot/` (service user home directory)
+- Atomic writes using `tempfile.mkstemp()` + `os.replace()` to prevent corruption
+- Thread-safe with `_global_settings_lock` mutex
+- Default state: `{"notifications_enabled": true, "updated_at": "2026-04-13T..."}`
+- Auto-creates parent directory if missing
+- Gracefully falls back to default on corrupt/missing file
 
-#### Fix: Bare Name Matching Scope (B01 Regression Fix)
-- When 350+ OpenRouter models became available, old prefix-stripping logic accidentally matched stale model names like 'gpt-5-mini' to OpenRouter models
-- Fix: Restrict prefix-stripping to 'ollama/' only
-- Fix: Scope substring matching for wee to non-OpenRouter models unless query has 'openrouter/' prefix
-- Result: Stale Copilot model names no longer accidentally resolve to OpenRouter models
+#### NotificationManager Enhancements
+- `set_global_enabled(bool)` — Enable/disable global toggle
+- `is_global_enabled()` — Check current global state
+- `get_global_settings()` — Return full settings dict for API responses
+- Modified `create_notification()` — Added `is_critical` parameter (True bypasses suppression)
+- Non-critical notifications return `None` when globally disabled (fully suppressed)
+- Critical notifications always create and deliver regardless of toggle
+
+#### Slash Command Integration
+- `/notifications current` — Show global toggle state ("ON" or "OFF")
+- `/notifications on` (alias: `/notifications all`) — Enable notifications globally
+- `/notifications off` (alias: `/notifications mute`) — Disable notifications globally
+- Clear messaging: "Critical alerts (heartbeat, crashes) will still be delivered"
+
+#### REST API Endpoints
+- `GET /api/v1/settings/notifications` — Returns `{notifications_enabled: bool, updated_at: string, available: bool}`
+- `PUT /api/v1/settings/notifications` — Updates toggle state with body `{notifications_enabled: bool}`
+- Both endpoints require Bearer token authentication
+- Responses include informative success messages
+
+#### Notification Preference Resolution
+Precedence order (first match wins):
+1. `body.notify` parameter (explicit override in background task request)
+2. Global toggle via `is_global_enabled()` (Issue #146)
+3. Per-identity mute (existing feature, still supported)
+4. Session default (`notification_preference` field)
+5. Hardcoded default (`True`)
+
+Critical notifications skip the global toggle check and always deliver.
 
 ### Files Changed
-- `agent_manager.py` — Removed filter constant, updated fetch_wee_models(), restrict prefix-stripping, scope substring matching
+- `notification_manager.py` — Global settings persistence (+71 lines)
+- `agent_manager.py` — API endpoints + slash command updates (+55 lines, -65 lines)
+- `tests/test_issue146_notification_toggle.py` — 25 regression tests (+248 lines)
 
 ### Tests
-- 13 new tests in test_issue145_openrouter_model_listing.py covering:
-  - Full OpenRouter catalog discovery
-  - Removal of OPENROUTER_POPULAR_MODELS filter
-  - Bare name matching scope fix (regression test for B01)
-  - Model selection validation
-- Total: 1463 passed, 13 new issue tests, 0 regressions
-- Fixed regression: `TestSessionValidationWee::test_stale_copilot_model_replaced` (B01 from Issue #142)
+- 25 new tests covering:
+  - Global settings persistence (file I/O, JSON format, corruption handling)
+  - `create_notification()` suppression behavior
+  - `is_critical` parameter bypasses suppression
+  - Slash command `/notifications` variants
+  - REST API GET/PUT endpoints
+  - Notification preference resolution (precedence order)
+  - Thread safety (concurrent access)
+  - Edge cases (missing file, corrupt JSON, permission errors)
+- Total: 1457 passed, 33 pre-existing failures, 0 regressions
 
----
+### Usage Examples
+
+**Disable all notifications:**
+```
+/notifications off
+✓ Background task notifications suppressed globally.
+Critical alerts (heartbeat, crashes) will still be delivered.
+```
+
+**Check current state:**
+```
+/notifications current
+🔔 **Background Notifications:** `ON (all channels)`
+```
+
+**Via API:**
+```bash
+# Check state
+curl -k https://127.0.0.1:8000/api/v1/settings/notifications
+{"notifications_enabled": true, "updated_at": "2026-04-13T12:58:18Z", "available": true}
+
+# Disable notifications
+curl -k -X PUT https://127.0.0.1:8000/api/v1/settings/notifications \
+  -H "Content-Type: application/json" \
+  -d '{"notifications_enabled": false}'
+{"notifications_enabled": false, "message": "Notifications suppressed globally..."}
+```
+
+### Non-Blocking Observations
+- **M1 (MINOR):** Service user mismatch in docs — `~` resolves to service user's home (`n8n` on dev). Standard Unix behavior, no impact.
+- **M2 (MINOR):** No WebUI integration yet — Toggle is only available via slash command or API. WebUI settings panel toggle can be added in a follow-up issue.
+- **M3 (MINOR):** Timestamp format not explicitly documented — Uses ISO 8601 with `Z` suffix (UTC). Self-documenting, no impact.
+
+### Design Decisions
+1. **Single source of truth** — Global toggle replaces the fragmented `_global` special identity hack
+2. **File-based persistence** — Simple, auditable, survives service restarts
+3. **Critical bypass** — Ensures critical alerts (heartbeat, crashes) never get suppressed
+4. **Graceful degradation** — Defaults to `true` (notifications enabled) on missing/corrupt settings
+5. **Thread-safe I/O** — Lock protects concurrent file access; atomic writes prevent corruption
 
 
 ## [Issue #153] Bug Fix: OpenRouter 401 Authentication Error
