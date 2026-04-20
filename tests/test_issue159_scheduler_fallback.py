@@ -16,22 +16,33 @@ class TestFallbackEligibility(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         from scheduler.executor import TaskSchedulerExecutor
+
         cls.executor = TaskSchedulerExecutor.__new__(TaskSchedulerExecutor)
 
     def test_rate_limit_429_eligible(self):
-        self.assertTrue(self.executor._is_fallback_eligible("Error: 429 Too Many Requests"))
+        self.assertTrue(
+            self.executor._is_fallback_eligible("Error: 429 Too Many Requests")
+        )
 
     def test_rate_limit_text_eligible(self):
-        self.assertTrue(self.executor._is_fallback_eligible("rate limit exceeded, try again later"))
+        self.assertTrue(
+            self.executor._is_fallback_eligible("rate limit exceeded, try again later")
+        )
 
     def test_quota_exceeded_eligible(self):
-        self.assertTrue(self.executor._is_fallback_eligible("Error: quota exceeded for this billing period"))
+        self.assertTrue(
+            self.executor._is_fallback_eligible(
+                "Error: quota exceeded for this billing period"
+            )
+        )
 
     def test_auth_401_eligible(self):
         self.assertTrue(self.executor._is_fallback_eligible("HTTP 401 Unauthorized"))
 
     def test_auth_missing_eligible(self):
-        self.assertTrue(self.executor._is_fallback_eligible("Missing Authentication header"))
+        self.assertTrue(
+            self.executor._is_fallback_eligible("Missing Authentication header")
+        )
 
     def test_service_unavailable_503_eligible(self):
         self.assertTrue(self.executor._is_fallback_eligible("503 Service Unavailable"))
@@ -40,16 +51,24 @@ class TestFallbackEligibility(unittest.TestCase):
         self.assertTrue(self.executor._is_fallback_eligible("502 Bad Gateway"))
 
     def test_connection_refused_eligible(self):
-        self.assertTrue(self.executor._is_fallback_eligible("Connection refused to endpoint"))
+        self.assertTrue(
+            self.executor._is_fallback_eligible("Connection refused to endpoint")
+        )
 
     def test_timeout_eligible(self):
-        self.assertTrue(self.executor._is_fallback_eligible("timed out waiting for response"))
+        self.assertTrue(
+            self.executor._is_fallback_eligible("timed out waiting for response")
+        )
 
     def test_overloaded_eligible(self):
-        self.assertTrue(self.executor._is_fallback_eligible("The server is overloaded right now"))
+        self.assertTrue(
+            self.executor._is_fallback_eligible("The server is overloaded right now")
+        )
 
     def test_task_logic_error_not_eligible(self):
-        self.assertFalse(self.executor._is_fallback_eligible("NameError: name 'x' is not defined"))
+        self.assertFalse(
+            self.executor._is_fallback_eligible("NameError: name 'x' is not defined")
+        )
 
     def test_empty_error_not_eligible(self):
         self.assertFalse(self.executor._is_fallback_eligible(""))
@@ -58,10 +77,16 @@ class TestFallbackEligibility(unittest.TestCase):
         self.assertFalse(self.executor._is_fallback_eligible(None))
 
     def test_normal_failure_not_eligible(self):
-        self.assertFalse(self.executor._is_fallback_eligible("Task completed with errors: missing file"))
+        self.assertFalse(
+            self.executor._is_fallback_eligible(
+                "Task completed with errors: missing file"
+            )
+        )
 
     def test_api_key_invalid_eligible(self):
-        self.assertTrue(self.executor._is_fallback_eligible("Error: api_key invalid or expired"))
+        self.assertTrue(
+            self.executor._is_fallback_eligible("Error: api_key invalid or expired")
+        )
 
     def test_case_insensitive(self):
         self.assertTrue(self.executor._is_fallback_eligible("RATE LIMIT EXCEEDED"))
@@ -74,6 +99,7 @@ class TestResolveFallback(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         from scheduler.executor import TaskSchedulerExecutor
+
         cls.executor = TaskSchedulerExecutor.__new__(TaskSchedulerExecutor)
 
     def test_per_job_fallback(self):
@@ -107,7 +133,13 @@ class TestResolveFallback(unittest.TestCase):
         self.assertIsNone(rt)
         self.assertEqual(model, "claude-haiku-4.5")
 
-    @patch.dict(os.environ, {"SCHEDULER_FALLBACK_RUNTIME": "claude", "SCHEDULER_FALLBACK_MODEL": "claude-sonnet-4.6"})
+    @patch.dict(
+        os.environ,
+        {
+            "SCHEDULER_FALLBACK_RUNTIME": "claude",
+            "SCHEDULER_FALLBACK_MODEL": "claude-sonnet-4.6",
+        },
+    )
     def test_global_env_fallback(self):
         job = {"runtime": "copilot", "model": "claude-opus-4.6"}
         rt, model = self.executor._resolve_fallback(job)
@@ -153,6 +185,7 @@ class TestExecuteAiModeFallback(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         from scheduler.executor import TaskSchedulerExecutor
+
         cls.ExecutorClass = TaskSchedulerExecutor
 
     def _make_executor(self):
@@ -190,9 +223,12 @@ class TestExecuteAiModeFallback(unittest.TestCase):
     def test_primary_succeeds_no_fallback(self):
         """When primary succeeds, no fallback is attempted."""
         ex = self._make_executor()
-        job = self._make_job(fallback_runtime="claude", fallback_model="claude-haiku-4.5")
+        job = self._make_job(
+            fallback_runtime="claude", fallback_model="claude-haiku-4.5"
+        )
 
         call_count = [0]
+
         def mock_attempt(j, runtime_override=None, model_override=None):
             call_count[0] += 1
             return ("ok", None)
@@ -203,9 +239,11 @@ class TestExecuteAiModeFallback(unittest.TestCase):
         self.assertEqual(result, "ok")
 
     def test_fallback_triggered_on_rate_limit(self):
-        """When primary fails with rate limit and fallback is configured, fallback runs."""
+        """When primary fails with rate limit and fallback is configured, fallback runs."""  # noqa: E501
         ex = self._make_executor()
-        job = self._make_job(fallback_runtime="claude", fallback_model="claude-haiku-4.5")
+        job = self._make_job(
+            fallback_runtime="claude", fallback_model="claude-haiku-4.5"
+        )
 
         call_count = [0]
 
@@ -223,7 +261,9 @@ class TestExecuteAiModeFallback(unittest.TestCase):
     def test_no_fallback_on_logic_error(self):
         """Task logic errors should NOT trigger fallback."""
         ex = self._make_executor()
-        job = self._make_job(fallback_runtime="claude", fallback_model="claude-haiku-4.5")
+        job = self._make_job(
+            fallback_runtime="claude", fallback_model="claude-haiku-4.5"
+        )
 
         call_count = [0]
 
@@ -279,7 +319,9 @@ class TestExecuteAiModeFallback(unittest.TestCase):
         self.assertIsNone(result)
         # _save_result should have been called with combined error
         ex._save_result.assert_called()
-        error_arg = ex._save_result.call_args[1].get("error") or ex._save_result.call_args[0][3]
+        error_arg = (
+            ex._save_result.call_args[1].get("error") or ex._save_result.call_args[0][3]
+        )
         self.assertIn("Primary", error_arg)
         self.assertIn("Fallback", error_arg)
 
@@ -432,6 +474,7 @@ class TestFallbackPatternCompleteness(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         from scheduler.executor import TaskSchedulerExecutor
+
         cls.executor = TaskSchedulerExecutor.__new__(TaskSchedulerExecutor)
 
     def test_all_documented_patterns(self):

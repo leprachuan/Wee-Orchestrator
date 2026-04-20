@@ -21,6 +21,7 @@ import pytest
 # ── helpers ─────────────────────────────────────────────────────────────
 sys.path.insert(0, "/opt/n8n-copilot-shim-dev")
 
+
 def _get_session_mgr():
     """Instantiate SessionManager without starting the full server."""
     mod = importlib.import_module("agent_manager")
@@ -28,12 +29,14 @@ def _get_session_mgr():
     mgr.__init__()
     return mgr
 
+
 @pytest.fixture(scope="module")
 def mgr():
     return _get_session_mgr()
 
 
 # ── WEE_MODELS constant ────────────────────────────────────────────────
+
 
 class TestWeeModelsConstant:
     def test_wee_models_has_ollama_group(self, mgr):
@@ -44,16 +47,24 @@ class TestWeeModelsConstant:
 
     def test_ollama_models_are_tuples(self, mgr):
         for entry in mgr.WEE_MODELS["Ollama Models"]:
-            assert isinstance(entry, tuple), f"Expected tuple, got {type(entry)}: {entry}"
+            assert isinstance(
+                entry, tuple
+            ), f"Expected tuple, got {type(entry)}: {entry}"
             assert len(entry) == 3, f"Expected 3-element tuple: {entry}"
             model_id, desc, aliases = entry
-            assert model_id.startswith("ollama/"), f"Ollama model missing prefix: {model_id}"
+            assert model_id.startswith(
+                "ollama/"
+            ), f"Ollama model missing prefix: {model_id}"
 
     def test_openrouter_static_models_prefixed(self, mgr):
         for entry in mgr.WEE_MODELS["OpenRouter Models"]:
-            assert isinstance(entry, tuple), f"Expected tuple, got {type(entry)}: {entry}"
+            assert isinstance(
+                entry, tuple
+            ), f"Expected tuple, got {type(entry)}: {entry}"
             model_id = entry[0]
-            assert model_id.startswith("openrouter/"), f"OR model missing prefix: {model_id}"
+            assert model_id.startswith(
+                "openrouter/"
+            ), f"OR model missing prefix: {model_id}"
 
     def test_at_least_3_ollama_models(self, mgr):
         assert len(mgr.WEE_MODELS["Ollama Models"]) >= 3
@@ -62,7 +73,12 @@ class TestWeeModelsConstant:
         assert len(mgr.WEE_MODELS["OpenRouter Models"]) >= 5
 
 
+# ── OPENROUTER_POPULAR_MODELS removed (Issue #145) ────────────────────
+# The OPENROUTER_POPULAR_MODELS filter was removed to show all OpenRouter
+# models. Tests for it are in test_issue145_openrouter_model_listing.py.
+
 # ── fetch_wee_models() ─────────────────────────────────────────────────
+
 
 class TestFetchWeeModels:
     def _reset_cache(self, mgr):
@@ -77,8 +93,9 @@ class TestFetchWeeModels:
             assert isinstance(k, str)
             assert isinstance(v, list)
             for model_id in v:
-                assert isinstance(model_id, str), \
-                    f"Expected flat string IDs, got {type(model_id)}: {model_id}"
+                assert isinstance(
+                    model_id, str
+                ), f"Expected flat string IDs, got {type(model_id)}: {model_id}"
 
     def test_ollama_group_in_result(self, mgr):
         self._reset_cache(mgr)
@@ -108,17 +125,19 @@ class TestFetchWeeModels:
         r2 = mgr.fetch_wee_models()
         assert r1 == r2
 
-    def test_discovery_filters_to_popular(self, mgr):
-        """When OpenRouter API returns models, only popular ones are kept."""
+    def test_discovery_includes_all_api_models(self, mgr):
+        """When OpenRouter API returns models, ALL are included (Issue #145)."""
         self._reset_cache(mgr)
-        fake_api_response = json.dumps({
-            "data": [
-                {"id": "meta-llama/llama-4-maverick", "name": "Llama 4 Maverick"},
-                {"id": "meta-llama/llama-4-scout", "name": "Llama 4 Scout"},
-                {"id": "some-vendor/obscure-model", "name": "Obscure"},
-                {"id": "openai/gpt-4.1", "name": "GPT-4.1"},
-            ]
-        }).encode()
+        fake_api_response = json.dumps(
+            {
+                "data": [
+                    {"id": "meta-llama/llama-4-maverick", "name": "Llama 4 Maverick"},
+                    {"id": "meta-llama/llama-4-scout", "name": "Llama 4 Scout"},
+                    {"id": "some-vendor/obscure-model", "name": "Obscure"},
+                    {"id": "openai/gpt-4.1", "name": "GPT-4.1"},
+                ]
+            }
+        ).encode()
 
         mock_resp = MagicMock()
         mock_resp.read.return_value = fake_api_response
@@ -135,16 +154,19 @@ class TestFetchWeeModels:
         assert "openrouter/meta-llama/llama-4-maverick" in or_models
         assert "openrouter/meta-llama/llama-4-scout" in or_models
         assert "openrouter/openai/gpt-4.1" in or_models
-        assert "openrouter/some-vendor/obscure-model" not in or_models
+        # Issue #145: ALL models now included (no filtering)
+        assert "openrouter/some-vendor/obscure-model" in or_models
 
     def test_discovered_models_have_openrouter_prefix(self, mgr):
         """Discovered OpenRouter models should have openrouter/ prefix."""
         self._reset_cache(mgr)
-        fake_api_response = json.dumps({
-            "data": [
-                {"id": "openai/gpt-4.1", "name": "GPT-4.1"},
-            ]
-        }).encode()
+        fake_api_response = json.dumps(
+            {
+                "data": [
+                    {"id": "openai/gpt-4.1", "name": "GPT-4.1"},
+                ]
+            }
+        ).encode()
 
         mock_resp = MagicMock()
         mock_resp.read.return_value = fake_api_response
@@ -162,6 +184,7 @@ class TestFetchWeeModels:
 
 # ── _get_model_description() ───────────────────────────────────────────
 
+
 class TestGetModelDescription:
     def test_ollama_model_description(self, mgr):
         desc = mgr._get_model_description("ollama/gemma4:e4b", "wee")
@@ -178,6 +201,7 @@ class TestGetModelDescription:
 
 
 # ── get_model_from_name() ──────────────────────────────────────────────
+
 
 class TestGetModelFromName:
     def _reset_cache(self, mgr):
@@ -213,10 +237,12 @@ class TestGetModelFromName:
 
 # ── /api/v1/models endpoint ────────────────────────────────────────────
 
+
 class TestModelsEndpoint:
     def test_wee_in_known_runtimes(self):
         """The source code must include 'wee' in known_runtimes."""
         import inspect
+
         mod = importlib.import_module("agent_manager")
         src = inspect.getsource(mod)
         assert '"wee"' in src or "'wee'" in src
@@ -266,7 +292,9 @@ class TestModelsEndpoint:
                 data["models"].append(entry)
         groups = {m.get("group", "") for m in data["models"]}
         assert "Ollama Models" in groups, f"Missing Ollama group. Got: {groups}"
-        assert any(g.startswith("OpenRouter") for g in groups), f"Missing OpenRouter group (expected group with OpenRouter prefix). Got: {groups}"
+        assert any(
+            g.startswith("OpenRouter") for g in groups
+        ), f"Missing OpenRouter group (expected group with OpenRouter prefix). Got: {groups}"  # noqa: E501
 
     def test_endpoint_unknown_runtime_rejected(self):
         """Unknown runtimes should return an error."""
@@ -276,6 +304,7 @@ class TestModelsEndpoint:
 
 # ── Session dispatch ───────────────────────────────────────────────────
 
+
 class TestSessionDispatch:
     def test_wee_runtime_resolves_openrouter_model(self, mgr):
         result = mgr.get_model_from_name("openrouter/meta-llama/llama-4-scout", "wee")
@@ -284,21 +313,27 @@ class TestSessionDispatch:
     def test_openrouter_models_all_have_prefix(self, mgr):
         for entry in mgr.WEE_MODELS.get("OpenRouter Models", []):
             model_id = entry[0]
-            assert model_id.startswith("openrouter/"), \
-                f"OpenRouter model missing prefix: {model_id}"
+            assert model_id.startswith(
+                "openrouter/"
+            ), f"OpenRouter model missing prefix: {model_id}"
 
 
 # ── Keyring integration ───────────────────────────────────────────────
 
+
 class TestKeyringIntegration:
     def test_keyring_has_openrouter_key(self):
         import keyring
+
         key = keyring.get_password("openrouter", "api_key")
         assert key is not None, "OpenRouter API key not stored in keyring"
-        assert key.startswith("sk-or-"), f"Key doesn't look like OpenRouter key: {key[:10]}"
+        assert key.startswith(
+            "sk-or-"
+        ), f"Key doesn't look like OpenRouter key: {key[:10]}"
 
 
 # ── Cache TTL ─────────────────────────────────────────────────────────
+
 
 class TestCacheTTL:
     def test_openrouter_cache_ts_attribute(self, mgr):

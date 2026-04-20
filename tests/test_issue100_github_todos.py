@@ -6,13 +6,8 @@ closes GitHub Issues.
 """
 
 import json
-import os
-import sys
-import tempfile
-from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-import pytest
 
 # ── Test helper: import the inner functions from agent_manager ──────
 
@@ -23,32 +18,35 @@ import pytest
 
 # ── 1. Unit tests for GitHub Issues helper logic ────────────────────
 
+
 class TestFetchGitHubTodos:
     """Test _fetch_github_todos logic (mocked gh CLI)."""
 
     def test_parses_gh_output_correctly(self):
         """GitHub Issues are parsed into the expected TODO format."""
-        gh_output = json.dumps([
-            {
-                "number": 42,
-                "title": "Buy groceries",
-                "body": "📅 **Due:** 2026-04-15\n\nMilk, eggs, bread",
-                "labels": [
-                    {"name": "todo"},
-                    {"name": "FAMILY"},
-                ],
-                "createdAt": "2026-04-10T00:00:00Z",
-                "updatedAt": "2026-04-10T00:00:00Z",
-            },
-            {
-                "number": 43,
-                "title": "Fix router",
-                "body": "",
-                "labels": [{"name": "todo"}],
-                "createdAt": "2026-04-11T00:00:00Z",
-                "updatedAt": "2026-04-11T00:00:00Z",
-            },
-        ])
+        gh_output = json.dumps(
+            [
+                {
+                    "number": 42,
+                    "title": "Buy groceries",
+                    "body": "📅 **Due:** 2026-04-15\n\nMilk, eggs, bread",
+                    "labels": [
+                        {"name": "todo"},
+                        {"name": "FAMILY"},
+                    ],
+                    "createdAt": "2026-04-10T00:00:00Z",
+                    "updatedAt": "2026-04-10T00:00:00Z",
+                },
+                {
+                    "number": 43,
+                    "title": "Fix router",
+                    "body": "",
+                    "labels": [{"name": "todo"}],
+                    "createdAt": "2026-04-11T00:00:00Z",
+                    "updatedAt": "2026-04-11T00:00:00Z",
+                },
+            ]
+        )
 
         with patch("subprocess.run") as mock_run:
             mock_run.return_value = MagicMock(
@@ -57,15 +55,28 @@ class TestFetchGitHubTodos:
             )
 
             # Simulate the logic from _fetch_github_todos
-            import subprocess as _sp
             import re as _re
+            import subprocess as _sp
 
             result = _sp.run(
-                ["gh", "issue", "list", "--repo", "leprachuan/fosterbot-home",
-                 "--label", "todo", "--state", "open",
-                 "--json", "number,title,body,labels,createdAt,updatedAt",
-                 "--limit", "100"],
-                capture_output=True, text=True, timeout=15,
+                [
+                    "gh",
+                    "issue",
+                    "list",
+                    "--repo",
+                    "leprachuan/fosterbot-home",
+                    "--label",
+                    "todo",
+                    "--state",
+                    "open",
+                    "--json",
+                    "number,title,body,labels,createdAt,updatedAt",
+                    "--limit",
+                    "100",
+                ],
+                capture_output=True,
+                text=True,
+                timeout=15,
             )
             issues = json.loads(result.stdout)
 
@@ -78,19 +89,22 @@ class TestFetchGitHubTodos:
                     due = due_match.group(1).strip()
 
                 issue_labels = [
-                    lbl["name"] for lbl in issue.get("labels", [])
+                    lbl["name"]
+                    for lbl in issue.get("labels", [])
                     if lbl["name"] != "todo"
                 ]
 
-                todos.append({
-                    "description": issue["title"],
-                    "due": due,
-                    "labels": issue_labels,
-                    "notes": [],
-                    "details": body,
-                    "source": "github",
-                    "github_issue_number": issue["number"],
-                })
+                todos.append(
+                    {
+                        "description": issue["title"],
+                        "due": due,
+                        "labels": issue_labels,
+                        "notes": [],
+                        "details": body,
+                        "source": "github",
+                        "github_issue_number": issue["number"],
+                    }
+                )
 
             assert len(todos) == 2
             assert todos[0]["description"] == "Buy groceries"
@@ -109,7 +123,9 @@ class TestFetchGitHubTodos:
 
             result = mock_run(
                 ["gh", "issue", "list"],
-                capture_output=True, text=True, timeout=15,
+                capture_output=True,
+                text=True,
+                timeout=15,
             )
             if result.returncode != 0:
                 todos = []
@@ -121,11 +137,14 @@ class TestFetchGitHubTodos:
     def test_handles_gh_timeout_gracefully(self):
         """Returns empty list on subprocess timeout."""
         import subprocess
+
         with patch("subprocess.run", side_effect=subprocess.TimeoutExpired("gh", 15)):
             try:
                 result = subprocess.run(
                     ["gh", "issue", "list"],
-                    capture_output=True, text=True, timeout=15,
+                    capture_output=True,
+                    text=True,
+                    timeout=15,
                 )
                 todos = json.loads(result.stdout)
             except (subprocess.TimeoutExpired, FileNotFoundError):
@@ -140,7 +159,9 @@ class TestFetchGitHubTodos:
 
             result = mock_run(
                 ["gh", "issue", "list"],
-                capture_output=True, text=True, timeout=15,
+                capture_output=True,
+                text=True,
+                timeout=15,
             )
             issues = json.loads(result.stdout) if result.stdout.strip() else []
             assert issues == []
@@ -288,19 +309,28 @@ class TestCreateGitHubTodo:
                 stdout="https://github.com/leprachuan/fosterbot-home/issues/99",
             )
 
-            import subprocess as _sp
             import re as _re
+            import subprocess as _sp
 
             labels = ["FAMILY"]
             if "todo" not in labels:
                 labels.append("todo")
 
             result = _sp.run(
-                ["gh", "issue", "create",
-                 "--repo", "leprachuan/fosterbot-home",
-                 "--title", "Test task",
-                 "--label", ",".join(labels)],
-                capture_output=True, text=True, timeout=15,
+                [
+                    "gh",
+                    "issue",
+                    "create",
+                    "--repo",
+                    "leprachuan/fosterbot-home",
+                    "--title",
+                    "Test task",
+                    "--label",
+                    ",".join(labels),
+                ],
+                capture_output=True,
+                text=True,
+                timeout=15,
             )
 
             m = _re.search(r"/issues/(\d+)", result.stdout)
@@ -321,7 +351,9 @@ class TestCreateGitHubTodo:
 
             result = mock_run(
                 ["gh", "issue", "create"],
-                capture_output=True, text=True, timeout=15,
+                capture_output=True,
+                text=True,
+                timeout=15,
             )
             if result.returncode != 0:
                 gh_result = None
@@ -344,12 +376,19 @@ class TestCreateGitHubTodo:
             full_body = "\n\n".join(body_parts)
 
             import subprocess as _sp
+
             cmd = [
-                "gh", "issue", "create",
-                "--repo", "leprachuan/fosterbot-home",
-                "--title", "Test task",
-                "--label", "todo",
-                "--body", full_body,
+                "gh",
+                "issue",
+                "create",
+                "--repo",
+                "leprachuan/fosterbot-home",
+                "--title",
+                "Test task",
+                "--label",
+                "todo",
+                "--body",
+                full_body,
             ]
             _sp.run(cmd, capture_output=True, text=True, timeout=15)
 
@@ -363,10 +402,12 @@ class TestCloseGitHubTodo:
 
     def test_closes_exact_title_match(self):
         """Finds and closes issue with exact title match."""
-        list_output = json.dumps([
-            {"number": 42, "title": "Buy groceries"},
-            {"number": 43, "title": "Fix router"},
-        ])
+        list_output = json.dumps(
+            [
+                {"number": 42, "title": "Buy groceries"},
+                {"number": 43, "title": "Fix router"},
+            ]
+        )
 
         with patch("subprocess.run") as mock_run:
             # First call: list issues, second call: close issue
@@ -375,15 +416,28 @@ class TestCloseGitHubTodo:
                 MagicMock(returncode=0, stdout=""),
             ]
 
-            import subprocess as _sp
             import json as _json
+            import subprocess as _sp
 
             result = _sp.run(
-                ["gh", "issue", "list",
-                 "--repo", "leprachuan/fosterbot-home",
-                 "--label", "todo", "--state", "open",
-                 "--json", "number,title", "--limit", "200"],
-                capture_output=True, text=True, timeout=15,
+                [
+                    "gh",
+                    "issue",
+                    "list",
+                    "--repo",
+                    "leprachuan/fosterbot-home",
+                    "--label",
+                    "todo",
+                    "--state",
+                    "open",
+                    "--json",
+                    "number,title",
+                    "--limit",
+                    "200",
+                ],
+                capture_output=True,
+                text=True,
+                timeout=15,
             )
             issues = _json.loads(result.stdout)
 
@@ -399,18 +453,27 @@ class TestCloseGitHubTodo:
             assert match["number"] == 42
 
             close_result = _sp.run(
-                ["gh", "issue", "close",
-                 "--repo", "leprachuan/fosterbot-home",
-                 str(match["number"])],
-                capture_output=True, text=True, timeout=15,
+                [
+                    "gh",
+                    "issue",
+                    "close",
+                    "--repo",
+                    "leprachuan/fosterbot-home",
+                    str(match["number"]),
+                ],
+                capture_output=True,
+                text=True,
+                timeout=15,
             )
             assert close_result.returncode == 0
 
     def test_closes_partial_title_match(self):
         """Falls back to partial title match when exact match not found."""
-        list_output = json.dumps([
-            {"number": 42, "title": "Buy groceries for the week"},
-        ])
+        list_output = json.dumps(
+            [
+                {"number": 42, "title": "Buy groceries for the week"},
+            ]
+        )
 
         with patch("subprocess.run") as mock_run:
             mock_run.side_effect = [
@@ -418,15 +481,28 @@ class TestCloseGitHubTodo:
                 MagicMock(returncode=0, stdout=""),
             ]
 
-            import subprocess as _sp
             import json as _json
+            import subprocess as _sp
 
             result = _sp.run(
-                ["gh", "issue", "list",
-                 "--repo", "leprachuan/fosterbot-home",
-                 "--label", "todo", "--state", "open",
-                 "--json", "number,title", "--limit", "200"],
-                capture_output=True, text=True, timeout=15,
+                [
+                    "gh",
+                    "issue",
+                    "list",
+                    "--repo",
+                    "leprachuan/fosterbot-home",
+                    "--label",
+                    "todo",
+                    "--state",
+                    "open",
+                    "--json",
+                    "number,title",
+                    "--limit",
+                    "200",
+                ],
+                capture_output=True,
+                text=True,
+                timeout=15,
             )
             issues = _json.loads(result.stdout)
 
@@ -448,19 +524,23 @@ class TestCloseGitHubTodo:
 
     def test_returns_none_when_no_match(self):
         """Returns None when no matching issue found."""
-        list_output = json.dumps([
-            {"number": 42, "title": "Completely different task"},
-        ])
+        list_output = json.dumps(
+            [
+                {"number": 42, "title": "Completely different task"},
+            ]
+        )
 
         with patch("subprocess.run") as mock_run:
             mock_run.return_value = MagicMock(returncode=0, stdout=list_output)
 
-            import subprocess as _sp
             import json as _json
+            import subprocess as _sp
 
             result = _sp.run(
                 ["gh", "issue", "list"],
-                capture_output=True, text=True, timeout=15,
+                capture_output=True,
+                text=True,
+                timeout=15,
             )
             issues = _json.loads(result.stdout)
 
@@ -486,6 +566,7 @@ class TestDueDateParsing:
     def test_extracts_due_date_with_emoji(self):
         """Parses 📅 **Due:** format from issue body."""
         import re
+
         body = "📅 **Due:** 2026-04-15\n\nSome details"
         match = re.search(r"📅\s*\*\*Due:\*\*\s*(.+)", body)
         assert match is not None
@@ -494,6 +575,7 @@ class TestDueDateParsing:
     def test_no_due_date_returns_none(self):
         """Returns None when no due date in body."""
         import re
+
         body = "Just some task details"
         match = re.search(r"📅\s*\*\*Due:\*\*\s*(.+)", body)
         assert match is None
@@ -501,6 +583,7 @@ class TestDueDateParsing:
     def test_empty_body_returns_none(self):
         """Returns None for empty body."""
         import re
+
         body = ""
         match = re.search(r"📅\s*\*\*Due:\*\*\s*(.+)", body)
         assert match is None
@@ -508,6 +591,7 @@ class TestDueDateParsing:
     def test_due_date_with_time(self):
         """Parses due date with time component."""
         import re
+
         body = "📅 **Due:** 03/15/2026 10:00:00"
         match = re.search(r"📅\s*\*\*Due:\*\*\s*(.+)", body)
         assert match is not None
@@ -533,6 +617,7 @@ class TestSourceTagging:
         todo["source"] = "flatfile"
         assert todo["source"] == "flatfile"
         assert "github_issue_number" not in todo
+
 
 class TestInvalidLabelHandling:
     """Test that invalid labels are stripped and issue creation succeeds."""
@@ -622,7 +707,10 @@ class TestInvalidLabelHandling:
             stderr="",
         )
 
-        with patch("subprocess.run", side_effect=[fail_result, label_list_result, success_result]):
+        with patch(
+            "subprocess.run",
+            side_effect=[fail_result, label_list_result, success_result],
+        ):
             resp = self._post_todo("Buy test item", labels=["qa-test"])
 
         data = resp.json()
@@ -642,7 +730,7 @@ class TestInvalidLabelHandling:
             stderr="could not add label: qa-test not found",
             stdout="",
         )
-        # Second call: gh label list returns only "bug" — neither "todo" nor "qa-test" are valid
+        # Second call: gh label list returns only "bug" — neither "todo" nor "qa-test" are valid  # noqa: E501
         label_list_result = MagicMock(
             returncode=0,
             stdout='[{"name": "bug"}]',
@@ -655,7 +743,10 @@ class TestInvalidLabelHandling:
             stderr="",
         )
 
-        with patch("subprocess.run", side_effect=[fail_result, label_list_result, success_result]):
+        with patch(
+            "subprocess.run",
+            side_effect=[fail_result, label_list_result, success_result],
+        ):
             resp = self._post_todo("All invalid labels task", labels=["qa-test"])
 
         data = resp.json()
@@ -666,7 +757,7 @@ class TestInvalidLabelHandling:
         assert gh["issue_number"] == 99
 
     def test_non_label_failure_is_logged_and_returns_none(self):
-        """Non-label failures (e.g., network error) return github_issue=None with no retry."""
+        """Non-label failures (e.g., network error) return github_issue=None with no retry."""  # noqa: E501
         from unittest.mock import MagicMock, patch
 
         # gh issue create fails with a network error (not a label error)
@@ -688,7 +779,7 @@ class TestInvalidLabelHandling:
         assert mock_run.call_count == 1
 
     def test_labels_stripped_field_in_response(self):
-        """Response dict contains labels_stripped field when invalid labels were removed."""
+        """Response dict contains labels_stripped field when invalid labels were removed."""  # noqa: E501
         from unittest.mock import MagicMock, patch
 
         # First call: create fails because "nonexistent-label" is invalid
@@ -710,8 +801,13 @@ class TestInvalidLabelHandling:
             stderr="",
         )
 
-        with patch("subprocess.run", side_effect=[fail_result, label_list_result, success_result]):
-            resp = self._post_todo("Label strip verify", labels=["nonexistent-label", "FAMILY"])
+        with patch(
+            "subprocess.run",
+            side_effect=[fail_result, label_list_result, success_result],
+        ):
+            resp = self._post_todo(
+                "Label strip verify", labels=["nonexistent-label", "FAMILY"]
+            )
 
         data = resp.json()
         assert data["success"] is True
