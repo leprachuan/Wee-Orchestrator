@@ -435,6 +435,14 @@ class BackgroundTaskManager:
             with open(self._path, "w") as f:
                 json.dump(tasks, f, indent=2, default=str)
 
+    def _load_unlocked(self, force: bool = False) -> list:
+        """Load tasks without acquiring self._lock (must be called within lock)."""
+        return self._load()
+
+    def _save_unlocked(self, tasks: list) -> None:
+        """Save tasks without acquiring self._lock (must be called within lock)."""
+        self._save(tasks)
+
     def _evict_oldest_terminal(self, tasks: list) -> list:
         """Evict oldest completed/failed/killed tasks when store exceeds MAX_TOTAL_TASKS."""
         if len(tasks) <= self.MAX_TOTAL_TASKS:
@@ -1497,7 +1505,7 @@ class SessionManager:
             (
                 "gemini-3.1-pro",
                 "Gemini 3.1 Pro",
-                ["pro-3.1", "gemini-3-pro", "pro-3"],
+                ["pro-3.1", "pro-3"],
             ),
             (
                 "gemini-3.1-flash-live",
@@ -1517,7 +1525,7 @@ class SessionManager:
             (
                 "gemini-3-pro-preview",
                 "Gemini 3 Pro (Preview)",
-                ["pro-3-preview"],
+                ["pro-3-preview", "gemini-3-pro"],
             ),
             (
                 "gemini-3-flash-preview",
