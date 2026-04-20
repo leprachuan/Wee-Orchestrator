@@ -3933,88 +3933,28 @@ You can mention an agent in your prompt and it will auto-delegate:
 
         return self._static_models_to_dict(self.CURSOR_MODELS)
 
-    def fetch_wee_models(self) -> Dict:
-        """Return available wee models: local Ollama + OpenRouter cloud models.
+    def _fetch_wee_models(self) -> Dict:
+        """Discover wee models dynamically from configured API hosts.
 
-        Resolution order:
-          1. WEE_MODELS_JSON env var (custom model list)
-          2. Live Ollama discovery + live OpenRouter discovery (300s TTL cache)
-          3. Static WEE_MODELS fallback
+        Queries Ollama and OpenAI-compatible endpoints, caches results
+        with TTL. Falls back to static presets if discovery fails entirely.
+        Issue #114.
         """
-        # Check for env var override first
-        env_models = os.getenv("WEE_MODELS_JSON")
-        if env_models:
-            try:
-                models_dict = json.loads(env_models)
-                normalized = {}
-                for cat, entries in models_dict.items():
-                    normalized[cat] = [
-                        tuple(e) if isinstance(e, list) else e for e in entries
-                    ]
-                self._env_wee_models = normalized
-                return self._static_models_to_dict(normalized)
-            except (json.JSONDecodeError, ValueError):
-                pass
-
-        cache_ttl = 300  # 5 minutes
-
-        # Return cache if still valid
-        if (
-            self._env_wee_models is not None
-            and time.time() - self._openrouter_cache_ts < cache_ttl
-        ):
-            return self._static_models_to_dict(self._env_wee_models)
-
-        # Start with static Ollama models
-        result = {}
-        for cat, entries in self.WEE_MODELS.items():
-            result[cat] = list(entries)
-
-        # Try live Ollama discovery
         try:
-            import httpx
-
-            resp = httpx.get(
-                "http://192.168.1.101:11434/api/tags",
-                timeout=httpx.Timeout(connect=5.0, read=10.0, write=10.0, pool=10.0),
-            )
-            if resp.status_code == 200:
-                tags = resp.json().get("models", [])
-                ollama_models = [(f"ollama/{t['name']}", t["name"], []) for t in tags]
-                if ollama_models:
-                    # Merge aliases from static WEE_MODELS into discovered models
-                    static_ollama = {
-                        e[0]: e for e in self.WEE_MODELS.get("Ollama Models", [])
-                    }
-                    merged_ollama = []
-                    discovered_ids = set()
-                    for or_id, name, _ in ollama_models:
-                        if or_id in static_ollama:
-                            merged_ollama.append(static_ollama[or_id])
-                        else:
-                            merged_ollama.append((or_id, name, []))
-                        discovered_ids.add(or_id)
-                    # Add static models not found via live discovery (preserves aliases)
-                    for entry in self.WEE_MODELS.get("Ollama Models", []):
-                        if entry[0] not in discovered_ids:
-                            merged_ollama.append(entry)
-                    result["Ollama Models"] = merged_ollama
-        except Exception:
-            pass
-
-        # Try live OpenRouter discovery via fetch_openrouter_models()
-        try:
-            or_models = self.fetch_openrouter_models()
-            if or_models and any(v for v in or_models.values()):
-                # Remove the static OpenRouter Models key and replace with dynamic groups
-                result.pop("OpenRouter Models", None)
-                result.update(or_models)
+            from wee_model_discovery import discover_wee_models
+            result = discover_wee_models()
+            if result:
+                return result
         except Exception as e:
-            print(f"[wee] OpenRouter discovery error: {e}", file=sys.stderr)
-
-        self._env_wee_models = result
-        self._openrouter_cache_ts = time.time()
-        return self._static_models_to_dict(result)
+            print(
+                f"[Wee] Model discovery failed: {e}",
+                file=sys.stderr,
+            )
+        # Fallback to static presets
+        return {"Wee Native (static)": [
+            "ollama/gemma4:e4b",
+            "openrouter/meta-llama/llama-4-scout",
+        ]}
 
     def get_models_for_runtime(self, runtime: str) -> Dict:
         """Fetch available models for a runtime, using CLI discovery where possible.
@@ -4033,7 +3973,7 @@ You can mention an agent in your prompt and it will auto-delegate:
             "codex": self.fetch_codex_models,
             "devin": self.fetch_devin_models,
             "cursor": self.fetch_cursor_models,
-            "wee": self.fetch_wee_models,
+            "wee": self._fetch_wee_models,
         }
         fetcher = dispatch.get(runtime)
         if fetcher is None:
@@ -10406,18 +10346,57 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             )
             models = []
             for _group, model_ids in raw.items():
-                for model_id in model_ids:
-                    label = (
-                        session_mgr._get_model_description(model_id, runtime)
-                        or model_id
-                    )
-                    entry = {"id": model_id, "label": label}
-                    if _group:
-                        entry["group"] = _group
-                    models.append(entry)
+                for entry in model_ids:
+                    # Handle both tuple (id, desc, aliases) and flat string formats
+                    if isinstance(entry, (list, tuple)):
+                        model_id = entry[0]
+                        label = entry[1] if len(entry) > 1 else model_id
+                    else:
+                        model_id = entry
+                        label = (
+                            session_mgr._get_model_description(model_id, runtime)
+                            or model_id
+                        )
+                    models.append({"id": model_id, "label": label, "group": _group})
             return {"runtime": runtime, "models": models}
         except Exception as e:
             return {"runtime": runtime, "models": [], "error": str(e)}
+
+    @app.get("/api/v1/wee/models")
+    async def get_wee_models(force: bool = False):
+        """Return discovered wee models with enriched metadata.
+
+        Queries Ollama and OpenAI-compatible hosts, returns models grouped
+        by provider with size, status, and modification time.
+
+        Query params:
+            force: bypass cache and re-discover (default false)
+        """
+        try:
+            from wee_model_discovery import get_discovery
+            discovery = get_discovery()
+            enriched = discovery.discover_all_enriched(force=force)
+            host_status = discovery.get_host_status()
+            return {
+                "runtime": "wee",
+                "providers": enriched,
+                "host_status": host_status,
+            }
+        except Exception as e:
+            return {"runtime": "wee", "providers": {}, "error": str(e)}
+
+    @app.post("/api/v1/wee/models/refresh")
+    async def refresh_wee_models():
+        """Force refresh the wee model cache."""
+        try:
+            from wee_model_discovery import get_discovery
+            discovery = get_discovery()
+            discovery.invalidate_cache()
+            result = discovery.discover_all(force=True)
+            total = sum(len(v) for v in result.values())
+            return {"status": "refreshed", "total_models": total, "providers": result}
+        except Exception as e:
+            return {"status": "error", "error": str(e)}
 
     @app.post("/api/v1/auth/request-pairing")
     async def request_pairing(body: PairingRequest, request: Request):
