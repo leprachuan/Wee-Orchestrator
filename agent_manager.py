@@ -14,7 +14,6 @@ import json
 import logging
 import os
 import re
-import shlex
 import secrets as _secrets
 import shlex
 import shutil
@@ -450,16 +449,16 @@ class BackgroundTaskManager:
 
         terminal_statuses = {"completed", "failed", "killed"}
         terminal_tasks = [
-            (i, t)
-            for i, t in enumerate(tasks)
-            if t.get("status") in terminal_statuses
+            (i, t) for i, t in enumerate(tasks) if t.get("status") in terminal_statuses
         ]
 
         if not terminal_tasks:
             return tasks
 
         evict_count = len(tasks) - self.MAX_TOTAL_TASKS
-        terminal_tasks.sort(key=lambda x: x[1].get("completed_at", "") or x[1].get("created_at", ""))
+        terminal_tasks.sort(
+            key=lambda x: x[1].get("completed_at", "") or x[1].get("created_at", "")
+        )
         evict_indices = {idx for idx, _ in terminal_tasks[:evict_count]}
 
         return [t for i, t in enumerate(tasks) if i not in evict_indices]
@@ -4089,7 +4088,7 @@ You can mention an agent in your prompt and it will auto-delegate:
             print(
                 f"[SessionMap] TTL evicted {evicted} inactive entries "
                 f"(threshold {self.session_map_ttl / 86400:.0f}d)",
-                file=__import__('sys').stderr,
+                file=__import__("sys").stderr,
             )
         return pruned
 
@@ -4612,7 +4611,15 @@ You can mention an agent in your prompt and it will auto-delegate:
         name_lower = name.lower().strip("\"'")
 
         # Ensure env models are loaded/cached by triggering fetch for this runtime
-        if runtime in ("claude", "claude-sdk", "gemini", "codex", "devin", "cursor", "wee"):
+        if runtime in (
+            "claude",
+            "claude-sdk",
+            "gemini",
+            "codex",
+            "devin",
+            "cursor",
+            "wee",
+        ):
             self.get_models_for_runtime(runtime)
 
         # Step 1: check env-loaded or static alias tables for all runtimes that have them.
@@ -5999,7 +6006,6 @@ Do NOT emit status updates for quick operations (< 15 seconds)."""
 User Request:
 {prompt}"""
         return context
-
 
     def _get_or_create_stream_buffer(self, session_id: str):
         """Get existing buffer for session or create a new one."""
@@ -9329,13 +9335,55 @@ User Request:
 
         def _mode_handler(fn):
             """Pass-through wrapper for API uniformity — all runtime dispatch uses the same 9-arg signature."""
-            def _h(prompt, model, agent, session_id, can_resume, n8n_session_id, timeout, render_type, mode):
-                return fn(prompt, model, agent, session_id, can_resume, n8n_session_id, timeout, render_type, mode)
+
+            def _h(
+                prompt,
+                model,
+                agent,
+                session_id,
+                can_resume,
+                n8n_session_id,
+                timeout,
+                render_type,
+                mode,
+            ):
+                return fn(
+                    prompt,
+                    model,
+                    agent,
+                    session_id,
+                    can_resume,
+                    n8n_session_id,
+                    timeout,
+                    render_type,
+                    mode,
+                )
+
             return _h
 
         def _no_mode_handler(fn):
-            def _h(prompt, model, agent, session_id, can_resume, n8n_session_id, timeout, render_type, _mode):
-                return fn(prompt, model, agent, session_id, can_resume, n8n_session_id, timeout, render_type)
+            def _h(
+                prompt,
+                model,
+                agent,
+                session_id,
+                can_resume,
+                n8n_session_id,
+                timeout,
+                render_type,
+                _mode,
+            ):
+                return fn(
+                    prompt,
+                    model,
+                    agent,
+                    session_id,
+                    can_resume,
+                    n8n_session_id,
+                    timeout,
+                    render_type,
+                )
+
             return _h
 
         for rt, fn in [
@@ -9600,8 +9648,8 @@ def _send_pairing_code(channel: str, identity: str, code: str) -> bool:
             #   email       → toPersonEmail
             #   person ID   → toPersonId  (base64 of ciscospark://us/PEOPLE/...)
             #   anything else → roomId
-            import re as _re
             import base64 as _b64
+            import re as _re
 
             if _re.match(r"[^@]+@[^@]+\.[^@]+", identity):
                 payload = {"toPersonEmail": identity, "text": msg, "markdown": msg}
@@ -10426,6 +10474,44 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             return {"runtime": runtime, "models": models}
         except Exception as e:
             return {"runtime": runtime, "models": [], "error": str(e)}
+
+    @app.get("/api/v1/wee/models")
+    async def get_wee_models(force: bool = False):
+        """Return discovered wee models with enriched metadata.
+
+        Queries Ollama and OpenAI-compatible hosts, returns models grouped
+        by provider with size, status, and modification time.
+
+        Query params:
+            force: bypass cache and re-discover (default false)
+        """
+        try:
+            from wee_model_discovery import get_discovery
+
+            discovery = get_discovery()
+            enriched = discovery.discover_all_enriched(force=force)
+            host_status = discovery.get_host_status()
+            return {
+                "runtime": "wee",
+                "providers": enriched,
+                "host_status": host_status,
+            }
+        except Exception as e:
+            return {"runtime": "wee", "providers": {}, "error": str(e)}
+
+    @app.post("/api/v1/wee/models/refresh")
+    async def refresh_wee_models():
+        """Force refresh the wee model cache."""
+        try:
+            from wee_model_discovery import get_discovery
+
+            discovery = get_discovery()
+            discovery.invalidate_cache()
+            result = discovery.discover_all(force=True)
+            total = sum(len(v) for v in result.values())
+            return {"status": "refreshed", "total_models": total, "providers": result}
+        except Exception as e:
+            return {"status": "error", "error": str(e)}
 
     @app.post("/api/v1/auth/request-pairing")
     async def request_pairing(body: PairingRequest, request: Request):
@@ -12312,9 +12398,12 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 cmd = [
                     sys.executable,
                     agent_manager_script,
-                    "--runtime", runtime,
-                    "--model", model,
-                    "--agent", agent,
+                    "--runtime",
+                    runtime,
+                    "--model",
+                    model,
+                    "--agent",
+                    agent,
                     context_prompt,
                     session_id or str(uuid4()),
                 ]
@@ -14439,6 +14528,46 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                     "icon": "🏖️",
                 },
             ]
+        }
+
+    @app.get("/api/v1/settings/notifications")
+    async def get_notification_settings(request: Request):
+        """Return the global notification toggle state."""
+        await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        if notification_mgr is None:
+            return {"notifications_enabled": True, "available": False}
+        settings = notification_mgr.get_global_settings()
+        settings["available"] = True
+        return settings
+
+    @app.put("/api/v1/settings/notifications")
+    async def set_notification_settings(
+        body: NotificationSettingsRequest, request: Request
+    ):
+        """Set the global notification toggle."""
+        await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        if notification_mgr is None:
+            raise HTTPException(
+                status_code=503, detail="Notification manager unavailable"
+            )
+        notification_mgr.set_global_enabled(body.notifications_enabled)
+        return {
+            "notifications_enabled": body.notifications_enabled,
+            "message": (
+                "Notifications enabled for all channels"
+                if body.notifications_enabled
+                else "Notifications suppressed globally (critical alerts still delivered)"
+            ),
         }
 
     # --- .env File Editor API ---
