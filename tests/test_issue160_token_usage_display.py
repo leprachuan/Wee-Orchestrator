@@ -467,16 +467,20 @@ class TestWebUIBuildTimingText(unittest.TestCase):
         self.assertIn("completion_tokens", source)
 
     def test_innerHTML_used_not_textContent(self):
-        """Timing div should use DOM API (appendChild) to render timing text."""
+        """Timing div uses innerHTML to render string returned by buildTimingText.
+
+        Issue #198: buildTimingText now returns string|null (not DocumentFragment),
+        so callers assign timingDiv.innerHTML = _timingText.
+        """
         source = self._get_app_js()
         import re
 
-        # Find timing div creation patterns using safe DOM API
-        timing_innerHTML = re.findall(r"timingDiv\.appendChild\(", source)
+        # Callers assign innerHTML (string-based) for timing divs
+        timing_innerHTML = re.findall(r"timingDiv\.innerHTML\s*=", source)
         self.assertGreaterEqual(
             len(timing_innerHTML),
             2,
-            "Expected at least 2 appendChild calls for timing divs",
+            "Expected at least 2 timingDiv.innerHTML assignments for timing divs",
         )
 
     def test_buildTimingText_handles_wee_meta_with_tokens(self):
@@ -490,7 +494,11 @@ class TestWebUIBuildTimingText(unittest.TestCase):
 
     def test_no_xss_in_timing_display(self):
         """Timing text should not allow arbitrary HTML injection.
-        The span title uses fixed format strings, not user input."""
+
+        The span title uses fixed format strings built from server-controlled
+        metadata (token counts, cost labels). Issue #198 updated buildTimingText
+        to return string|null using template literals — verify tooltip is safe.
+        """
         source = self._get_app_js()
         import re
 
@@ -499,11 +507,12 @@ class TestWebUIBuildTimingText(unittest.TestCase):
         func_match = re.search(pattern, source, re.DOTALL)
         self.assertIsNotNone(func_match, "buildTimingText function not found")
         func_body = func_match.group(0)
-        # title uses template literal ${tooltip} — verify tooltip is built safely
-        self.assertIn("setAttribute('title'", func_body)
+        # title uses template literal ${tooltip} — tooltip is built from safe server fields
         self.assertIn("tooltip", func_body)
         self.assertIn("prompt_tokens", func_body)
         self.assertIn("completion_tokens", func_body)
+        # The span uses template literal, not innerHTML concatenation of raw user text
+        self.assertIn('<span title=', func_body)
 
 
 class TestPricingTable(unittest.TestCase):
