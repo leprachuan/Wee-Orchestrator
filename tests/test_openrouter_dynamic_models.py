@@ -1,16 +1,15 @@
-"""Regression tests for dynamic OpenRouter model discovery.
+"""Regression tests for dynamic OpenRouter model discovery (Issue #172 deduplication).
 
 Tests:
-1. fetch_openrouter_models() returns ALL models from API (not filtered)
-2. Models are grouped by provider prefix
-3. Priority providers appear first (Anthropic, OpenAI, Google, Meta Llama, ...)
-4. Falls back to static WEE_MODELS on network error
-5. Falls back to static WEE_MODELS when no API key
-6. Static aliases are preserved for known model IDs
-7. Cache TTL works (second call returns cached result without HTTP)
-8. fetch_wee_models() integrates with fetch_openrouter_models()
-9. fetch_wee_models() falls back gracefully when fetch_openrouter_models() raises
-10. get_models_for_runtime("wee") returns dynamic models
+1. fetch_openrouter_models() deduplicates variant suffixes (:free, :thinking, etc.)
+2. Models are collapsed into a single "OpenRouter" group
+3. Falls back to static WEE_MODELS on network error
+4. Falls back to static WEE_MODELS when no API key
+5. Static aliases are preserved for known base model IDs
+6. Cache TTL works (second call returns cached result without HTTP)
+7. fetch_wee_models() integrates with fetch_openrouter_models()
+8. fetch_wee_models() falls back gracefully when fetch_openrouter_models() raises
+9. get_models_for_runtime("wee") returns dynamic models
 """
 import json
 import sys
@@ -64,49 +63,40 @@ class TestFetchOpenrouterModels(unittest.TestCase):
 
     @patch("keyring.get_password", return_value="test-key-123")
     @patch("urllib.request.urlopen")
-    def test_returns_all_models(self, mock_urlopen, mock_keyring):
-        """All models from API response should be included (not filtered)."""
+    def test_returns_base_model_ids(self, mock_urlopen, mock_keyring):
+        """Models are returned with variant suffixes stripped (Issue #172)."""
         mock_urlopen.side_effect = self._urlopen_mock
         result = self.sm.fetch_openrouter_models()
         all_ids = [m for models in result.values() for m in models]
-        # Extract model IDs (first element of tuple)
         all_model_ids = [m[0] for m in all_ids]
         self.assertIn("openrouter/anthropic/claude-3.5-sonnet", all_model_ids)
-        self.assertIn("openrouter/qwen/qwen3-32b:free", all_model_ids)
+        # :free suffix should be stripped to base ID
+        self.assertIn("openrouter/qwen/qwen3-32b", all_model_ids)
+        self.assertNotIn("openrouter/qwen/qwen3-32b:free", all_model_ids)
         self.assertIn("openrouter/unknown-provider/some-model", all_model_ids)
 
     @patch("keyring.get_password", return_value="test-key-123")
     @patch("urllib.request.urlopen")
-    def test_grouped_by_provider(self, mock_urlopen, mock_keyring):
-        """Models should be grouped by provider prefix."""
+    def test_single_openrouter_group(self, mock_urlopen, mock_keyring):
+        """All models collapsed into single 'OpenRouter' group (Issue #172)."""
         mock_urlopen.side_effect = self._urlopen_mock
         result = self.sm.fetch_openrouter_models()
-        self.assertIn("OpenRouter - Anthropic", result)
-        self.assertIn("OpenRouter - OpenAI", result)
-        self.assertIn("OpenRouter - Meta Llama", result)
-        self.assertIn("OpenRouter - Google", result)
-        self.assertIn("OpenRouter - DeepSeek", result)
+        # Should be exactly one group
+        self.assertEqual(len(result), 1)
+        self.assertIn("OpenRouter", result)
+        # No per-provider groups
+        self.assertNotIn("OpenRouter - Anthropic", result)
+        self.assertNotIn("OpenRouter - OpenAI", result)
 
     @patch("keyring.get_password", return_value="test-key-123")
     @patch("urllib.request.urlopen")
-    def test_priority_providers_first(self, mock_urlopen, mock_keyring):
-        """Anthropic, OpenAI, Google, Meta, DeepSeek appear before others."""
+    def test_models_sorted_alphabetically(self, mock_urlopen, mock_keyring):
+        """Models within the OpenRouter group should be sorted alphabetically (Issue #172)."""
         mock_urlopen.side_effect = self._urlopen_mock
         result = self.sm.fetch_openrouter_models()
-        keys = list(result.keys())
-        # Priority providers should appear before the unknown-provider group
-        priority_indices = [
-            keys.index(k)
-            for k in keys
-            if k in self.sm.OPENROUTER_PROVIDER_PRIORITY
-        ]
-        non_priority_indices = [
-            keys.index(k)
-            for k in keys
-            if k not in self.sm.OPENROUTER_PROVIDER_PRIORITY
-        ]
-        if priority_indices and non_priority_indices:
-            self.assertLess(max(priority_indices), min(non_priority_indices))
+        self.assertIn("OpenRouter", result)
+        names = [m[1].lower() for m in result["OpenRouter"]]
+        self.assertEqual(names, sorted(names))
 
     @patch("keyring.get_password", side_effect=Exception("no keyring"))
     @patch.dict("os.environ", {}, clear=True)
@@ -128,15 +118,16 @@ class TestFetchOpenrouterModels(unittest.TestCase):
     @patch("keyring.get_password", return_value="test-key-123")
     @patch("urllib.request.urlopen")
     def test_static_aliases_preserved(self, mock_urlopen, mock_keyring):
-        """Static aliases in WEE_MODELS should be preserved."""
+        """Static aliases in WEE_MODELS should be preserved after dedup (Issue #172)."""
         # The static WEE_MODELS has "openrouter/meta-llama/llama-4-scout"
         # with alias ["or-scout"]. When API returns this, alias included.
         models = [{"id": "meta-llama/llama-4-scout", "name": "Llama 4 Scout"}]
         mock_urlopen.return_value = _mock_api_response(models)
         result = self.sm.fetch_openrouter_models()
-        llama_group = result.get("OpenRouter - Meta Llama", [])
+        # All models now in single "OpenRouter" group
+        or_group = result.get("OpenRouter", [])
         scout_entries = [
-            m for m in llama_group
+            m for m in or_group
             if m[0] == "openrouter/meta-llama/llama-4-scout"
         ]
         self.assertTrue(len(scout_entries) > 0)
@@ -222,12 +213,17 @@ class TestFetchOpenrouterModels(unittest.TestCase):
 
     @patch("keyring.get_password", return_value="test-key-123")
     @patch("urllib.request.urlopen")
-    def test_unknown_provider_uses_title_case(self, mock_urlopen, mock_keyring):
-        """Unknown providers should get a title-cased label."""
+    def test_unknown_provider_in_single_group(self, mock_urlopen, mock_keyring):
+        """Unknown providers are included in the single 'OpenRouter' group (Issue #172)."""
         models = [{"id": "some-new-provider/a-model", "name": "A Model"}]
         mock_urlopen.return_value = _mock_api_response(models)
         result = self.sm.fetch_openrouter_models()
-        self.assertIn("OpenRouter - Some New Provider", result)
+        # No per-provider groups — everything in "OpenRouter"
+        self.assertNotIn("OpenRouter - Some New Provider", result)
+        self.assertIn("OpenRouter", result)
+        or_group = result.get("OpenRouter", [])
+        all_ids = [m[0] for m in or_group]
+        self.assertIn("openrouter/some-new-provider/a-model", all_ids)
 
     @patch("keyring.get_password", return_value="test-key-123")
     @patch("urllib.request.urlopen")
