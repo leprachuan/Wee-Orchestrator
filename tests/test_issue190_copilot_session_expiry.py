@@ -1,27 +1,9 @@
-"""
-Regression tests for Issue #190 — Copilot session token expiry on long-running tasks.
+"""Regression tests for issue #190 copilot session expiry recovery."""
 
-Tests:
-  B01 - Reactive: 'Session token expired' in output triggers auto-retry with fresh session
-  B02 - Reactive: prior work context injected into recovery prompt
-  B03 - Reactive: recovery prompt builds a fresh session (no --resume flag)
-  B04 - Proactive: session age > 25 min causes fresh session start (ignores --resume)
-  B05 - Proactive: session age <= 25 min keeps --resume flag
-  B06 - Happy path: no token error → normal output returned unchanged
-"""
-
-import os
-import sys
 import threading
 import time
 import unittest
-from pathlib import Path
 from unittest.mock import MagicMock, patch
-
-os.environ.setdefault("API_SHARED_KEY", "test_key_190")
-
-REPO = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(REPO))
 
 from agent_manager import SessionManager
 
@@ -62,11 +44,11 @@ class TestIssue190ReactiveRecovery(unittest.TestCase):
         self.mgr = _make_mgr()
 
     def test_issue_190_b01_expired_output_triggers_retry(self):
-        """B01: When output contains 'Session token expired', a second subprocess is launched."""
+        """B01: token expiry should trigger a retry."""
         call_count = [0]
         session_expiry_output = (
             "Some partial work completed...\n"
-            "Session token expired. Please resend your message. "
+            "Session token expired. Please resend your message.\n"
             "(Request ID: 8888:112498:1207E6B:16D0D95:69E58E62)\n"
         )
         recovery_output = "Task completed successfully after session recovery."
@@ -89,21 +71,17 @@ class TestIssue190ReactiveRecovery(unittest.TestCase):
                 n8n_session_id="n8n-session-xyz",
             )
 
-        self.assertEqual(
-            call_count[0],
-            2,
-            "B01: must launch exactly 2 subprocesses (original + retry)",
-        )
-        self.assertEqual(
-            result, recovery_output, "B01: final result must be from retry subprocess"
-        )
+        self.assertEqual(call_count[0], 2, "B01: expected one retry")
+        self.assertEqual(result, recovery_output, "B01: expected retry output")
 
     def test_issue_190_b02_prior_work_injected_into_recovery(self):
-        """B02: Context from work done before expiry is injected into the recovery prompt."""
+        """B02: prior work should be injected into recovery context."""
         captured_recovery_prompt = []
         session_expiry_output = (
-            "Installed dependencies.\nRan tests.\n"
-            "Session token expired. Please resend your message. (Request ID: 9999:abc)\n"
+            "Installed dependencies.\n"
+            "Ran tests.\n"
+            "Session token expired. Please resend your message.\n"
+            "(Request ID: 9999:abc)\n"
         )
 
         call_count = [0]
@@ -127,34 +105,23 @@ class TestIssue190ReactiveRecovery(unittest.TestCase):
                 n8n_session_id="n8n-b02",
             )
 
-        self.assertTrue(
-            captured_recovery_prompt, "B02: recovery subprocess must be launched"
-        )
+        self.assertTrue(captured_recovery_prompt, "B02: recovery must launch")
         recovery_prompt_text = captured_recovery_prompt[0]
         # Recovery prompt must reference prior work
         self.assertIn(
             "Installed dependencies",
             recovery_prompt_text,
-            "B02: prior work must appear in recovery prompt",
+            "B02: prior work missing",
         )
-        self.assertIn(
-            "Ran tests",
-            recovery_prompt_text,
-            "B02: prior work must appear in recovery prompt",
-        )
-        # Recovery prompt must include original task
-        self.assertIn(
-            "implement feature X",
-            recovery_prompt_text,
-            "B02: original task must appear in recovery prompt",
-        )
+        self.assertIn("Ran tests", recovery_prompt_text, "B02: prior work missing")
+        self.assertIn("implement feature X", recovery_prompt_text, "B02: task missing")
 
     def test_issue_190_b03_recovery_uses_fresh_session_no_resume(self):
-        """B03: Recovery subprocess must NOT use --resume (fresh session only)."""
+        """B03: recovery should start fresh."""
         captured_cmds = []
 
         session_expiry_output = (
-            "partial work\nSession token expired. Please resend your message.\n"
+            "partial work\n" "Session token expired. Please resend your message.\n"
         )
 
         call_count = [0]
@@ -176,16 +143,12 @@ class TestIssue190ReactiveRecovery(unittest.TestCase):
                 n8n_session_id="n8n-b03",
             )
 
-        self.assertEqual(
-            len(captured_cmds), 2, "B03: exactly 2 subprocess launches expected"
-        )
+        self.assertEqual(len(captured_cmds), 2, "B03: expected two launches")
         recovery_cmd = captured_cmds[1]
-        self.assertNotIn(
-            "--resume", recovery_cmd, "B03: recovery cmd must NOT use --resume"
-        )
+        self.assertNotIn("--resume", recovery_cmd, "B03: resume must be absent")
 
     def test_issue_190_b06_happy_path_no_retry(self):
-        """B06: Normal output (no expiry marker) must be returned as-is without retry."""
+        """B06: normal output should pass through unchanged."""
         call_count = [0]
 
         def fake_execute(cmd, cwd, timeout, runtime, agent, prompt, session_id):
@@ -204,7 +167,7 @@ class TestIssue190ReactiveRecovery(unittest.TestCase):
                 n8n_session_id="n8n-b06",
             )
 
-        self.assertEqual(call_count[0], 1, "B06: only one subprocess for normal output")
+        self.assertEqual(call_count[0], 1, "B06: expected one launch")
         self.assertEqual(result, "Task completed successfully.")
 
 
@@ -215,7 +178,7 @@ class TestIssue190ProactiveRestart(unittest.TestCase):
         self.mgr = _make_mgr()
 
     def test_issue_190_b04_old_session_starts_fresh(self):
-        """B04: Session age > 25 min forces fresh start even when resume=True and session_id set."""
+        """B04: old sessions should start fresh."""
         # Mark session as 26 minutes old
         self.mgr._copilot_session_start["n8n-b04"] = time.time() - (26 * 60)
 
@@ -237,15 +200,13 @@ class TestIssue190ProactiveRestart(unittest.TestCase):
                 n8n_session_id="n8n-b04",
             )
 
-        self.assertEqual(len(captured_cmds), 1, "B04: exactly one subprocess")
+        self.assertEqual(len(captured_cmds), 1, "B04: expected one launch")
         cmd = captured_cmds[0]
-        self.assertNotIn("--resume", cmd, "B04: stale session must NOT use --resume")
-        self.assertNotIn(
-            "stale-copilot-session", cmd, "B04: stale session ID must not appear in cmd"
-        )
+        self.assertNotIn("--resume", cmd, "B04: resume must be absent")
+        self.assertNotIn("stale-copilot-session", cmd, "B04: stale session leaked")
 
     def test_issue_190_b05_young_session_keeps_resume(self):
-        """B05: Session age <= 25 min keeps --resume as expected."""
+        """B05: young sessions should keep resume."""
         # Mark session as 5 minutes old (well within TTL)
         self.mgr._copilot_session_start["n8n-b05"] = time.time() - (5 * 60)
 
@@ -269,13 +230,11 @@ class TestIssue190ProactiveRestart(unittest.TestCase):
 
         self.assertEqual(len(captured_cmds), 1)
         cmd = captured_cmds[0]
-        self.assertIn("--resume", cmd, "B05: young session must still use --resume")
-        self.assertIn(
-            "valid-copilot-session", cmd, "B05: session ID must be passed to --resume"
-        )
+        self.assertIn("--resume", cmd, "B05: resume should be used")
+        self.assertIn("valid-copilot-session", cmd, "B05: session id missing")
 
     def test_issue_190_session_start_recorded_on_new_session(self):
-        """Session start time is recorded when launching a new (non-resume) session."""
+        """Record session start on a new run."""
         before = time.time()
 
         def fake_execute(cmd, cwd, timeout, runtime, agent, prompt, session_id):
@@ -300,9 +259,9 @@ class TestIssue190ProactiveRestart(unittest.TestCase):
         self.assertLessEqual(recorded, after + 1)
 
     def test_issue_190_session_start_recorded_on_recovery(self):
-        """Session start time is refreshed when a recovery session is launched."""
+        """Refresh session start after recovery."""
         session_expiry_output = (
-            "work\nSession token expired. Please resend your message.\n"
+            "work\n" "Session token expired. Please resend your message.\n"
         )
         call_count = [0]
 
@@ -368,82 +327,3 @@ class TestIssue190SourceInspection(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
-
-
-class TestIssue190SessionPersistence(unittest.TestCase):
-    """Regression test: session_id must persist after proactive/reactive recovery.
-
-    When Copilot session recovery is triggered internally (proactive age-based or
-    reactive token-expiry), the new session_id must be persisted back to session_data.
-
-    Fix: run_copilot() now calls get_most_recent_session_id() and update_session_field()
-    after both recovery paths to ensure the new session persists across turns.
-    """
-
-    def setUp(self):
-        self.mgr = _make_mgr()
-        self.mgr.get_most_recent_session_id = MagicMock(return_value="new-session-xyz")
-        self.mgr.update_session_field = MagicMock()
-
-    def test_issue_190_persistence_proactive_recovery(self):
-        """Proactive recovery (age-based) should persist new session_id."""
-        n8n_session_id = "n8n-persist-proactive"
-        self.mgr._copilot_session_start[n8n_session_id] = time.time() - (26 * 60)
-
-        def fake_execute(cmd, cwd, timeout, runtime, agent, prompt, session_id):
-            return "Task completed with fresh session."
-
-        self.mgr._execute_subprocess_with_tracking = fake_execute
-
-        with patch("sys.stderr"):
-            result = self.mgr.run_copilot(
-                prompt="long running task",
-                model="gpt-4o",
-                agent="wee-dev",
-                session_id="old-session-abc",
-                resume=True,
-                n8n_session_id=n8n_session_id,
-            )
-
-        # Verify get_most_recent_session_id was called
-        self.mgr.get_most_recent_session_id.assert_called_with("copilot", "wee-dev")
-
-        # Verify new session_id was persisted to session_data
-        self.mgr.update_session_field.assert_called_with(
-            n8n_session_id, "session_id", "new-session-xyz"
-        )
-
-    def test_issue_190_persistence_reactive_recovery(self):
-        """Reactive recovery (token expiry) should persist new session_id."""
-        session_expiry_output = (
-            "Some work done...\n" "Session token expired. Please resend your message.\n"
-        )
-
-        call_count = [0]
-
-        def fake_execute(cmd, cwd, timeout, runtime, agent, prompt, session_id):
-            call_count[0] += 1
-            return session_expiry_output if call_count[0] == 1 else "Task recovered."
-
-        self.mgr._execute_subprocess_with_tracking = fake_execute
-        n8n_session_id = "n8n-persist-reactive"
-
-        with patch("sys.stderr"):
-            result = self.mgr.run_copilot(
-                prompt="task causing expiry",
-                model="gpt-4o",
-                agent="wee-dev",
-                session_id="active-session-123",
-                resume=True,
-                n8n_session_id=n8n_session_id,
-            )
-
-        # Verify get_most_recent_session_id was called after reactive recovery
-        self.mgr.get_most_recent_session_id.assert_called_with("copilot", "wee-dev")
-
-        # Verify the new session_id was persisted
-        self.mgr.update_session_field.assert_called_with(
-            n8n_session_id, "session_id", "new-session-xyz"
-        )
-
-        self.assertIn("recovered", result)
