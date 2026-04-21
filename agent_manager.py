@@ -1915,6 +1915,11 @@ class SessionManager:
     # AttributeError in tests that bypass __init__ via __new__.
     session_map_ttl: int = int(os.environ.get("SESSION_MAP_TTL_DAYS", "30")) * 86400
 
+    # OpenRouter model cache — class-level defaults prevent AttributeError in tests
+    # that bypass __init__ via __new__.
+    _openrouter_models_cache: Optional[Dict] = None
+    _openrouter_models_cache_ts: float = 0.0
+
     # Query tracking constants
     MAX_PROMPT_LENGTH = 200  # Maximum chars to store from prompt
     MAX_OUTPUT_LENGTH = 500  # Maximum chars to store from output
@@ -2284,6 +2289,9 @@ class SessionManager:
         self._manifest_model_metadata = {}
         self._manifest_mtime: float = 0.0
         self._openrouter_cache_ts = 0.0
+        # Cache for fetch_openrouter_models() (separate from fetch_wee_models cache)
+        self._openrouter_models_cache = None
+        self._openrouter_models_cache_ts = 0.0
 
         # Load command timeout from environment
         self.command_timeout = get_command_timeout()
@@ -4192,6 +4200,11 @@ You can mention an agent in your prompt and it will auto-delegate:
         "OpenRouter - xAI",
     ]
 
+    # Regex to strip variant suffixes from OpenRouter model IDs (Issue #172)
+    BASE_MODEL_RE = re.compile(
+        r"(:free|:thinking|:extended|:beta|:nitro|:floor|:preview)$"
+    )
+
     def fetch_openrouter_models(self) -> Dict:
         """Fetch ALL available models from the OpenRouter API, grouped by provider.
 
@@ -4248,39 +4261,34 @@ You can mention an agent in your prompt and it will auto-delegate:
                 e[0]: e[2] for e in self.WEE_MODELS.get("OpenRouter Models", [])
             }
 
-            grouped = {}
+            # Deduplicate by stripping variant suffixes (Issue #172)
+            # e.g. meta-llama/llama-3.3-70b-instruct:free -> meta-llama/llama-3.3-70b-instruct
+            seen_base_ids: set = set()
+            deduped: list = []
             for m in all_models:
                 mid = m.get("id", "")
                 if not mid:
                     continue
+                base_id = self.BASE_MODEL_RE.sub("", mid)
+                if base_id in seen_base_ids:
+                    continue
+                seen_base_ids.add(base_id)
                 name = m.get("name", mid)
-                or_id = "openrouter/" + mid
+                # Use or_id based on the base model ID so aliases apply correctly
+                or_id = "openrouter/" + base_id
                 aliases = static_aliases.get(or_id, [])
+                deduped.append((or_id, name, aliases))
 
-                provider_prefix = mid.split("/")[0] if "/" in mid else mid
-                friendly = self.OPENROUTER_PROVIDER_NAMES.get(
-                    provider_prefix,
-                    provider_prefix.replace("-", " ").title(),
-                )
-                category = "OpenRouter - " + friendly
-                grouped.setdefault(category, []).append((or_id, name, aliases))
-
-            if not grouped:
+            if not deduped:
                 return static_fallback
 
-            for cat in grouped:
-                grouped[cat].sort(key=lambda t: t[1].lower())
+            # Collapse all models into a single "OpenRouter" group (Issue #172)
+            deduped.sort(key=lambda t: t[1].lower())
+            ordered = {"OpenRouter": deduped}
 
-            ordered = {}
-            for priority_cat in self.OPENROUTER_PROVIDER_PRIORITY:
-                if priority_cat in grouped:
-                    ordered[priority_cat] = grouped.pop(priority_cat)
-            for cat in sorted(grouped):
-                ordered[cat] = grouped[cat]
-
-            total = sum(len(v) for v in ordered.values())
+            total = len(deduped)
             print(
-                f"[wee] OpenRouter: discovered {total} models in {len(ordered)} groups",
+                f"[wee] OpenRouter: discovered {total} models (deduplicated)",
                 file=sys.stderr,
             )
 
@@ -4612,42 +4620,19 @@ You can mention an agent in your prompt and it will auto-delegate:
         except Exception as ollama_err:
             print("[wee] Ollama discovery failed: %s" % ollama_err, file=sys.stderr)
 
-        # Live OpenRouter discovery — show ALL available models (Issue #142)
+        # Live OpenRouter discovery — deduplicated, single group (Issue #172)
         try:
-            api_key = None
-            try:
-                import keyring
-
-                api_key = keyring.get_password("openrouter", "api_key")
-            except Exception:
-                pass
-            if not api_key:
-                api_key = os.getenv("OPENROUTER_API_KEY")
-
-            if api_key:
-                import urllib.request
-
-                req = urllib.request.Request(
-                    "https://openrouter.ai/api/v1/models",
-                    headers={"Authorization": "Bearer " + api_key},
+            or_groups = self.fetch_openrouter_models()
+            # Flatten all groups into "OpenRouter Models" (deduplication done in fetch_openrouter_models)
+            live_or = []
+            for entries in or_groups.values():
+                live_or.extend(entries)
+            if live_or:
+                result["OpenRouter Models"] = live_or
+                print(
+                    "[wee] OpenRouter: %d models merged into model picker" % len(live_or),
+                    file=sys.stderr,
                 )
-                resp = urllib.request.urlopen(req, timeout=10)
-                data = json.loads(resp.read())
-                all_models = data.get("data", [])
-
-                popular = self.OPENROUTER_POPULAR_MODELS
-                static_aliases = {
-                    e[0]: e[2] for e in self.WEE_MODELS.get("OpenRouter Models", [])
-                }
-                discovered_popular = []
-                discovered_rest = []
-                for m in all_models:
-                    mid = m.get("id", "")
-                    if mid:
-                        name = m.get("name", mid)
-                        or_id = "openrouter/" + mid
-                        discovered.append((or_id, name + " (OpenRouter)", []))
-
         except Exception as or_err:
             print("[wee] OpenRouter discovery failed: %s" % or_err, file=sys.stderr)
 
