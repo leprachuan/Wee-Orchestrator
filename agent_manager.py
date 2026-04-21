@@ -7068,6 +7068,11 @@ User Request:
                     "or make network requests to external services. Analysis and reporting only."
                 )
             cmd[2] = context_prompt
+            # Mark proactive recovery so we fetch and persist the new session_id
+            # after execution completes
+            _proactive_recovery_triggered = True
+        else:
+            _proactive_recovery_triggered = False
 
         if resume and session_id:
             cmd.extend(["--resume", session_id])
@@ -7166,8 +7171,21 @@ User Request:
                 _recovery_preamble,
                 n8n_session_id,
             )
-            return self.strip_metadata(_recovery_output, "copilot")
+            _recovery_result = self.strip_metadata(_recovery_output, "copilot")
+            
+            # Persist the new session_id from reactive recovery (issue #190)
+            _new_session_id = self.get_most_recent_session_id("copilot", agent)
+            if _new_session_id:
+                self.update_session_field(n8n_session_id, "session_id", _new_session_id)
+            
+            return _recovery_result
 
+        # If proactive recovery was triggered, persist the new session_id (issue #190)
+        if _proactive_recovery_triggered:
+            _new_session_id = self.get_most_recent_session_id("copilot", agent)
+            if _new_session_id:
+                self.update_session_field(n8n_session_id, "session_id", _new_session_id)
+        
         return result
 
     def run_copilot_sdk(
