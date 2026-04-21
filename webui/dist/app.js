@@ -2351,8 +2351,14 @@ document.addEventListener('DOMContentLoaded', () => {
   syncNotificationToggleFromBackend();
 
   // --- Request Queue ---
-  $('btn-toggle-queue').addEventListener('click', toggleQueuePanel);
-  $('btn-pause-queue').addEventListener('click', toggleQueuePause);
+  const btnToggleQueue = $('btn-toggle-queue');
+  if (btnToggleQueue) {
+    btnToggleQueue.addEventListener('click', toggleQueuePanel);
+  }
+  const btnPauseQueue = $('btn-pause-queue');
+  if (btnPauseQueue) {
+    btnPauseQueue.addEventListener('click', toggleQueuePause);
+  }
   
   // --- Queue Section (Collapsible) ---
   const btnToggleQueueSection = $('btn-toggle-queue-section');
