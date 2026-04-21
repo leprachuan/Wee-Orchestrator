@@ -89,8 +89,10 @@ def _configure_logging() -> None:
     handler.setFormatter(formatter)
 
     root = logging.getLogger()
-    if not root.handlers:
-        root.addHandler(handler)
+    # Remove existing handlers and reconfigure with the requested formatter
+    for h in root.handlers[:]:
+        root.removeHandler(h)
+    root.addHandler(handler)
     root.setLevel(level)
 
 
@@ -7491,7 +7493,6 @@ User Request:
 
         import asyncio
         import io
-        import sys
 
         # Parse mode
         if mode is None:

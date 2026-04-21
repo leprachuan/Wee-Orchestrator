@@ -14,6 +14,7 @@ import re
 import sys
 from io import StringIO
 from unittest.mock import patch
+import pathlib
 
 
 # ---------------------------------------------------------------------------
@@ -24,7 +25,7 @@ def _import_am():
     """Import agent_manager fresh (bypasses module cache to re-run configure)."""
     if 'agent_manager' in sys.modules:
         del sys.modules['agent_manager']
-    sys.path.insert(0, '/opt/n8n-copilot-shim-dev')
+    import pathlib; sys.path.insert(0, str(pathlib.Path(__file__).parent.parent))
     return importlib.import_module('agent_manager')
 
 
@@ -143,7 +144,7 @@ class TestIssue31StructuredLogging:
         Only the 4 intentional CLI-output print(output) calls at the end of main()
         are allowed; those use plain print(output) with no file= kwarg.
         """
-        with open('/opt/n8n-copilot-shim-dev/agent_manager.py') as f:
+        with open(pathlib.Path(__file__).parent.parent / 'agent_manager.py') as f:
             source = f.read()
 
         # Find all print() calls with file=sys.stderr
