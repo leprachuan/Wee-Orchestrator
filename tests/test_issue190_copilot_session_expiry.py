@@ -333,3 +333,83 @@ class TestIssue190SourceInspection(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+class TestIssue190SessionPersistence(unittest.TestCase):
+    """Regression test: session_id must persist after proactive/reactive recovery.
+    
+    When Copilot session recovery is triggered internally (proactive age-based or
+    reactive token-expiry), the new session_id must be persisted back to session_data.
+    
+    Fix: run_copilot() now calls get_most_recent_session_id() and update_session_field()
+    after both recovery paths to ensure the new session persists across turns.
+    """
+
+    def setUp(self):
+        self.mgr = _make_mgr()
+        self.mgr.get_most_recent_session_id = MagicMock(return_value="new-session-xyz")
+        self.mgr.update_session_field = MagicMock()
+
+    def test_issue_190_persistence_proactive_recovery(self):
+        """Proactive recovery (age-based) should persist new session_id."""
+        n8n_session_id = "n8n-persist-proactive"
+        self.mgr._copilot_session_start[n8n_session_id] = time.time() - (26 * 60)
+        
+        def fake_execute(cmd, cwd, timeout, runtime, agent, prompt, session_id):
+            return "Task completed with fresh session."
+        
+        self.mgr._execute_subprocess_with_tracking = fake_execute
+        
+        with patch("sys.stderr"):
+            result = self.mgr.run_copilot(
+                prompt="long running task",
+                model="gpt-4o",
+                agent="wee-dev",
+                session_id="old-session-abc",
+                resume=True,
+                n8n_session_id=n8n_session_id,
+            )
+        
+        # Verify get_most_recent_session_id was called
+        self.mgr.get_most_recent_session_id.assert_called_with("copilot", "wee-dev")
+        
+        # Verify new session_id was persisted to session_data
+        self.mgr.update_session_field.assert_called_with(
+            n8n_session_id, "session_id", "new-session-xyz"
+        )
+
+    def test_issue_190_persistence_reactive_recovery(self):
+        """Reactive recovery (token expiry) should persist new session_id."""
+        session_expiry_output = (
+            "Some work done...\n"
+            "Session token expired. Please resend your message.\n"
+        )
+        
+        call_count = [0]
+        
+        def fake_execute(cmd, cwd, timeout, runtime, agent, prompt, session_id):
+            call_count[0] += 1
+            return session_expiry_output if call_count[0] == 1 else "Task recovered."
+        
+        self.mgr._execute_subprocess_with_tracking = fake_execute
+        n8n_session_id = "n8n-persist-reactive"
+        
+        with patch("sys.stderr"):
+            result = self.mgr.run_copilot(
+                prompt="task causing expiry",
+                model="gpt-4o",
+                agent="wee-dev",
+                session_id="active-session-123",
+                resume=True,
+                n8n_session_id=n8n_session_id,
+            )
+        
+        # Verify get_most_recent_session_id was called after reactive recovery
+        self.mgr.get_most_recent_session_id.assert_called_with("copilot", "wee-dev")
+        
+        # Verify the new session_id was persisted
+        self.mgr.update_session_field.assert_called_with(
+            n8n_session_id, "session_id", "new-session-xyz"
+        )
+        
+        self.assertIn("recovered", result)
