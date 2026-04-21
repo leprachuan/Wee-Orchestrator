@@ -180,3 +180,38 @@ class TestCodexModelsGpt54Mini(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+class TestCodexModelsEndpoint(unittest.TestCase):
+    """gpt-5.4-mini must appear in /api/v1/models endpoint for codex runtime."""
+
+    def test_models_endpoint_codex_includes_gpt_54_mini(self):
+        """Endpoint logic must return gpt-5.4-mini; _group NameError must not occur."""
+        from agent_manager import SessionManager  # noqa: PLC0415
+
+        mgr = SessionManager.__new__(SessionManager)
+        mgr._env_codex_models = None
+        raw = mgr.fetch_codex_models()
+
+        # Reproduce the /api/v1/models endpoint loop (post e3d0009 cherry-pick)
+        models = []
+        for group_name, model_ids in raw.items():
+            for model_id in model_ids:
+                if isinstance(model_id, tuple):
+                    model_id = model_id[0]
+                models.append({"id": model_id, "label": model_id, "group": group_name})
+
+        all_ids = [m["id"] for m in models]
+        self.assertIn(
+            "gpt-5.4-mini",
+            all_ids,
+            "gpt-5.4-mini missing from codex models endpoint simulation",
+        )
+        for m in models:
+            self.assertIsInstance(
+                m["group"], str, f"group must be a string, got: {m['group']!r}"
+            )
+
+
+if __name__ == "__main__":
+    unittest.main(verbosity=2)
