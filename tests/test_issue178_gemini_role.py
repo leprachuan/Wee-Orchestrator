@@ -2,243 +2,239 @@
 Regression tests for issue #178: Gemini runtime echoes raw JSON user messages
 instead of AI responses.
 
-Root cause: role checks used "assistant" but Gemini CLI uses "model" per Google's API
-convention. Two bugs: strip_metadata and the streaming path both failed to match,
-causing either empty responses or raw JSON lines falling through to the stream buffer.
+Root cause: role checks used "assistant" but Gemini CLI uses "model" per Google's
+API convention.  Two code paths were broken: strip_metadata and the streaming
+path in _execute_subprocess_with_tracking.
+
+These tests call the real production code in SessionManager to guard against
+future regressions — if the fix is reverted, the tests will fail.
 """
+
 import json
+import os
 import sys
-import types
+import tempfile
+import threading
 import unittest
 from unittest.mock import MagicMock, patch
 
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-# ---------------------------------------------------------------------------
-# Helper: build a minimal SessionManager with just the strip_metadata method
-# ---------------------------------------------------------------------------
+os.environ.setdefault("API_SHARED_KEY", "test_key_178")
+os.environ.setdefault("APP_ENV", "DEV")
+os.environ.setdefault("API_PORT", "9178")
 
-def _import_strip_metadata():
-    """Import only the strip_metadata method without starting the full server."""
-    import importlib.util
-    import pathlib
+from agent_manager import SessionManager  # noqa: E402
+from session_manager_components import StreamBuffer  # noqa: E402
 
-    path = pathlib.Path("/opt/n8n-copilot-shim-dev/agent_manager.py")
-    spec = importlib.util.spec_from_file_location("agent_manager", path)
-    mod = importlib.util.module_from_spec(spec)
-    # Provide stubs so the module-level code doesn't crash on missing deps
-    for dep in ["fastapi", "uvicorn", "pydantic", "starlette", "aiofiles",
-                "websockets", "httpx", "psutil", "cryptography", "jose",
-                "passlib", "multipart", "yaml", "toml"]:
-        if dep not in sys.modules:
-            sys.modules[dep] = types.ModuleType(dep)
-    try:
-        spec.loader.exec_module(mod)
-    except Exception:
-        pass
-    # SessionManager may or may not be importable; fall back to direct method test
-    return mod
+
+def _make_sm():
+    """Return a (SessionManager, config_path) pair using a temp agents.json."""
+    tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False)
+    json.dump({"agents": []}, tmp)
+    tmp.close()
+    return SessionManager(tmp.name), tmp.name
 
 
 class TestStripMetadataGeminiRole(unittest.TestCase):
-    """Tests for strip_metadata Gemini role='model' fix (Fix 1)."""
+    """Tests that SessionManager.strip_metadata handles role='model' (Fix 1 + Fix 4)."""
 
-    def _run_strip(self, lines_text: str) -> str:
-        """
-        Inline the Gemini branch of strip_metadata so tests are fast and
-        don't depend on the full server starting up.
-        """
-        import json as _json_strip
+    @classmethod
+    def setUpClass(cls):
+        cls.sm, cls.config_path = _make_sm()
 
-        lines = lines_text.splitlines(keepends=True)
-        result = []
-        _has_json = False
-        _text_parts = []
+    @classmethod
+    def tearDownClass(cls):
+        os.unlink(cls.config_path)
 
-        for line in lines:
-            line_stripped = line.strip()
-            if line_stripped.startswith("{"):
-                try:
-                    obj = _json_strip.loads(line_stripped)
-                    _has_json = True
-                    obj_type = obj.get("type", "")
-                    # ----- THE FIXED CHECK -----
-                    if obj_type == "message" and obj.get("role") in ("assistant", "model"):
-                        content = obj.get("content", "")
-                        if content:
-                            _text_parts.append(content)
-                    elif obj_type == "result":
-                        error_msg = (
-                            obj.get("error")
-                            or obj.get("error_message")
-                            or obj.get("message")
-                        )
-                        if error_msg and isinstance(error_msg, str):
-                            _text_parts.append(f"[Gemini Error] {error_msg}")
-                    elif obj_type in ("tool_use", "tool_result", "init"):
-                        pass
-                    continue
-                except (ValueError, KeyError):
-                    pass
-            result.append(line)
-
-        if _has_json and _text_parts:
-            return "\n".join(_text_parts)
-        return "".join(result)
-
-    # --- Before fix: role="assistant" would have been required ---
+    def _strip(self, text):
+        return self.sm.strip_metadata(text, "gemini")
 
     def test_model_role_extracted(self):
         """Gemini 'model' role messages must produce the AI response text."""
-        line = json.dumps({"type": "message", "role": "model", "content": "Hello from Gemini!"})
-        result = self._run_strip(line)
-        self.assertEqual(result, "Hello from Gemini!")
+        line = json.dumps(
+            {"type": "message", "role": "model", "content": "Hello from Gemini!"}
+        )
+        self.assertEqual(self._strip(line), "Hello from Gemini!")
 
     def test_assistant_role_still_works(self):
         """Existing 'assistant' role messages must still be extracted (backwards compat)."""
-        line = json.dumps({"type": "message", "role": "assistant", "content": "Hi there"})
-        result = self._run_strip(line)
-        self.assertEqual(result, "Hi there")
+        line = json.dumps(
+            {"type": "message", "role": "assistant", "content": "Hi there"}
+        )
+        self.assertEqual(self._strip(line), "Hi there")
 
     def test_user_role_not_echoed(self):
-        """User messages must NOT be included in the output."""
-        user_msg = json.dumps({
-            "type": "message",
-            "timestamp": "2026-04-18T23:24:40.797Z",
-            "role": "user",
-            "content": "what happened?"
-        })
-        model_msg = json.dumps({"type": "message", "role": "model", "content": "Here is what happened."})
-        output = self._run_strip(user_msg + "\n" + model_msg)
+        """User messages must NOT appear in the strip_metadata output."""
+        user_msg = json.dumps(
+            {"type": "message", "role": "user", "content": "what happened?"}
+        )
+        model_msg = json.dumps(
+            {"type": "message", "role": "model", "content": "Here is what happened."}
+        )
+        output = self._strip(user_msg + "\n" + model_msg)
         self.assertNotIn("what happened?", output)
         self.assertIn("Here is what happened.", output)
 
-    def test_raw_json_not_echoed_as_chunk(self):
-        """Bug scenario: user sends a message → Gemini must NOT echo the raw JSON back."""
-        raw_user_json = json.dumps({
-            "type": "message",
-            "timestamp": "2026-04-18T23:24:40.797Z",
-            "role": "user",
-            "content": "what happened?"
-        })
-        result = self._run_strip(raw_user_json)
-        # The raw JSON itself must not appear in the result
+    def test_raw_user_json_not_echoed(self):
+        """Bug scenario from #178: raw user-role JSON must not appear in output."""
+        raw_user_json = json.dumps(
+            {
+                "type": "message",
+                "timestamp": "2026-04-18T23:24:40.797Z",
+                "role": "user",
+                "content": "what happened?",
+            }
+        )
+        result = self._strip(raw_user_json)
         self.assertNotIn('"role": "user"', result)
         self.assertNotIn("what happened?", result)
 
     def test_result_error_surfaced(self):
         """Gemini API error in result event must be surfaced (Fix 4)."""
-        result_line = json.dumps({
-            "type": "result",
-            "error": "RESOURCE_EXHAUSTED: Quota exceeded"
-        })
-        output = self._run_strip(result_line)
+        result_line = json.dumps(
+            {"type": "result", "error": "RESOURCE_EXHAUSTED: Quota exceeded"}
+        )
+        output = self._strip(result_line)
         self.assertIn("[Gemini Error]", output)
         self.assertIn("RESOURCE_EXHAUSTED", output)
 
     def test_result_without_error_produces_no_output(self):
-        """Normal result event (stats only) must not produce output."""
+        """Normal result event (stats only) must not produce visible output."""
         result_line = json.dumps({"type": "result", "tokens": 123, "cost": 0.001})
-        output = self._run_strip(result_line)
+        output = self._strip(result_line)
         self.assertEqual(output.strip(), "")
 
     def test_multiple_model_chunks_joined(self):
-        """Multiple model messages must be joined with newlines."""
-        lines = "\n".join([
-            json.dumps({"type": "message", "role": "model", "content": "Part 1"}),
-            json.dumps({"type": "message", "role": "model", "content": "Part 2"}),
-        ])
-        result = self._run_strip(lines)
+        """Multiple consecutive model messages must all appear in output."""
+        lines = "\n".join(
+            [
+                json.dumps({"type": "message", "role": "model", "content": "Part 1"}),
+                json.dumps({"type": "message", "role": "model", "content": "Part 2"}),
+            ]
+        )
+        result = self._strip(lines)
         self.assertIn("Part 1", result)
         self.assertIn("Part 2", result)
 
 
 class TestStreamingPathGeminiRole(unittest.TestCase):
     """
-    Tests for the streaming path fallthrough fix (Fix 2 + Fix 3).
+    Tests for the streaming path in _execute_subprocess_with_tracking (Fix 2 + Fix 3).
 
-    These tests simulate the condition where user-role message JSON lines
-    would previously fall through to stream_buffer.push("chunk", line),
-    echoing raw JSON as visible output.
+    A real subprocess outputs Gemini JSON lines; the test verifies that
+    StreamBuffer receives the correct events — model messages become chunks,
+    user-role messages are silently dropped instead of being echoed.
     """
 
-    def _simulate_stream_processing(self, line: str):
+    @classmethod
+    def setUpClass(cls):
+        cls.sm, cls.config_path = _make_sm()
+
+    @classmethod
+    def tearDownClass(cls):
+        os.unlink(cls.config_path)
+
+    def _run_with_gemini_output(self, gemini_lines):
         """
-        Simulate the fixed streaming path logic for a single Gemini JSON line.
-        Returns ("chunk", content) if the line produces a chunk,
-        ("skip", None) if the line is skipped, or ("passthrough", line) if it
-        falls through to the non-Gemini path.
+        Run _execute_subprocess_with_tracking with a subprocess that writes the
+        given Gemini JSON lines to stdout.  Returns the StreamBuffer populated
+        during execution.
         """
-        import json as _json
+        session_id = f"test-178-{threading.get_ident()}"
+        buf = StreamBuffer()
+        self.sm._stream_buffers[session_id] = buf
+        # stream_info must be a truthy 2-tuple to activate the streaming code path
+        self.sm._stream_queues[session_id] = (MagicMock(), MagicMock())
 
-        _line_stripped = line.strip()
-        if not _line_stripped.startswith("{"):
-            return ("passthrough", line)
+        output_text = "\n".join(gemini_lines) + "\n"
+        script = (
+            "import sys; " f"sys.stdout.write({output_text!r}); " "sys.stdout.flush()"
+        )
+        cmd = ["python3", "-c", script]
 
-        try:
-            _gobj = _json.loads(_line_stripped)
-            _gtype = _gobj.get("type", "")
+        with (
+            patch.object(self.sm, "track_running_query"),
+            patch.object(self.sm, "update_query_output"),
+        ):
+            self.sm._execute_subprocess_with_tracking(
+                cmd=cmd,
+                cwd="/tmp",
+                timeout=30,
+                runtime="gemini",
+                agent="test-agent",
+                prompt="test prompt",
+                n8n_session_id=session_id,
+            )
 
-            # ----- THE FIXED CHECKS -----
-            if _gtype == "message" and _gobj.get("role") in ("assistant", "model"):
-                _content = _gobj.get("content", "")
-                if _content:
-                    return ("chunk", _content)
-                return ("skip", None)
-            elif _gtype == "tool_use":
-                return ("skip", None)
-            elif _gtype == "tool_result":
-                return ("skip", None)
-            elif _gtype in ("init", "result"):
-                return ("skip", None)
-            elif _gtype == "message":
-                # Fix 3: non-model message lines must be skipped, not fall through
-                return ("skip", None)
-        except (ValueError, KeyError):
-            pass
+        self.sm._stream_buffers.pop(session_id, None)
+        self.sm._stream_queues.pop(session_id, None)
+        return buf
 
-        return ("passthrough", line)
+    def _chunk_text(self, buf):
+        """Collect all chunk event payloads from a StreamBuffer as a single string."""
+        return " ".join(str(data) for kind, data in buf.chunks if kind == "chunk")
 
     def test_model_role_produces_chunk(self):
         """Streaming: Gemini 'model' role must produce a chunk event."""
-        line = json.dumps({"type": "message", "role": "model", "content": "AI says hi"})
-        event, content = self._simulate_stream_processing(line)
-        self.assertEqual(event, "chunk")
-        self.assertEqual(content, "AI says hi")
+        buf = self._run_with_gemini_output(
+            [json.dumps({"type": "message", "role": "model", "content": "AI says hi"})]
+        )
+        self.assertIn("AI says hi", self._chunk_text(buf))
 
     def test_assistant_role_produces_chunk(self):
         """Streaming: 'assistant' role still produces a chunk (backwards compat)."""
-        line = json.dumps({"type": "message", "role": "assistant", "content": "Response"})
-        event, content = self._simulate_stream_processing(line)
-        self.assertEqual(event, "chunk")
+        buf = self._run_with_gemini_output(
+            [
+                json.dumps(
+                    {
+                        "type": "message",
+                        "role": "assistant",
+                        "content": "Compat response",
+                    }
+                )
+            ]
+        )
+        self.assertIn("Compat response", self._chunk_text(buf))
 
-    def test_user_role_message_skipped_not_echoed(self):
-        """Fix 3: user-role message must be skipped, NOT fall through to chunk push."""
-        user_line = json.dumps({
-            "type": "message",
-            "timestamp": "2026-04-18T23:24:40.797Z",
-            "role": "user",
-            "content": "what happened?"
-        })
-        event, _ = self._simulate_stream_processing(user_line)
-        self.assertEqual(event, "skip",
-            "User-role message fell through to chunk — this is the echoing bug!")
+    def test_user_role_message_not_echoed_as_chunk(self):
+        """Fix 3: user-role message must be skipped, NOT pushed as a chunk."""
+        user_json = json.dumps(
+            {"type": "message", "role": "user", "content": "what happened?"}
+        )
+        model_json = json.dumps(
+            {"type": "message", "role": "model", "content": "Answer here."}
+        )
+        buf = self._run_with_gemini_output([user_json, model_json])
+        chunks = self._chunk_text(buf)
+        self.assertNotIn(
+            "what happened?",
+            chunks,
+            "User-role message was pushed as a chunk — echoing bug from #178 is present!",
+        )
+        self.assertIn("Answer here.", chunks)
 
-    def test_init_event_skipped(self):
-        """init events must be skipped."""
-        line = json.dumps({"type": "init", "session": "abc123"})
-        event, _ = self._simulate_stream_processing(line)
-        self.assertEqual(event, "skip")
+    def test_init_event_not_pushed_as_chunk(self):
+        """init events must be skipped (not pushed as chunks)."""
+        buf = self._run_with_gemini_output(
+            [
+                json.dumps({"type": "init", "session": "abc123"}),
+                json.dumps(
+                    {"type": "message", "role": "model", "content": "Real response"}
+                ),
+            ]
+        )
+        chunks = self._chunk_text(buf)
+        self.assertNotIn("abc123", chunks)
+        self.assertIn("Real response", chunks)
 
-    def test_result_event_skipped(self):
-        """result events must be skipped in streaming path."""
-        line = json.dumps({"type": "result", "tokens": 99})
-        event, _ = self._simulate_stream_processing(line)
-        self.assertEqual(event, "skip")
-
-    def test_non_json_line_passthrough(self):
-        """Non-JSON lines must fall through to the normal processing path."""
-        event, _ = self._simulate_stream_processing("plain text output")
-        self.assertEqual(event, "passthrough")
+    def test_result_event_not_pushed_as_chunk(self):
+        """result events must be skipped in the streaming path."""
+        buf = self._run_with_gemini_output(
+            [json.dumps({"type": "result", "tokens": 99, "cost": 0.001})]
+        )
+        chunks = self._chunk_text(buf)
+        self.assertNotIn('"tokens"', chunks)
 
 
 if __name__ == "__main__":
