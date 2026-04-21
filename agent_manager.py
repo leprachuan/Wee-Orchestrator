@@ -4934,12 +4934,14 @@ You can mention an agent in your prompt and it will auto-delegate:
                         obj = _json_strip.loads(line_stripped)
                         _has_json = True
                         obj_type = obj.get("type", "")
-                        if obj_type == "message" and obj.get("role") == "assistant":
+                        if obj_type == "message" and obj.get("role") in ("assistant", "model"):
                             content = obj.get("content", "")
                             if content:
                                 _text_parts.append(content)
                         elif obj_type == "result":
-                            pass  # skip stats
+                            error_msg = obj.get("error") or obj.get("error_message") or obj.get("message")
+                            if error_msg and isinstance(error_msg, str):
+                                _text_parts.append(f"[Gemini Error] {error_msg}")
                         elif obj_type in ("tool_use", "tool_result", "init"):
                             pass  # skip tool events and init
                         continue
@@ -6425,7 +6427,7 @@ User Request:
                                         _gtype = _gobj.get("type", "")
                                         if (
                                             _gtype == "message"
-                                            and _gobj.get("role") == "assistant"
+                                            and _gobj.get("role") in ("assistant", "model")
                                         ):
                                             _content = _gobj.get("content", "")
                                             if _content:
@@ -6491,6 +6493,8 @@ User Request:
                                             continue
                                         elif _gtype in ("init", "result"):
                                             continue  # skip metadata
+                                        elif _gtype == "message":
+                                            continue  # skip non-model message lines (e.g. user role)
                                     except (ValueError, KeyError):
                                         pass
 
