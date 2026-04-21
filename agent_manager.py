@@ -10637,7 +10637,18 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             x_auth_channel=request.headers.get("x-auth-channel"),
         )
         valid_runtimes = {rt["id"] for rt in get_available_runtimes()}
-        # Accept any runtime name, but warn if unknown
+        for field_name, rt_value in [
+            ("primary_runtime", body.primary_runtime),
+            ("backup_runtime", body.backup_runtime),
+        ]:
+            if rt_value not in valid_runtimes:
+                raise HTTPException(
+                    status_code=422,
+                    detail=(
+                        f"Invalid {field_name} '{rt_value}'. "
+                        f"Must be one of: {sorted(valid_runtimes)}"
+                    ),
+                )
         _get_runtime_pref_mgr().set(body.primary_runtime, body.backup_runtime)
         return {
             "primary_runtime": body.primary_runtime,
@@ -12951,13 +12962,21 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         else:
             _session_rt = defaults.get("runtime")
             _pref_primary = _get_runtime_pref_mgr().primary()
-            runtime = _session_rt or _pref_primary or get_default_runtime()
+            _pref_backup = _get_runtime_pref_mgr().backup()
+            runtime = (
+                _session_rt or _pref_primary or _pref_backup or get_default_runtime()
+            )
             if _session_rt:
                 print(f"[RuntimePref] Using session runtime: {runtime}",
                       file=sys.stderr)
-            else:
+            elif _pref_primary:
                 print(
                     f"[RuntimePref] Using primary preference runtime: {runtime}",
+                    file=sys.stderr,
+                )
+            else:
+                print(
+                    f"[RuntimePref] Using backup preference runtime: {runtime}",
                     file=sys.stderr,
                 )
         model = body.model or defaults.get("model", get_default_model())

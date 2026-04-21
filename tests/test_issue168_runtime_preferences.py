@@ -232,8 +232,9 @@ class TestBackgroundTaskRuntimeSelection(unittest.TestCase):
         # Mock _execute_background_task to capture runtime used
         cls._captured_tasks = []
 
-        _orig_run = agent_manager.SessionManager._execute_background_task
-        async def _fake_run_bg(self_sm, task_id, session_id, prompt, agent, runtime, model, *a, **kw):
+        async def _fake_run_bg(  # noqa: E306
+            self_sm, task_id, session_id, prompt, agent, runtime, model, *a, **kw
+        ):
             cls._captured_tasks.append({
                 "task_id": task_id, "runtime": runtime, "model": model
             })
@@ -264,7 +265,9 @@ class TestBackgroundTaskRuntimeSelection(unittest.TestCase):
         self._pref_mgr.set("gemini", "claude")
 
         # Patch _compute_bg_task_defaults to return empty (no session inheritance)
-        with patch.object(agent_manager, "_compute_bg_task_defaults", return_value={}):
+        with patch.object(
+            agent_manager, "_compute_bg_task_defaults", return_value={}
+        ):
             resp = self.client.post(
                 "/api/v1/background-tasks",
                 json={"prompt": "test task no runtime", "agent": "orchestrator"},
@@ -284,10 +287,16 @@ class TestBackgroundTaskRuntimeSelection(unittest.TestCase):
         # Set primary to gemini, but explicitly request claude
         self._pref_mgr.set("gemini", "copilot")
 
-        with patch.object(agent_manager, "_compute_bg_task_defaults", return_value={}):
+        with patch.object(
+            agent_manager, "_compute_bg_task_defaults", return_value={}
+        ):
             resp = self.client.post(
                 "/api/v1/background-tasks",
-                json={"prompt": "test explicit override", "agent": "orchestrator", "runtime": "claude"},
+                json={
+                    "prompt": "test explicit override",
+                    "agent": "orchestrator",
+                    "runtime": "claude",
+                },
                 headers=self.auth,
             )
         self.assertIn(resp.status_code, [200, 201, 202])
@@ -301,7 +310,7 @@ class TestContextInjection(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        from unittest.mock import patch, MagicMock
+        from unittest.mock import patch
         import agent_manager
 
         cls._tmp_pref = tempfile.mktemp(suffix="_168_ctx_test.json")
@@ -321,7 +330,7 @@ class TestContextInjection(unittest.TestCase):
     def test_context_includes_runtime_preferences(self):
         """build_agent_context_prompt should include runtime preferences in context."""
         import agent_manager
-        from unittest.mock import patch, MagicMock
+        from unittest.mock import patch
 
         session_mgr = agent_manager.SessionManager.__new__(agent_manager.SessionManager)
         session_mgr.AGENTS = {
@@ -345,6 +354,146 @@ class TestContextInjection(unittest.TestCase):
         self.assertIn("opencode", ctx)
         self.assertIn("gemini", ctx)
         self.assertIn("Primary runtime", ctx)
+
+
+class TestRuntimePreferencesValidation(unittest.TestCase):
+    """Tests that PUT /api/v1/runtime-preferences validates input."""
+
+    @classmethod
+    def setUpClass(cls):
+        from unittest.mock import patch
+        from fastapi.testclient import TestClient
+        import agent_manager
+
+        cls._telegram_patch = patch.object(
+            agent_manager, "_resolve_telegram_identity",
+            side_effect=lambda identity: identity,
+        )
+        cls._telegram_patch.start()
+        cls._send_pairing_patch = patch.object(
+            agent_manager, "_send_pairing_code", return_value=True,
+        )
+        cls._send_pairing_patch.start()
+
+        cls._tmp_pref = tempfile.mktemp(suffix="_168_val_test.json")
+        cls._pref_patch = patch.object(
+            agent_manager, "_runtime_pref_mgr",
+            agent_manager.RuntimePreferencesManager(cls._tmp_pref),
+        )
+        cls._pref_patch.start()
+
+        cls.app = agent_manager.create_api_app()
+        cls.client = TestClient(cls.app)
+        cls.auth = {"Authorization": "Bearer shared_test_key_168"}
+
+    @classmethod
+    def tearDownClass(cls):
+        cls._telegram_patch.stop()
+        cls._send_pairing_patch.stop()
+        cls._pref_patch.stop()
+        if os.path.exists(cls._tmp_pref):
+            os.unlink(cls._tmp_pref)
+
+    def test_invalid_primary_runtime_rejected(self):
+        """PUT with invalid primary_runtime should return 422."""
+        payload = {
+            "primary_runtime": "<script>alert(1)</script>",
+            "backup_runtime": "claude",
+        }
+        resp = self.client.put(
+            "/api/v1/runtime-preferences",
+            json=payload,
+            headers=self.auth,
+        )
+        self.assertEqual(resp.status_code, 422)
+
+    def test_invalid_backup_runtime_rejected(self):
+        """PUT with invalid backup_runtime should return 422."""
+        payload = {
+            "primary_runtime": "copilot",
+            "backup_runtime": "'; DROP TABLE sessions;--",
+        }
+        resp = self.client.put(
+            "/api/v1/runtime-preferences",
+            json=payload,
+            headers=self.auth,
+        )
+        self.assertEqual(resp.status_code, 422)
+
+    def test_valid_runtimes_accepted(self):
+        """PUT with known-valid runtimes should succeed."""
+        import agent_manager
+        valid = agent_manager.get_available_runtimes()
+        if len(valid) < 2:
+            self.skipTest("Need at least 2 available runtimes")
+        payload = {
+            "primary_runtime": valid[0]["id"],
+            "backup_runtime": valid[1]["id"],
+        }
+        resp = self.client.put(
+            "/api/v1/runtime-preferences",
+            json=payload,
+            headers=self.auth,
+        )
+        self.assertEqual(resp.status_code, 200)
+
+
+class TestBackupRuntimeFallback(unittest.TestCase):
+    """Tests that backup_runtime is used when primary is empty."""
+
+    def test_backup_used_when_primary_empty(self):
+        """When primary returns '', backup should be used."""
+        import agent_manager
+        from unittest.mock import patch
+        from fastapi.testclient import TestClient
+
+        tmp = tempfile.mktemp(suffix="_168_fallback.json")
+        mgr = agent_manager.RuntimePreferencesManager(tmp)
+        mgr.set("", "gemini")
+
+        try:
+            with patch.object(agent_manager, "_runtime_pref_mgr", mgr), \
+                 patch.object(
+                     agent_manager, "get_default_runtime",
+                     return_value="copilot",
+                 ), patch.object(
+                     agent_manager, "_resolve_telegram_identity",
+                     side_effect=lambda x: x,
+                 ), patch.object(
+                     agent_manager, "_send_pairing_code", return_value=True,
+                 ), patch.object(
+                     agent_manager, "_compute_bg_task_defaults",
+                     return_value={},
+                 ):
+                captured = []
+
+                async def fake_bg(self_sm, task_id, session_id, prompt,
+                                  agent, runtime, model, *a, **kw):
+                    captured.append(runtime)
+
+                with patch.object(
+                    agent_manager.SessionManager,
+                    "_execute_background_task", fake_bg,
+                ):
+                    app = agent_manager.create_api_app()
+                    client = TestClient(app)
+                    resp = client.post(
+                        "/api/v1/background-tasks",
+                        json={
+                            "prompt": "test backup fallback",
+                            "agent": "orchestrator",
+                        },
+                        headers={
+                            "Authorization": "Bearer shared_test_key_168",
+                        },
+                    )
+                self.assertIn(resp.status_code, [200, 201, 202])
+                task_data = resp.json()
+                self.assertIn("runtime", task_data)
+                self.assertEqual(task_data["runtime"], "gemini")
+        finally:
+            if os.path.exists(tmp):
+                os.unlink(tmp)
 
 
 if __name__ == "__main__":
