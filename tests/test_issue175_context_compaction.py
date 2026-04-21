@@ -9,6 +9,7 @@ Tests cover:
   - Integration: _wee_maybe_compact called from run_wee_native
 """
 
+from agent_manager import SessionManager
 import sys
 import os
 import json
@@ -19,8 +20,6 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch, call
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
-
-from agent_manager import SessionManager
 
 
 def _make_mgr():
@@ -107,7 +106,8 @@ class TestWeeGetContextLimit(unittest.TestCase):
         self.assertEqual(self.mgr._wee_get_context_limit("gemma4:e4b"), 128000)
 
     def test_known_model_openrouter(self):
-        self.assertEqual(self.mgr._wee_get_context_limit("meta-llama/llama-4-scout:free"), 131072)
+        self.assertEqual(self.mgr._wee_get_context_limit(
+            "meta-llama/llama-4-scout:free"), 131072)
 
     def test_default_for_unknown_model(self):
         self.assertEqual(
@@ -116,7 +116,8 @@ class TestWeeGetContextLimit(unittest.TestCase):
         )
 
     def test_heuristic_128k(self):
-        self.assertEqual(self.mgr._wee_get_context_limit("some-model-128k-version"), 128000)
+        self.assertEqual(self.mgr._wee_get_context_limit(
+            "some-model-128k-version"), 128000)
 
     def test_heuristic_32k(self):
         self.assertEqual(self.mgr._wee_get_context_limit("some-model-32k"), 32768)
@@ -145,7 +146,8 @@ class TestWeeSaveTranscript(unittest.TestCase):
                 real_path.mkdir(parents=True, exist_ok=True)
 
             mock_dir = MagicMock(spec=Path)
-            mock_dir.__truediv__ = lambda self, other: Path(tmpdir) / "logs" / "transcripts" / other
+            mock_dir.__truediv__ = lambda self, other: Path(
+                tmpdir) / "logs" / "transcripts" / other
             mock_dir.mkdir = fake_mkdir
 
             # Patch Path(__file__).parent to return tmpdir-based path object
