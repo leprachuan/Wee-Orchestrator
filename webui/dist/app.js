@@ -3256,14 +3256,14 @@ function buildJobForm(job) {
         <div style="margin-top:8px">
           <div class="form-group">
             <label>Fallback Runtime</label>
-            <select id="sched-fallback-runtime" name="fallback_runtime">
+            <select class="glass-input glass-select" id="sched-fallback-runtime" name="fallback_runtime">
               <option value="">None (no fallback)</option>
             </select>
             <small>Used if primary runtime fails (rate limit, auth error, timeout)</small>
           </div>
           <div class="form-group">
             <label>Fallback Model</label>
-            <select id="sched-fallback-model" name="fallback_model">
+            <select class="glass-input glass-select" id="sched-fallback-model" name="fallback_model">
               <option value="">None (no fallback)</option>
             </select>
             <small>Used with fallback runtime</small>
