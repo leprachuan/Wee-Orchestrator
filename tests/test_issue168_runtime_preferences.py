@@ -1,0 +1,351 @@
+"""Regression tests for Issue #168: Global Background Runtime Configuration.
+
+Tests:
+- GET /api/v1/runtime-preferences returns defaults
+- PUT /api/v1/runtime-preferences saves and returns new values
+- Background task uses primary runtime when no runtime specified
+- Background task preserves explicit runtime override (does not apply preference)
+- RuntimePreferencesManager loads/saves/defaults correctly
+- Context injection includes runtime preferences
+"""
+
+import json
+import os
+import sys
+import tempfile
+import threading
+import unittest
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+os.environ["API_SHARED_KEY"] = "test_key_168"
+os.environ["APP_ENV"] = "DEV"
+os.environ["API_PORT"] = "8099"
+
+
+class TestRuntimePreferencesManager(unittest.TestCase):
+    """Unit tests for the RuntimePreferencesManager class."""
+
+    def setUp(self):
+        import agent_manager
+        self.tmp = tempfile.mktemp(suffix=".json")
+        self.mgr = agent_manager.RuntimePreferencesManager(self.tmp)
+
+    def tearDown(self):
+        if os.path.exists(self.tmp):
+            os.unlink(self.tmp)
+
+    def test_default_primary(self):
+        """Default primary runtime should be 'copilot'."""
+        self.assertEqual(self.mgr.primary(), "copilot")
+
+    def test_default_backup(self):
+        """Default backup runtime should be 'claude'."""
+        self.assertEqual(self.mgr.backup(), "claude")
+
+    def test_get_returns_dict(self):
+        """get() should return a dict with primary_runtime and backup_runtime keys."""
+        prefs = self.mgr.get()
+        self.assertIn("primary_runtime", prefs)
+        self.assertIn("backup_runtime", prefs)
+
+    def test_set_persists_to_disk(self):
+        """set() should persist changes to the JSON file."""
+        self.mgr.set("gemini", "opencode")
+        self.assertTrue(os.path.exists(self.tmp))
+        with open(self.tmp) as f:
+            data = json.load(f)
+        self.assertEqual(data["primary_runtime"], "gemini")
+        self.assertEqual(data["backup_runtime"], "opencode")
+
+    def test_set_updates_in_memory(self):
+        """set() should immediately update in-memory values."""
+        self.mgr.set("claude", "copilot")
+        self.assertEqual(self.mgr.primary(), "claude")
+        self.assertEqual(self.mgr.backup(), "copilot")
+
+    def test_load_from_existing_file(self):
+        """Manager should load existing preferences from disk on init."""
+        import agent_manager
+        data = {"primary_runtime": "opencode", "backup_runtime": "gemini"}
+        with open(self.tmp, "w") as f:
+            json.dump(data, f)
+        mgr2 = agent_manager.RuntimePreferencesManager(self.tmp)
+        self.assertEqual(mgr2.primary(), "opencode")
+        self.assertEqual(mgr2.backup(), "gemini")
+
+    def test_load_handles_corrupt_file(self):
+        """Manager should fall back to defaults if file is corrupt."""
+        import agent_manager
+        with open(self.tmp, "w") as f:
+            f.write("{ not valid json }")
+        mgr2 = agent_manager.RuntimePreferencesManager(self.tmp)
+        self.assertEqual(mgr2.primary(), "copilot")
+        self.assertEqual(mgr2.backup(), "claude")
+
+    def test_thread_safety(self):
+        """Concurrent reads and writes should not raise exceptions."""
+        errors = []
+
+        def writer():
+            try:
+                for _ in range(20):
+                    self.mgr.set("claude", "copilot")
+            except Exception as e:
+                errors.append(e)
+
+        def reader():
+            try:
+                for _ in range(20):
+                    _ = self.mgr.get()
+            except Exception as e:
+                errors.append(e)
+
+        threads = [threading.Thread(target=writer) for _ in range(3)]
+        threads += [threading.Thread(target=reader) for _ in range(3)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        self.assertEqual(errors, [], f"Thread safety errors: {errors}")
+
+
+class TestRuntimePreferencesAPI(unittest.TestCase):
+    """Tests for the /api/v1/runtime-preferences API endpoints."""
+
+    @classmethod
+    def setUpClass(cls):
+        from unittest.mock import patch
+        from fastapi.testclient import TestClient
+        import agent_manager
+
+        cls._telegram_patch = patch.object(
+            agent_manager, "_resolve_telegram_identity",
+            side_effect=lambda identity: identity,
+        )
+        cls._telegram_patch.start()
+        cls._send_pairing_patch = patch.object(
+            agent_manager, "_send_pairing_code", return_value=True,
+        )
+        cls._send_pairing_patch.start()
+
+        # Override pref file to a temp file so tests don't affect real config
+        cls._tmp_pref = tempfile.mktemp(suffix="_168_test.json")
+        cls._pref_patch = patch.object(
+            agent_manager, "_runtime_pref_mgr",
+            agent_manager.RuntimePreferencesManager(cls._tmp_pref),
+        )
+        cls._pref_patch.start()
+
+        cls.app = agent_manager.create_api_app()
+        cls.client = TestClient(cls.app)
+        cls.auth = {"Authorization": "Bearer shared_test_key_168"}
+
+    @classmethod
+    def tearDownClass(cls):
+        cls._telegram_patch.stop()
+        cls._send_pairing_patch.stop()
+        cls._pref_patch.stop()
+        if os.path.exists(cls._tmp_pref):
+            os.unlink(cls._tmp_pref)
+
+    def test_get_returns_defaults(self):
+        """GET /api/v1/runtime-preferences should return default primary/backup."""
+        resp = self.client.get("/api/v1/runtime-preferences")
+        self.assertEqual(resp.status_code, 200)
+        data = resp.json()
+        self.assertIn("primary_runtime", data)
+        self.assertIn("backup_runtime", data)
+        self.assertIn("available_runtimes", data)
+        self.assertEqual(data["primary_runtime"], "copilot")
+        self.assertEqual(data["backup_runtime"], "claude")
+
+    def test_put_saves_preferences(self):
+        """PUT /api/v1/runtime-preferences should save and return new values."""
+        payload = {"primary_runtime": "gemini", "backup_runtime": "opencode"}
+        resp = self.client.put(
+            "/api/v1/runtime-preferences",
+            json=payload,
+            headers=self.auth,
+        )
+        self.assertEqual(resp.status_code, 200)
+        data = resp.json()
+        self.assertEqual(data["primary_runtime"], "gemini")
+        self.assertEqual(data["backup_runtime"], "opencode")
+        self.assertEqual(data["status"], "saved")
+
+    def test_put_persists_across_get(self):
+        """After PUT, GET should return the new values."""
+        payload = {"primary_runtime": "claude", "backup_runtime": "copilot"}
+        self.client.put(
+            "/api/v1/runtime-preferences", json=payload, headers=self.auth
+        )
+        resp = self.client.get("/api/v1/runtime-preferences")
+        data = resp.json()
+        self.assertEqual(data["primary_runtime"], "claude")
+        self.assertEqual(data["backup_runtime"], "copilot")
+
+    def test_put_requires_auth(self):
+        """PUT without valid auth should be rejected (401 or 403)."""
+        payload = {"primary_runtime": "gemini", "backup_runtime": "opencode"}
+        resp = self.client.put("/api/v1/runtime-preferences", json=payload)
+        self.assertIn(resp.status_code, [401, 403])
+
+    def test_get_no_auth_required(self):
+        """GET should be accessible without authentication."""
+        resp = self.client.get("/api/v1/runtime-preferences")
+        self.assertEqual(resp.status_code, 200)
+
+    def test_available_runtimes_in_response(self):
+        """GET should include available_runtimes list."""
+        resp = self.client.get("/api/v1/runtime-preferences")
+        data = resp.json()
+        self.assertIsInstance(data["available_runtimes"], list)
+
+
+class TestBackgroundTaskRuntimeSelection(unittest.TestCase):
+    """Tests that background tasks use runtime preferences correctly."""
+
+    @classmethod
+    def setUpClass(cls):
+        from unittest.mock import patch
+        from fastapi.testclient import TestClient
+        import agent_manager
+
+        cls._telegram_patch = patch.object(
+            agent_manager, "_resolve_telegram_identity",
+            side_effect=lambda identity: identity,
+        )
+        cls._telegram_patch.start()
+        cls._send_pairing_patch = patch.object(
+            agent_manager, "_send_pairing_code", return_value=True,
+        )
+        cls._send_pairing_patch.start()
+
+        cls._tmp_pref = tempfile.mktemp(suffix="_168_bg_test.json")
+        cls._pref_mgr = agent_manager.RuntimePreferencesManager(cls._tmp_pref)
+        cls._pref_patch = patch.object(
+            agent_manager, "_runtime_pref_mgr", cls._pref_mgr,
+        )
+        cls._pref_patch.start()
+
+        # Mock _execute_background_task to capture runtime used
+        cls._captured_tasks = []
+
+        _orig_run = agent_manager.SessionManager._execute_background_task
+        async def _fake_run_bg(self_sm, task_id, session_id, prompt, agent, runtime, model, *a, **kw):
+            cls._captured_tasks.append({
+                "task_id": task_id, "runtime": runtime, "model": model
+            })
+        cls._run_bg_patch = patch.object(
+            agent_manager.SessionManager, "_execute_background_task", _fake_run_bg
+        )
+        cls._run_bg_patch.start()
+
+        cls.app = agent_manager.create_api_app()
+        cls.client = TestClient(cls.app)
+        cls.auth = {"Authorization": "Bearer shared_test_key_168"}
+
+    @classmethod
+    def tearDownClass(cls):
+        cls._telegram_patch.stop()
+        cls._send_pairing_patch.stop()
+        cls._pref_patch.stop()
+        cls._run_bg_patch.stop()
+        if os.path.exists(cls._tmp_pref):
+            os.unlink(cls._tmp_pref)
+
+    def test_primary_runtime_used_when_no_explicit_runtime(self):
+        """Background task with no explicit runtime should use primary preference."""
+        import agent_manager
+        from unittest.mock import patch
+
+        # Set primary to gemini
+        self._pref_mgr.set("gemini", "claude")
+
+        # Patch _compute_bg_task_defaults to return empty (no session inheritance)
+        with patch.object(agent_manager, "_compute_bg_task_defaults", return_value={}):
+            resp = self.client.post(
+                "/api/v1/background-tasks",
+                json={"prompt": "test task no runtime", "agent": "orchestrator"},
+                headers=self.auth,
+            )
+        self.assertIn(resp.status_code, [200, 201, 202])
+        # The task may be queued but runtime should be set based on preference
+        task_data = resp.json()
+        self.assertIn("runtime", task_data)
+        self.assertEqual(task_data["runtime"], "gemini")
+
+    def test_explicit_runtime_overrides_preference(self):
+        """Background task with explicit runtime should NOT be overridden."""
+        import agent_manager
+        from unittest.mock import patch
+
+        # Set primary to gemini, but explicitly request claude
+        self._pref_mgr.set("gemini", "copilot")
+
+        with patch.object(agent_manager, "_compute_bg_task_defaults", return_value={}):
+            resp = self.client.post(
+                "/api/v1/background-tasks",
+                json={"prompt": "test explicit override", "agent": "orchestrator", "runtime": "claude"},
+                headers=self.auth,
+            )
+        self.assertIn(resp.status_code, [200, 201, 202])
+        task_data = resp.json()
+        self.assertIn("runtime", task_data)
+        self.assertEqual(task_data["runtime"], "claude")
+
+
+class TestContextInjection(unittest.TestCase):
+    """Tests that runtime preferences are injected into session context."""
+
+    @classmethod
+    def setUpClass(cls):
+        from unittest.mock import patch, MagicMock
+        import agent_manager
+
+        cls._tmp_pref = tempfile.mktemp(suffix="_168_ctx_test.json")
+        cls._pref_mgr = agent_manager.RuntimePreferencesManager(cls._tmp_pref)
+        cls._pref_mgr.set("opencode", "gemini")
+        cls._pref_patch = patch.object(
+            agent_manager, "_runtime_pref_mgr", cls._pref_mgr,
+        )
+        cls._pref_patch.start()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls._pref_patch.stop()
+        if os.path.exists(cls._tmp_pref):
+            os.unlink(cls._tmp_pref)
+
+    def test_context_includes_runtime_preferences(self):
+        """build_agent_context_prompt should include runtime preferences in context."""
+        import agent_manager
+        from unittest.mock import patch, MagicMock
+
+        session_mgr = agent_manager.SessionManager.__new__(agent_manager.SessionManager)
+        session_mgr.AGENTS = {
+            "orchestrator": {"description": "Main orchestrator", "path": "/opt"},
+            "devops": {"description": "DevOps agent", "path": "/opt"},
+        }
+        session_mgr._bg_task_mgr = None
+        session_mgr._bg_identity = None
+        session_mgr.session_map_file = None
+        session_mgr.skill_repositories = []
+
+        with patch.object(session_mgr, "load_session_data", return_value={}), \
+             patch.object(session_mgr, "update_session_field", return_value=None):
+            ctx = session_mgr.build_agent_context_prompt(
+                prompt="hello",
+                agent="orchestrator",
+                channel="api",
+                n8n_session_id="test-session-168",
+            )
+
+        self.assertIn("opencode", ctx)
+        self.assertIn("gemini", ctx)
+        self.assertIn("Primary runtime", ctx)
+
+
+if __name__ == "__main__":
+    unittest.main()
