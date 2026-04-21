@@ -66,6 +66,51 @@ _THEME_NAME_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$")
 _themes_dir = Path(os.path.abspath(__file__)).parent / "webui" / "themes"
 
 
+def _configure_logging() -> None:
+    """Configure root logger from LOG_LEVEL / LOG_FORMAT env vars.
+
+    LOG_LEVEL  — DEBUG | INFO | WARNING | ERROR  (default: INFO)
+    LOG_FORMAT — json | text                      (default: text)
+    """
+    level_name = os.environ.get("LOG_LEVEL", "INFO").upper()
+    level = getattr(logging, level_name, logging.INFO)
+
+    fmt = os.environ.get("LOG_FORMAT", "text").lower()
+    formatter: logging.Formatter
+    if fmt == "json":
+        formatter = _JsonFormatter()
+    else:
+        formatter = logging.Formatter(
+            "%(asctime)s %(levelname)-8s %(name)s %(message)s",
+            datefmt="%Y-%m-%dT%H:%M:%S",
+        )
+
+    handler = logging.StreamHandler(sys.stderr)
+    handler.setFormatter(formatter)
+
+    root = logging.getLogger()
+    if not root.handlers:
+        root.addHandler(handler)
+    root.setLevel(level)
+
+
+class _JsonFormatter(logging.Formatter):
+    """Emit one JSON object per log record."""
+
+    def format(self, record: logging.LogRecord) -> str:
+        import json as _json
+
+        payload = {
+            "ts": self.formatTime(record, "%Y-%m-%dT%H:%M:%S"),
+            "level": record.levelname,
+            "logger": record.name,
+            "msg": record.getMessage(),
+        }
+        if record.exc_info:
+            payload["exc"] = self.formatException(record.exc_info)
+        return _json.dumps(payload)
+
+
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
@@ -1081,16 +1126,14 @@ def get_command_timeout() -> int:
         timeout = int(timeout_str)
         # Ensure minimum timeout of 30 seconds
         if timeout < 30:
-            print(
-                f"Warning: COMMAND_TIMEOUT must be at least 30 seconds, using 30",
-                file=sys.stderr,
+            logger.warning(
+                f"Warning: COMMAND_TIMEOUT must be at least 30 seconds, using 30"
             )
             return 30
         return timeout
     except ValueError:
-        print(
-            f"Warning: COMMAND_TIMEOUT must be an integer, using default 300 seconds",
-            file=sys.stderr,
+        logger.warning(
+            f"Warning: COMMAND_TIMEOUT must be an integer, using default 300 seconds"
         )
 
 
@@ -1478,9 +1521,7 @@ class RuntimeUsageTracker:
             self._cache[cache_key] = {"ts": now, "data": data}
             return data
         except Exception as exc:
-            print(
-                f"[RuntimeUsage] Copilot billing fetch failed: {exc}", file=sys.stderr
-            )
+            logger.info(f"[RuntimeUsage] Copilot billing fetch failed: {exc}")
             return {}
 
     def _get_copilot_quota(self) -> int:
@@ -2397,15 +2438,12 @@ You can mention an agent in your prompt and it will auto-delegate:
                         prev_runtime,
                         new_runtime,
                     )
-                    print(
+                    logger.debug(
                         f"[Handoff] Prepared handoff: {prev_runtime} → {new_runtime} "
-                        f"(prev_session={prev_session_id}, new_session={new_session_id})",
-                        file=sys.stderr,
-                    )
+                        f"(prev_session={prev_session_id}, new_session={new_session_id})")
                 except Exception as _handoff_err:
-                    print(
-                        f"[Handoff] Warning: handoff preparation failed: {_handoff_err}",
-                        file=sys.stderr,
+                    logger.warning(
+                        f"[Handoff] Warning: handoff preparation failed: {_handoff_err}"
                     )
                     try:
                         from session_handoff import _handoff_logger
@@ -2482,10 +2520,7 @@ You can mention an agent in your prompt and it will auto-delegate:
                 return f"Unknown agent: '{agent_name}'. Available: {available}"
 
             # Invoke the sub-agent with a new session
-            print(
-                f"[Agent] Invoking sub-agent '{agent_name}' with delegation",
-                file=sys.stderr,
-            )
+            logger.info(f"[Agent] Invoking sub-agent '{agent_name}' with delegation")
             sub_session_id = str(uuid4())
 
             # Save delegation context
@@ -3236,9 +3271,9 @@ You can mention an agent in your prompt and it will auto-delegate:
         self._agents_config_path = config_path
 
         if not config_path.exists():
-            print(
-                f"[Warning] Agents config file not found at {config_path}. Using empty agents.",
-                file=sys.stderr,
+            logger.warning(
+                f"[Warning] Agents config file not found at {config_path}. Using empty "
+                "agents."
             )
             self._agents_json_mtime = 0.0
             return {}
@@ -3251,10 +3286,7 @@ You can mention an agent in your prompt and it will auto-delegate:
                 for agent in config.get("agents", []):
                     name = agent.get("name")
                     if not name:
-                        print(
-                            f"[Warning] Agent entry missing 'name' field",
-                            file=sys.stderr,
-                        )
+                        logger.warning(f"[Warning] Agent entry missing 'name' field")
                         continue
                     agents[name] = {
                         "path": agent.get("path", ""),
@@ -3265,10 +3297,10 @@ You can mention an agent in your prompt and it will auto-delegate:
                     }
                 return agents
         except json.JSONDecodeError as e:
-            print(f"[Error] Failed to parse agents config: {e}", file=sys.stderr)
+            logger.error(f"[Error] Failed to parse agents config: {e}")
             return {}
         except Exception as e:
-            print(f"[Error] Failed to load agents config: {e}", file=sys.stderr)
+            logger.error(f"[Error] Failed to load agents config: {e}")
             return {}
 
     def reload_agents_from_disk(self) -> tuple:
@@ -3349,22 +3381,22 @@ You can mention an agent in your prompt and it will auto-delegate:
                             if repo.get("enabled", False)
                         ]
                         if repositories:
-                            print(
-                                f"[Info] Loaded {len(repositories)} skill repositories from {config_path}",
-                                file=sys.stderr,
+                            logger.info(
+                                f"[Info] Loaded {len(repositories)} skill repositories "
+                                f"from {config_path}"
                             )
                             return repositories
                 except Exception as e:
-                    print(
-                        f"[Warning] Failed to load skill repositories from {config_path}: {e}",
-                        file=sys.stderr,
+                    logger.error(
+                        "[Warning] Failed to load skill repositories from "
+                        f"{config_path}: {e}"
                     )
                     continue
 
         # Return default Anthropic repository if no config found
-        print(
-            "[Info] No skill_repositories.json found, using default Anthropic repository",
-            file=sys.stderr,
+        logger.info(
+            "[Info] No skill_repositories.json found, using default Anthropic "
+            "repository"
         )
         return [
             {
@@ -3420,9 +3452,8 @@ You can mention an agent in your prompt and it will auto-delegate:
             "last_output": "",
         }
         self.save_running_queries(queries)
-        print(
-            f"[Track] Started tracking query for session {n8n_session_id}, PID: {pid}",
-            file=sys.stderr,
+        logger.debug(
+            f"[Track] Started tracking query for session {n8n_session_id}, PID: {pid}"
         )
 
     def update_query_output(self, n8n_session_id: str, output_snippet: str):
@@ -3440,10 +3471,7 @@ You can mention an agent in your prompt and it will auto-delegate:
         if n8n_session_id in queries:
             del queries[n8n_session_id]
             self.save_running_queries(queries)
-            print(
-                f"[Track] Cleared tracking for session {n8n_session_id}",
-                file=sys.stderr,
-            )
+            logger.debug(f"[Track] Cleared tracking for session {n8n_session_id}")
 
     def get_running_query(self, n8n_session_id: str) -> Optional[Dict]:
         """Get tracking info for a running query"""
@@ -3468,7 +3496,7 @@ You can mention an agent in your prompt and it will auto-delegate:
             os.kill(pid, signal.SIGKILL)
             return True
         except OSError as e:
-            print(f"[Error] Failed to kill process {pid}: {e}", file=sys.stderr)
+            logger.error(f"[Error] Failed to kill process {pid}: {e}")
             return False
 
     def _copilot_static_fallback(self) -> dict:
@@ -3504,7 +3532,7 @@ You can mention an agent in your prompt and it will auto-delegate:
     def fetch_copilot_models(self) -> Dict:
         """Fetch available models from copilot CLI help text"""
         if not self.copilot_bin:
-            print("Copilot executable not found in any search paths", file=sys.stderr)
+            logger.error("Copilot executable not found in any search paths")
             return self._copilot_static_fallback()
 
         try:
@@ -3512,7 +3540,7 @@ You can mention an agent in your prompt and it will auto-delegate:
             cmd = [self.copilot_bin, "--help", "--no-color"]
             result = subprocess.run(cmd, capture_output=True, text=True)
             if result.returncode != 0:
-                print(f"Copilot help command failed: {result.stderr}", file=sys.stderr)
+                logger.error(f"Copilot help command failed: {result.stderr}")
                 return self._copilot_static_fallback()
 
             # Method 1: Robust Regex
@@ -3619,7 +3647,7 @@ You can mention an agent in your prompt and it will auto-delegate:
 
             return categorized
         except Exception as e:
-            print(f"Error fetching copilot models: {e}", file=sys.stderr)
+            logger.error(f"Error fetching copilot models: {e}")
             return self._copilot_static_fallback()
 
     def fetch_opencode_models(self) -> Dict:
@@ -3632,16 +3660,14 @@ You can mention an agent in your prompt and it will auto-delegate:
             )
 
             if result.returncode != 0:
-                print(
-                    f"[Error] opencode models failed (exit {result.returncode}): {result.stderr}",
-                    file=sys.stderr,
+                logger.error(
+                    f"[Error] opencode models failed (exit {result.returncode}): "
+                    f"{result.stderr}"
                 )
                 return self._static_models_to_dict(self.OPENCODE_MODELS)
 
             if not result.stdout.strip():
-                print(
-                    "[Warning] opencode models returned empty output", file=sys.stderr
-                )
+                logger.warning("[Warning] opencode models returned empty output")
                 return self._static_models_to_dict(self.OPENCODE_MODELS)
 
             models_by_provider = {}
@@ -3664,13 +3690,13 @@ You can mention an agent in your prompt and it will auto-delegate:
         except ValueError as e:
             return f"Error: {e}"
         except subprocess.TimeoutExpired:
-            print(
-                f"[Error] opencode models command timed out after {self.command_timeout}s",
-                file=sys.stderr,
+            logger.error(
+                "[Error] opencode models command timed out after "
+                f"{self.command_timeout}s"
             )
             return self._static_models_to_dict(self.OPENCODE_MODELS)
         except Exception as e:
-            print(f"Error fetching opencode models: {e}", file=sys.stderr)
+            logger.error(f"Error fetching opencode models: {e}")
             return self._static_models_to_dict(self.OPENCODE_MODELS)
 
     def _static_models_to_dict(self, static_dict: Dict) -> Dict:
@@ -3747,10 +3773,7 @@ You can mention an agent in your prompt and it will auto-delegate:
             api_key = os.getenv("OPENROUTER_API_KEY")
 
         if not api_key:
-            print(
-                "[wee] OpenRouter: no API key available, using static fallback",
-                file=sys.stderr,
-            )
+            logger.info("[wee] OpenRouter: no API key available, using static fallback")
             return static_fallback
 
         try:
@@ -3799,9 +3822,8 @@ You can mention an agent in your prompt and it will auto-delegate:
                 ordered[cat] = grouped[cat]
 
             total = sum(len(v) for v in ordered.values())
-            print(
-                f"[wee] OpenRouter: discovered {total} models in {len(ordered)} groups",
-                file=sys.stderr,
+            logger.info(
+                f"[wee] OpenRouter: discovered {total} models in {len(ordered)} groups"
             )
 
             self._openrouter_models_cache = ordered
@@ -3809,7 +3831,7 @@ You can mention an agent in your prompt and it will auto-delegate:
             return ordered
 
         except Exception as e:
-            print(f"[wee] OpenRouter discovery failed: {e}", file=sys.stderr)
+            logger.warning(f"[wee] OpenRouter discovery failed: {e}")
             return static_fallback
 
     def _get_model_description(self, model_id: str, runtime: str) -> Optional[str]:
@@ -3870,9 +3892,7 @@ You can mention an agent in your prompt and it will auto-delegate:
                 # Convert to the expected format {category: [model_ids]}
                 return self._static_models_to_dict(models_dict)
             except (json.JSONDecodeError, ValueError) as e:
-                print(
-                    f"Warning: Failed to parse CLAUDE_MODELS_JSON: {e}", file=sys.stderr
-                )
+                logger.error(f"Warning: Failed to parse CLAUDE_MODELS_JSON: {e}")
 
         # Fallback to static configuration
         return self._static_models_to_dict(self.CLAUDE_MODELS)
@@ -3896,9 +3916,7 @@ You can mention an agent in your prompt and it will auto-delegate:
                 # Convert to the expected format {category: [model_ids]}
                 return self._static_models_to_dict(models_dict)
             except (json.JSONDecodeError, ValueError) as e:
-                print(
-                    f"Warning: Failed to parse GEMINI_MODELS_JSON: {e}", file=sys.stderr
-                )
+                logger.error(f"Warning: Failed to parse GEMINI_MODELS_JSON: {e}")
 
         # Fallback to static configuration
         return self._static_models_to_dict(self.GEMINI_MODELS)
@@ -3922,9 +3940,7 @@ You can mention an agent in your prompt and it will auto-delegate:
                 # Convert to the expected format {category: [model_ids]}
                 return self._static_models_to_dict(models_dict)
             except (json.JSONDecodeError, ValueError) as e:
-                print(
-                    f"Warning: Failed to parse CODEX_MODELS_JSON: {e}", file=sys.stderr
-                )
+                logger.error(f"Warning: Failed to parse CODEX_MODELS_JSON: {e}")
 
         # Fallback to static configuration
         return self._static_models_to_dict(self.CODEX_MODELS)
@@ -3959,16 +3975,10 @@ You can mention an agent in your prompt and it will auto-delegate:
                         discovered = {
                             "Available Models": [(mid, mid, []) for mid in model_ids]
                         }
-                        print(
-                            f"[devin] Auto-discovered {len(model_ids)} models",
-                            file=sys.stderr,
-                        )
+                        logger.info(f"[devin] Auto-discovered {len(model_ids)} models")
                         return self._static_models_to_dict(discovered)
         except Exception as e:
-            print(
-                f"[devin] Model discovery failed, using static list: {e}",
-                file=sys.stderr,
-            )
+            logger.warning(f"[devin] Model discovery failed, using static list: {e}")
 
         return self._static_models_to_dict(self.DEVIN_MODELS)
 
@@ -4015,17 +4025,11 @@ You can mention an agent in your prompt and it will auto-delegate:
                     model_ids.append(model_id)
             if model_ids:
                 discovered = {"Available Models": [(mid, mid, []) for mid in model_ids]}
-                print(
-                    f"[cursor] Auto-discovered {len(model_ids)} models",
-                    file=sys.stderr,
-                )
+                logger.info(f"[cursor] Auto-discovered {len(model_ids)} models")
                 self._env_cursor_models = discovered
                 return self._static_models_to_dict(discovered)
         except Exception as e:
-            print(
-                f"[cursor] Model discovery failed, using static list: {e}",
-                file=sys.stderr,
-            )
+            logger.warning(f"[cursor] Model discovery failed, using static list: {e}")
 
         return self._static_models_to_dict(self.CURSOR_MODELS)
 
@@ -4096,12 +4100,9 @@ You can mention an agent in your prompt and it will auto-delegate:
                         merged_ollama.append(entry)
                 if merged_ollama:
                     result["Ollama Models"] = merged_ollama
-                    print(
-                        "[wee] Ollama: discovered %d models" % len(tags),
-                        file=sys.stderr,
-                    )
+                    logger.info("[wee] Ollama: discovered %d models" % len(tags))
         except Exception as ollama_err:
-            print("[wee] Ollama discovery failed: %s" % ollama_err, file=sys.stderr)
+            logger.warning("[wee] Ollama discovery failed: %s" % ollama_err)
 
         # Live OpenRouter discovery — show ALL available models (Issue #142)
         try:
@@ -4140,7 +4141,7 @@ You can mention an agent in your prompt and it will auto-delegate:
                         discovered.append((or_id, name + " (OpenRouter)", []))
 
         except Exception as or_err:
-            print("[wee] OpenRouter discovery failed: %s" % or_err, file=sys.stderr)
+            logger.warning("[wee] OpenRouter discovery failed: %s" % or_err)
 
         self._env_wee_models = result
         self._openrouter_cache_ts = _time.time()
@@ -4167,10 +4168,7 @@ You can mention an agent in your prompt and it will auto-delegate:
         }
         fetcher = dispatch.get(runtime)
         if fetcher is None:
-            print(
-                f"[Warning] Unknown runtime for model listing: {runtime}",
-                file=sys.stderr,
-            )
+            logger.warning(f"[Warning] Unknown runtime for model listing: {runtime}")
             return {}
         return fetcher()
 
@@ -4208,11 +4206,9 @@ You can mention an agent in your prompt and it will auto-delegate:
                 continue
             pruned[key] = entry
         if evicted:
-            print(
+            logger.warning(
                 f"[SessionMap] TTL evicted {evicted} inactive entries "
-                f"(threshold {self.session_map_ttl / 86400:.0f}d)",
-                file=__import__("sys").stderr,
-            )
+                f"(threshold {self.session_map_ttl / 86400:.0f}d)")
         return pruned
 
     def save_session_map(self, session_map: dict):
@@ -4413,9 +4409,9 @@ You can mention an agent in your prompt and it will auto-delegate:
         # Fallback: new session
         session_map[n8n_session_id] = default_data
         self.save_session_map(session_map)
-        print(
-            f"[Session] Created new session: {default_data['session_id']} (N8N: {n8n_session_id}, Bot: {bot_id})",
-            file=sys.stderr,
+        logger.info(
+            f"[Session] Created new session: {default_data['session_id']} (N8N: "
+            f"{n8n_session_id}, Bot: {bot_id})"
         )
         return {**default_data, "is_new": True}
 
@@ -4651,9 +4647,9 @@ You can mention an agent in your prompt and it will auto-delegate:
 
             self.save_session_map(session_map)
         agent_info = self.AGENTS[agent]
-        print(
-            f"[Agent] Switched to '{agent}' agent. New backend session: {new_backend_session_id}",
-            file=sys.stderr,
+        logger.info(
+            f"[Agent] Switched to '{agent}' agent. New backend session: "
+            f"{new_backend_session_id}"
         )
         return f"✓ Switched to **{agent}** agent\n\n{agent_info['description']}\n\nLocation: `{agent_info['path']}`"
 
@@ -5179,7 +5175,7 @@ You can mention an agent in your prompt and it will auto-delegate:
         else:
             agent_dir = agent_info["path"]
 
-        print(f"[Shell] Executing in {agent_dir}: {command}", file=sys.stderr)
+        logger.debug(f"[Shell] Executing in {agent_dir}: {command}")
 
         try:
             argv = _split_command_args(command)
@@ -5230,7 +5226,7 @@ You can mention an agent in your prompt and it will auto-delegate:
         else:
             agent_dir = agent_info["path"]
 
-        print(f"[Shell] Executing in {agent_dir}: {command}", file=sys.stderr)
+        logger.debug(f"[Shell] Executing in {agent_dir}: {command}")
 
         try:
             result = subprocess.run(
@@ -5274,7 +5270,7 @@ You can mention an agent in your prompt and it will auto-delegate:
         else:
             agent_dir = agent_info["path"]
 
-        print(f"[Shell] Executing in {agent_dir}: {command}", file=sys.stderr)
+        logger.debug(f"[Shell] Executing in {agent_dir}: {command}")
 
         try:
             result = subprocess.run(
@@ -5362,9 +5358,7 @@ You can mention an agent in your prompt and it will auto-delegate:
                                     }
                                 )
                 except Exception as e:
-                    print(
-                        f"[WARN] Error loading skill {skill_file}: {e}", file=sys.stderr
-                    )
+                    logger.warning(f"[WARN] Error loading skill {skill_file}: {e}")
 
         if available_skills:
             skills_context = "\n[Agent Skills - Available]\n"
@@ -5489,9 +5483,8 @@ Example skill structure:
                     )
 
                     if result.returncode != 0:
-                        print(
-                            f"[Warn] Could not access {repo_name} repository",
-                            file=sys.stderr,
+                        logger.warning(
+                            f"[Warn] Could not access {repo_name} repository"
                         )
                         continue
 
@@ -5536,7 +5529,7 @@ Example skill structure:
                     )
 
                 except Exception as e:
-                    print(f"[Warn] Error searching {repo_name}: {e}", file=sys.stderr)
+                    logger.warning(f"[Warn] Error searching {repo_name}: {e}")
                     continue
 
             if not all_skills:
@@ -5629,18 +5622,16 @@ Example skill structure:
                     )
 
                     if result.returncode != 0:
-                        print(
-                            f"[Warn] Could not access {repo_name} repository",
-                            file=sys.stderr,
+                        logger.warning(
+                            f"[Warn] Could not access {repo_name} repository"
                         )
                         continue
 
                     # Find the skill
                     source_skill = Path(temp_dir) / skill_name
                     if not source_skill.exists():
-                        print(
-                            f"[Info] Skill '{skill_name}' not found in {repo_name}",
-                            file=sys.stderr,
+                        logger.info(
+                            f"[Info] Skill '{skill_name}' not found in {repo_name}"
                         )
                         subprocess.run(
                             ["rm", "-rf", temp_dir], capture_output=True, timeout=5
@@ -5666,9 +5657,7 @@ Example skill structure:
                         return f"Error: Failed to copy skill '{skill_name}' to {agent}."
 
                 except Exception as e:
-                    print(
-                        f"[Warn] Error loading from {repo_name}: {e}", file=sys.stderr
-                    )
+                    logger.warning(f"[Warn] Error loading from {repo_name}: {e}")
                     continue
 
             # If we get here, skill wasn't found in any repository
@@ -6052,15 +6041,12 @@ When to use: Prefer wee_executor over direct curl for background tasks — it ha
                             _ctx["transcript_path"],
                             _ctx["prev_runtime"],
                         )
-                        print(
+                        logger.info(
                             f"[Handoff] Injecting handoff context from {_ctx['prev_runtime']} "
-                            f"into first message of new {runtime} session",
-                            file=sys.stderr,
-                        )
+                            f"into first message of new {runtime} session")
         except Exception as _handoff_err:
-            print(
-                f"[Handoff] Warning: failed to load handoff context: {_handoff_err}",
-                file=sys.stderr,
+            logger.error(
+                f"[Handoff] Warning: failed to load handoff context: {_handoff_err}"
             )
 
         # Mobile channel context: instruct LLM to emit periodic status updates
@@ -6128,19 +6114,14 @@ Do NOT emit status updates for quick operations (< 15 seconds)."""
                 if _mem_ctx:
                     memory_section = f"\n\n{_mem_ctx}\n"
                     self.update_session_field(n8n_session_id, "memory_injected", True)
-                    print(
+                    logger.debug(
                         f"[Memory] Injected {len(_mem_ctx)} chars for "
-                        f"session={n8n_session_id} agent={agent}",
-                        flush=True,
-                    )
+                        f"session={n8n_session_id} agent={agent}")
                 else:
                     # No memory files — still mark as injected
                     self.update_session_field(n8n_session_id, "memory_injected", True)
         except Exception as _mem_exc:
-            print(
-                f"[Memory] Injection skipped: {_mem_exc}",
-                flush=True,
-            )
+            logger.debug(f"[Memory] Injection skipped: {_mem_exc}")
 
         context = f"""{handoff_prefix}[Session ID: {n8n_session_id}]
 {runtime_instruction}{injection_text}{mobile_channel_instruction}{silent_mode_instruction}{memory_section}{agent_desc}{files_context}{render_instruction}{bg_task_instruction}{canvas_instruction}{wee_executor_instruction}{timeout_instruction}
@@ -7134,11 +7115,10 @@ User Request:
 
         if resume and session_id:
             cmd.extend(["--resume", session_id])
-            print(f"[Session] Resuming Copilot session: {session_id}", file=sys.stderr)
+            logger.debug(f"[Session] Resuming Copilot session: {session_id}")
         else:
-            print(
-                f"[Session] Starting new Copilot session in {mode} permission mode",
-                file=sys.stderr,
+            logger.info(
+                f"[Session] Starting new Copilot session in {mode} permission mode"
             )
 
         output = self._execute_subprocess_with_tracking(
@@ -7398,18 +7378,12 @@ User Request:
 
                 try:
                     if sdk_session_id:
-                        print(
-                            f"[SDK] Resuming session: {sdk_session_id}",
-                            file=sys.stderr,
-                        )
+                        logger.info(f"[SDK] Resuming session: {sdk_session_id}")
                         session = await client.resume_session(
                             sdk_session_id, **session_kwargs
                         )
                     else:
-                        print(
-                            f"[SDK] Starting new session in {mode} mode",
-                            file=sys.stderr,
-                        )
+                        logger.info(f"[SDK] Starting new session in {mode} mode")
                         session = await client.create_session(**session_kwargs)
                 except Exception as sess_err:
                     if stream_buffer:
@@ -7471,7 +7445,7 @@ User Request:
         try:
             output = asyncio.run(_run_sdk())
         except Exception as e:
-            print(f"[SDK] Error: {type(e).__name__}: {e}", file=sys.stderr)
+            logger.error(f"[SDK] Error: {type(e).__name__}: {e}")
             if stream_buffer:
                 stream_buffer.push("done", "")
             return f"Error (Copilot SDK): {type(e).__name__}: {e}"
@@ -7716,10 +7690,7 @@ User Request:
                 stream_buffer.push("done", "")
             return f"Error: Claude Agent SDK timed out after {effective_timeout}s"
         except Exception as e:
-            print(
-                f"[Claude-Agent-SDK] Error: {type(e).__name__}: {e}",
-                file=sys.stderr,
-            )
+            logger.info(f"[Claude-Agent-SDK] Error: {type(e).__name__}: {e}")
             if stream_buffer:
                 stream_buffer.push("done", "")
             return f"Error (Claude Agent SDK): {type(e).__name__}: {e}"
@@ -7777,12 +7748,9 @@ User Request:
 
         if resume and session_id:
             cmd.extend(["--session", session_id])
-            print(f"[Session] Resuming OpenCode session: {session_id}", file=sys.stderr)
+            logger.debug(f"[Session] Resuming OpenCode session: {session_id}")
         else:
-            print(
-                f"[Session] Starting new OpenCode session in {mode} mode",
-                file=sys.stderr,
-            )
+            logger.info(f"[Session] Starting new OpenCode session in {mode} mode")
 
         cmd.append(context_prompt)
 
@@ -7869,17 +7837,15 @@ User Request:
 
         if resume and session_id:
             cmd.extend(["--resume", session_id])
-            print(f"[Session] Resuming Claude session: {session_id}", file=sys.stderr)
+            logger.debug(f"[Session] Resuming Claude session: {session_id}")
         elif session_id:
             cmd.extend(["--session-id", session_id])
-            print(
-                f"[Session] Starting new Claude session: {session_id} in {mode} mode",
-                file=sys.stderr,
+            logger.info(
+                f"[Session] Starting new Claude session: {session_id} in {mode} mode"
             )
         else:
-            print(
-                f"[Session] Starting new Claude session (auto-ID) in {mode} mode",
-                file=sys.stderr,
+            logger.info(
+                f"[Session] Starting new Claude session (auto-ID) in {mode} mode"
             )
 
         output = self._execute_subprocess_with_tracking(
@@ -7906,30 +7872,25 @@ User Request:
                 if _sid and _obj.get("type") in ("system", "result"):
                     _captured_sid = _sid
                     self.update_session_field(n8n_session_id, "session_id", _sid)
-                    print(
-                        f"[Session] Captured claude session_id: {_sid}", file=sys.stderr
-                    )
+                    logger.info(f"[Session] Captured claude session_id: {_sid}")
                     break
             except (ValueError, KeyError):
                 pass
 
         if not _captured_sid:
-            print(
+            logger.warning(
                 f"[Session] WARNING: Could not extract session_id from claude stream-json "
                 f"output for n8n_session={n8n_session_id}. Session context may be lost on "
-                f"next message. Output length={len(output)} chars.",
-                file=sys.stderr,
-            )
+                f"next message. Output length={len(output)} chars.")
 
         stripped = self.strip_metadata(output, "claude")
         # If strip_metadata returned empty but the raw output is non-empty, fall back to
         # returning the raw output for debugging purposes.
         # still detect rate-limit / usage-limit error text (e.g. plain-text stderr output).
         if not stripped.strip() and output.strip():
-            print(
+            logger.warning(
                 "[Session] WARNING: strip_metadata returned empty for non-empty claude output. "
-                "Returning raw output to preserve error context for limit detection.",
-                file=sys.stderr,
+                "Returning raw output to preserve error context for limit detection."
             )
             return output
         return stripped
@@ -8000,11 +7961,9 @@ User Request:
         # Using "--resume latest" automatically continues with the most recent session.
         if resume:
             cmd.extend(["--resume", "latest"])
-            print(f"[Session] Resuming Gemini session (latest)", file=sys.stderr)
+            logger.debug(f"[Session] Resuming Gemini session (latest)")
         else:
-            print(
-                f"[Session] Starting new Gemini session in {mode} mode", file=sys.stderr
-            )
+            logger.info(f"[Session] Starting new Gemini session in {mode} mode")
 
         output = self._execute_subprocess_with_tracking(
             cmd, agent_dir, effective_timeout, "gemini", agent, prompt, n8n_session_id
@@ -8100,9 +8059,9 @@ User Request:
             if model:
                 cmd += ["-m", model]
             cmd += [session_id, context_prompt]
-            print(
-                f"[Session] Resuming CODEX session: {session_id} with model {model} in {mode} mode",
-                file=sys.stderr,
+            logger.debug(
+                f"[Session] Resuming CODEX session: {session_id} with model {model} in "
+                f"{mode} mode"
             )
         else:
             # Start new session - flags must come BEFORE the prompt positional arg
@@ -8115,9 +8074,9 @@ User Request:
             if model:
                 cmd += ["-m", model]
             cmd.append(context_prompt)
-            print(
-                f"[Session] Starting new CODEX session with model {model} in {mode} mode",
-                file=sys.stderr,
+            logger.info(
+                f"[Session] Starting new CODEX session with model {model} in {mode} "
+                "mode"
             )
 
         output = self._execute_subprocess_with_tracking(
@@ -8229,14 +8188,14 @@ User Request:
 
         if actually_resuming:
             cmd += ["-r", devin_sid]
-            print(
-                f"[Session] Resuming Devin session {devin_sid[:8]}... with model {model} in {mode} mode",
-                file=sys.stderr,
+            logger.debug(
+                f"[Session] Resuming Devin session {devin_sid[:8]}... with model "
+                f"{model} in {mode} mode"
             )
         else:
-            print(
-                f"[Session] Starting new Devin session with model {model} in {mode} mode",
-                file=sys.stderr,
+            logger.info(
+                f"[Session] Starting new Devin session with model {model} in {mode} "
+                "mode"
             )
 
         cmd += ["--", context_prompt]
@@ -8352,14 +8311,14 @@ User Request:
 
         if actually_resuming:
             cmd += ["--continue"]
-            print(
-                f"[Session] Resuming Cursor session for {n8n_session_id[:8]}... with model {model} in {mode} mode",
-                file=sys.stderr,
+            logger.debug(
+                f"[Session] Resuming Cursor session for {n8n_session_id[:8]}... with "
+                f"model {model} in {mode} mode"
             )
         else:
-            print(
-                f"[Session] Starting new Cursor session with model {model} in {mode} mode",
-                file=sys.stderr,
+            logger.info(
+                f"[Session] Starting new Cursor session with model {model} in {mode} "
+                "mode"
             )
 
         cmd += ["--", context_prompt]
@@ -8419,9 +8378,7 @@ User Request:
                 _json.dump(pricing, f)
             return pricing
         except Exception as e:
-            print(
-                f"[TokenUsage] Could not fetch OpenRouter pricing: {e}", file=sys.stderr
-            )
+            logger.info(f'[TokenUsage] Could not fetch OpenRouter pricing: {e}')
             return {}
 
         session_data = self.get_or_create_session_data(n8n_session_id)
@@ -8500,7 +8457,7 @@ User Request:
             with open(self.logs_dir / "token_usage.jsonl", "a") as f:
                 f.write(_json.dumps(entry) + "\n")
         except Exception as e:
-            print(f"[TokenUsage] Failed to log usage: {e}", file=sys.stderr)
+            logger.error(f'[TokenUsage] Failed to log usage: {e}')
 
     # ── End Issue #128 helpers ─────────────────────────────────────────────────
 
@@ -8535,7 +8492,7 @@ User Request:
         api_base = session_api_base or os.environ.get("WEE_API_BASE")
         api_key = session_api_key or os.environ.get("WEE_API_KEY")
         resolved_model = model
-        print(f"[wee-runtime] Session model: {model}", file=sys.stderr)
+        logger.debug(f"[wee-runtime] Session model: {model}")
         for prefix, (preset_base, preset_key) in _PRESETS.items():
             if model.lower().startswith(f"{prefix}/"):
                 resolved_model = model[len(prefix) + 1 :]
@@ -8688,7 +8645,7 @@ User Request:
                     + str(len(_chain) - 1)
                     + ")...\n"
                 )
-                print("[Wee Native] " + _fb_msg.strip(), file=sys.stderr)
+                logger.info("[Wee Native] " + _fb_msg.strip())
                 if stream_buffer:
                     stream_buffer.push("chunk", {"text": _fb_msg})
 
@@ -8757,9 +8714,9 @@ User Request:
                             },
                         )
 
-                    print(
-                        f"[Wee Native] Tool: {func_name}({_json.dumps(func_args)[:200]})",
-                        file=sys.stderr,
+                    logger.info(
+                        "[Wee Native] Tool: "
+                        f"{func_name}({_json.dumps(func_args)[:200]})"
                     )
 
                     # Execute the tool
@@ -8824,17 +8781,16 @@ User Request:
                 if tool_results:
                     last_result = tool_results[-1]
                     output = f"Tool execution result:\n{last_result[:4000]}"
-                    print(
-                        f"[Wee Native] Empty synthesis fallback: surfacing last tool result ({len(last_result)} chars)",
-                        file=sys.stderr,
+                    logger.info(
+                        "[Wee Native] Empty synthesis fallback: surfacing last tool "
+                        f"result ({len(last_result)} chars)"
                     )
                     if stream_buffer:
                         stream_buffer.push("chunk", {"text": output})
                 elif any(m.get("role") == "tool" for m in messages):
                     output = "(Tool executed but produced no output)"
-                    print(
-                        "[Wee Native] Empty synthesis fallback: tool produced no output",
-                        file=sys.stderr,
+                    logger.info(
+                        "[Wee Native] Empty synthesis fallback: tool produced no output"
                     )
                     if stream_buffer:
                         stream_buffer.push("chunk", {"text": output})
@@ -8846,21 +8802,10 @@ User Request:
             if stream_buffer:
                 stream_buffer.push("done", output)
 
-            print(
-                "[Wee Native] model="
-                + resolved_model
-                + " api_base="
-                + api_base
-                + " session="
-                + n8n_session_id[:8]
-                + "..."
-                + " (chain "
-                + str(_chain_idx + 1)
-                + "/"
-                + str(len(_chain))
-                + ")",
-                file=sys.stderr,
-            )
+            logger.info(
+                "[Wee Native] model=" + resolved_model + " api_base=" + api_base
+                + " session=" + n8n_session_id[:8] + "..."
+                + " (chain " + str(_chain_idx + 1) + "/" + str(len(_chain)) + ")")
 
             import httpx as _httpx_wee
 
@@ -8922,14 +8867,14 @@ User Request:
                                 + str(_max_attempts)
                                 + ")...\n"
                             )
-                            print("[Wee Native] " + _retry_msg.strip(), file=sys.stderr)
+                            logger.info("[Wee Native] " + _retry_msg.strip())
                             if stream_buffer:
                                 stream_buffer.push("chunk", {"text": _retry_msg})
                             # M01: time.sleep is correct here — sync function in thread-pool worker
                             _time.sleep(_wait)
                     else:
                         error_msg = "Error: Wee native runtime failed: " + str(_e)
-                        print("[Wee Native] " + error_msg, file=sys.stderr)
+                        logger.info("[Wee Native] " + error_msg)
                         if stream_buffer:
                             stream_buffer.push("done", error_msg)
                         return error_msg
@@ -8981,18 +8926,13 @@ User Request:
                             duration_ms=_duration_ms,
                         )
                 except Exception as _meta_err:
-                    print(
-                        "[Wee Native] wee_meta error: " + str(_meta_err),
-                        file=sys.stderr,
-                    )
+                    logger.debug("[Wee Native] wee_meta error: " + str(_meta_err))
 
                 if stream_buffer:
                     stream_buffer.push("done", output)
-                print(
-                    "[Wee Native] Completed. Output length: "
-                    + str(len(output))
-                    + " chars",
-                    file=sys.stderr,
+                logger.debug(
+                    "[Wee Native] Completed. Output length: " + str(len(output)) + " "
+                    "chars"
                 )
                 return output
             # _got_429=True — continue outer loop to next fallback model
@@ -9002,7 +8942,7 @@ User Request:
             "\n\u274c All free model fallbacks exhausted. "
             "Please try again later or switch to a paid model.\n"
         )
-        print("[Wee Native] " + exhausted_msg.strip(), file=sys.stderr)
+        logger.info("[Wee Native] " + exhausted_msg.strip())
         if stream_buffer:
             stream_buffer.push("done", exhausted_msg)
         return exhausted_msg
@@ -9298,15 +9238,11 @@ User Request:
                 json.dump(
                     {"cursor_session_active": True, "n8n_session_id": n8n_session_id}, f
                 )
-            print(
-                f"[Session] Stored cursor session mapping: {n8n_session_id[:8]}...",
-                file=sys.stderr,
+            logger.info(
+                f"[Session] Stored cursor session mapping: {n8n_session_id[:8]}..."
             )
         except Exception as e:
-            print(
-                f"[Session] Warning: could not save cursor session ID: {e}",
-                file=sys.stderr,
-            )
+            logger.warning(f"[Session] Warning: could not save cursor session ID: {e}")
 
     def _get_devin_session_id(self, n8n_session_id: str) -> Optional[str]:
         """Return the stored devin session UUID for this n8n session, or None."""
@@ -9340,15 +9276,12 @@ User Request:
             mapping_file = self.devin_session_dir / f"{n8n_session_id}.json"
             with open(mapping_file, "w") as f:
                 json.dump({"devin_session_id": devin_sid}, f)
-            print(
-                f"[Session] Stored devin session mapping: {n8n_session_id[:8]}... → {devin_sid[:8]}...",
-                file=sys.stderr,
+            logger.info(
+                f"[Session] Stored devin session mapping: {n8n_session_id[:8]}... → "
+                f"{devin_sid[:8]}..."
             )
         except Exception as e:
-            print(
-                f"[Session] Warning: could not save devin session ID: {e}",
-                file=sys.stderr,
-            )
+            logger.warning(f"[Session] Warning: could not save devin session ID: {e}")
 
     def session_exists(
         self, session_id: str, runtime: str, n8n_session_id: Optional[str] = None
@@ -9527,7 +9460,7 @@ User Request:
                 # Cursor agent CLI does not persist local session files
                 return None
         except Exception as e:
-            print(f"Error getting recent session ID: {e}", file=sys.stderr)
+            logger.error(f"Error getting recent session ID: {e}")
             return None
 
     def _find_opencode_session_files(self) -> List[Path]:
@@ -9750,9 +9683,8 @@ User Request:
             delegated_agent, cleaned_prompt = self.detect_agent_delegation(prompt)
             if delegated_agent and delegated_agent in self.AGENTS:
                 # User asked for specific agent help - auto-delegate
-                print(
-                    f"[Auto-Delegate] Detected request for '{delegated_agent}' agent",
-                    file=sys.stderr,
+                logger.info(
+                    f"[Auto-Delegate] Detected request for '{delegated_agent}' agent"
                 )
                 return self._execute_with_context(
                     cleaned_prompt,
@@ -9871,9 +9803,8 @@ User Request:
             and can_resume
             and ("Resource not found" in output or "NotFoundError" in output)
         ):
-            print(
-                f"[Session] Session {session_id} lost/corrupted. Starting new session.",
-                file=sys.stderr,
+            logger.info(
+                f"[Session] Session {session_id} lost/corrupted. Starting new session."
             )
             output = self._dispatch_single_runtime(
                 "opencode",
@@ -9911,7 +9842,7 @@ def _check_command_result(result: str, error_keywords: List[str]) -> None:
     """
     for keyword in error_keywords:
         if keyword in result:
-            print(result, file=sys.stderr)
+            logger.info(result)
             sys.exit(1)
 
 
@@ -9944,16 +9875,12 @@ def _send_pairing_code(channel: str, identity: str, code: str) -> bool:
                     return True
                 except Exception as _exc:
                     last_exc = _exc
-                    print(
-                        f"[API] Telegram send attempt {attempt}/3 failed: {_exc}",
-                        file=sys.stderr,
+                    logger.info(
+                        f"[API] Telegram send attempt {attempt}/3 failed: {_exc}"
                     )
                     if attempt < 3:
                         time.sleep(2)
-            print(
-                f"[API] All 3 Telegram send attempts failed: {last_exc}",
-                file=sys.stderr,
-            )
+            logger.info(f"[API] All 3 Telegram send attempts failed: {last_exc}")
             return False
         elif channel == "webex":
             config_path = os.path.join(script_dir, "webex_config.json")
@@ -9999,14 +9926,15 @@ def _send_pairing_code(channel: str, identity: str, code: str) -> bool:
                 timeout=10,
             )
             if resp.status_code != 200:
-                print(
-                    f"[API] WebEX send failed ({resp.status_code}): {resp.text[:200]}",
-                    file=sys.stderr,
+                logger.info(
+                    f"[API] WebEX send failed ({resp.status_code}): {resp.text[:200]}"
                 )
                 return False
             return True
     except Exception as exc:  # noqa: BLE001
-        print(f"[API] Warning: could not send pairing code via {channel}: {exc}")
+        logger.warning(
+            f"[API] Warning: could not send pairing code via {channel}: {exc}"
+        )
         return False
 
 
@@ -10178,9 +10106,9 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
     IS_PRODUCTION = APP_ENV != "DEV"
     SHARED_KEY = os.environ.get("API_SHARED_KEY", "")
     if not SHARED_KEY:
-        print(
-            "[SECURITY][WARN] API shared key is empty — authentication is effectively disabled. Set API_SHARED_KEY env var.",
-            file=sys.stderr,
+        logger.warning(
+            "[SECURITY][WARN] API shared key is empty — authentication is effectively "
+            "disabled. Set API_SHARED_KEY env var."
         )
     PAIRING_CODE_LENGTH = int(os.environ.get("PAIRING_CODE_LENGTH", "6"))
     PAIRING_CODE_TTL = int(os.environ.get("PAIRING_CODE_TTL", "300"))
@@ -10236,10 +10164,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         notification_mgr = NotificationManager()
     except ImportError:
         notification_mgr = None
-        print(
-            "[API] NotificationManager not available — notifications disabled",
-            file=sys.stderr,
-        )
+        logger.info("[API] NotificationManager not available — notifications disabled")
 
     session_mgr._notification_mgr = notification_mgr
 
@@ -10533,9 +10458,8 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                         await asyncio.to_thread(
                             bg_task_mgr.promote_queued_task, _qt["task_id"], _nsid
                         )
-                        print(
-                            f"[Periodic] Promoting queued task {_qt['task_id']}",
-                            flush=True,
+                        logger.info(
+                            f"[Periodic] Promoting queued task {_qt['task_id']}"
                         )
                         bg_executor.submit(
                             _run_background_task,
@@ -10551,10 +10475,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                             _qt.get("notify", True),
                         )
                 except Exception as _rec_exc:
-                    print(
-                        f"[Periodic] Queue reconciliation error: {_rec_exc}",
-                        flush=True,
-                    )
+                    logger.info(f"[Periodic] Queue reconciliation error: {_rec_exc}")
 
         async def _agents_file_watcher():
             """Poll agents.json mtime every 10s and hot-reload on change."""
@@ -10569,32 +10490,26 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                     if current_mtime != last_mtime:
                         ok, msg = session_mgr.reload_agents_from_disk()
                         if ok:
-                            print(
-                                f"[Hot-Reload] agents.json changed on disk — {msg}",
-                                file=sys.stderr,
+                            logger.info(
+                                f"[Hot-Reload] agents.json changed on disk — {msg}"
                             )
                         else:
                             # Update mtime even on failure to avoid log-spam on every poll cycle
                             session_mgr._agents_json_mtime = current_mtime
-                            print(
-                                f"[Hot-Reload] agents.json changed but reload failed: {msg}",
-                                file=sys.stderr,
+                            logger.info(
+                                "[Hot-Reload] agents.json changed but reload failed: "
+                                f"{msg}"
                             )
                 except Exception as exc:
-                    print(
-                        f"[Hot-Reload] Error watching agents.json: {exc}",
-                        file=sys.stderr,
-                    )
+                    logger.info(f"[Hot-Reload] Error watching agents.json: {exc}")
 
         # Reconcile orphaned tasks from previous process lifetime
         _reconcile_result = await asyncio.to_thread(bg_task_mgr.reconcile_stale_tasks)
         if _reconcile_result["stale_running"] or _reconcile_result["queued_ready"]:
-            print(
+            logger.info(
                 f"[Startup] Task reconciliation: "
                 f"{_reconcile_result['stale_running']} stale running → failed, "
-                f"{_reconcile_result['queued_ready']} queued tasks ready for promotion",
-                flush=True,
-            )
+                f"{_reconcile_result['queued_ready']} queued tasks ready for promotion")
             # Promote queued tasks that now have available slots
             _all_tasks = await asyncio.to_thread(bg_task_mgr.list_all_tasks)
             _queued = [t for t in _all_tasks if t["status"] == "queued"]
@@ -10616,9 +10531,8 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 await asyncio.to_thread(
                     bg_task_mgr.promote_queued_task, _qt["task_id"], _new_sid
                 )
-                print(
-                    f"[Startup] Promoting queued task {_qt['task_id']} → running",
-                    flush=True,
+                logger.info(
+                    f"[Startup] Promoting queued task {_qt['task_id']} → running"
                 )
                 bg_executor.submit(
                     _run_background_task,
@@ -10956,24 +10870,20 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
 
         existing = session_mgr.load_session_data(session_id)
         if not existing:
-            print(
+            logger.info(
                 f"[Session Recovery] Session {session_id} not in session map, "
-                f"attempting recovery (user={user['identity']}, channel={user['channel']})",
-                file=sys.stderr,
-            )
+                f"attempting recovery (user={user['identity']}, channel={user['channel']})")
             history_sessions = history_mgr.get_sessions(
                 user["channel"], user["identity"]
             )
             session_ids_in_history = {s["session_id"] for s in history_sessions}
             if session_id not in session_ids_in_history:
-                print(
-                    f"[Session Recovery] Session {session_id} not in history — 404",
-                    file=sys.stderr,
+                logger.info(
+                    f"[Session Recovery] Session {session_id} not in history — 404"
                 )
                 raise HTTPException(status_code=404, detail="Session not found")
-            print(
-                f"[Session Recovery] Restored session {session_id} from history",
-                file=sys.stderr,
+            logger.info(
+                f"[Session Recovery] Restored session {session_id} from history"
             )
             existing = session_mgr.get_or_create_session_data(
                 session_id, identity=user["identity"]
@@ -11185,28 +11095,22 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         if not existing:
             # Session map entry was lost — likely due to cleanup daemon
             # removing the backend session while the UI was idle.
-            print(
+            logger.info(
                 f"[Session Recovery] Stream: session {session_id} not in map, "
                 f"attempting recovery (user={user['identity']}, "
-                f"channel={user['channel']})",
-                file=sys.stderr,
-            )
+                f"channel={user['channel']})")
             history_sessions = history_mgr.get_sessions(
                 user["channel"], user["identity"]
             )
             session_ids_in_history = {s["session_id"] for s in history_sessions}
             if session_id not in session_ids_in_history:
-                print(
+                logger.info(
                     f"[Session Recovery] Stream: session {session_id} not in "
-                    f"history — returning 404",
-                    file=sys.stderr,
-                )
+                    f"history — returning 404")
                 raise HTTPException(status_code=404, detail="Session not found")
-            print(
+            logger.info(
                 f"[Session Recovery] Stream: restored session {session_id} "
-                f"from chat history — backend will be recreated",
-                file=sys.stderr,
-            )
+                f"from chat history — backend will be recreated")
             existing = session_mgr.get_or_create_session_data(
                 session_id, identity=user["identity"]
             )
@@ -12224,9 +12128,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                     },
                 )
         except Exception as exc:
-            print(
-                f"[API] Notification emit failed for {task_id}: {exc}", file=sys.stderr
-            )
+            logger.info(f"[API] Notification emit failed for {task_id}: {exc}")
 
     def _run_command_task(
         task_id: str,
@@ -13016,7 +12918,9 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 if next_q:
                     new_sid = str(uuid4())
                     bg_task_mgr.promote_queued_task(next_q["task_id"], new_sid)
-                    print(f"[BG] Promoting queued task {next_q['task_id']} → running")
+                    logger.info(
+                        f"[BG] Promoting queued task {next_q['task_id']} → running"
+                    )
                     bg_executor.submit(
                         _run_background_task,
                         next_q["task_id"],
@@ -13031,7 +12935,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                         next_q.get("notify", True),
                     )
             except Exception as promo_exc:
-                print(f"[BG] Error promoting queued task: {promo_exc}")
+                logger.info(f"[BG] Error promoting queued task: {promo_exc}")
 
     @app.post("/api/v1/background-tasks")
     async def create_background_task(body: BackgroundTaskRequest, request: Request):
@@ -13113,9 +13017,9 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             running = await asyncio.to_thread(
                 bg_task_mgr.count_running, channel, identity, agent
             )
-            print(
-                f"[API] Task {task_id} queued"
-                f" (position {queue_pos}, {running}/{max_concurrent} slots full)"
+            logger.info(
+                f"[API] Task {task_id} queued (position {queue_pos}, "
+                f"{running}/{max_concurrent} slots full)"
             )
             return {
                 "task_id": task_id,
@@ -13346,8 +13250,9 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                     await asyncio.to_thread(
                         bg_task_mgr.promote_queued_task, next_q["task_id"], new_sid
                     )
-                    print(
-                        f"[BG] Kill triggered promotion of queued task {next_q['task_id']}"
+                    logger.info(
+                        "[BG] Kill triggered promotion of queued task "
+                        f"{next_q['task_id']}"
                     )
                     loop = asyncio.get_running_loop()
                     loop.run_in_executor(
@@ -13604,9 +13509,9 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             if u.strip()
         }
         if not _sched_allowed_telegram and not _sched_allowed_webex:
-            print(
-                "[SECURITY][WARN] No scheduler allowlist configured — set SCHEDULER_ALLOWED_TELEGRAM and/or SCHEDULER_ALLOWED_WEBEX env vars",
-                file=sys.stderr,
+            logger.warning(
+                "[SECURITY][WARN] No scheduler allowlist configured — set "
+                "SCHEDULER_ALLOWED_TELEGRAM and/or SCHEDULER_ALLOWED_WEBEX env vars"
             )
 
         async def _require_scheduler_auth(request: Request) -> dict:
@@ -15121,19 +15026,13 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         if _agents_json_path.exists():
             shutil.copy2(str(_agents_json_path), str(backup))
         _agents_json_path.write_text(json.dumps(data, indent=2) + "\n")
-        print(
-            f"[API] agents.json updated by {auth.get('identity', 'unknown')}",
-            file=sys.stderr,
-        )
+        logger.info(f"[API] agents.json updated by {auth.get('identity', 'unknown')}")
         # Auto-reload in-memory agent config after writing to disk
         ok, msg = session_mgr.reload_agents_from_disk()
         if ok:
-            print(f"[API] Auto-reloaded agents after save — {msg}", file=sys.stderr)
+            logger.info(f"[API] Auto-reloaded agents after save — {msg}")
         else:
-            print(
-                f"[API] Warning: saved to disk but reload failed: {msg}",
-                file=sys.stderr,
-            )
+            logger.warning(f"[API] Warning: saved to disk but reload failed: {msg}")
         return {
             "status": "saved",
             "agent_count": len(data["agents"]),
@@ -15153,15 +15052,13 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         ok, msg = session_mgr.reload_agents_from_disk()
         if ok:
             count = len(session_mgr.AGENTS)
-            print(
-                f"[API] agents.json hot-reloaded by {auth.get('identity', 'unknown')} — {count} agents",
-                file=sys.stderr,
+            logger.info(
+                f"[API] agents.json hot-reloaded by {auth.get('identity', 'unknown')} — {count} agents"
             )
             return {"status": "reloaded", "message": msg}
         else:
-            print(
-                f"[API] Hot-reload failed ({auth.get('identity', 'unknown')}): {msg}",
-                file=sys.stderr,
+            logger.info(
+                f"[API] Hot-reload failed ({auth.get('identity', 'unknown')}): {msg}"
             )
             raise HTTPException(status_code=500, detail=f"Reload failed: {msg}")
 
@@ -15674,6 +15571,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
 
 def start_api_server():
     """Load dotenv, create the FastAPI app, and run uvicorn."""
+    _configure_logging()
     try:
         from dotenv import load_dotenv
 
@@ -15709,9 +15607,9 @@ def start_api_server():
             ssl_kwargs = {"ssl_certfile": ssl_certfile, "ssl_keyfile": ssl_keyfile}
             proto = "https"
         else:
-            print(
-                "[API] SSL cert/key found but APP_ENV=DEV — serving HTTP for development. Set FORCE_SSL=1 to force HTTPS.",
-                file=sys.stderr,
+            logger.info(
+                "[API] SSL cert/key found but APP_ENV=DEV — serving HTTP for "
+                "development. Set FORCE_SSL=1 to force HTTPS."
             )
 
     # Support comma-separated hosts (e.g. "127.0.0.1,100.x.x.x" for Tailscale + localhost).
@@ -15722,7 +15620,7 @@ def start_api_server():
 
         threads = []
         for h in hosts[:-1]:
-            print(f"[API] Listening on {proto}://{h}:{port}", file=sys.stderr)
+            logger.info(f"[API] Listening on {proto}://{h}:{port}")
             t = threading.Thread(
                 target=uvicorn.run,
                 kwargs={"app": app, "host": h, "port": port, **ssl_kwargs},
@@ -15730,14 +15628,15 @@ def start_api_server():
             )
             t.start()
             threads.append(t)
-        print(f"[API] Listening on {proto}://{hosts[-1]}:{port}", file=sys.stderr)
+        logger.info(f"[API] Listening on {proto}://{hosts[-1]}:{port}")
         uvicorn.run(app, host=hosts[-1], port=port, **ssl_kwargs)
     else:
-        print(f"[API] Listening on {proto}://{host}:{port}", file=sys.stderr)
+        logger.info(f"[API] Listening on {proto}://{host}:{port}")
         uvicorn.run(app, host=host, port=port, **ssl_kwargs)
 
 
 def main():
+    _configure_logging()
     parser = argparse.ArgumentParser(
         description="AI Session Wrapper for N8N Integration",
         formatter_class=argparse.RawDescriptionHelpFormatter,
