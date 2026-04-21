@@ -4,15 +4,12 @@
 - gpt-5.4-mini missing from CODEX_MODELS static configuration
 """
 
-import sys
 import os
-import importlib
+import sys
+import types
 import unittest
 
 sys.path.insert(0, "/opt/n8n-copilot-shim-dev")
-
-# Patch out heavy imports before loading agent_manager
-import types
 
 # Minimal stubs so agent_manager imports cleanly
 for mod_name in ["anthropic", "google.generativeai", "google", "openai"]:
@@ -75,15 +72,16 @@ class TestTrimToolCall(unittest.TestCase):
         self.assertIsNone(result["meta"])
 
     def test_append_tool_call_does_not_crash(self):
-        """append_tool_call must not crash (regression: AttributeError on _trim_tool_call)."""
-        import tempfile
+        """append_tool_call must not crash.
+
+        Regression: AttributeError on _trim_tool_call.
+        """
         import json
+        import tempfile
 
         mgr = self._make_manager()
         # Provide a temporary task store
-        with tempfile.NamedTemporaryFile(
-            suffix=".json", mode="w", delete=False
-        ) as f:
+        with tempfile.NamedTemporaryFile(suffix=".json", mode="w", delete=False) as f:
             json.dump(
                 [{"task_id": "bg_test001", "tool_calls": [], "output_lines": []}],
                 f,
@@ -95,7 +93,9 @@ class TestTrimToolCall(unittest.TestCase):
 
         try:
             # This must not raise AttributeError
-            mgr.append_tool_call("bg_test001", {"id": "tc_a", "name": "shell", "input": "ls"})
+            mgr.append_tool_call(
+                "bg_test001", {"id": "tc_a", "name": "shell", "input": "ls"}
+            )
             task = mgr.get_task("bg_test001")
             self.assertEqual(len(task["tool_calls"]), 1)
             self.assertEqual(task["tool_calls"][0]["name"], "shell")
@@ -103,19 +103,22 @@ class TestTrimToolCall(unittest.TestCase):
             os.unlink(tmp_path)
 
     def test_update_tool_call_does_not_crash(self):
-        """update_tool_call must not crash (regression: AttributeError on _trim_tool_call)."""
-        import tempfile
+        """update_tool_call must not crash.
+
+        Regression: AttributeError on _trim_tool_call.
+        """
         import json
+        import tempfile
 
         mgr = self._make_manager()
-        with tempfile.NamedTemporaryFile(
-            suffix=".json", mode="w", delete=False
-        ) as f:
+        with tempfile.NamedTemporaryFile(suffix=".json", mode="w", delete=False) as f:
             json.dump(
                 [
                     {
                         "task_id": "bg_test002",
-                        "tool_calls": [{"id": "tc_b", "name": "shell", "status": "running"}],
+                        "tool_calls": [
+                            {"id": "tc_b", "name": "shell", "status": "running"}
+                        ],
                         "output_lines": [],
                     }
                 ],
