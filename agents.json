@@ -90,7 +90,9 @@
         "vendor": "Anthropic Claude Sonnet 4.6",
         "permission_mode": "elevated",
         "yolo": true,
-        "timeout": 3600
+        "timeout": 3600,
+        "fallback_runtime": "copilot",
+        "fallback_model": "claude-sonnet-4.6"
       },
       "bots": {
         "telegram": {
@@ -130,7 +132,9 @@
         "vendor": "OpenAI (GPT-5.4-mini)",
         "permission_mode": "elevated",
         "yolo": true,
-        "timeout": 1800
+        "timeout": 1800,
+        "fallback_runtime": "copilot",
+        "fallback_model": "gpt-5.4"
       },
       "bots": {
         "telegram": {
