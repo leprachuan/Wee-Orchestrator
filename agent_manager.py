@@ -8711,10 +8711,40 @@ User Request:
         stream_buffer = getattr(self, "_stream_buffers", {}).get(n8n_session_id)
 
         for _chain_idx, _attempt_model in enumerate(_chain):
-            api_base, api_key, resolved_model = self._wee_resolve_endpoint(
-                _attempt_model, _sess_api_base, _sess_api_key
-            )
+            # Issue #175: Finalize previous model's output (fallback iterations only).
+            # On first iteration, messages and collected_output are not yet defined.
             if _chain_idx > 0:
+                output = "".join(collected_output)
+                # Issue #112: surface last tool result when synthesis is empty
+                if not output.strip():
+                    tool_results = [
+                        m["content"] for m in messages
+                        if m.get("role") == "tool" and m.get("content")
+                    ]
+                    if tool_results:
+                        last_result = tool_results[-1]
+                        output = f"Tool execution result:\n{last_result[:4000]}"
+                        print(
+                            f"[Wee Native] Empty synthesis fallback: surfacing last tool result ({len(last_result)} chars)",
+                            file=sys.stderr,
+                        )
+                        if stream_buffer:
+                            stream_buffer.push("chunk", {"text": output})
+                    elif any(m.get("role") == "tool" for m in messages):
+                        output = "(Tool executed but produced no output)"
+                        print(
+                            "[Wee Native] Empty synthesis fallback: tool produced no output",
+                            file=sys.stderr,
+                        )
+                        if stream_buffer:
+                            stream_buffer.push("chunk", {"text": output})
+
+                # Issue #108: Persist conversation history
+                self._wee_save_messages(n8n_session_id, messages)
+
+                if stream_buffer:
+                    stream_buffer.push("done", output)
+
                 # B02: surface fallback model switch to user
                 _fb_short = _attempt_model.split("/")[-1]
                 _fb_msg = (
@@ -8730,175 +8760,13 @@ User Request:
                 if stream_buffer:
                     stream_buffer.push("chunk", {"text": _fb_msg})
 
-                # Build assistant message with tool_calls for conversation history
-                assistant_tool_calls = []
-                for idx in sorted(tool_calls_acc.keys()):  # noqa: F821
-                    tc = tool_calls_acc[idx]  # noqa: F821
-                    assistant_tool_calls.append(
-                        {
-                            "id": tc["id"],
-                            "type": "function",
-                            "function": {
-                                "name": tc["name"],
-                                "arguments": tc["arguments"],
-                            },
-                        }
-                    )
+                if not _got_429:
+                    return output
 
-                assistant_msg = {
-                    "role": "assistant",
-                    "content": content_text or None,  # noqa: F821
-                    "tool_calls": assistant_tool_calls,
-                }
-                messages.append(assistant_msg)  # noqa: F821
-
-                # Execute each tool call and emit SSE events (Issue #109)
-                for tc_entry in assistant_tool_calls:
-                    tc_id = tc_entry["id"]
-                    func_name = tc_entry["function"]["name"]
-                    func_args_str = tc_entry["function"]["arguments"]
-
-                    # Parse arguments
-                    try:
-                        func_args = _json.loads(func_args_str)
-                    except (ValueError, _json.JSONDecodeError):
-                        func_args = {"raw": func_args_str}
-
-                    # Issue #109 / #142: Emit tool start event to SSE stream
-                    tc_start_event = {
-                        "id": tc_id,
-                        "name": func_name,
-                        "event": "detected",
-                        "input": func_args,
-                        "status": "running",
-                    }
-                    if stream_buffer:
-                        stream_buffer.push("tool_call", tc_start_event)
-
-                    # Issue #142: Track tool call in bg_task_mgr for Tasks panel
-                    if bg_task_id and self._bg_task_mgr:  # noqa: F821
-                        self._bg_task_mgr.append_tool_call(
-                            bg_task_id,  # noqa: F821
-                            {
-                                "id": tc_id,
-                                "name": func_name,
-                                "input": (
-                                    _json.dumps(func_args)
-                                    if isinstance(func_args, dict)
-                                    else str(func_args)
-                                ),
-                                "status": "running",
-                                "runtime": "wee",
-                                "timestamp": time.strftime(
-                                    "%Y-%m-%dT%H:%M:%SZ", time.gmtime()
-                                ),
-                            },
-                        )
-
-                    logger.info(
-                        "[Wee Native] Tool: "
-                        f"{func_name}({_json.dumps(func_args)[:200]})"
-                    )
-
-                    # Execute the tool
-                    tool_result = self._wee_execute_tool(func_name, func_args, agent)
-
-                    # Issue #109 / #142: Emit tool complete event to SSE stream
-                    tc_done_event = {
-                        "id": tc_id,
-                        "name": func_name,
-                        "event": "result",
-                        "input": func_args,
-                        "output": tool_result[:2000] if tool_result else "",
-                        "status": "complete",
-                    }
-                    if stream_buffer:
-                        stream_buffer.push("tool_call", tc_done_event)
-
-                    # Issue #142: Update tool call completion in bg_task_mgr
-                    if bg_task_id and self._bg_task_mgr:  # noqa: F821
-                        self._bg_task_mgr.update_tool_call(
-                            bg_task_id,  # noqa: F821
-                            tc_id,
-                            status="completed",
-                            output=str(tool_result[:500]) if tool_result else "",
-                        )
-
-                    # Append tool result to conversation for next round
-                    messages.append(  # noqa: F821
-                        {
-                            "role": "tool",
-                            "tool_call_id": tc_id,
-                            "content": tool_result or "No output",
-                        }
-                    )
-
-            else:
-                # All MAX_TOOL_ROUNDS had tool calls with no final text
-                last_tool_results = [
-                    m["content"] for m in messages if m.get("role") == "tool"  # noqa
-                ]
-                if last_tool_results:
-                    collected_output.append(  # noqa: F821
-                        "Tool execution completed. Last result:\n"
-                        + last_tool_results[-1][:2000]
-                    )
-                else:
-                    collected_output.append(  # noqa: F821
-                        "Max tool rounds reached without final response."
-                    )
-
-            output = "".join(collected_output)  # noqa: F821
-
-            # Issue #112: Fallback when LLM generates empty synthesis after tool
-            # execution.
-            # Some models (e.g. qwen3:8b) return zero text tokens after processing
-            # tool results, yielding output=''. Surface the last tool result instead.
-            if not output.strip():
-                tool_results = [
-                    m["content"]
-                    for m in messages  # noqa: F821
-                    if m.get("role") == "tool" and m.get("content")
-                ]
-                if tool_results:
-                    last_result = tool_results[-1]
-                    output = f"Tool execution result:\n{last_result[:4000]}"
-                    logger.info(
-                        "[Wee Native] Empty synthesis fallback: surfacing last tool "
-                        f"result ({len(last_result)} chars)"
-                    )
-                    if stream_buffer:
-                        stream_buffer.push("chunk", {"text": output})
-                elif any(m.get("role") == "tool" for m in messages):  # noqa: F821
-                    output = "(Tool executed but produced no output)"
-                    logger.info(
-                        "[Wee Native] Empty synthesis fallback: tool produced no output"
-                    )
-                    if stream_buffer:
-                        stream_buffer.push("chunk", {"text": output})
-
-            # Issue #108: Persist conversation history
-            self._wee_save_messages(n8n_session_id, messages)  # noqa: F821
-
-            # Push done sentinel
-            if stream_buffer:
-                stream_buffer.push("done", output)
-
-            logger.info(
-                "[Wee Native] model="
-                + resolved_model  # noqa: F821
-                + " api_base="
-                + api_base  # noqa: F821
-                + " session="
-                + n8n_session_id[:8]
-                + "..."
-                + " (chain "
-                + str(_chain_idx + 1)
-                + "/"
-                + str(len(_chain))
-                + ")"
+            # Resolve endpoint for current model in fallback chain
+            api_base, api_key, resolved_model = self._wee_resolve_endpoint(
+                _attempt_model, _sess_api_base, _sess_api_key
             )
-
             import httpx as _httpx_wee
 
             client = OpenAI(
@@ -8909,10 +8777,13 @@ User Request:
                 ),
                 max_retries=0,
             )
-            messages = []
-            if context_prompt:
-                messages.append({"role": "system", "content": context_prompt})
+            # Issue #108: Load conversation history for multi-turn context.
+            # Issue #175: Apply proactive compaction if context exceeds 80% capacity.
+            messages = self._wee_load_messages(n8n_session_id, context_prompt)
             messages.append({"role": "user", "content": prompt})
+            messages = self._wee_maybe_compact(
+                client, n8n_session_id, messages, resolved_model, context_prompt
+            )
 
             collected_output = []
             _got_429 = False
@@ -9223,6 +9094,210 @@ User Request:
             return result
         except (FileNotFoundError, json.JSONDecodeError, OSError):
             return dict(_defaults)
+
+    # ------------------------------------------------------------------
+    # Issue #175: Active Context Window Management and Intelligent Compaction
+    # ------------------------------------------------------------------
+
+    _WEE_CONTEXT_LIMITS: dict = {
+        # Ollama models (local)
+        "gemma4:e4b": 128000,
+        "gemma4:27b": 128000,
+        "llama3.3": 128000,
+        "qwen3:30b-a3b": 40000,
+        "qwen3:32b": 40000,
+        "deepseek-r1": 64000,
+        # OpenRouter free models
+        "meta-llama/llama-4-scout:free": 131072,
+        "meta-llama/llama-4-maverick:free": 131072,
+        "google/gemini-2.0-flash-exp:free": 1048576,
+        "mistralai/mistral-7b-instruct:free": 32768,
+        "qwen/qwen3-8b:free": 40000,
+        "qwen/qwen3-14b:free": 40000,
+        "qwen/qwen3-235b-a22b:free": 40000,
+    }
+
+    _WEE_DEFAULT_CONTEXT_LIMIT = 16384  # conservative default
+
+    def _wee_get_context_limit(self, model: str) -> int:
+        """Return approximate context window token limit for a model.
+
+        Looks up the model in a known table, then checks the model name for
+        common size cues as a heuristic. Falls back to a conservative default.
+        """
+        m = model.lower().strip()
+        if m in self._WEE_CONTEXT_LIMITS:
+            return self._WEE_CONTEXT_LIMITS[m]
+        # Heuristic: model name contains a known context size indicator
+        if "128k" in m:
+            return 128000
+        if "1m" in m or "1048k" in m:
+            return 1048576
+        if "200k" in m:
+            return 200000
+        if "64k" in m:
+            return 64000
+        if "32k" in m:
+            return 32768
+        return self._WEE_DEFAULT_CONTEXT_LIMIT
+
+    @staticmethod
+    def _wee_estimate_tokens(messages: list) -> int:
+        """Rough token estimate: ~4 chars per token, 4 token overhead per message."""
+        total = 0
+        for m in messages:
+            content = m.get("content") or ""
+            if isinstance(content, list):
+                # vision / multi-part content
+                content = " ".join(
+                    part.get("text", "") for part in content if isinstance(part, dict)
+                )
+            total += max(4, len(str(content)) // 4)
+        return total
+
+    def _wee_save_transcript(self, n8n_session_id: str, messages: list) -> str:
+        """Persist full conversation transcript to disk; return the file path.
+
+        Transcripts are stored under logs/transcripts/<session_id>/ and never
+        exceed one JSON file per compaction event. The path is injected into
+        the compact context so the model can look back if needed.
+        """
+        import json
+        from datetime import datetime
+
+        transcript_dir = Path(__file__).parent / "logs" / "transcripts" / n8n_session_id
+        transcript_dir.mkdir(parents=True, exist_ok=True)
+        ts = datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
+        path = transcript_dir / f"transcript_{ts}.json"
+        try:
+            with open(path, "w") as f:
+                json.dump(messages, f, indent=2, default=str)
+            return str(path)
+        except Exception as e:
+            print(f"[Wee Native] Warning: could not save transcript: {e}", file=sys.stderr)
+            return ""
+
+    def _wee_compact_context(
+        self,
+        client,
+        n8n_session_id: str,
+        messages: list,
+        resolved_model: str,
+        context_prompt: str,
+    ) -> list:
+        """Summarize conversation history via LLM and return a compact message list.
+
+        Preserves the system message and latest user turn.  All assistant/user
+        turns in between are summarized into a single assistant message.  The
+        transcript path is embedded so the agent can look back if needed.
+
+        Returns a new messages list with the structure:
+          [system_msg, assistant_summary_msg, user_latest_msg]
+        """
+        import json
+
+        # Save full transcript before compacting
+        transcript_path = self._wee_save_transcript(n8n_session_id, messages)
+
+        # Separate system messages, history, and current user turn
+        system_msgs = [m for m in messages if m.get("role") == "system"]
+        non_system = [m for m in messages if m.get("role") != "system"]
+
+        if not non_system:
+            return messages  # nothing to compact
+
+        # The latest user message is the current prompt — keep it verbatim
+        latest_user = None
+        history = list(non_system)
+        if history and history[-1].get("role") == "user":
+            latest_user = history.pop()
+
+        if not history:
+            # Only one user message — nothing to summarize
+            return messages
+
+        # Build summary request: ask LLM to condense the history
+        history_text = "\n".join(
+            f"[{m.get('role','?').upper()}]: {str(m.get('content',''))[:1500]}"
+            for m in history
+        )
+        summary_prompt = (
+            "You are a session compaction assistant. Produce a dense, structured summary of "
+            "the following conversation segment. Preserve all key facts, decisions, code "
+            "changes, file paths, error messages, and action results. Be thorough but concise.\n\n"
+            "CONVERSATION TO SUMMARIZE:\n" + history_text
+        )
+        try:
+            summary_resp = client.chat.completions.create(
+                model=resolved_model,
+                messages=[
+                    {"role": "system", "content": "You summarize conversations accurately."},
+                    {"role": "user", "content": summary_prompt},
+                ],
+                max_tokens=2048,
+                stream=False,
+            )
+            summary_text = summary_resp.choices[0].message.content or "(no summary)"
+        except Exception as e:
+            print(f"[Wee Native] Compaction summary failed: {e}", file=sys.stderr)
+            summary_text = "(compaction failed — context may be incomplete)"
+
+        # Build compact summary block
+        transcript_ref = (
+            f"\n\n[Full transcript saved at: {transcript_path}]"
+            if transcript_path
+            else ""
+        )
+        summary_block = (
+            "=== SESSION CONTEXT SUMMARY ===\n"
+            "The following is a summary of the conversation history prior to this point.\n"
+            "For full details, refer to the transcript path below.\n\n"
+            + summary_text
+            + transcript_ref
+            + "\n=== END SUMMARY ==="
+        )
+
+        compact_messages = list(system_msgs)
+        compact_messages.append({"role": "assistant", "content": summary_block})
+        if latest_user is not None:
+            compact_messages.append(latest_user)
+
+        print(
+            f"[Wee Native] Context compacted: {len(messages)} → {len(compact_messages)} messages",
+            file=sys.stderr,
+        )
+        return compact_messages
+
+    def _wee_maybe_compact(
+        self,
+        client,
+        n8n_session_id: str,
+        messages: list,
+        resolved_model: str,
+        context_prompt: str,
+        threshold: float = 0.80,
+    ) -> list:
+        """Trigger compaction when token estimate exceeds *threshold* of context limit.
+
+        Called after every message load so that compaction is proactive rather
+        than reactive. Returns the original messages unchanged if under threshold,
+        or a compact replacement list if over.
+        """
+        estimated = self._wee_estimate_tokens(messages)
+        limit = self._wee_get_context_limit(resolved_model)
+        ratio = estimated / limit if limit > 0 else 0.0
+
+        if ratio < threshold:
+            return messages
+
+        print(
+            f"[Wee Native] Context at {ratio:.1%} capacity ({estimated}/{limit} tokens) — "
+            "triggering compaction",
+            file=sys.stderr,
+        )
+        return self._wee_compact_context(
+            client, n8n_session_id, messages, resolved_model, context_prompt
+        )
 
     def _wee_run_attempt(
         self,
