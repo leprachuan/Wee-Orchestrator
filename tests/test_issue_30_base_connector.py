@@ -882,8 +882,9 @@ def test_telegram_execute_via_api_passes_session_id_on_create():
     /api/v1/sessions/<session_id>/execute returned 404 because the deterministic
     session_id was never registered.
     """
+    from unittest.mock import MagicMock, call, patch
+
     import requests as req_mod
-    from unittest.mock import MagicMock, patch, call
 
     with patch.dict(
         "sys.modules",
@@ -907,7 +908,9 @@ def test_telegram_execute_via_api_passes_session_id_on_create():
         execute_resp.status_code = 200
         execute_resp.json.return_value = {"response": "hello from bot"}
 
-        with patch.object(req_mod, "post", side_effect=[create_resp, execute_resp]) as mock_post:
+        with patch.object(
+            req_mod, "post", side_effect=[create_resp, execute_resp]
+        ) as mock_post:
             result = connector._execute_via_api(
                 query="hello",
                 session_id=session_id,
@@ -929,17 +932,18 @@ def test_telegram_execute_via_api_passes_session_id_on_create():
         ), f"Create call was missing session_id: {create_call}"
 
         execute_call = mock_post.call_args_list[1]
-        assert f"/sessions/{session_id}/execute" in execute_call[0][0], (
-            f"Execute URL did not reference expected session_id: {execute_call}"
-        )
+        assert (
+            f"/sessions/{session_id}/execute" in execute_call[0][0]
+        ), f"Execute URL did not reference expected session_id: {execute_call}"
 
         assert result == "hello from bot"
 
 
 def test_telegram_execute_via_api_session_id_not_empty_on_create():
     """Ensure the session_id forwarded to create is non-empty (regression guard)."""
-    import requests as req_mod
     from unittest.mock import MagicMock, patch
+
+    import requests as req_mod
 
     with patch.dict(
         "sys.modules",
@@ -982,6 +986,6 @@ def test_telegram_execute_via_api_session_id_not_empty_on_create():
         payload = captured.get("create_json", {})
         assert "session_id" in payload, "session_id key missing from create payload"
         assert payload["session_id"], "session_id in create payload must be non-empty"
-        assert payload["session_id"] == session_id, (
-            f"session_id mismatch: expected {session_id}, got {payload['session_id']}"
-        )
+        assert (
+            payload["session_id"] == session_id
+        ), f"session_id mismatch: expected {session_id}, got {payload['session_id']}"
