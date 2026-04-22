@@ -3076,8 +3076,8 @@ You can mention an agent in your prompt and it will auto-delegate:
         # Otherwise it's a prompt to run in the background
         # Parse optional overrides: agent=X runtime=Y model=Z timeout=N
         bg_agent = session_data.get("agent", "orchestrator")
-        bg_runtime = session_data.get("runtime", "copilot")
-        bg_model = session_data.get("model", "gpt-5-mini")
+        bg_runtime = None  # resolved below with dispatch_config fallback
+        bg_model = None
         bg_timeout_override = None
         bg_prompt_parts = []
         for word in sub.split():
@@ -3095,6 +3095,10 @@ You can mention an agent in your prompt and it will auto-delegate:
             else:
                 bg_prompt_parts.append(word)
         bg_prompt = " ".join(bg_prompt_parts)
+        # Apply dispatch_config as 2nd-tier fallback, then session defaults (Issue #193)
+        _bg_dispatch_cfg = self.AGENTS.get(bg_agent, {}).get("dispatch_config", {})
+        bg_runtime = bg_runtime or _bg_dispatch_cfg.get("runtime") or session_data.get("runtime", "copilot")
+        bg_model = bg_model or _bg_dispatch_cfg.get("model") or session_data.get("model", "gpt-5-mini")
 
         if not bg_prompt:
             return "❌ No prompt provided. Usage: `/background <prompt>`"
@@ -12025,6 +12029,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         permission_mode: Optional[str] = (
             None  # elevated, restricted (default), sandboxed
         )
+        yolo: Optional[bool] = None  # shorthand for permission_mode="elevated"
         description: Optional[str] = (
             None  # human-readable task name shown in Agents panel
         )
@@ -12912,15 +12917,20 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         defaults = _compute_bg_task_defaults(session_map, identity, channel)
 
         agent = body.agent or defaults.get("agent", get_default_agent())
-        runtime = body.runtime or defaults.get("runtime", get_default_runtime())
-        model = body.model or defaults.get("model", get_default_model())
+        # Load agent dispatch_config as 2nd-tier fallback (Issue #193):
+        #   body > dispatch_config > session defaults > global defaults
+        _dispatch_config = session_mgr.AGENTS.get(agent, {}).get("dispatch_config", {})
+        runtime = body.runtime or _dispatch_config.get("runtime") or defaults.get("runtime", get_default_runtime())
+        model = body.model or _dispatch_config.get("model") or defaults.get("model", get_default_model())
 
         task_id = f"bg_{str(uuid4())[:8]}"
         session_id = str(uuid4())  # Must be valid UUID format for Copilot CLI
 
         # Use agent-specified timeout or fall back to default (15 min)
         bg_timeout = (
-            body.timeout if body.timeout is not None else get_bg_command_timeout()
+            body.timeout
+            if body.timeout is not None
+            else (_dispatch_config.get("timeout") or get_bg_command_timeout())
         )
 
         # Determine notification preference:
@@ -12941,6 +12951,21 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         # Memory injection is handled at session creation in build_agent_context_prompt
         # (not here at API time) so queued/promoted tasks get fresh context.
         effective_prompt = body.prompt
+
+        # Resolve permission mode early so queued/running responses both use same value.
+        # Priority: body.permission_mode > body.yolo > dispatch_config > "restricted" (Issue #193)
+        _dc_perm = (
+            "elevated" if _dispatch_config.get("yolo")
+            else _dispatch_config.get("permission_mode", "")
+        )
+        perm_mode = (
+            body.permission_mode
+            or ("elevated" if body.yolo else None)
+            or _dc_perm
+            or "restricted"
+        )
+        if perm_mode not in ("elevated", "restricted", "sandboxed"):
+            perm_mode = "restricted"
 
         # Atomically check concurrency limit and create task — TOCTOU-safe (Issue #192)
         agent_config = session_mgr.AGENTS.get(agent, {})
@@ -12980,16 +13005,11 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 "agent": agent,
                 "runtime": runtime,
                 "model": model,
-                "permission_mode": body.permission_mode or "restricted",
+                "permission_mode": perm_mode,
                 "status": "queued",
                 "queue_position": queue_pos,
                 "timeout": bg_timeout,
             }
-
-        # Resolve permission mode (default: restricted)
-        perm_mode = body.permission_mode or "restricted"
-        if perm_mode not in ("elevated", "restricted", "sandboxed"):
-            perm_mode = "restricted"
 
         # Run in background thread using shared executor
         loop = asyncio.get_running_loop()
