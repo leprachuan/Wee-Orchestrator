@@ -32,7 +32,7 @@ from session_manager_components import (
     StreamingManager,
 )
 
-# Dynamically determine the repo base directory (works regardless of where repo is cloned)
+# Dynamically determine the repo base directory (works regardless of where repo is cloned)  # noqa: E501
 SCRIPT_BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 # ── Theme constants (F025) ──────────────────────────────────────────────
@@ -128,7 +128,7 @@ _SENSITIVE_HEADER_RE = re.compile(
     re.IGNORECASE,
 )
 _SENSITIVE_HEADER_GENERIC_RE = re.compile(
-    r"""(-H\s+["'])([^"']*(?:password|secret|token|key|credential|bearer)[^:]*):\s*[^"']*(["'])""",
+    r"""(-H\s+["'])([^"']*(?:password|secret|token|key|credential|bearer)[^:]*):\s*[^"']*(["'])""",  # noqa: E501
     re.IGNORECASE,
 )
 _BEARER_TOKEN_RE = re.compile(
@@ -412,7 +412,7 @@ class AuthManager:
 
 
 class BackgroundTaskManager:
-    """Manages background task lifecycle: creation, tracking, output capture, cleanup."""
+    """Manages background task lifecycle: creation, tracking, output capture, cleanup."""  # noqa: E501
 
     MAX_TASKS_PER_USER = int(os.environ.get("BG_MAX_TASKS_PER_USER", "5"))
     MAX_TOTAL_TASKS = int(os.environ.get("BG_MAX_TOTAL_TASKS", "500"))
@@ -600,7 +600,7 @@ class BackgroundTaskManager:
         return None
 
     def _identity_matches(self, task: dict, channel: str, identity: str) -> bool:
-        """Check if a task belongs to this user (for rate-limiting/queue management only).
+        """Check if a task belongs to this user (for rate-limiting/queue management only).  # noqa: E501
         NOT used for visibility -- all authorized users can see all tasks.
         """
         stored_identity = task.get("user_identity")
@@ -881,7 +881,7 @@ class BackgroundTaskManager:
         return False
 
     def cleanup_old(self):
-        """Purge terminal tasks older than CLEANUP_AGE_HOURS and enforce MAX_TOTAL_TASKS cap."""
+        """Purge terminal tasks older than CLEANUP_AGE_HOURS and enforce MAX_TOTAL_TASKS cap."""  # noqa: E501
         cutoff = time.time() - (self.CLEANUP_AGE_HOURS * 3600)
         with self._lock:
             tasks = self._load()
@@ -1140,7 +1140,7 @@ def get_command_timeout() -> int:
 
 
 def get_bg_command_timeout() -> int:
-    """Get background task timeout from environment or use default 900 seconds (15 minutes)"""
+    """Get background task timeout from environment or use default 900 seconds (15 minutes)"""  # noqa: E501
     try:
         timeout_str = os.environ.get("BG_COMMAND_TIMEOUT", "900")
         timeout = int(timeout_str)
@@ -1384,7 +1384,7 @@ class HistoryManager:
         title: str,
         source: str = "llm",
     ) -> bool:
-        """Update session title from auto-generation. Won't overwrite user-set titles."""
+        """Update session title from auto-generation. Won't overwrite user-set titles."""  # noqa: E501
         with self._lock:
             data = self._load()
             key = self._user_key(channel, identity)
@@ -1580,7 +1580,7 @@ class SessionManager:
 
     # Model configurations
     # Note: Claude Code CLI does not support dynamic model listing via flag.
-    # We use CLI aliases (sonnet, haiku, opus) as primary IDs to let the CLI resolve to the latest versions.
+    # We use CLI aliases (sonnet, haiku, opus) as primary IDs to let the CLI resolve to the latest versions.  # noqa: E501
     CLAUDE_MODELS = {
         "Anthropic Models": [
             (
@@ -1936,7 +1936,7 @@ class SessionManager:
         self.cursor_home.mkdir(exist_ok=True)
         self.cursor_session_dir.mkdir(exist_ok=True)
 
-        # Load agents from config file (also sets _agents_config_path and _agents_json_mtime)
+        # Load agents from config file (also sets _agents_config_path and _agents_json_mtime)  # noqa: E501
         self._agents_config_path: Optional[Path] = None
         self._agents_json_mtime: float = 0.0
         self.AGENTS = self._load_agents_config(config_file)
@@ -2225,7 +2225,7 @@ class SessionManager:
 
 **Runtime Management:**
    • /runtime list - Show available runtimes
-   • /runtime set (copilot|copilot-sdk|opencode|claude|claude-sdk|gemini|codex|devin|cursor|wee) - Switch runtime
+   • /runtime set (copilot|copilot-sdk|opencode|claude|claude-sdk|gemini|codex|devin|cursor|wee) - Switch runtime  # noqa: E501
    • /runtime current - Show current runtime
 
 **Model Management:**
@@ -2363,7 +2363,7 @@ You can mention an agent in your prompt and it will auto-delegate:
             runtime = query_info.get("runtime", "unknown")
             return f"✓ Cancelled running query (PID: {pid}, Runtime: {runtime})"
         else:
-            return f"❌ Failed to cancel query (PID: {pid}). Process may have already terminated."
+            return f"❌ Failed to cancel query (PID: {pid}). Process may have already terminated."  # noqa: E501
 
     def _slash_capabilities(self, argument, session_data, n8n_session_id):
         """Handle /capabilities slash command."""
@@ -2386,7 +2386,7 @@ You can mention an agent in your prompt and it will auto-delegate:
                 "• `devin` (Devin CLI)\n"
                 "• `cursor` (Cursor Agent CLI)\n"
                 "• `claude-sdk` (Claude Agent SDK — native Python, in-process tools)\n"
-                "• `wee` (Wee Native — OpenAI-compatible API: Ollama, OpenRouter, LM Studio)"
+                "• `wee` (Wee Native — OpenAI-compatible API: Ollama, OpenRouter, LM Studio)"  # noqa: E501
             )
         elif argument == "current":
             return f"🤖 **Current Runtime:** `{current_runtime}`"
@@ -2427,7 +2427,7 @@ You can mention an agent in your prompt and it will auto-delegate:
 
                     # Log the reason for handoff (user command: /runtime set)
                     _handoff_logger.info(
-                        f"HANDOFF REASON: User executed '/runtime set {new_runtime}' command | "
+                        f"HANDOFF REASON: User executed '/runtime set {new_runtime}' command | "  # noqa: E501
                         f"n8n_session={n8n_session_id} | "
                         f"current_agent={session_data.get('agent', 'unknown')}"
                     )
@@ -2461,8 +2461,9 @@ You can mention an agent in your prompt and it will auto-delegate:
 
             self.update_session_field(n8n_session_id, "runtime", new_runtime)
 
-            # When switching runtime, reset the session ID to a new UUID since session formats are incompatible
-            # (e.g., OpenCode uses "ses_*" format, Claude uses UUID format, CODEX uses UUID format, etc.)
+            # When switching runtime, reset the session ID to a new UUID since session formats are incompatible  # noqa: E501
+            # (e.g., OpenCode uses "ses_*" format, Claude uses UUID format, CODEX uses UUID format,  # noqa: E501
+            # etc.)
             self.update_session_field(n8n_session_id, "session_id", new_session_id)
 
             # When switching runtime, also reset the model to a default for that runtime
@@ -2489,7 +2490,7 @@ You can mention an agent in your prompt and it will auto-delegate:
                 default_model = os.getenv("WEE_DEFAULT_MODEL", "ollama/gemma4:e4b")
 
             self.update_session_field(n8n_session_id, "model", default_model)
-            return f"✓ Switched runtime to **{new_runtime}**. Model set to `{default_model}`. Session reset."
+            return f"✓ Switched runtime to **{new_runtime}**. Model set to `{default_model}`. Session reset."  # noqa: E501
 
     def _slash_agent(self, argument, session_data, n8n_session_id):
         """Handle /agent slash command."""
@@ -2557,7 +2558,7 @@ You can mention an agent in your prompt and it will auto-delegate:
             if not models_dict:
                 return (
                     out
-                    + f"❌ No models available for {effective_rt}. Check CLI configuration."
+                    + f"❌ No models available for {effective_rt}. Check CLI configuration."  # noqa: E501
                 )
             for cat in sorted(models_dict.keys()):
                 out += f"**{cat}:**\n"
@@ -2637,7 +2638,7 @@ You can mention an agent in your prompt and it will auto-delegate:
             if session_timeout:
                 return f"⏱️ **Current Timeout:** `{session_timeout}` seconds"
             else:
-                return f"⏱️ **Current Timeout:** `{self.command_timeout}` seconds (default)"
+                return f"⏱️ **Current Timeout:** `{self.command_timeout}` seconds (default)"  # noqa: E501
 
         elif argument.startswith("set "):
             timeout_str = argument[4:].strip()
@@ -2645,9 +2646,9 @@ You can mention an agent in your prompt and it will auto-delegate:
                 timeout_seconds = int(timeout_str)
                 # Validate timeout (minimum 30 seconds, maximum 3600 seconds / 1 hour)
                 if timeout_seconds < 30:
-                    return f"❌ Timeout must be at least 30 seconds. You specified: {timeout_seconds}s"
+                    return f"❌ Timeout must be at least 30 seconds. You specified: {timeout_seconds}s"  # noqa: E501
                 if timeout_seconds > 3600:
-                    return f"❌ Timeout must not exceed 3600 seconds (1 hour). You specified: {timeout_seconds}s"
+                    return f"❌ Timeout must not exceed 3600 seconds (1 hour). You specified: {timeout_seconds}s"  # noqa: E501
 
                 # Store timeout in session
                 self.update_session_field(
@@ -2655,7 +2656,7 @@ You can mention an agent in your prompt and it will auto-delegate:
                 )
                 return f"✓ Timeout set to `{timeout_seconds}` seconds for this session"
             except ValueError:
-                return f"❌ Invalid timeout value '{timeout_str}'. Please provide a number (30-600 seconds)"
+                return f"❌ Invalid timeout value '{timeout_str}'. Please provide a number (30-600 seconds)"  # noqa: E501
         else:
             return (
                 "Usage: `/timeout` or `/timeout current` to show current timeout\n"
@@ -2676,7 +2677,7 @@ You can mention an agent in your prompt and it will auto-delegate:
             render_type = argument[4:].strip().lower()
             valid_types = ["text", "markdown", "html", "telegram_html"]
             if render_type not in valid_types:
-                return f"❌ Invalid render type '{render_type}'. Valid options: {', '.join(valid_types)}"
+                return f"❌ Invalid render type '{render_type}'. Valid options: {', '.join(valid_types)}"  # noqa: E501
 
             # Store render type in session
             self.update_session_field(n8n_session_id, "render_type", render_type)
@@ -2684,7 +2685,7 @@ You can mention an agent in your prompt and it will auto-delegate:
         else:
             return (
                 "Usage: `/render` or `/render current` to show current render type\n"
-                "       `/render set [text|markdown|html|telegram_html]` to set render type"
+                "       `/render set [text|markdown|html|telegram_html]` to set render type"  # noqa: E501
             )
 
     def _slash_notifications(self, argument, session_data, n8n_session_id):
@@ -2734,7 +2735,7 @@ You can mention an agent in your prompt and it will auto-delegate:
                 "Critical alerts (heartbeat, crashes) will still be delivered."
             )
         else:
-            return "Usage: `/notifications [on|off]` to toggle background task notifications."
+            return "Usage: `/notifications [on|off]` to toggle background task notifications."  # noqa: E501
 
     def _slash_silent(self, argument, session_data, n8n_session_id):
         """Handle /silent slash command (F026)."""
@@ -2813,7 +2814,7 @@ You can mention an agent in your prompt and it will auto-delegate:
             return (
                 "\U0001f4cb **Available Permission Modes:**\n\n"
                 "\u2022 `elevated` \u26a1 - Full access, auto-approve all operations\n"
-                "\u2022 `restricted` \U0001f512 - Bounded to agent directory (default)\n"
+                "\u2022 `restricted` \U0001f512 - Bounded to agent directory (default)\n"  # noqa: E501
                 "\u2022 `sandboxed` \U0001f3d6\ufe0f - Read-only, no external access"
             )
 
@@ -2824,7 +2825,7 @@ You can mention an agent in your prompt and it will auto-delegate:
             _cur_perms["mode"] = "elevated"
             self.update_session_field(n8n_session_id, "permissions", _cur_perms)
             self.update_session_field(n8n_session_id, "yolo_mode", "on")
-            return "\u2713 Elevated mode enabled \u26a1 - auto-approving actions without prompts"
+            return "\u2713 Elevated mode enabled \u26a1 - auto-approving actions without prompts"  # noqa: E501
 
         elif argument == "restricted":
             _cur_perms = session_data.get("permissions", {})
@@ -2842,7 +2843,7 @@ You can mention an agent in your prompt and it will auto-delegate:
             _cur_perms["mode"] = "sandboxed"
             self.update_session_field(n8n_session_id, "permissions", _cur_perms)
             self.update_session_field(n8n_session_id, "yolo_mode", "restricted")
-            return "\u2713 Sandboxed mode enabled \U0001f3d6\ufe0f - read-only, no external access"
+            return "\u2713 Sandboxed mode enabled \U0001f3d6\ufe0f - read-only, no external access"  # noqa: E501
 
         else:
             return (
@@ -2880,7 +2881,7 @@ You can mention an agent in your prompt and it will auto-delegate:
                     f"{status} {recurring} `{j['id']}` — **{j['name']}**\n"
                     f"   Schedule: `{j['schedule']}`\n"
                     f"   Next run: `{j.get('next_run','?')}`\n"
-                    f"   Agent: `{j.get('agent','?')}` / Runtime: `{j.get('runtime','?')}`"
+                    f"   Agent: `{j.get('agent','?')}` / Runtime: `{j.get('runtime','?')}`"  # noqa: E501
                 )
             return "\n\n".join(lines)
 
@@ -2931,7 +2932,7 @@ You can mention an agent in your prompt and it will auto-delegate:
                 f"• **Schedule:** `{j['schedule']}`{cron_line}\n"
                 f"• **Next run:** `{j.get('next_run','?')}`\n"
                 f"• **Last run:** `{j.get('last_run','never')}`\n"
-                f"• **Agent:** `{j.get('agent','?')}` / Runtime: `{j.get('runtime','?')}`\n"
+                f"• **Agent:** `{j.get('agent','?')}` / Runtime: `{j.get('runtime','?')}`\n"  # noqa: E501
                 f"• **Recurring:** {'Yes 🔁' if j.get('recurring') else 'No 1️⃣'}\n"
                 f"• **Enabled:** {'Yes ▶️' if j.get('enabled') else 'No ⏸'}\n"
                 f"• **Task:** {j.get('task','')}"
@@ -2976,7 +2977,7 @@ You can mention an agent in your prompt and it will auto-delegate:
             if len(parts) < 3:
                 return (
                     "Usage: `/schedule add <name> | <schedule> | <task>`\n\n"
-                    "Example: `/schedule add Daily Report | every day at 9am | generate a daily summary`\n"
+                    "Example: `/schedule add Daily Report | every day at 9am | generate a daily summary`\n"  # noqa: E501
                     "Example: `/schedule add One-time Ping | in 10 minutes | say hello`"
                 )
             name, schedule_str, task = parts[0], parts[1], parts[2]
@@ -3013,7 +3014,7 @@ You can mention an agent in your prompt and it will auto-delegate:
                 "• `/schedule logs <job_id>` — View job logs\n"
                 "• `/schedule results <job_id>` — View job execution results\n\n"
                 "**Examples:**\n"
-                "`/schedule add Daily Report | every day at 9am | generate daily summary`\n"
+                "`/schedule add Daily Report | every day at 9am | generate daily summary`\n"  # noqa: E501
                 "`/schedule pause daily-report`\n"
                 "`/schedule delete daily-report`"
             )
@@ -3026,12 +3027,12 @@ You can mention an agent in your prompt and it will auto-delegate:
                 "⚡ **Background Task Commands**\n\n"
                 "• `/background <prompt>` — Run a task in the background\n"
                 "• `/background agent=devops <prompt>` — Override agent\n"
-                "• `/background runtime=claude model=sonnet <prompt>` — Override runtime/model\n"
+                "• `/background runtime=claude model=sonnet <prompt>` — Override runtime/model\n"  # noqa: E501
                 "• `/background timeout=600 <prompt>` — Override timeout (seconds)\n"
                 "• `/background list` — List your background tasks\n"
                 "• `/background status <task_id>` — Check task status\n"
                 "• `/background kill <task_id>` — Kill a running task\n"
-                "• `/background steer <task_id> <instruction>` — Steer a running task\n\n"
+                "• `/background steer <task_id> <instruction>` — Steer a running task\n\n"  # noqa: E501
                 "Background tasks run in separate sessions and don't block your chat.\n"
                 "Monitor them in the ⚡ Tasks tab in the sidebar."
             )
@@ -3085,7 +3086,7 @@ You can mention an agent in your prompt and it will auto-delegate:
             return (
                 f"{icon} **Task: `{task['task_id']}`**\n\n"
                 f"**Status:** {task['status']}\n"
-                f"**Agent:** `{task['agent']}` | Runtime: `{task['runtime']}` | Model: `{task['model']}`\n"
+                f"**Agent:** `{task['agent']}` | Runtime: `{task['runtime']}` | Model: `{task['model']}`\n"  # noqa: E501
                 f"**Prompt:** {task['prompt'][:200]}"
                 f"{elapsed}"
             )
@@ -3195,7 +3196,7 @@ You can mention an agent in your prompt and it will auto-delegate:
         return (
             f"⚡ **Background task started!**\n\n"
             f"• **Task ID:** `{task_id}`\n"
-            f"• **Agent:** `{bg_agent}` | Runtime: `{bg_runtime}` | Model: `{bg_model}`\n"
+            f"• **Agent:** `{bg_agent}` | Runtime: `{bg_runtime}` | Model: `{bg_model}`\n"  # noqa: E501
             f"• **Timeout:** `{bg_timeout}s` ({bg_timeout // 60}m)\n"
             f"• **Prompt:** {bg_prompt[:150]}\n\n"
             f"Check the ⚡ Tasks tab or use `/background status {task_id}` to monitor."
@@ -3227,7 +3228,7 @@ You can mention an agent in your prompt and it will auto-delegate:
         if sub == "help":
             return (
                 f"🔄 **Update Commands** ({_env_label})\n\n"
-                f"• `/update` — Pull latest code from `{_branch}` and restart all {_env_label} services\n"
+                f"• `/update` — Pull latest code from `{_branch}` and restart all {_env_label} services\n"  # noqa: E501
                 f"• `/update status` — Show last update log\n"
                 f"• `/update help` — This message\n\n"
                 f"Aliases: `/upgrade`, `/pull`\n\n"
@@ -3246,7 +3247,7 @@ You can mention an agent in your prompt and it will auto-delegate:
         return (
             f"🔄 **Update started** (PID: `{pid}`)\n\n"
             f"Pulling latest `{_branch}` and restarting {_env_label} services.\n"
-            f"I may go offline briefly — you will receive a Telegram notification when complete.\n\n"
+            f"I may go offline briefly — you will receive a Telegram notification when complete.\n\n"  # noqa: E501
             f"Log: `{_log_path}`\n"
             f"Check status later: `/update status`"
         )
@@ -3558,7 +3559,7 @@ You can mention an agent in your prompt and it will auto-delegate:
             if match:
                 raw_content = match.group(1)
                 models = re.findall(r'"([^"]+)"', raw_content)
-                # Validate: filter out false positives (e.g. --output-format choices: "text", "json")
+                # Validate: filter out false positives (e.g. --output-format choices: "text", "json")  # noqa: E501
                 models = [
                     m
                     for m in models
@@ -3604,8 +3605,10 @@ You can mention an agent in your prompt and it will auto-delegate:
                     ]
 
             if not models:
-                # copilot CLI no longer lists models in --help (choices removed in newer versions).
-                # Return the static fallback list so /model list and /model set still work.
+                # copilot CLI no longer lists models in --help (choices removed in newer
+                # versions).
+                # Return the static fallback list so /model list and /model set still
+                # work.
                 return {
                     "Claude Models": [
                         "claude-sonnet-4.6",
@@ -3655,7 +3658,7 @@ You can mention an agent in your prompt and it will auto-delegate:
             return self._copilot_static_fallback()
 
     def fetch_opencode_models(self) -> Dict:
-        """Fetch available models from opencode CLI, falling back to static list on failure."""
+        """Fetch available models from opencode CLI, falling back to static list on failure."""  # noqa: E501
         try:
             cmd = [str(self.opencode_bin), "models"]
             # Use configured command timeout (may be set via COMMAND_TIMEOUT)
@@ -3704,7 +3707,7 @@ You can mention an agent in your prompt and it will auto-delegate:
             return self._static_models_to_dict(self.OPENCODE_MODELS)
 
     def _static_models_to_dict(self, static_dict: Dict) -> Dict:
-        """Convert static model config {cat: [(id, desc, aliases)...]} to {cat: [id,...]}."""
+        """Convert static model config {cat: [(id, desc, aliases)...]} to {cat: [id,...]}."""  # noqa: E501
         return {
             cat: [model_id for model_id, _desc, _aliases in entries]
             for cat, entries in static_dict.items()
@@ -4340,7 +4343,8 @@ You can mention an agent in your prompt and it will auto-delegate:
                     merged["model"] = "haiku"
             elif runtime == "opencode":
                 # For opencode, only force default if model is truly empty.
-                # Allow any non-empty model string (opencode/*, openai-compatible/*, etc.)
+                # Allow any non-empty model string (opencode/*, openai-compatible/*,
+                # etc.)
                 if not merged.get("model"):
                     merged["model"] = "opencode/gpt-5-nano"
             elif runtime == "gemini":
@@ -4535,7 +4539,7 @@ You can mention an agent in your prompt and it will auto-delegate:
         if unsupported_tags:
             return (
                 False,
-                f"Unsupported HTML tags for Telegram: {', '.join(sorted(unsupported_tags))}",
+                f"Unsupported HTML tags for Telegram: {', '.join(sorted(unsupported_tags))}",  # noqa: E501
             )
 
         return True, ""
@@ -4573,7 +4577,8 @@ You can mention an agent in your prompt and it will auto-delegate:
             "tg-emoji",
         }
 
-        # First, escape double angle brackets (<<EOF, >>, etc.) that are used in scripting
+        # First, escape double angle brackets (<<EOF, >>, etc.) that are used in
+        # scripting
         # Replace << with &lt;&lt; and >> with &gt;&gt;
         text = text.replace("<<", "&lt;&lt;")
         text = text.replace(">>", "&gt;&gt;")
@@ -4604,14 +4609,14 @@ You can mention an agent in your prompt and it will auto-delegate:
     def get_capabilities(self) -> str:
         """Get available capabilities based on configured agents"""
         if not self.AGENTS:
-            return "No agents configured. Add agents to agents.json to extend capabilities."
+            return "No agents configured. Add agents to agents.json to extend capabilities."  # noqa: E501
 
         out = "# 🤖 Orchestrator Capabilities\n\n"
         out += "I can help with the following agents:\n\n"
         for agent_name, agent_info in self.AGENTS.items():
             description = agent_info.get("description", "No description")
             path = agent_info.get("path", "")
-            out += f"### {agent_name}\n- **Description:** {description}\n- **Location:** `{path}`\n\n"
+            out += f"### {agent_name}\n- **Description:** {description}\n- **Location:** `{path}`\n\n"  # noqa: E501
         out += "#### How to use\n"
         out += "- `/agent set <agent_name>` — switch to an agent and work with it.\n"
         out += "- `/agent list` — show all available agents and their locations.\n"
@@ -4627,7 +4632,8 @@ You can mention an agent in your prompt and it will auto-delegate:
         with self._session_map_lock:
             session_map = self.load_session_map()
 
-            # Generate a new session ID for the backend because sessions are often project-scoped
+            # Generate a new session ID for the backend because sessions are often
+            # project-scoped
             new_backend_session_id = str(uuid4())
 
             if n8n_session_id not in session_map:
@@ -4656,7 +4662,7 @@ You can mention an agent in your prompt and it will auto-delegate:
             f"[Agent] Switched to '{agent}' agent. New backend session: "
             f"{new_backend_session_id}"
         )
-        return f"✓ Switched to **{agent}** agent\n\n{agent_info['description']}\n\nLocation: `{agent_info['path']}`"
+        return f"✓ Switched to **{agent}** agent\n\n{agent_info['description']}\n\nLocation: `{agent_info['path']}`"  # noqa: E501
 
     def detect_agent_delegation(self, prompt: str) -> Tuple[Optional[str], str]:
         """Detect if user is asking for a specific agent to help with something
@@ -4729,7 +4735,7 @@ You can mention an agent in your prompt and it will auto-delegate:
         """Convert model name/alias to full model ID based on runtime.
 
         Resolution order:
-          1. Check env-loaded or static alias tables (contain alias/description metadata).
+          1. Check env-loaded or static alias tables (contain alias/description metadata).  # noqa: E501
           2. Fall back to CLI-discovered model list (exact then substring match).
         """
         name_lower = name.lower().strip("\"'")
@@ -4746,7 +4752,8 @@ You can mention an agent in your prompt and it will auto-delegate:
         ):
             self.get_models_for_runtime(runtime)
 
-        # Step 1: check env-loaded or static alias tables for all runtimes that have them.
+        # Step 1: check env-loaded or static alias tables for all runtimes that have
+        # them.
         env_alias_map = {
             "claude": self._env_claude_models,
             "claude-sdk": self._env_claude_models,
@@ -4790,9 +4797,10 @@ You can mention an agent in your prompt and it will auto-delegate:
             if m.lower() == name_lower:
                 return m
 
-        # Exact match with "ollama/" prefix stripped (e.g., "gemma4:e4b" matches "ollama/gemma4:e4b").
-        # Intentionally only strips the ollama/ prefix -- not arbitrary provider prefixes --
-        # so bare names like "gpt-5-mini" never accidentally match "openrouter/openai/gpt-5-mini".
+        # Exact match with "ollama/" prefix stripped (e.g., "gemma4:e4b" matches "ollama/gemma4:e4b").  # noqa: E501
+        # Intentionally only strips the ollama/ prefix -- not arbitrary provider prefixes  # noqa: E501
+        # --
+        # so bare names like "gpt-5-mini" never accidentally match "openrouter/openai/gpt-5-mini".  # noqa: E501
         for m in all_models:
             model_lower = m.lower()
             if model_lower.startswith("ollama/"):
@@ -4801,8 +4809,10 @@ You can mention an agent in your prompt and it will auto-delegate:
                     return m
 
         # Substring matching with shortest-match preference.
-        # For wee runtime, bare names without an openrouter/ prefix are scoped to Ollama models
-        # only -- prevents accidental matches against the full OpenRouter catalog (350+ models).
+        # For wee runtime, bare names without an openrouter/ prefix are scoped to Ollama
+        # models
+        # only -- prevents accidental matches against the full OpenRouter catalog (350+
+        # models).
         if runtime == "wee" and not name_lower.startswith("openrouter/"):
             candidate_models = [
                 m for m in all_models if not m.lower().startswith("openrouter/")
@@ -4849,9 +4859,9 @@ You can mention an agent in your prompt and it will auto-delegate:
     def _resolve_permission_mode(
         self, session_data: dict, prompt_mode: str = "restricted"
     ) -> str:
-        """Resolve effective permission mode from session data with backward compatibility.
+        """Resolve effective permission mode from session data with backward compatibility.  # noqa: E501
 
-        Priority: prompt_mode (if not default) > permissions.mode > yolo_mode (legacy) > 'restricted'
+        Priority: prompt_mode (if not default) > permissions.mode > yolo_mode (legacy) > 'restricted'  # noqa: E501
         """
         if prompt_mode != "restricted":
             return prompt_mode
@@ -4925,7 +4935,7 @@ You can mention an agent in your prompt and it will auto-delegate:
                     continue
                 skip_banner = False
 
-                # Skip tool invocation lines (e.g., "|  Glob", "|  Read", "|  Write", etc.)
+                # Skip tool invocation lines (e.g., "|  Glob", "|  Read", "|  Write", etc.)  # noqa: E501
                 if re.match(
                     r"^\|\s+(Glob|Read|Write|Bash|Edit|bash|grep|find)", clean_line
                 ):
@@ -4968,8 +4978,9 @@ You can mention an agent in your prompt and it will auto-delegate:
                             error_result = result_text
                         else:
                             return result_text
-                    # Handle top-level API error events (e.g. rate limits, usage limits).
-                    # These arrive as {"type":"error","error":{"type":"rate_limit_error","message":"..."}}
+                    # Handle top-level API error events (e.g. rate limits, usage
+                    # limits).
+                    # These arrive as {"type":"error","error":{"type":"rate_limit_error","message":"..."}}  # noqa: E501
                     # and must be surfaced so is_limit_error() can detect them.
                     elif obj_type == "error":
                         err_obj = obj.get("error") or {}
@@ -5001,7 +5012,8 @@ You can mention an agent in your prompt and it will auto-delegate:
                             delta = event.get("delta") or {}
                             if delta.get("type") == "text_delta":
                                 text_parts.append(delta.get("text", ""))
-                    # Extract text from assistant partial messages as last-resort fallback
+                    # Extract text from assistant partial messages as last-resort
+                    # fallback
                     elif obj_type == "assistant":
                         msg = obj.get("message") or {}
                         content = msg.get("content") or []
@@ -5370,7 +5382,7 @@ You can mention an agent in your prompt and it will auto-delegate:
             for skill in available_skills:
                 skills_context += f"- {skill['name']}: {skill['description']}\n"
             skills_context += """
-To use these skills, simply reference them in your work. The system will automatically load the appropriate skill instructions.
+To use these skills, simply reference them in your work. The system will automatically load the appropriate skill instructions.  # noqa: E501
 
 To add new skills to this agent:
 1. Create a directory in .github/skills/{skill-name}/
@@ -5390,7 +5402,7 @@ To get skills from Anthropic's official repository:
 - Visit: https://github.com/anthropics/skills
 - Clone skills you want to use
 - Copy them to .github/skills/ or .claude/skills/
-- Run: git clone https://github.com/anthropics/skills {agent_path}/.github/skills/anthropic-skills
+- Run: git clone https://github.com/anthropics/skills {agent_path}/.github/skills/anthropic-skills  # noqa: E501
 """
         else:
             skills_context = """
@@ -5443,7 +5455,7 @@ Example skill structure:
 
         Args:
             query: Optional search term to filter skills (e.g., "helm", "kubernetes")
-            repository: Optional repository name to search in specific repo (e.g., "Anthropic Official")
+            repository: Optional repository name to search in specific repo (e.g., "Anthropic Official")  # noqa: E501
 
         Returns:
             Formatted string listing available skills or error message
@@ -5459,7 +5471,7 @@ Example skill structure:
                     r for r in self.skill_repositories if r.get("name") == repository
                 ]
                 if not repos_to_search:
-                    return f"Error: Repository '{repository}' not found. Available: {', '.join(r.get('name') for r in self.skill_repositories)}"
+                    return f"Error: Repository '{repository}' not found. Available: {', '.join(r.get('name') for r in self.skill_repositories)}"  # noqa: E501
             else:
                 # Search all repositories
                 repos_to_search = self.skill_repositories
@@ -5567,12 +5579,12 @@ Example skill structure:
         agent: str = "orchestrator",
         repository: Optional[str] = None,
     ) -> str:
-        """Load a skill from configured repositories into the agent's .github/skills directory.
+        """Load a skill from configured repositories into the agent's .github/skills directory.  # noqa: E501
 
         Args:
             skill_name: Name of the skill to load (e.g., "helm-deploy")
             agent: Agent to load the skill into (default: orchestrator)
-            repository: Optional repository name to search in (if None, searches all repositories)
+            repository: Optional repository name to search in (if None, searches all repositories)  # noqa: E501
 
         Returns:
             Status message indicating success or failure
@@ -5582,7 +5594,7 @@ Example skill structure:
             import subprocess
 
             if agent not in self.AGENTS:
-                return f"Error: Unknown agent '{agent}'. Available agents: {', '.join(self.AGENTS.keys())}"
+                return f"Error: Unknown agent '{agent}'. Available agents: {', '.join(self.AGENTS.keys())}"  # noqa: E501
 
             agent_path = Path(self.AGENTS[agent]["path"])
             skills_dir = agent_path / ".github" / "skills"
@@ -5602,7 +5614,7 @@ Example skill structure:
                     r for r in self.skill_repositories if r.get("name") == repository
                 ]
                 if not repos_to_search:
-                    return f"Error: Repository '{repository}' not found. Available: {', '.join(r.get('name') for r in self.skill_repositories)}"
+                    return f"Error: Repository '{repository}' not found. Available: {', '.join(r.get('name') for r in self.skill_repositories)}"  # noqa: E501
             else:
                 repos_to_search = self.skill_repositories
 
@@ -5655,9 +5667,9 @@ Example skill structure:
                     if skill_target.exists():
                         skill_md = skill_target / "SKILL.md"
                         if skill_md.exists():
-                            return f"✓ Successfully loaded skill '{skill_name}' from {repo_name} into {agent} agent. The skill is now available and will be included in context on the next session."
+                            return f"✓ Successfully loaded skill '{skill_name}' from {repo_name} into {agent} agent. The skill is now available and will be included in context on the next session."  # noqa: E501
                         else:
-                            return f"⚠️ Skill '{skill_name}' was copied but SKILL.md not found. The skill may not work properly."
+                            return f"⚠️ Skill '{skill_name}' was copied but SKILL.md not found. The skill may not work properly."  # noqa: E501
                     else:
                         return f"Error: Failed to copy skill '{skill_name}' to {agent}."
 
@@ -5739,10 +5751,10 @@ Example skill structure:
         channel: str = "webui",
         bg_identity: Optional[str] = None,
     ) -> str:
-        """Build a context-aware prompt that includes agent information, runtime, model, and execution deadline.
+        """Build a context-aware prompt that includes agent information, runtime, model, and execution deadline.  # noqa: E501
 
         Args:
-            channel: The communication channel (telegram, webex, webui) - determines which platform to send files to
+            channel: The communication channel (telegram, webex, webui) - determines which platform to send files to  # noqa: E501
         """
         if agent not in self.AGENTS:
             agent = "devops"
@@ -5762,7 +5774,7 @@ Example skill structure:
                 files = list(agent_path_obj.glob("*"))[:10]  # First 10 items
                 if files:
                     files_list = "\n".join([f"  - {f.name}" for f in files])
-                    files_context = f"\n\nAvailable resources in this agent's workspace:\n{files_list}"
+                    files_context = f"\n\nAvailable resources in this agent's workspace:\n{files_list}"  # noqa: E501
         except Exception:
             pass
 
@@ -5771,30 +5783,30 @@ Example skill structure:
         if render_type == "markdown":
             render_instruction = f"""
 [Output Format: markdown]
-[Image Retrieval — MANDATORY: When the user asks for any image, picture, photo, or logo, you MUST retrieve and display a real image. Never say you cannot retrieve images — use your tools.
+[Image Retrieval — MANDATORY: When the user asks for any image, picture, photo, or logo, you MUST retrieve and display a real image. Never say you cannot retrieve images — use your tools.  # noqa: E501
 
 How to get images:
-1. Use WebFetch on a relevant page (Wikipedia, the official product site, Wikimedia Commons) to locate a direct image URL ending in .jpg, .png, .gif, or .webp.
-   Example: WebFetch("https://en.wikipedia.org/wiki/Snort_(software)") then read the page to extract a real image src URL.
+1. Use WebFetch on a relevant page (Wikipedia, the official product site, Wikimedia Commons) to locate a direct image URL ending in .jpg, .png, .gif, or .webp.  # noqa: E501
+   Example: WebFetch("https://en.wikipedia.org/wiki/Snort_(software)") then read the page to extract a real image src URL.  # noqa: E501
 2. Return the image using one of these methods:
 
    Option A — Direct external URL (simplest, use when URL is publicly accessible):
    ![Description of image](https://actual-direct-image-url.jpg)
 
-   Option B — Download locally for reliability (use when image may be behind a CDN or require headers):
-   Step 1: Bash("mkdir -p /tmp/webui_ai_media/{n8n_session_id} && curl -s -L --max-time 15 -o /tmp/webui_ai_media/{n8n_session_id}/image.jpg 'https://direct-image-url.jpg'")
-   Step 2: Include in your response: ![Description](/ai-media/{n8n_session_id}/image.jpg)
+   Option B — Download locally for reliability (use when image may be behind a CDN or require headers):  # noqa: E501
+   Step 1: Bash("mkdir -p /tmp/webui_ai_media/{n8n_session_id} && curl -s -L --max-time 15 -o /tmp/webui_ai_media/{n8n_session_id}/image.jpg 'https://direct-image-url.jpg'")  # noqa: E501
+   Step 2: Include in your response: ![Description](/ai-media/{n8n_session_id}/image.jpg)  # noqa: E501
 
-   Option C — Local file (screenshots, files already on disk e.g. from Playwright/browser tools):
-   Step 1: Bash("mkdir -p /tmp/webui_ai_media/{n8n_session_id} && cp /path/to/local/screenshot.png /tmp/webui_ai_media/{n8n_session_id}/screenshot.png")
-   Step 2: Include in your response: ![Description](/ai-media/{n8n_session_id}/screenshot.png)
-   IMPORTANT: Always verify the cp succeeded and the destination file size is > 0 before including the image URL.
+   Option C — Local file (screenshots, files already on disk e.g. from Playwright/browser tools):  # noqa: E501
+   Step 1: Bash("mkdir -p /tmp/webui_ai_media/{n8n_session_id} && cp /path/to/local/screenshot.png /tmp/webui_ai_media/{n8n_session_id}/screenshot.png")  # noqa: E501
+   Step 2: Include in your response: ![Description](/ai-media/{n8n_session_id}/screenshot.png)  # noqa: E501
+   IMPORTANT: Always verify the cp succeeded and the destination file size is > 0 before including the image URL.  # noqa: E501
 
-Always include at least one image in markdown format. Do NOT use ASCII art, SVG generation, or placeholder images.]"""
+Always include at least one image in markdown format. Do NOT use ASCII art, SVG generation, or placeholder images.]"""  # noqa: E501
         elif render_type == "html":
             render_instruction = """
 [Output Format: html]
-[Media: When the user asks for images or pictures, you MUST use the web_search tool to search for the image. Find a real, publicly accessible image URL ending in .jpg, .png, .gif, or .webp (e.g. from Wikipedia Commons, Unsplash, Pexels). Include it using <img src="https://real-url.jpg" alt="caption text">. The alt attribute will appear as the image caption. Do NOT create files, generate ASCII art, or make SVGs. Only use real URLs found via web_search. You can also include hyperlinks using <a href="url">text</a> tags.]"""
+[Media: When the user asks for images or pictures, you MUST use the web_search tool to search for the image. Find a real, publicly accessible image URL ending in .jpg, .png, .gif, or .webp (e.g. from Wikipedia Commons, Unsplash, Pexels). Include it using <img src="https://real-url.jpg" alt="caption text">. The alt attribute will appear as the image caption. Do NOT create files, generate ASCII art, or make SVGs. Only use real URLs found via web_search. You can also include hyperlinks using <a href="url">text</a> tags.]"""  # noqa: E501
         elif render_type == "telegram_html":
             render_instruction = """
 [Output Format: Telegram HTML - STRICT]
@@ -5803,7 +5815,7 @@ Always include at least one image in markdown format. Do NOT use ASCII art, SVG 
 2. <i>text</i> or <em>text</em> - italic
 3. <u>text</u> or <ins>text</ins> - underline
 4. <s>text</s>, <strike>text</strike>, or <del>text</del> - strikethrough
-5. <tg-spoiler>text</tg-spoiler> or <span class="tg-spoiler">text</span> - spoiler/hidden
+5. <tg-spoiler>text</tg-spoiler> or <span class="tg-spoiler">text</span> - spoiler/hidden  # noqa: E501
 6. <a href="URL">text</a> - hyperlinks (URL must be valid)
 7. <code>text</code> - inline code/monospace
 8. <pre>code block</pre> - multiline code blocks
@@ -5812,7 +5824,7 @@ Always include at least one image in markdown format. Do NOT use ASCII art, SVG 
 11. <tg-emoji emoji-id="ID">🎉</tg-emoji> - custom emoji
 
 ABSOLUTELY NO OTHER TAGS ALLOWED:
-❌ Do NOT use: <p>, <div>, <span> (without class="tg-spoiler"), <br>, <status>, or any custom tags
+❌ Do NOT use: <p>, <div>, <span> (without class="tg-spoiler"), <br>, <status>, or any custom tags  # noqa: E501
 ❌ Never create new tag names like <proxmox-node>, <b-Status>, <code-block>, etc.
 ❌ Do NOT nest unsupported tags inside supported ones
 
@@ -5822,15 +5834,16 @@ HOW TO FORMAT:
 - Always close tags properly: <b>text</b> not <b>text<b>
 - For line breaks in output, use plain \\n characters
 
-[Media: When the user asks for images or pictures, you MUST use the web_search tool to search for the image. Find a real, publicly accessible image URL ending in .jpg, .png, .gif, or .webp (e.g. from Wikipedia Commons, Unsplash, Pexels). You can provide images in two ways:
-1. Markdown syntax: ![caption text](https://url.jpg) - Caption will appear below the image
+[Media: When the user asks for images or pictures, you MUST use the web_search tool to search for the image. Find a real, publicly accessible image URL ending in .jpg, .png, .gif, or .webp (e.g. from Wikipedia Commons, Unsplash, Pexels). You can provide images in two ways:  # noqa: E501
+1. Markdown syntax: ![caption text](https://url.jpg) - Caption will appear below the image  # noqa: E501
 2. Bare URL: https://url.jpg - Image sent without caption
-Do NOT use <img> tags (unsupported). Do NOT create files, generate ASCII art, or make SVGs. The system will automatically detect image URLs and send them as photos. You can include hyperlinks using <a href="url">text</a>.]
+Do NOT use <img> tags (unsupported). Do NOT create files, generate ASCII art, or make SVGs. The system will automatically detect image URLs and send them as photos. You can include hyperlinks using <a href="url">text</a>.]  # noqa: E501
 """
         else:  # text (default)
             render_instruction = ""
 
-        # Add channel-specific file handling instructions (only for render types that support media)
+        # Add channel-specific file handling instructions (only for render types that support  # noqa: E501
+        # media)
         if render_type in ("markdown", "telegram_html"):
             size_limits = {"telegram": "50 MB", "webex": "100 MB", "webui": "500 MB"}
             channel_limit = size_limits.get(channel, "100 MB")
@@ -5847,7 +5860,8 @@ Do NOT use <img> tags (unsupported). Do NOT create files, generate ASCII art, or
   ✓ Use absolute paths  ✓ Only save to {channel}_downloads"""
             render_instruction += file_handling
 
-        # Format render_instruction with channel, script_base_dir, and session_id variables
+        # Format render_instruction with channel, script_base_dir, and session_id
+        # variables
         if (
             "{channel" in render_instruction
             or "{script_base_dir" in render_instruction
@@ -5868,7 +5882,7 @@ Do NOT use <img> tags (unsupported). Do NOT create files, generate ASCII art, or
             buffer_percent = 0.15
             agent_timeout = timeout * (1 - buffer_percent)
             agent_timeout_min = agent_timeout / 60
-            timeout_instruction = f"\n[⏱️ EXECUTION DEADLINE: You have {agent_timeout:.0f} seconds ({agent_timeout_min:.1f} minutes) to complete this task. Plan your approach efficiently and wrap up before this deadline. If an operation might take too long, skip it or provide a summary instead.]"
+            timeout_instruction = f"\n[⏱️ EXECUTION DEADLINE: You have {agent_timeout:.0f} seconds ({agent_timeout_min:.1f} minutes) to complete this task. Plan your approach efficiently and wrap up before this deadline. If an operation might take too long, skip it or provide a summary instead.]"  # noqa: E501
 
         # Add runtime, model, and slash commands information
         runtime_instruction = f"""
@@ -5878,12 +5892,12 @@ Do NOT use <img> tags (unsupported). Do NOT create files, generate ASCII art, or
 - Agent: {agent_name}
 
 [Available Slash Commands]
-These commands allow you to control the agent's behavior and are processed by the system (not the model):
+These commands allow you to control the agent's behavior and are processed by the system (not the model):  # noqa: E501
 - /agent <name> - Switch to a different agent (e.g., /agent devops, /agent orchestrator)
 - /model <model> - Change the AI model (e.g., /model gpt-5-sonnet, /model haiku)
-- /runtime <runtime> - Change execution runtime (e.g., /runtime claude, /runtime opencode)
+- /runtime <runtime> - Change execution runtime (e.g., /runtime claude, /runtime opencode)  # noqa: E501
 - /timeout <seconds> - Adjust execution timeout (e.g., /timeout 600)
-- /render <format> - Change output format (e.g., /render markdown, /render html, /render telegram_html)
+- /render <format> - Change output format (e.g., /render markdown, /render html, /render telegram_html)  # noqa: E501
 - /notifications <on|off> - Toggle background task notifications for Telegram/WebEx
 - /session <id> - Continue a specific session (e.g., /session abc123)
 - /status - Check running tasks status
@@ -5892,11 +5906,11 @@ These commands allow you to control the agent's behavior and are processed by th
 - /secret list - List stored secret names (bypasses LLM)
 - /secret set <name> <value> - Store a secret (value never sent to LLM)
 - /secret delete <name> - Delete a secret (bypasses LLM)
-- /discover-skills [query] - Discover available skills from configured repositories (optional search term)
-- /load-skill <name> [repo] - Load a skill into this agent's .github/skills directory (optional repository name)
+- /discover-skills [query] - Discover available skills from configured repositories (optional search term)  # noqa: E501
+- /load-skill <name> [repo] - Load a skill into this agent's .github/skills directory (optional repository name)  # noqa: E501
 - /schedule list - List all scheduled jobs
 - /schedule status - Scheduler health and diagnostics
-- /schedule add <name> | <schedule> | <task> - Create a scheduled job (e.g., /schedule add Daily Report | every day at 9am | generate summary)
+- /schedule add <name> | <schedule> | <task> - Create a scheduled job (e.g., /schedule add Daily Report | every day at 9am | generate summary)  # noqa: E501
 - /schedule info <job_id> - Show details for a scheduled job
 - /schedule pause <job_id> - Pause a scheduled job
 - /schedule resume <job_id> - Resume a paused job
@@ -5904,17 +5918,17 @@ These commands allow you to control the agent's behavior and are processed by th
 - /schedule logs <job_id> - View logs for a job
 - /schedule results <job_id> - View execution results for a job
 - /background <prompt> - Run a task in the background (doesn't block chat)
-- /background agent=<name> model=<model> timeout=<seconds> <prompt> - Background task with overrides
+- /background agent=<name> model=<model> timeout=<seconds> <prompt> - Background task with overrides  # noqa: E501
 - /background list - List your background tasks
 - /background status <task_id> - Check background task status
 - /background kill <task_id> - Kill a running background task
 - /background steer <task_id> <instruction> - Send steering to a running task
 - /silent <on|off> - Toggle silent mode (hide tool calls from responses)
 - /verbose <on|off> - Toggle verbose mode (show tool calls in responses)
-- /update - Pull latest code from dev branch and restart all dev services (aliases: /upgrade, /pull)
+- /update - Pull latest code from dev branch and restart all dev services (aliases: /upgrade, /pull)  # noqa: E501
 
 [Skills Discovery & Management]
-You can help users discover and load additional skills for this agent from configured skill repositories.
+You can help users discover and load additional skills for this agent from configured skill repositories.  # noqa: E501
 
 Configured Skill Repositories:
 {self._format_repository_info()}
@@ -5954,7 +5968,7 @@ To add custom skill repositories or manage repository settings:
     {{
       "name": "Anthropic Official",
       "url": "https://github.com/anthropics/skills.git",
-      "description": "Official Anthropic skills repository with production-ready skills",
+      "description": "Official Anthropic skills repository with production-ready skills",  # noqa: E501
       "enabled": true
     }},
     {{
@@ -5980,10 +5994,10 @@ To add custom skill repositories or manage repository settings:
    - enabled: Set to true to enable, false to disable (without deleting config)
 
 4. Popular community repositories to add:
-   - VoltAgent/awesome-agent-skills: https://github.com/VoltAgent/awesome-agent-skills.git (300+ skills)
-   - karanb192/awesome-claude-skills: https://github.com/karanb192/awesome-claude-skills.git (50+ verified)
-   - travisvn/awesome-claude-skills: https://github.com/travisvn/awesome-claude-skills.git (curated list)
-   - abubakarsiddik31/claude-skills-collection: https://github.com/abubakarsiddik31/claude-skills-collection.git (organized by category)
+   - VoltAgent/awesome-agent-skills: https://github.com/VoltAgent/awesome-agent-skills.git (300+ skills)  # noqa: E501
+   - karanb192/awesome-claude-skills: https://github.com/karanb192/awesome-claude-skills.git (50+ verified)  # noqa: E501
+   - travisvn/awesome-claude-skills: https://github.com/travisvn/awesome-claude-skills.git (curated list)  # noqa: E501
+   - abubakarsiddik31/claude-skills-collection: https://github.com/abubakarsiddik31/claude-skills-collection.git (organized by category)  # noqa: E501
 
 5. After updating skill_repositories.json:
    - The new repositories become available immediately on next session start
@@ -6001,31 +6015,31 @@ To add custom skill repositories or manage repository settings:
         bg_task_instruction = ""
         if _shared_key:
             bg_task_instruction = f"""
-[Background Tasks] Run long USER-INITIATED tasks via the orchestrator API (visible in ⚡ Tasks tab). ONLY use this when the USER explicitly asks to run something in the background. Full docs: {SCRIPT_BASE_DIR}/docs/background-tasks.md
-curl -s{_curl_insecure} -X POST {_api_scheme}://127.0.0.1:{_api_port_bg}/api/v1/background-tasks -H "Content-Type: application/json" -H "Authorization: Bearer shared_{_shared_key}" -H "X-User-Identity: {_user_identity}" -H "X-Auth-Channel: {channel}" -d '{{"prompt": "...", "agent": "{agent}", "timeout": 900}}'
+[Background Tasks] Run long USER-INITIATED tasks via the orchestrator API (visible in ⚡ Tasks tab). ONLY use this when the USER explicitly asks to run something in the background. Full docs: {SCRIPT_BASE_DIR}/docs/background-tasks.md  # noqa: E501
+curl -s{_curl_insecure} -X POST {_api_scheme}://127.0.0.1:{_api_port_bg}/api/v1/background-tasks -H "Content-Type: application/json" -H "Authorization: Bearer shared_{_shared_key}" -H "X-User-Identity: {_user_identity}" -H "X-Auth-Channel: {channel}" -d '{{"prompt": "...", "agent": "{agent}", "timeout": 900}}'  # noqa: E501
 
 ⚠️ CRITICAL ROUTING RULES:
-1. Sub-agent delegation MUST NOT use the background-tasks API above. When routing work to another agent, ALWAYS use agent_manager.py directly (invisible to user — does NOT create a Tasks panel entry). Using the curl API for delegation is a BUG.
-2. USER-FACING LONG TASKS from Telegram/Webex MUST use the orchestrator background-tasks API (curl above). NEVER use internal agent_manager.py subprocess calls for user-visible tasks — this makes them invisible and breaks notification routing back to the user.
-3. X-User-Identity and X-Auth-Channel in the curl above are pre-filled with the real user identity. DO NOT change or hardcode them — altering them breaks notification routing.
+1. Sub-agent delegation MUST NOT use the background-tasks API above. When routing work to another agent, ALWAYS use agent_manager.py directly (invisible to user — does NOT create a Tasks panel entry). Using the curl API for delegation is a BUG.  # noqa: E501
+2. USER-FACING LONG TASKS from Telegram/Webex MUST use the orchestrator background-tasks API (curl above). NEVER use internal agent_manager.py subprocess calls for user-visible tasks — this makes them invisible and breaks notification routing back to the user.  # noqa: E501
+3. X-User-Identity and X-Auth-Channel in the curl above are pre-filled with the real user identity. DO NOT change or hardcode them — altering them breaks notification routing.  # noqa: E501
 
 [Sub-Agent Delegation] Route tasks to another agent invisibly:
-python3 {SCRIPT_BASE_DIR}/agent_manager.py --agent <agent_name> --runtime copilot --model claude-haiku-4.5 --config {SCRIPT_BASE_DIR}/agents.json "<task prompt>" {n8n_session_id}
-Example: python3 {SCRIPT_BASE_DIR}/agent_manager.py --agent research-dev --runtime copilot --config {SCRIPT_BASE_DIR}/agents.json "get crude oil pricing stats" {n8n_session_id}"""
+python3 {SCRIPT_BASE_DIR}/agent_manager.py --agent <agent_name> --runtime copilot --model claude-haiku-4.5 --config {SCRIPT_BASE_DIR}/agents.json "<task prompt>" {n8n_session_id}  # noqa: E501
+Example: python3 {SCRIPT_BASE_DIR}/agent_manager.py --agent research-dev --runtime copilot --config {SCRIPT_BASE_DIR}/agents.json "get crude oil pricing stats" {n8n_session_id}"""  # noqa: E501
 
         # Inject Wee Canvas capability hint
         canvas_instruction = f"""
-[Wee Canvas] Native real-time visual panel in the WebUI (progress boards, charts, forms, approval flows). Client: `{SCRIPT_BASE_DIR}/canvas.py` — `from canvas import Canvas; c = Canvas(); c.open()`. Full docs: {SCRIPT_BASE_DIR}/docs/canvas.md"""
+[Wee Canvas] Native real-time visual panel in the WebUI (progress boards, charts, forms, approval flows). Client: `{SCRIPT_BASE_DIR}/canvas.py` — `from canvas import Canvas; c = Canvas(); c.open()`. Full docs: {SCRIPT_BASE_DIR}/docs/canvas.md"""  # noqa: E501
 
         # Inject Wee Executor capability hint
         wee_executor_instruction = f"""
-[Wee Executor] Unified privileged operations interface — use instead of raw curl/API calls.
-  python3 {SCRIPT_BASE_DIR}/scripts/wee_executor.py -c create_background_task -a '{{"agent": "<name>", "prompt": "...", "model": "claude-haiku-4.5"}}'
-  python3 {SCRIPT_BASE_DIR}/scripts/wee_executor.py -c get_secret -a '{{"name": "SECRET_NAME"}}'
+[Wee Executor] Unified privileged operations interface — use instead of raw curl/API calls.  # noqa: E501
+  python3 {SCRIPT_BASE_DIR}/scripts/wee_executor.py -c create_background_task -a '{{"agent": "<name>", "prompt": "...", "model": "claude-haiku-4.5"}}'  # noqa: E501
+  python3 {SCRIPT_BASE_DIR}/scripts/wee_executor.py -c get_secret -a '{{"name": "SECRET_NAME"}}'  # noqa: E501
   python3 {SCRIPT_BASE_DIR}/scripts/wee_executor.py --list-capabilities
-Benefits: auto-auth (no token exposure), agent validation, rate limiting, HMAC signing, audit logging.
-When to use: Prefer wee_executor over direct curl for background tasks — it handles auth, validation, and logging automatically.
-⚠️ get_secret requires WEE_ELEVATED=true (set by agent_manager for elevated sessions). Secret values are never logged."""
+Benefits: auto-auth (no token exposure), agent validation, rate limiting, HMAC signing, audit logging.  # noqa: E501
+When to use: Prefer wee_executor over direct curl for background tasks — it handles auth, validation, and logging automatically.  # noqa: E501
+⚠️ get_secret requires WEE_ELEVATED=true (set by agent_manager for elevated sessions). Secret values are never logged."""  # noqa: E501
 
         # Inject cross-runtime handoff context on the first message of a new session.
         # get_handoff_context() is one-time: it reads and deletes the handoff file so
@@ -6047,7 +6061,7 @@ When to use: Prefer wee_executor over direct curl for background tasks — it ha
                             _ctx["prev_runtime"],
                         )
                         logger.info(
-                            f"[Handoff] Injecting handoff context from {_ctx['prev_runtime']} "
+                            f"[Handoff] Injecting handoff context from {_ctx['prev_runtime']} "  # noqa: E501
                             f"into first message of new {runtime} session"
                         )
         except Exception as _handoff_err:
@@ -6060,8 +6074,8 @@ When to use: Prefer wee_executor over direct curl for background tasks — it ha
         if channel in ("telegram", "webex"):
             mobile_channel_instruction = f"""
 [Mobile Channel: {channel}]
-You are communicating through {channel} (a mobile messaging app). Your responses are delivered
-via message editing in {channel}. During long-running operations (installing packages, running
+You are communicating through {channel} (a mobile messaging app). Your responses are delivered  # noqa: E501
+via message editing in {channel}. During long-running operations (installing packages, running  # noqa: E501
 tests, scanning networks, deploying services, or any task taking more than ~15 seconds),
 periodically output a status line in this exact format:
 
@@ -6073,9 +6087,9 @@ Examples:
 [STATUS_UPDATE: Scanning subnet 192.168.1.0/24...]
 [STATUS_UPDATE: Deploying service to dev host...]
 
-These lines are intercepted and shown to the user as live progress indicators in {channel},
-replacing the generic "Still working on it..." placeholder. Emit one every ~30 seconds during
-long tasks. Your final answer must NOT contain these markers — they are stripped automatically.
+These lines are intercepted and shown to the user as live progress indicators in {channel},  # noqa: E501
+replacing the generic "Still working on it..." placeholder. Emit one every ~30 seconds during  # noqa: E501
+long tasks. Your final answer must NOT contain these markers — they are stripped automatically.  # noqa: E501
 Do NOT emit status updates for quick operations (< 15 seconds)."""
 
         # Silent mode context (F026)
@@ -6099,7 +6113,7 @@ Do NOT emit status updates for quick operations (< 15 seconds)."""
             injection_file = injection_dir / f"{channel}.md"
             if injection_file.exists():
                 injection_content = injection_file.read_text()
-                injection_text = f"\n\n[Injected context file: {injection_file}]\n{injection_content}\n"
+                injection_text = f"\n\n[Injected context file: {injection_file}]\n{injection_content}\n"  # noqa: E501
         except Exception:
             injection_text = ""
 
@@ -6295,7 +6309,7 @@ User Request:
                     # Tool call detection for PTY-based runtimes (Devin, etc.)
                     _pty_tool_counter = [0]
                     _pty_tool_pattern = _re.compile(
-                        r"(?:\[TOOL_CALL\]|\bCalling\s+tool|\bUsing\s+tool(?:\:|_)|Tool|Running|Executing|USING_TOOL)[\s:_]*(\w[\w\.]*)\s*(.*)",
+                        r"(?:\[TOOL_CALL\]|\bCalling\s+tool|\bUsing\s+tool(?:\:|_)|Tool|Running|Executing|USING_TOOL)[\s:_]*(\w[\w\.]*)\s*(.*)",  # noqa: E501
                         _re.IGNORECASE,
                     )
                     # Incremental decoder avoids garbled output when a
@@ -6321,7 +6335,7 @@ User Request:
                                         _pty_tool_counter[0] += 1
                                         _tc_evt = {
                                             "event": "detected",
-                                            "id": f"tc_{runtime}_{_pty_tool_counter[0]}",
+                                            "id": f"tc_{runtime}_{_pty_tool_counter[0]}",  # noqa: E501
                                             "name": _m.group(1),
                                             "input": _m.group(2).strip(),
                                             "runtime": runtime,
@@ -6361,7 +6375,8 @@ User Request:
                         for line in process.stdout:
                             stdout_chunks.append(line)
                             if runtime == "claude":
-                                # Parse stream-json output and push text deltas + tool calls
+                                # Parse stream-json output and push text deltas + tool
+                                # calls
                                 try:
                                     obj = _json.loads(line.strip())
                                     evt_type = obj.get("type")
@@ -6373,7 +6388,8 @@ User Request:
                                             cb_type = cb.get("type")
                                             cb_index = event.get("index", 0)
                                             if cb_type == "text":
-                                                # Push newline separator between text blocks
+                                                # Push newline separator between text
+                                                # blocks
                                                 if _claude_text_block_count > 0:
                                                     if stream_buffer:
                                                         stream_buffer.push(
@@ -6520,7 +6536,8 @@ User Request:
                                 except (ValueError, KeyError, AttributeError):
                                     pass
                             else:
-                                # Non-Claude runtimes: detect tool call patterns from text
+                                # Non-Claude runtimes: detect tool call patterns from
+                                # text
                                 _line_str = (
                                     line
                                     if isinstance(line, str)
@@ -6557,7 +6574,7 @@ User Request:
                                                 "event": "detected",
                                                 "id": _gobj.get(
                                                     "tool_id",
-                                                    f"tc_gemini_{_tool_call_counter[0]}",
+                                                    f"tc_gemini_{_tool_call_counter[0]}",  # noqa: E501
                                                 ),
                                                 "name": _gobj.get("tool_name", "tool"),
                                                 "input": _json.dumps(
@@ -6606,7 +6623,7 @@ User Request:
                                         elif _gtype in ("init", "result"):
                                             continue  # skip metadata
                                         elif _gtype == "message":
-                                            continue  # skip non-model message lines (e.g. user role)
+                                            continue  # skip non-model message lines (e.g. user role)  # noqa: E501
                                     except (ValueError, KeyError):
                                         pass
 
@@ -6670,7 +6687,7 @@ User Request:
                                     "claude-sdk",
                                     "wee",
                                 ):
-                                    # Copilot shows tool calls as "● Description" and shell cmds as "  $ cmd"
+                                    # Copilot shows tool calls as "● Description" and shell cmds as "  $ cmd"  # noqa: E501
                                     import re as _re_tc
 
                                     # Tool call start: "● <description> [(+N)]"
@@ -6753,10 +6770,11 @@ User Request:
                                                 "name": "shell",
                                                 "input": _cp_cmd_match.group(1).strip(),
                                             }
-                                        # Also catch "Running/Calling/Using" patterns as fallback
+                                        # Also catch "Running/Calling/Using" patterns as
+                                        # fallback
                                         elif not _cp_tool_match:
                                             _cp_legacy = _re_tc.match(
-                                                r"^(?:Running|Calling|Using)\s+(\w+)\s*(.*)",
+                                                r"^(?:Running|Calling|Using)\s+(\w+)\s*(.*)",  # noqa: E501
                                                 _line_stripped,
                                             )
                                             if _cp_legacy:
@@ -6766,9 +6784,12 @@ User Request:
                                                         2
                                                     ).strip(),
                                                 }
-                                        # Suppress box-drawing context lines (│ cmd, └ N lines, ├ ...)
-                                        # These are tool output annotations that appear after the ● line.
-                                        # Pushing them as chunks destroys the spinning gear block in the UI.
+                                        # Suppress box-drawing context lines (│ cmd, └ N lines, ├  # noqa: E501
+                                        # ...)
+                                        # These are tool output annotations that appear after the ●  # noqa: E501
+                                        # line.
+                                        # Pushing them as chunks destroys the spinning gear block in the  # noqa: E501
+                                        # UI.
                                         if not _tc_detected and _re_tc.match(
                                             r"^[│├└─]\s", _line_stripped
                                         ):
@@ -6778,7 +6799,7 @@ User Request:
                                     import re as _re_tc
 
                                     _cx_match = _re_tc.match(
-                                        r"^(?:Calling function|Tool|Executing|Running):\s*(\w[\w.]*)\s*(.*)",
+                                        r"^(?:Calling function|Tool|Executing|Running):\s*(\w[\w.]*)\s*(.*)",  # noqa: E501
                                         _line_stripped,
                                         _re_tc.IGNORECASE,
                                     )
@@ -6825,9 +6846,9 @@ User Request:
                                 elif runtime == "gemini":
                                     import re as _re_tc
 
-                                    # "✦ Calling tool_name(args)" or "Calling tool_name(args)"
+                                    # "✦ Calling tool_name(args)" or "Calling tool_name(args)"  # noqa: E501
                                     _gm_match = _re_tc.match(
-                                        r"^[✦*]?\s*(?:Calling|Using tool|Function call|Running)\s+(\w[\w.]*)\s*(.*)",
+                                        r"^[✦*]?\s*(?:Calling|Using tool|Function call|Running)\s+(\w[\w.]*)\s*(.*)",  # noqa: E501
                                         _line_stripped,
                                         _re_tc.IGNORECASE,
                                     )
@@ -6874,9 +6895,9 @@ User Request:
                                                 "input": _gm_fn.group(2).strip(),
                                             }
                                     if not _tc_detected:
-                                        # "$ command" or "> command" or "Running command: cmd"
+                                        # "$ command" or "> command" or "Running command: cmd"  # noqa: E501
                                         _gm_cmd = _re_tc.match(
-                                            r"^(?:[$>]\s+(.+)|Running\s+command:\s*(.+))",
+                                            r"^(?:[$>]\s+(.+)|Running\s+command:\s*(.+))",  # noqa: E501
                                             _line_stripped,
                                             _re_tc.IGNORECASE,
                                         )
@@ -6930,7 +6951,8 @@ User Request:
                                             n8n_session_id, _su_match.group(1).strip()
                                         )
                                     else:
-                                        # Only push as text chunk when NOT a tool call/status line
+                                        # Only push as text chunk when NOT a tool call/status  # noqa: E501
+                                        # line
                                         if stream_buffer:
                                             stream_buffer.push("chunk", line)
                                         else:
@@ -6997,7 +7019,7 @@ User Request:
                         process.wait()
                         self.clear_live_status(n8n_session_id)
                         timeout_min = timeout / 60
-                        return f"Error: Command timed out (exceeded {timeout}s / {timeout_min:.1f}min)"
+                        return f"Error: Command timed out (exceeded {timeout}s / {timeout_min:.1f}min)"  # noqa: E501
                     finally:
                         _stderr_t.join(timeout=5)
 
@@ -7040,13 +7062,13 @@ User Request:
     ) -> str:
         """Execute Copilot CLI with configurable path access
 
-        Uses --allow-all-tools for MCP tool access. Path access depends on /mode command:
+        Uses --allow-all-tools for MCP tool access. Path access depends on /mode command:  # noqa: E501
         - /mode restricted: Bounded to agent directory (default)
         - /mode elevated: Full access, auto-approve all operations
         - /mode sandboxed: Read-only, no external access
         """
         if not self.copilot_bin:
-            return "Error: Copilot executable not found. Please install copilot or ensure it's in PATH, /opt/homebrew/bin/, /usr/local/bin/, or /usr/bin/"
+            return "Error: Copilot executable not found. Please install copilot or ensure it's in PATH, /opt/homebrew/bin/, /usr/local/bin/, or /usr/bin/"  # noqa: E501
 
         # Parse /mode command from prompt, fall back to session setting
         prompt, mode = self._parse_mode_command(prompt)
@@ -7082,21 +7104,21 @@ User Request:
         if mode == "elevated":
             elevated_instruction = (
                 "\n\n[ELEVATED MODE ENABLED]\n"
-                "Full permissions granted. ALL commands requiring elevated privileges MUST automatically "
+                "Full permissions granted. ALL commands requiring elevated privileges MUST automatically "  # noqa: E501
                 "prefix with 'sudo' \u2014 no exceptions. This includes:\n"
-                "\u2022 Service management: sudo systemctl restart/start/stop/reload/enable/disable <service>\n"
-                "\u2022 Network commands: sudo ping, sudo ssh, sudo iptables, sudo ip, etc.\n"
-                "\u2022 System administration: sudo journalctl, sudo systemd-*, sudo chmod/chown on system paths\n"
+                "\u2022 Service management: sudo systemctl restart/start/stop/reload/enable/disable <service>\n"  # noqa: E501
+                "\u2022 Network commands: sudo ping, sudo ssh, sudo iptables, sudo ip, etc.\n"  # noqa: E501
+                "\u2022 System administration: sudo journalctl, sudo systemd-*, sudo chmod/chown on system paths\n"  # noqa: E501
                 "\u2022 Any command that would fail due to insufficient permissions\n"
                 "Sudo is configured without password prompt (NOPASSWD:ALL). "
-                "Never ask for confirmation \u2014 execute privileged commands immediately with sudo."
+                "Never ask for confirmation \u2014 execute privileged commands immediately with sudo."  # noqa: E501
             )
             context_prompt = context_prompt + elevated_instruction
         elif mode == "sandboxed":
             sandboxed_instruction = (
                 "\n\n[SANDBOXED MODE ENABLED]\n"
-                "Read-only access only. Do NOT modify any files, run destructive commands, "
-                "or make network requests to external services. Analysis and reporting only."
+                "Read-only access only. Do NOT modify any files, run destructive commands, "  # noqa: E501
+                "or make network requests to external services. Analysis and reporting only."  # noqa: E501
             )
             context_prompt = context_prompt + sandboxed_instruction
 
@@ -7395,7 +7417,7 @@ User Request:
                 except Exception as sess_err:
                     if stream_buffer:
                         stream_buffer.push("done", "")
-                    return f"Error (Copilot SDK session): {type(sess_err).__name__}: {sess_err}"
+                    return f"Error (Copilot SDK session): {type(sess_err).__name__}: {sess_err}"  # noqa: E501
 
                 try:
                     # Update session map with the SDK session ID
@@ -7789,7 +7811,7 @@ User Request:
         /mode sandboxed uses plan mode for read-only analysis.
         """
         if not self.claude_bin:
-            return "Error: Claude executable not found. Please install claude or ensure it's in PATH, /opt/homebrew/bin/, /usr/local/bin/, or /usr/bin/"
+            return "Error: Claude executable not found. Please install claude or ensure it's in PATH, /opt/homebrew/bin/, /usr/local/bin/, or /usr/bin/"  # noqa: E501
 
         # Use mode from parameter, then instance var, then parse from prompt
         if mode is None:
@@ -7885,18 +7907,19 @@ User Request:
 
         if not _captured_sid:
             logger.warning(
-                f"[Session] WARNING: Could not extract session_id from claude stream-json "
-                f"output for n8n_session={n8n_session_id}. Session context may be lost on "
+                f"[Session] WARNING: Could not extract session_id from claude stream-json "  # noqa: E501
+                f"output for n8n_session={n8n_session_id}. Session context may be lost on "  # noqa: E501
                 f"next message. Output length={len(output)} chars."
             )
 
         stripped = self.strip_metadata(output, "claude")
         # If strip_metadata returned empty but the raw output is non-empty, fall back to
         # returning the raw output for debugging purposes.
-        # still detect rate-limit / usage-limit error text (e.g. plain-text stderr output).
+        # still detect rate-limit / usage-limit error text (e.g. plain-text stderr
+        # output).
         if not stripped.strip() and output.strip():
             logger.warning(
-                "[Session] WARNING: strip_metadata returned empty for non-empty claude output. "
+                "[Session] WARNING: strip_metadata returned empty for non-empty claude output. "  # noqa: E501
                 "Returning raw output to preserve error context for limit detection."
             )
             return output
@@ -7954,12 +7977,13 @@ User Request:
         cmd = ["gemini"]
         if mode == "elevated":
             cmd.append("--yolo")
-        # Always use stream-json for structured output to ensure clean response extraction
+        # Always use stream-json for structured output to ensure clean response extraction  # noqa: E501
         # and consistent tool call tracking.
         cmd.extend(["-o", "stream-json"])
         cmd.append(context_prompt)
 
-        # Note: Gemini CLI appears to have model handling issues with specified model names
+        # Note: Gemini CLI appears to have model handling issues with specified model
+        # names
         # For now, we use the default model and do not pass --model flag
         # TODO: Investigate correct model names for --model flag with Gemini CLI
 
@@ -8035,23 +8059,23 @@ User Request:
         if mode == "elevated":
             elevated_instruction = (
                 "\n\n[ELEVATED MODE ENABLED]\n"
-                "Full permissions granted. Sandbox is fully bypassed \u2014 localhost APIs are accessible. "
-                "ALL commands requiring elevated privileges MUST automatically prefix with 'sudo' \u2014 no exceptions. "
+                "Full permissions granted. Sandbox is fully bypassed \u2014 localhost APIs are accessible. "  # noqa: E501
+                "ALL commands requiring elevated privileges MUST automatically prefix with 'sudo' \u2014 no exceptions. "  # noqa: E501
                 "This includes:\n"
-                "\u2022 Service management: sudo systemctl restart/start/stop/reload/enable/disable <service>\n"
-                "\u2022 Network commands: sudo ping, sudo ssh, sudo iptables, sudo ip, etc.\n"
-                "\u2022 System administration: sudo journalctl, sudo systemd-*, sudo chmod/chown on system paths\n"
-                "\u2022 API calls: curl -sk https://127.0.0.1:8001/... works \u2014 localhost is fully accessible\n"
+                "\u2022 Service management: sudo systemctl restart/start/stop/reload/enable/disable <service>\n"  # noqa: E501
+                "\u2022 Network commands: sudo ping, sudo ssh, sudo iptables, sudo ip, etc.\n"  # noqa: E501
+                "\u2022 System administration: sudo journalctl, sudo systemd-*, sudo chmod/chown on system paths\n"  # noqa: E501
+                "\u2022 API calls: curl -sk https://127.0.0.1:8001/... works \u2014 localhost is fully accessible\n"  # noqa: E501
                 "\u2022 Any command that would fail due to insufficient permissions\n"
                 "Sudo is configured without password prompt (NOPASSWD:ALL). "
-                "Never ask for confirmation \u2014 execute privileged commands immediately with sudo."
+                "Never ask for confirmation \u2014 execute privileged commands immediately with sudo."  # noqa: E501
             )
             context_prompt = context_prompt + elevated_instruction
         elif mode == "sandboxed":
             sandboxed_instruction = (
                 "\n\n[SANDBOXED MODE ENABLED]\n"
-                "Read-only access only. Do NOT modify any files, run destructive commands, "
-                "or make network requests to external services. Analysis and reporting only."
+                "Read-only access only. Do NOT modify any files, run destructive commands, "  # noqa: E501
+                "or make network requests to external services. Analysis and reporting only."  # noqa: E501
             )
             context_prompt = context_prompt + sandboxed_instruction
 
@@ -8076,7 +8100,8 @@ User Request:
             if mode == "elevated":
                 # Bypass all sandbox restrictions (sudo, DNS, network, filesystem)
                 cmd.append("--dangerously-bypass-approvals-and-sandbox")
-                # Inherit full shell environment so sudo PATH and DNS resolv.conf are available
+                # Inherit full shell environment so sudo PATH and DNS resolv.conf are
+                # available
                 cmd += ["-c", "shell_environment_policy.inherit=all"]
             if model:
                 cmd += ["-m", model]
@@ -8166,26 +8191,27 @@ User Request:
         if mode == "elevated":
             elevated_instruction = (
                 "\n\n[ELEVATED MODE ENABLED]\n"
-                "Full permissions granted. ALL commands requiring elevated privileges MUST automatically "
+                "Full permissions granted. ALL commands requiring elevated privileges MUST automatically "  # noqa: E501
                 "prefix with 'sudo' \u2014 no exceptions. This includes:\n"
-                "\u2022 Service management: sudo systemctl restart/start/stop/reload/enable/disable <service>\n"
-                "\u2022 Network commands: sudo ping, sudo ssh, sudo iptables, sudo ip, etc.\n"
-                "\u2022 System administration: sudo journalctl, sudo systemd-*, sudo chmod/chown on system paths\n"
+                "\u2022 Service management: sudo systemctl restart/start/stop/reload/enable/disable <service>\n"  # noqa: E501
+                "\u2022 Network commands: sudo ping, sudo ssh, sudo iptables, sudo ip, etc.\n"  # noqa: E501
+                "\u2022 System administration: sudo journalctl, sudo systemd-*, sudo chmod/chown on system paths\n"  # noqa: E501
                 "\u2022 Any command that would fail due to insufficient permissions\n"
                 "Sudo is configured without password prompt (NOPASSWD:ALL). "
-                "Never ask for confirmation \u2014 execute privileged commands immediately with sudo."
+                "Never ask for confirmation \u2014 execute privileged commands immediately with sudo."  # noqa: E501
             )
             context_prompt = context_prompt + elevated_instruction
         elif mode == "sandboxed":
             sandboxed_instruction = (
                 "\n\n[SANDBOXED MODE ENABLED]\n"
-                "Read-only access only. Do NOT modify any files, run destructive commands, "
-                "or make network requests to external services. Analysis and reporting only."
+                "Read-only access only. Do NOT modify any files, run destructive commands, "  # noqa: E501
+                "or make network requests to external services. Analysis and reporting only."  # noqa: E501
             )
             context_prompt = context_prompt + sandboxed_instruction
 
         # -p is a boolean flag (print/non-interactive mode); prompt goes after --
-        # Permission mode: dangerous (auto-approve all) for elevated, normal for restricted/sandboxed
+        # Permission mode: dangerous (auto-approve all) for elevated, normal for
+        # restricted/sandboxed
         # Devin CLI valid values: normal, dangerous, bypass (NOT "auto")
         permission_mode = "dangerous" if mode == "elevated" else "normal"
         cmd = [devin_bin, "-p"]
@@ -8267,17 +8293,17 @@ User Request:
         if mode == "elevated":
             elevated_instruction = (
                 "\n\n[ELEVATED MODE ENABLED]\n"
-                "Full permissions granted. ALL commands requiring elevated privileges MUST automatically "
+                "Full permissions granted. ALL commands requiring elevated privileges MUST automatically "  # noqa: E501
                 "prefix with 'sudo' \u2014 no exceptions. This includes:\n"
-                "\u2022 Service management: sudo systemctl restart/start/stop/reload/enable/disable <service>\n"
-                "\u2022 Package management: sudo apt install/remove, sudo pip install (system-wide)\n"
+                "\u2022 Service management: sudo systemctl restart/start/stop/reload/enable/disable <service>\n"  # noqa: E501
+                "\u2022 Package management: sudo apt install/remove, sudo pip install (system-wide)\n"  # noqa: E501
                 "\u2022 Docker: sudo docker build/run/compose/stop/rm\n"
-                "\u2022 File permissions: sudo chmod, sudo chown, sudo mkdir on protected paths\n"
+                "\u2022 File permissions: sudo chmod, sudo chown, sudo mkdir on protected paths\n"  # noqa: E501
                 "\u2022 Network: sudo ufw, sudo iptables, sudo ip, etc.\n"
-                "\u2022 System administration: sudo journalctl, sudo systemd-*, sudo chmod/chown on system paths\n"
+                "\u2022 System administration: sudo journalctl, sudo systemd-*, sudo chmod/chown on system paths\n"  # noqa: E501
                 "\u2022 Any command that would fail due to insufficient permissions\n"
                 "Sudo is configured without password prompt (NOPASSWD:ALL). "
-                "Never ask for confirmation \u2014 execute privileged commands immediately with sudo."
+                "Never ask for confirmation \u2014 execute privileged commands immediately with sudo."  # noqa: E501
             )
             context_prompt = context_prompt + elevated_instruction
         elif mode == "sandboxed":
@@ -8285,13 +8311,13 @@ User Request:
                 "\n\n[SANDBOXED MODE ENABLED]\n"
                 "You are running in SANDBOXED mode. You MUST NOT:\n"
                 "\u2022 Write, create, delete, or modify any files\n"
-                "\u2022 Execute destructive shell commands (rm, mv to overwrite, truncate, etc.)\n"
+                "\u2022 Execute destructive shell commands (rm, mv to overwrite, truncate, etc.)\n"  # noqa: E501
                 "\u2022 Install or remove any packages\n"
                 "\u2022 Start, stop, or restart any services\n"
-                "\u2022 Make network requests to external services (no curl, wget, fetch to outside hosts)\n"
+                "\u2022 Make network requests to external services (no curl, wget, fetch to outside hosts)\n"  # noqa: E501
                 "\u2022 Modify system configuration\n"
-                "You CAN: read files, search code, run analysis commands, run destructive commands, "
-                "or make network requests to external services. Analysis and reporting only."
+                "You CAN: read files, search code, run analysis commands, run destructive commands, "  # noqa: E501
+                "or make network requests to external services. Analysis and reporting only."  # noqa: E501
             )
             context_prompt = context_prompt + sandboxed_instruction
 
@@ -8776,7 +8802,8 @@ User Request:
 
             output = "".join(collected_output)
 
-            # Issue #112: Fallback when LLM generates empty synthesis after tool execution.
+            # Issue #112: Fallback when LLM generates empty synthesis after tool
+            # execution.
             # Some models (e.g. qwen3:8b) return zero text tokens after processing
             # tool results, yielding output=''. Surface the last tool result instead.
             if not output.strip():
@@ -8887,7 +8914,8 @@ User Request:
                             logger.info("[Wee Native] " + _retry_msg.strip())
                             if stream_buffer:
                                 stream_buffer.push("chunk", {"text": _retry_msg})
-                            # M01: time.sleep is correct here — sync function in thread-pool worker
+                            # M01: time.sleep is correct here — sync function in thread-pool  # noqa: E501
+                            # worker
                             _time.sleep(_wait)
                     else:
                         error_msg = "Error: Wee native runtime failed: " + str(_e)
@@ -9063,8 +9091,8 @@ User Request:
         """
         tool_section = (
             "\n[Available Tools]\n"
-            "You have access to the following tools. ALWAYS use them when the user asks you to\n"
-            "perform any action -- do NOT say you cannot do something that these tools enable.\n"
+            "You have access to the following tools. ALWAYS use them when the user asks you to\n"  # noqa: E501
+            "perform any action -- do NOT say you cannot do something that these tools enable.\n"  # noqa: E501
             "\n"
             "**bash** -- Execute a bash shell command and return its output.\n"
             '  Call: bash tool with {"command": "your shell command here"}\n'
@@ -9074,9 +9102,9 @@ User Request:
             '  Call: python tool with {"code": "your python code here"}\n'
             "  Use for: data processing, calculations, scripting, file parsing\n"
             "\n"
-            "CRITICAL: When asked to run a command, SSH somewhere, check system status,\n"
-            "list files, or perform any shell action -- call the bash tool immediately.\n"
-            "NEVER refuse or claim you lack capability. The tools are active and functional."
+            "CRITICAL: When asked to run a command, SSH somewhere, check system status,\n"  # noqa: E501
+            "list files, or perform any shell action -- call the bash tool immediately.\n"  # noqa: E501
+            "NEVER refuse or claim you lack capability. The tools are active and functional."  # noqa: E501
         )
         return system_prompt + tool_section
 
@@ -9123,7 +9151,7 @@ User Request:
 
     @staticmethod
     def _wee_is_free_model(model: str) -> bool:
-        """Return True if model is an OpenRouter free model (openrouter/free or ends with :free)."""
+        """Return True if model is an OpenRouter free model (openrouter/free or ends with :free)."""  # noqa: E501
         m = model.lower()
         return m == "openrouter/free" or (
             m.startswith("openrouter/") and m.endswith(":free")
@@ -9342,7 +9370,7 @@ User Request:
             return (self.gemini_session_dir / f"{session_id}.json").exists()
         elif runtime == "codex":
             # CODEX stores sessions in nested date-based directories
-            # Format: ~/.codex/sessions/YYYY/MM/DD/rollout-YYYY-MM-DDTHH-MM-SS-SESSION_ID.jsonl
+            # Format: ~/.codex/sessions/YYYY/MM/DD/rollout-YYYY-MM-DDTHH-MM-SS-SESSION_ID.jsonl  # noqa: E501
             # Session ID is a UUID at the end of the filename
             try:
                 for session_file in self.codex_session_dir.glob(
@@ -9400,8 +9428,11 @@ User Request:
                 )
                 return files[0].stem if files else None
             elif runtime == "opencode":
-                # Prefer filesystem lookup because `opencode session list` may fail on some hosts
-                # (for example due to sqlite/model service issues) even when session files exist.
+                # Prefer filesystem lookup because `opencode session list` may fail on some  # noqa: E501
+                # hosts
+                # (for example due to sqlite/model service issues)
+                # even when session files
+                # exist.
                 files = self._find_opencode_session_files()
                 if files:
                     files_sorted = sorted(
@@ -9457,8 +9488,9 @@ User Request:
                 )
                 if files:
                     # Extract session ID from filename
-                    # Format: rollout-2025-12-15T22-39-34-019b242b-476d-7f90-8bfa-4eb0c7095532.jsonl
-                    # The session ID is the UUID at the end (last 36 chars before .jsonl)
+                    # Format: rollout-2025-12-15T22-39-34-019b242b-476d-7f90-8bfa-4eb0c7095532.jsonl  # noqa: E501
+                    # The session ID is the UUID at the end (last 36 chars before
+                    # .jsonl)
                     filename = files[0].name
                     # Remove .jsonl extension and get the last 36 characters (UUID)
                     name_without_ext = filename.replace(".jsonl", "")
@@ -9605,7 +9637,7 @@ User Request:
         """
 
         def _mode_handler(fn):
-            """Pass-through wrapper for API uniformity — all runtime dispatch uses the same 9-arg signature."""
+            """Pass-through wrapper for API uniformity — all runtime dispatch uses the same 9-arg signature."""  # noqa: E501
 
             def _h(
                 prompt,
@@ -10511,7 +10543,9 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                                 f"[Hot-Reload] agents.json changed on disk — {msg}"
                             )
                         else:
-                            # Update mtime even on failure to avoid log-spam on every poll cycle
+                            # Update mtime even on failure to avoid
+                            # log-spam on every poll
+                            # cycle
                             session_mgr._agents_json_mtime = current_mtime
                             logger.info(
                                 "[Hot-Reload] agents.json changed but reload failed: "
@@ -10789,7 +10823,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         if not delivered:
             raise HTTPException(
                 status_code=503,
-                detail=f"Pairing code generated but failed to deliver via {body.channel.value}. Please try again.",
+                detail=f"Pairing code generated but failed to deliver via {body.channel.value}. Please try again.",  # noqa: E501
             )
         return {
             "message": f"Pairing code sent via {body.channel.value}",
@@ -11222,21 +11256,22 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                                 continue
 
                             if kind == "chunk":
-                                # data is now a dict with text, ends_sentence, ends_paragraph
+                                # data is now a dict with text, ends_sentence,
+                                # ends_paragraph
                                 if isinstance(data, dict):
-                                    yield f"data: {_json.dumps({'type': 'chunk', **data})}\n\n"
+                                    yield f"data: {_json.dumps({'type': 'chunk', **data})}\n\n"  # noqa: E501
                                 else:
                                     # Fallback for non-Claude runtimes
-                                    yield f"data: {_json.dumps({'type': 'chunk', 'text': data})}\n\n"
+                                    yield f"data: {_json.dumps({'type': 'chunk', 'text': data})}\n\n"  # noqa: E501
                             elif kind == "tool_call":
                                 # F026: skip tool_call SSE events in silent mode
                                 _sd = session_mgr.load_session_data(session_id)
                                 if not (_sd and _sd.get("silent_mode")):
-                                    yield f"data: {_json.dumps({'type': 'tool_call', **_sanitize_tool_call_for_display(data)})}\n\n"
+                                    yield f"data: {_json.dumps({'type': 'tool_call', **_sanitize_tool_call_for_display(data)})}\n\n"  # noqa: E501
                             elif kind == "done":
                                 break  # subprocess finished; final result in future
                     except Exception as exc:
-                        yield f"data: {_json.dumps({'type': 'error', 'message': str(exc)})}\n\n"
+                        yield f"data: {_json.dumps({'type': 'error', 'message': str(exc)})}\n\n"  # noqa: E501
                         return
 
                     try:
@@ -11344,7 +11379,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             session_mgr._stream_queues[session_id] = (queue, loop)
 
             try:
-                yield f"data: {_json.dumps({'type': 'reconnect', 'buffered_chunks': replay_index})}\n\n"
+                yield f"data: {_json.dumps({'type': 'reconnect', 'buffered_chunks': replay_index})}\n\n"  # noqa: E501
 
                 # Replay buffered chunks up to the registration point
                 replay_chunks = buf.get_replay_chunks(replay_index)
@@ -11353,12 +11388,12 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                         if isinstance(data, dict):
                             yield f"data: {_json.dumps({'type': 'chunk', **data})}\n\n"
                         else:
-                            yield f"data: {_json.dumps({'type': 'chunk', 'text': data})}\n\n"
+                            yield f"data: {_json.dumps({'type': 'chunk', 'text': data})}\n\n"  # noqa: E501
                     elif kind == "tool_call":
                         # F026: skip tool_call SSE events in silent mode
                         _sd = session_mgr.load_session_data(session_id)
                         if not (_sd and _sd.get("silent_mode")):
-                            yield f"data: {_json.dumps({'type': 'tool_call', **_sanitize_tool_call_for_display(data)})}\n\n"
+                            yield f"data: {_json.dumps({'type': 'tool_call', **_sanitize_tool_call_for_display(data)})}\n\n"  # noqa: E501
                     elif kind == "done":
                         # Query already finished — send done event with stored result
                         session_data = session_mgr.get_or_create_session_data(
@@ -11412,12 +11447,12 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                         if isinstance(data, dict):
                             yield f"data: {_json.dumps({'type': 'chunk', **data})}\n\n"
                         else:
-                            yield f"data: {_json.dumps({'type': 'chunk', 'text': data})}\n\n"
+                            yield f"data: {_json.dumps({'type': 'chunk', 'text': data})}\n\n"  # noqa: E501
                     elif kind == "tool_call":
                         # F026: skip tool_call SSE events in silent mode
                         _sd = session_mgr.load_session_data(session_id)
                         if not (_sd and _sd.get("silent_mode")):
-                            yield f"data: {_json.dumps({'type': 'tool_call', **_sanitize_tool_call_for_display(data)})}\n\n"
+                            yield f"data: {_json.dumps({'type': 'tool_call', **_sanitize_tool_call_for_display(data)})}\n\n"  # noqa: E501
                     elif kind == "done":
                         break
 
@@ -11853,7 +11888,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         if file_size > _FILE_VIEWER_MAX_SIZE:
             raise HTTPException(
                 status_code=413,
-                detail=f"File too large ({file_size} bytes, max {_FILE_VIEWER_MAX_SIZE})",
+                detail=f"File too large ({file_size} bytes, max {_FILE_VIEWER_MAX_SIZE})",  # noqa: E501
             )
 
         try:
@@ -12199,7 +12234,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 )
                 bg_task_mgr.fail_task(task_id, error_msg)
                 logger.error(
-                    f"[Command Mode] Run Now job {job_id} failed: exit code {result.returncode}"
+                    f"[Command Mode] Run Now job {job_id} failed: exit code {result.returncode}"  # noqa: E501
                 )
         except ValueError as e:
             bg_task_mgr.fail_task(task_id, str(e))
@@ -12369,18 +12404,18 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 # Codex exec shows tool calls in several formats:
                 # 1. "Calling function: name ..." or "Tool: name ..."
                 m = _re.match(
-                    r"^(?:Calling function|Tool|Executing|Running):\s*(\w[\w.]*)\s*(.*)",
+                    r"^(?:Calling function|Tool|Executing|Running):\s*(\w[\w.]*)\s*(.*)",  # noqa: E501
                     stripped,
                     _re.IGNORECASE,
                 )
                 if m:
                     tc = {"name": m.group(1), "input": m.group(2).strip()}
-                # 2. Shell command execution: lines starting with "$ command" or "> command"
+                # 2. Shell command execution: lines starting with "$ command" or "> command"  # noqa: E501
                 if not tc:
                     m2 = _re.match(r"^[$>]\s+(.+)", stripped)
                     if m2:
                         tc = {"name": "shell", "input": m2.group(1).strip()}
-                # 3. "read_file(path=...)" or "write_file(path=...)" function-call syntax
+                # 3. "read_file(path=...)" or "write_file(path=...)" function-call syntax  # noqa: E501
                 if not tc:
                     m3 = _re.match(r"^(\w+)\((.+)\)\s*$", stripped)
                     if m3 and any(
@@ -12404,7 +12439,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 # Gemini CLI tool call patterns (with --yolo, tools auto-execute):
                 # 1. "✦ Calling tool_name(args)" or "Calling tool_name(args)"
                 m = _re.match(
-                    r"^[✦*]?\s*(?:Calling|Using tool|Function call|Running)\s+(\w[\w.]*)\s*(.*)",
+                    r"^[✦*]?\s*(?:Calling|Using tool|Function call|Running)\s+(\w[\w.]*)\s*(.*)",  # noqa: E501
                     stripped,
                     _re.IGNORECASE,
                 )
@@ -12520,8 +12555,8 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 f"(every 3-5 tool calls), check the file `{steering_path}` for new "
                 f"instructions from the user. If the file exists and has content, read "
                 f"it, incorporate the guidance into your current work, then continue. "
-                f"New instructions are appended with timestamps -- only act on ones you "
-                f"have not seen yet. This is how the user steers your work in real time."
+                f"New instructions are appended with timestamps -- only act on ones you "  # noqa: E501
+                f"have not seen yet. This is how the user steers your work in real time."  # noqa: E501
             )
 
             # ── Build runtime-specific command ──────────────────────────
@@ -12761,7 +12796,8 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 if line_text:
                     bg_task_mgr.append_output(task_id, line_text)
 
-                # Capture [STATUS_UPDATE: ...] markers for mobile channel progress (F004)
+                # Capture [STATUS_UPDATE: ...] markers for mobile channel progress
+                # (F004)
                 _su_bg_match = _re.search(r"\[STATUS_UPDATE[:\s]*(.+?)\]", line_text)
                 if _su_bg_match:
                     session_mgr.set_live_status(
@@ -12769,8 +12805,9 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                     )
 
                 # ── Structured JSON parsing for stream-json runtimes ──
-                # Gemini (stream-json) emits {"type":"tool_use",...} and {"type":"tool_result",...}
-                # Claude (stream-json) emits nested stream_event objects with tool_use blocks
+                # Gemini (stream-json) emits {"type":"tool_use",...} and {"type":"tool_result",...}  # noqa: E501
+                # Claude (stream-json) emits nested stream_event objects with tool_use
+                # blocks
                 tc = None
                 if runtime in ("gemini", "claude") and line_text.strip().startswith(
                     "{"
@@ -12815,7 +12852,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                                         tc = {
                                             "id": _cb.get(
                                                 "id",
-                                                f"bg_{task_id[:8]}_{_tool_call_counter}",
+                                                f"bg_{task_id[:8]}_{_tool_call_counter}",  # noqa: E501
                                             ),
                                             "name": _cb.get("name", "tool"),
                                             "input": _json.dumps(_cb.get("input", {})),
@@ -12975,7 +13012,8 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         # Check concurrent limit (used below after resolving params)
 
         # Resolve agent/runtime/model — default to user's current session config
-        # Determine defaults by searching for ANY session for this identity across all channels
+        # Determine defaults by searching for ANY session for this identity across all
+        # channels
         # to inherit preferences (like notification_preference).
         session_map = await asyncio.to_thread(session_mgr.load_session_map)
         # Inherit only safe fields (never 'agent') from prior sessions — see issue #75
@@ -13363,7 +13401,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
 
     @app.get("/api/v1/notifications")
     async def list_notifications(request: Request, unread_only: bool = False):
-        """Return background task completion notifications for the authenticated user."""
+        """Return background task completion notifications for the authenticated user."""  # noqa: E501
         user = await authenticate(
             request,
             authorization=request.headers.get("authorization"),
@@ -13492,13 +13530,15 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             "message": (
                 "Notifications enabled for all channels"
                 if body.notifications_enabled
-                else "Notifications suppressed globally (critical alerts still delivered)"
+                else "Notifications suppressed globally (critical alerts still delivered)"  # noqa: E501
             ),
         }
 
     # --- Task Scheduler ---
     if SCHEDULER_ENABLED:
-        # Lazy-load TaskScheduler so the API starts even if the scheduler dirs don't exist yet.
+        # Lazy-load TaskScheduler so the API starts even if the
+        # scheduler dirs don't exist
+        # yet.
         _task_scheduler = None
 
         def _get_scheduler():
@@ -13558,7 +13598,8 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             identity = user.get("identity", "")
 
             if channel == "telegram":
-                # identity is a numeric chat_id; resolve to username for the allowlist check.
+                # identity is a numeric chat_id; resolve to username for the allowlist
+                # check.
                 username = _get_telegram_username(identity) or ""
                 if username.lower() in _sched_allowed_telegram:
                     return user
@@ -13611,7 +13652,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
 
         @app.post("/api/v1/scheduler/validate-schedule")
         async def validate_schedule(body: ValidateScheduleRequest, request: Request):
-            """Convert natural language schedule to cron format using AI + deterministic fallback."""
+            """Convert natural language schedule to cron format using AI + deterministic fallback."""  # noqa: E501
             await _require_scheduler_auth(request)
             client_ip = request.client.host if request.client else "unknown"
             if not rate_limiter.check(
@@ -13826,7 +13867,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                     "job_id": job_id,
                     "mode": "command",
                     "status": "running",
-                    "message": f"Command job '{job.get('name', job_id)}' is now running (direct shell execution)",
+                    "message": f"Command job '{job.get('name', job_id)}' is now running (direct shell execution)",  # noqa: E501
                 }
             else:
                 # ---- AI mode: dispatch to LLM background task ----
@@ -13893,7 +13934,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             return _get_scheduler().get_logs(job_id)
 
     # --- Wee Canvas ───────────────────────────────────────────────────────────
-    # In-memory canvas session state: session_id → {components, connections, action_watchers, pending_actions, name, created_at, last_activity}
+    # In-memory canvas session state: session_id → {components, connections, action_watchers, pending_actions, name, created_at, last_activity}  # noqa: E501
     _canvas_sessions: dict = {}
     _CANVAS_PERSIST_DIR = Path(SCRIPT_BASE_DIR) / ".canvas-sessions"
     _CANVAS_PERSIST_DIR.mkdir(parents=True, exist_ok=True)
@@ -14356,7 +14397,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         if origin_type == "website":
             raise HTTPException(
                 status_code=400,
-                detail=f"Website-sourced skills must be updated manually. Visit: {origin.get('origin_url', '')}",
+                detail=f"Website-sourced skills must be updated manually. Visit: {origin.get('origin_url', '')}",  # noqa: E501
             )
 
         # Build a prompt for the background task agent
@@ -14370,10 +14411,10 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             f"Origin URL: {origin.get('origin_url', '')}\n"
             f"Origin path in repo: {origin.get('origin_path', '')}\n\n"
             f"Steps:\n"
-            f"1. Run: python3 -c \"import sys; sys.path.insert(0, '/opt/n8n-copilot-shim-dev'); "
+            f"1. Run: python3 -c \"import sys; sys.path.insert(0, '/opt/n8n-copilot-shim-dev'); "  # noqa: E501
             f"from skill_manager import apply_update; import json; "
             f"r = apply_update('{skill_key}'); print(json.dumps(r, indent=2))\"\n"
-            f"2. Report the result — files changed, any errors, and whether a backup was created.\n"
+            f"2. Report the result — files changed, any errors, and whether a backup was created.\n"  # noqa: E501
             f"3. If the update succeeded, confirm the skill is still valid."
         )
 
@@ -14505,7 +14546,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         if not re.match(r"^[A-Za-z0-9._-]+$", name):
             raise HTTPException(
                 status_code=400,
-                detail="Secret name may only contain letters, digits, hyphens, underscores, and dots",
+                detail="Secret name may only contain letters, digits, hyphens, underscores, and dots",  # noqa: E501
             )
         try:
             proc = await asyncio.create_subprocess_exec(
@@ -14558,7 +14599,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         if not re.match(r"^[A-Za-z0-9._-]+$", name):
             raise HTTPException(
                 status_code=400,
-                detail="Secret name may only contain letters, digits, hyphens, underscores, and dots",
+                detail="Secret name may only contain letters, digits, hyphens, underscores, and dots",  # noqa: E501
             )
         try:
             proc = await asyncio.create_subprocess_exec(
@@ -14764,7 +14805,8 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
 
         # Accept either a full permissions object or just a mode string
         if isinstance(body, dict) and "mode" in body:
-            # If just mode is provided, build full permissions from agent default + new mode
+            # If just mode is provided, build full permissions from agent default + new
+            # mode
             new_mode = body["mode"]
             if new_mode not in valid_modes:
                 raise HTTPException(
@@ -14831,19 +14873,19 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 {
                     "mode": "elevated",
                     "label": "Full Access",
-                    "description": "Agent has unrestricted access to all tools, directories, and network",
+                    "description": "Agent has unrestricted access to all tools, directories, and network",  # noqa: E501
                     "icon": "⚡",
                 },
                 {
                     "mode": "restricted",
                     "label": "Restricted",
-                    "description": "Agent uses curated tool and directory allowlists only",
+                    "description": "Agent uses curated tool and directory allowlists only",  # noqa: E501
                     "icon": "🔒",
                 },
                 {
                     "mode": "sandboxed",
                     "label": "Sandboxed",
-                    "description": "Agent has no external access — fully isolated environment",
+                    "description": "Agent has no external access — fully isolated environment",  # noqa: E501
                     "icon": "🏖️",
                 },
             ]
@@ -14888,7 +14930,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             "message": (
                 "Notifications enabled for all channels"
                 if body.notifications_enabled
-                else "Notifications suppressed globally (critical alerts still delivered)"
+                else "Notifications suppressed globally (critical alerts still delivered)"  # noqa: E501
             ),
         }
 
@@ -15110,7 +15152,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         if service not in allowed_services:
             raise HTTPException(
                 status_code=400,
-                detail=f"Service not allowed. Choose from: {', '.join(sorted(allowed_services))}",
+                detail=f"Service not allowed. Choose from: {', '.join(sorted(allowed_services))}",  # noqa: E501
             )
         cmd = [
             "journalctl",
@@ -15613,7 +15655,7 @@ def start_api_server():
     host = os.environ.get("API_HOST", "127.0.0.1")
 
     # SSL support — set SSL_CERTFILE and SSL_KEYFILE env vars to enable HTTPS
-    # In development (APP_ENV=DEV) prefer HTTP even if cert files exist to avoid surprising TLS-only bindings.
+    # In development (APP_ENV=DEV) prefer HTTP even if cert files exist to avoid surprising TLS-only bindings.  # noqa: E501
     ssl_certfile = os.environ.get("SSL_CERTFILE")
     ssl_keyfile = os.environ.get("SSL_KEYFILE")
     ssl_kwargs = {}
@@ -15636,8 +15678,10 @@ def start_api_server():
                 "development. Set FORCE_SSL=1 to force HTTPS."
             )
 
-    # Support comma-separated hosts (e.g. "127.0.0.1,100.x.x.x" for Tailscale + localhost).
-    # When multiple hosts are specified, run each in a background thread and block on the last.
+    # Support comma-separated hosts (e.g. "127.0.0.1,100.x.x.x" for Tailscale + localhost).  # noqa: E501
+    # When multiple hosts are specified, run each in a background
+    # thread and block on the
+    # last.
     hosts = [h.strip() for h in host.split(",") if h.strip()]
     if len(hosts) > 1:
         import threading
@@ -15762,7 +15806,7 @@ Examples:
             "devin",
             "cursor",
         ],
-        help="Set the runtime to use (choices: copilot, copilot-sdk, opencode, claude, claude-sdk, gemini, codex, devin, cursor)",
+        help="Set the runtime to use (choices: copilot, copilot-sdk, opencode, claude, claude-sdk, gemini, codex, devin, cursor)",  # noqa: E501
     )
     runtime_group.add_argument(
         "--list-runtimes",
@@ -15776,7 +15820,7 @@ Examples:
         "--mode",
         metavar="MODE",
         choices=["elevated", "restricted", "sandboxed"],
-        help="Set permission mode: elevated (auto-approve), restricted (default), or sandboxed (read-only)",
+        help="Set permission mode: elevated (auto-approve), restricted (default), or sandboxed (read-only)",  # noqa: E501
     )
 
     args = parser.parse_args()
@@ -15800,7 +15844,7 @@ Examples:
         result = manager.execute(f'/agent set "{args.agent}"', args.session_id)
         _check_command_result(result, ["Unknown agent", "Error"])
 
-    # Handle list commands (these don't require a prompt but may use runtime/agent settings)
+    # Handle list commands (these don't require a prompt but may use runtime/agent settings)  # noqa: E501
     if args.list_agents:
         output = manager.execute("/agent list", args.session_id)
         print(output)
@@ -15820,7 +15864,8 @@ Examples:
     if not args.prompt:
         parser.error("prompt is required unless using --list-* options")
 
-    # Apply model setting if provided (after list commands since we don't need it for lists)
+    # Apply model setting if provided (after list commands since we don't need it for
+    # lists)
     if args.model:
         result = manager.execute(f'/model set "{args.model}"', args.session_id)
         _check_command_result(result, ["Unknown model", "Error"])
