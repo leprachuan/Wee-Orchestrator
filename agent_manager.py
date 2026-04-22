@@ -3090,6 +3090,11 @@ You can mention an agent in your prompt and it will auto-delegate:
         )
         task_id = f"bg_{str(uuid4())[:8]}"
         bg_session_id = f"bg_{str(uuid4())[:8]}"
+        # Resolve per-agent concurrency limit (falls back to global cap)
+        _agent_cfg = self.AGENTS.get(bg_agent, {})
+        _max_concurrent = _agent_cfg.get(
+            "max_concurrent", BackgroundTaskManager.MAX_TASKS_PER_USER
+        )
         # Atomic check-and-create prevents TOCTOU race (Issue #192)
         _task, _status = self._bg_task_mgr.create_task_checked(
             task_id=task_id,
@@ -3100,15 +3105,17 @@ You can mention an agent in your prompt and it will auto-delegate:
             runtime=bg_runtime,
             model=bg_model,
             prompt=bg_prompt,
-            max_concurrent=BackgroundTaskManager.MAX_TASKS_PER_USER,
+            max_concurrent=_max_concurrent,
             origin_session_id=n8n_session_id,
         )
         if _status == "queued":
             return (
                 f"⏳ **Background task queued.**\n\n"
                 f"• **Task ID:** `{task_id}`\n"
-                f"• **Agent:** `{bg_agent}` | Runtime: `{bg_runtime}` | Model: `{bg_model}`\n"
-                f"• **Reason:** Maximum {BackgroundTaskManager.MAX_TASKS_PER_USER} concurrent tasks reached.\n\n"
+                f"• **Agent:** `{bg_agent}`"
+                f" | Runtime: `{bg_runtime}` | Model: `{bg_model}`\n"
+                f"• **Reason:** Maximum {_max_concurrent}"
+                f" concurrent tasks for this agent.\n\n"
                 f"The task will start automatically when a slot opens. "
                 f"Use `/background status {task_id}` to monitor."
             )
@@ -12945,7 +12952,8 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 bg_task_mgr.count_running, channel, identity, agent
             )
             print(
-                f"[API] Task {task_id} queued (position {queue_pos}, {running}/{max_concurrent} slots full)"
+                f"[API] Task {task_id} queued"
+                f" (position {queue_pos}, {running}/{max_concurrent} slots full)"
             )
             return {
                 "task_id": task_id,
@@ -12959,7 +12967,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 "timeout": bg_timeout,
             }
 
-                # Resolve permission mode (default: restricted)
+        # Resolve permission mode (default: restricted)
         perm_mode = body.permission_mode or "restricted"
         if perm_mode not in ("elevated", "restricted", "sandboxed"):
             perm_mode = "restricted"

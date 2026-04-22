@@ -1,4 +1,4 @@
-"""Regression test for Issue #192: TOCTOU race condition in background task concurrency check.
+"""Regression test for Issue #192: TOCTOU race in background task concurrency check.
 
 Tests that:
 1. create_task_checked() atomically enforces the concurrency limit
@@ -16,7 +16,7 @@ import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from agent_manager import BackgroundTaskManager
+from agent_manager import BackgroundTaskManager  # noqa: E402
 
 
 class TestIssue192ToctouRace(unittest.TestCase):
@@ -133,7 +133,8 @@ class TestIssue192ToctouRace(unittest.TestCase):
         """The core TOCTOU regression test.
 
         20 threads all call create_task_checked simultaneously with max_concurrent=5.
-        After all complete, the number of 'running' tasks must be exactly 5 (never more).
+        After all complete, the number of 'running' tasks must be exactly 5
+        (never more).
         """
         mgr = self._make_manager()
         max_c = 5
@@ -177,7 +178,8 @@ class TestIssue192ToctouRace(unittest.TestCase):
         self.assertLessEqual(
             running_count,
             max_c,
-            f"TOCTOU BUG: {running_count} tasks marked 'running' but max_concurrent={max_c}",
+            f"TOCTOU BUG: {running_count} tasks marked 'running'"
+            f" but max_concurrent={max_c}",
         )
         self.assertEqual(
             running_count,
@@ -294,7 +296,10 @@ class TestIssue192ToctouRace(unittest.TestCase):
 
 
 class TestIssue192EvictionCap(unittest.TestCase):
-    """Regression: _evict_oldest_terminal must never allow store to exceed MAX_TOTAL_TASKS."""
+    """Regression: _evict_oldest_terminal must not exceed MAX_TOTAL_TASKS cap.
+
+    Enforces that the task store count stays within the configured cap.
+    """
 
     def setUp(self):
         self.temp_dir = tempfile.mkdtemp()
@@ -355,11 +360,12 @@ class TestIssue192EvictionCap(unittest.TestCase):
         self.assertLessEqual(
             len(all_tasks),
             3,
-            f"Store exceeded MAX_TOTAL_TASKS=3 after create_task: {len(all_tasks)} tasks",
+            f"Store exceeded MAX_TOTAL_TASKS=3 after create_task:"
+            f" {len(all_tasks)} tasks",
         )
 
     def test_store_never_exceeds_max_total_tasks_via_create_task_checked(self):
-        """create_task_checked evicts terminal tasks so store stays at MAX_TOTAL_TASKS."""
+        """create_task_checked evicts terminal tasks; store stays at MAX_TOTAL_TASKS."""
         mgr = self._make_manager(max_tasks=3)
         # Pre-fill with completed tasks (all evictable)
         for i in range(3):
@@ -392,11 +398,12 @@ class TestIssue192EvictionCap(unittest.TestCase):
         self.assertLessEqual(
             len(all_tasks),
             3,
-            f"Store exceeded MAX_TOTAL_TASKS=3 via create_task_checked: {len(all_tasks)} tasks",
+            f"Store exceeded MAX_TOTAL_TASKS=3 via create_task_checked:"
+            f" {len(all_tasks)} tasks",
         )
 
     def test_eviction_at_exact_cap_boundary(self):
-        """When store is exactly at MAX_TOTAL_TASKS, next create must evict one terminal."""
+        """When store is at MAX_TOTAL_TASKS, next create must evict one terminal."""
         mgr = self._make_manager(max_tasks=3)
         # Add 2 completed + 1 running = 3 total (AT cap)
         self._add_terminal(mgr, 1, "completed")
@@ -429,7 +436,8 @@ class TestIssue192EvictionCap(unittest.TestCase):
         self.assertLessEqual(
             len(all_tasks),
             3,
-            f"EVICTION BUG: store has {len(all_tasks)} tasks after create at exact cap boundary",
+            f"EVICTION BUG: store has {len(all_tasks)} tasks"
+            f" after create at exact cap boundary",
         )
         # The new task must be present
         task_ids = {t["task_id"] for t in all_tasks}
@@ -471,7 +479,7 @@ class TestIssue192EndpointConcurrency(unittest.TestCase):
             self.bg_task_mgr._save_unlocked([])
 
     def test_two_concurrent_posts_at_limit_one_runs_one_queues(self):
-        """Simultaneous requests when one slot remains: exactly one 'running', one 'queued'.
+        """Simultaneous requests when one slot remains: one 'running', one 'queued'.
 
         This is the endpoint-level proof that the TOCTOU race is closed.
         Without the atomic create_task_checked(), both requests would read
@@ -524,7 +532,8 @@ class TestIssue192EndpointConcurrency(unittest.TestCase):
             self.assertLessEqual(
                 running,
                 1,
-                f"TOCTOU BUG at API endpoint: {running} tasks got 'running' with limit=1. "
+                f"TOCTOU BUG at API endpoint: {running} tasks got 'running'"
+                f" with limit=1. "
                 f"Responses: {responses}",
             )
             self.assertEqual(
@@ -532,6 +541,118 @@ class TestIssue192EndpointConcurrency(unittest.TestCase):
             )
             self.assertEqual(
                 queued, 1, f"Expected 1 queued, got {queued}. Responses: {responses}"
+            )
+        finally:
+            BackgroundTaskManager.MAX_TASKS_PER_USER = original_max
+
+
+
+class TestIssue192SlashCommandPerAgentLimit(unittest.TestCase):
+    """Regression: /background slash handler must use per-agent max_concurrent.
+
+    The slash handler was passing BackgroundTaskManager.MAX_TASKS_PER_USER (the
+    global cap) instead of the selected agent configured max_concurrent. An agent
+    with max_concurrent=1 could still spawn a second running task via the slash
+    command while the API path correctly enforced the limit.
+    """
+
+    def setUp(self):
+        from agent_manager import SessionManager  # noqa: E402
+
+        self.temp_dir = tempfile.mkdtemp()
+        sm = SessionManager.__new__(SessionManager)
+        sm._bg_task_mgr = BackgroundTaskManager()
+        sm._bg_task_mgr._path = os.path.join(
+            self.temp_dir, "bg-tasks-slash-test.json"
+        )
+        sm._bg_task_mgr._tasks_cache = None
+        sm._bg_identity = "test-user-slash"
+        sm.AGENTS = {
+            "qa-agent": {"max_concurrent": 1, "path": "/fake/path"},
+        }
+        sm._execute_background_task = lambda *args, **kwargs: None
+        self.sm = sm
+        self.mgr = sm._bg_task_mgr
+
+    def _call_slash(self, argument):
+        session_data = {"channel": "telegram"}
+        return self.sm._slash_background(
+            argument, session_data, "n8n-test-session"
+        )
+
+    def test_slash_queues_when_agent_limit_reached(self):
+        """Second /background for agent at max_concurrent=1 must be queued."""
+        self.mgr.create_task(
+            task_id="seed-running",
+            session_id="seed-sess",
+            user_identity="test-user-slash",
+            channel="telegram",
+            agent="qa-agent",
+            runtime="claude",
+            model="sonnet",
+            prompt="seed task",
+            status="running",
+        )
+        result = self._call_slash("agent=qa-agent second task")
+        tasks = self.mgr.list_tasks("telegram", "test-user-slash")
+        running = [t for t in tasks if t["status"] == "running"]
+        queued = [t for t in tasks if t["status"] == "queued"]
+        self.assertEqual(
+            len(running),
+            1,
+            f"Expected 1 running, got {len(running)}. Tasks: {tasks}",
+        )
+        self.assertEqual(
+            len(queued),
+            1,
+            f"Expected 1 queued, got {len(queued)}. Tasks: {tasks}",
+        )
+        self.assertIn(
+            "queued",
+            result.lower(),
+            f"Expected queued in response, got: {result!r}",
+        )
+
+    def test_slash_runs_when_slot_available(self):
+        """First /background for agent with open slot must start running."""
+        result = self._call_slash("agent=qa-agent first task")
+        tasks = self.mgr.list_tasks("telegram", "test-user-slash")
+        running = [t for t in tasks if t["status"] == "running"]
+        self.assertEqual(
+            len(running),
+            1,
+            f"Expected 1 running, got {len(running)}. Tasks: {tasks}",
+        )
+        self.assertNotIn(
+            "queued",
+            result.lower(),
+            f"Task should start but response says queued: {result!r}",
+        )
+
+    def test_slash_global_limit_not_used_for_per_agent_cap(self):
+        """Slash must NOT use global MAX_TASKS_PER_USER when agent cap is lower."""
+        original_max = BackgroundTaskManager.MAX_TASKS_PER_USER
+        BackgroundTaskManager.MAX_TASKS_PER_USER = 5
+        try:
+            self.mgr.create_task(
+                task_id="seed-global-test",
+                session_id="seed-sess-g",
+                user_identity="test-user-slash",
+                channel="telegram",
+                agent="qa-agent",
+                runtime="claude",
+                model="sonnet",
+                prompt="seed",
+                status="running",
+            )
+            self._call_slash("agent=qa-agent task two")
+            tasks = self.mgr.list_tasks("telegram", "test-user-slash")
+            running = [t for t in tasks if t["status"] == "running"]
+            self.assertLessEqual(
+                len(running),
+                1,
+                f"Slash bypassed per-agent cap: {len(running)} running."
+                f" Tasks: {tasks}",
             )
         finally:
             BackgroundTaskManager.MAX_TASKS_PER_USER = original_max
