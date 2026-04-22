@@ -122,7 +122,9 @@ class WebEXConnector(BaseConnector):
     def _stop_consuming(self):
         """Stop RabbitMQ consumption on the current channel if possible."""
         try:
-            if self.rabbitmq_channel and getattr(self.rabbitmq_channel, "is_open", True):
+            if self.rabbitmq_channel and getattr(
+                self.rabbitmq_channel, "is_open", True
+            ):
                 self.rabbitmq_channel.stop_consuming()
         except Exception as e:
             print(f"[WARN] Failed to stop RabbitMQ consumption: {e}", file=sys.stderr)
@@ -1300,7 +1302,6 @@ class WebEXConnector(BaseConnector):
         finally:
             self._finish_active_request()
 
-
     def listen_to_queue(self, poll_interval: int = 1):
         """Listen to RabbitMQ queue for WebEX messages"""
         self._install_signal_handlers()
@@ -1356,7 +1357,9 @@ class WebEXConnector(BaseConnector):
                     import traceback
 
                     tb_str = traceback.format_exc()
-                    print("[ERROR] Exception processing WebEX message:", file=sys.stderr)
+                    print(
+                        "[ERROR] Exception processing WebEX message:", file=sys.stderr
+                    )
                     print(tb_str, file=sys.stderr)
                     if self.shutdown_event.is_set():
                         ch.basic_nack(delivery_tag=method.delivery_tag, requeue=True)

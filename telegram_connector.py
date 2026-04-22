@@ -154,9 +154,7 @@ class TelegramConnector(BaseConnector):
             sm = SessionManager()
             commands = sm.get_slash_commands()
         except Exception as e:
-            logger.warning(
-                "Failed to load slash commands from SessionManager: %s", e
-            )
+            logger.warning("Failed to load slash commands from SessionManager: %s", e)
             commands = {}
 
         if not commands:
@@ -195,17 +193,13 @@ class TelegramConnector(BaseConnector):
             if data.get("ok"):
                 count = len(bot_commands)
                 logger.info("Registered %d commands with Telegram", count)
-                return (
-                    f"\u2705 Registered {count} commands with Telegram."
-                )
+                return f"\u2705 Registered {count} commands with Telegram."
             else:
                 err = data.get("description", "Unknown error")
                 return f"\u26a0\ufe0f setMyCommands failed: {err}"
         except Exception as e:
             logger.error("Failed to register bot commands: %s", e)
-            return (
-                f"\u274c Failed to register commands: {str(e)[:100]}"
-            )
+            return f"\u274c Failed to register commands: {str(e)[:100]}"
 
     @property
     def _safe_file_dirs(self):
@@ -1174,7 +1168,6 @@ class TelegramConnector(BaseConnector):
     def _handle_command(self, chat_id: int, user_id: int, command: str):
         """Handle Telegram commands - DEPRECATED: Commands now pass to agent_manager"""
         pass  # Commands are now routed to agent_manager
-
 
     def run(self, poll_interval: int = 1):
         """Start polling for messages"""

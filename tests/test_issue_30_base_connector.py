@@ -19,7 +19,6 @@ import pytest
 sys.path.insert(0, "/opt/n8n-copilot-shim-dev")
 from base_connector import BaseConnector
 
-
 # ── BaseConfig tests ─────────────────────────────────────────────────────────
 
 
@@ -293,12 +292,12 @@ def test_is_safe_file_path_too_large(concrete_connector, tmp_path, monkeypatch):
     f.write_bytes(b"x" * 10)
 
     monkeypatch.setattr(
-        type(concrete_connector), "_safe_file_dirs",
-        property(lambda self: [tmp_path.resolve()])
+        type(concrete_connector),
+        "_safe_file_dirs",
+        property(lambda self: [tmp_path.resolve()]),
     )
     monkeypatch.setattr(
-        type(concrete_connector), "_max_file_bytes",
-        property(lambda self: 5)
+        type(concrete_connector), "_max_file_bytes", property(lambda self: 5)
     )
     assert concrete_connector._is_safe_file_path(str(f)) is False
 
@@ -350,8 +349,9 @@ def test_extract_file_paths_basic(concrete_connector, tmp_path, monkeypatch):
     f.write_bytes(b"PDF")
 
     monkeypatch.setattr(
-        type(concrete_connector), "_safe_file_dirs",
-        property(lambda self: [tmp_path.resolve()])
+        type(concrete_connector),
+        "_safe_file_dirs",
+        property(lambda self: [tmp_path.resolve()]),
     )
 
     text = f"Here is the report [FILE:{f}:Report PDF]."
@@ -398,16 +398,21 @@ def test_telegram_safe_file_dirs(tmp_path):
         mock_requests.get.return_value = mock_resp
 
         config_path = tmp_path / "telegram_config.json"
-        config_path.write_text(json.dumps({
-            "token": "fake",
-            "allowed_users": [],
-            "user_pairings": {},
-            "enable_auto_pair": False,
-            "default_agent": "orchestrator",
-            "default_model": "gpt-5-mini",
-        }))
+        config_path.write_text(
+            json.dumps(
+                {
+                    "token": "fake",
+                    "allowed_users": [],
+                    "user_pairings": {},
+                    "enable_auto_pair": False,
+                    "default_agent": "orchestrator",
+                    "default_model": "gpt-5-mini",
+                }
+            )
+        )
 
         from telegram_connector import TelegramConnector
+
         conn = TelegramConnector("fake_token", config_file=str(config_path))
 
     dirs = conn._safe_file_dirs
@@ -419,22 +424,27 @@ def test_telegram_safe_file_dirs(tmp_path):
 def test_webex_safe_file_dirs(tmp_path):
     """WebEXConnector._safe_file_dirs includes webex_downloads and limit is 100MB."""
     config_path = tmp_path / "webex_config.json"
-    config_path.write_text(json.dumps({
-        "token": "fake",
-        "allowed_users": [],
-        "user_pairings": {},
-        "enable_auto_pair": False,
-        "default_agent": "orchestrator",
-        "default_model": "gpt-5-mini",
-        "rabbitmq_host": "localhost",
-        "rabbitmq_port": 5672,
-        "rabbitmq_user": "admin",
-        "rabbitmq_password": "",
-        "rabbitmq_queue": "test",
-        "rabbitmq_vhost": "/",
-    }))
+    config_path.write_text(
+        json.dumps(
+            {
+                "token": "fake",
+                "allowed_users": [],
+                "user_pairings": {},
+                "enable_auto_pair": False,
+                "default_agent": "orchestrator",
+                "default_model": "gpt-5-mini",
+                "rabbitmq_host": "localhost",
+                "rabbitmq_port": 5672,
+                "rabbitmq_user": "admin",
+                "rabbitmq_password": "",
+                "rabbitmq_queue": "test",
+                "rabbitmq_vhost": "/",
+            }
+        )
+    )
 
     from webex_connector import WebEXConnector
+
     conn = WebEXConnector("fake_token", config_file=str(config_path))
 
     dirs = conn._safe_file_dirs
@@ -460,6 +470,7 @@ def test_telegram_make_session_id_with_bot_id(tmp_path):
         )
 
         from telegram_connector import TelegramConnector
+
         conn = TelegramConnector("fake_token", config_file=str(config_path))
 
     assert conn._make_session_id(42) == "telegram_99_42"
@@ -479,6 +490,7 @@ def test_telegram_make_session_id_without_bot_id(tmp_path):
         )
 
         from telegram_connector import TelegramConnector
+
         conn = TelegramConnector("fake_token", config_file=str(config_path))
 
     assert conn._make_session_id(42) == "telegram_42"
@@ -487,15 +499,23 @@ def test_telegram_make_session_id_without_bot_id(tmp_path):
 def test_webex_make_session_id(tmp_path):
     """WebEXConnector._make_session_id prefixes webex_."""
     config_path = tmp_path / "webex_config.json"
-    config_path.write_text(json.dumps({
-        "token": "fake", "allowed_users": [], "user_pairings": {},
-        "rabbitmq_host": "localhost", "rabbitmq_port": 5672,
-        "rabbitmq_user": "u",
-        "rabbitmq_password": "",
-        "rabbitmq_queue": "q",
-        "rabbitmq_vhost": "/",
-    }))
+    config_path.write_text(
+        json.dumps(
+            {
+                "token": "fake",
+                "allowed_users": [],
+                "user_pairings": {},
+                "rabbitmq_host": "localhost",
+                "rabbitmq_port": 5672,
+                "rabbitmq_user": "u",
+                "rabbitmq_password": "",
+                "rabbitmq_queue": "q",
+                "rabbitmq_vhost": "/",
+            }
+        )
+    )
     from webex_connector import WebEXConnector
+
     conn = WebEXConnector("fake_token", config_file=str(config_path))
     assert conn._make_session_id("person123") == "webex_person123"
 
@@ -538,6 +558,7 @@ def test_telegram_connector_inherits_base(tmp_path):
         )
 
         from telegram_connector import TelegramConnector
+
         conn = TelegramConnector("fake_token", config_file=str(config_path))
 
     assert isinstance(conn, BaseConnector)
@@ -547,15 +568,23 @@ def test_webex_connector_inherits_base(tmp_path):
     """WebEXConnector inherits from BaseConnector."""
 
     config_path = tmp_path / "w.json"
-    config_path.write_text(json.dumps({
-        "token": "fake", "allowed_users": [], "user_pairings": {},
-        "rabbitmq_host": "localhost", "rabbitmq_port": 5672,
-        "rabbitmq_user": "u",
-        "rabbitmq_password": "",
-        "rabbitmq_queue": "q",
-        "rabbitmq_vhost": "/",
-    }))
+    config_path.write_text(
+        json.dumps(
+            {
+                "token": "fake",
+                "allowed_users": [],
+                "user_pairings": {},
+                "rabbitmq_host": "localhost",
+                "rabbitmq_port": 5672,
+                "rabbitmq_user": "u",
+                "rabbitmq_password": "",
+                "rabbitmq_queue": "q",
+                "rabbitmq_vhost": "/",
+            }
+        )
+    )
     from webex_connector import WebEXConnector
+
     conn = WebEXConnector("fake_token", config_file=str(config_path))
     assert isinstance(conn, BaseConnector)
 
@@ -750,47 +779,47 @@ def test_query_agent_with_status_returns_no_status_on_fast_response(api_connecto
 def test_telegram_connector_delegates_execute_command_to_base():
     """TelegramConnector._execute_command is inherited from BaseConnector."""
     from telegram_connector import TelegramConnector
-    
+
     # Verify the method exists and is from BaseConnector
-    assert hasattr(TelegramConnector, '_execute_command')
-    assert '_execute_command' in BaseConnector.__dict__
-    
+    assert hasattr(TelegramConnector, "_execute_command")
+    assert "_execute_command" in BaseConnector.__dict__
+
     # Verify TelegramConnector does NOT override it (it should be inherited)
-    assert '_execute_command' not in TelegramConnector.__dict__
-    
+    assert "_execute_command" not in TelegramConnector.__dict__
+
     # Create instance and verify method is callable
     connector = TelegramConnector.__new__(TelegramConnector)
-    assert callable(getattr(connector, '_execute_command'))
+    assert callable(getattr(connector, "_execute_command"))
 
 
 def test_telegram_connector_delegates_query_agent_to_base():
     """TelegramConnector._query_agent is inherited from BaseConnector."""
     from telegram_connector import TelegramConnector
-    
+
     # Verify the method exists and is from BaseConnector
-    assert hasattr(TelegramConnector, '_query_agent')
-    assert '_query_agent' in BaseConnector.__dict__
-    
+    assert hasattr(TelegramConnector, "_query_agent")
+    assert "_query_agent" in BaseConnector.__dict__
+
     # Verify TelegramConnector does NOT override it
-    assert '_query_agent' not in TelegramConnector.__dict__
-    
+    assert "_query_agent" not in TelegramConnector.__dict__
+
     connector = TelegramConnector.__new__(TelegramConnector)
-    assert callable(getattr(connector, '_query_agent'))
+    assert callable(getattr(connector, "_query_agent"))
 
 
 def test_telegram_connector_delegates_query_agent_with_status_to_base():
     """TelegramConnector._query_agent_with_status is inherited from BaseConnector."""
     from telegram_connector import TelegramConnector
-    
+
     # Verify the method exists and is from BaseConnector
-    assert hasattr(TelegramConnector, '_query_agent_with_status')
-    assert '_query_agent_with_status' in BaseConnector.__dict__
-    
+    assert hasattr(TelegramConnector, "_query_agent_with_status")
+    assert "_query_agent_with_status" in BaseConnector.__dict__
+
     # Verify TelegramConnector does NOT override it
-    assert '_query_agent_with_status' not in TelegramConnector.__dict__
-    
+    assert "_query_agent_with_status" not in TelegramConnector.__dict__
+
     connector = TelegramConnector.__new__(TelegramConnector)
-    assert callable(getattr(connector, '_query_agent_with_status'))
+    assert callable(getattr(connector, "_query_agent_with_status"))
 
 
 # ── WebEXConnector delegation tests ────────────────────────────────────────────
@@ -799,44 +828,44 @@ def test_telegram_connector_delegates_query_agent_with_status_to_base():
 def test_webex_connector_delegates_execute_command_to_base():
     """WebEXConnector._execute_command is inherited from BaseConnector."""
     from webex_connector import WebEXConnector
-    
+
     # Verify the method exists and is from BaseConnector
-    assert hasattr(WebEXConnector, '_execute_command')
-    assert '_execute_command' in BaseConnector.__dict__
-    
+    assert hasattr(WebEXConnector, "_execute_command")
+    assert "_execute_command" in BaseConnector.__dict__
+
     # Verify WebEXConnector does NOT override it (it should be inherited)
-    assert '_execute_command' not in WebEXConnector.__dict__
-    
+    assert "_execute_command" not in WebEXConnector.__dict__
+
     # Create instance and verify method is callable
     connector = WebEXConnector.__new__(WebEXConnector)
-    assert callable(getattr(connector, '_execute_command'))
+    assert callable(getattr(connector, "_execute_command"))
 
 
 def test_webex_connector_delegates_query_agent_to_base():
     """WebEXConnector._query_agent is inherited from BaseConnector."""
     from webex_connector import WebEXConnector
-    
+
     # Verify the method exists and is from BaseConnector
-    assert hasattr(WebEXConnector, '_query_agent')
-    assert '_query_agent' in BaseConnector.__dict__
-    
+    assert hasattr(WebEXConnector, "_query_agent")
+    assert "_query_agent" in BaseConnector.__dict__
+
     # Verify WebEXConnector does NOT override it
-    assert '_query_agent' not in WebEXConnector.__dict__
-    
+    assert "_query_agent" not in WebEXConnector.__dict__
+
     connector = WebEXConnector.__new__(WebEXConnector)
-    assert callable(getattr(connector, '_query_agent'))
+    assert callable(getattr(connector, "_query_agent"))
 
 
 def test_webex_connector_delegates_query_agent_with_status_to_base():
     """WebEXConnector._query_agent_with_status is inherited from BaseConnector."""
     from webex_connector import WebEXConnector
-    
+
     # Verify the method exists and is from BaseConnector
-    assert hasattr(WebEXConnector, '_query_agent_with_status')
-    assert '_query_agent_with_status' in BaseConnector.__dict__
-    
+    assert hasattr(WebEXConnector, "_query_agent_with_status")
+    assert "_query_agent_with_status" in BaseConnector.__dict__
+
     # Verify WebEXConnector does NOT override it
-    assert '_query_agent_with_status' not in WebEXConnector.__dict__
-    
+    assert "_query_agent_with_status" not in WebEXConnector.__dict__
+
     connector = WebEXConnector.__new__(WebEXConnector)
-    assert callable(getattr(connector, '_query_agent_with_status'))
+    assert callable(getattr(connector, "_query_agent_with_status"))
