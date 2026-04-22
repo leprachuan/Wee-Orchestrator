@@ -40,18 +40,19 @@ class BaseConfig:
             try:
                 with open(self.config_file, "r") as f:
                     data = json.load(f)
-                try:
-                    from config_schemas import CONNECTOR_VALIDATORS
-
-                    validator = CONNECTOR_VALIDATORS.get(self.config_file.name)
-                    if validator:
-                        validator(data)
-                except ImportError:
-                    pass
-                return data
             except Exception as e:
                 print(f"Error loading config: {e}", file=sys.stderr)
                 return self._default_config()
+            try:
+                from config_schemas import CONNECTOR_VALIDATORS
+
+                validator = CONNECTOR_VALIDATORS.get(self.config_file.name)
+                if validator:
+                    validator(data)
+            except ImportError:
+                pass
+            # ValidationError from validator() is not swallowed — it propagates to caller
+            return data
         return self._default_config()
 
     def _default_config(self) -> Dict:

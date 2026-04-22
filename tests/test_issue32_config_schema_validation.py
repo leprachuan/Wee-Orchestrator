@@ -520,3 +520,185 @@ class TestAgentManagerIntegration:
         assert (
             not unknown_warnings
         ), f"Expected no unknown-key warnings, got: {unknown_warnings}"
+
+
+# ===========================================================================
+# Regression: _load_agents_config rejects structurally invalid agents.json
+# ===========================================================================
+
+
+class TestAgentManagerInvalidSchemaRejected:
+    """Regression: _load_agents_config must not load agents when schema validation fails.
+
+    Issue #32 Round 5 — max_concurrent="oops" was previously loaded silently.
+    """
+
+    def test_invalid_max_concurrent_returns_empty_agents(self, tmp_path):
+        """_load_agents_config returns {} when max_concurrent has wrong type."""
+        config = {
+            "agents": [
+                {
+                    "name": "bad-agent",
+                    "path": "/opt/bad/",
+                    "max_concurrent": "oops",  # must be int
+                }
+            ]
+        }
+        config_file = tmp_path / "agents.json"
+        config_file.write_text(json.dumps(config))
+
+        import agent_manager as am
+
+        mgr = am.SessionManager.__new__(am.SessionManager)
+        mgr._agents_config_path = config_file
+        mgr._agents_json_mtime = 0.0
+
+        result = mgr._load_agents_config(str(config_file))
+
+        assert result == {}, (
+            f"Expected empty dict when schema validation fails, got: {result!r}. "
+            "Invalid agents.json must not be loaded into the live agent roster."
+        )
+
+    def test_invalid_schema_does_not_load_any_agents(self, tmp_path):
+        """_load_agents_config rejects the entire config, not just the bad entry."""
+        config = {
+            "agents": [
+                {
+                    "name": "good-agent",
+                    "path": "/opt/good/",
+                },
+                {
+                    "name": "bad-agent",
+                    "path": "/opt/bad/",
+                    "max_concurrent": "oops",
+                },
+            ]
+        }
+        config_file = tmp_path / "agents.json"
+        config_file.write_text(json.dumps(config))
+
+        import agent_manager as am
+
+        mgr = am.SessionManager.__new__(am.SessionManager)
+        mgr._agents_config_path = config_file
+        mgr._agents_json_mtime = 0.0
+
+        result = mgr._load_agents_config(str(config_file))
+
+        assert result == {}, (
+            f"Expected empty dict for any schema failure, got: {result!r}. "
+            "A single invalid entry must prevent loading the entire file."
+        )
+
+    def test_valid_config_still_loads_normally(self, tmp_path):
+        """_load_agents_config loads valid config without regression."""
+        config = {
+            "agents": [
+                {
+                    "name": "good-agent",
+                    "path": "/opt/good/",
+                    "max_concurrent": 2,
+                }
+            ]
+        }
+        config_file = tmp_path / "agents.json"
+        config_file.write_text(json.dumps(config))
+
+        import agent_manager as am
+
+        mgr = am.SessionManager.__new__(am.SessionManager)
+        mgr._agents_config_path = config_file
+        mgr._agents_json_mtime = 0.0
+
+        result = mgr._load_agents_config(str(config_file))
+
+        assert "good-agent" in result, f"Valid config should load cleanly, got: {result!r}"
+        assert result["good-agent"]["max_concurrent"] == 2
+
+
+# ===========================================================================
+# Regression: BaseConfig._load_config surfaces connector schema failures
+# ===========================================================================
+
+
+class TestBaseConfigSchemaValidationSurfaced:
+    """Regression: BaseConfig._load_config must not swallow ValidationError.
+
+    Issue #32 Round 5 — allowed_users="not-a-list" was previously silently
+    defaulted instead of surfacing the schema failure.
+    """
+
+    def test_telegram_invalid_allowed_users_raises(self, tmp_path):
+        """_load_config raises ValidationError when allowed_users is not a list."""
+        cfg_data = {"token": "bot123:FAKE", "allowed_users": "not-a-list"}
+        cfg_file = tmp_path / "telegram_config.json"
+        cfg_file.write_text(json.dumps(cfg_data))
+
+        import base_connector as bc
+
+        class FakeTelegramConfig(bc.BaseConfig):
+            def _default_config(self):
+                return {"defaulted": True}
+
+        with pytest.raises(ValidationError):
+            FakeTelegramConfig(str(cfg_file))
+
+    def test_webex_invalid_allowed_users_raises(self, tmp_path):
+        """_load_config raises ValidationError when webex allowed_users is not a list."""
+        cfg_data = {"token": "webex-token", "allowed_users": "not-a-list"}
+        cfg_file = tmp_path / "webex_config.json"
+        cfg_file.write_text(json.dumps(cfg_data))
+
+        import base_connector as bc
+
+        class FakeWebEXConfig(bc.BaseConfig):
+            def _default_config(self):
+                return {"defaulted": True}
+
+        with pytest.raises(ValidationError):
+            FakeWebEXConfig(str(cfg_file))
+
+    def test_invalid_connector_config_does_not_return_defaults(self, tmp_path):
+        """_load_config raises rather than silently returning default config."""
+        cfg_data = {"token": "bot123:FAKE", "allowed_users": 12345}  # must be list
+        cfg_file = tmp_path / "telegram_config.json"
+        cfg_file.write_text(json.dumps(cfg_data))
+
+        import base_connector as bc
+
+        class FakeTelegramConfig(bc.BaseConfig):
+            def _default_config(self):
+                return {"defaulted": True}
+
+        caught_exc = None
+        result = None
+        try:
+            instance = FakeTelegramConfig(str(cfg_file))
+            result = instance.config
+        except Exception as e:
+            caught_exc = e
+
+        assert caught_exc is not None, (
+            f"Expected an exception to propagate, but got config: {result!r}. "
+            "Schema validation failure must not be silently swallowed."
+        )
+        assert isinstance(caught_exc, ValidationError), (
+            f"Expected ValidationError, got {type(caught_exc).__name__}: {caught_exc}"
+        )
+
+    def test_json_parse_error_still_returns_defaults(self, tmp_path):
+        """I/O errors and JSON parse errors still fall back to defaults (unchanged)."""
+        cfg_file = tmp_path / "telegram_config.json"
+        cfg_file.write_text("{{invalid json")
+
+        import base_connector as bc
+
+        class FakeTelegramConfig(bc.BaseConfig):
+            def _default_config(self):
+                return {"defaulted": True}
+
+        instance = FakeTelegramConfig(str(cfg_file))
+        assert instance.config == {"defaulted": True}, (
+            "JSON parse errors should still fall back to _default_config()"
+        )

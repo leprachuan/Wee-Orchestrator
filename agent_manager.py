@@ -3292,9 +3292,11 @@ You can mention an agent in your prompt and it will auto-delegate:
                 except ImportError:
                     pass
                 except Exception as _schema_exc:
-                    logger.warning(
-                        f"[config] agents.json schema warning: {_schema_exc}"
+                    logger.error(
+                        f"[config] agents.json schema validation failed: "
+                        f"{_schema_exc}. Refusing to load agents from invalid config."
                     )
+                    return {}
                 agents = {}
                 for agent in config.get("agents", []):
                     name = agent.get("name")
