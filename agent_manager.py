@@ -2442,7 +2442,8 @@ You can mention an agent in your prompt and it will auto-delegate:
                     )
                     logger.debug(
                         f"[Handoff] Prepared handoff: {prev_runtime} → {new_runtime} "
-                        f"(prev_session={prev_session_id}, new_session={new_session_id})"
+                        f"(prev_session={prev_session_id}, "
+                        f"new_session={new_session_id})"
                     )
                 except Exception as _handoff_err:
                     logger.warning(
@@ -10889,7 +10890,8 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         if not existing:
             logger.info(
                 f"[Session Recovery] Session {session_id} not in session map, "
-                f"attempting recovery (user={user['identity']}, channel={user['channel']})"
+                f"attempting recovery (user={user['identity']}, "
+                f"channel={user['channel']})"
             )
             history_sessions = history_mgr.get_sessions(
                 user["channel"], user["identity"]
@@ -15074,7 +15076,8 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         if ok:
             count = len(session_mgr.AGENTS)
             logger.info(
-                f"[API] agents.json hot-reloaded by {auth.get('identity', 'unknown')} — {count} agents"
+                f"[API] agents.json reloaded by {auth.get('identity', 'unknown')} "
+                f"— {count} agents"
             )
             return {"status": "reloaded", "message": msg}
         else:
