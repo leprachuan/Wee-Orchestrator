@@ -546,7 +546,6 @@ class TestIssue192EndpointConcurrency(unittest.TestCase):
             BackgroundTaskManager.MAX_TASKS_PER_USER = original_max
 
 
-
 class TestIssue192SlashCommandPerAgentLimit(unittest.TestCase):
     """Regression: /background slash handler must use per-agent max_concurrent.
 
