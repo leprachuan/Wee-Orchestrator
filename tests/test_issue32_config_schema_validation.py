@@ -740,8 +740,7 @@ class TestBaseConfigConnectorDefaults:
             "allowed_users must be present after loading a minimal config — "
             "model_dump() must be called to apply Pydantic defaults"
         )
-        assert instance.config["allowed_users"] == [], (
-        )
+        assert instance.config["allowed_users"] == [], ()
 
     def test_minimal_telegram_config_allow_user_no_keyerror(self, tmp_path):
         """allow_user() must not raise KeyError when config was loaded from a
@@ -780,14 +779,12 @@ class TestBaseConfigConnectorDefaults:
 
         instance = FakeWebEXConfig(str(cfg_file))
 
-        assert "allowed_users" in instance.config, (
-            "allowed_users must be present after loading a minimal webex config"
-        )
-        assert instance.config["allowed_users"] == [], (
-        )
+        assert (
+            "allowed_users" in instance.config
+        ), "allowed_users must be present after loading a minimal webex config"
+        assert instance.config["allowed_users"] == [], ()
         # Schema defaults for rabbitmq_host etc. must also be present
-        assert instance.config.get("rabbitmq_host") == "192.168.0.85", (
-        )
+        assert instance.config.get("rabbitmq_host") == "192.168.0.85", ()
 
     def test_is_user_allowed_works_on_minimal_config(self, tmp_path):
         """is_user_allowed() must work on a config loaded from a minimal file."""
@@ -802,6 +799,6 @@ class TestBaseConfigConnectorDefaults:
 
         instance = FakeTelegramConfig(str(cfg_file))
         # Empty allowed_users means everyone is allowed
-        assert instance.is_user_allowed(999) is True, (
-            "is_user_allowed() must return True when allowed_users is empty (default)"
-        )
+        assert (
+            instance.is_user_allowed(999) is True
+        ), "is_user_allowed() must return True when allowed_users is empty (default)"
