@@ -97,6 +97,13 @@ def _make_manager():
     mgr.strip_metadata = MagicMock(side_effect=lambda text, rt: text)
     mgr.update_session_field = MagicMock()
     mgr.touch_session = MagicMock()
+    mgr.runtime_executor = MagicMock()
+    # Route any runtime to the corresponding run_* method on mgr (resolved dynamically)
+
+    def _get_handler(rt):
+        attr = 'run_' + rt.replace('-', '_')
+        return lambda *a, **kw: getattr(mgr, attr)(*a, **kw)
+    mgr.runtime_executor.get.side_effect = _get_handler
     return mgr
 
 
