@@ -13938,19 +13938,57 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         defaults = _compute_bg_task_defaults(session_map, identity, channel)
 
         agent = body.agent or defaults.get("agent", get_default_agent())
-        # Load agent dispatch_config as 2nd-tier fallback (Issue #193):
-        #   body > dispatch_config > session defaults > global defaults
-        _dispatch_config = session_mgr.AGENTS.get(agent, {}).get("dispatch_config", {})
-        runtime = (
-            body.runtime
-            or _dispatch_config.get("runtime")
-            or defaults.get("runtime", get_default_runtime())
-        )
-        model = (
-            body.model
-            or _dispatch_config.get("model")
-            or defaults.get("model", get_default_model())
-        )
+        # Priority order: body > dispatch_config (#193) > session > pref-manager (#168) > default
+        _dispatch_config = session_mgr.AGENTS.get(agent, {}).get(dispatch_config, {})
+        if body.runtime:
+            runtime = body.runtime
+            print(
+                f[RuntimePref] Explicit runtime override: {runtime}, file=sys.stderr
+            )
+        else:
+            _dispatch_rt = _dispatch_config.get(runtime)
+            _session_rt = defaults.get(runtime)
+            _pref_primary = _get_runtime_pref_mgr().primary()
+            _pref_backup = _get_runtime_pref_mgr().backup()
+            if _dispatch_rt:
+                runtime = _dispatch_rt
+                print(
+                    f[RuntimePref] Using dispatch_config runtime: {runtime},
+                    file=sys.stderr,
+                )
+            elif _session_rt:
+                runtime = _session_rt
+                print(
+                    f[RuntimePref] Using session runtime: {runtime}, file=sys.stderr
+                )
+            elif _pref_primary:
+                if check_runtime_available(_pref_primary):
+                    runtime = _pref_primary
+                    print(
+                        f[RuntimePref] Using primary preference runtime: {runtime},
+                        file=sys.stderr,
+                    )
+                else:
+                    # Primary configured but unavailable — fall back to backup or default
+                    runtime = _pref_backup or get_default_runtime()
+                    print(
+                        f[RuntimePref] Primary '{_pref_primary}' unavailable, 
+                        ffalling back to: {runtime},
+                        file=sys.stderr,
+                    )
+            elif _pref_backup:
+                runtime = _pref_backup
+                print(
+                    f[RuntimePref] Using backup preference runtime: {runtime},
+                    file=sys.stderr,
+                )
+            else:
+                runtime = get_default_runtime()
+                print(
+                    f[RuntimePref] Using default runtime: {runtime},
+                    file=sys.stderr,
+                )
+        model = body.model or _dispatch_config.get(model) or defaults.get(model, get_default_model())
 
         # Apply dispatch_config fallback if primary runtime is blocked/unavailable
         eff_runtime, eff_model, used_fallback, fallback_reason = (
