@@ -210,9 +210,15 @@ class TestDispatchConfigPriorityResolution(unittest.TestCase):
             if dispatch_cfg.get("yolo")
             else dispatch_cfg.get("permission_mode", "")
         )
-        perm_mode = (
-            body_perm or ("elevated" if body_yolo else None) or _dc_perm or "restricted"
-        )
+        # Mirror the fixed production logic: explicit is-checks for body_yolo
+        if body_perm:
+            perm_mode = body_perm
+        elif body_yolo is True:
+            perm_mode = "elevated"
+        elif body_yolo is False:
+            perm_mode = "restricted"
+        else:
+            perm_mode = _dc_perm or "restricted"
         if perm_mode not in ("elevated", "restricted", "sandboxed"):
             perm_mode = "restricted"
         return runtime, model, perm_mode
@@ -294,6 +300,39 @@ class TestDispatchConfigPriorityResolution(unittest.TestCase):
             {"permission_mode": "elevated", "yolo": True},
         )
         self.assertEqual(pm, "sandboxed")
+
+    def test_body_yolo_false_overrides_dispatch_config_yolo_true(self):
+        """Explicit body.yolo=False must beat dispatch_config.yolo=True.
+
+        Regression for Issue #193: body.yolo was falsy so the `or` chain fell
+        through to dispatch_config, letting yolo=True in dispatch_config elevate
+        the permission even when the caller explicitly opted out.
+        """
+        _, _, pm = self._resolve(
+            None,
+            None,
+            None,
+            False,  # explicit False, not omitted
+            {"yolo": True, "permission_mode": "elevated"},
+            "copilot",
+            "gpt-5-mini",
+        )
+        self.assertEqual(
+            pm,
+            "restricted",
+            "body.yolo=False must override dispatch_config.yolo=True",
+        )
+
+    def test_body_yolo_none_still_uses_dispatch_config(self):
+        """Omitted body.yolo (None) should fall through to dispatch_config."""
+        _, _, pm = self._resolve(
+            None, None, None, None, {"yolo": True}, "copilot", "gpt-5-mini"
+        )
+        self.assertEqual(
+            pm,
+            "elevated",
+            "omitted body.yolo must still let dispatch_config.yolo=True elevate",
+        )
 
 
 class TestBackgroundTaskRequestYoloField(unittest.TestCase):

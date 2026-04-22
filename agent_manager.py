@@ -12977,12 +12977,18 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             "elevated" if _dispatch_config.get("yolo")
             else _dispatch_config.get("permission_mode", "")
         )
-        perm_mode = (
-            body.permission_mode
-            or ("elevated" if body.yolo else None)
-            or _dc_perm
-            or "restricted"
-        )
+        # Use explicit is-checks so body.yolo=False (falsy but intentional) is not
+        # treated as omitted — otherwise dispatch_config.yolo=True would win.
+        if body.permission_mode:
+            perm_mode = body.permission_mode
+        elif body.yolo is True:
+            perm_mode = "elevated"
+        elif body.yolo is False:
+            # Caller explicitly downgraded: override dispatch_config entirely.
+            perm_mode = "restricted"
+        else:
+            # body.yolo is None (omitted) → fall through to dispatch_config
+            perm_mode = _dc_perm or "restricted"
         if perm_mode not in ("elevated", "restricted", "sandboxed"):
             perm_mode = "restricted"
 
