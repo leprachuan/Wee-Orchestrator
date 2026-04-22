@@ -12,7 +12,6 @@ Tests cover:
 - Dispatch routing
 """
 
-import asyncio
 import os
 import sys
 import types
@@ -25,30 +24,58 @@ os.environ.setdefault("API_SHARED_KEY", "test_key_123")
 
 # --- Fake claude_agent_sdk module ---
 
-_TextBlock = type("TextBlock", (), {
-    "__init__": lambda self, text="": setattr(self, "text", text),
-})
-_AssistantMessage = type("AssistantMessage", (), {
-    "__init__": lambda self, content=None: setattr(self, "content", content or []),
-})
-_ResultMessage = type("ResultMessage", (), {
-    "__init__": lambda self, session_id="": setattr(self, "session_id", session_id),
-})
+_TextBlock = type(
+    "TextBlock",
+    (),
+    {
+        "__init__": lambda self, text="": setattr(self, "text", text),
+    },
+)
+_AssistantMessage = type(
+    "AssistantMessage",
+    (),
+    {
+        "__init__": lambda self, content=None: setattr(self, "content", content or []),
+    },
+)
+_ResultMessage = type(
+    "ResultMessage",
+    (),
+    {
+        "__init__": lambda self, session_id="": setattr(self, "session_id", session_id),
+    },
+)
 
-_ToolUseBlock = type("ToolUseBlock", (), {
-    "__init__": lambda self, id="", name="", input=None: (
-        setattr(self, "id", id) or setattr(self, "name", name) or setattr(self, "input", input)
-    ),
-})
-_ToolResultBlock = type("ToolResultBlock", (), {
-    "__init__": lambda self, tool_use_id="", content=None, is_error=False: (
-        setattr(self, "tool_use_id", tool_use_id) or setattr(self, "content", content) or setattr(self, "is_error", is_error)
-    ),
-})
+_ToolUseBlock = type(
+    "ToolUseBlock",
+    (),
+    {
+        "__init__": lambda self, id="", name="", input=None: (
+            setattr(self, "id", id)
+            or setattr(self, "name", name)
+            or setattr(self, "input", input)
+        ),
+    },
+)
+_ToolResultBlock = type(
+    "ToolResultBlock",
+    (),
+    {
+        "__init__": lambda self, tool_use_id="", content=None, is_error=False: (
+            setattr(self, "tool_use_id", tool_use_id)
+            or setattr(self, "content", content)
+            or setattr(self, "is_error", is_error)
+        ),
+    },
+)
 
-_ClaudeAgentOptions = type("ClaudeAgentOptions", (), {
-    "__init__": lambda self, **kw: self.__dict__.update(kw),
-})
+_ClaudeAgentOptions = type(
+    "ClaudeAgentOptions",
+    (),
+    {
+        "__init__": lambda self, **kw: self.__dict__.update(kw),
+    },
+)
 
 
 def _build_fake_module(query_fn=None):
@@ -72,6 +99,7 @@ def _build_fake_module(query_fn=None):
 def _make_manager():
     """Create a minimal SessionManager for testing."""
     from agent_manager import SessionManager
+
     mgr = SessionManager.__new__(SessionManager)
     mgr.session_state_dir = MagicMock()
     mgr.session_map_file = MagicMock()
@@ -84,13 +112,15 @@ def _make_manager():
         "orchestrator": {"path": "/opt/n8n-copilot-shim-dev", "name": "orchestrator"},
         "wee-dev": {"path": "/opt/wee-dev", "name": "wee-dev"},
     }
-    mgr.get_or_create_session_data = MagicMock(return_value={
-        "channel": "api",
-        "runtime": "claude-sdk",
-        "model": "haiku",
-        "session_id": "test-session-id",
-        "mode": None,
-    })
+    mgr.get_or_create_session_data = MagicMock(
+        return_value={
+            "channel": "api",
+            "runtime": "claude-sdk",
+            "model": "haiku",
+            "session_id": "test-session-id",
+            "mode": None,
+        }
+    )
     mgr.build_agent_context_prompt = MagicMock(return_value="[context] test prompt")
     mgr._parse_mode_command = MagicMock(return_value=("test prompt", None))
     mgr._resolve_permission_mode = MagicMock(side_effect=lambda m, s: m)
@@ -101,8 +131,9 @@ def _make_manager():
     # Route any runtime to the corresponding run_* method on mgr (resolved dynamically)
 
     def _get_handler(rt):
-        attr = 'run_' + rt.replace('-', '_')
+        attr = "run_" + rt.replace("-", "_")
         return lambda *a, **kw: getattr(mgr, attr)(*a, **kw)
+
     mgr.runtime_executor.get.side_effect = _get_handler
     return mgr
 
@@ -144,7 +175,12 @@ class TestPermissionModeMapping(unittest.TestCase):
         fake_mod = _build_fake_module(capturing_query)
         with patch.dict("sys.modules", {"claude_agent_sdk": fake_mod}):
             result = mgr.run_claude_sdk(
-                "test prompt", "haiku", "orchestrator", None, False, "sess1",
+                "test prompt",
+                "haiku",
+                "orchestrator",
+                None,
+                False,
+                "sess1",
                 mode=mode,
             )
         return captured, result
@@ -213,9 +249,15 @@ class TestStreamingCollection(unittest.TestCase):
         mgr = _make_manager()
 
         # Create a message type that isn't AssistantMessage but has content
-        OtherMsg = type("OtherMessage", (), {
-            "__init__": lambda self, content=None: setattr(self, "content", content or []),
-        })
+        OtherMsg = type(
+            "OtherMessage",
+            (),
+            {
+                "__init__": lambda self, content=None: setattr(
+                    self, "content", content or []
+                ),
+            },
+        )
         msg = OtherMsg([_TextBlock("fallback text")])
 
         async def mock_query(prompt, options=None):
@@ -289,8 +331,12 @@ class TestSessionResumption(unittest.TestCase):
         fake_mod = _build_fake_module(cap_query)
         with patch.dict("sys.modules", {"claude_agent_sdk": fake_mod}):
             mgr.run_claude_sdk(
-                "test prompt", "haiku", "orchestrator",
-                "existing-sess-123", True, "sess1",
+                "test prompt",
+                "haiku",
+                "orchestrator",
+                "existing-sess-123",
+                True,
+                "sess1",
             )
 
         # options.resume should be set to the session_id for --resume flag
@@ -311,8 +357,12 @@ class TestSessionResumption(unittest.TestCase):
         fake_mod = _build_fake_module(cap_query)
         with patch.dict("sys.modules", {"claude_agent_sdk": fake_mod}):
             mgr.run_claude_sdk(
-                "test", "haiku", "orchestrator",
-                None, False, "sess1",
+                "test",
+                "haiku",
+                "orchestrator",
+                None,
+                False,
+                "sess1",
             )
 
         self.assertIsNone(captured["resume"])
@@ -330,7 +380,12 @@ class TestSessionResumption(unittest.TestCase):
         fake_mod = _build_fake_module(cap_query)
         with patch.dict("sys.modules", {"claude_agent_sdk": fake_mod}):
             mgr.run_claude_sdk(
-                "test", "opus", "orchestrator", None, False, "sess1",
+                "test",
+                "opus",
+                "orchestrator",
+                None,
+                False,
+                "sess1",
             )
 
         self.assertEqual(captured["model"], "opus")
@@ -357,7 +412,8 @@ class TestSessionResumption(unittest.TestCase):
         self.assertIn("response text", result)
 
     def test_multiturn_uses_query_with_resume(self):
-        """Issue #86: multi-turn must use query() with options.resume, not ClaudeSDKClient."""
+        """Issue #86: multi-turn must use query() with options.resume, not
+        ClaudeSDKClient."""
         mgr = _make_manager()
         captured = {}
 
@@ -371,8 +427,12 @@ class TestSessionResumption(unittest.TestCase):
         fake_mod = _build_fake_module(cap_query)
         with patch.dict("sys.modules", {"claude_agent_sdk": fake_mod}):
             result = mgr.run_claude_sdk(
-                "Follow-up question", "haiku", "orchestrator",
-                "session-abc-123", True, "sess1",
+                "Follow-up question",
+                "haiku",
+                "orchestrator",
+                "session-abc-123",
+                True,
+                "sess1",
             )
 
         # Verify query() was used with options.resume set
@@ -391,8 +451,12 @@ class TestSessionResumption(unittest.TestCase):
         fake_mod = _build_fake_module(mock_query)
         with patch.dict("sys.modules", {"claude_agent_sdk": fake_mod}):
             result = mgr.run_claude_sdk(
-                "follow-up", "haiku", "orchestrator",
-                "prev-session-id", True, "sess1",
+                "follow-up",
+                "haiku",
+                "orchestrator",
+                "prev-session-id",
+                True,
+                "sess1",
             )
 
         self.assertIn("second turn output", result)
@@ -412,8 +476,12 @@ class TestSessionResumption(unittest.TestCase):
         fake_mod = _build_fake_module(mock_query)
         with patch.dict("sys.modules", {"claude_agent_sdk": fake_mod}):
             mgr.run_claude_sdk(
-                "test", "haiku", "orchestrator",
-                "old-session-id", True, "sess1",
+                "test",
+                "haiku",
+                "orchestrator",
+                "old-session-id",
+                True,
+                "sess1",
             )
 
         mgr.update_session_field.assert_called_once_with(
@@ -433,8 +501,12 @@ class TestSessionResumption(unittest.TestCase):
         fake_mod = _build_fake_module(cap_query)
         with patch.dict("sys.modules", {"claude_agent_sdk": fake_mod}):
             mgr.run_claude_sdk(
-                "test", "haiku", "orchestrator",
-                "some-session-id", False, "sess1",
+                "test",
+                "haiku",
+                "orchestrator",
+                "some-session-id",
+                False,
+                "sess1",
             )
 
         # resume=False should NOT set options.resume even if session_id is present
@@ -462,7 +534,9 @@ class TestRuntimeRegistration(unittest.TestCase):
     def test_session_validation_source(self):
         """Verify source code includes claude-sdk in session validation."""
         import inspect
+
         from agent_manager import SessionManager
+
         source = inspect.getsource(SessionManager._get_or_create_session_data_unlocked)
         self.assertIn("claude-sdk", source)
 
@@ -475,6 +549,7 @@ class TestDispatch(unittest.TestCase):
         mgr.run_claude_sdk = MagicMock(return_value="SDK response")
 
         from agent_manager import SessionManager
+
         result = SessionManager._dispatch_single_runtime(
             mgr,
             runtime="claude-sdk",
@@ -497,6 +572,7 @@ class TestDispatch(unittest.TestCase):
         mgr.run_claude_sdk = MagicMock(return_value="resp")
 
         from agent_manager import SessionManager
+
         SessionManager._dispatch_single_runtime(
             mgr,
             runtime="claude-sdk",
@@ -522,6 +598,7 @@ class TestDispatch(unittest.TestCase):
         mgr.run_claude = MagicMock(return_value="claude response")
 
         from agent_manager import SessionManager
+
         result = SessionManager._dispatch_single_runtime(
             mgr,
             runtime="claude",

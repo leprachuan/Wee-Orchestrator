@@ -6,7 +6,6 @@ Manages session ID mapping between N8N chat sessions and AI backend sessions
 """
 
 import argparse
-
 import copy
 import hashlib
 import hmac
@@ -5271,7 +5270,9 @@ You can mention an agent in your prompt and it will auto-delegate:
         except Exception as e:
             return f"Error executing command: {str(e)}"
 
-    def _execute_shell_command(self, command: str, agent: str = "orchestrator") -> str:  # noqa
+    def _execute_shell_command(
+        self, command: str, agent: str = "orchestrator"
+    ) -> str:  # noqa
         """Execute a trusted shell command with full bash semantics.
 
         This is reserved for agent-authored shell tool calls that rely on pipes,
@@ -8418,7 +8419,9 @@ User Request:
         # Issue #142: Retrieve background task ID for tool call tracking in Tasks panel
         bg_task_id = session_data.get("bg_task_id")  # noqa: F841
         agent_dir = self.AGENTS.get(agent, self.AGENTS["orchestrator"])["path"]  # noqa
-        effective_timeout = timeout if timeout is not None else self.command_timeout  # noqa
+        effective_timeout = (
+            timeout if timeout is not None else self.command_timeout
+        )  # noqa
         channel = session_data.get("channel", "webui")  # noqa: F841
 
     def _calculate_anthropic_cost(
@@ -8936,7 +8939,9 @@ User Request:
                         _provider = (
                             "ollama"
                             if "192.168" in api_base  # noqa: F821
-                            else "openrouter" if "openrouter" in api_base else "wee"  # noqa
+                            else (
+                                "openrouter" if "openrouter" in api_base else "wee"
+                            )  # noqa
                         )
                         _pricing = (
                             self._fetch_openrouter_pricing()
@@ -10142,7 +10147,6 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
     from fastapi.responses import (
         FileResponse,
         JSONResponse,
-
         StreamingResponse,
     )
     from fastapi.staticfiles import StaticFiles
