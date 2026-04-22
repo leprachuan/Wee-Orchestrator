@@ -2880,7 +2880,7 @@ You can mention an agent in your prompt and it will auto-delegate:
                 lines.append(
                     f"{status} {recurring} `{j['id']}` — **{j['name']}**\n"
                     f"   Schedule: `{j['schedule']}`\n"
-                    f"   Next run: `{j.get('next_run','?')}`\n"
+                    f"   Next run: `{j.get('next_run', '?')}`\n"
                     f"   Agent: `{j.get('agent', '?')}` / Runtime: `{j.get('runtime', '?')}`"  # noqa: E501
                 )
             return "\n\n".join(lines)
@@ -2930,12 +2930,12 @@ You can mention an agent in your prompt and it will auto-delegate:
                 f"📋 **Job: {j['name']}**\n\n"
                 f"• **ID:** `{j['id']}`\n"
                 f"• **Schedule:** `{j['schedule']}`{cron_line}\n"
-                f"• **Next run:** `{j.get('next_run','?')}`\n"
-                f"• **Last run:** `{j.get('last_run','never')}`\n"
+                f"• **Next run:** `{j.get('next_run', '?')}`\n"
+                f"• **Last run:** `{j.get('last_run', 'never')}`\n"
                 f"• **Agent:** `{j.get('agent', '?')}` / Runtime: `{j.get('runtime', '?')}`\n"  # noqa: E501
                 f"• **Recurring:** {'Yes 🔁' if j.get('recurring') else 'No 1️⃣'}\n"
                 f"• **Enabled:** {'Yes ▶️' if j.get('enabled') else 'No ⏸'}\n"
-                f"• **Task:** {j.get('task','')}"
+                f"• **Task:** {j.get('task', '')}"
             )
 
         # /schedule logs <job_id>
@@ -2965,7 +2965,7 @@ You can mention an agent in your prompt and it will auto-delegate:
             for r in results[-5:]:  # last 5 runs
                 status = "✅" if r.get("success") else "❌"
                 lines.append(
-                    f"{status} `{r.get('timestamp','?')}` — {r.get('summary','')[:100]}"
+                    f"{status} `{r.get('timestamp', '?')}` — {r.get('summary', '')[:100]}"
                 )
             return "\n".join(lines)
 
@@ -2996,7 +2996,7 @@ You can mention an agent in your prompt and it will auto-delegate:
                     f"• **ID:** `{j['id']}`\n"
                     f"• **Name:** {j['name']}\n"
                     f"• **Schedule:** `{j['schedule']}`{cron_line}\n"
-                    f"• **Next run:** `{j.get('next_run','?')}`\n"
+                    f"• **Next run:** `{j.get('next_run', '?')}`\n"
                     f"• **Recurring:** {'Yes 🔁' if j.get('recurring') else 'No 1️⃣'}"
                 )
             return f"❌ {result.get('message', 'Failed to schedule job.')}"
@@ -5214,7 +5214,7 @@ You can mention an agent in your prompt and it will auto-delegate:
             # If there's no output, indicate success
             if not output.strip():
                 if result.returncode == 0:
-                    output = f"✓ Command executed successfully (exit code: 0)"
+                    output = "✓ Command executed successfully (exit code: 0)"
                 else:
                     output = f"✗ Command failed with exit code: {result.returncode}"
 
@@ -5260,7 +5260,7 @@ You can mention an agent in your prompt and it will auto-delegate:
 
             if not output.strip():
                 if result.returncode == 0:
-                    output = f"✓ Command executed successfully (exit code: 0)"
+                    output = "✓ Command executed successfully (exit code: 0)"
                 else:
                     output = f"✗ Command failed with exit code: {result.returncode}"
 
@@ -5304,7 +5304,7 @@ You can mention an agent in your prompt and it will auto-delegate:
 
             if not output.strip():
                 if result.returncode == 0:
-                    output = f"✓ Command executed successfully (exit code: 0)"
+                    output = "✓ Command executed successfully (exit code: 0)"
                 else:
                     output = f"✗ Command failed with exit code: {result.returncode}"
 
@@ -5566,7 +5566,7 @@ Example skill structure:
                 result_text += f"  • {skill['name']} - {skill['description']}\n"
 
             result_text += (
-                f"\nTo load any skill, use: /load-skill <skill-name> [repository-name]"
+                "\nTo load any skill, use: /load-skill <skill-name> [repository-name]"
             )
             return result_text
 
@@ -15211,7 +15211,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             "task-scheduler-executor-dev",
         }
         if service not in allowed_services:
-            raise HTTPException(status_code=400, detail=f"Service not allowed")
+            raise HTTPException(status_code=400, detail="Service not allowed")
 
         async def _event_generator():
             proc = await asyncio.create_subprocess_exec(
@@ -15241,7 +15241,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                         else:
                             break
                     except asyncio.TimeoutError:
-                        yield f": keepalive\n\n"
+                        yield ": keepalive\n\n"
             finally:
                 proc.terminate()
                 try:
