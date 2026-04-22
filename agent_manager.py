@@ -3287,8 +3287,9 @@ You can mention an agent in your prompt and it will auto-delegate:
             with open(config_path, "r") as f:
                 config = json.load(f)
                 try:
-                    from config_schemas import validate_agents_config
                     from pydantic import ValidationError as _ValidationError
+
+                    from config_schemas import validate_agents_config
 
                     validate_agents_config(config)
                 except ImportError:
