@@ -190,148 +190,161 @@ class TestSlashBgTimeoutUsesDispatchConfig(unittest.TestCase):
 
 
 class TestDispatchConfigPriorityResolution(unittest.TestCase):
-    """Unit tests for the priority resolution: body > dispatch_config > session."""
+    """Tests verify priority resolution via the PRODUCTION endpoint.
 
-    def _resolve(
-        self,
-        body_runtime,
-        body_model,
-        body_perm,
-        body_yolo,
-        dispatch_cfg,
-        session_runtime="copilot",
-        session_model="gpt-5-mini",
-    ):
-        """Simulate the resolution logic from create_background_task."""
-        runtime = body_runtime or dispatch_cfg.get("runtime") or session_runtime
-        model = body_model or dispatch_cfg.get("model") or session_model
-        _dc_perm = (
-            "elevated"
-            if dispatch_cfg.get("yolo")
-            else dispatch_cfg.get("permission_mode", "")
+    These tests POST to /api/v1/background-tasks and assert the
+    permission_mode in the response — exercising the real code path in
+    create_background_task() instead of a reimplemented helper.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        import tempfile
+
+        from fastapi.testclient import TestClient
+
+        import agent_manager as am
+
+        # Inject a test agents.json that has wee-qa with dispatch_config
+        cls.temp_dir = tempfile.TemporaryDirectory()
+        cfg_path = os.path.join(cls.temp_dir.name, "agents.json")
+        with open(cfg_path, "w") as f:
+            json.dump(
+                {
+                    "agents": [
+                        {
+                            "name": "wee-qa",
+                            "description": "QA agent",
+                            "path": "/opt/wee-qa",
+                            "dispatch_config": {
+                                "runtime": "openai",
+                                "model": "gpt-5.4-mini",
+                                "permission_mode": "elevated",
+                                "yolo": True,
+                                "timeout": 1800,
+                            },
+                        },
+                        {
+                            "name": "plain-agent",
+                            "description": "Agent without dispatch_config",
+                            "path": "/opt/plain",
+                        },
+                    ]
+                },
+                f,
+            )
+        os.environ["AGENT_CONFIG_FILE"] = cfg_path
+        cls.app = am.create_api_app()
+        cls.client = TestClient(cls.app, raise_server_exceptions=False)
+        cls.headers = {"Authorization": "Bearer shared_test_key_123"}
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.temp_dir.cleanup()
+
+    def _post(self, payload):
+        """POST to the production endpoint and return the JSON response."""
+        resp = self.client.post(
+            "/api/v1/background-tasks",
+            json=payload,
+            headers=self.headers,
         )
-        # Mirror the fixed production logic: explicit is-checks for body_yolo
-        if body_perm:
-            perm_mode = body_perm
-        elif body_yolo is True:
-            perm_mode = "elevated"
-        elif body_yolo is False:
-            perm_mode = "restricted"
-        else:
-            perm_mode = _dc_perm or "restricted"
-        if perm_mode not in ("elevated", "restricted", "sandboxed"):
-            perm_mode = "restricted"
-        return runtime, model, perm_mode
+        self.assertIn(
+            resp.status_code,
+            (200, 201),
+            f"Unexpected status {resp.status_code}: {resp.text[:300]}",
+        )
+        return resp.json()
 
     def test_body_overrides_all(self):
-        """Explicit body values must override dispatch_config and session."""
-        rt, mdl, pm = self._resolve(
-            "my-runtime",
-            "my-model",
-            "sandboxed",
-            None,
+        """Explicit body.permission_mode overrides dispatch_config and yolo."""
+        data = self._post(
             {
-                "runtime": "openai",
-                "model": "gpt-5.4",
-                "permission_mode": "elevated",
-            },
-            "session-runtime",
-            "session-model",
+                "prompt": "test",
+                "agent": "wee-qa",
+                "runtime": "my-runtime",
+                "model": "my-model",
+                "permission_mode": "sandboxed",
+            }
         )
-        self.assertEqual(rt, "my-runtime")
-        self.assertEqual(mdl, "my-model")
-        self.assertEqual(pm, "sandboxed")
+        self.assertEqual(data.get("permission_mode"), "sandboxed")
+        self.assertEqual(data.get("runtime"), "my-runtime")
+        self.assertEqual(data.get("model"), "my-model")
 
     def test_dispatch_config_overrides_session_defaults(self):
-        """dispatch_config beats session defaults when body is empty."""
-        rt, mdl, pm = self._resolve(
-            None,
-            None,
-            None,
-            None,
-            {
-                "runtime": "openai",
-                "model": "gpt-5.4",
-                "permission_mode": "elevated",
-            },
-            "session-runtime",
-            "session-model",
+        """dispatch_config.permission_mode beats session defaults when body is empty."""
+        data = self._post({"prompt": "test", "agent": "wee-qa"})
+        # wee-qa has dispatch_config.yolo=True → should resolve to "elevated"
+        self.assertEqual(
+            data.get("permission_mode"),
+            "elevated",
+            "dispatch_config.yolo=True must resolve to 'elevated'",
         )
-        self.assertEqual(rt, "openai")
-        self.assertEqual(mdl, "gpt-5.4")
-        self.assertEqual(pm, "elevated")
 
     def test_wee_qa_dispatch_config_scenario(self):
-        """Simulate exact wee-qa dispatch scenario from the issue report."""
-        rt, mdl, pm = self._resolve(
-            None,
-            None,
-            None,
-            None,
-            {"runtime": "openai", "model": "gpt-5.4-mini", "yolo": True},
-            "copilot",
-            "gpt-5-mini",
-        )
-        self.assertEqual(rt, "openai")
-        self.assertEqual(mdl, "gpt-5.4-mini")
-        self.assertEqual(pm, "elevated")
+        """Full wee-qa scenario: runtime/model/permission_mode from dispatch_config."""
+        data = self._post({"prompt": "test", "agent": "wee-qa"})
+        self.assertEqual(data.get("runtime"), "openai")
+        self.assertEqual(data.get("model"), "gpt-5.4-mini")
+        self.assertEqual(data.get("permission_mode"), "elevated")
 
     def test_session_defaults_when_dispatch_config_empty(self):
-        """Session defaults apply when dispatch_config is empty."""
-        rt, mdl, pm = self._resolve(
-            None, None, None, None, {}, "copilot", "claude-haiku"
-        )
-        self.assertEqual(rt, "copilot")
-        self.assertEqual(mdl, "claude-haiku")
-        self.assertEqual(pm, "restricted")
+        """plain-agent (no dispatch_config) falls back to restricted."""
+        data = self._post({"prompt": "test", "agent": "plain-agent"})
+        self.assertEqual(data.get("permission_mode"), "restricted")
 
     def test_body_yolo_true_elevates_perm_mode(self):
         """body.yolo=True must resolve to elevated perm_mode."""
-        _, _, pm = self._resolve(None, None, None, True, {}, "copilot", "gpt-5-mini")
-        self.assertEqual(pm, "elevated")
+        data = self._post(
+            {
+                "prompt": "test",
+                "agent": "plain-agent",
+                "yolo": True,
+            }
+        )
+        self.assertEqual(data.get("permission_mode"), "elevated")
 
     def test_body_permission_mode_takes_highest_priority(self):
-        """Explicit body.permission_mode wins over all other sources."""
-        _, _, pm = self._resolve(
-            None,
-            None,
-            "sandboxed",
-            True,
-            {"permission_mode": "elevated", "yolo": True},
+        """Explicit body.permission_mode wins over yolo and dispatch_config."""
+        data = self._post(
+            {
+                "prompt": "test",
+                "agent": "wee-qa",
+                "permission_mode": "sandboxed",
+                "yolo": True,
+            }
         )
-        self.assertEqual(pm, "sandboxed")
+        self.assertEqual(data.get("permission_mode"), "sandboxed")
 
     def test_body_yolo_false_overrides_dispatch_config_yolo_true(self):
-        """Explicit body.yolo=False must beat dispatch_config.yolo=True.
+        """body.yolo=False must beat dispatch_config.yolo=True.
 
-        Regression for Issue #193: body.yolo was falsy so the `or` chain fell
-        through to dispatch_config, letting yolo=True in dispatch_config elevate
-        the permission even when the caller explicitly opted out.
+        This is the core regression for Issue #193: body.yolo=False was falsy
+        so the 'or' chain fell through to dispatch_config, letting yolo=True
+        in dispatch_config elevate the permission even when the caller
+        explicitly opted out.
         """
-        _, _, pm = self._resolve(
-            None,
-            None,
-            None,
-            False,  # explicit False, not omitted
-            {"yolo": True, "permission_mode": "elevated"},
-            "copilot",
-            "gpt-5-mini",
+        data = self._post(
+            {
+                "prompt": "test",
+                "agent": "wee-qa",  # dispatch_config has yolo=True
+                "yolo": False,  # explicit False must win
+            }
         )
         self.assertEqual(
-            pm,
+            data.get("permission_mode"),
             "restricted",
             "body.yolo=False must override dispatch_config.yolo=True",
         )
 
     def test_body_yolo_none_still_uses_dispatch_config(self):
         """Omitted body.yolo (None) should fall through to dispatch_config."""
-        _, _, pm = self._resolve(
-            None, None, None, None, {"yolo": True}, "copilot", "gpt-5-mini"
-        )
+        # wee-qa has dispatch_config.yolo=True
+        data = self._post({"prompt": "test", "agent": "wee-qa"})
         self.assertEqual(
-            pm,
+            data.get("permission_mode"),
             "elevated",
-            "omitted body.yolo must still let dispatch_config.yolo=True elevate",
+            "omitted body.yolo must let dispatch_config.yolo=True elevate",
         )
 
 

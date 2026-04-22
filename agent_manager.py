@@ -1051,6 +1051,153 @@ def check_runtime_available(runtime: str) -> bool:
     return False
 
 
+def check_runtime_blocked(runtime: str, state_file_path: Optional[str] = None) -> bool:
+    """Check if a runtime is listed as blocked in RUNTIME_STATE.md.
+
+    Parses the Active Incidents table and checks if the runtime appears
+    with a future Blocked Until timestamp.  Returns True only when the
+    incident is still active (not yet expired).
+    """
+    if state_file_path is None:
+        state_file_path = "/opt/RUNTIME_STATE.md"
+
+    state_path = Path(state_file_path)
+    if not state_path.exists():
+        return False
+
+    try:
+        content = state_path.read_text(encoding="utf-8")
+    except OSError:
+        return False
+
+    # Locate the Active Incidents table
+    in_table = False
+    header_passed = False
+    for line in content.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("## Active Incidents"):
+            in_table = True
+            continue
+        if not in_table:
+            continue
+        # Any new ## heading ends the Active Incidents section
+        if stripped.startswith("## ") and "Active Incidents" not in stripped:
+            break
+        # Table rows start with '|'
+        if not stripped.startswith("|"):
+            continue
+        # Skip separator row (e.g. |----|...|)
+        is_separator = (
+            stripped.startswith("|---")
+            or stripped.startswith("| ---")
+            or set(stripped.replace("|", "").replace("-", "").replace(" ", "")) == set()
+        )
+        if is_separator:
+            continue
+        # Skip header row (contains 'ID' column)
+        if "| ID " in stripped or "| ID|" in stripped:
+            header_passed = True
+            continue
+        if not header_passed:
+            header_passed = True  # first non-separator row after section start
+            if "Blocked Until" in stripped:
+                continue
+
+        # Parse columns: | ID | Runtime/Service | Issue | Blocked Until | Written By | Fallback |
+        cols = [c.strip() for c in stripped.split("|")]
+        # cols[0] is empty (before first |), cols[1]=ID, cols[2]=Runtime, cols[3]=Issue,
+        # cols[4]=Blocked Until, cols[5]=Written By, cols[6]=Fallback
+        if len(cols) < 5:
+            continue
+
+        runtime_col = cols[2] if len(cols) > 2 else ""
+        blocked_until_col = cols[4] if len(cols) > 4 else ""
+
+        # Strip backtick formatting
+        runtime_col_clean = runtime_col.strip("`").strip()
+
+        # Check if this row covers the requested runtime (exact or prefix match)
+        runtime_matches = (
+            runtime_col_clean == runtime
+            or runtime_col_clean.startswith(f"{runtime}/")
+            or runtime_col_clean.startswith(f"{runtime} ")
+        )
+        if runtime_matches:
+            # Check if still active: Blocked Until is in the future
+            blocked_until_clean = blocked_until_col.strip()
+            if not blocked_until_clean:
+                return True  # No expiry listed — treat as still blocked
+
+            # Try parsing ISO-8601 datetime (YYYY-MM-DD HH:MM UTC or YYYY-MM-DDTHH:MM...)
+            try:
+                import re as _re
+
+                # Normalize: replace space before UTC with +00:00
+                dt_str = _re.sub(r"\s+UTC$", "+00:00", blocked_until_clean).strip()
+                from datetime import datetime as _dt
+                from datetime import timezone as _tz
+
+                if "T" in dt_str or "+" in dt_str or dt_str.endswith("Z"):
+                    blocked_dt = _dt.fromisoformat(dt_str.replace("Z", "+00:00"))
+                else:
+                    # Try YYYY-MM-DD HH:MM
+                    blocked_dt = _dt.strptime(dt_str, "%Y-%m-%d %H:%M").replace(
+                        tzinfo=_tz.utc
+                    )
+                now_utc = _dt.now(_tz.utc)
+                return now_utc < blocked_dt
+            except (ValueError, ImportError):
+                # Cannot parse date — be conservative, treat as still blocked
+                return True
+
+    return False
+
+
+def resolve_dispatch_runtime_model(
+    agent: str,
+    requested_runtime: str,
+    requested_model: str,
+    agents_map: Dict,
+    state_file_path: Optional[str] = None,
+) -> tuple:
+    """Resolve effective runtime/model for an agent, applying dispatch_config fallback.
+
+    Checks:
+    1. Is the requested runtime blocked in RUNTIME_STATE.md?
+    2. Is the requested runtime unavailable (not installed)?
+    If either is true AND the agent's dispatch_config has fallback_runtime/fallback_model,
+    the fallback values are returned.
+
+    Returns:
+        (effective_runtime, effective_model, used_fallback: bool, fallback_reason: str)
+    """
+    agent_config = agents_map.get(agent, {})
+    dispatch_cfg = agent_config.get("dispatch_config", {})
+    fallback_runtime = dispatch_cfg.get("fallback_runtime")
+    fallback_model = dispatch_cfg.get("fallback_model")
+
+    # Only apply fallback if at least one fallback field is set
+    if not fallback_runtime and not fallback_model:
+        return requested_runtime, requested_model, False, ""
+
+    # Determine if primary runtime is unavailable
+    reason = ""
+    primary_blocked = check_runtime_blocked(requested_runtime, state_file_path)
+    primary_unavailable = not check_runtime_available(requested_runtime)
+
+    if primary_blocked:
+        reason = f"runtime '{requested_runtime}' blocked in RUNTIME_STATE.md"
+    elif primary_unavailable:
+        reason = f"runtime '{requested_runtime}' not available on this host"
+
+    if not reason:
+        return requested_runtime, requested_model, False, ""
+
+    effective_runtime = fallback_runtime or requested_runtime
+    effective_model = fallback_model or requested_model
+    return effective_runtime, effective_model, True, reason
+
+
 def get_available_runtimes() -> List[Dict[str, str]]:
     """Get list of available runtimes on this system.
 
@@ -3687,8 +3834,6 @@ You can mention an agent in your prompt and it will auto-delegate:
             print(f"Error fetching opencode models: {e}", file=sys.stderr)
             return self._static_models_to_dict(self.OPENCODE_MODELS)
 
-
-
     def _static_models_to_dict(self, static_dict: Dict) -> Dict:
         """Convert static model config {cat: [(id, desc, aliases)...]} to {cat: [id,...]}."""
         return {
@@ -4087,13 +4232,16 @@ You can mention an agent in your prompt and it will auto-delegate:
         # Live Ollama discovery (Issue #142: return all installed models)
         try:
             import httpx
+
             resp = httpx.get(
                 "http://192.168.1.101:11434/api/tags",
                 timeout=httpx.Timeout(connect=5.0, read=10.0, write=10.0, pool=10.0),
             )
             if resp.status_code == 200:
                 tags = resp.json().get("models", [])
-                static_ollama = {e[0]: e for e in self.WEE_MODELS.get("Ollama Models", [])}
+                static_ollama = {
+                    e[0]: e for e in self.WEE_MODELS.get("Ollama Models", [])
+                }
                 merged_ollama = []
                 discovered_ids = set()
                 for t in tags:
@@ -4121,6 +4269,7 @@ You can mention an agent in your prompt and it will auto-delegate:
             api_key = None
             try:
                 import keyring
+
                 api_key = keyring.get_password("openrouter", "api_key")
             except Exception:
                 pass
@@ -4129,6 +4278,7 @@ You can mention an agent in your prompt and it will auto-delegate:
 
             if api_key:
                 import urllib.request
+
                 req = urllib.request.Request(
                     "https://openrouter.ai/api/v1/models",
                     headers={"Authorization": "Bearer " + api_key},
@@ -4138,7 +4288,9 @@ You can mention an agent in your prompt and it will auto-delegate:
                 all_models = data.get("data", [])
 
                 popular = self.OPENROUTER_POPULAR_MODELS
-                static_aliases = {e[0]: e[2] for e in self.WEE_MODELS.get("OpenRouter Models", [])}
+                static_aliases = {
+                    e[0]: e[2] for e in self.WEE_MODELS.get("OpenRouter Models", [])
+                }
                 discovered_popular = []
                 discovered_rest = []
                 for m in all_models:
@@ -4804,7 +4956,7 @@ You can mention an agent in your prompt and it will auto-delegate:
         for m in all_models:
             model_lower = m.lower()
             if model_lower.startswith("ollama/"):
-                suffix = model_lower[len("ollama/"):]
+                suffix = model_lower[len("ollama/") :]
                 if suffix == name_lower:
                     return m
 
@@ -4812,7 +4964,9 @@ You can mention an agent in your prompt and it will auto-delegate:
         # For wee runtime, bare names without an openrouter/ prefix are scoped to Ollama models
         # only -- prevents accidental matches against the full OpenRouter catalog (350+ models).
         if runtime == "wee" and not name_lower.startswith("openrouter/"):
-            candidate_models = [m for m in all_models if not m.lower().startswith("openrouter/")]
+            candidate_models = [
+                m for m in all_models if not m.lower().startswith("openrouter/")
+            ]
         else:
             candidate_models = all_models
         matches = [m for m in candidate_models if name_lower in m.lower()]
@@ -5050,12 +5204,19 @@ You can mention an agent in your prompt and it will auto-delegate:
                         obj = _json_strip.loads(line_stripped)
                         _has_json = True
                         obj_type = obj.get("type", "")
-                        if obj_type == "message" and obj.get("role") in ("assistant", "model"):
+                        if obj_type == "message" and obj.get("role") in (
+                            "assistant",
+                            "model",
+                        ):
                             content = obj.get("content", "")
                             if content:
                                 _text_parts.append(content)
                         elif obj_type == "result":
-                            error_msg = obj.get("error") or obj.get("error_message") or obj.get("message")
+                            error_msg = (
+                                obj.get("error")
+                                or obj.get("error_message")
+                                or obj.get("message")
+                            )
                             if error_msg and isinstance(error_msg, str):
                                 _text_parts.append(f"[Gemini Error] {error_msg}")
                         elif obj_type in ("tool_use", "tool_result", "init"):
@@ -6504,7 +6665,14 @@ User Request:
                                             if block.get("type") == "tool_result":
                                                 _tr_content = block.get("content", "")
                                                 if isinstance(_tr_content, list):
-                                                    _tr_content = " ".join(b.get("text", str(b)) if isinstance(b, dict) else str(b) for b in _tr_content)
+                                                    _tr_content = " ".join(
+                                                        (
+                                                            b.get("text", str(b))
+                                                            if isinstance(b, dict)
+                                                            else str(b)
+                                                        )
+                                                        for b in _tr_content
+                                                    )
                                                 tc_event = {
                                                     "event": "result",
                                                     "id": block.get("tool_use_id", ""),
@@ -6541,10 +6709,9 @@ User Request:
                                     try:
                                         _gobj = _json.loads(_line_stripped)
                                         _gtype = _gobj.get("type", "")
-                                        if (
-                                            _gtype == "message"
-                                            and _gobj.get("role") in ("assistant", "model")
-                                        ):
+                                        if _gtype == "message" and _gobj.get(
+                                            "role"
+                                        ) in ("assistant", "model"):
                                             _content = _gobj.get("content", "")
                                             if _content:
                                                 if stream_buffer:
@@ -6595,7 +6762,9 @@ User Request:
                                                 "status": _gobj.get(
                                                     "status", "completed"
                                                 ),
-                                                "output": _gobj.get("output", "")[:2000],
+                                                "output": _gobj.get("output", "")[
+                                                    :2000
+                                                ],
                                             }
                                             if stream_buffer:
                                                 stream_buffer.push(
@@ -7314,8 +7483,21 @@ User Request:
                     elif event.type == SessionEventType.TOOL_EXECUTION_COMPLETE:
                         tool_name = "tool"
                         if hasattr(event, "data"):
-                            tool_name = getattr(event.data, "name", None) or getattr(event.data, "tool_name", None) or "tool"
-                        tool_output = str(getattr(event.data, "output", "") or getattr(event.data, "result", "") or getattr(event.data, "content", "") or "")[:2000] if hasattr(event, "data") else ""
+                            tool_name = (
+                                getattr(event.data, "name", None)
+                                or getattr(event.data, "tool_name", None)
+                                or "tool"
+                            )
+                        tool_output = (
+                            str(
+                                getattr(event.data, "output", "")
+                                or getattr(event.data, "result", "")
+                                or getattr(event.data, "content", "")
+                                or ""
+                            )[:2000]
+                            if hasattr(event, "data")
+                            else ""
+                        )
                         tc_evt = {
                             "event": "completed",
                             "id": f"tc_copilot-sdk_{_tool_call_counter[0]}",
@@ -7610,14 +7792,21 @@ User Request:
                             elif isinstance(block, ToolResultBlock):
                                 _block_content = block.content
                                 if isinstance(_block_content, list):
-                                    _block_content = " ".join(getattr(b, "text", str(b)) for b in _block_content)
+                                    _block_content = " ".join(
+                                        getattr(b, "text", str(b))
+                                        for b in _block_content
+                                    )
                                 tc_evt = {
                                     "event": "completed",
                                     "id": block.tool_use_id
                                     or f"tc_claude-sdk_{_tool_call_counter[0]}",
                                     "name": "tool",
                                     "input": "",
-                                    "output": str(_block_content)[:2000] if _block_content else "",
+                                    "output": (
+                                        str(_block_content)[:2000]
+                                        if _block_content
+                                        else ""
+                                    ),
                                     "is_error": getattr(block, "is_error", False),
                                     "runtime": "claude-sdk",
                                     "timestamp": time.strftime(
@@ -8359,11 +8548,11 @@ User Request:
 
     def _fetch_openrouter_pricing(self) -> dict:
         """Fetch and cache OpenRouter model pricing (1h TTL)."""
-        import time as _time
         import json as _json
+        import time as _time
         import urllib.request
 
-        cache_path = Path('/tmp/openrouter_pricing.json')
+        cache_path = Path("/tmp/openrouter_pricing.json")
         now = _time.time()
         if cache_path.exists() and (now - cache_path.stat().st_mtime) < 3600:
             try:
@@ -8373,25 +8562,27 @@ User Request:
                 pass
         try:
             with urllib.request.urlopen(
-                'https://openrouter.ai/api/v1/models', timeout=10
+                "https://openrouter.ai/api/v1/models", timeout=10
             ) as resp:
                 data = _json.loads(resp.read().decode())
             pricing = {}
-            for model_info in data.get('data', []):
-                mid = model_info.get('id', '')
-                p = model_info.get('pricing', {})
+            for model_info in data.get("data", []):
+                mid = model_info.get("id", "")
+                p = model_info.get("pricing", {})
                 try:
                     pricing[mid] = {
-                        'prompt': float(p.get('prompt', 0) or 0),
-                        'completion': float(p.get('completion', 0) or 0),
+                        "prompt": float(p.get("prompt", 0) or 0),
+                        "completion": float(p.get("completion", 0) or 0),
                     }
                 except (ValueError, TypeError):
                     pass
-            with open(cache_path, 'w') as f:
+            with open(cache_path, "w") as f:
                 _json.dump(pricing, f)
             return pricing
         except Exception as e:
-            print(f'[TokenUsage] Could not fetch OpenRouter pricing: {e}', file=sys.stderr)
+            print(
+                f"[TokenUsage] Could not fetch OpenRouter pricing: {e}", file=sys.stderr
+            )
             return {}
 
         session_data = self.get_or_create_session_data(n8n_session_id)
@@ -8401,18 +8592,20 @@ User Request:
         effective_timeout = timeout if timeout is not None else self.command_timeout
         channel = session_data.get("channel", "webui")
 
-    def _calculate_anthropic_cost(self, model: str, prompt_tokens: int, completion_tokens: int):
+    def _calculate_anthropic_cost(
+        self, model: str, prompt_tokens: int, completion_tokens: int
+    ):
         """Calculate cost for Anthropic / claude-sdk models."""
         ANTHROPIC_PRICING = {
-            'claude-haiku-4-5':  (0.80, 4.00),
-            'claude-haiku-4':    (0.80, 4.00),
-            'claude-haiku':      (0.80, 4.00),
-            'claude-sonnet-4-5': (3.00, 15.00),
-            'claude-sonnet-4':   (3.00, 15.00),
-            'claude-sonnet':     (3.00, 15.00),
-            'claude-opus-4-5':   (15.00, 75.00),
-            'claude-opus-4':     (15.00, 75.00),
-            'claude-opus':       (15.00, 75.00),
+            "claude-haiku-4-5": (0.80, 4.00),
+            "claude-haiku-4": (0.80, 4.00),
+            "claude-haiku": (0.80, 4.00),
+            "claude-sonnet-4-5": (3.00, 15.00),
+            "claude-sonnet-4": (3.00, 15.00),
+            "claude-sonnet": (3.00, 15.00),
+            "claude-opus-4-5": (15.00, 75.00),
+            "claude-opus-4": (15.00, 75.00),
+            "claude-opus": (15.00, 75.00),
         }
         model_lower = model.lower()
         input_price, output_price = 3.00, 15.00
@@ -8420,18 +8613,20 @@ User Request:
             if key in model_lower:
                 input_price, output_price = inp, out
                 break
-        cost = (prompt_tokens * input_price / 1_000_000) + (completion_tokens * output_price / 1_000_000)
+        cost = (prompt_tokens * input_price / 1_000_000) + (
+            completion_tokens * output_price / 1_000_000
+        )
         return cost, self._get_cost_label(cost)
 
     def _get_cost_label(self, cost_usd: float) -> str:
         """Format cost as display label."""
         if cost_usd == 0.0:
-            return 'free'
+            return "free"
         if cost_usd < 0.00001:
-            return f'${cost_usd:.8f}'.rstrip('0')
+            return f"${cost_usd:.8f}".rstrip("0")
         if cost_usd < 0.001:
-            return f'${cost_usd:.6f}'.rstrip('0')
-        return f'${cost_usd:.4f}'.rstrip('0').rstrip('.')
+            return f"${cost_usd:.6f}".rstrip("0")
+        return f"${cost_usd:.4f}".rstrip("0").rstrip(".")
 
     def _log_token_usage(
         self,
@@ -8446,35 +8641,36 @@ User Request:
         duration_ms: int,
     ):
         """Append a usage entry to logs/token_usage.jsonl."""
-        import time as _time
         import json as _json
+        import time as _time
+
         try:
             self.logs_dir.mkdir(parents=True, exist_ok=True)
             entry = {
-                'timestamp': _time.time(),
-                'session_id': session_id,
-                'model': model,
-                'runtime': runtime,
-                'provider': provider,
-                'prompt_tokens': prompt_tokens,
-                'completion_tokens': completion_tokens,
-                'total_tokens': total_tokens,
-                'cost_usd': cost_usd,
-                'duration_ms': duration_ms,
+                "timestamp": _time.time(),
+                "session_id": session_id,
+                "model": model,
+                "runtime": runtime,
+                "provider": provider,
+                "prompt_tokens": prompt_tokens,
+                "completion_tokens": completion_tokens,
+                "total_tokens": total_tokens,
+                "cost_usd": cost_usd,
+                "duration_ms": duration_ms,
             }
-            with open(self.logs_dir / 'token_usage.jsonl', 'a') as f:
-                f.write(_json.dumps(entry) + '\n')
+            with open(self.logs_dir / "token_usage.jsonl", "a") as f:
+                f.write(_json.dumps(entry) + "\n")
         except Exception as e:
-            print(f'[TokenUsage] Failed to log usage: {e}', file=sys.stderr)
+            print(f"[TokenUsage] Failed to log usage: {e}", file=sys.stderr)
 
     # ── End Issue #128 helpers ─────────────────────────────────────────────────
-
 
     # ---- Issue #125 helpers ------------------------------------------------
 
     def _wee_load_free_config(self) -> dict:
         """Load wee_free_models.json config. Returns defaults if file missing."""
         import json as _json
+
         config_path = Path(__file__).parent / "wee_free_models.json"
         try:
             with open(config_path) as f:
@@ -8537,12 +8733,12 @@ User Request:
 
     # ---- End Issue #125 helpers ---------------------------------------------
 
-
     # ---- Issue #125 helpers ------------------------------------------------
 
     def _wee_load_free_config(self) -> dict:
         """Load wee_free_models.json config. Returns defaults if file missing."""
         import json as _json
+
         config_path = Path(__file__).parent / "wee_free_models.json"
         try:
             with open(config_path) as f:
@@ -8570,7 +8766,7 @@ User Request:
         resolved_model = model
         for prefix, (preset_base, preset_key) in _PRESETS.items():
             if model.lower().startswith(f"{prefix}/"):
-                resolved_model = model[len(prefix) + 1:]
+                resolved_model = model[len(prefix) + 1 :]
                 if not api_base:
                     api_base = preset_base
                 if not api_key and preset_key:
@@ -8582,6 +8778,7 @@ User Request:
             if "openrouter" in api_base.lower():
                 try:
                     import keyring
+
                     api_key = keyring.get_password("openrouter", "api_key")
                 except Exception:
                     pass
@@ -8620,7 +8817,9 @@ User Request:
         session_data = self.get_or_create_session_data(n8n_session_id)
         effective_timeout = timeout if timeout is not None else self.command_timeout
         channel = session_data.get("channel", "webui")
-        context_prompt = self.build_agent_context_prompt(prompt, agent, channel, n8n_session_id)
+        context_prompt = self.build_agent_context_prompt(
+            prompt, agent, channel, n8n_session_id
+        )
         _sess_api_base = session_data.get("api_base")
         _sess_api_key = session_data.get("api_key")
 
@@ -8658,14 +8857,16 @@ User Request:
                 assistant_tool_calls = []
                 for idx in sorted(tool_calls_acc.keys()):
                     tc = tool_calls_acc[idx]
-                    assistant_tool_calls.append({
-                        "id": tc["id"],
-                        "type": "function",
-                        "function": {
-                            "name": tc["name"],
-                            "arguments": tc["arguments"],
-                        },
-                    })
+                    assistant_tool_calls.append(
+                        {
+                            "id": tc["id"],
+                            "type": "function",
+                            "function": {
+                                "name": tc["name"],
+                                "arguments": tc["arguments"],
+                            },
+                        }
+                    )
 
                 assistant_msg = {
                     "role": "assistant",
@@ -8699,14 +8900,23 @@ User Request:
 
                     # Issue #142: Track tool call in bg_task_mgr for Tasks panel
                     if bg_task_id and self._bg_task_mgr:
-                        self._bg_task_mgr.append_tool_call(bg_task_id, {
-                            "id": tc_id,
-                            "name": func_name,
-                            "input": _json.dumps(func_args) if isinstance(func_args, dict) else str(func_args),
-                            "status": "running",
-                            "runtime": "wee",
-                            "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-                        })
+                        self._bg_task_mgr.append_tool_call(
+                            bg_task_id,
+                            {
+                                "id": tc_id,
+                                "name": func_name,
+                                "input": (
+                                    _json.dumps(func_args)
+                                    if isinstance(func_args, dict)
+                                    else str(func_args)
+                                ),
+                                "status": "running",
+                                "runtime": "wee",
+                                "timestamp": time.strftime(
+                                    "%Y-%m-%dT%H:%M:%SZ", time.gmtime()
+                                ),
+                            },
+                        )
 
                     print(
                         f"[Wee Native] Tool: {func_name}({_json.dumps(func_args)[:200]})",
@@ -8738,21 +8948,28 @@ User Request:
                         )
 
                     # Append tool result to conversation for next round
-                    messages.append({
-                        "role": "tool",
-                        "tool_call_id": tc_id,
-                        "content": tool_result or "No output",
-                    })
+                    messages.append(
+                        {
+                            "role": "tool",
+                            "tool_call_id": tc_id,
+                            "content": tool_result or "No output",
+                        }
+                    )
 
             else:
                 # All MAX_TOOL_ROUNDS had tool calls with no final text
-                last_tool_results = [m["content"] for m in messages if m.get("role") == "tool"]
+                last_tool_results = [
+                    m["content"] for m in messages if m.get("role") == "tool"
+                ]
                 if last_tool_results:
                     collected_output.append(
-                        "Tool execution completed. Last result:\n" + last_tool_results[-1][:2000]
+                        "Tool execution completed. Last result:\n"
+                        + last_tool_results[-1][:2000]
                     )
                 else:
-                    collected_output.append("Max tool rounds reached without final response.")
+                    collected_output.append(
+                        "Max tool rounds reached without final response."
+                    )
 
             output = "".join(collected_output)
 
@@ -8761,7 +8978,8 @@ User Request:
             # tool results, yielding output=''. Surface the last tool result instead.
             if not output.strip():
                 tool_results = [
-                    m["content"] for m in messages
+                    m["content"]
+                    for m in messages
                     if m.get("role") == "tool" and m.get("content")
                 ]
                 if tool_results:
@@ -8790,13 +9008,23 @@ User Request:
                 stream_buffer.push("done", output)
 
             print(
-                "[Wee Native] model=" + resolved_model + " api_base=" + api_base
-                + " session=" + n8n_session_id[:8] + "..."
-                + " (chain " + str(_chain_idx + 1) + "/" + str(len(_chain)) + ")",
+                "[Wee Native] model="
+                + resolved_model
+                + " api_base="
+                + api_base
+                + " session="
+                + n8n_session_id[:8]
+                + "..."
+                + " (chain "
+                + str(_chain_idx + 1)
+                + "/"
+                + str(len(_chain))
+                + ")",
                 file=sys.stderr,
             )
 
             import httpx as _httpx_wee
+
             client = OpenAI(
                 base_url=api_base,
                 api_key=api_key,
@@ -8842,7 +9070,8 @@ User Request:
                         _got_429 = True
                         if _retry < _max_attempts - 1:
                             _wait = (
-                                _backoff[_retry] if _retry < len(_backoff)
+                                _backoff[_retry]
+                                if _retry < len(_backoff)
                                 else (_backoff[-1] if _backoff else 5)
                             )
                             _retry_msg = (
@@ -8876,29 +9105,56 @@ User Request:
                         _ct = getattr(_u, "completion_tokens", 0) or 0
                         _total = getattr(_u, "total_tokens", _pt + _ct)
                         _provider = (
-                            "ollama" if "192.168" in api_base else
-                            "openrouter" if "openrouter" in api_base else "wee"
+                            "ollama"
+                            if "192.168" in api_base
+                            else "openrouter" if "openrouter" in api_base else "wee"
                         )
-                        _pricing = self._fetch_openrouter_pricing() if _provider == "openrouter" else {}
+                        _pricing = (
+                            self._fetch_openrouter_pricing()
+                            if _provider == "openrouter"
+                            else {}
+                        )
                         _cost_usd, _cost_label = self._calculate_wee_cost(
                             _attempt_model, _pt, _ct, _pricing
                         )
-                        self.update_session_field(n8n_session_id, "wee_meta", {
-                            "tokens": _total, "prompt_tokens": _pt,
-                            "completion_tokens": _ct, "cost_usd": _cost_usd,
-                            "cost_label": _cost_label, "model": _attempt_model, "runtime": "wee",
-                        })
+                        self.update_session_field(
+                            n8n_session_id,
+                            "wee_meta",
+                            {
+                                "tokens": _total,
+                                "prompt_tokens": _pt,
+                                "completion_tokens": _ct,
+                                "cost_usd": _cost_usd,
+                                "cost_label": _cost_label,
+                                "model": _attempt_model,
+                                "runtime": "wee",
+                            },
+                        )
                         self._log_token_usage(
-                            session_id=n8n_session_id, model=_attempt_model, runtime="wee",
-                            provider=_provider, prompt_tokens=_pt, completion_tokens=_ct,
-                            total_tokens=_total, cost_usd=_cost_usd, duration_ms=_duration_ms,
+                            session_id=n8n_session_id,
+                            model=_attempt_model,
+                            runtime="wee",
+                            provider=_provider,
+                            prompt_tokens=_pt,
+                            completion_tokens=_ct,
+                            total_tokens=_total,
+                            cost_usd=_cost_usd,
+                            duration_ms=_duration_ms,
                         )
                 except Exception as _meta_err:
-                    print("[Wee Native] wee_meta error: " + str(_meta_err), file=sys.stderr)
+                    print(
+                        "[Wee Native] wee_meta error: " + str(_meta_err),
+                        file=sys.stderr,
+                    )
 
                 if stream_buffer:
                     stream_buffer.push("done", output)
-                print("[Wee Native] Completed. Output length: " + str(len(output)) + " chars", file=sys.stderr)
+                print(
+                    "[Wee Native] Completed. Output length: "
+                    + str(len(output))
+                    + " chars",
+                    file=sys.stderr,
+                )
                 return output
             # _got_429=True — continue outer loop to next fallback model
 
@@ -8911,7 +9167,6 @@ User Request:
         if stream_buffer:
             stream_buffer.push("done", exhausted_msg)
         return exhausted_msg
-
 
     def _wee_load_messages(
         self,
@@ -8957,7 +9212,10 @@ User Request:
                 if len(messages) > MAX_WEE_MESSAGES:
                     system_msgs = [m for m in messages if m.get("role") == "system"]
                     non_system = [m for m in messages if m.get("role") != "system"]
-                    saved = system_msgs + non_system[-(MAX_WEE_MESSAGES - len(system_msgs)):]
+                    saved = (
+                        system_msgs
+                        + non_system[-(MAX_WEE_MESSAGES - len(system_msgs)) :]
+                    )
                 else:
                     saved = list(messages)
                 # Strip tool_calls from assistant messages for JSON serialization
@@ -8967,15 +9225,29 @@ User Request:
                         mc = dict(m)
                         mc["tool_calls"] = [
                             {
-                                "id": tc.get("id", "") if isinstance(tc, dict) else getattr(tc, "id", ""),
+                                "id": (
+                                    tc.get("id", "")
+                                    if isinstance(tc, dict)
+                                    else getattr(tc, "id", "")
+                                ),
                                 "type": "function",
                                 "function": {
-                                    "name": (tc.get("function", {}).get("name", "")
-                                             if isinstance(tc, dict)
-                                             else getattr(getattr(tc, "function", None), "name", "")),
-                                    "arguments": (tc.get("function", {}).get("arguments", "")
-                                                  if isinstance(tc, dict)
-                                                  else getattr(getattr(tc, "function", None), "arguments", "")),
+                                    "name": (
+                                        tc.get("function", {}).get("name", "")
+                                        if isinstance(tc, dict)
+                                        else getattr(
+                                            getattr(tc, "function", None), "name", ""
+                                        )
+                                    ),
+                                    "arguments": (
+                                        tc.get("function", {}).get("arguments", "")
+                                        if isinstance(tc, dict)
+                                        else getattr(
+                                            getattr(tc, "function", None),
+                                            "arguments",
+                                            "",
+                                        )
+                                    ),
                                 },
                             }
                             for tc in m["tool_calls"]
@@ -8999,11 +9271,11 @@ User Request:
             "perform any action -- do NOT say you cannot do something that these tools enable.\n"
             "\n"
             "**bash** -- Execute a bash shell command and return its output.\n"
-            "  Call: bash tool with {\"command\": \"your shell command here\"}\n"
+            '  Call: bash tool with {"command": "your shell command here"}\n'
             "  Use for: running commands, SSH, file operations, checking system state\n"
             "\n"
             "**python** -- Execute Python 3 code and return its output.\n"
-            "  Call: python tool with {\"code\": \"your python code here\"}\n"
+            '  Call: python tool with {"code": "your python code here"}\n'
             "  Use for: data processing, calculations, scripting, file parsing\n"
             "\n"
             "CRITICAL: When asked to run a command, SSH somewhere, check system status,\n"
@@ -9053,12 +9325,13 @@ User Request:
         except Exception as e:
             return f"Error executing {func_name}: {e}"
 
-
     @staticmethod
     def _wee_is_free_model(model: str) -> bool:
         """Return True if model is an OpenRouter free model (openrouter/free or ends with :free)."""
         m = model.lower()
-        return m == "openrouter/free" or (m.startswith("openrouter/") and m.endswith(":free"))
+        return m == "openrouter/free" or (
+            m.startswith("openrouter/") and m.endswith(":free")
+        )
 
     @staticmethod
     def _wee_load_free_config(config_path=None) -> dict:
@@ -9138,12 +9411,16 @@ User Request:
                             func_args = json.loads(tc_data["args"] or "{}")
                         except json.JSONDecodeError:
                             func_args = {}
-                        result = self._wee_execute_tool(tc_data["name"], func_args, agent)
-                        messages.append({
-                            "role": "tool",
-                            "tool_call_id": tc_data["id"],
-                            "content": result,
-                        })
+                        result = self._wee_execute_tool(
+                            tc_data["name"], func_args, agent
+                        )
+                        messages.append(
+                            {
+                                "role": "tool",
+                                "tool_call_id": tc_data["id"],
+                                "content": result,
+                            }
+                        )
 
                 self._wee_save_messages(n8n_session_id, messages)
                 return output, False
@@ -9154,11 +9431,14 @@ User Request:
                     return f"Error: {err_str}", False
                 last_exc = e
                 if attempt < attempts - 1:
-                    wait = backoff[attempt] if attempt < len(backoff) else (backoff[-1] if backoff else 5)
+                    wait = (
+                        backoff[attempt]
+                        if attempt < len(backoff)
+                        else (backoff[-1] if backoff else 5)
+                    )
                     _time.sleep(wait)
 
         return None, True
-
 
     def _get_cursor_session_id(self, n8n_session_id: str) -> Optional[str]:
         """Return the stored cursor session flag for this n8n session, or None."""
@@ -10564,11 +10844,15 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
 
     # ---- endpoints ----
 
-    # ---- endpoints ----
-
     @app.get("/api/v1/agents")
-    async def get_agents():
+    async def get_agents(request: Request):
         """Return list of configured agents for WebUI."""
+        await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
         try:
             agents = []
             for name, info in session_mgr.AGENTS.items():
@@ -10604,20 +10888,6 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             "background_tasks_enabled": True,
             "app_env": APP_ENV,
         }
-
-    @app.get("/api/v1/agents")
-    async def get_agents():
-        """Return available agents from agents.json."""
-        agents = []
-        for name, info in session_mgr.AGENTS.items():
-            agents.append(
-                {
-                    "name": name,
-                    "description": info.get("description", ""),
-                    "path": info.get("path", ""),
-                }
-            )
-        return {"agents": agents}
 
     @app.get("/api/v1/runtimes")
     async def get_runtimes():
@@ -10672,7 +10942,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                         session_mgr._get_model_description(model_id, runtime)
                         or model_id
                     )
-                    models.append({"id": model_id, "label": label, "group": _group})
+                    models.append({"id": model_id, "label": label, "group": group_name})
             return {"runtime": runtime, "models": models}
         except Exception as e:
             return {"runtime": runtime, "models": [], "error": str(e)}
@@ -12683,14 +12953,25 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                         if _wee_tc.get("__wee_tc__") == "start":
                             _tool_call_counter += 1
                             _tc_input = _wee_tc.get("input", {})
-                            bg_task_mgr.append_tool_call(task_id, {
-                                "id": _wee_tc.get("id", f"bg_{task_id[:8]}_{_tool_call_counter}"),
-                                "name": _wee_tc.get("name", "tool"),
-                                "input": _json.dumps(_tc_input) if isinstance(_tc_input, dict) else str(_tc_input),
-                                "status": "running",
-                                "runtime": "wee",
-                                "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-                            })
+                            bg_task_mgr.append_tool_call(
+                                task_id,
+                                {
+                                    "id": _wee_tc.get(
+                                        "id", f"bg_{task_id[:8]}_{_tool_call_counter}"
+                                    ),
+                                    "name": _wee_tc.get("name", "tool"),
+                                    "input": (
+                                        _json.dumps(_tc_input)
+                                        if isinstance(_tc_input, dict)
+                                        else str(_tc_input)
+                                    ),
+                                    "status": "running",
+                                    "runtime": "wee",
+                                    "timestamp": time.strftime(
+                                        "%Y-%m-%dT%H:%M:%SZ", time.gmtime()
+                                    ),
+                                },
+                            )
                         elif _wee_tc.get("__wee_tc__") == "done":
                             bg_task_mgr.update_tool_call(
                                 task_id,
@@ -12941,6 +13222,18 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             or defaults.get("model", get_default_model())
         )
 
+        # Apply dispatch_config fallback if primary runtime is blocked/unavailable
+        eff_runtime, eff_model, used_fallback, fallback_reason = (
+            resolve_dispatch_runtime_model(agent, runtime, model, session_mgr.AGENTS)
+        )
+        if used_fallback:
+            print(
+                f"[Dispatch] Fallback activated for agent='{agent}': {fallback_reason}. "
+                f"Using runtime={eff_runtime}, model={eff_model} instead of {runtime}/{model}"
+            )
+            runtime = eff_runtime
+            model = eff_model
+
         task_id = f"bg_{str(uuid4())[:8]}"
         session_id = str(uuid4())  # Must be valid UUID format for Copilot CLI
 
@@ -12974,7 +13267,8 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         # Priority: body.permission_mode > body.yolo > dispatch_config >
         # "restricted" (Issue #193)
         _dc_perm = (
-            "elevated" if _dispatch_config.get("yolo")
+            "elevated"
+            if _dispatch_config.get("yolo")
             else _dispatch_config.get("permission_mode", "")
         )
         # Use explicit is-checks so body.yolo=False (falsy but intentional) is not
