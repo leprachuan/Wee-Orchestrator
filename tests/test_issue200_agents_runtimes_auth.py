@@ -1,4 +1,5 @@
-"""Regression tests for GitHub Issue #200 - auth gate on /api/v1/agents and /api/v1/runtimes.
+"""Regression tests for GitHub Issue #200 - auth gate on /api/v1/agents
+and /api/v1/runtimes.
 
 wee-qa blocker: GET /api/v1/agents and GET /api/v1/runtimes returned HTTP 200 to
 unauthenticated callers. Both endpoints must now require a valid Bearer token,
@@ -55,7 +56,8 @@ class TestIssue200AgentsRuntimesAuth(unittest.TestCase):
         self.assertIn(
             resp.status_code,
             (401, 403),
-            f"Expected 401/403 for unauthenticated /api/v1/agents, got {resp.status_code}",
+            f"Expected 401/403 for unauthenticated /api/v1/agents, "
+            f"got {resp.status_code}",
         )
 
     def test_agents_authenticated_ok(self):
@@ -89,7 +91,8 @@ class TestIssue200AgentsRuntimesAuth(unittest.TestCase):
         self.assertIn(
             resp.status_code,
             (401, 403),
-            f"Expected 401/403 for unauthenticated /api/v1/runtimes, got {resp.status_code}",
+            f"Expected 401/403 for unauthenticated /api/v1/runtimes, "
+            f"got {resp.status_code}",
         )
 
     def test_runtimes_authenticated_ok(self):
