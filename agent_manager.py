@@ -1129,13 +1129,13 @@ def get_command_timeout() -> int:
         # Ensure minimum timeout of 30 seconds
         if timeout < 30:
             logger.warning(
-                f"Warning: COMMAND_TIMEOUT must be at least 30 seconds, using 30"
+                "Warning: COMMAND_TIMEOUT must be at least 30 seconds, using 30"
             )
             return 30
         return timeout
     except ValueError:
         logger.warning(
-            f"Warning: COMMAND_TIMEOUT must be an integer, using default 300 seconds"
+            "Warning: COMMAND_TIMEOUT must be an integer, using default 300 seconds"
         )
 
 
