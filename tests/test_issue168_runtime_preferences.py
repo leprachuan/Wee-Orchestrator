@@ -28,6 +28,7 @@ class TestRuntimePreferencesManager(unittest.TestCase):
 
     def setUp(self):
         import agent_manager
+
         self.tmp = tempfile.mktemp(suffix=".json")
         self.mgr = agent_manager.RuntimePreferencesManager(self.tmp)
 
@@ -67,6 +68,7 @@ class TestRuntimePreferencesManager(unittest.TestCase):
     def test_load_from_existing_file(self):
         """Manager should load existing preferences from disk on init."""
         import agent_manager
+
         data = {"primary_runtime": "opencode", "backup_runtime": "gemini"}
         with open(self.tmp, "w") as f:
             json.dump(data, f)
@@ -77,6 +79,7 @@ class TestRuntimePreferencesManager(unittest.TestCase):
     def test_load_handles_corrupt_file(self):
         """Manager should fall back to defaults if file is corrupt."""
         import agent_manager
+
         with open(self.tmp, "w") as f:
             f.write("{ not valid json }")
         mgr2 = agent_manager.RuntimePreferencesManager(self.tmp)
@@ -116,23 +119,29 @@ class TestRuntimePreferencesAPI(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         from unittest.mock import patch
+
         from fastapi.testclient import TestClient
+
         import agent_manager
 
         cls._telegram_patch = patch.object(
-            agent_manager, "_resolve_telegram_identity",
+            agent_manager,
+            "_resolve_telegram_identity",
             side_effect=lambda identity: identity,
         )
         cls._telegram_patch.start()
         cls._send_pairing_patch = patch.object(
-            agent_manager, "_send_pairing_code", return_value=True,
+            agent_manager,
+            "_send_pairing_code",
+            return_value=True,
         )
         cls._send_pairing_patch.start()
 
         # Override pref file to a temp file so tests don't affect real config
         cls._tmp_pref = tempfile.mktemp(suffix="_168_test.json")
         cls._pref_patch = patch.object(
-            agent_manager, "_runtime_pref_mgr",
+            agent_manager,
+            "_runtime_pref_mgr",
             agent_manager.RuntimePreferencesManager(cls._tmp_pref),
         )
         cls._pref_patch.start()
@@ -151,7 +160,7 @@ class TestRuntimePreferencesAPI(unittest.TestCase):
 
     def test_get_returns_defaults(self):
         """GET /api/v1/runtime-preferences should return default primary/backup."""
-        resp = self.client.get("/api/v1/runtime-preferences")
+        resp = self.client.get("/api/v1/runtime-preferences", headers=self.auth)
         self.assertEqual(resp.status_code, 200)
         data = resp.json()
         self.assertIn("primary_runtime", data)
@@ -177,10 +186,8 @@ class TestRuntimePreferencesAPI(unittest.TestCase):
     def test_put_persists_across_get(self):
         """After PUT, GET should return the new values."""
         payload = {"primary_runtime": "claude", "backup_runtime": "copilot"}
-        self.client.put(
-            "/api/v1/runtime-preferences", json=payload, headers=self.auth
-        )
-        resp = self.client.get("/api/v1/runtime-preferences")
+        self.client.put("/api/v1/runtime-preferences", json=payload, headers=self.auth)
+        resp = self.client.get("/api/v1/runtime-preferences", headers=self.auth)
         data = resp.json()
         self.assertEqual(data["primary_runtime"], "claude")
         self.assertEqual(data["backup_runtime"], "copilot")
@@ -191,14 +198,14 @@ class TestRuntimePreferencesAPI(unittest.TestCase):
         resp = self.client.put("/api/v1/runtime-preferences", json=payload)
         self.assertIn(resp.status_code, [401, 403])
 
-    def test_get_no_auth_required(self):
-        """GET should be accessible without authentication."""
+    def test_get_requires_auth(self):
+        """GET should require authentication (401 without valid auth)."""
         resp = self.client.get("/api/v1/runtime-preferences")
-        self.assertEqual(resp.status_code, 200)
+        self.assertIn(resp.status_code, [401, 403])
 
     def test_available_runtimes_in_response(self):
         """GET should include available_runtimes list."""
-        resp = self.client.get("/api/v1/runtime-preferences")
+        resp = self.client.get("/api/v1/runtime-preferences", headers=self.auth)
         data = resp.json()
         self.assertIsInstance(data["available_runtimes"], list)
 
@@ -209,23 +216,30 @@ class TestBackgroundTaskRuntimeSelection(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         from unittest.mock import patch
+
         from fastapi.testclient import TestClient
+
         import agent_manager
 
         cls._telegram_patch = patch.object(
-            agent_manager, "_resolve_telegram_identity",
+            agent_manager,
+            "_resolve_telegram_identity",
             side_effect=lambda identity: identity,
         )
         cls._telegram_patch.start()
         cls._send_pairing_patch = patch.object(
-            agent_manager, "_send_pairing_code", return_value=True,
+            agent_manager,
+            "_send_pairing_code",
+            return_value=True,
         )
         cls._send_pairing_patch.start()
 
         cls._tmp_pref = tempfile.mktemp(suffix="_168_bg_test.json")
         cls._pref_mgr = agent_manager.RuntimePreferencesManager(cls._tmp_pref)
         cls._pref_patch = patch.object(
-            agent_manager, "_runtime_pref_mgr", cls._pref_mgr,
+            agent_manager,
+            "_runtime_pref_mgr",
+            cls._pref_mgr,
         )
         cls._pref_patch.start()
 
@@ -235,9 +249,10 @@ class TestBackgroundTaskRuntimeSelection(unittest.TestCase):
         async def _fake_run_bg(  # noqa: E306
             self_sm, task_id, session_id, prompt, agent, runtime, model, *a, **kw
         ):
-            cls._captured_tasks.append({
-                "task_id": task_id, "runtime": runtime, "model": model
-            })
+            cls._captured_tasks.append(
+                {"task_id": task_id, "runtime": runtime, "model": model}
+            )
+
         cls._run_bg_patch = patch.object(
             agent_manager.SessionManager, "_execute_background_task", _fake_run_bg
         )
@@ -258,16 +273,15 @@ class TestBackgroundTaskRuntimeSelection(unittest.TestCase):
 
     def test_primary_runtime_used_when_no_explicit_runtime(self):
         """Background task with no explicit runtime should use primary preference."""
-        import agent_manager
         from unittest.mock import patch
+
+        import agent_manager
 
         # Set primary to gemini
         self._pref_mgr.set("gemini", "claude")
 
         # Patch _compute_bg_task_defaults to return empty (no session inheritance)
-        with patch.object(
-            agent_manager, "_compute_bg_task_defaults", return_value={}
-        ):
+        with patch.object(agent_manager, "_compute_bg_task_defaults", return_value={}):
             resp = self.client.post(
                 "/api/v1/background-tasks",
                 json={"prompt": "test task no runtime", "agent": "orchestrator"},
@@ -281,15 +295,14 @@ class TestBackgroundTaskRuntimeSelection(unittest.TestCase):
 
     def test_explicit_runtime_overrides_preference(self):
         """Background task with explicit runtime should NOT be overridden."""
-        import agent_manager
         from unittest.mock import patch
+
+        import agent_manager
 
         # Set primary to gemini, but explicitly request claude
         self._pref_mgr.set("gemini", "copilot")
 
-        with patch.object(
-            agent_manager, "_compute_bg_task_defaults", return_value={}
-        ):
+        with patch.object(agent_manager, "_compute_bg_task_defaults", return_value={}):
             resp = self.client.post(
                 "/api/v1/background-tasks",
                 json={
@@ -311,13 +324,16 @@ class TestContextInjection(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         from unittest.mock import patch
+
         import agent_manager
 
         cls._tmp_pref = tempfile.mktemp(suffix="_168_ctx_test.json")
         cls._pref_mgr = agent_manager.RuntimePreferencesManager(cls._tmp_pref)
         cls._pref_mgr.set("opencode", "gemini")
         cls._pref_patch = patch.object(
-            agent_manager, "_runtime_pref_mgr", cls._pref_mgr,
+            agent_manager,
+            "_runtime_pref_mgr",
+            cls._pref_mgr,
         )
         cls._pref_patch.start()
 
@@ -329,8 +345,9 @@ class TestContextInjection(unittest.TestCase):
 
     def test_context_includes_runtime_preferences(self):
         """build_agent_context_prompt should include runtime preferences in context."""
-        import agent_manager
         from unittest.mock import patch
+
+        import agent_manager
 
         session_mgr = agent_manager.SessionManager.__new__(agent_manager.SessionManager)
         session_mgr.AGENTS = {
@@ -342,8 +359,9 @@ class TestContextInjection(unittest.TestCase):
         session_mgr.session_map_file = None
         session_mgr.skill_repositories = []
 
-        with patch.object(session_mgr, "load_session_data", return_value={}), \
-             patch.object(session_mgr, "update_session_field", return_value=None):
+        with patch.object(
+            session_mgr, "load_session_data", return_value={}
+        ), patch.object(session_mgr, "update_session_field", return_value=None):
             ctx = session_mgr.build_agent_context_prompt(
                 prompt="hello",
                 agent="orchestrator",
@@ -362,22 +380,28 @@ class TestRuntimePreferencesValidation(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         from unittest.mock import patch
+
         from fastapi.testclient import TestClient
+
         import agent_manager
 
         cls._telegram_patch = patch.object(
-            agent_manager, "_resolve_telegram_identity",
+            agent_manager,
+            "_resolve_telegram_identity",
             side_effect=lambda identity: identity,
         )
         cls._telegram_patch.start()
         cls._send_pairing_patch = patch.object(
-            agent_manager, "_send_pairing_code", return_value=True,
+            agent_manager,
+            "_send_pairing_code",
+            return_value=True,
         )
         cls._send_pairing_patch.start()
 
         cls._tmp_pref = tempfile.mktemp(suffix="_168_val_test.json")
         cls._pref_patch = patch.object(
-            agent_manager, "_runtime_pref_mgr",
+            agent_manager,
+            "_runtime_pref_mgr",
             agent_manager.RuntimePreferencesManager(cls._tmp_pref),
         )
         cls._pref_patch.start()
@@ -423,6 +447,7 @@ class TestRuntimePreferencesValidation(unittest.TestCase):
     def test_valid_runtimes_accepted(self):
         """PUT with known-valid runtimes should succeed."""
         import agent_manager
+
         valid = agent_manager.get_available_runtimes()
         if len(valid) < 2:
             self.skipTest("Need at least 2 available runtimes")
@@ -443,37 +468,53 @@ class TestBackupRuntimeFallback(unittest.TestCase):
 
     def test_backup_used_when_primary_empty(self):
         """When primary returns '', backup should be used."""
-        import agent_manager
         from unittest.mock import patch
+
         from fastapi.testclient import TestClient
+
+        import agent_manager
 
         tmp = tempfile.mktemp(suffix="_168_fallback.json")
         mgr = agent_manager.RuntimePreferencesManager(tmp)
         mgr.set("", "gemini")
 
         try:
-            with patch.object(agent_manager, "_runtime_pref_mgr", mgr), \
-                 patch.object(
-                     agent_manager, "get_default_runtime",
-                     return_value="copilot",
-                 ), patch.object(
-                     agent_manager, "_resolve_telegram_identity",
-                     side_effect=lambda x: x,
-                 ), patch.object(
-                     agent_manager, "_send_pairing_code", return_value=True,
-                 ), patch.object(
-                     agent_manager, "_compute_bg_task_defaults",
-                     return_value={},
-                 ):
+            with patch.object(agent_manager, "_runtime_pref_mgr", mgr), patch.object(
+                agent_manager,
+                "get_default_runtime",
+                return_value="copilot",
+            ), patch.object(
+                agent_manager,
+                "_resolve_telegram_identity",
+                side_effect=lambda x: x,
+            ), patch.object(
+                agent_manager,
+                "_send_pairing_code",
+                return_value=True,
+            ), patch.object(
+                agent_manager,
+                "_compute_bg_task_defaults",
+                return_value={},
+            ):
                 captured = []
 
-                async def fake_bg(self_sm, task_id, session_id, prompt,
-                                  agent, runtime, model, *a, **kw):
+                async def fake_bg(
+                    self_sm,
+                    task_id,
+                    session_id,
+                    prompt,
+                    agent,
+                    runtime,
+                    model,
+                    *a,
+                    **kw,
+                ):
                     captured.append(runtime)
 
                 with patch.object(
                     agent_manager.SessionManager,
-                    "_execute_background_task", fake_bg,
+                    "_execute_background_task",
+                    fake_bg,
                 ):
                     app = agent_manager.create_api_app()
                     client = TestClient(app)

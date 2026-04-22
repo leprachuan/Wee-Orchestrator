@@ -10611,8 +10611,14 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         return {"runtimes": runtimes}
 
     @app.get("/api/v1/runtime-preferences")
-    async def get_runtime_preferences():
+    async def get_runtime_preferences(request: Request):
         """Return current global runtime preferences (primary and backup)."""
+        await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
         prefs = _get_runtime_pref_mgr().get()
         available = get_available_runtimes()
         return {
