@@ -246,11 +246,11 @@ class TelegramConnector(BaseConnector):
                 "X-Auth-Channel": channel,
             }
 
-            # Ensure session exists
+            # Ensure session exists with our deterministic session_id so execute finds it
             requests.post(
                 f"{self.api_url_copilot}/api/v1/sessions/create",
                 headers=headers,
-                json={},
+                json={"session_id": session_id},
                 timeout=10,
             )
 

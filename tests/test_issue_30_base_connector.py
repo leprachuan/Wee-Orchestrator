@@ -869,3 +869,119 @@ def test_webex_connector_delegates_query_agent_with_status_to_base():
 
     connector = WebEXConnector.__new__(WebEXConnector)
     assert callable(getattr(connector, "_query_agent_with_status"))
+
+
+# -- Regression: Telegram API-mode session lifecycle (issue #30) ---------------
+
+
+def test_telegram_execute_via_api_passes_session_id_on_create():
+    """Regression: _execute_via_api must pass session_id when creating the session.
+
+    Previously, telegram_connector._execute_via_api called POST /api/v1/sessions/create
+    with json={} so the server minted a random UUID.  The subsequent POST
+    /api/v1/sessions/<session_id>/execute returned 404 because the deterministic
+    session_id was never registered.
+    """
+    import requests as req_mod
+    from unittest.mock import MagicMock, patch, call
+
+    with patch.dict(
+        "sys.modules",
+        {"telegram": MagicMock(), "telegram.ext": MagicMock()},
+    ):
+        from telegram_connector import TelegramConnector
+
+        connector = TelegramConnector.__new__(TelegramConnector)
+        connector.api_url_copilot = "https://127.0.0.1:8000"
+        connector.api_shared_key = "testkey"
+        connector.config = MagicMock()
+        connector.config.get_user_timeout.return_value = 600
+
+        session_id = "telegram_12345"
+
+        create_resp = MagicMock()
+        create_resp.status_code = 200
+        create_resp.json.return_value = {"session_id": session_id}
+
+        execute_resp = MagicMock()
+        execute_resp.status_code = 200
+        execute_resp.json.return_value = {"response": "hello from bot"}
+
+        with patch.object(req_mod, "post", side_effect=[create_resp, execute_resp]) as mock_post:
+            result = connector._execute_via_api(
+                query="hello",
+                session_id=session_id,
+                user_identity="telegram_12345",
+                channel="telegram",
+            )
+
+        create_call = mock_post.call_args_list[0]
+        assert create_call == call(
+            f"{connector.api_url_copilot}/api/v1/sessions/create",
+            headers={
+                "Authorization": "Bearer shared_testkey",
+                "Content-Type": "application/json",
+                "X-User-Identity": "telegram_12345",
+                "X-Auth-Channel": "telegram",
+            },
+            json={"session_id": session_id},
+            timeout=10,
+        ), f"Create call was missing session_id: {create_call}"
+
+        execute_call = mock_post.call_args_list[1]
+        assert f"/sessions/{session_id}/execute" in execute_call[0][0], (
+            f"Execute URL did not reference expected session_id: {execute_call}"
+        )
+
+        assert result == "hello from bot"
+
+
+def test_telegram_execute_via_api_session_id_not_empty_on_create():
+    """Ensure the session_id forwarded to create is non-empty (regression guard)."""
+    import requests as req_mod
+    from unittest.mock import MagicMock, patch
+
+    with patch.dict(
+        "sys.modules",
+        {"telegram": MagicMock(), "telegram.ext": MagicMock()},
+    ):
+        from telegram_connector import TelegramConnector
+
+        connector = TelegramConnector.__new__(TelegramConnector)
+        connector.api_url_copilot = "https://127.0.0.1:8000"
+        connector.api_shared_key = "testkey"
+        connector.config = MagicMock()
+        connector.config.get_user_timeout.return_value = 600
+
+        session_id = "telegram_99999"
+
+        create_resp = MagicMock()
+        create_resp.status_code = 200
+        create_resp.json.return_value = {"session_id": session_id}
+
+        execute_resp = MagicMock()
+        execute_resp.status_code = 200
+        execute_resp.json.return_value = {"response": "ok"}
+
+        captured = {}
+
+        def capturing_post(url, **kwargs):
+            if "/sessions/create" in url:
+                captured["create_json"] = kwargs.get("json", {})
+                return create_resp
+            return execute_resp
+
+        with patch.object(req_mod, "post", side_effect=capturing_post):
+            connector._execute_via_api(
+                query="ping",
+                session_id=session_id,
+                user_identity="telegram_99999",
+                channel="telegram",
+            )
+
+        payload = captured.get("create_json", {})
+        assert "session_id" in payload, "session_id key missing from create payload"
+        assert payload["session_id"], "session_id in create payload must be non-empty"
+        assert payload["session_id"] == session_id, (
+            f"session_id mismatch: expected {session_id}, got {payload['session_id']}"
+        )
