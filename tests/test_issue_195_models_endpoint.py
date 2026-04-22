@@ -1,13 +1,16 @@
-"""Regression test for issue #195: /api/v1/models returns empty for copilot/copilot-sdk runtimes.
+"""Regression tests for GitHub issue #195.
 
-The bug was a NameError: `_group` used instead of `group_name` in the models endpoint loop,
-causing the try/except to swallow the error and return an empty list.
+Issue #195: /api/v1/models returns empty list for copilot/copilot-sdk runtimes
+due to a NameError (_group used instead of group_name in the loop body).
+
+Issue #195 round-2: /api/v1/models was unauthenticated — any caller could
+retrieve the full model catalogue without a valid token.
 """
 
 import os
 import sys
 import unittest
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -17,11 +20,12 @@ os.environ["API_PORT"] = "8099"
 
 
 class TestIssue195ModelsEndpoint(unittest.TestCase):
-    """Regression tests for /api/v1/models NameError bug."""
+    """Regression tests for /api/v1/models NameError bug and auth gate."""
 
     @classmethod
     def setUpClass(cls):
         from fastapi.testclient import TestClient
+
         import agent_manager
 
         cls._telegram_patch = patch.object(
@@ -52,6 +56,25 @@ class TestIssue195ModelsEndpoint(unittest.TestCase):
             "openai": ["gpt-5.4", "gpt-5.3-codex"],
         }
 
+    def test_models_endpoint_unauthenticated_rejected(self):
+        """GET /api/v1/models without auth must return HTTP 401."""
+        import agent_manager
+
+        with patch.object(
+            agent_manager._session_mgr,
+            "get_models_for_runtime",
+            return_value=self._mock_copilot_models(),
+        ):
+            resp = self.client.get(
+                "/api/v1/models",
+                params={"runtime": "copilot"},
+            )
+        self.assertEqual(
+            resp.status_code,
+            401,
+            "Unauthenticated request must be rejected with 401",
+        )
+
     def test_models_endpoint_copilot_no_error(self):
         """GET /api/v1/models?runtime=copilot must not return an 'error' key."""
         import agent_manager
@@ -68,10 +91,14 @@ class TestIssue195ModelsEndpoint(unittest.TestCase):
             )
         self.assertEqual(resp.status_code, 200)
         data = resp.json()
-        self.assertNotIn("error", data, f"Unexpected error in response: {data.get('error')}")
+        self.assertNotIn(
+            "error",
+            data,
+            f"Unexpected error in response: {data.get('error')}",
+        )
 
     def test_models_endpoint_copilot_returns_non_empty_list(self):
-        """GET /api/v1/models?runtime=copilot must return a non-empty models list."""
+        """GET /api/v1/models?runtime=copilot must return a non-empty list."""
         import agent_manager
 
         with patch.object(
@@ -105,7 +132,11 @@ class TestIssue195ModelsEndpoint(unittest.TestCase):
         data = resp.json()
         models = data.get("models", [])
         for model in models:
-            self.assertIn("group", model, f"Model {model.get('id')} missing 'group' field")
+            self.assertIn(
+                "group",
+                model,
+                f"Model {model.get('id')} missing 'group' field",
+            )
             self.assertIsNotNone(model["group"], "group must not be None")
             self.assertIn(
                 model["group"],
@@ -129,7 +160,13 @@ class TestIssue195ModelsEndpoint(unittest.TestCase):
             )
         data = resp.json()
         returned_ids = {m["id"] for m in data.get("models", [])}
-        expected = {"auto", "claude-opus-4.7", "claude-sonnet-4.6", "gpt-5.4", "gpt-5.3-codex"}
+        expected = {
+            "auto",
+            "claude-opus-4.7",
+            "claude-sonnet-4.6",
+            "gpt-5.4",
+            "gpt-5.3-codex",
+        }
         self.assertEqual(
             expected,
             returned_ids,
@@ -137,7 +174,7 @@ class TestIssue195ModelsEndpoint(unittest.TestCase):
         )
 
     def test_models_endpoint_copilot_sdk_no_error(self):
-        """GET /api/v1/models?runtime=copilot-sdk must also work (same code path)."""
+        """GET /api/v1/models?runtime=copilot-sdk must also work."""
         import agent_manager
 
         with patch.object(
