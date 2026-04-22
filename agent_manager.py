@@ -443,10 +443,13 @@ class BackgroundTaskManager:
         self._save(tasks)
 
     def _evict_oldest_terminal(self, tasks: list) -> list:
-        """Evict oldest completed/failed/killed tasks to make room for one new task.
+        """Evict tasks to make room for one new task, enforcing the hard cap.
 
-        Called pre-append, so we trim to MAX_TOTAL_TASKS - 1 rather than
-        MAX_TOTAL_TASKS, ensuring the store never exceeds the cap after append.
+        Called pre-append (trims to MAX_TOTAL_TASKS - 1) so the store never
+        exceeds MAX_TOTAL_TASKS after append.  Terminal tasks (completed /
+        failed / killed) are preferred eviction candidates.  When none are
+        available, the oldest queued task is evicted next; if the store is
+        still at capacity, the oldest running task is evicted as a last resort.
         """
         cap = self.MAX_TOTAL_TASKS - 1
         if len(tasks) <= cap:
@@ -457,14 +460,30 @@ class BackgroundTaskManager:
             (i, t) for i, t in enumerate(tasks) if t.get("status") in terminal_statuses
         ]
 
-        if not terminal_tasks:
-            return tasks
-
         evict_count = len(tasks) - cap
-        terminal_tasks.sort(
-            key=lambda x: x[1].get("completed_at", "") or x[1].get("created_at", "")
-        )
-        evict_indices = {idx for idx, _ in terminal_tasks[:evict_count]}
+
+        if terminal_tasks:
+            terminal_tasks.sort(
+                key=lambda x: x[1].get("completed_at", "") or x[1].get("created_at", "")
+            )
+            evict_indices = {idx for idx, _ in terminal_tasks[:evict_count]}
+            return [t for i, t in enumerate(tasks) if i not in evict_indices]
+
+        # No terminal tasks: evict oldest queued first, then oldest running.
+        evict_indices: set = set()
+        remaining = evict_count
+        for priority_status in ("queued", "running"):
+            if remaining <= 0:
+                break
+            candidates = [
+                (i, t)
+                for i, t in enumerate(tasks)
+                if t.get("status") == priority_status and i not in evict_indices
+            ]
+            candidates.sort(key=lambda x: x[1].get("created_at", ""))
+            for idx, _ in candidates[:remaining]:
+                evict_indices.add(idx)
+                remaining -= 1
 
         return [t for i, t in enumerate(tasks) if i not in evict_indices]
 

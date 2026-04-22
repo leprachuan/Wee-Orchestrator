@@ -443,6 +443,59 @@ class TestIssue192EvictionCap(unittest.TestCase):
         task_ids = {t["task_id"] for t in all_tasks}
         self.assertIn("new-task", task_ids, "New task was not retained after eviction")
 
+    def test_cap_enforced_when_all_tasks_running_no_terminal(self):
+        """Hard cap must hold even when all existing tasks are running (no terminal).
+
+        Regression for: _evict_oldest_terminal() returned early when no terminal
+        tasks existed, allowing the store to grow beyond MAX_TOTAL_TASKS.
+        Reproduction: MAX_TOTAL_TASKS=3, seed 3 running, call create_task_checked
+        with max_concurrent=10 -> task_count must stay at 3, not become 4.
+        """
+        mgr = self._make_manager(max_tasks=3)
+        # Seed 3 running tasks (none are terminal - no eviction candidates)
+        for i in range(3):
+            mgr.create_task(
+                task_id=f"all-running-{i}",
+                session_id=f"sr{i}",
+                user_identity="cap-user",
+                channel="api",
+                agent="orchestrator",
+                runtime="copilot",
+                model="m",
+                prompt=f"running {i}",
+                status="running",
+            )
+        self.assertEqual(len(mgr.list_all_tasks()), 3)
+
+        # Call create_task_checked -- no terminal tasks exist for preferred eviction.
+        # The forced fallback must evict one running task to stay within cap.
+        new_task, _ = mgr.create_task_checked(
+            task_id="new-when-all-running",
+            session_id="sn",
+            user_identity="cap-user",
+            channel="api",
+            agent="orchestrator",
+            runtime="copilot",
+            model="m",
+            prompt="new task when full of running tasks",
+            max_concurrent=10,  # high limit, not testing concurrency here
+        )
+        all_tasks = mgr.list_all_tasks()
+        task_count = len(all_tasks)
+        statuses = [t["status"] for t in all_tasks]
+        self.assertLessEqual(
+            task_count,
+            3,
+            f"Hard cap violated: store has {task_count} tasks with statuses {statuses}",
+        )
+        # The new task must be present
+        task_ids = {t["task_id"] for t in all_tasks}
+        self.assertIn(
+            "new-when-all-running",
+            task_ids,
+            "New task was not retained after forced eviction of running task",
+        )
+
 
 class TestIssue192EndpointConcurrency(unittest.TestCase):
     """Endpoint-level regression: concurrent POSTs to /api/v1/background-tasks
