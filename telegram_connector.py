@@ -5,13 +5,11 @@ Bridges Telegram chat with the agent_manager.py
 Handles user pairing, message routing, and configuration
 """
 
-import json
 import logging
 import math
 import mimetypes
 import os
 import re
-import signal
 import sys
 import threading
 import time
@@ -23,6 +21,7 @@ import requests
 
 import agent_manager
 import audio_transcriber
+from base_connector import BaseConfig, BaseConnector
 
 logger = logging.getLogger(__name__)
 
@@ -41,26 +40,14 @@ if (
     sys.exit(0)
 
 
-class TelegramConfig:
-    """Manages Telegram connector configuration"""
+class TelegramConfig(BaseConfig):
+    """Manages Telegram connector configuration."""
 
     def __init__(self, config_file: str = "telegram_config.json"):
-        self.config_file = Path(config_file)
-        self.config = self._load_config()
-
-    def _load_config(self) -> Dict:
-        """Load configuration from file or create defaults"""
-        if self.config_file.exists():
-            try:
-                with open(self.config_file, "r") as f:
-                    return json.load(f)
-            except Exception as e:
-                print(f"Error loading config: {e}", file=sys.stderr)
-                return self._default_config()
-        return self._default_config()
+        super().__init__(config_file)
 
     def _default_config(self) -> Dict:
-        """Return default configuration"""
+        """Return default Telegram configuration."""
         return {
             "token": os.environ.get("TELEGRAM_BOT_TOKEN", ""),
             "allowed_users": [],  # List of telegram user IDs allowed to chat
@@ -68,95 +55,16 @@ class TelegramConfig:
             "enable_auto_pair": False,  # Auto-pair new users
             "default_agent": os.environ.get("COPILOT_DEFAULT_AGENT", "orchestrator"),
             "default_model": os.environ.get("COPILOT_DEFAULT_MODEL", "gpt-5-mini"),
-            "pinned_users": {},  # Maps user_id (str) to {"agent": "name"} - locks user to that agent
+            "pinned_users": {},  # Maps user_id (str) to {"agent": "name"}
             "yolo_allowed_users": [],  # User IDs permitted to enable /mode yolo; empty = all allowed
         }
 
-    def save(self):
-        """Save configuration to file"""
-        try:
-            with open(self.config_file, "w") as f:
-                json.dump(self.config, f, indent=2)
-        except Exception as e:
-            print(f"Error saving config: {e}", file=sys.stderr)
 
-    def is_user_allowed(self, user_id: int) -> bool:
-        """Check if user is allowed to chat"""
-        if not self.config["allowed_users"]:
-            return True  # No restrictions if list is empty
-        return user_id in self.config["allowed_users"]
+class TelegramConnector(BaseConnector):
+    """Main Telegram connector class."""
 
-    def get_user_session(self, user_id: int) -> Optional[Dict]:
-        """Get session info for a user"""
-        return self.config["user_pairings"].get(str(user_id))
-
-    def set_user_session(self, user_id: int, session_info: Dict):
-        """Store session info for a user"""
-        self.config["user_pairings"][str(user_id)] = session_info
-        self.save()
-
-    def get_user_timeout(self, user_id: int) -> int:
-        """Get timeout for user (default 300s)"""
-        session = self.get_user_session(user_id)
-        if session:
-            return session.get("timeout", 300)
-        return 300
-
-    def set_user_timeout(self, user_id: int, timeout: int):
-        """Set timeout for user"""
-        session = self.get_user_session(user_id)
-        if session:
-            session["timeout"] = max(30, min(timeout, 3600))  # Clamp 30-3600s
-            self.set_user_session(user_id, session)
-
-    def allow_user(self, user_id: int):
-        """Add user to allowed list"""
-        if user_id not in self.config["allowed_users"]:
-            self.config["allowed_users"].append(user_id)
-            self.save()
-
-    def deny_user(self, user_id: int):
-        """Remove user from allowed list"""
-        if user_id in self.config["allowed_users"]:
-            self.config["allowed_users"].remove(user_id)
-            self.save()
-
-    def is_user_pinned(self, user_id: int) -> bool:
-        """Check if user is pinned to a specific agent"""
-        return str(user_id) in self.config.get("pinned_users", {})
-
-    def get_pinned_agent(self, user_id: int) -> Optional[str]:
-        """Get the pinned agent for a user, or None if not pinned"""
-        pinned = self.config.get("pinned_users", {}).get(str(user_id))
-        if pinned:
-            return pinned.get("agent")
-        return None
-
-    def get_pinned_runtime(self, user_id: int) -> Optional[str]:
-        """Get the pinned runtime for a user, or None if not set"""
-        pinned = self.config.get("pinned_users", {}).get(str(user_id))
-        if pinned:
-            return pinned.get("runtime")
-        return None
-
-    def get_pinned_model(self, user_id: int) -> Optional[str]:
-        """Get the pinned model for a user, or None if not set"""
-        pinned = self.config.get("pinned_users", {}).get(str(user_id))
-        if pinned:
-            return pinned.get("model")
-        return None
-
-    def is_yolo_allowed(self, user_id: int) -> bool:
-        """Check if user is permitted to enable /mode yolo.
-        If yolo_allowed_users is empty, all users are allowed (backward compatible)."""
-        yolo_users = self.config.get("yolo_allowed_users", [])
-        if not yolo_users:
-            return True
-        return user_id in yolo_users
-
-
-class TelegramConnector:
-    """Main Telegram connector class"""
+    connector_name = "Telegram connector"
+    channel_name = "telegram"
 
     def __init__(self, token: str, config_file: str = "telegram_config.json"):
         """
@@ -172,18 +80,13 @@ class TelegramConnector:
         config_token = self.config.config.get("token", "")
         self.token = config_token if config_token else token
 
-        # Keep persistent SessionManager per session_id for context persistence
-        self.session_managers = {}  # {session_id: SessionManager}
-
         # Set token in config if provided
         if self.token and not self.config.config.get("token"):
             self.config.config["token"] = self.token
             self.config.save()
 
         # API mode configuration
-        self.use_api = os.getenv("USE_API", "false").lower() == "true"
         self.api_url_copilot = os.getenv("API_URL", "http://127.0.0.1:8001")
-        self.api_shared_key = os.getenv("API_SHARED_KEY", "")
 
         self.api_url = f"https://api.telegram.org/bot{self.token}"
         # Determine bot id (useful when multiple bots run against same service)
@@ -201,75 +104,16 @@ class TelegramConnector:
             print(f"[WARN] Failed to determine bot id: {e}", file=sys.stderr)
 
         self.offset = 0
-        self.running = False
-        self.shutdown_event = threading.Event()
-        self._active_request_lock = threading.Lock()
-        self._active_requests = 0
-        self._active_requests_drained = threading.Event()
-        self._active_requests_drained.set()
-        self.shutdown_timeout = self._load_shutdown_timeout()
         self.poll_slice_timeout = max(
             1.0, float(os.environ.get("TELEGRAM_POLL_SLICE_TIMEOUT_SECONDS", "5"))
         )
+        self._init_shared_state()
 
         if not self.config.config.get("allowed_users"):
             print(
                 "⚠️  WARNING: allowed_users is empty — ALL Telegram users can interact with this bot!",
                 file=sys.stderr,
             )
-
-    def _install_signal_handlers(self):
-        """Install SIGTERM/SIGINT handlers when running on the main thread."""
-        for sig in (signal.SIGTERM, signal.SIGINT):
-            try:
-                signal.signal(sig, self._handle_shutdown_signal)
-            except ValueError:
-                logger.debug("Skipping %s handler outside main thread", sig)
-
-    def _handle_shutdown_signal(self, signum, _frame):
-        """Stop taking new work and let in-flight requests finish."""
-        signame = signal.Signals(signum).name
-        print(
-            f"\nReceived {signame}; draining active Telegram requests before shutdown...",
-            file=sys.stderr,
-        )
-        self._request_shutdown(signame)
-
-    def _load_shutdown_timeout(self) -> Optional[float]:
-        """Return an optional shutdown drain timeout from the environment."""
-        raw_timeout = os.environ.get("CONNECTOR_SHUTDOWN_TIMEOUT_SECONDS", "").strip()
-        if not raw_timeout:
-            return None
-
-        timeout = float(raw_timeout)
-        if timeout <= 0:
-            return None
-        return timeout
-
-    def _request_shutdown(self, reason: str = "shutdown"):
-        """Mark the connector as shutting down."""
-        if self.shutdown_event.is_set():
-            return
-        self.shutdown_event.set()
-        self.running = False
-        print(f"[INFO] Telegram connector shutdown requested: {reason}", file=sys.stderr)
-
-    def _begin_active_request(self) -> bool:
-        """Track a request that must complete before shutdown finishes."""
-        with self._active_request_lock:
-            if self.shutdown_event.is_set():
-                return False
-            self._active_requests += 1
-            self._active_requests_drained.clear()
-            return True
-
-    def _finish_active_request(self):
-        """Mark a tracked request as complete."""
-        with self._active_request_lock:
-            if self._active_requests > 0:
-                self._active_requests -= 1
-            if self._active_requests == 0:
-                self._active_requests_drained.set()
 
     def _wait_for_active_requests(
         self, component: str = "Telegram connector", timeout: Optional[float] = None
@@ -295,32 +139,6 @@ class TelegramConnector:
                 file=sys.stderr,
             )
         return drained
-
-    def get_session_manager(self, session_id: str):
-        """Get or create SessionManager for session_id"""
-        if session_id not in self.session_managers:
-            from agent_manager import SessionManager
-
-            mgr = SessionManager()
-            # Backwards compatibility: ensure older SessionManager implementations
-            # that expose load_session_map still satisfy callers expecting
-            # load_session_data
-            if not hasattr(mgr, "load_session_data"):
-                if hasattr(mgr, "load_session_map"):
-                    mgr.load_session_data = mgr.load_session_map
-                else:
-                    mgr.load_session_data = lambda sid: None
-            self.session_managers[session_id] = mgr
-        return self.session_managers[session_id]
-
-    def _evict_session_manager(self, session_id: str):
-        """Remove cached SessionManager so next call gets a fresh one"""
-        if session_id in self.session_managers:
-            del self.session_managers[session_id]
-            print(
-                f"[DEBUG] Evicted cached SessionManager for: {session_id}",
-                file=sys.stderr,
-            )
 
     def register_bot_commands(self) -> str:
         """Register slash commands with Telegram BotFather for autocomplete.
@@ -389,22 +207,38 @@ class TelegramConnector:
                 f"\u274c Failed to register commands: {str(e)[:100]}"
             )
 
-    def _enforce_pinned_session(self, user_id: int, session_id: str):
-        """For pinned users, push pinned agent/runtime/model into the SessionManager.
-        Must be called before every query or command so the SessionManager's session
-        data always reflects the pinned values regardless of what the user has set."""
-        if not self.config.is_user_pinned(user_id):
-            return
-        session_mgr = self.get_session_manager(session_id)
-        pinned_agent = self.config.get_pinned_agent(user_id)
-        if pinned_agent:
-            session_mgr.update_session_field(session_id, "agent", pinned_agent)
-        pinned_runtime = self.config.get_pinned_runtime(user_id)
-        if pinned_runtime:
-            session_mgr.update_session_field(session_id, "runtime", pinned_runtime)
-        pinned_model = self.config.get_pinned_model(user_id)
-        if pinned_model:
-            session_mgr.update_session_field(session_id, "model", pinned_model)
+    @property
+    def _safe_file_dirs(self):
+        """Allowed download directories for Telegram file sends."""
+        return [
+            Path("/opt/n8n-copilot-shim-dev/telegram_downloads").resolve(),
+            Path("/tmp/webui_ai_media").resolve(),
+        ]
+
+    @property
+    def _max_file_bytes(self) -> int:
+        return 50 * 1024 * 1024  # 50 MB
+
+    @property
+    def _copilot_api_url(self) -> str:
+        return self.api_url_copilot
+
+    def _make_session_id(self, user_id) -> str:
+        if self.bot_id:
+            return f"telegram_{self.bot_id}_{user_id}"
+        return f"telegram_{user_id}"
+
+    def _get_user_identity(self, user_id) -> str:
+        return str(user_id)
+
+    def _send_channel_status(self, channel_id, text: str):
+        return self.send_message(channel_id, text)
+
+    def _edit_channel_status(self, channel_id, msg_id, text: str):
+        self.edit_message(channel_id, msg_id, text)
+
+    def _send_channel_typing(self, channel_id):
+        self.send_typing(channel_id)
 
     def _execute_via_api(
         self, query: str, session_id: str, user_identity: str, channel: str
@@ -766,54 +600,6 @@ class TelegramConnector:
             print(f"Error pinning message: {e}", file=sys.stderr)
             return False
 
-    def _is_safe_file_path(self, file_path: str) -> bool:
-        """Validate file path for security.
-
-        Checks:
-        - File exists
-        - File is within allowed directories (telegram_downloads, /tmp/webui_ai_media)
-        - No path traversal attacks
-        - File size within limits (50MB)
-        """
-        try:
-            allowed_dirs = [
-                Path("/opt/n8n-copilot-shim-dev/telegram_downloads").resolve(),
-                Path("/tmp/webui_ai_media").resolve(),
-            ]
-            file_path_obj = Path(file_path).resolve()
-
-            # Check file exists
-            if not file_path_obj.exists():
-                print(f"[WARN] File does not exist: {file_path}", file=sys.stderr)
-                return False
-
-            # Check file is in any allowed directory
-            is_safe = False
-            for allowed_dir in allowed_dirs:
-                try:
-                    is_safe = file_path_obj.is_relative_to(allowed_dir)
-                except AttributeError:
-                    is_safe = str(file_path_obj).startswith(str(allowed_dir))
-                if is_safe:
-                    break
-
-            if not is_safe:
-                print(
-                    f"[WARN] File outside allowed directories: {file_path}",
-                    file=sys.stderr,
-                )
-                return False
-
-            # Check file size (50MB limit)
-            if file_path_obj.stat().st_size > 50 * 1024 * 1024:
-                print(f"[WARN] File exceeds 50MB limit: {file_path}", file=sys.stderr)
-                return False
-
-            return True
-        except Exception as e:
-            print(f"[WARN] Error validating file path: {e}", file=sys.stderr)
-            return False
-
     def send_photo(
         self, chat_id: int, photo_source: str, caption: str = ""
     ) -> Optional[int]:
@@ -977,133 +763,6 @@ class TelegramConnector:
             print(f"Error sending document: {e}", file=sys.stderr)
             self.send_message(chat_id, f"⚠️ Error sending file: {str(e)}")
         return None
-
-    def _resolve_image_path(self, url: str) -> str:
-        """Resolve /ai-media/ paths to local filesystem paths and strip ANSI codes.
-
-        Handles LLM-mangled session IDs by fuzzy-matching directory names.
-        """
-        url = re.sub(r"\x1b\[[0-9;]*m", "", url)
-        if url.startswith("/ai-media/"):
-            resolved = url.replace("/ai-media/", "/tmp/webui_ai_media/", 1)
-            if os.path.exists(resolved):
-                return resolved
-            # Fuzzy directory match for mangled session IDs
-            base_dir = "/tmp/webui_ai_media"
-            parts = resolved[len(base_dir) + 1 :].split("/", 1)
-            if len(parts) == 2:
-                session_dir_name, filename = parts
-                try:
-                    candidates = []
-                    for d in os.listdir(base_dir):
-                        if not os.path.isdir(os.path.join(base_dir, d)):
-                            continue
-                        prefix_len = min(20, len(session_dir_name), len(d))
-                        if d[:prefix_len] == session_dir_name[:prefix_len]:
-                            candidate_path = os.path.join(base_dir, d, filename)
-                            if os.path.isfile(candidate_path):
-                                candidates.append(candidate_path)
-                    if len(candidates) == 1:
-                        print(
-                            f"[DEBUG] Fuzzy-matched image path: {resolved} -> {candidates[0]}",
-                            file=sys.stderr,
-                            flush=True,
-                        )
-                        return candidates[0]
-                    elif len(candidates) > 1:
-                        best = max(candidates, key=os.path.getmtime)
-                        print(
-                            f"[DEBUG] Fuzzy-matched image path (newest of {len(candidates)}): {resolved} -> {best}",
-                            file=sys.stderr,
-                            flush=True,
-                        )
-                        return best
-                except OSError as e:
-                    logger.debug(f"Failed to check file modification time: {e}")
-            return resolved
-        return url
-
-    def extract_image_urls(self, text: str) -> tuple:
-        """Extract image URLs from text/HTML/Markdown.
-
-        Supports:
-        - Markdown: ![alt text](URL) - extracts URL and alt text as caption
-        - HTML: <img src="URL"/> - extracts URL, no caption
-        - Bare URLs: https://example.com/image.png - extracts URL, no caption
-        - Local paths: /ai-media/session/image.png (mapped to /tmp/webui_ai_media/)
-
-        Returns:
-            Tuple of (image_data, remaining_text) where:
-            - image_data: List of (url, caption) tuples
-            - remaining_text: Text with all image references removed
-        """
-        image_extensions = r'\.(jpg|jpeg|png|gif|webp|bmp|svg)(\?[^\s"<>]*)?'
-
-        # Match markdown images: ![alt text](url)
-        md_img_pattern = r"!\[([^\]]*)\]\(([^)]+)\)"
-        # Match <img> tags
-        img_tag_pattern = r'<img\s+[^>]*src=["\']([^"\']+)["\'][^>]*/?\s*>'
-        # Match bare image URLs
-        bare_url_pattern = r'(https?://[^\s"<>]+' + image_extensions + r")"
-
-        image_data = []  # List of (url, caption) tuples
-        remaining = text
-
-        # Extract from markdown images FIRST (preserves alt text before bare URL pattern strips it)
-        for match in re.finditer(md_img_pattern, remaining, re.IGNORECASE):
-            alt_text = match.group(1).strip()
-            url = self._resolve_image_path(match.group(2).strip())
-            if url not in [img[0] for img in image_data]:
-                image_data.append((url, alt_text))
-            remaining = remaining.replace(match.group(0), "").strip()
-
-        # Extract from <img> tags
-        for match in re.finditer(img_tag_pattern, remaining, re.IGNORECASE):
-            url = self._resolve_image_path(match.group(1).strip())
-            if url not in [img[0] for img in image_data]:
-                image_data.append((url, ""))  # Empty caption
-            remaining = remaining.replace(match.group(0), "").strip()
-
-        # Extract bare image URLs
-        for match in re.finditer(bare_url_pattern, remaining, re.IGNORECASE):
-            url = match.group(1)
-            if url not in [img[0] for img in image_data]:
-                image_data.append((url, ""))  # Empty caption
-                remaining = remaining.replace(url, "").strip()
-
-        return image_data, remaining
-
-    def extract_file_paths(self, text: str) -> tuple:
-        """Extract file paths from [FILE:...] markers.
-
-        Supports:
-        - [FILE:/path/to/file.ext] - file without caption
-        - [FILE:/path/to/file.ext:Caption text] - file with caption
-
-        Returns:
-            Tuple of (file_data, remaining_text) where:
-            - file_data: List of (path, caption) tuples
-            - remaining_text: Text with all file references removed
-        """
-        # Match [FILE:path] or [FILE:path:caption]
-        file_pattern = r"\[FILE:([^\]:]+)(?::([^\]]*))?\]"
-
-        file_data = []  # List of (path, caption) tuples
-        remaining = text
-
-        for match in re.finditer(file_pattern, remaining):
-            file_path = match.group(1).strip()
-            caption = match.group(2).strip() if match.group(2) else ""
-
-            # Validate path before adding
-            if self._is_safe_file_path(file_path):
-                file_data.append((file_path, caption))
-                remaining = remaining.replace(match.group(0), "").strip()
-            else:
-                # Keep marker in text as error indicator
-                print(f"[WARN] Unsafe file path rejected: {file_path}", file=sys.stderr)
-
-        return file_data, remaining
 
     def send_response(
         self, chat_id: int, text: str, status_msg_id: Optional[int] = None
@@ -1516,197 +1175,6 @@ class TelegramConnector:
         """Handle Telegram commands - DEPRECATED: Commands now pass to agent_manager"""
         pass  # Commands are now routed to agent_manager
 
-    def _execute_command(
-        self,
-        command: str,
-        session_id: str,
-        timeout: int = 300,
-        user_identity: str = None,
-    ) -> str:
-        """Execute slash command via agent_manager.execute() with timeout support"""
-        # Container for result and thread control
-        result_container = {"response": None, "done": False}
-        effective_identity = user_identity or session_id
-
-        def run_command():
-            """Run command in background thread"""
-            try:
-                if self.use_api:
-                    result_container["response"] = self._execute_via_api(
-                        command, session_id, effective_identity, "telegram"
-                    )
-                else:
-                    session_mgr = self.get_session_manager(session_id)
-                    result_container["response"] = session_mgr.execute(
-                        command, session_id
-                    )
-                result_container["done"] = True
-            except Exception as e:
-                import traceback
-
-                tb_str = traceback.format_exc()
-                print(f"Error in _execute_command: {tb_str}", file=sys.stderr)
-                result_container["response"] = f"Error: {str(e)[:150]}"
-                result_container["done"] = True
-
-        # Start command in background
-        cmd_thread = threading.Thread(target=run_command, daemon=True)
-        cmd_thread.start()
-
-        # Wait for result with timeout
-        elapsed = 0
-        while not result_container["done"] and elapsed < timeout:
-            time.sleep(1)
-            elapsed += 1
-
-        # Wait for thread to complete
-        cmd_thread.join(timeout=5)
-
-        return result_container["response"] or "Error: Command timed out"
-
-    def _poll_live_status(self, session_id: str) -> Optional[str]:
-        """Poll the live-status endpoint for real-time LLM progress (F004).
-
-        Returns the latest status text, or None if no live status is available.
-        """
-        try:
-            headers = {
-                "Authorization": f"Bearer shared_{self.api_shared_key}",
-            }
-            resp = requests.get(
-                f"{self.api_url_copilot}/api/v1/sessions/{session_id}/live-status",
-                headers=headers,
-                timeout=3,
-            )
-            if resp.status_code == 200:
-                data = resp.json()
-                return data.get("status")
-        except Exception:
-            pass
-        return None
-
-    def _query_agent_with_status(
-        self,
-        query: str,
-        agent: str,
-        model: str,
-        user_id: int,
-        chat_id: int,
-        timeout: int = 300,
-    ) -> tuple:
-        """Query agent with live status updates at 30s intervals.
-
-        Polls the live-status API endpoint for LLM-generated progress updates
-        (F004). Falls back to static messages if no live status is available.
-
-        Returns (response_text, status_msg_id) where status_msg_id is the
-        message to edit with the final response, or None if no status was sent.
-        """
-        # Container for result and thread control
-        result_container = {"response": None, "done": False}
-
-        # Determine session ID for live-status polling
-        if self.bot_id:
-            _poll_session_id = f"telegram_{self.bot_id}_{user_id}"
-        else:
-            _poll_session_id = f"telegram_{user_id}"
-
-        # Fallback static status messages (used when no live status from LLM)
-        status_msgs = [
-            "Still working on it...",
-            "Sorry it's taking so long, still working on it...",
-            "Still processing, hang tight...",
-            "Almost there, still working...",
-            "Continuing to work on this...",
-        ]
-
-        def run_query():
-            """Run query in background thread"""
-            print(f"[DEBUG] Query to agent: {query[:200]}", file=sys.stderr)
-            result_container["response"] = self._query_agent(
-                query, agent, model, user_id, timeout
-            )
-            result_container["done"] = True
-
-        # Start query in background
-        query_thread = threading.Thread(target=run_query, daemon=True)
-        query_thread.start()
-
-        # Wait for result with status updates
-        elapsed = 0
-        status_idx = 0
-        status_msg_id = None
-        _last_live_status = None  # Track last live status to avoid redundant edits
-        while not result_container["done"] and elapsed < timeout:
-            # Re-send typing every 5 seconds to keep indicator alive
-            if elapsed % 5 == 0:
-                self.send_typing(chat_id)
-
-            if elapsed >= 30 and (elapsed - 30) % 10 == 0:
-                # Poll live-status endpoint for LLM-generated progress
-                live_status = self._poll_live_status(_poll_session_id)
-
-                if live_status and live_status != _last_live_status:
-                    # Use LLM-generated status update
-                    msg = f"⚙️ {live_status}"
-                    _last_live_status = live_status
-                elif elapsed == 30 or (elapsed > 30 and (elapsed - 30) % 30 == 0):
-                    # Fall back to static message on 30s boundaries
-                    msg = status_msgs[status_idx % len(status_msgs)]
-                    status_idx += 1
-                else:
-                    msg = None
-
-                if msg:
-                    if status_msg_id:
-                        self.edit_message(chat_id, status_msg_id, msg)
-                    else:
-                        status_msg_id = self.send_message(chat_id, msg)
-                    self.send_typing(chat_id)
-
-            time.sleep(1)
-            elapsed += 1
-
-        # Wait for thread to complete (with timeout)
-        query_thread.join(timeout=5)
-
-        return (result_container["response"] or "Error: Query timed out", status_msg_id)
-
-    def _query_agent(
-        self, query: str, agent: str, model: str, user_id: int, timeout: int = 300
-    ) -> str:
-        """Query the agent_manager with user session tied to user ID"""
-        try:
-            # Session ID tied to user ID and bot id (if available)
-            if self.bot_id:
-                session_id = f"telegram_{self.bot_id}_{user_id}"
-            else:
-                session_id = f"telegram_{user_id}"
-
-            # Use persistent session manager
-            session_mgr = self.get_session_manager(session_id)
-
-            # Debug: log session info
-            print(
-                f"[DEBUG] Using persistent session_mgr for: {session_id}",
-                file=sys.stderr,
-            )
-
-            # Use execute() which routes to the correct runtime automatically
-            if self.use_api:
-                result = self._execute_via_api(
-                    query, session_id, str(user_id), "telegram"
-                )
-            else:
-                result = session_mgr.execute(query, session_id)
-
-            return result if result else "No response from agent"
-        except Exception as e:
-            import traceback
-
-            tb_str = traceback.format_exc()
-            print(f"Error in _query_agent: {tb_str}", file=sys.stderr)
-            return f"Error: {str(e)[:150]}"
 
     def run(self, poll_interval: int = 1):
         """Start polling for messages"""

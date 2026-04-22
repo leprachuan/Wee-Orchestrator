@@ -10550,25 +10550,6 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
 
     # ---- endpoints ----
 
-    # ---- endpoints ----
-
-    @app.get("/api/v1/agents")
-    async def get_agents():
-        """Return list of configured agents for WebUI."""
-        try:
-            agents = []
-            for name, info in session_mgr.AGENTS.items():
-                agents.append(
-                    {
-                        "name": name,
-                        "description": info.get("description", ""),
-                        "path": info.get("path", ""),
-                    }
-                )
-            return {"agents": agents}
-        except Exception as e:
-            return {"agents": [], "error": str(e)}
-
     @app.get("/api/v1/health")
     async def health():
         # Do NOT call load_session_map() or any disk I/O here —
@@ -10592,8 +10573,14 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         }
 
     @app.get("/api/v1/agents")
-    async def get_agents():
+    async def get_agents(request: Request):
         """Return available agents from agents.json."""
+        await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
         agents = []
         for name, info in session_mgr.AGENTS.items():
             agents.append(
@@ -10606,12 +10593,18 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         return {"agents": agents}
 
     @app.get("/api/v1/runtimes")
-    async def get_runtimes():
+    async def get_runtimes(request: Request):
         """Return list of available runtimes on this system.
 
         Only runtimes that are actually installed/available are returned.
         This prevents the WebUI from showing runtimes that cannot be used.
         """
+        await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
         runtimes = get_available_runtimes()
         return {"runtimes": runtimes}
 
