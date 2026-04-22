@@ -39,7 +39,16 @@ class BaseConfig:
         if self.config_file.exists():
             try:
                 with open(self.config_file, "r") as f:
-                    return json.load(f)
+                    data = json.load(f)
+                try:
+                    from config_schemas import CONNECTOR_VALIDATORS
+
+                    validator = CONNECTOR_VALIDATORS.get(self.config_file.name)
+                    if validator:
+                        validator(data)
+                except ImportError:
+                    pass
+                return data
             except Exception as e:
                 print(f"Error loading config: {e}", file=sys.stderr)
                 return self._default_config()

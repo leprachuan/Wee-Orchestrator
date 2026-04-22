@@ -3286,6 +3286,15 @@ You can mention an agent in your prompt and it will auto-delegate:
             self._agents_json_mtime = config_path.stat().st_mtime
             with open(config_path, "r") as f:
                 config = json.load(f)
+                try:
+                    from config_schemas import validate_agents_config
+                    validate_agents_config(config)
+                except ImportError:
+                    pass
+                except Exception as _schema_exc:
+                    logger.warning(
+                        f"[config] agents.json schema warning: {_schema_exc}"
+                    )
                 agents = {}
                 for agent in config.get("agents", []):
                     name = agent.get("name")
