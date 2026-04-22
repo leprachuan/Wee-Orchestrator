@@ -1959,20 +1959,18 @@ async function loadEarlierMessages() {
 
 /**
  * Build timing/token footer text for assistant messages (Issue #128).
+ * Always returns string|null — never a DocumentFragment (Issue #198).
  */
 function buildTimingText(elapsedSec, weeMeta) {
-  const frag = document.createDocumentFragment();
   const base = elapsedSec != null ? `Generated in ${elapsedSec.toFixed(1)}s` : null;
   if (!weeMeta) {
-    if (base) frag.appendChild(document.createTextNode(`⏱️ ${base}`));
-    return frag.childNodes.length ? frag : null;
+    return base ? `⏱️ ${base}` : null;
   }
   const runtime = weeMeta.runtime || '';
   const tokens = weeMeta.tokens;
   const costLabel = weeMeta.cost_label || '';
   if (runtime === 'copilot-sdk' || costLabel === 'copilot') {
-    frag.appendChild(document.createTextNode(base ? `⏱️ ${base} · copilot request` : 'copilot request'));
-    return frag;
+    return base ? `⏱️ ${base} · copilot request` : 'copilot request';
   }
   if (tokens != null) {
     const tokenStr = tokens.toLocaleString();
@@ -1991,8 +1989,7 @@ function buildTimingText(elapsedSec, weeMeta) {
     const span = `<span title="${tooltip}">${tokenStr} tokens${costStr}</span>`;
     return base ? `⏱️ ${base} · ${span}` : span;
   }
-  if (base) frag.appendChild(document.createTextNode(`⏱️ ${base}`));
-  return frag.childNodes.length ? frag : null;
+  return base ? `⏱️ ${base}` : null;
 }
 
 async function renderMessage(role, content, files = [], timing = null, weeMeta = null) {
