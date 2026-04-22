@@ -5270,52 +5270,6 @@ You can mention an agent in your prompt and it will auto-delegate:
         except Exception as e:
             return f"Error executing command: {str(e)}"
 
-    def _execute_shell_command(
-        self, command: str, agent: str = "orchestrator"
-    ) -> str:  # noqa
-        """Execute a trusted shell command with full bash semantics.
-
-        This is reserved for agent-authored shell tool calls that rely on pipes,
-        redirects, and command chaining. User-controlled scheduler command mode
-        must continue to use argv parsing via _execute_bash_command.
-        """
-        if not command:
-            return "Error: No command provided. Usage: !<command>"
-
-        agent_info = self.AGENTS.get(agent)
-        if not agent_info:
-            agent_dir = str(Path.cwd())
-        else:
-            agent_dir = agent_info["path"]
-
-        logger.debug(f"[Shell] Executing in {agent_dir}: {command}")
-
-        try:
-            result = subprocess.run(
-                ["bash", "-o", "pipefail", "-c", command],
-                capture_output=True,
-                text=True,
-                timeout=self.command_timeout,
-                cwd=agent_dir,
-            )
-
-            output = result.stdout
-            if result.stderr:
-                output += result.stderr
-
-            if not output.strip():
-                if result.returncode == 0:
-                    output = "✓ Command executed successfully (exit code: 0)"
-                else:
-                    output = f"✗ Command failed with exit code: {result.returncode}"
-
-            return output.strip()
-
-        except subprocess.TimeoutExpired:
-            return f"Error: Command timed out after {self.command_timeout} seconds"
-        except Exception as e:
-            return f"Error executing command: {str(e)}"
-
     def load_agent_skills(self, agent_path: str) -> str:
         """Load all SKILL.md files from agent's .github/skills/ directory.
 
@@ -8415,15 +8369,6 @@ User Request:
             logger.info(f"[TokenUsage] Could not fetch OpenRouter pricing: {e}")
             return {}
 
-        session_data = self.get_or_create_session_data(n8n_session_id)  # noqa
-        # Issue #142: Retrieve background task ID for tool call tracking in Tasks panel
-        bg_task_id = session_data.get("bg_task_id")  # noqa: F841
-        agent_dir = self.AGENTS.get(agent, self.AGENTS["orchestrator"])["path"]  # noqa
-        effective_timeout = (
-            timeout if timeout is not None else self.command_timeout
-        )  # noqa
-        channel = session_data.get("channel", "webui")  # noqa: F841
-
     def _calculate_anthropic_cost(
         self, model: str, prompt_tokens: int, completion_tokens: int
     ):
@@ -8652,8 +8597,8 @@ User Request:
         context_prompt = self.build_agent_context_prompt(
             prompt, agent, channel, n8n_session_id
         )
-        _sess_api_base = session_data.get("api_base")  # noqa: F841
-        _sess_api_key = session_data.get("api_key")  # noqa: F841
+        _sess_api_base = session_data.get("api_base")
+        _sess_api_key = session_data.get("api_key")
 
         # Issue #125: build iterative fallback chain (B01: no recursion)
         _free_cfg = self._wee_load_free_config()
@@ -8669,6 +8614,9 @@ User Request:
         stream_buffer = getattr(self, "_stream_buffers", {}).get(n8n_session_id)
 
         for _chain_idx, _attempt_model in enumerate(_chain):
+            api_base, api_key, resolved_model = self._wee_resolve_endpoint(
+                _attempt_model, _sess_api_base, _sess_api_key
+            )
             if _chain_idx > 0:
                 # B02: surface fallback model switch to user
                 _fb_short = _attempt_model.split("/")[-1]
@@ -8938,10 +8886,10 @@ User Request:
                         _total = getattr(_u, "total_tokens", _pt + _ct)
                         _provider = (
                             "ollama"
-                            if "192.168" in api_base  # noqa: F821
+                            if "192.168" in api_base
                             else (
                                 "openrouter" if "openrouter" in api_base else "wee"
-                            )  # noqa
+                            )
                         )
                         _pricing = (
                             self._fetch_openrouter_pricing()
