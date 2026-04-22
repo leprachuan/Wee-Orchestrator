@@ -13969,15 +13969,21 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                         file=sys.stderr,
                     )
                 else:
-                    # Primary configured but unavailable — fall back to backup or default
-                    runtime = _pref_backup or get_default_runtime()
+                    # Primary configured but unavailable — validate backup before using it
+                    if _pref_backup and check_runtime_available(_pref_backup):
+                        runtime = _pref_backup
+                    else:
+                        runtime = get_default_runtime()
                     print(
                         f[RuntimePref] Primary '{_pref_primary}' unavailable, 
                         ffalling back to: {runtime},
                         file=sys.stderr,
                     )
             elif _pref_backup:
-                runtime = _pref_backup
+                if check_runtime_available(_pref_backup):
+                    runtime = _pref_backup
+                else:
+                    runtime = get_default_runtime()
                 print(
                     f[RuntimePref] Using backup preference runtime: {runtime},
                     file=sys.stderr,
