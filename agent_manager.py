@@ -10616,13 +10616,19 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         return {"runtimes": runtimes}
 
     @app.get("/api/v1/models")
-    async def get_models(runtime: str = "copilot"):
+    async def get_models(request: Request, runtime: str = "copilot"):
         """Return available models for the specified runtime.
 
         Uses CLI discovery for all runtimes where possible; falls back to the
         built-in static model list when the runtime CLI is unavailable or does
         not expose a model-listing command.
         """
+        await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
         runtime = runtime.lower().strip()
         known_runtimes = {
             "copilot",
@@ -10658,7 +10664,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                         session_mgr._get_model_description(model_id, runtime)
                         or model_id
                     )
-                    models.append({"id": model_id, "label": label, "group": _group})
+                    models.append({"id": model_id, "label": label, "group": group_name})
             return {"runtime": runtime, "models": models}
         except Exception as e:
             return {"runtime": runtime, "models": [], "error": str(e)}
