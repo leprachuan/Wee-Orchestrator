@@ -1037,6 +1037,87 @@ def get_default_runtime() -> str:
     return os.environ.get("COPILOT_DEFAULT_RUNTIME", "copilot")
 
 
+class RuntimePreferencesManager:
+    """Manages global runtime preferences (primary/backup) persisted to disk."""
+
+    _DEFAULT_PRIMARY = "copilot"
+    _DEFAULT_BACKUP = "claude"
+
+    def __init__(self, pref_file: str):
+        self._pref_file = pref_file
+        self._lock = threading.Lock()
+        self._prefs: Dict[str, str] = {}
+        self._load()
+
+    def _load(self) -> None:
+        """Load preferences from disk, falling back to defaults."""
+        try:
+            if os.path.exists(self._pref_file):
+                with open(self._pref_file, "r") as f:
+                    data = json.load(f)
+                self._prefs = {
+                    "primary_runtime": str(
+                        data.get("primary_runtime", self._DEFAULT_PRIMARY)
+                    ),
+                    "backup_runtime": str(
+                        data.get("backup_runtime", self._DEFAULT_BACKUP)
+                    ),
+                }
+                return
+        except Exception as e:
+            print(f"[RuntimePref] Failed to load preferences: {e}", file=sys.stderr)
+        self._prefs = {
+            "primary_runtime": self._DEFAULT_PRIMARY,
+            "backup_runtime": self._DEFAULT_BACKUP,
+        }
+
+    def get(self) -> Dict[str, str]:
+        """Return a copy of current preferences."""
+        with self._lock:
+            return dict(self._prefs)
+
+    def set(self, primary_runtime: str, backup_runtime: str) -> None:
+        """Save preferences to disk."""
+        with self._lock:
+            self._prefs = {
+                "primary_runtime": primary_runtime,
+                "backup_runtime": backup_runtime,
+            }
+            try:
+                with open(self._pref_file, "w") as f:
+                    json.dump(self._prefs, f, indent=2)
+                print(
+                    f"[RuntimePref] Saved: primary={primary_runtime},"  # noqa: E501
+                    f" backup={backup_runtime}",
+                    file=sys.stderr,
+                )
+            except Exception as e:
+                print(f"[RuntimePref] Failed to save preferences: {e}", file=sys.stderr)
+
+    def primary(self) -> str:
+        """Return primary runtime, falling back to env/default."""
+        with self._lock:
+            return self._prefs.get("primary_runtime", self._DEFAULT_PRIMARY)
+
+    def backup(self) -> str:
+        """Return backup runtime."""
+        with self._lock:
+            return self._prefs.get("backup_runtime", self._DEFAULT_BACKUP)
+
+
+# Global runtime preferences manager (loaded once at startup)
+_runtime_pref_mgr: "RuntimePreferencesManager" = None  # noqa: F821
+
+
+def _get_runtime_pref_mgr() -> "RuntimePreferencesManager":  # noqa: F821
+    """Get (or lazily initialize) the global runtime preferences manager."""
+    global _runtime_pref_mgr
+    if _runtime_pref_mgr is None:
+        pref_file = os.path.join(SCRIPT_BASE_DIR, "runtime_preferences.json")
+        _runtime_pref_mgr = RuntimePreferencesManager(pref_file)
+    return _runtime_pref_mgr
+
+
 def check_runtime_available(runtime: str) -> bool:
     """Check if a runtime is available on the system.
 
@@ -6099,8 +6180,24 @@ Do NOT emit status updates for quick operations (< 15 seconds)."""
         except Exception as _mem_exc:
             logger.debug(f"[Memory] Injection skipped: {_mem_exc}")
 
+        # Inject global runtime preferences as advisory context
+        try:
+            _rt_prefs = _get_runtime_pref_mgr().get()
+            _pref_primary = _rt_prefs["primary_runtime"]
+            _pref_backup = _rt_prefs["backup_runtime"]
+            runtime_pref_instruction = (
+                "\n[Global Runtime Preferences] Primary runtime: "
+                + _pref_primary
+                + ". Backup runtime: "
+                + _pref_backup
+                + ". These are advisory only —"
+                + " agents can still explicitly choose a different runtime."
+            )
+        except Exception:
+            runtime_pref_instruction = ""
+
         context = f"""{handoff_prefix}[Session ID: {n8n_session_id}]
-{runtime_instruction}{injection_text}{mobile_channel_instruction}{silent_mode_instruction}{memory_section}{agent_desc}{files_context}{render_instruction}{bg_task_instruction}{canvas_instruction}{wee_executor_instruction}{timeout_instruction}
+{runtime_instruction}{injection_text}{mobile_channel_instruction}{silent_mode_instruction}{memory_section}{agent_desc}{files_context}{render_instruction}{bg_task_instruction}{canvas_instruction}{wee_executor_instruction}{runtime_pref_instruction}{timeout_instruction}
 
 User Request:
 {prompt}"""
@@ -10657,6 +10754,58 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         runtimes = get_available_runtimes()
         return {"runtimes": runtimes}
 
+    @app.get("/api/v1/runtime-preferences")
+    async def get_runtime_preferences(request: Request):
+        """Return current global runtime preferences (primary and backup)."""
+        await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        prefs = _get_runtime_pref_mgr().get()
+        available = get_available_runtimes()
+        return {
+            "primary_runtime": prefs["primary_runtime"],
+            "backup_runtime": prefs["backup_runtime"],
+            "available_runtimes": [rt["id"] for rt in available],
+        }
+
+    class RuntimePreferencesRequest(BaseModel):
+        primary_runtime: str
+        backup_runtime: str
+
+    @app.put("/api/v1/runtime-preferences")
+    async def update_runtime_preferences(
+        body: RuntimePreferencesRequest, request: Request
+    ):
+        """Update global runtime preferences and persist to disk."""
+        await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        valid_runtimes = {rt["id"] for rt in get_available_runtimes()}
+        for field_name, rt_value in [
+            ("primary_runtime", body.primary_runtime),
+            ("backup_runtime", body.backup_runtime),
+        ]:
+            if rt_value not in valid_runtimes:
+                raise HTTPException(
+                    status_code=422,
+                    detail=(
+                        f"Invalid {field_name} '{rt_value}'. "
+                        f"Must be one of: {sorted(valid_runtimes)}"
+                    ),
+                )
+        _get_runtime_pref_mgr().set(body.primary_runtime, body.backup_runtime)
+        return {
+            "primary_runtime": body.primary_runtime,
+            "backup_runtime": body.backup_runtime,
+            "status": "saved",
+        }
+
     @app.get("/api/v1/models")
     async def get_models(request: Request, runtime: str = "copilot"):
         """Return available models for the specified runtime.
@@ -12970,7 +13119,32 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         defaults = _compute_bg_task_defaults(session_map, identity, channel)
 
         agent = body.agent or defaults.get("agent", get_default_agent())
-        runtime = body.runtime or defaults.get("runtime", get_default_runtime())
+        # Use explicit body.runtime; else inherit from session defaults; else use
+        # global primary runtime preference; else fall back to env/default.
+        if body.runtime:
+            runtime = body.runtime
+            print(f"[RuntimePref] Explicit runtime override: {runtime}",
+                  file=sys.stderr)
+        else:
+            _session_rt = defaults.get("runtime")
+            _pref_primary = _get_runtime_pref_mgr().primary()
+            _pref_backup = _get_runtime_pref_mgr().backup()
+            runtime = (
+                _session_rt or _pref_primary or _pref_backup or get_default_runtime()
+            )
+            if _session_rt:
+                print(f"[RuntimePref] Using session runtime: {runtime}",
+                      file=sys.stderr)
+            elif _pref_primary:
+                print(
+                    f"[RuntimePref] Using primary preference runtime: {runtime}",
+                    file=sys.stderr,
+                )
+            else:
+                print(
+                    f"[RuntimePref] Using backup preference runtime: {runtime}",
+                    file=sys.stderr,
+                )
         model = body.model or defaults.get("model", get_default_model())
 
         task_id = f"bg_{str(uuid4())[:8]}"

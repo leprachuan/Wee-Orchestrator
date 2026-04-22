@@ -6632,6 +6632,86 @@ if (document.readyState !== 'loading') {
   }
 })();
 
+/* ── Runtime Preferences Panel ──────────────────────────────────────────────── */
+(function initRuntimePreferences() {
+  const rpPrimary  = document.getElementById('rp-primary');
+  const rpBackup   = document.getElementById('rp-backup');
+  const rpSave     = document.getElementById('rp-save');
+  const rpStatus   = document.getElementById('rp-status');
+
+
+  function showRpStatus(msg, isErr) {
+    rpStatus.textContent = msg;
+    rpStatus.className = isErr ? 'asf-hint rp-err' : 'asf-hint rp-ok';
+    rpStatus.classList.remove('hidden');
+    setTimeout(() => rpStatus && rpStatus.classList.add('hidden'), 3500);
+  }
+
+  /** Populate dropdowns from available runtimes and set selected values */
+  async function loadRuntimePrefs() {
+    try {
+      // Fetch available runtimes for dynamic dropdown population
+      const rtRes = await apiRequest('GET', '/runtimes');
+      const available = (rtRes.runtimes || []).map(r => r.id || r);
+      const allRuntimes = available.length ? available : [
+        'copilot', 'copilot-sdk', 'claude', 'claude-sdk', 'gemini', 'opencode', 'codex', 'devin'
+      ];
+
+      // Rebuild dropdowns with available runtimes
+      [rpPrimary, rpBackup].forEach(sel => {
+        const cur = sel.value;
+        sel.innerHTML = '';
+        allRuntimes.forEach(id => {
+          const opt = document.createElement('option');
+          opt.value = id;
+          opt.textContent = id;
+          sel.appendChild(opt);
+        });
+        if (cur) sel.value = cur;
+      });
+
+      // Fetch current preferences
+      const prefs = await apiRequest('GET', '/runtime-preferences');
+      if (prefs.primary_runtime) rpPrimary.value = prefs.primary_runtime;
+      if (prefs.backup_runtime)  rpBackup.value  = prefs.backup_runtime;
+    } catch (e) {
+      // Non-fatal: leave dropdown with static defaults
+    }
+  }
+
+  async function saveRuntimePrefs() {
+    if (rpSave) { rpSave.disabled = true; rpSave.textContent = 'Saving…'; }
+    try {
+      await apiRequest('PUT', '/runtime-preferences', {
+        primary_runtime: rpPrimary.value,
+        backup_runtime:  rpBackup.value,
+      });
+      showRpStatus('✓ Runtime preferences saved', false);
+    } catch (e) {
+      showRpStatus('✗ Save failed: ' + e.message, true);
+    } finally {
+      if (rpSave) { rpSave.disabled = false; rpSave.textContent = '💾 Save Runtime Prefs'; }
+    }
+  }
+
+  rpSave.addEventListener('click', saveRuntimePrefs);
+
+  // Load preferences whenever the Settings modal opens
+  const modalSettings = document.getElementById('modal-settings');
+  if (modalSettings) {
+    const observer = new MutationObserver((mutations) => {
+      for (const m of mutations) {
+        if (m.attributeName === 'class') {
+          const hidden = modalSettings.classList.contains('hidden');
+        }
+      }
+    });
+    observer.observe(modalSettings, { attributes: true });
+  }
+  // Also load on init in case modal starts open
+  loadRuntimePrefs();
+})();
+
 // ─── Skills Manager Panel ────────────────────────────────────────────────────
 // Mirrors the Canvas pushover panel pattern.
 // ═══════════════════════════════════════════════════════════════════════════════
