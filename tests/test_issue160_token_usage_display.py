@@ -513,7 +513,7 @@ class TestWebUIBuildTimingText(unittest.TestCase):
         self.assertIn("prompt_tokens", func_body)
         self.assertIn("completion_tokens", func_body)
         # The span uses template literal, not innerHTML concatenation of raw user text
-        self.assertIn('<span title=', func_body)
+        self.assertIn("<span title=", func_body)
 
 
 class TestPricingTable(unittest.TestCase):
