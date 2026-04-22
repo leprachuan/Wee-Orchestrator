@@ -616,6 +616,7 @@ class TestBackupRuntimeFallback(unittest.TestCase):
                 )
         finally:
             import os
+
             if os.path.exists(tmp):
                 os.unlink(tmp)
 
@@ -696,6 +697,7 @@ class TestBackupRuntimeFallback(unittest.TestCase):
                 )
         finally:
             import os
+
             if os.path.exists(tmp):
                 os.unlink(tmp)
 
@@ -720,9 +722,8 @@ class TestBackupRuntimeFallback(unittest.TestCase):
             with patch.object(agent_manager, "_runtime_pref_mgr", mgr), patch.object(
                 agent_manager,
                 "check_runtime_available",
-                side_effect=lambda rt: rt not in (
-                    "definitely-not-installed", "also-not-installed"
-                ),
+                side_effect=lambda rt: rt
+                not in ("definitely-not-installed", "also-not-installed"),
             ), patch.object(
                 agent_manager,
                 "get_default_runtime",
@@ -785,6 +786,7 @@ class TestBackupRuntimeFallback(unittest.TestCase):
                 )
         finally:
             import os
+
             if os.path.exists(tmp):
                 os.unlink(tmp)
 
