@@ -2442,7 +2442,8 @@ You can mention an agent in your prompt and it will auto-delegate:
                     )
                     logger.debug(
                         f"[Handoff] Prepared handoff: {prev_runtime} → {new_runtime} "
-                        f"(prev_session={prev_session_id}, new_session={new_session_id})")
+                        f"(prev_session={prev_session_id}, new_session={new_session_id})"
+                    )
                 except Exception as _handoff_err:
                     logger.warning(
                         f"[Handoff] Warning: handoff preparation failed: {_handoff_err}"
@@ -4210,7 +4211,8 @@ You can mention an agent in your prompt and it will auto-delegate:
         if evicted:
             logger.warning(
                 f"[SessionMap] TTL evicted {evicted} inactive entries "
-                f"(threshold {self.session_map_ttl / 86400:.0f}d)")
+                f"(threshold {self.session_map_ttl / 86400:.0f}d)"
+            )
         return pruned
 
     def save_session_map(self, session_map: dict):
@@ -6045,7 +6047,8 @@ When to use: Prefer wee_executor over direct curl for background tasks — it ha
                         )
                         logger.info(
                             f"[Handoff] Injecting handoff context from {_ctx['prev_runtime']} "
-                            f"into first message of new {runtime} session")
+                            f"into first message of new {runtime} session"
+                        )
         except Exception as _handoff_err:
             logger.error(
                 f"[Handoff] Warning: failed to load handoff context: {_handoff_err}"
@@ -6118,7 +6121,8 @@ Do NOT emit status updates for quick operations (< 15 seconds)."""
                     self.update_session_field(n8n_session_id, "memory_injected", True)
                     logger.debug(
                         f"[Memory] Injected {len(_mem_ctx)} chars for "
-                        f"session={n8n_session_id} agent={agent}")
+                        f"session={n8n_session_id} agent={agent}"
+                    )
                 else:
                     # No memory files — still mark as injected
                     self.update_session_field(n8n_session_id, "memory_injected", True)
@@ -7882,7 +7886,8 @@ User Request:
             logger.warning(
                 f"[Session] WARNING: Could not extract session_id from claude stream-json "
                 f"output for n8n_session={n8n_session_id}. Session context may be lost on "
-                f"next message. Output length={len(output)} chars.")
+                f"next message. Output length={len(output)} chars."
+            )
 
         stripped = self.strip_metadata(output, "claude")
         # If strip_metadata returned empty but the raw output is non-empty, fall back to
@@ -8379,7 +8384,7 @@ User Request:
                 _json.dump(pricing, f)
             return pricing
         except Exception as e:
-            logger.info(f'[TokenUsage] Could not fetch OpenRouter pricing: {e}')
+            logger.info(f"[TokenUsage] Could not fetch OpenRouter pricing: {e}")
             return {}
 
         session_data = self.get_or_create_session_data(n8n_session_id)
@@ -8458,7 +8463,7 @@ User Request:
             with open(self.logs_dir / "token_usage.jsonl", "a") as f:
                 f.write(_json.dumps(entry) + "\n")
         except Exception as e:
-            logger.error(f'[TokenUsage] Failed to log usage: {e}')
+            logger.error(f"[TokenUsage] Failed to log usage: {e}")
 
     # ── End Issue #128 helpers ─────────────────────────────────────────────────
 
@@ -8804,9 +8809,19 @@ User Request:
                 stream_buffer.push("done", output)
 
             logger.info(
-                "[Wee Native] model=" + resolved_model + " api_base=" + api_base
-                + " session=" + n8n_session_id[:8] + "..."
-                + " (chain " + str(_chain_idx + 1) + "/" + str(len(_chain)) + ")")
+                "[Wee Native] model="
+                + resolved_model
+                + " api_base="
+                + api_base
+                + " session="
+                + n8n_session_id[:8]
+                + "..."
+                + " (chain "
+                + str(_chain_idx + 1)
+                + "/"
+                + str(len(_chain))
+                + ")"
+            )
 
             import httpx as _httpx_wee
 
@@ -10510,7 +10525,8 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             logger.info(
                 f"[Startup] Task reconciliation: "
                 f"{_reconcile_result['stale_running']} stale running → failed, "
-                f"{_reconcile_result['queued_ready']} queued tasks ready for promotion")
+                f"{_reconcile_result['queued_ready']} queued tasks ready for promotion"
+            )
             # Promote queued tasks that now have available slots
             _all_tasks = await asyncio.to_thread(bg_task_mgr.list_all_tasks)
             _queued = [t for t in _all_tasks if t["status"] == "queued"]
@@ -10873,7 +10889,8 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         if not existing:
             logger.info(
                 f"[Session Recovery] Session {session_id} not in session map, "
-                f"attempting recovery (user={user['identity']}, channel={user['channel']})")
+                f"attempting recovery (user={user['identity']}, channel={user['channel']})"
+            )
             history_sessions = history_mgr.get_sessions(
                 user["channel"], user["identity"]
             )
@@ -11099,7 +11116,8 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             logger.info(
                 f"[Session Recovery] Stream: session {session_id} not in map, "
                 f"attempting recovery (user={user['identity']}, "
-                f"channel={user['channel']})")
+                f"channel={user['channel']})"
+            )
             history_sessions = history_mgr.get_sessions(
                 user["channel"], user["identity"]
             )
@@ -11107,11 +11125,13 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             if session_id not in session_ids_in_history:
                 logger.info(
                     f"[Session Recovery] Stream: session {session_id} not in "
-                    f"history — returning 404")
+                    f"history — returning 404"
+                )
                 raise HTTPException(status_code=404, detail="Session not found")
             logger.info(
                 f"[Session Recovery] Stream: restored session {session_id} "
-                f"from chat history — backend will be recreated")
+                f"from chat history — backend will be recreated"
+            )
             existing = session_mgr.get_or_create_session_data(
                 session_id, identity=user["identity"]
             )

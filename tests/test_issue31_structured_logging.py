@@ -1,10 +1,11 @@
-"""Regression tests for Issue #31: structured logging — replace print() with logger calls.
+"""Regression tests for Issue #31: structured logging.
+Replace print() calls with logger calls.
 
 Verifies:
 1. _configure_logging() sets up root logger handlers correctly
 2. LOG_LEVEL env var is respected
 3. LOG_FORMAT=json produces JSON output via _JsonFormatter
-4. No diagnostic print() calls remain in agent_manager (only 4 intentional CLI output ones)
+4. No diagnostic print() calls remain in agent_manager (4 intentional CLI ones allowed)
 """
 
 import importlib
@@ -74,9 +75,10 @@ class TestIssue31StructuredLogging:
             am = _import_am()
             am._configure_logging()
         root = logging.getLogger()
-        assert (
-            root.level == logging.DEBUG
-        ), f"Expected DEBUG level when LOG_LEVEL=DEBUG, got {logging.getLevelName(root.level)}"
+        assert root.level == logging.DEBUG, (
+            f"Expected DEBUG level when LOG_LEVEL=DEBUG, "
+            f"got {logging.getLevelName(root.level)}"
+        )
 
     def test_issue_31_log_level_env_var_warning(self):
         """LOG_LEVEL=WARNING should set root logger to WARNING level."""
@@ -96,9 +98,10 @@ class TestIssue31StructuredLogging:
             am = _import_am()
             am._configure_logging()
         root = logging.getLogger()
-        assert (
-            root.level == logging.INFO
-        ), f"Expected INFO fallback for invalid LOG_LEVEL, got {logging.getLevelName(root.level)}"
+        assert root.level == logging.INFO, (
+            "Expected INFO fallback for invalid LOG_LEVEL, "
+            f"got {logging.getLevelName(root.level)}"
+        )
 
     def test_issue_31_json_format_produces_valid_json(self):
         """LOG_FORMAT=json handler should emit valid JSON records."""
@@ -182,9 +185,10 @@ class TestIssue31StructuredLogging:
         count_after_first = len(logging.getLogger().handlers)
         am._configure_logging()
         count_after_second = len(logging.getLogger().handlers)
-        assert (
-            count_after_second == count_after_first
-        ), f"Handler count grew from {count_after_first} to {count_after_second} on second call"
+        assert count_after_second == count_after_first, (
+            f"Handler count grew from {count_after_first} to "
+            f"{count_after_second} on second call"
+        )
 
     def test_issue_31_json_formatter_class_exists(self):
         """_JsonFormatter class must be importable from agent_manager."""
