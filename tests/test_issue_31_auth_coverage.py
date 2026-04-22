@@ -19,9 +19,8 @@ from unittest.mock import patch
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-os.environ["API_SHARED_KEY"] = ""
-os.environ["APP_ENV"] = "DEV"
-os.environ["API_PORT"] = "8199"
+os.environ.setdefault("APP_ENV", "DEV")
+os.environ.setdefault("API_PORT", "8199")
 
 
 class TestIssue31AuthCoverage(unittest.TestCase):
@@ -32,6 +31,10 @@ class TestIssue31AuthCoverage(unittest.TestCase):
         from fastapi.testclient import TestClient
 
         import agent_manager
+
+        # Isolate API_SHARED_KEY — this class uses empty key + "Bearer shared_" token
+        cls._saved_api_key = os.environ.get("API_SHARED_KEY")
+        os.environ["API_SHARED_KEY"] = ""
 
         cls._telegram_patch = patch.object(
             agent_manager,
@@ -54,6 +57,11 @@ class TestIssue31AuthCoverage(unittest.TestCase):
     def tearDownClass(cls):
         cls._telegram_patch.stop()
         cls._send_pairing_patch.stop()
+        # Restore API_SHARED_KEY to avoid polluting other test modules
+        if cls._saved_api_key is None:
+            os.environ.pop("API_SHARED_KEY", None)
+        else:
+            os.environ["API_SHARED_KEY"] = cls._saved_api_key
 
     def _mock_copilot_models(self):
         return {
