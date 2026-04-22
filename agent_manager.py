@@ -443,8 +443,13 @@ class BackgroundTaskManager:
         self._save(tasks)
 
     def _evict_oldest_terminal(self, tasks: list) -> list:
-        """Evict oldest completed/failed/killed tasks when store exceeds MAX_TOTAL_TASKS."""
-        if len(tasks) <= self.MAX_TOTAL_TASKS:
+        """Evict oldest completed/failed/killed tasks to make room for one new task.
+
+        Called pre-append, so we trim to MAX_TOTAL_TASKS - 1 rather than
+        MAX_TOTAL_TASKS, ensuring the store never exceeds the cap after append.
+        """
+        cap = self.MAX_TOTAL_TASKS - 1
+        if len(tasks) <= cap:
             return tasks
 
         terminal_statuses = {"completed", "failed", "killed"}
@@ -455,7 +460,7 @@ class BackgroundTaskManager:
         if not terminal_tasks:
             return tasks
 
-        evict_count = len(tasks) - self.MAX_TOTAL_TASKS
+        evict_count = len(tasks) - cap
         terminal_tasks.sort(
             key=lambda x: x[1].get("completed_at", "") or x[1].get("created_at", "")
         )
