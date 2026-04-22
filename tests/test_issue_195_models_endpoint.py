@@ -56,7 +56,7 @@ class TestIssue195ModelsEndpoint(unittest.TestCase):
             "openai": ["gpt-5.4", "gpt-5.3-codex"],
         }
 
-    def test_models_endpoint_unauthenticated_rejected(self):
+    def test_issue_195_unauthenticated_rejected(self):
         """GET /api/v1/models without auth must return HTTP 401."""
         import agent_manager
 
@@ -75,7 +75,7 @@ class TestIssue195ModelsEndpoint(unittest.TestCase):
             "Unauthenticated request must be rejected with 401",
         )
 
-    def test_models_endpoint_copilot_no_error(self):
+    def test_issue_195_copilot_no_error(self):
         """GET /api/v1/models?runtime=copilot must not return an 'error' key."""
         import agent_manager
 
@@ -97,7 +97,7 @@ class TestIssue195ModelsEndpoint(unittest.TestCase):
             f"Unexpected error in response: {data.get('error')}",
         )
 
-    def test_models_endpoint_copilot_returns_non_empty_list(self):
+    def test_issue_195_copilot_returns_non_empty_list(self):
         """GET /api/v1/models?runtime=copilot must return a non-empty list."""
         import agent_manager
 
@@ -115,7 +115,7 @@ class TestIssue195ModelsEndpoint(unittest.TestCase):
         models = data.get("models", [])
         self.assertGreater(len(models), 0, "Models list must not be empty")
 
-    def test_models_endpoint_copilot_group_field_populated(self):
+    def test_issue_195_copilot_group_field_populated(self):
         """Each model entry must have a 'group' field matching its group_name."""
         import agent_manager
 
@@ -144,7 +144,7 @@ class TestIssue195ModelsEndpoint(unittest.TestCase):
                 f"Unexpected group value: {model['group']}",
             )
 
-    def test_models_endpoint_copilot_all_expected_models_present(self):
+    def test_issue_195_copilot_all_expected_models_present(self):
         """All models from the mock data must appear in the response."""
         import agent_manager
 
@@ -173,7 +173,7 @@ class TestIssue195ModelsEndpoint(unittest.TestCase):
             f"Missing models: {expected - returned_ids}",
         )
 
-    def test_models_endpoint_copilot_sdk_no_error(self):
+    def test_issue_195_copilot_sdk_no_error(self):
         """GET /api/v1/models?runtime=copilot-sdk must also work."""
         import agent_manager
 
@@ -192,7 +192,7 @@ class TestIssue195ModelsEndpoint(unittest.TestCase):
         self.assertNotIn("error", data)
         self.assertEqual(len(data.get("models", [])), 2)
 
-    def test_models_endpoint_runtime_key_in_response(self):
+    def test_issue_195_runtime_key_in_response(self):
         """Response must include the runtime key matching the query parameter."""
         import agent_manager
 
