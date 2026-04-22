@@ -8887,9 +8887,7 @@ User Request:
                         _provider = (
                             "ollama"
                             if "192.168" in api_base
-                            else (
-                                "openrouter" if "openrouter" in api_base else "wee"
-                            )
+                            else ("openrouter" if "openrouter" in api_base else "wee")
                         )
                         _pricing = (
                             self._fetch_openrouter_pricing()
