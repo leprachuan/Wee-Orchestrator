@@ -2881,7 +2881,7 @@ You can mention an agent in your prompt and it will auto-delegate:
                     f"{status} {recurring} `{j['id']}` — **{j['name']}**\n"
                     f"   Schedule: `{j['schedule']}`\n"
                     f"   Next run: `{j.get('next_run','?')}`\n"
-                    f"   Agent: `{j.get('agent','?')}` / Runtime: `{j.get('runtime','?')}`"  # noqa: E501
+                    f"   Agent: `{j.get('agent', '?')}` / Runtime: `{j.get('runtime', '?')}`"  # noqa: E501
                 )
             return "\n\n".join(lines)
 
@@ -2932,7 +2932,7 @@ You can mention an agent in your prompt and it will auto-delegate:
                 f"• **Schedule:** `{j['schedule']}`{cron_line}\n"
                 f"• **Next run:** `{j.get('next_run','?')}`\n"
                 f"• **Last run:** `{j.get('last_run','never')}`\n"
-                f"• **Agent:** `{j.get('agent','?')}` / Runtime: `{j.get('runtime','?')}`\n"  # noqa: E501
+                f"• **Agent:** `{j.get('agent', '?')}` / Runtime: `{j.get('runtime', '?')}`\n"  # noqa: E501
                 f"• **Recurring:** {'Yes 🔁' if j.get('recurring') else 'No 1️⃣'}\n"
                 f"• **Enabled:** {'Yes ▶️' if j.get('enabled') else 'No ⏸'}\n"
                 f"• **Task:** {j.get('task','')}"
@@ -3291,7 +3291,7 @@ You can mention an agent in your prompt and it will auto-delegate:
                 for agent in config.get("agents", []):
                     name = agent.get("name")
                     if not name:
-                        logger.warning(f"[Warning] Agent entry missing 'name' field")
+                        logger.warning("[Warning] Agent entry missing 'name' field")
                         continue
                     agents[name] = {
                         "path": agent.get("path", ""),
@@ -7992,7 +7992,7 @@ User Request:
         # Using "--resume latest" automatically continues with the most recent session.
         if resume:
             cmd.extend(["--resume", "latest"])
-            logger.debug(f"[Session] Resuming Gemini session (latest)")
+            logger.debug("[Session] Resuming Gemini session (latest)")
         else:
             logger.info(f"[Session] Starting new Gemini session in {mode} mode")
 
