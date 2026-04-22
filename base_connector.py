@@ -48,7 +48,8 @@ class BaseConfig:
 
                 validator = CONNECTOR_VALIDATORS.get(self.config_file.name)
                 if validator:
-                    validator(data)
+                    validated = validator(data)
+                    data = validated.model_dump()
             except ImportError:
                 pass
             # ValidationError from validator() is not swallowed —

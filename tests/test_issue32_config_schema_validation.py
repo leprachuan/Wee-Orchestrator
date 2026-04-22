@@ -706,3 +706,102 @@ class TestBaseConfigSchemaValidationSurfaced:
         assert instance.config == {
             "defaulted": True
         }, "JSON parse errors should still fall back to _default_config()"
+
+
+# ===========================================================================
+# Regression: _load_config uses model_dump() so schema defaults are applied
+# ===========================================================================
+
+
+class TestBaseConfigConnectorDefaults:
+    """Regression: BaseConfig._load_config must use model_dump() so Pydantic
+    schema defaults (e.g. allowed_users=[]) are present in the loaded config.
+
+    Without model_dump(), a minimal config like {"token":"abc"} is returned
+    as-is; BaseConfig.allow_user() (and any other method that expects the full
+    schema) then raises KeyError on missing keys.
+    """
+
+    def test_minimal_telegram_config_gets_defaults(self, tmp_path):
+        """A telegram_config.json with only 'token' gets all schema defaults."""
+        cfg_file = tmp_path / "telegram_config.json"
+        cfg_file.write_text(json.dumps({"token": "bot123:FAKE"}))
+
+        import base_connector as bc
+
+        class FakeTelegramConfig(bc.BaseConfig):
+            def _default_config(self):
+                return {}
+
+        instance = FakeTelegramConfig(str(cfg_file))
+
+        # Pydantic schema default for allowed_users is []
+        assert "allowed_users" in instance.config, (
+            "allowed_users must be present after loading a minimal config — "
+            "model_dump() must be called to apply Pydantic defaults"
+        )
+        assert instance.config["allowed_users"] == [], (
+        )
+
+    def test_minimal_telegram_config_allow_user_no_keyerror(self, tmp_path):
+        """allow_user() must not raise KeyError when config was loaded from a
+        minimal file (only 'token' present — all other keys come from schema
+        defaults via model_dump()).
+        """
+        cfg_file = tmp_path / "telegram_config.json"
+        cfg_file.write_text(json.dumps({"token": "bot123:FAKE"}))
+
+        import base_connector as bc
+
+        class FakeTelegramConfig(bc.BaseConfig):
+            def _default_config(self):
+                return {}
+
+        instance = FakeTelegramConfig(str(cfg_file))
+        # Should not raise KeyError — allowed_users default [] must be present
+        try:
+            instance.allow_user(12345)
+        except KeyError as exc:
+            pytest.fail(
+                f"allow_user() raised KeyError({exc}) — model_dump() was not called "
+                "so the Pydantic default for allowed_users was not applied"
+            )
+
+    def test_minimal_webex_config_gets_defaults(self, tmp_path):
+        """A webex_config.json with only 'token' gets all schema defaults."""
+        cfg_file = tmp_path / "webex_config.json"
+        cfg_file.write_text(json.dumps({"token": "webex-token"}))
+
+        import base_connector as bc
+
+        class FakeWebEXConfig(bc.BaseConfig):
+            def _default_config(self):
+                return {}
+
+        instance = FakeWebEXConfig(str(cfg_file))
+
+        assert "allowed_users" in instance.config, (
+            "allowed_users must be present after loading a minimal webex config"
+        )
+        assert instance.config["allowed_users"] == [], (
+        )
+        # Schema defaults for rabbitmq_host etc. must also be present
+        assert instance.config.get("rabbitmq_host") == "192.168.0.85", (
+        )
+
+    def test_is_user_allowed_works_on_minimal_config(self, tmp_path):
+        """is_user_allowed() must work on a config loaded from a minimal file."""
+        cfg_file = tmp_path / "telegram_config.json"
+        cfg_file.write_text(json.dumps({"token": "bot123:FAKE"}))
+
+        import base_connector as bc
+
+        class FakeTelegramConfig(bc.BaseConfig):
+            def _default_config(self):
+                return {}
+
+        instance = FakeTelegramConfig(str(cfg_file))
+        # Empty allowed_users means everyone is allowed
+        assert instance.is_user_allowed(999) is True, (
+            "is_user_allowed() must return True when allowed_users is empty (default)"
+        )

@@ -3288,11 +3288,12 @@ You can mention an agent in your prompt and it will auto-delegate:
                 config = json.load(f)
                 try:
                     from config_schemas import validate_agents_config
+                    from pydantic import ValidationError as _ValidationError
 
                     validate_agents_config(config)
                 except ImportError:
                     pass
-                except Exception as _schema_exc:
+                except _ValidationError as _schema_exc:
                     logger.error(
                         f"[config] agents.json schema validation failed: "
                         f"{_schema_exc}. Refusing to load agents from invalid config."
