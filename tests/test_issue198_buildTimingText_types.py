@@ -12,7 +12,9 @@ import unittest
 
 APP_JS_PATH = os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-    "webui", "dist", "app.js",
+    "webui",
+    "dist",
+    "app.js",
 )
 
 
@@ -33,8 +35,7 @@ def _extract_build_timing_text(source):
 def _run_node(js_code):
     """Run JS code via node and return stdout."""
     result = subprocess.run(
-        ["node", "-e", js_code],
-        capture_output=True, text=True, timeout=10
+        ["node", "-e", js_code], capture_output=True, text=True, timeout=10
     )
     return result.stdout.strip(), result.stderr.strip(), result.returncode
 
@@ -47,12 +48,14 @@ class TestBuildTimingTextNoDocumentFragment(unittest.TestCase):
         source = _get_app_js()
         func_body = _extract_build_timing_text(source)
         self.assertNotIn(
-            "createDocumentFragment", func_body,
-            "buildTimingText must not use DocumentFragment (Issue #198)"
+            "createDocumentFragment",
+            func_body,
+            "buildTimingText must not use DocumentFragment (Issue #198)",
         )
         self.assertNotIn(
-            "DocumentFragment", func_body,
-            "buildTimingText must not reference DocumentFragment (Issue #198)"
+            "DocumentFragment",
+            func_body,
+            "buildTimingText must not reference DocumentFragment (Issue #198)",
         )
 
     def test_no_fragment_append_in_source(self):
@@ -61,8 +64,9 @@ class TestBuildTimingTextNoDocumentFragment(unittest.TestCase):
         func_body = _extract_build_timing_text(source)
         # These patterns indicate DocumentFragment building
         self.assertNotIn(
-            "frag.appendChild", func_body,
-            "buildTimingText must not use frag.appendChild (Issue #198)"
+            "frag.appendChild",
+            func_body,
+            "buildTimingText must not use frag.appendChild (Issue #198)",
         )
 
     def test_returns_string_or_null_no_weemeta(self):
@@ -239,8 +243,9 @@ class TestBuildTimingTextNoDocumentFragment(unittest.TestCase):
         # Check that the callers use innerHTML (string-based) approach
         timing_inner_html = re.findall(r"timingDiv\.innerHTML\s*=", source)
         self.assertGreaterEqual(
-            len(timing_inner_html), 2,
-            "Expected timingDiv.innerHTML assignments for timing divs"
+            len(timing_inner_html),
+            2,
+            "Expected timingDiv.innerHTML assignments for timing divs",
         )
 
 
