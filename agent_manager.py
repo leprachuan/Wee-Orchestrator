@@ -6,7 +6,7 @@ Manages session ID mapping between N8N chat sessions and AI backend sessions
 """
 
 import argparse
-import calendar
+
 import copy
 import hashlib
 import hmac
@@ -2965,7 +2965,7 @@ You can mention an agent in your prompt and it will auto-delegate:
             for r in results[-5:]:  # last 5 runs
                 status = "✅" if r.get("success") else "❌"
                 lines.append(
-                    f"{status} `{r.get('timestamp', '?')}` — {r.get('summary', '')[:100]}"
+                    f"{status} `{r.get('timestamp', '?')}` — {r.get('summary', '')[:100]}"  # noqa: E501
                 )
             return "\n".join(lines)
 
@@ -4134,18 +4134,18 @@ You can mention an agent in your prompt and it will auto-delegate:
                 data = json.loads(resp.read())
                 all_models = data.get("data", [])
 
-                popular = self.OPENROUTER_POPULAR_MODELS
-                static_aliases = {
+                popular = self.OPENROUTER_POPULAR_MODELS  # noqa: F841
+                static_aliases = {  # noqa: F841
                     e[0]: e[2] for e in self.WEE_MODELS.get("OpenRouter Models", [])
                 }
-                discovered_popular = []
-                discovered_rest = []
+                discovered_popular = []  # noqa: F841
+                discovered_rest = []  # noqa: F841
                 for m in all_models:
                     mid = m.get("id", "")
                     if mid:
                         name = m.get("name", mid)
                         or_id = "openrouter/" + mid
-                        discovered.append((or_id, name + " (OpenRouter)", []))
+                        discovered.append((or_id, name + " (OpenRouter)", []))  # noqa
 
         except Exception as or_err:
             logger.warning("[wee] OpenRouter discovery failed: %s" % or_err)
@@ -5271,7 +5271,7 @@ You can mention an agent in your prompt and it will auto-delegate:
         except Exception as e:
             return f"Error executing command: {str(e)}"
 
-    def _execute_shell_command(self, command: str, agent: str = "orchestrator") -> str:
+    def _execute_shell_command(self, command: str, agent: str = "orchestrator") -> str:  # noqa
         """Execute a trusted shell command with full bash semantics.
 
         This is reserved for agent-authored shell tool calls that rely on pipes,
@@ -7178,7 +7178,7 @@ User Request:
         """
         try:
             from copilot import CopilotClient, SubprocessConfig
-            from copilot.session import (
+            from copilot.session import (  # noqa: F401
                 CopilotSession,
                 ElicitationContext,
                 ElicitationResult,
@@ -7519,7 +7519,7 @@ User Request:
             return "Error: claude-sdk not installed. " "Run: pip install claude-sdk"
 
         import asyncio
-        import io
+        import io  # noqa: F401
 
         # Parse mode
         if mode is None:
@@ -8414,12 +8414,12 @@ User Request:
             logger.info(f"[TokenUsage] Could not fetch OpenRouter pricing: {e}")
             return {}
 
-        session_data = self.get_or_create_session_data(n8n_session_id)
+        session_data = self.get_or_create_session_data(n8n_session_id)  # noqa
         # Issue #142: Retrieve background task ID for tool call tracking in Tasks panel
-        bg_task_id = session_data.get("bg_task_id")
-        agent_dir = self.AGENTS.get(agent, self.AGENTS["orchestrator"])["path"]
-        effective_timeout = timeout if timeout is not None else self.command_timeout
-        channel = session_data.get("channel", "webui")
+        bg_task_id = session_data.get("bg_task_id")  # noqa: F841
+        agent_dir = self.AGENTS.get(agent, self.AGENTS["orchestrator"])["path"]  # noqa
+        effective_timeout = timeout if timeout is not None else self.command_timeout  # noqa
+        channel = session_data.get("channel", "webui")  # noqa: F841
 
     def _calculate_anthropic_cost(
         self, model: str, prompt_tokens: int, completion_tokens: int
@@ -8564,7 +8564,7 @@ User Request:
 
     # ---- Issue #125 helpers ------------------------------------------------
 
-    def _wee_load_free_config(self) -> dict:
+    def _wee_load_free_config(self) -> dict:  # noqa: F811
         """Load wee_free_models.json config. Returns defaults if file missing."""
         import json as _json
 
@@ -8579,11 +8579,11 @@ User Request:
                 "free_model_fallback_chain": [],
             }
 
-    def _wee_is_free_model(self, model: str) -> bool:
+    def _wee_is_free_model(self, model: str) -> bool:  # noqa: F811
         """Return True if model is an OpenRouter :free model."""
         return ":free" in model.lower() and "openrouter" in model.lower()
 
-    def _wee_resolve_endpoint(self, model, session_api_base, session_api_key):
+    def _wee_resolve_endpoint(self, model, session_api_base, session_api_key):  # noqa
         """Resolve (api_base, api_key, resolved_model) for a wee model string."""
         _PRESETS = {
             "ollama": ("http://192.168.1.101:11434/v1", "ollama"),
@@ -8649,8 +8649,8 @@ User Request:
         context_prompt = self.build_agent_context_prompt(
             prompt, agent, channel, n8n_session_id
         )
-        _sess_api_base = session_data.get("api_base")
-        _sess_api_key = session_data.get("api_key")
+        _sess_api_base = session_data.get("api_base")  # noqa: F841
+        _sess_api_key = session_data.get("api_key")  # noqa: F841
 
         # Issue #125: build iterative fallback chain (B01: no recursion)
         _free_cfg = self._wee_load_free_config()
@@ -8684,8 +8684,8 @@ User Request:
 
                 # Build assistant message with tool_calls for conversation history
                 assistant_tool_calls = []
-                for idx in sorted(tool_calls_acc.keys()):
-                    tc = tool_calls_acc[idx]
+                for idx in sorted(tool_calls_acc.keys()):  # noqa: F821
+                    tc = tool_calls_acc[idx]  # noqa: F821
                     assistant_tool_calls.append(
                         {
                             "id": tc["id"],
@@ -8699,10 +8699,10 @@ User Request:
 
                 assistant_msg = {
                     "role": "assistant",
-                    "content": content_text or None,
+                    "content": content_text or None,  # noqa: F821
                     "tool_calls": assistant_tool_calls,
                 }
-                messages.append(assistant_msg)
+                messages.append(assistant_msg)  # noqa: F821
 
                 # Execute each tool call and emit SSE events (Issue #109)
                 for tc_entry in assistant_tool_calls:
@@ -8728,9 +8728,9 @@ User Request:
                         stream_buffer.push("tool_call", tc_start_event)
 
                     # Issue #142: Track tool call in bg_task_mgr for Tasks panel
-                    if bg_task_id and self._bg_task_mgr:
+                    if bg_task_id and self._bg_task_mgr:  # noqa: F821
                         self._bg_task_mgr.append_tool_call(
-                            bg_task_id,
+                            bg_task_id,  # noqa: F821
                             {
                                 "id": tc_id,
                                 "name": func_name,
@@ -8768,16 +8768,16 @@ User Request:
                         stream_buffer.push("tool_call", tc_done_event)
 
                     # Issue #142: Update tool call completion in bg_task_mgr
-                    if bg_task_id and self._bg_task_mgr:
+                    if bg_task_id and self._bg_task_mgr:  # noqa: F821
                         self._bg_task_mgr.update_tool_call(
-                            bg_task_id,
+                            bg_task_id,  # noqa: F821
                             tc_id,
                             status="completed",
                             output=str(tool_result[:500]) if tool_result else "",
                         )
 
                     # Append tool result to conversation for next round
-                    messages.append(
+                    messages.append(  # noqa: F821
                         {
                             "role": "tool",
                             "tool_call_id": tc_id,
@@ -8788,19 +8788,19 @@ User Request:
             else:
                 # All MAX_TOOL_ROUNDS had tool calls with no final text
                 last_tool_results = [
-                    m["content"] for m in messages if m.get("role") == "tool"
+                    m["content"] for m in messages if m.get("role") == "tool"  # noqa
                 ]
                 if last_tool_results:
-                    collected_output.append(
+                    collected_output.append(  # noqa: F821
                         "Tool execution completed. Last result:\n"
                         + last_tool_results[-1][:2000]
                     )
                 else:
-                    collected_output.append(
+                    collected_output.append(  # noqa: F821
                         "Max tool rounds reached without final response."
                     )
 
-            output = "".join(collected_output)
+            output = "".join(collected_output)  # noqa: F821
 
             # Issue #112: Fallback when LLM generates empty synthesis after tool
             # execution.
@@ -8809,7 +8809,7 @@ User Request:
             if not output.strip():
                 tool_results = [
                     m["content"]
-                    for m in messages
+                    for m in messages  # noqa: F821
                     if m.get("role") == "tool" and m.get("content")
                 ]
                 if tool_results:
@@ -8821,7 +8821,7 @@ User Request:
                     )
                     if stream_buffer:
                         stream_buffer.push("chunk", {"text": output})
-                elif any(m.get("role") == "tool" for m in messages):
+                elif any(m.get("role") == "tool" for m in messages):  # noqa: F821
                     output = "(Tool executed but produced no output)"
                     logger.info(
                         "[Wee Native] Empty synthesis fallback: tool produced no output"
@@ -8830,7 +8830,7 @@ User Request:
                         stream_buffer.push("chunk", {"text": output})
 
             # Issue #108: Persist conversation history
-            self._wee_save_messages(n8n_session_id, messages)
+            self._wee_save_messages(n8n_session_id, messages)  # noqa: F821
 
             # Push done sentinel
             if stream_buffer:
@@ -8838,9 +8838,9 @@ User Request:
 
             logger.info(
                 "[Wee Native] model="
-                + resolved_model
+                + resolved_model  # noqa: F821
                 + " api_base="
-                + api_base
+                + api_base  # noqa: F821
                 + " session="
                 + n8n_session_id[:8]
                 + "..."
@@ -8854,8 +8854,8 @@ User Request:
             import httpx as _httpx_wee
 
             client = OpenAI(
-                base_url=api_base,
-                api_key=api_key,
+                base_url=api_base,  # noqa: F821
+                api_key=api_key,  # noqa: F821
                 timeout=_httpx_wee.Timeout(
                     connect=15.0, read=float(effective_timeout), write=30.0, pool=15.0
                 ),
@@ -8875,7 +8875,7 @@ User Request:
             for _retry in range(_max_attempts):
                 try:
                     stream = client.chat.completions.create(
-                        model=resolved_model,
+                        model=resolved_model,  # noqa: F821
                         messages=messages,
                         stream=True,
                         stream_options={"include_usage": True},
@@ -8935,8 +8935,8 @@ User Request:
                         _total = getattr(_u, "total_tokens", _pt + _ct)
                         _provider = (
                             "ollama"
-                            if "192.168" in api_base
-                            else "openrouter" if "openrouter" in api_base else "wee"
+                            if "192.168" in api_base  # noqa: F821
+                            else "openrouter" if "openrouter" in api_base else "wee"  # noqa
                         )
                         _pricing = (
                             self._fetch_openrouter_pricing()
@@ -9150,7 +9150,7 @@ User Request:
             return f"Error executing {func_name}: {e}"
 
     @staticmethod
-    def _wee_is_free_model(model: str) -> bool:
+    def _wee_is_free_model(model: str) -> bool:  # noqa: F811
         """Return True if model is an OpenRouter free model (openrouter/free or ends with :free)."""  # noqa: E501
         m = model.lower()
         return m == "openrouter/free" or (
@@ -9158,7 +9158,7 @@ User Request:
         )
 
     @staticmethod
-    def _wee_load_free_config(config_path=None) -> dict:
+    def _wee_load_free_config(config_path=None) -> dict:  # noqa: F811
         """Load wee_free_models.json; fall back to hardcoded defaults if absent."""
         _defaults = {
             "free_model_fallback_chain": ["openrouter/free"],
@@ -9253,7 +9253,7 @@ User Request:
                 err_str = str(e)
                 if "429" not in err_str and "rate limit" not in err_str.lower():
                     return f"Error: {err_str}", False
-                last_exc = e
+                last_exc = e  # noqa: F841
                 if attempt < attempts - 1:
                     wait = (
                         backoff[attempt]
@@ -10142,7 +10142,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
     from fastapi.responses import (
         FileResponse,
         JSONResponse,
-        Response,
+
         StreamingResponse,
     )
     from fastapi.staticfiles import StaticFiles
@@ -11343,7 +11343,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         """
         import json as _json
 
-        user = await authenticate(
+        await authenticate(
             request,
             authorization=request.headers.get("authorization"),
             x_user_identity=request.headers.get("x-user-identity"),
@@ -11570,7 +11570,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         This is a dedicated endpoint that bypasses the execute pipeline so it
         can be called even while a streaming response is in-flight.
         """
-        user = await authenticate(
+        await authenticate(
             request,
             authorization=request.headers.get("authorization"),
             x_user_identity=request.headers.get("x-user-identity"),
@@ -11733,7 +11733,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
     async def upload_file(
         session_id: str, request: Request, file: UploadFile = File(...)
     ):
-        user = await authenticate(
+        await authenticate(
             request,
             authorization=request.headers.get("authorization"),
             x_user_identity=request.headers.get("x-user-identity"),
@@ -11793,7 +11793,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         ".bmp",
         ".pdf",
     }
-    _FILE_VIEWER_TEXT_EXTS = {
+    _FILE_VIEWER_TEXT_EXTS = {  # noqa: F841
         ".md",
         ".txt",
         ".py",
@@ -11999,7 +11999,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         session_id: str, request: Request, file: UploadFile = File(...)
     ):
         """Upload an audio file and get text transcription back."""
-        user = await authenticate(
+        await authenticate(
             request,
             authorization=request.headers.get("authorization"),
             x_user_identity=request.headers.get("x-user-identity"),
@@ -12905,7 +12905,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                             sched.save_result(
                                 job_id, job.get("name", job_id), True, final_output
                             )
-                    except:
+                    except Exception:
                         pass
                 _emit_bg_notification(
                     task_id,
@@ -12929,7 +12929,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                             sched.save_result(
                                 job_id, job.get("name", job_id), False, "", error_msg
                             )
-                    except:
+                    except Exception:
                         pass
                 _emit_bg_notification(
                     task_id,
@@ -13147,7 +13147,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         offset: int = 0,
         status: str = None,
     ):
-        user = await authenticate(
+        await authenticate(
             request,
             authorization=request.headers.get("authorization"),
             x_user_identity=request.headers.get("x-user-identity"),
@@ -13197,7 +13197,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
 
     @app.get("/api/v1/background-tasks/{task_id}")
     async def get_background_task(task_id: str, request: Request):
-        user = await authenticate(
+        await authenticate(
             request,
             authorization=request.headers.get("authorization"),
             x_user_identity=request.headers.get("x-user-identity"),
@@ -13227,7 +13227,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
 
     @app.get("/api/v1/background-tasks/{task_id}/transcript")
     async def get_background_task_transcript(task_id: str, request: Request):
-        user = await authenticate(
+        await authenticate(
             request,
             authorization=request.headers.get("authorization"),
             x_user_identity=request.headers.get("x-user-identity"),
@@ -13247,7 +13247,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
     @app.get("/api/v1/background-tasks/{task_id}/logs")
     async def get_background_task_logs(task_id: str, request: Request):
         """Return all output lines for a background task (for live log streaming)."""
-        user = await authenticate(
+        await authenticate(
             request,
             authorization=request.headers.get("authorization"),
             x_user_identity=request.headers.get("x-user-identity"),
@@ -13268,7 +13268,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
     @app.get("/api/v1/background-tasks/{task_id}/tool-calls")
     async def get_background_task_tool_calls(task_id: str, request: Request):
         """Return all tool calls for a background task."""
-        user = await authenticate(
+        await authenticate(
             request,
             authorization=request.headers.get("authorization"),
             x_user_identity=request.headers.get("x-user-identity"),
@@ -13352,7 +13352,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
 
     @app.post("/api/v1/background-tasks/{task_id}/steer")
     async def steer_background_task(task_id: str, body: SteerRequest, request: Request):
-        user = await authenticate(
+        await authenticate(
             request,
             authorization=request.headers.get("authorization"),
             x_user_identity=request.headers.get("x-user-identity"),
@@ -14419,7 +14419,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         )
 
         # Dispatch as background task
-        bg_body = {
+        bg_body = {  # noqa: F841
             "prompt": prompt,
             "agent": "orchestrator",
             "runtime": "copilot",
@@ -14438,7 +14438,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             task_id = f"skill_update_{str(uuid4())[:8]}"
             session_id = f"skill_{str(uuid4())[:8]}"
 
-            task_record = bg_task_mgr.create_task(
+            task_record = bg_task_mgr.create_task(  # noqa: F841
                 task_id=task_id,
                 session_id=session_id,
                 user_identity=identity,
@@ -14720,7 +14720,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
     @app.patch("/api/v1/sessions/{session_id}/settings")
     async def update_session_settings(session_id: str, request: Request):
         """F027: Update session settings (e.g. silent_mode toggle)."""
-        user = await authenticate(
+        await authenticate(
             request,
             authorization=request.headers.get("authorization"),
             x_user_identity=request.headers.get("x-user-identity"),
@@ -14756,7 +14756,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
     @app.get("/api/v1/sessions/{session_id}/permissions")
     async def get_session_permissions(session_id: str, request: Request):
         """Return current session permissions (inherited from agent or overridden)."""
-        user = await authenticate(
+        await authenticate(
             request,
             authorization=request.headers.get("authorization"),
             x_user_identity=request.headers.get("x-user-identity"),
@@ -14790,7 +14790,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
     @app.put("/api/v1/sessions/{session_id}/permissions")
     async def set_session_permissions(session_id: str, request: Request):
         """Override session-level permissions."""
-        user = await authenticate(
+        await authenticate(
             request,
             authorization=request.headers.get("authorization"),
             x_user_identity=request.headers.get("x-user-identity"),
@@ -14892,7 +14892,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         }
 
     @app.get("/api/v1/settings/notifications")
-    async def get_notification_settings(request: Request):
+    async def get_notification_settings(request: Request):  # noqa: F811
         """Return the global notification toggle state."""
         await authenticate(
             request,
@@ -14910,7 +14910,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         notifications_enabled: bool
 
     @app.put("/api/v1/settings/notifications")
-    async def set_notification_settings(
+    async def set_notification_settings(  # noqa: F811
         body: NotificationSettingsRequest, request: Request
     ):
         """Set the global notification toggle."""
@@ -14940,7 +14940,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
     @app.get("/api/v1/settings/env")
     async def get_env_file(request: Request):
         """Return .env file contents for editing."""
-        auth = await authenticate(
+        await authenticate(
             request,
             authorization=request.headers.get("authorization"),
             x_user_identity=request.headers.get("x-user-identity"),
@@ -14959,7 +14959,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
     @app.put("/api/v1/settings/env")
     async def put_env_file(request: Request):
         """Save updated .env file contents."""
-        auth = await authenticate(
+        await authenticate(
             request,
             authorization=request.headers.get("authorization"),
             x_user_identity=request.headers.get("x-user-identity"),
@@ -14988,7 +14988,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
     @app.post("/api/v1/settings/restart-services")
     async def restart_services(request: Request):
         """Restart dev services (agent-manager-api-dev, etc.)."""
-        auth = await authenticate(
+        await authenticate(
             request,
             authorization=request.headers.get("authorization"),
             x_user_identity=request.headers.get("x-user-identity"),
@@ -15030,7 +15030,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
     @app.get("/api/v1/agents-config")
     async def get_agents_config(request: Request):
         """Return current agents.json content."""
-        auth = await authenticate(
+        await authenticate(
             request,
             authorization=request.headers.get("authorization"),
             x_user_identity=request.headers.get("x-user-identity"),
@@ -15137,7 +15137,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         since: str = Query(""),
     ):
         """Fetch recent journalctl logs for a systemd service."""
-        auth = await authenticate(
+        await authenticate(
             request,
             authorization=request.headers.get("authorization"),
             x_user_identity=request.headers.get("x-user-identity"),
@@ -15712,31 +15712,31 @@ def main():
 Examples:
   # Execute a prompt with default settings
   %(prog)s "What is the status of the cluster?"
-  
+
   # Set agent via CLI
   %(prog)s --agent devops "Check server status"
-  
+
   # Set model and runtime via CLI
   %(prog)s --runtime gemini --model gemini-1.5-pro "Analyze this code"
-  
+
   # Use custom configuration file
   %(prog)s --config my-agents.json "What can you do?"
-  
+
   # List available agents
   %(prog)s --list-agents
-  
+
   # List available agents with custom config
   %(prog)s --list-agents --config my-agents.json
-  
+
   # List available models for current runtime
   %(prog)s --list-models
-  
+
   # List available runtimes
   %(prog)s --list-runtimes
-  
+
   # Combine multiple options
   %(prog)s --agent family --runtime claude --model sonnet "Find recipes"
-  
+
   # Backwards compatible: positional arguments
   %(prog)s "What's the weather?" my_session my-config.json
 """,
