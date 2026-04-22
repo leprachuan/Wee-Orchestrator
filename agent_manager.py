@@ -12930,8 +12930,16 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         # Load agent dispatch_config as 2nd-tier fallback (Issue #193):
         #   body > dispatch_config > session defaults > global defaults
         _dispatch_config = session_mgr.AGENTS.get(agent, {}).get("dispatch_config", {})
-        runtime = body.runtime or _dispatch_config.get("runtime") or defaults.get("runtime", get_default_runtime())
-        model = body.model or _dispatch_config.get("model") or defaults.get("model", get_default_model())
+        runtime = (
+            body.runtime
+            or _dispatch_config.get("runtime")
+            or defaults.get("runtime", get_default_runtime())
+        )
+        model = (
+            body.model
+            or _dispatch_config.get("model")
+            or defaults.get("model", get_default_model())
+        )
 
         task_id = f"bg_{str(uuid4())[:8]}"
         session_id = str(uuid4())  # Must be valid UUID format for Copilot CLI
@@ -12963,7 +12971,8 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         effective_prompt = body.prompt
 
         # Resolve permission mode early so queued/running responses both use same value.
-        # Priority: body.permission_mode > body.yolo > dispatch_config > "restricted" (Issue #193)
+        # Priority: body.permission_mode > body.yolo > dispatch_config >
+        # "restricted" (Issue #193)
         _dc_perm = (
             "elevated" if _dispatch_config.get("yolo")
             else _dispatch_config.get("permission_mode", "")
