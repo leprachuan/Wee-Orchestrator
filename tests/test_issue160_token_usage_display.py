@@ -507,7 +507,8 @@ class TestWebUIBuildTimingText(unittest.TestCase):
         func_match = re.search(pattern, source, re.DOTALL)
         self.assertIsNotNone(func_match, "buildTimingText function not found")
         func_body = func_match.group(0)
-        # title uses template literal ${tooltip} — tooltip is built from safe server fields
+        # title uses template literal ${tooltip} — tooltip is built
+        # from safe server fields
         self.assertIn("tooltip", func_body)
         self.assertIn("prompt_tokens", func_body)
         self.assertIn("completion_tokens", func_body)

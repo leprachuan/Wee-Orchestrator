@@ -4,11 +4,9 @@ Regression tests ensuring buildTimingText always returns string|null,
 never a DocumentFragment.
 """
 
-import json
 import os
 import re
 import subprocess
-import sys
 import textwrap
 import unittest
 
@@ -82,11 +80,15 @@ class TestBuildTimingTextNoDocumentFragment(unittest.TestCase):
             ];
             results.forEach(([val, t]) => {{
                 if (val !== null && t !== 'string') {{
-                    throw new Error('Expected string or null, got ' + t + ': ' + String(val));
+                    throw new Error(
+                        'Expected string or null, got ' + t +
+                        ': ' + String(val));
                 }}
                 // Detect DocumentFragment coercion
                 if (String(val) === '[object DocumentFragment]') {{
-                    throw new Error('Got [object DocumentFragment] for val: ' + String(val));
+                    throw new Error(
+                        'Got [object DocumentFragment] for val: ' +
+                        String(val));
                 }}
             }});
             console.log('OK: ' + JSON.stringify(results.map(([v]) => v)));
@@ -109,11 +111,16 @@ class TestBuildTimingTextNoDocumentFragment(unittest.TestCase):
             const r1 = buildTimingText(2.5, weeMeta);
             const r2 = buildTimingText(null, weeMeta);
 
-            if (typeof r1 !== 'string') throw new Error('Expected string, got: ' + typeof r1 + ' => ' + String(r1));
-            if (typeof r2 !== 'string') throw new Error('Expected string, got: ' + typeof r2 + ' => ' + String(r2));
-            if (String(r1) === '[object DocumentFragment]') throw new Error('Got DocumentFragment');
-            if (String(r2) === '[object DocumentFragment]') throw new Error('Got DocumentFragment');
-            if (!r1.includes('copilot request')) throw new Error('Missing copilot request in: ' + r1);
+            if (typeof r1 !== 'string') throw new Error(
+                'Expected string, got: ' + typeof r1 + ' => ' + String(r1));
+            if (typeof r2 !== 'string') throw new Error(
+                'Expected string, got: ' + typeof r2 + ' => ' + String(r2));
+            if (String(r1) === '[object DocumentFragment]') throw new Error(
+                'Got DocumentFragment');
+            if (String(r2) === '[object DocumentFragment]') throw new Error(
+                'Got DocumentFragment');
+            if (!r1.includes('copilot request')) throw new Error(
+                'Missing copilot request in: ' + r1);
             if (!r1.includes('2.5')) throw new Error('Missing timing in: ' + r1);
             console.log('OK: r1=' + r1 + ' r2=' + r2);
         """)
@@ -129,11 +136,16 @@ class TestBuildTimingTextNoDocumentFragment(unittest.TestCase):
         js = textwrap.dedent(f"""
             {func_body}
 
-            const weeMeta = {{ tokens: 1200, prompt_tokens: 800, completion_tokens: 400 }};
+            const weeMeta = {{
+                tokens: 1200, prompt_tokens: 800,
+                completion_tokens: 400,
+            }};
             const r = buildTimingText(2.5, weeMeta);
 
-            if (typeof r !== 'string') throw new Error('Expected string, got: ' + typeof r + ' => ' + String(r));
-            if (String(r) === '[object DocumentFragment]') throw new Error('Got DocumentFragment');
+            if (typeof r !== 'string') throw new Error(
+                'Expected string, got: ' + typeof r + ' => ' + String(r));
+            if (String(r) === '[object DocumentFragment]') throw new Error(
+                'Got DocumentFragment');
             if (!r.includes('1,200')) throw new Error('Missing token count in: ' + r);
             console.log('OK: ' + r);
         """)
@@ -151,7 +163,8 @@ class TestBuildTimingTextNoDocumentFragment(unittest.TestCase):
             {func_body}
 
             const r = buildTimingText(null, null);
-            if (r !== null) throw new Error('Expected null, got: ' + typeof r + ' => ' + String(r));
+            if (r !== null) throw new Error(
+                'Expected null, got: ' + typeof r + ' => ' + String(r));
             console.log('OK: null');
         """)
         out, err, rc = _run_node(js)
@@ -169,8 +182,10 @@ class TestBuildTimingTextNoDocumentFragment(unittest.TestCase):
             const weeMeta = {{ runtime: 'wee', cost_label: 'copilot' }};
             const r = buildTimingText(3.0, weeMeta);
 
-            if (typeof r !== 'string') throw new Error('Expected string, got: ' + typeof r + ' => ' + String(r));
-            if (String(r) === '[object DocumentFragment]') throw new Error('Got DocumentFragment');
+            if (typeof r !== 'string') throw new Error(
+                'Expected string, got: ' + typeof r + ' => ' + String(r));
+            if (String(r) === '[object DocumentFragment]') throw new Error(
+                'Got DocumentFragment');
             console.log('OK: ' + r);
         """)
         out, err, rc = _run_node(js)
@@ -188,8 +203,10 @@ class TestBuildTimingTextNoDocumentFragment(unittest.TestCase):
             const weeMeta = {{ runtime: 'wee', cost_label: '' }};
             const r = buildTimingText(1.8, weeMeta);
 
-            if (typeof r !== 'string') throw new Error('Expected string, got: ' + typeof r + ' => ' + String(r));
-            if (String(r) === '[object DocumentFragment]') throw new Error('Got DocumentFragment');
+            if (typeof r !== 'string') throw new Error(
+                'Expected string, got: ' + typeof r + ' => ' + String(r));
+            if (String(r) === '[object DocumentFragment]') throw new Error(
+                'Got DocumentFragment');
             if (!r.includes('1.8')) throw new Error('Missing timing in: ' + String(r));
             console.log('OK: ' + r);
         """)
@@ -208,7 +225,8 @@ class TestBuildTimingTextNoDocumentFragment(unittest.TestCase):
             const weeMeta = {{ runtime: 'wee', cost_label: '' }};
             const r = buildTimingText(null, weeMeta);
 
-            if (r !== null) throw new Error('Expected null, got: ' + typeof r + ' => ' + String(r));
+            if (r !== null) throw new Error(
+                'Expected null, got: ' + typeof r + ' => ' + String(r));
             console.log('OK: null');
         """)
         out, err, rc = _run_node(js)
@@ -256,8 +274,10 @@ class TestBuildTimingTextOutputFormat(unittest.TestCase):
                 completion_tokens: 200,
             }};
             const r = buildTimingText(1.0, weeMeta);
-            if (!r.includes('Input:')) throw new Error('Missing Input: in tooltip: ' + r);
-            if (!r.includes('Output:')) throw new Error('Missing Output: in tooltip: ' + r);
+            if (!r.includes('Input:')) throw new Error(
+                'Missing Input: in tooltip: ' + r);
+            if (!r.includes('Output:')) throw new Error(
+                'Missing Output: in tooltip: ' + r);
             console.log('OK: ' + r.substring(0, 100));
         """)
         out, err, rc = _run_node(js)
