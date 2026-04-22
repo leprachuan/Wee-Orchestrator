@@ -3097,8 +3097,16 @@ You can mention an agent in your prompt and it will auto-delegate:
         bg_prompt = " ".join(bg_prompt_parts)
         # Apply dispatch_config as 2nd-tier fallback, then session defaults (Issue #193)
         _bg_dispatch_cfg = self.AGENTS.get(bg_agent, {}).get("dispatch_config", {})
-        bg_runtime = bg_runtime or _bg_dispatch_cfg.get("runtime") or session_data.get("runtime", "copilot")
-        bg_model = bg_model or _bg_dispatch_cfg.get("model") or session_data.get("model", "gpt-5-mini")
+        bg_runtime = (
+            bg_runtime
+            or _bg_dispatch_cfg.get("runtime")
+            or session_data.get("runtime", "copilot")
+        )
+        bg_model = (
+            bg_model
+            or _bg_dispatch_cfg.get("model")
+            or session_data.get("model", "gpt-5-mini")
+        )
 
         if not bg_prompt:
             return "❌ No prompt provided. Usage: `/background <prompt>`"
@@ -3109,7 +3117,7 @@ You can mention an agent in your prompt and it will auto-delegate:
         bg_timeout = (
             bg_timeout_override
             if bg_timeout_override is not None
-            else get_bg_command_timeout()
+            else (_bg_dispatch_cfg.get("timeout") or get_bg_command_timeout())
         )
         task_id = f"bg_{str(uuid4())[:8]}"
         bg_session_id = f"bg_{str(uuid4())[:8]}"
@@ -3266,6 +3274,7 @@ You can mention an agent in your prompt and it will auto-delegate:
                         "max_concurrent": agent.get("max_concurrent", 1),
                         "runtime": agent.get("runtime", "copilot"),
                         "model": agent.get("model", ""),
+                        "dispatch_config": agent.get("dispatch_config", {}),
                     }
                 return agents
         except json.JSONDecodeError as e:
@@ -3316,6 +3325,7 @@ You can mention an agent in your prompt and it will auto-delegate:
                 "max_concurrent": agent.get("max_concurrent", 1),
                 "runtime": agent.get("runtime", "copilot"),
                 "model": agent.get("model", ""),
+                "dispatch_config": agent.get("dispatch_config", {}),
             }
 
         if not fresh and self.AGENTS:

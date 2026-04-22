@@ -1,247 +1,358 @@
-"""Regression tests for Issue #193: Background task API ignores agent dispatch_config.
+"""Regression tests for Issue #193.
 
 Tests verify:
-1. BackgroundTaskRequest includes a yolo field
-2. dispatch_config.runtime/model are used when body fields are not set
-3. dispatch_config.permission_mode/yolo map to correct perm_mode
-4. dispatch_config.timeout is used when body.timeout is not set
-5. Explicit body values override dispatch_config (priority order correct)
-6. /background slash command handler applies dispatch_config fallback
+1. AGENTS dict preserves dispatch_config when loading agents.json
+2. reload_agents_from_disk also preserves dispatch_config
+3. dispatch_config.runtime/model/timeout used when body fields are empty
+4. Explicit body values override dispatch_config (priority order correct)
+5. /background slash command handler applies dispatch_config fallback
 """
 
-import re
+import json
+import os
 import sys
+import tempfile
 import unittest
+from pathlib import Path
+from unittest.mock import MagicMock, patch
 
 sys.path.insert(0, "/opt/n8n-copilot-shim-dev")
+os.environ.setdefault("API_SHARED_KEY", "test_key_123")
+os.environ.setdefault("APP_ENV", "DEV")
 
-SOURCE_PATH = "/opt/n8n-copilot-shim-dev/agent_manager.py"
+from agent_manager import SessionManager  # noqa: E402
+
+AGENTS_WITH_DISPATCH = {
+    "agents": [
+        {
+            "name": "wee-qa",
+            "description": "QA agent",
+            "path": "/opt/wee-qa",
+            "dispatch_config": {
+                "runtime": "openai",
+                "model": "gpt-5.4-mini",
+                "permission_mode": "elevated",
+                "yolo": True,
+                "timeout": 1800,
+            },
+        },
+        {
+            "name": "plain-agent",
+            "description": "Agent without dispatch_config",
+            "path": "/opt/plain",
+        },
+    ]
+}
 
 
-def _read_source():
-    with open(SOURCE_PATH, "r") as f:
-        return f.read()
+class TestDispatchConfigPreservedOnLoad(unittest.TestCase):
+    """Verify dispatch_config survives the agents.json → AGENTS dict journey."""
 
+    def setUp(self):
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.cfg_path = Path(self.temp_dir.name) / "agents.json"
+        with open(self.cfg_path, "w") as f:
+            json.dump(AGENTS_WITH_DISPATCH, f)
 
-class TestIssue193BackgroundTaskDispatchConfig(unittest.TestCase):
-    """Regression tests for Issue #193."""
+    def tearDown(self):
+        self.temp_dir.cleanup()
 
-    @classmethod
-    def setUpClass(cls):
-        cls.src = _read_source()
+    def test_load_agents_config_preserves_dispatch_config(self):
+        """_load_agents_config must keep dispatch_config in the AGENTS dict."""
+        mgr = SessionManager(str(self.cfg_path))
+        self.assertIn("wee-qa", mgr.AGENTS)
+        dc = mgr.AGENTS["wee-qa"].get("dispatch_config", {})
+        self.assertNotEqual(dc, {}, "dispatch_config must not be stripped on load")
+        self.assertEqual(dc.get("runtime"), "openai")
+        self.assertEqual(dc.get("model"), "gpt-5.4-mini")
+        self.assertEqual(dc.get("timeout"), 1800)
+        self.assertTrue(dc.get("yolo"))
 
-    # ── Test 1: BackgroundTaskRequest has yolo field ──────────────────────────
+    def test_load_agents_config_missing_dispatch_config_is_empty_dict(self):
+        """Agent without dispatch_config must have an empty dict, not KeyError."""
+        mgr = SessionManager(str(self.cfg_path))
+        self.assertIn("plain-agent", mgr.AGENTS)
+        dc = mgr.AGENTS["plain-agent"].get("dispatch_config", {})
+        self.assertEqual(dc, {})
 
-    def test_background_task_request_has_yolo_field(self):
-        """BackgroundTaskRequest must include a yolo: Optional[bool] field."""
-        # Find the class definition and check for yolo field
-        req_class_match = re.search(
-            r"class BackgroundTaskRequest\(BaseModel\):(.*?)(?=\n    \w|\n    #|\nclass|\ndef )",
-            self.src,
-            re.DOTALL,
+    def test_reload_agents_from_disk_preserves_dispatch_config(self):
+        """reload_agents_from_disk must also keep dispatch_config."""
+        mgr = SessionManager(str(self.cfg_path))
+        # Force a reload
+        ok, msg = mgr.reload_agents_from_disk()
+        self.assertTrue(ok, f"Reload failed: {msg}")
+        dc = mgr.AGENTS["wee-qa"].get("dispatch_config", {})
+        self.assertNotEqual(
+            dc, {}, "dispatch_config stripped by reload_agents_from_disk"
         )
-        self.assertIsNotNone(req_class_match, "BackgroundTaskRequest class not found")
-        class_body = req_class_match.group(1)
-        self.assertIn(
-            "yolo",
-            class_body,
-            "BackgroundTaskRequest must have a 'yolo' field",
-        )
+        self.assertEqual(dc.get("runtime"), "openai")
+        self.assertEqual(dc.get("timeout"), 1800)
 
-    def test_yolo_field_is_optional_bool(self):
-        """BackgroundTaskRequest.yolo must be Optional[bool] with None default."""
-        req_class_match = re.search(
-            r"class BackgroundTaskRequest\(BaseModel\):(.*?)@field_validator",
-            self.src,
-            re.DOTALL,
-        )
-        self.assertIsNotNone(req_class_match)
-        class_body = req_class_match.group(1)
-        self.assertIn(
-            "yolo: Optional[bool] = None",
-            class_body,
-            "yolo field must be 'Optional[bool] = None'",
-        )
+    def test_dispatch_config_lookup_succeeds_after_load(self):
+        """AGENTS.get(...).get('dispatch_config', {}) returns real values."""
+        mgr = SessionManager(str(self.cfg_path))
+        # Simulate what create_background_task does:
+        dc = mgr.AGENTS.get("wee-qa", {}).get("dispatch_config", {})
+        self.assertEqual(dc.get("runtime"), "openai")
+        self.assertEqual(dc.get("model"), "gpt-5.4-mini")
+        self.assertIsNotNone(dc.get("timeout"))
 
-    # ── Test 2: dispatch_config lookup exists in create_background_task ───────
 
-    def test_dispatch_config_lookup_in_create_bg_task(self):
-        """create_background_task must load agent dispatch_config from AGENTS."""
-        self.assertIn(
-            '_dispatch_config = session_mgr.AGENTS.get(agent, {}).get("dispatch_config", {})',
-            self.src,
-            "dispatch_config must be loaded from session_mgr.AGENTS in create_background_task",
-        )
+class TestSlashBgTimeoutUsesDispatchConfig(unittest.TestCase):
+    """Verify /background slash handler picks up dispatch_config.timeout."""
 
-    def test_runtime_falls_back_to_dispatch_config(self):
-        """runtime resolution must consult dispatch_config before session defaults."""
-        # The fix pattern: body.runtime or _dispatch_config.get("runtime") or defaults...
-        self.assertRegex(
-            self.src,
-            r'runtime\s*=\s*body\.runtime\s+or\s+_dispatch_config\.get\("runtime"\)',
-            "runtime must use dispatch_config as 2nd-tier fallback",
-        )
+    def setUp(self):
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.cfg_path = Path(self.temp_dir.name) / "agents.json"
+        with open(self.cfg_path, "w") as f:
+            json.dump(AGENTS_WITH_DISPATCH, f)
+        self.mgr = SessionManager(str(self.cfg_path))
 
-    def test_model_falls_back_to_dispatch_config(self):
-        """model resolution must consult dispatch_config before session defaults."""
-        self.assertRegex(
-            self.src,
-            r'model\s*=\s*body\.model\s+or\s+_dispatch_config\.get\("model"\)',
-            "model must use dispatch_config as 2nd-tier fallback",
-        )
+    def tearDown(self):
+        self.temp_dir.cleanup()
 
-    def test_timeout_falls_back_to_dispatch_config(self):
-        """bg_timeout must use dispatch_config.timeout before global default."""
-        self.assertIn(
-            '_dispatch_config.get("timeout")',
-            self.src,
-            "bg_timeout must fall back to dispatch_config.timeout",
-        )
+    def _make_fake_session(self, runtime="copilot", model="gpt-5-mini"):
+        return {
+            "runtime": runtime,
+            "model": model,
+            "channel": "webui",
+            "identity": "test_user",
+        }
 
-    # ── Test 3: perm_mode resolution logic ────────────────────────────────────
+    def test_slash_bg_timeout_comes_from_dispatch_config(self):
+        """When no timeout= override, /background uses dispatch_config.timeout."""
+        # Build the fake session data for the slash handler
+        session_data = self._make_fake_session()
+        captured = {}
 
-    def test_perm_mode_resolved_from_dispatch_config(self):
-        """perm_mode resolution must include dispatch_config fallback."""
-        self.assertIn(
-            '_dc_perm',
-            self.src,
-            "perm_mode resolution must use _dc_perm from dispatch_config",
-        )
-        self.assertIn(
-            '_dispatch_config.get("yolo")',
-            self.src,
-            "dispatch_config.yolo must be checked when resolving perm_mode",
-        )
-        self.assertIn(
-            '_dispatch_config.get("permission_mode", "")',
-            self.src,
-            "dispatch_config.permission_mode must be checked when resolving perm_mode",
-        )
+        def fake_create_task_checked(**kwargs):
+            captured.update(kwargs)
+            fake_task = MagicMock()
+            fake_task.task_id = "bg_test"
+            return fake_task, "running"
 
-    def test_body_yolo_true_elevates_perm_mode(self):
-        """body.yolo=True must resolve to perm_mode='elevated'."""
-        self.assertIn(
-            '"elevated" if body.yolo else None',
-            self.src,
-            "body.yolo=True must produce 'elevated' perm_mode",
-        )
+        self.mgr._bg_task_mgr = MagicMock()
+        self.mgr._bg_task_mgr.create_task_checked.side_effect = fake_create_task_checked
+        self.mgr._bg_identity = "test_user"
 
-    def test_perm_mode_computed_before_queued_response(self):
-        """perm_mode must be resolved before the queued early-return."""
-        # Search within create_background_task function scope only
-        fn_start = self.src.find("async def create_background_task(")
-        self.assertGreater(fn_start, 0, "create_background_task function not found")
-        fn_section = self.src[fn_start:fn_start + 10000]
-        perm_mode_idx = fn_section.find("# Resolve permission mode early")
-        create_task_idx = fn_section.find("bg_task_mgr.create_task_checked")
-        self.assertGreater(perm_mode_idx, 0, "perm_mode early resolution comment not found in create_background_task")
-        self.assertGreater(create_task_idx, 0, "create_task_checked call not found in create_background_task")
-        self.assertLess(
-            perm_mode_idx,
-            create_task_idx,
-            "perm_mode must be resolved BEFORE create_task_checked to be available in queued response",
-        )
+        with patch("concurrent.futures.ThreadPoolExecutor"):
+            result = self.mgr._slash_background(
+                "agent=wee-qa say hello",
+                session_data,
+                "test-session-id",
+            )
 
-    def test_queued_response_uses_perm_mode_variable(self):
-        """Queued response must use the resolved perm_mode variable (not body.permission_mode)."""
-        # The wrong pattern that this fixes:
-        self.assertNotIn(
-            '"permission_mode": body.permission_mode or "restricted"',
-            self.src,
-            "Queued response must NOT hardcode 'body.permission_mode or restricted'",
-        )
+        # Check that timeout came from dispatch_config (1800) not default (900)
+        # The timeout is passed positionally to _execute_background_task
+        # But we can check indirectly via the output message
+        self.assertIn("1800", result, "bg_timeout must be 1800 from dispatch_config")
 
-    # ── Test 4: /background slash command uses dispatch_config ────────────────
+    def test_slash_bg_explicit_timeout_overrides_dispatch_config(self):
+        """Explicit timeout= override wins over dispatch_config.timeout."""
+        session_data = self._make_fake_session()
 
-    def test_slash_bg_command_uses_dispatch_config(self):
-        """/background slash command must apply dispatch_config fallback."""
-        self.assertIn(
-            '_bg_dispatch_cfg = self.AGENTS.get(bg_agent, {}).get("dispatch_config", {})',
-            self.src,
-            "/background handler must look up dispatch_config for the target agent",
-        )
+        self.mgr._bg_task_mgr = MagicMock()
+        fake_task = MagicMock()
+        fake_task.task_id = "bg_test2"
+        self.mgr._bg_task_mgr.create_task_checked.return_value = (fake_task, "running")
+        self.mgr._bg_identity = "test_user"
 
-    def test_slash_bg_runtime_fallback_chain(self):
-        """In /background handler, runtime must use dispatch_config before session."""
-        self.assertIn(
-            'bg_runtime = bg_runtime or _bg_dispatch_cfg.get("runtime")',
-            self.src,
-            "/background handler must apply dispatch_config.runtime as fallback",
-        )
+        with patch("concurrent.futures.ThreadPoolExecutor"):
+            result = self.mgr._slash_background(
+                "agent=wee-qa timeout=300 say hello",
+                session_data,
+                "test-session-id",
+            )
 
-    def test_slash_bg_model_fallback_chain(self):
-        """In /background handler, model must use dispatch_config before session."""
-        self.assertIn(
-            'bg_model = bg_model or _bg_dispatch_cfg.get("model")',
-            self.src,
-            "/background handler must apply dispatch_config.model as fallback",
-        )
+        # Explicit timeout=300 must override dispatch_config 1800
+        self.assertIn("300", result)
+        self.assertNotIn("1800", result)
 
-    # ── Test 5: Priority order verification (logic unit tests) ────────────────
+    def test_slash_bg_runtime_comes_from_dispatch_config(self):
+        """When no runtime= override, /background uses dispatch_config.runtime."""
+        session_data = self._make_fake_session()
 
-    def _resolve(self, body_runtime, body_model, body_perm, body_yolo,
-                 dispatch_cfg, session_runtime="copilot", session_model="gpt-5-mini"):
+        self.mgr._bg_task_mgr = MagicMock()
+        fake_task = MagicMock()
+        fake_task.task_id = "bg_test3"
+        self.mgr._bg_task_mgr.create_task_checked.return_value = (fake_task, "running")
+        self.mgr._bg_identity = "test_user"
+
+        with patch("concurrent.futures.ThreadPoolExecutor"):
+            result = self.mgr._slash_background(
+                "agent=wee-qa say hello",
+                session_data,
+                "test-session-id",
+            )
+
+        # wee-qa dispatch_config.runtime = "openai"
+        self.assertIn("openai", result)
+
+
+class TestDispatchConfigPriorityResolution(unittest.TestCase):
+    """Unit tests for the priority resolution: body > dispatch_config > session."""
+
+    def _resolve(
+        self,
+        body_runtime,
+        body_model,
+        body_perm,
+        body_yolo,
+        dispatch_cfg,
+        session_runtime="copilot",
+        session_model="gpt-5-mini",
+    ):
         """Simulate the resolution logic from create_background_task."""
         runtime = body_runtime or dispatch_cfg.get("runtime") or session_runtime
         model = body_model or dispatch_cfg.get("model") or session_model
         _dc_perm = (
-            "elevated" if dispatch_cfg.get("yolo")
+            "elevated"
+            if dispatch_cfg.get("yolo")
             else dispatch_cfg.get("permission_mode", "")
         )
         perm_mode = (
-            body_perm
-            or ("elevated" if body_yolo else None)
-            or _dc_perm
-            or "restricted"
+            body_perm or ("elevated" if body_yolo else None) or _dc_perm or "restricted"
         )
         if perm_mode not in ("elevated", "restricted", "sandboxed"):
             perm_mode = "restricted"
         return runtime, model, perm_mode
 
     def test_body_overrides_all(self):
-        """Explicit body values must override dispatch_config and session defaults."""
+        """Explicit body values must override dispatch_config and session."""
         rt, mdl, pm = self._resolve(
-            "my-runtime", "my-model", "sandboxed", None,
-            {"runtime": "openai", "model": "gpt-5.4", "permission_mode": "elevated"},
-            "session-runtime", "session-model",
+            "my-runtime",
+            "my-model",
+            "sandboxed",
+            None,
+            {
+                "runtime": "openai",
+                "model": "gpt-5.4",
+                "permission_mode": "elevated",
+            },
+            "session-runtime",
+            "session-model",
         )
         self.assertEqual(rt, "my-runtime")
         self.assertEqual(mdl, "my-model")
         self.assertEqual(pm, "sandboxed")
 
     def test_dispatch_config_overrides_session_defaults(self):
-        """dispatch_config must override session defaults when body is empty."""
+        """dispatch_config beats session defaults when body is empty."""
         rt, mdl, pm = self._resolve(
-            None, None, None, None,
-            {"runtime": "openai", "model": "gpt-5.4", "permission_mode": "elevated"},
-            "session-runtime", "session-model",
+            None,
+            None,
+            None,
+            None,
+            {
+                "runtime": "openai",
+                "model": "gpt-5.4",
+                "permission_mode": "elevated",
+            },
+            "session-runtime",
+            "session-model",
         )
         self.assertEqual(rt, "openai")
         self.assertEqual(mdl, "gpt-5.4")
         self.assertEqual(pm, "elevated")
 
     def test_wee_qa_dispatch_config_scenario(self):
-        """Simulate the exact wee-qa dispatch scenario from the issue report."""
-        # wee-qa has: runtime="openai", model="gpt-5.4-mini", permission_mode (via yolo=True)
+        """Simulate exact wee-qa dispatch scenario from the issue report."""
         rt, mdl, pm = self._resolve(
-            None, None, None, None,
+            None,
+            None,
+            None,
+            None,
             {"runtime": "openai", "model": "gpt-5.4-mini", "yolo": True},
-            "copilot", "gpt-5-mini",
+            "copilot",
+            "gpt-5-mini",
         )
-        self.assertEqual(rt, "openai", "wee-qa should use openai runtime from dispatch_config")
-        self.assertEqual(mdl, "gpt-5.4-mini", "wee-qa should use gpt-5.4-mini from dispatch_config")
-        self.assertEqual(pm, "elevated", "wee-qa yolo=True should result in elevated perm_mode")
+        self.assertEqual(rt, "openai")
+        self.assertEqual(mdl, "gpt-5.4-mini")
+        self.assertEqual(pm, "elevated")
 
-    def test_session_defaults_used_when_dispatch_config_empty(self):
+    def test_session_defaults_when_dispatch_config_empty(self):
         """Session defaults apply when dispatch_config is empty."""
         rt, mdl, pm = self._resolve(
-            None, None, None, None,
-            {},
-            "copilot", "claude-haiku",
+            None, None, None, None, {}, "copilot", "claude-haiku"
         )
         self.assertEqual(rt, "copilot")
         self.assertEqual(mdl, "claude-haiku")
         self.assertEqual(pm, "restricted")
+
+    def test_body_yolo_true_elevates_perm_mode(self):
+        """body.yolo=True must resolve to elevated perm_mode."""
+        _, _, pm = self._resolve(None, None, None, True, {}, "copilot", "gpt-5-mini")
+        self.assertEqual(pm, "elevated")
+
+    def test_body_permission_mode_takes_highest_priority(self):
+        """Explicit body.permission_mode wins over all other sources."""
+        _, _, pm = self._resolve(
+            None,
+            None,
+            "sandboxed",
+            True,
+            {"permission_mode": "elevated", "yolo": True},
+        )
+        self.assertEqual(pm, "sandboxed")
+
+
+class TestBackgroundTaskRequestYoloField(unittest.TestCase):
+    """Verify the /api/v1/background-tasks endpoint accepts yolo field."""
+
+    @classmethod
+    def setUpClass(cls):
+        from fastapi.testclient import TestClient
+
+        import agent_manager as am
+
+        cls.app = am.create_api_app()
+        cls.client = TestClient(cls.app, raise_server_exceptions=False)
+        cls.headers = {"Authorization": "Bearer shared_test_key_123"}
+
+    def test_yolo_field_accepted_not_422(self):
+        """POST /api/v1/background-tasks must accept yolo field (no 422)."""
+        resp = self.client.post(
+            "/api/v1/background-tasks",
+            json={"prompt": "test", "agent": "wee-qa", "yolo": True},
+            headers=self.headers,
+        )
+        self.assertNotEqual(
+            resp.status_code,
+            422,
+            f"yolo field should be accepted, got 422: {resp.text[:200]}",
+        )
+
+    def test_yolo_false_accepted_not_422(self):
+        """POST /api/v1/background-tasks must accept yolo=false."""
+        resp = self.client.post(
+            "/api/v1/background-tasks",
+            json={"prompt": "test", "agent": "wee-qa", "yolo": False},
+            headers=self.headers,
+        )
+        self.assertNotEqual(resp.status_code, 422)
+
+    def test_yolo_omitted_accepted_not_422(self):
+        """POST /api/v1/background-tasks must accept requests without yolo."""
+        resp = self.client.post(
+            "/api/v1/background-tasks",
+            json={"prompt": "test", "agent": "wee-qa"},
+            headers=self.headers,
+        )
+        self.assertNotEqual(resp.status_code, 422)
+
+    def test_openapi_schema_has_yolo_property(self):
+        """OpenAPI schema for background-tasks must include yolo property."""
+        resp = self.client.get("/openapi.json")
+        self.assertEqual(resp.status_code, 200)
+        schema = resp.json()
+        schemas = schema.get("components", {}).get("schemas", {})
+        bg_req = schemas.get("BackgroundTaskRequest", {})
+        props = bg_req.get("properties", {})
+        self.assertIn(
+            "yolo",
+            props,
+            "BackgroundTaskRequest schema must include 'yolo' property",
+        )
 
 
 if __name__ == "__main__":
