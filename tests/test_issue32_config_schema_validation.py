@@ -528,7 +528,8 @@ class TestAgentManagerIntegration:
 
 
 class TestAgentManagerInvalidSchemaRejected:
-    """Regression: _load_agents_config must not load agents when schema validation fails.
+    """Regression: _load_agents_config must not load agents when schema
+    validation fails.
 
     Issue #32 Round 5 — max_concurrent="oops" was previously loaded silently.
     """
@@ -613,7 +614,9 @@ class TestAgentManagerInvalidSchemaRejected:
 
         result = mgr._load_agents_config(str(config_file))
 
-        assert "good-agent" in result, f"Valid config should load cleanly, got: {result!r}"
+        assert (
+            "good-agent" in result
+        ), f"Valid config should load cleanly, got: {result!r}"
         assert result["good-agent"]["max_concurrent"] == 2
 
 
@@ -645,7 +648,8 @@ class TestBaseConfigSchemaValidationSurfaced:
             FakeTelegramConfig(str(cfg_file))
 
     def test_webex_invalid_allowed_users_raises(self, tmp_path):
-        """_load_config raises ValidationError when webex allowed_users is not a list."""
+        """_load_config raises ValidationError when webex allowed_users is not
+        a list."""
         cfg_data = {"token": "webex-token", "allowed_users": "not-a-list"}
         cfg_file = tmp_path / "webex_config.json"
         cfg_file.write_text(json.dumps(cfg_data))
@@ -683,9 +687,9 @@ class TestBaseConfigSchemaValidationSurfaced:
             f"Expected an exception to propagate, but got config: {result!r}. "
             "Schema validation failure must not be silently swallowed."
         )
-        assert isinstance(caught_exc, ValidationError), (
-            f"Expected ValidationError, got {type(caught_exc).__name__}: {caught_exc}"
-        )
+        assert isinstance(
+            caught_exc, ValidationError
+        ), f"Expected ValidationError, got {type(caught_exc).__name__}: {caught_exc}"
 
     def test_json_parse_error_still_returns_defaults(self, tmp_path):
         """I/O errors and JSON parse errors still fall back to defaults (unchanged)."""
@@ -699,6 +703,6 @@ class TestBaseConfigSchemaValidationSurfaced:
                 return {"defaulted": True}
 
         instance = FakeTelegramConfig(str(cfg_file))
-        assert instance.config == {"defaulted": True}, (
-            "JSON parse errors should still fall back to _default_config()"
-        )
+        assert instance.config == {
+            "defaulted": True
+        }, "JSON parse errors should still fall back to _default_config()"

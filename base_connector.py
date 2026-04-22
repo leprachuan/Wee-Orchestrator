@@ -51,7 +51,8 @@ class BaseConfig:
                     validator(data)
             except ImportError:
                 pass
-            # ValidationError from validator() is not swallowed — it propagates to caller
+            # ValidationError from validator() is not swallowed —
+            # it propagates to caller
             return data
         return self._default_config()
 
