@@ -443,8 +443,16 @@ class BackgroundTaskManager:
         self._save(tasks)
 
     def _evict_oldest_terminal(self, tasks: list) -> list:
-        """Evict oldest completed/failed/killed tasks when store exceeds MAX_TOTAL_TASKS."""
-        if len(tasks) <= self.MAX_TOTAL_TASKS:
+        """Evict tasks to make room for one new task, enforcing the hard cap.
+
+        Called pre-append (trims to MAX_TOTAL_TASKS - 1) so the store never
+        exceeds MAX_TOTAL_TASKS after append.  Terminal tasks (completed /
+        failed / killed) are preferred eviction candidates.  When none are
+        available, the oldest queued task is evicted next; if the store is
+        still at capacity, the oldest running task is evicted as a last resort.
+        """
+        cap = self.MAX_TOTAL_TASKS - 1
+        if len(tasks) <= cap:
             return tasks
 
         terminal_statuses = {"completed", "failed", "killed"}
@@ -452,14 +460,30 @@ class BackgroundTaskManager:
             (i, t) for i, t in enumerate(tasks) if t.get("status") in terminal_statuses
         ]
 
-        if not terminal_tasks:
-            return tasks
+        evict_count = len(tasks) - cap
 
-        evict_count = len(tasks) - self.MAX_TOTAL_TASKS
-        terminal_tasks.sort(
-            key=lambda x: x[1].get("completed_at", "") or x[1].get("created_at", "")
-        )
-        evict_indices = {idx for idx, _ in terminal_tasks[:evict_count]}
+        if terminal_tasks:
+            terminal_tasks.sort(
+                key=lambda x: x[1].get("completed_at", "") or x[1].get("created_at", "")
+            )
+            evict_indices = {idx for idx, _ in terminal_tasks[:evict_count]}
+            return [t for i, t in enumerate(tasks) if i not in evict_indices]
+
+        # No terminal tasks: evict oldest queued first, then oldest running.
+        evict_indices: set = set()
+        remaining = evict_count
+        for priority_status in ("queued", "running"):
+            if remaining <= 0:
+                break
+            candidates = [
+                (i, t)
+                for i, t in enumerate(tasks)
+                if t.get("status") == priority_status and i not in evict_indices
+            ]
+            candidates.sort(key=lambda x: x[1].get("created_at", ""))
+            for idx, _ in candidates[:remaining]:
+                evict_indices.add(idx)
+                remaining -= 1
 
         return [t for i, t in enumerate(tasks) if i not in evict_indices]
 
@@ -608,6 +632,70 @@ class BackgroundTaskManager:
         if agent:
             tasks = [t for t in tasks if t.get("agent") == agent]
         return sum(1 for t in tasks if t["status"] == "queued")
+
+    def create_task_checked(
+        self,
+        task_id: str,
+        session_id: str,
+        user_identity: str,
+        channel: str,
+        agent: str,
+        runtime: str,
+        model: str,
+        prompt: str,
+        max_concurrent: int,
+        pid: int = 0,
+        timeout: int = None,
+        notify: bool = True,
+        origin_session_id: str = None,
+    ) -> tuple:
+        """Atomically check concurrency limit and create task (TOCTOU-safe).
+
+        Holds self._lock for the entire check-then-create sequence so no
+        concurrent request can slip through the same slot window.
+
+        Returns:
+            (task dict, status string) where status is "running" or "queued".
+        """
+        now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        with self._lock:
+            tasks = self._load_unlocked()
+            running = sum(
+                1
+                for t in tasks
+                if self._identity_matches(t, channel, user_identity)
+                and (not agent or t.get("agent") == agent)
+                and t["status"] == "running"
+            )
+            status = "queued" if running >= max_concurrent else "running"
+            task = {
+                "task_id": task_id,
+                "session_id": session_id,
+                "user_key": self._user_key(channel, identity=user_identity),
+                "channel": channel,
+                "user_identity": user_identity,
+                "agent": agent,
+                "runtime": runtime,
+                "model": model,
+                "prompt": prompt,
+                "status": status,
+                "pid": pid,
+                "created_at": now,
+                "started_at": now if status == "running" else None,
+                "completed_at": None,
+                "output_lines": [],
+                "tool_calls": [],
+                "final_response": None,
+                "error": None,
+                "timeout": timeout,
+                "notify": notify,
+                "origin_session_id": origin_session_id,
+            }
+            tasks = self._evict_oldest_terminal(tasks)
+            tasks.append(task)
+            self._save_unlocked(tasks)
+        self._start_cleanup_thread()
+        return task, status
 
     def get_next_queued(
         self, channel: str, identity: str, agent: str = None
@@ -3014,10 +3102,6 @@ You can mention an agent in your prompt and it will auto-delegate:
         channel = session_data.get("channel", "webui")
         identity = self._bg_identity or "unknown"
 
-        running = self._bg_task_mgr.count_running(channel, identity)
-        if running >= BackgroundTaskManager.MAX_TASKS_PER_USER:
-            return f"❌ Maximum {BackgroundTaskManager.MAX_TASKS_PER_USER} concurrent background tasks allowed."
-
         bg_timeout = (
             bg_timeout_override
             if bg_timeout_override is not None
@@ -3025,7 +3109,13 @@ You can mention an agent in your prompt and it will auto-delegate:
         )
         task_id = f"bg_{str(uuid4())[:8]}"
         bg_session_id = f"bg_{str(uuid4())[:8]}"
-        self._bg_task_mgr.create_task(
+        # Resolve per-agent concurrency limit (falls back to global cap)
+        _agent_cfg = self.AGENTS.get(bg_agent, {})
+        _max_concurrent = _agent_cfg.get(
+            "max_concurrent", BackgroundTaskManager.MAX_TASKS_PER_USER
+        )
+        # Atomic check-and-create prevents TOCTOU race (Issue #192)
+        _task, _status = self._bg_task_mgr.create_task_checked(
             task_id=task_id,
             session_id=bg_session_id,
             user_identity=identity,
@@ -3034,8 +3124,20 @@ You can mention an agent in your prompt and it will auto-delegate:
             runtime=bg_runtime,
             model=bg_model,
             prompt=bg_prompt,
+            max_concurrent=_max_concurrent,
             origin_session_id=n8n_session_id,
         )
+        if _status == "queued":
+            return (
+                f"⏳ **Background task queued.**\n\n"
+                f"• **Task ID:** `{task_id}`\n"
+                f"• **Agent:** `{bg_agent}`"
+                f" | Runtime: `{bg_runtime}` | Model: `{bg_model}`\n"
+                f"• **Reason:** Maximum {_max_concurrent}"
+                f" concurrent tasks for this agent.\n\n"
+                f"The task will start automatically when a slot opens. "
+                f"Use `/background status {task_id}` to monitor."
+            )
         # Launch in background thread
         import concurrent.futures as _cf
 
@@ -12840,36 +12942,37 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         # (not here at API time) so queued/promoted tasks get fresh context.
         effective_prompt = body.prompt
 
-        # Check concurrent limit — queue instead of rejecting
-        running = await asyncio.to_thread(
-            bg_task_mgr.count_running, channel, identity, agent
-        )
+        # Atomically check concurrency limit and create task — TOCTOU-safe (Issue #192)
         agent_config = session_mgr.AGENTS.get(agent, {})
         max_concurrent = agent_config.get(
             "max_concurrent", BackgroundTaskManager.MAX_TASKS_PER_USER
         )
-        if running >= max_concurrent:
-            # Queue the task — it will be promoted when a running task finishes
-            task = await asyncio.to_thread(
-                bg_task_mgr.create_task,
-                task_id=task_id,
-                session_id=session_id,
-                user_identity=identity,
-                channel=channel,
-                agent=agent,
-                runtime=runtime,
-                model=model,
-                prompt=effective_prompt,
-                status="queued",
-                timeout=bg_timeout,
-                notify=notify_pref,
-                origin_session_id=body.origin_session_id,
-            )
+        task, task_status = await asyncio.to_thread(
+            bg_task_mgr.create_task_checked,
+            task_id=task_id,
+            session_id=session_id,
+            user_identity=identity,
+            channel=channel,
+            agent=agent,
+            runtime=runtime,
+            model=model,
+            prompt=effective_prompt,
+            max_concurrent=max_concurrent,
+            timeout=bg_timeout,
+            notify=notify_pref,
+            origin_session_id=body.origin_session_id,
+        )
+
+        if task_status == "queued":
             queue_pos = await asyncio.to_thread(
                 bg_task_mgr.count_queued, channel, identity
             )
+            running = await asyncio.to_thread(
+                bg_task_mgr.count_running, channel, identity, agent
+            )
             print(
-                f"[API] Task {task_id} queued (position {queue_pos}, {running}/{BackgroundTaskManager.MAX_TASKS_PER_USER} slots full)"
+                f"[API] Task {task_id} queued"
+                f" (position {queue_pos}, {running}/{max_concurrent} slots full)"
             )
             return {
                 "task_id": task_id,
@@ -12882,23 +12985,6 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 "queue_position": queue_pos,
                 "timeout": bg_timeout,
             }
-
-        # Create task record (running immediately)
-        task = await asyncio.to_thread(
-            bg_task_mgr.create_task,
-            task_id=task_id,
-            session_id=session_id,
-            user_identity=identity,
-            channel=channel,
-            agent=agent,
-            runtime=runtime,
-            model=model,
-            prompt=effective_prompt,
-            status="running",
-            timeout=bg_timeout,
-            notify=notify_pref,
-            origin_session_id=body.origin_session_id,
-        )
 
         # Resolve permission mode (default: restricted)
         perm_mode = body.permission_mode or "restricted"
