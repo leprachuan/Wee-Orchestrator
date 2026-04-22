@@ -536,7 +536,6 @@ class TestBackupRuntimeFallback(unittest.TestCase):
             if os.path.exists(tmp):
                 os.unlink(tmp)
 
-
     def test_backup_used_when_primary_unavailable(self):
         """Regression test for #168 BLOCKER: when primary is configured but
         unavailable (not installed), the backup runtime must be selected."""
@@ -703,7 +702,8 @@ class TestBackupRuntimeFallback(unittest.TestCase):
     def test_default_used_when_both_primary_and_backup_unavailable(self):
         """Regression test for #168 MAJOR: when both primary AND backup runtimes are
         configured but unavailable, the code must fall back to the default runtime —
-        NOT select the unavailable backup. Reproduction: primary='definitely-not-installed',
+        NOT select the unavailable backup. Reproduction:
+        primary='definitely-not-installed',
         backup='also-not-installed', default='copilot' -> must return 'copilot'."""
         import tempfile
         from unittest.mock import patch
@@ -779,13 +779,15 @@ class TestBackupRuntimeFallback(unittest.TestCase):
                     task_data["runtime"],
                     "copilot",
                     f"Expected default 'copilot' but got '{task_data['runtime']}'. "
-                    "Both primary 'definitely-not-installed' and backup 'also-not-installed' "
+                    "Both primary 'definitely-not-installed' and backup"
+                    " 'also-not-installed' "
                     "are unavailable — must fall back to default 'copilot'.",
                 )
         finally:
             import os
             if os.path.exists(tmp):
                 os.unlink(tmp)
+
 
 if __name__ == "__main__":
     unittest.main()

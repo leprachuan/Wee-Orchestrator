@@ -14362,7 +14362,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                         file=sys.stderr,
                     )
                 else:
-                    # Primary configured but unavailable — validate backup before using it
+                    # Primary unavailable — validate backup before using it
                     if _pref_backup and check_runtime_available(_pref_backup):
                         runtime = _pref_backup
                     else:
