@@ -14349,21 +14349,36 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             _session_rt = defaults.get("runtime")
             _pref_primary = _get_runtime_pref_mgr().primary()
             _pref_backup = _get_runtime_pref_mgr().backup()
-            runtime = (
-                _session_rt or _pref_primary or _pref_backup or get_default_runtime()
-            )
             if _session_rt:
+                runtime = _session_rt
                 print(
                     f"[RuntimePref] Using session runtime: {runtime}", file=sys.stderr
                 )
             elif _pref_primary:
+                if check_runtime_available(_pref_primary):
+                    runtime = _pref_primary
+                    print(
+                        f"[RuntimePref] Using primary preference runtime: {runtime}",
+                        file=sys.stderr,
+                    )
+                else:
+                    # Primary configured but unavailable — fall back to backup or default
+                    runtime = _pref_backup or get_default_runtime()
+                    print(
+                        f"[RuntimePref] Primary '{_pref_primary}' unavailable, "
+                        f"falling back to: {runtime}",
+                        file=sys.stderr,
+                    )
+            elif _pref_backup:
+                runtime = _pref_backup
                 print(
-                    f"[RuntimePref] Using primary preference runtime: {runtime}",
+                    f"[RuntimePref] Using backup preference runtime: {runtime}",
                     file=sys.stderr,
                 )
             else:
+                runtime = get_default_runtime()
                 print(
-                    f"[RuntimePref] Using backup preference runtime: {runtime}",
+                    f"[RuntimePref] Using default runtime: {runtime}",
                     file=sys.stderr,
                 )
         model = body.model or defaults.get("model", get_default_model())
