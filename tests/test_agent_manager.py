@@ -762,6 +762,33 @@ class TestDynamicModelListing(unittest.TestCase):
         all_ids = [m for group in result.values() for m in group]
         self.assertTrue(any("gpt" in m for m in all_ids))
 
+    @patch.dict(
+        os.environ,
+        {
+            "CODEX_MODELS_JSON": json.dumps(
+                {
+                    "OpenAI Models": [
+                        ["gpt-9-test", "GPT-9 Test", ["gpt-9", "codex-test"]]
+                    ]
+                }
+            )
+        },
+        clear=False,
+    )
+    def test_codex_models_json_overrides_alias_and_description_metadata(self):
+        self.manager._env_codex_models = None
+
+        listed = self.manager.fetch_codex_models()
+        self.assertEqual(listed, {"OpenAI Models": ["gpt-9-test"]})
+        self.assertEqual(
+            self.manager.get_model_from_name("codex-test", "codex"),
+            "gpt-9-test",
+        )
+        self.assertEqual(
+            self.manager._get_model_description("gpt-9-test", "codex"),
+            "GPT-9 Test",
+        )
+
     # ── fetch_opencode_models fallback ────────────────────────────────────────
 
     @patch("subprocess.run")

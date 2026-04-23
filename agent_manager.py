@@ -3947,8 +3947,31 @@ You can mention an agent in your prompt and it will auto-delegate:
             return static_fallback
 
     def _get_model_description(self, model_id: str, runtime: str) -> Optional[str]:
-        """Look up a human-readable description for a model from static metadata."""
-        # First check env-loaded models (if cached)
+        """Look up a human-readable description for a model from metadata."""
+        env_models, static_models = self._get_runtime_model_metadata(runtime)
+        for models_dict in (env_models, static_models):
+            if not models_dict:
+                continue
+            for _cat, entries in models_dict.items():
+                for mid, desc, _aliases in entries:
+                    if mid == model_id:
+                        return desc
+        return None
+
+    def _get_runtime_model_metadata(self, runtime: str) -> tuple[Optional[Dict], Optional[Dict]]:
+        """Return (env_models, static_models) for a runtime."""
+        if runtime in (
+            "claude",
+            "claude-sdk",
+            "gemini",
+            "codex",
+            "devin",
+            "cursor",
+            "wee",
+        ):
+            # Populate env-backed caches when available.
+            self.get_models_for_runtime(runtime)
+
         env_models_map = {
             "claude": self._env_claude_models,
             "claude-sdk": self._env_claude_models,
@@ -3958,14 +3981,6 @@ You can mention an agent in your prompt and it will auto-delegate:
             "cursor": self._env_cursor_models,
             "wee": self._env_wee_models,
         }
-        env_models = env_models_map.get(runtime)
-        if env_models:
-            for _cat, entries in env_models.items():
-                for mid, desc, _aliases in entries:
-                    if mid == model_id:
-                        return desc
-
-        # Fall back to static models
         static_map = {
             "claude": self.CLAUDE_MODELS,
             "claude-sdk": self.CLAUDE_MODELS,
@@ -3976,14 +3991,7 @@ You can mention an agent in your prompt and it will auto-delegate:
             "cursor": self.CURSOR_MODELS,
             "wee": self.WEE_MODELS,
         }
-        models_dict = static_map.get(runtime)
-        if not models_dict:
-            return None
-        for _cat, entries in models_dict.items():
-            for mid, desc, _aliases in entries:
-                if mid == model_id:
-                    return desc
-        return None
+        return env_models_map.get(runtime), static_map.get(runtime)
 
     def fetch_claude_models(self) -> Dict:
         """Return available Claude models from environment or fallback to static list.
@@ -4867,43 +4875,12 @@ You can mention an agent in your prompt and it will auto-delegate:
         """
         name_lower = name.lower().strip("\"'")
 
-        # Ensure env models are loaded/cached by triggering fetch for this runtime
-        if runtime in (
-            "claude",
-            "claude-sdk",
-            "gemini",
-            "codex",
-            "devin",
-            "cursor",
-            "wee",
-        ):
-            self.get_models_for_runtime(runtime)
+        # Step 1: check env-loaded or static alias tables for runtimes with metadata.
+        env_models, static_models = self._get_runtime_model_metadata(runtime)
 
-        # Step 1: check env-loaded or static alias tables for all runtimes that have them.
-        env_alias_map = {
-            "claude": self._env_claude_models,
-            "claude-sdk": self._env_claude_models,
-            "gemini": self._env_gemini_models,
-            "codex": self._env_codex_models,
-            "devin": self._env_devin_models,
-            "cursor": self._env_cursor_models,
-            "wee": self._env_wee_models,
-        }
-        static_alias_map = {
-            "claude": self.CLAUDE_MODELS,
-            "claude-sdk": self.CLAUDE_MODELS,
-            "gemini": self.GEMINI_MODELS,
-            "codex": self.CODEX_MODELS,
-            "opencode": self.OPENCODE_MODELS,
-            "devin": self.DEVIN_MODELS,
-            "cursor": self.CURSOR_MODELS,
-            "wee": self.WEE_MODELS,
-        }
-
-        # Try env-loaded models first, fall back to static
-        models_to_check = env_alias_map.get(runtime) or static_alias_map.get(runtime)
-
-        if runtime in static_alias_map and models_to_check:
+        for models_to_check in (env_models, static_models):
+            if not models_to_check:
+                continue
             for _category, entries in models_to_check.items():
                 for model_id, desc, aliases in entries:
                     aliases_lower = [a.lower() for a in aliases]
