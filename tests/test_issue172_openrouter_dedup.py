@@ -19,11 +19,12 @@ Regression tests assert:
 """
 
 import json
+import os
 import sys
 import unittest
 from unittest.mock import MagicMock, patch
 
-sys.path.insert(0, "/opt/n8n-copilot-shim-dev")  # noqa: E402
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from agent_manager import SessionManager  # noqa: E402
 
 
@@ -49,12 +50,18 @@ def _mock_api_response(models):
 VARIANT_MODELS = [
     # Base + all variant types for llama-3.3-70b-instruct
     {"id": "meta-llama/llama-3.3-70b-instruct", "name": "Llama 3.3 70B Instruct"},
-    {"id": "meta-llama/llama-3.3-70b-instruct:free", "name": "Llama 3.3 70B Instruct (free)"},
+    {
+        "id": "meta-llama/llama-3.3-70b-instruct:free",
+        "name": "Llama 3.3 70B Instruct (free)",
+    },
     {"id": "meta-llama/llama-3.3-70b-instruct:nitro", "name": "Llama 3.3 70B Nitro"},
     {"id": "meta-llama/llama-3.3-70b-instruct:floor", "name": "Llama 3.3 70B Floor"},
     # :thinking variant
     {"id": "anthropic/claude-3.7-sonnet", "name": "Claude 3.7 Sonnet"},
-    {"id": "anthropic/claude-3.7-sonnet:thinking", "name": "Claude 3.7 Sonnet (thinking)"},
+    {
+        "id": "anthropic/claude-3.7-sonnet:thinking",
+        "name": "Claude 3.7 Sonnet (thinking)",
+    },
     # :extended variant
     {"id": "openai/gpt-4o", "name": "GPT-4o"},
     {"id": "openai/gpt-4o:extended", "name": "GPT-4o Extended"},
@@ -129,11 +136,18 @@ class TestIssue172Deduplication(unittest.TestCase):
     @patch("urllib.request.urlopen")
     def test_all_suffix_types_stripped(self, mock_urlopen, _keyring):
         """All BASE_MODEL_RE suffix types must be stripped."""
-        suffixes = [":free", ":thinking", ":extended", ":beta", ":nitro", ":floor", ":preview"]
+        suffixes = [
+            ":free",
+            ":thinking",
+            ":extended",
+            ":beta",
+            ":nitro",
+            ":floor",
+            ":preview",
+        ]
         base = "provider/model-name"
         raw = [{"id": base, "name": "Base Model"}] + [
-            {"id": base + s, "name": f"Variant {s}"}
-            for s in suffixes
+            {"id": base + s, "name": f"Variant {s}"} for s in suffixes
         ]
         mock_urlopen.return_value = _mock_api_response(raw)
         result = self.sm.fetch_openrouter_models()
@@ -196,6 +210,7 @@ class TestIssue172Deduplication(unittest.TestCase):
     def test_base_model_re_constant_exists(self, mock_urlopen, _keyring):
         """BASE_MODEL_RE class constant must exist on SessionManager."""
         import re
+
         self.assertTrue(
             hasattr(self.sm, "BASE_MODEL_RE"),
             "BASE_MODEL_RE constant missing from SessionManager",
@@ -209,8 +224,18 @@ class TestIssue172Deduplication(unittest.TestCase):
         # Build a realistic large set: 200 base models + 145 variant duplicates
         raw = []
         suffixes = [":free", ":thinking", ":nitro"]
-        providers = ["anthropic", "openai", "google", "meta-llama", "deepseek",
-                     "mistralai", "qwen", "microsoft", "nvidia", "cohere"]
+        providers = [
+            "anthropic",
+            "openai",
+            "google",
+            "meta-llama",
+            "deepseek",
+            "mistralai",
+            "qwen",
+            "microsoft",
+            "nvidia",
+            "cohere",
+        ]
         idx = 0
         for p in providers:
             for j in range(20):
@@ -220,7 +245,9 @@ class TestIssue172Deduplication(unittest.TestCase):
                 if idx % 3 == 0:
                     raw.append({"id": base + ":free", "name": f"Model {idx} Free"})
                 if idx % 5 == 0:
-                    raw.append({"id": base + ":thinking", "name": f"Model {idx} Thinking"})
+                    raw.append(
+                        {"id": base + ":thinking", "name": f"Model {idx} Thinking"}
+                    )
                 idx += 1
 
         raw_count = len(raw)

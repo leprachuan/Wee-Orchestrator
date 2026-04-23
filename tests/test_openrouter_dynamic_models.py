@@ -11,13 +11,15 @@ Tests:
 8. fetch_wee_models() falls back gracefully when fetch_openrouter_models() raises
 9. get_models_for_runtime("wee") returns dynamic models
 """
+
 import json
+import os
 import sys
 import time
 import unittest
 from unittest.mock import MagicMock, patch
 
-sys.path.insert(0, "/opt/n8n-copilot-shim-dev")  # noqa: E402
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from agent_manager import SessionManager  # noqa: E402
 
 
@@ -127,8 +129,7 @@ class TestFetchOpenrouterModels(unittest.TestCase):
         # All models now in single "OpenRouter" group
         or_group = result.get("OpenRouter", [])
         scout_entries = [
-            m for m in or_group
-            if m[0] == "openrouter/meta-llama/llama-4-scout"
+            m for m in or_group if m[0] == "openrouter/meta-llama/llama-4-scout"
         ]
         self.assertTrue(len(scout_entries) > 0)
         # aliases should be the third element
@@ -145,9 +146,7 @@ class TestFetchOpenrouterModels(unittest.TestCase):
         self.sm.fetch_openrouter_models()
         call_count_2 = mock_urlopen.call_count
         self.assertEqual(
-            call_count_1,
-            call_count_2,
-            "Second call should use cache, not HTTP"
+            call_count_1, call_count_2, "Second call should use cache, not HTTP"
         )
 
     @patch("keyring.get_password", return_value="test-key-123")
@@ -160,9 +159,7 @@ class TestFetchOpenrouterModels(unittest.TestCase):
         self.sm._openrouter_models_cache_ts = time.time() - 400
         self.sm.fetch_openrouter_models()
         self.assertEqual(
-            mock_urlopen.call_count,
-            2,
-            "Should make new HTTP call after TTL expires"
+            mock_urlopen.call_count, 2, "Should make new HTTP call after TTL expires"
         )
 
     @patch("keyring.get_password", return_value="test-key-123")
@@ -174,9 +171,7 @@ class TestFetchOpenrouterModels(unittest.TestCase):
         for cat, models in result.items():
             names = [m[1].lower() for m in models]
             self.assertEqual(
-                names,
-                sorted(names),
-                f"Models in '{cat}' should be sorted"
+                names, sorted(names), f"Models in '{cat}' should be sorted"
             )
 
     @patch("keyring.get_password", return_value="test-key-123")
