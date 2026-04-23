@@ -10112,6 +10112,7 @@ User Request:
 
         if not hasattr(self, 'runtime_executor'):
             self.runtime_executor = RuntimeExecutor()
+            self._register_runtime_executors()
         handler = self.runtime_executor.get(runtime)
         if handler is None:
             return f"Error: Unknown runtime '{runtime}'"
