@@ -1,4 +1,5 @@
-"""Regression tests for Issue #175: Active Context Window Management and Intelligent Compaction.
+"""Regression tests for Issue #175: Active Context Window Management
+and Intelligent Compaction.
 
 Tests cover:
   - Token estimation helpers
@@ -17,7 +18,7 @@ import tempfile
 import threading
 import unittest
 from pathlib import Path
-from unittest.mock import MagicMock, patch, call
+from unittest.mock import MagicMock, patch
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
@@ -62,8 +63,10 @@ def _run_wee_native_test(mgr, test_session, model="ollama/gemma4:e4b", **kwargs)
         {"runtime": "wee", "model": model, "channel": "api"},
     )
     with patch.object(mgr, "get_or_create_session_data", return_value=session_data):
-        with patch.object(mgr, "build_agent_context_prompt", return_value="You are helpful."):
-            with patch.object(mgr, "load_session_map", return_value=dict(mgr.session_map)):
+        with patch.object(mgr, "build_agent_context_prompt",
+                          return_value="You are helpful."):
+            with patch.object(mgr, "load_session_map",
+                              return_value=dict(mgr.session_map)):
                 with patch.object(mgr, "save_session_map"):
                     return mgr.run_wee_native(**defaults)
 
@@ -138,7 +141,6 @@ class TestWeeSaveTranscript(unittest.TestCase):
             {"role": "assistant", "content": "hi there"},
         ]
         with tempfile.TemporaryDirectory() as tmpdir:
-            saved_path = None
 
             def fake_mkdir(mode=0o777, parents=False, exist_ok=False):
                 # Actually create the directory in tmpdir
@@ -201,10 +203,51 @@ class TestWeeSaveTranscript(unittest.TestCase):
             if path and os.path.exists(path):
                 os.remove(path)
 
+    def test_no_path_traversal(self):
+        """Regression: crafted session IDs must not escape the transcripts directory."""
+        msgs = [{"role": "user", "content": "x"}]
+        # Attempt classic traversal
+        path = self.mgr._wee_save_transcript("../../../tmp/weeqa-path-test2", msgs)
+        try:
+            if path:
+                norm = os.path.normpath(path)
+                # The resolved path must NOT be under /tmp (traversal escaped)
+                self.assertFalse(
+                    norm.startswith("/tmp/"),
+                    f"Path traversal succeeded — transcript written to {path}"
+                )
+                # It must stay inside a 'transcripts' sub-directory
+                self.assertIn("transcripts", norm)
+                # No raw ".." components must survive in the output path
+                for part in norm.split(os.sep):
+                    self.assertNotEqual(
+                        part, "..",
+                        f"Traversal sequence '..' in path: {norm}"
+                    )
+        finally:
+            if path and os.path.exists(path):
+                os.remove(path)
+
+    def test_traversal_sanitization_slash(self):
+        """Regression: forward slashes in session IDs must be sanitized."""
+        msgs = [{"role": "user", "content": "x"}]
+        path = self.mgr._wee_save_transcript("foo/bar/baz", msgs)
+        try:
+            if path:
+                self.assertIn("transcripts", path)
+                # The sanitized dir should NOT create sub-directories for slashes
+                transcript_dir = os.path.dirname(path)
+                # The leaf directory should be the sanitized id with _ replacing /
+                leaf = os.path.basename(transcript_dir)
+                self.assertNotIn("/", leaf)
+        finally:
+            if path and os.path.exists(path):
+                os.remove(path)
 
 # ---------------------------------------------------------------------------
 # _wee_maybe_compact threshold logic
 # ---------------------------------------------------------------------------
+
 
 class TestWeeMaybeCompact(unittest.TestCase):
     def setUp(self):
@@ -229,7 +272,8 @@ class TestWeeMaybeCompact(unittest.TestCase):
         ]
         client = _make_client("Summary of prior messages.")
         with patch.object(self.mgr, "_wee_get_context_limit", return_value=10):
-            with patch.object(self.mgr, "_wee_save_transcript", return_value="/tmp/fake.json"):
+            with patch.object(self.mgr, "_wee_save_transcript",
+                              return_value="/tmp/fake.json"):
                 result = self.mgr._wee_maybe_compact(
                     client, "sess2", msgs, "gemma4:e4b", "sys"
                 )
@@ -240,7 +284,7 @@ class TestWeeMaybeCompact(unittest.TestCase):
         msgs = [{"role": "user", "content": "x" * 10000}]
         client = _make_client()
         with patch.object(self.mgr, "_wee_get_context_limit", return_value=1):
-            result = self.mgr._wee_maybe_compact(
+            self.mgr._wee_maybe_compact(
                 client, "sess3", msgs, "gemma4:e4b", "sys", threshold=1.0
             )
         client.chat.completions.create.assert_not_called()
@@ -321,7 +365,10 @@ class TestWeeCompactContext(unittest.TestCase):
             {"role": "user", "content": "q_current"},
         ]
         client = _make_client("SUMMARY_CONTENT")
-        with patch.object(self.mgr, "_wee_save_transcript", return_value="/special/path.json"):
+        with patch.object(
+            self.mgr, "_wee_save_transcript",
+            return_value="/special/path.json"
+        ):
             result = self.mgr._wee_compact_context(
                 client, "sess-tp", msgs, "gemma4:e4b", "sys"
             )
@@ -335,10 +382,57 @@ class TestWeeCompactContext(unittest.TestCase):
         ]
         self.assertEqual(self._run_compact(msgs), msgs)
 
+    def test_long_message_tail_preserved_in_summary_request(self):
+        """Regression (#175 MAJOR): error tails must not be silently dropped.
+
+        When a message exceeds the per-message budget, the compaction prompt
+        that is sent to the LLM must preserve both the head AND the tail of
+        the message — because error messages / stack traces typically appear
+        at the end.
+        """
+        error_tail = "CRITICAL_ERROR: division by zero at line 42"
+        # Build a message whose middle is filler but whose tail is the error
+        long_content = ("filler " * 1000) + error_tail
+        msgs = [
+            {"role": "system", "content": "sys"},
+            {"role": "user", "content": "what happened?"},
+            {"role": "assistant", "content": long_content},
+            {"role": "user", "content": "current question"},
+        ]
+        captured_prompts = []
+
+        client = MagicMock()
+        mock_choice = MagicMock()
+        mock_choice.message.content = "summary"
+        client.chat.completions.create.side_effect = (
+            lambda **kw: (captured_prompts.append(kw["messages"]),
+                          type("R", (), {"choices": [mock_choice]})())[-1]
+        )
+
+        with patch.object(self.mgr, "_wee_save_transcript", return_value="/tmp/t.json"):
+            self.mgr._wee_compact_context(
+                client, "sess-tail", msgs, "gemma4:e4b", "system context"
+            )
+
+        self.assertTrue(
+            captured_prompts,
+            "LLM should have been called for compaction"
+        )
+        # The prompt sent to the LLM must contain the error tail
+        summary_user_msg = next(
+            (m for m in captured_prompts[0] if m.get("role") == "user"),
+            None
+        )
+        self.assertIsNotNone(summary_user_msg, "LLM call should have a user message")
+        self.assertIn(
+            error_tail, summary_user_msg["content"],
+            "Error tail must survive compaction and appear in the LLM summary request"
+        )
 
 # ---------------------------------------------------------------------------
 # Integration: run_wee_native calls _wee_maybe_compact
 # ---------------------------------------------------------------------------
+
 
 class TestRunWeeNativeCompactionIntegration(unittest.TestCase):
     """Verify that run_wee_native calls _wee_maybe_compact."""

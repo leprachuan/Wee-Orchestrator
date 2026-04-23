@@ -8779,7 +8779,7 @@ User Request:
             )
             # Issue #108: Load conversation history for multi-turn context.
             # Issue #175: Apply proactive compaction if context exceeds 80% capacity.
-            messages = self._wee_load_messages(n8n_session_id, context_prompt)
+            messages = self._wee_load_messages(n8n_session_id, context_prompt, resume=resume)
             messages.append({"role": "user", "content": prompt})
             messages = self._wee_maybe_compact(
                 client, n8n_session_id, messages, resolved_model, context_prompt
@@ -8949,6 +8949,10 @@ User Request:
         """
         MAX_WEE_MESSAGES = 100
         with self._session_map_lock:
+            # Fast-path: skip disk access when the session isn't registered at all.
+            # This keeps fresh (resume=False) calls from requiring session_map_file.
+            if n8n_session_id not in self.session_map:
+                return
             session_map = self.load_session_map()
             if n8n_session_id in session_map:
                 # Keep system prompt + last N messages
@@ -9163,9 +9167,12 @@ User Request:
         the compact context so the model can look back if needed.
         """
         import json
+        import re as _re
         from datetime import datetime
 
-        transcript_dir = Path(__file__).parent / "logs" / "transcripts" / n8n_session_id
+        # Sanitize session_id to prevent path traversal (e.g. ../../../tmp/...)
+        safe_id = _re.sub(r"[^A-Za-z0-9_\-]", "_", n8n_session_id)[:80] or "unknown"
+        transcript_dir = Path(__file__).parent / "logs" / "transcripts" / safe_id
         transcript_dir.mkdir(parents=True, exist_ok=True)
         ts = datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
         path = transcript_dir / f"transcript_{ts}.json"
@@ -9217,8 +9224,15 @@ User Request:
             return messages
 
         # Build summary request: ask LLM to condense the history
+        def _fmt_msg(content: str, budget: int = 6000) -> str:
+            """Preserve head and tail of a message so error tails / stack traces survive."""
+            if len(content) <= budget:
+                return content
+            half = budget // 2
+            return content[:half] + "\n... [middle truncated] ...\n" + content[-half:]
+
         history_text = "\n".join(
-            f"[{m.get('role','?').upper()}]: {str(m.get('content',''))[:1500]}"
+            f"[{m.get('role', '?').upper()}]: {_fmt_msg(str(m.get('content', '')))}"
             for m in history
         )
         summary_prompt = (
