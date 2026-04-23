@@ -11283,6 +11283,12 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         built-in static model list when the runtime CLI is unavailable or does
         not expose a model-listing command.
         """
+        await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
         runtime = runtime.lower().strip()
         known_runtimes = {
             "copilot",
