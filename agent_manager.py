@@ -1658,6 +1658,9 @@ class SessionManager:
     MAX_OUTPUT_LENGTH = 500  # Maximum chars to store from output
     MAX_OUTPUT_DISPLAY = 300  # Maximum chars to display in status output
 
+    # Issue #111: regex for SSH-family binaries that need host-key sanitization
+    _SSH_BIN_RE = re.compile(r"\b(ssh|scp|sftp)\b")
+
     # Model configurations
     # Note: Claude Code CLI does not support dynamic model listing via flag.
     # We use CLI aliases (sonnet, haiku, opus) as primary IDs to let the CLI resolve to the latest versions.  # noqa: E501
@@ -8690,9 +8693,11 @@ User Request:
         session_data = self.get_or_create_session_data(n8n_session_id)
         effective_timeout = timeout if timeout is not None else self.command_timeout
         channel = session_data.get("channel", "webui")
-        context_prompt = self.build_agent_context_prompt(
-            prompt, agent, channel, n8n_session_id
+        base_context_prompt = self.build_agent_context_prompt(
+            prompt, agent, channel, n8n_session_id, runtime="wee"
         )
+        # Issue #111: augment with tool capability declaration + anti-hallucination
+        context_prompt = self._wee_augment_system_prompt_with_tools(base_context_prompt)
         _sess_api_base = session_data.get("api_base")
         _sess_api_key = session_data.get("api_key")
 
@@ -8766,15 +8771,17 @@ User Request:
                     return output
 
             # Resolve endpoint for current model in fallback chain
+            # Ollama default: http://192.168.1.101:11434/v1 (port 11434)
+            # OpenRouter: https://openrouter.ai/api/v1
             api_base, api_key, resolved_model = self._wee_resolve_endpoint(
                 _attempt_model, _sess_api_base, _sess_api_key
             )
-            import httpx as _httpx_wee
+            import httpx
 
             client = OpenAI(
                 base_url=api_base,  # noqa: F821
                 api_key=api_key,  # noqa: F821
-                timeout=_httpx_wee.Timeout(
+                timeout=httpx.Timeout(
                     connect=15.0, read=float(effective_timeout), write=30.0, pool=15.0
                 ),
                 max_retries=0,
@@ -9012,7 +9019,7 @@ User Request:
             "list files, or perform any shell action -- call the bash tool immediately.\n"  # noqa: E501
             "NEVER refuse or claim you lack capability. The tools are active and functional."  # noqa: E501
         )
-        return system_prompt + tool_section
+        return system_prompt + tool_section + self._wee_anti_hallucination_prompt()
 
     def _wee_execute_tool(self, func_name: str, func_args: dict, agent: str) -> str:
         """Execute a tool call from the wee runtime agentic loop.
@@ -9025,6 +9032,7 @@ User Request:
                 command = func_args.get("command", "")
                 if not command:
                     return "Error: No command provided"
+                command = self._wee_sanitize_bash_command(command)
                 return self._execute_bash_command(command, agent)
             elif func_name == "python":
                 code = func_args.get("code", "")
@@ -9054,6 +9062,47 @@ User Request:
             return f"Error: Tool '{func_name}' timed out"
         except Exception as e:
             return f"Error executing {func_name}: {e}"
+
+    @staticmethod
+    def _wee_sanitize_bash_command(command: str) -> str:
+        """Auto-inject SSH flags to prevent host key verification failures.
+
+        When a bash command contains an ssh/scp/sftp invocation without
+        StrictHostKeyChecking already set, inject
+        ``-o StrictHostKeyChecking=accept-new`` so first-connect succeeds
+        without manual intervention.  ``accept-new`` is safer than ``no``
+        because it still rejects CHANGED keys (potential MITM).
+        """
+        if not command:
+            return command
+        if not SessionManager._SSH_BIN_RE.search(command):
+            return command
+        if "StrictHostKeyChecking" in command:
+            return command
+
+        def _inject(m):
+            return m.group(0) + " -o StrictHostKeyChecking=accept-new"
+
+        return SessionManager._SSH_BIN_RE.sub(_inject, command, count=0)
+
+    @staticmethod
+    def _wee_anti_hallucination_prompt() -> str:
+        """Return system-prompt section that prevents hallucinated tool output.
+
+        Smaller Ollama models tend to fabricate command output when a tool
+        call fails.  This prompt section explicitly forbids that.
+        """
+        return (
+            "\n\n[CRITICAL — Output Integrity Rules]\n"
+            "1. NEVER fabricate, invent, or hallucinate command output. If a command "
+            "fails or you cannot execute it, report the EXACT error message.\n"
+            "2. NEVER provide example or placeholder output and present it as real. "
+            'If you show an example, clearly label it as "EXAMPLE (not real output)".\n'
+            "3. When a tool call returns an error, relay the error verbatim to the user. "
+            "Do NOT attempt to guess what the successful output would have looked like.\n"
+            "4. For SSH commands: ALWAYS use ``-o StrictHostKeyChecking=accept-new`` to "
+            "avoid host-key verification failures on first connect.\n"
+        )
 
     @staticmethod
     def _wee_get_tool_schemas() -> list:
@@ -9358,11 +9407,13 @@ User Request:
         backoff: list,
         attempt_model: str,
     ):
-        """Try one model with 429 retry+backoff.
+        """Try one model with 429 retry+backoff, supporting multi-round tool calls.
 
         Returns (output, is_429_exhausted, last_usage).
         Streams tokens to stream_buffer as they arrive so callers retain
         real-time output. Persists wee_messages on every successful turn.
+        Multi-round tool loop (Issue #111): loops up to MAX_TOOL_ROUNDS times
+        when the model issues tool calls, executing each and feeding results back.
         """
         import time as _time
 
@@ -9377,66 +9428,152 @@ User Request:
         last_usage = None
         last_exc = None
         attempts = max(max_retries, 1)
+        MAX_TOOL_ROUNDS = 10
         for attempt in range(attempts):
             try:
-                stream = client.chat.completions.create(
-                    model=resolved_model,
-                    messages=messages,
-                    **create_kwargs,
-                )
-                collected = []
-                tool_calls_acc = {}
-                for chunk in stream:
-                    if not chunk.choices:
-                        # Usage-only trailing chunk from stream_options
+                output = ""
+                for _tool_round in range(MAX_TOOL_ROUNDS + 1):
+                    stream = client.chat.completions.create(
+                        model=resolved_model,
+                        messages=messages,
+                        **create_kwargs,
+                    )
+                    collected = []
+                    tool_calls_acc = {}
+                    for chunk in stream:
+                        if not chunk.choices:
+                            # Usage-only trailing chunk from stream_options
+                            if hasattr(chunk, "usage") and chunk.usage is not None:
+                                last_usage = chunk.usage
+                            continue
+                        delta = chunk.choices[0].delta
+                        if delta.content:
+                            collected.append(delta.content)
+                            if stream_buffer:
+                                stream_buffer.push("chunk", {"text": delta.content})
+                        if delta.tool_calls:
+                            for tc in delta.tool_calls:
+                                idx = getattr(tc, "index", 0) or 0
+                                if idx not in tool_calls_acc:
+                                    tool_calls_acc[idx] = {
+                                        "id": "",
+                                        "name": "",
+                                        "args": "",
+                                    }
+                                if tc.id:
+                                    tool_calls_acc[idx]["id"] += tc.id
+                                if tc.function:
+                                    if tc.function.name:
+                                        tool_calls_acc[idx]["name"] += tc.function.name
+                                    if tc.function.arguments:
+                                        tool_calls_acc[idx]["args"] += (
+                                            tc.function.arguments
+                                        )
                         if hasattr(chunk, "usage") and chunk.usage is not None:
                             last_usage = chunk.usage
-                        continue
-                    delta = chunk.choices[0].delta
-                    if delta.content:
-                        collected.append(delta.content)
-                        if stream_buffer:
-                            stream_buffer.push("chunk", {"text": delta.content})
-                    if delta.tool_calls:
-                        for tc in delta.tool_calls:
-                            idx = getattr(tc, "index", 0) or 0
-                            if idx not in tool_calls_acc:
-                                tool_calls_acc[idx] = {"id": "", "name": "", "args": ""}
-                            if tc.id:
-                                tool_calls_acc[idx]["id"] += tc.id
-                            if tc.function:
-                                if tc.function.name:
-                                    tool_calls_acc[idx]["name"] += tc.function.name
-                                if tc.function.arguments:
-                                    tool_calls_acc[idx]["args"] += tc.function.arguments
-                    if hasattr(chunk, "usage") and chunk.usage is not None:
-                        last_usage = chunk.usage
 
-                output = "".join(collected)
+                    output = "".join(collected)
 
-                if tool_calls_acc and wee_tools:
-                    for tc_data in tool_calls_acc.values():
-                        try:
-                            func_args = json.loads(tc_data["args"] or "{}")
-                        except json.JSONDecodeError:
-                            func_args = {}
-                        result = self._wee_execute_tool(
-                            tc_data["name"], func_args, agent
-                        )
+                    if tool_calls_acc and wee_tools:
+                        # Build assistant message with tool_calls for conversation
+                        assistant_tool_calls = [
+                            {
+                                "id": tc["id"],
+                                "type": "function",
+                                "function": {
+                                    "name": tc["name"],
+                                    "arguments": tc["args"],
+                                },
+                            }
+                            for tc in tool_calls_acc.values()
+                        ]
                         messages.append(
                             {
-                                "role": "tool",
-                                "tool_call_id": tc_data["id"],
-                                "content": result,
+                                "role": "assistant",
+                                "content": output or None,
+                                "tool_calls": assistant_tool_calls,
                             }
                         )
+                        for tc_data in tool_calls_acc.values():
+                            try:
+                                func_args = json.loads(tc_data["args"] or "{}")
+                            except json.JSONDecodeError:
+                                func_args = {}
+                            result = self._wee_execute_tool(
+                                tc_data["name"], func_args, agent
+                            )
+                            messages.append(
+                                {
+                                    "role": "tool",
+                                    "tool_call_id": tc_data["id"],
+                                    "content": result,
+                                }
+                            )
+                        # Continue to next round — model will synthesize tool results
+                        continue
 
+                    # No tool calls — final answer received
+                    # Issue #112: fallback to last tool result if synthesis empty
+                    if not output.strip():
+                        tool_results = [
+                            m["content"]
+                            for m in messages
+                            if m.get("role") == "tool" and m.get("content")
+                        ]
+                        if tool_results:
+                            last_result = tool_results[-1]
+                            output = (
+                                f"Tool execution result:\n{last_result[:4000]}"
+                            )
+                            if stream_buffer:
+                                stream_buffer.push("chunk", {"text": output})
+                        elif any(m.get("role") == "tool" for m in messages):
+                            output = "(Tool executed but produced no output)"
+                            if stream_buffer:
+                                stream_buffer.push("chunk", {"text": output})
+                    self._wee_save_messages(n8n_session_id, messages)
+                    return output, False, last_usage
+
+                # MAX_TOOL_ROUNDS exhausted without final text
                 self._wee_save_messages(n8n_session_id, messages)
-                return output, False, last_usage
+                return output or "", False, last_usage
 
             except Exception as e:
                 err_str = str(e)
                 if "429" not in err_str and "rate limit" not in err_str.lower():
+                    if "tools" in create_kwargs and (
+                        "tool" in err_str.lower() or "not supported" in err_str.lower()
+                    ):
+                        # Some models don't support tools — retry without
+                        create_kwargs.pop("tools", None)
+                        create_kwargs.pop("tool_choice", None)
+                        try:
+                            stream = client.chat.completions.create(
+                                model=resolved_model,
+                                messages=messages,
+                                **create_kwargs,
+                            )
+                            collected = []
+                            for chunk in stream:
+                                if not chunk.choices:
+                                    if (
+                                        hasattr(chunk, "usage")
+                                        and chunk.usage is not None
+                                    ):
+                                        last_usage = chunk.usage
+                                    continue
+                                delta = chunk.choices[0].delta
+                                if delta.content:
+                                    collected.append(delta.content)
+                                    if stream_buffer:
+                                        stream_buffer.push(
+                                            "chunk", {"text": delta.content}
+                                        )
+                            output = "".join(collected)
+                            self._wee_save_messages(n8n_session_id, messages)
+                            return output, False, last_usage
+                        except Exception as retry_err:
+                            return f"Error: {retry_err}", False, None
                     return f"Error: {err_str}", False, None
                 last_exc = e  # noqa: F841
                 if attempt < attempts - 1:

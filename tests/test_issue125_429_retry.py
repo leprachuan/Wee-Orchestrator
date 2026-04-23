@@ -14,7 +14,7 @@ os.environ.setdefault("API_SHARED_KEY", "test_key_123")
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
 
-from agent_manager import SessionManager
+from agent_manager import SessionManager  # noqa: E402
 
 
 def _make_mgr():
@@ -63,7 +63,8 @@ class TestIssue125RetryFallbackChain(unittest.TestCase):
     @patch("agent_manager.time.sleep")
     @patch("openai.OpenAI")
     def test_issue_125_retry_fallback_chain(self, mock_openai_cls, mock_sleep):
-        """Main regression: 429 retries exhaust on primary, then falls back to next model."""
+        """Main regression: 429 retries exhaust on primary,
+        then falls back to next model."""
         free_cfg = {
             "max_retries_per_model": 2,
             "retry_backoff_seconds": [1, 2],
@@ -101,11 +102,16 @@ class TestIssue125RetryFallbackChain(unittest.TestCase):
         self.assertIn("fallback works", result)
         # primary was tried max_retries times before switching
         primary_calls = [c for c in call_tracker if "primary" in c]
-        self.assertEqual(len(primary_calls), 2, "Should retry primary 2x before fallback")
+        self.assertEqual(
+            len(primary_calls), 2,
+            "Should retry primary 2x before fallback"
+        )
 
     @patch("agent_manager.time.sleep")
     @patch("openai.OpenAI")
-    def test_issue_125_all_fallbacks_exhausted_no_crash(self, mock_openai_cls, mock_sleep):
+    def test_issue_125_all_fallbacks_exhausted_no_crash(
+        self, mock_openai_cls, mock_sleep
+    ):
         """B01: When all fallbacks are 429, return error message (no stack overflow)."""
         free_cfg = {
             "max_retries_per_model": 1,
@@ -133,7 +139,9 @@ class TestIssue125RetryFallbackChain(unittest.TestCase):
 
     @patch("agent_manager.time.sleep")
     @patch("openai.OpenAI")
-    def test_issue_125_fallback_notification_in_stream(self, mock_openai_cls, mock_sleep):
+    def test_issue_125_fallback_notification_in_stream(
+        self, mock_openai_cls, mock_sleep
+    ):
         """B02: stream buffer should receive fallback notification message."""
         free_cfg = {
             "max_retries_per_model": 1,
@@ -173,10 +181,16 @@ class TestIssue125RetryFallbackChain(unittest.TestCase):
 
         push_calls = stream_buf.push.call_args_list
         fallback_pushed = any(
-            any(kw in str(c).lower() for kw in ("fallback", "rate limited", "switching"))
+            any(
+                kw in str(c).lower()
+                for kw in ("fallback", "rate limited", "switching")
+            )
             for c in push_calls
         )
-        self.assertTrue(fallback_pushed, "B02: fallback notification must be pushed to stream buffer")
+        self.assertTrue(
+            fallback_pushed,
+            "B02: fallback notification must be pushed to stream buffer"
+        )
         self.assertIn("backup ok", result)
 
     @patch("agent_manager.time.sleep")
@@ -252,7 +266,8 @@ class TestIssue125RetryFallbackChain(unittest.TestCase):
 
 
 class TestIssue125HelperMethods(unittest.TestCase):
-    """Unit tests for _wee_load_free_config, _wee_is_free_model, _wee_resolve_endpoint."""
+    """Unit tests for _wee_load_free_config, _wee_is_free_model,
+    _wee_resolve_endpoint."""
 
     def setUp(self):
         self.mgr = _make_mgr()
@@ -278,8 +293,16 @@ class TestIssue125HelperMethods(unittest.TestCase):
 
     def test_issue_125_free_model_detection(self):
         """_wee_is_free_model must correctly identify :free models."""
-        self.assertTrue(self.mgr._wee_is_free_model("openrouter/anthropic/claude-3-haiku:free"))
-        self.assertTrue(self.mgr._wee_is_free_model("openrouter/mistral/mistral-7b-instruct:free"))
+        self.assertTrue(
+            self.mgr._wee_is_free_model(
+                "openrouter/anthropic/claude-3-haiku:free"
+            )
+        )
+        self.assertTrue(
+            self.mgr._wee_is_free_model(
+                "openrouter/mistral/mistral-7b-instruct:free"
+            )
+        )
         self.assertFalse(self.mgr._wee_is_free_model("ollama/llama3.2"))
         self.assertFalse(self.mgr._wee_is_free_model("anthropic/claude-3-haiku"))
 
