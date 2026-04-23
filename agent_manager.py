@@ -1226,7 +1226,8 @@ def check_runtime_blocked(runtime: str, state_file_path=None) -> bool:
             if "Blocked Until" in stripped:
                 continue
 
-        # Parse: | ID | Runtime/Service | Issue | Blocked Until | Written By | Fallback |
+        # Parse: | ID | Runtime/Service | Issue | Blocked Until |
+        # Written By | Fallback |
         cols = [c.strip() for c in stripped.split("|")]
         if len(cols) < 5:
             continue
