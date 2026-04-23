@@ -1226,7 +1226,8 @@ def check_runtime_blocked(runtime: str, state_file_path=None) -> bool:
             if "Blocked Until" in stripped:
                 continue
 
-        # Parse: | ID | Runtime/Service | Issue | Blocked Until | Written By | Fallback |
+        # Parse: | ID | Runtime/Service | Issue | Blocked Until |
+        # Written By | Fallback |
         cols = [c.strip() for c in stripped.split("|")]
         if len(cols) < 5:
             continue
@@ -1249,15 +1250,16 @@ def check_runtime_blocked(runtime: str, state_file_path=None) -> bool:
 
         try:
             import re as _re
-            from datetime import timezone as _tz, datetime as _dt
+            from datetime import datetime as _dt
+            from datetime import timezone as _tz
 
             dt_str = _re.sub(r"\s+UTC$", "+00:00", blocked_until_clean).strip()
             if "T" in dt_str or "+" in dt_str or dt_str.endswith("Z"):
                 blocked_dt = _dt.fromisoformat(dt_str.replace("Z", "+00:00"))
             else:
-                blocked_dt = _dt.strptime(
-                    dt_str, "%Y-%m-%d %H:%M"
-                ).replace(tzinfo=_tz.utc)
+                blocked_dt = _dt.strptime(dt_str, "%Y-%m-%d %H:%M").replace(
+                    tzinfo=_tz.utc
+                )
             return _dt.now(_tz.utc) < blocked_dt
         except (ValueError, ImportError):
             return True  # Unparseable date — treat as blocked
@@ -2174,6 +2176,9 @@ class SessionManager:
 
         # Lock for session map file read-modify-write to prevent TOCTOU races
         self._session_map_lock = threading.Lock()
+        # Per-session locks to prevent concurrent modification of individual sessions
+        self._per_session_locks: Dict[str, threading.Lock] = {}
+        self._per_session_locks_lock = threading.Lock()
         self._session_map_cache: Optional[Dict] = None
 
         # Per-session streaming queues: session_id -> (asyncio.Queue, event_loop)
@@ -4412,14 +4417,23 @@ You can mention an agent in your prompt and it will auto-delegate:
         cutoff = now - self.session_map_ttl
         pruned = {}
         evicted = 0
+        evicted_keys = []
         for key, entry in session_map.items():
             last_activity = (
                 entry.get("last_activity") if isinstance(entry, dict) else None
             )
             if last_activity is not None and last_activity < cutoff:
                 evicted += 1
+                evicted_keys.append(key)
                 continue
             pruned[key] = entry
+
+        # Clean up orphaned locks for evicted sessions (memory leak prevention)
+        if evicted_keys:
+            with self._per_session_locks_lock:
+                for session_id in evicted_keys:
+                    self._per_session_locks.pop(session_id, None)
+
         if evicted:
             logger.warning(
                 f"[SessionMap] TTL evicted {evicted} inactive entries "
@@ -4433,6 +4447,45 @@ You can mention an agent in your prompt and it will auto-delegate:
         with open(self.session_map_file, "w") as f:
             json.dump(session_map, f, indent=2)
         self._session_map_cache = dict(session_map)
+
+    def _get_per_session_lock(self, session_id: str) -> threading.Lock:
+        """Get or create a per-session lock (thread-safe)."""
+        with self._per_session_locks_lock:
+            if session_id not in self._per_session_locks:
+                self._per_session_locks[session_id] = threading.Lock()
+            return self._per_session_locks[session_id]
+
+    def save_session_map_atomic(self, session_map: dict) -> None:
+        """Save session map with atomic write using tempfile."""
+        import shutil
+        import tempfile
+
+        # Prune TTL before saving
+        session_map = self._prune_session_map_ttl(session_map)
+
+        # Write to temporary file first
+        tmp_path = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                mode="w",
+                dir=os.path.dirname(self.session_map_file),
+                delete=False,
+                suffix=".tmp",
+            ) as tmp:
+                json.dump(session_map, tmp, indent=2)
+                tmp_path = tmp.name
+
+            # Atomic rename
+            shutil.move(tmp_path, self.session_map_file)
+            self._session_map_cache = dict(session_map)
+        except Exception as e:
+            # Clean up temp file if rename failed
+            if tmp_path is not None and os.path.exists(tmp_path):
+                try:
+                    os.remove(tmp_path)
+                except OSError:
+                    pass
+            raise e
 
     def get_cached_session_count(self) -> int:
         """Return the in-memory session count without touching disk."""
@@ -6333,6 +6386,8 @@ User Request:
 
     def _get_or_create_stream_buffer(self, session_id: str):
         """Get existing buffer for session or create a new one."""
+        if not hasattr(self, "streaming_manager"):
+            self.streaming_manager = StreamingManager()
         return self.streaming_manager.get_or_create_buffer(session_id)
 
     def _register_stream(
@@ -10066,6 +10121,9 @@ User Request:
         # Touch before dispatch to keep session alive during long operations
         self.touch_session(n8n_session_id)
 
+        if not hasattr(self, "runtime_executor"):
+            self.runtime_executor = RuntimeExecutor()
+            self._register_runtime_executors()
         handler = self.runtime_executor.get(runtime)
         if handler is None:
             return f"Error: Unknown runtime '{runtime}'"
@@ -12577,13 +12635,16 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             x_user_identity=request.headers.get("x-user-identity"),
             x_auth_channel=request.headers.get("x-auth-channel"),
         )
-        session_map = session_mgr.load_session_map()
-        session_data = session_map.get(session_id)
-        if not session_data:
-            raise HTTPException(status_code=404, detail="Session not found")
+        # Use per-session lock to prevent race conditions
+        session_lock = session_mgr._get_per_session_lock(session_id)
+        with session_lock:
+            session_map = session_mgr.load_session_map()
+            session_data = session_map.get(session_id)
+            if not session_data:
+                raise HTTPException(status_code=404, detail="Session not found")
 
-        scratch = session_data.get("scratch", "")
-        return {"scratch": scratch, "session_id": session_id}
+            scratch = session_data.get("scratch", "")
+            return {"scratch": scratch, "session_id": session_id}
 
     class ScratchNotesRequest(BaseModel):
         scratch: str
@@ -12606,14 +12667,18 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             x_user_identity=request.headers.get("x-user-identity"),
             x_auth_channel=request.headers.get("x-auth-channel"),
         )
-        session_map = session_mgr.load_session_map()
-        session_data = session_map.get(session_id)
-        if not session_data:
-            raise HTTPException(status_code=404, detail="Session not found")
+        # Use per-session lock to prevent race conditions during read-modify-write
+        session_lock = session_mgr._get_per_session_lock(session_id)
+        with session_lock:
+            session_map = session_mgr.load_session_map()
+            session_data = session_map.get(session_id)
+            if not session_data:
+                raise HTTPException(status_code=404, detail="Session not found")
 
-        session_data["scratch"] = body.scratch
-        session_map[session_id] = session_data
-        session_mgr.save_session_map(session_map)
+            session_data["scratch"] = body.scratch
+            session_map[session_id] = session_data
+            # Use atomic write to prevent partial file writes
+            session_mgr.save_session_map_atomic(session_map)
 
         return {"success": True, "scratch": body.scratch, "session_id": session_id}
 
