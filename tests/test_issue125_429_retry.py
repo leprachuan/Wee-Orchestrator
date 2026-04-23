@@ -2,12 +2,13 @@
 Regression tests for Issue #125 — 429 retry + free model fallback chain.
 Tests: B01 (no recursion), B02 (user visibility), M01 (sync sleep), M03 (coverage).
 """
+
 import os
 import sys
 import threading
 import unittest
 from pathlib import Path
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
 
 os.environ.setdefault("API_SHARED_KEY", "test_key_123")
 
@@ -51,9 +52,9 @@ class TestIssue125RetryFallbackChain(unittest.TestCase):
 
     def setUp(self):
         self.mgr = _make_mgr()
-        self.mgr.get_or_create_session_data = MagicMock(return_value={
-            "channel": "test", "api_base": None, "api_key": None
-        })
+        self.mgr.get_or_create_session_data = MagicMock(
+            return_value={"channel": "test", "api_base": None, "api_key": None}
+        )
         self.mgr.build_agent_context_prompt = MagicMock(return_value="")
         self.mgr.update_session_field = MagicMock()
         self.mgr._fetch_openrouter_pricing = MagicMock(return_value={})
@@ -103,8 +104,7 @@ class TestIssue125RetryFallbackChain(unittest.TestCase):
         # primary was tried max_retries times before switching
         primary_calls = [c for c in call_tracker if "primary" in c]
         self.assertEqual(
-            len(primary_calls), 2,
-            "Should retry primary 2x before fallback"
+            len(primary_calls), 2, "Should retry primary 2x before fallback"
         )
 
     @patch("agent_manager.time.sleep")
@@ -182,14 +182,13 @@ class TestIssue125RetryFallbackChain(unittest.TestCase):
         push_calls = stream_buf.push.call_args_list
         fallback_pushed = any(
             any(
-                kw in str(c).lower()
-                for kw in ("fallback", "rate limited", "switching")
+                kw in str(c).lower() for kw in ("fallback", "rate limited", "switching")
             )
             for c in push_calls
         )
         self.assertTrue(
             fallback_pushed,
-            "B02: fallback notification must be pushed to stream buffer"
+            "B02: fallback notification must be pushed to stream buffer",
         )
         self.assertIn("backup ok", result)
 
@@ -275,6 +274,7 @@ class TestIssue125HelperMethods(unittest.TestCase):
     def test_issue_125_config_file_exists(self):
         """wee_free_models.json config file must exist in repo root."""
         import json
+
         config_path = REPO / "wee_free_models.json"
         self.assertTrue(config_path.exists(), "wee_free_models.json must exist")
         with open(config_path) as f:
@@ -294,14 +294,10 @@ class TestIssue125HelperMethods(unittest.TestCase):
     def test_issue_125_free_model_detection(self):
         """_wee_is_free_model must correctly identify :free models."""
         self.assertTrue(
-            self.mgr._wee_is_free_model(
-                "openrouter/anthropic/claude-3-haiku:free"
-            )
+            self.mgr._wee_is_free_model("openrouter/anthropic/claude-3-haiku:free")
         )
         self.assertTrue(
-            self.mgr._wee_is_free_model(
-                "openrouter/mistral/mistral-7b-instruct:free"
-            )
+            self.mgr._wee_is_free_model("openrouter/mistral/mistral-7b-instruct:free")
         )
         self.assertFalse(self.mgr._wee_is_free_model("ollama/llama3.2"))
         self.assertFalse(self.mgr._wee_is_free_model("anthropic/claude-3-haiku"))
@@ -327,6 +323,7 @@ class TestIssue125HelperMethods(unittest.TestCase):
         the orchestration path and the attempt helper use _time.sleep (not asyncio).
         """
         import inspect
+
         src_native = inspect.getsource(SessionManager.run_wee_native)
         src_attempt = inspect.getsource(SessionManager._wee_run_attempt)
         combined_src = src_native + src_attempt

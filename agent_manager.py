@@ -9098,10 +9098,12 @@ User Request:
             "fails or you cannot execute it, report the EXACT error message.\n"
             "2. NEVER provide example or placeholder output and present it as real. "
             'If you show an example, clearly label it as "EXAMPLE (not real output)".\n'
-            "3. When a tool call returns an error, relay the error verbatim to the user. "
-            "Do NOT attempt to guess what the successful output would have looked like.\n"
-            "4. For SSH commands: ALWAYS use ``-o StrictHostKeyChecking=accept-new`` to "
-            "avoid host-key verification failures on first connect.\n"
+            "3. When a tool call returns an error, relay the error verbatim "
+            "to the user. Do NOT attempt to guess what the successful output "
+            "would have looked like.\n"
+            "4. For SSH commands: ALWAYS use"
+            " ``-o StrictHostKeyChecking=accept-new``"
+            " to avoid host-key verification failures on first connect.\n"
         )
 
     @staticmethod
@@ -9466,9 +9468,9 @@ User Request:
                                     if tc.function.name:
                                         tool_calls_acc[idx]["name"] += tc.function.name
                                     if tc.function.arguments:
-                                        tool_calls_acc[idx]["args"] += (
-                                            tc.function.arguments
-                                        )
+                                        tool_calls_acc[idx][
+                                            "args"
+                                        ] += tc.function.arguments
                         if hasattr(chunk, "usage") and chunk.usage is not None:
                             last_usage = chunk.usage
 
@@ -9522,9 +9524,7 @@ User Request:
                         ]
                         if tool_results:
                             last_result = tool_results[-1]
-                            output = (
-                                f"Tool execution result:\n{last_result[:4000]}"
-                            )
+                            output = f"Tool execution result:\n{last_result[:4000]}"
                             if stream_buffer:
                                 stream_buffer.push("chunk", {"text": output})
                         elif any(m.get("role") == "tool" for m in messages):
