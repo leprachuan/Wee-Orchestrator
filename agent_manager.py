@@ -485,7 +485,9 @@ class BackgroundTaskManager:
         for task in tasks:
             current = dict(task)
             if isinstance(current.get("output_lines"), list):
-                current["output_lines"] = current["output_lines"][-self.MAX_OUTPUT_LINES :]
+                current["output_lines"] = current["output_lines"][
+                    -self.MAX_OUTPUT_LINES :
+                ]
             else:
                 current["output_lines"] = []
 
@@ -549,16 +551,16 @@ class BackgroundTaskManager:
 
         terminal_statuses = {"completed", "failed", "killed"}
         terminal_tasks = [
-            (i, t)
-            for i, t in enumerate(tasks)
-            if t.get("status") in terminal_statuses
+            (i, t) for i, t in enumerate(tasks) if t.get("status") in terminal_statuses
         ]
 
         if not terminal_tasks:
             return tasks
 
         evict_count = len(tasks) - self.MAX_TOTAL_TASKS
-        terminal_tasks.sort(key=lambda x: x[1].get("completed_at", "") or x[1].get("created_at", ""))
+        terminal_tasks.sort(
+            key=lambda x: x[1].get("completed_at", "") or x[1].get("created_at", "")
+        )
         evict_indices = {idx for idx, _ in terminal_tasks[:evict_count]}
 
         return [t for i, t in enumerate(tasks) if i not in evict_indices]
@@ -1925,6 +1927,12 @@ class SessionManager:
         self._session_map_lock = threading.Lock()
         self._session_map_cache: Optional[Dict] = None
 
+        # Per-session locks to prevent concurrent read-modify-write races on
+        # individual sessions. Maps n8n_session_id -> threading.Lock()
+        self._per_session_locks: Dict[str, threading.Lock] = {}
+        # Lock to protect the _per_session_locks dictionary itself
+        self._per_session_locks_lock = threading.Lock()
+
         # Collaborators extracted from the former monolithic SessionManager.
         self.cli_commands = CliCommandHandler(self)
         self.streaming = StreamingManager(self)
@@ -1967,6 +1975,18 @@ class SessionManager:
         """Remove live status for a session (call when execution finishes)."""
         with self._live_status_lock:
             self._live_status.pop(n8n_session_id, None)
+
+    def _get_per_session_lock(self, n8n_session_id: str) -> threading.Lock:
+        """Get or create a per-session lock to prevent concurrent modifications.
+
+        This lock ensures that when multiple API requests operate on the same
+        session, their read-modify-write operations are serialized. This prevents
+        lost session state and corrupted history (GitHub issue #23).
+        """
+        with self._per_session_locks_lock:
+            if n8n_session_id not in self._per_session_locks:
+                self._per_session_locks[n8n_session_id] = threading.Lock()
+            return self._per_session_locks[n8n_session_id]
 
     # ── Slash command registry (F020) ───────────────────────────────────
 
@@ -4084,10 +4104,14 @@ You can mention an agent in your prompt and it will auto-delegate:
         An entry is considered inactive if its ``last_activity`` timestamp is
         older than ``self.session_map_ttl`` seconds.  Entries that lack a
         ``last_activity`` field are kept so legacy data is not silently dropped.
+
+        Also cleans up orphaned per-session locks to prevent memory leaks
+        (GitHub issue #23).
         """
         now = time.time()
         cutoff = now - self.session_map_ttl
         pruned = {}
+        evicted_sessions = []
         evicted = 0
         for key, entry in session_map.items():
             last_activity = (
@@ -4095,14 +4119,19 @@ You can mention an agent in your prompt and it will auto-delegate:
             )
             if last_activity is not None and last_activity < cutoff:
                 evicted += 1
+                evicted_sessions.append(key)
                 continue
             pruned[key] = entry
         if evicted:
             print(
                 f"[SessionMap] TTL evicted {evicted} inactive entries "
                 f"(threshold {self.session_map_ttl / 86400:.0f}d)",
-                file=__import__('sys').stderr,
+                file=__import__("sys").stderr,
             )
+            # Clean up orphaned per-session locks to prevent memory leak
+            with self._per_session_locks_lock:
+                for session_id in evicted_sessions:
+                    self._per_session_locks.pop(session_id, None)
         return pruned
 
     def save_session_map(self, session_map: dict):
@@ -4146,9 +4175,17 @@ You can mention an agent in your prompt and it will auto-delegate:
         """
         Get existing session data or create new default
         Returns dict with keys: session_id, model, agent, runtime, bot_id, channel
+
+        Thread-safe: acquires both global session_map lock and per-session lock
+        to prevent race conditions even with concurrent requests to the same session.
         """
-        with self._session_map_lock:
-            return self._get_or_create_session_data_unlocked(n8n_session_id, identity)
+        # Acquire per-session lock first to prevent concurrent modifications
+        session_lock = self._get_per_session_lock(n8n_session_id)
+        with session_lock:
+            with self._session_map_lock:
+                return self._get_or_create_session_data_unlocked(
+                    n8n_session_id, identity
+                )
 
     def _get_or_create_session_data_unlocked(
         self, n8n_session_id: str, identity: Optional[str] = None
@@ -4310,30 +4347,37 @@ You can mention an agent in your prompt and it will auto-delegate:
         return {**default_data, "is_new": True}
 
     def update_session_field(self, n8n_session_id: str, field: str, value):
-        """Update a specific field in the session map (thread-safe)"""
-        with self._session_map_lock:
-            session_map = self.load_session_map()
+        """Update a specific field in the session map (thread-safe).
 
-            if n8n_session_id not in session_map:
-                # Create new if doesn't exist
-                self._get_or_create_session_data_unlocked(n8n_session_id)
+        Acquires both global session_map lock and per-session lock to prevent
+        concurrent modifications to the same session.
+        """
+        session_lock = self._get_per_session_lock(n8n_session_id)
+        with session_lock:
+            with self._session_map_lock:
                 session_map = self.load_session_map()
 
-            # Guard against race-condition where key is still missing after create
-            if n8n_session_id not in session_map:
-                return
+                if n8n_session_id not in session_map:
+                    # Create new if doesn't exist
+                    self._get_or_create_session_data_unlocked(n8n_session_id)
+                    session_map = self.load_session_map()
 
-            if isinstance(session_map[n8n_session_id], str):
-                # Convert old string format to dict
-                session_map[n8n_session_id] = {
-                    "session_id": session_map[n8n_session_id],
-                    "model": get_default_model(),
-                    "agent": get_default_agent(),
-                    "runtime": get_default_runtime(),
-                }
+                # Guard against race-condition where key is still missing after
+                # create
+                if n8n_session_id not in session_map:
+                    return
 
-            session_map[n8n_session_id][field] = value
-            self.save_session_map(session_map)
+                if isinstance(session_map[n8n_session_id], str):
+                    # Convert old string format to dict
+                    session_map[n8n_session_id] = {
+                        "session_id": session_map[n8n_session_id],
+                        "model": get_default_model(),
+                        "agent": get_default_agent(),
+                        "runtime": get_default_runtime(),
+                    }
+
+                session_map[n8n_session_id][field] = value
+                self.save_session_map(session_map)
 
     def touch_session(self, n8n_session_id: str) -> None:
         """Update the last_activity timestamp for a session.
@@ -4343,25 +4387,29 @@ You can mention an agent in your prompt and it will auto-delegate:
         from abandoned ones.  Also touches the backend session-state
         directory (if it exists) to reset its mtime, preventing the
         cleanup daemon from treating it as stale.
+
+        Thread-safe: acquires both global and per-session locks.
         """
         now = time.time()
-        with self._session_map_lock:
-            session_map = self.load_session_map()
-            entry = session_map.get(n8n_session_id)
-            if entry and isinstance(entry, dict):
-                entry["last_activity"] = now
-                self.save_session_map(session_map)
+        session_lock = self._get_per_session_lock(n8n_session_id)
+        with session_lock:
+            with self._session_map_lock:
+                session_map = self.load_session_map()
+                entry = session_map.get(n8n_session_id)
+                if entry and isinstance(entry, dict):
+                    entry["last_activity"] = now
+                    self.save_session_map(session_map)
 
-                # Touch the backend session-state directory to reset mtime
-                backend_sid = entry.get("session_id")
-                if backend_sid:
-                    backend_dir = self.session_state_dir / backend_sid
-                    if backend_dir.exists():
-                        try:
-                            backend_dir.stat()  # read
-                            os.utime(backend_dir, (now, now))
-                        except OSError:
-                            pass
+                    # Touch the backend session-state directory to reset mtime
+                    backend_sid = entry.get("session_id")
+                    if backend_sid:
+                        backend_dir = self.session_state_dir / backend_sid
+                        if backend_dir.exists():
+                            try:
+                                backend_dir.stat()  # read
+                                os.utime(backend_dir, (now, now))
+                            except OSError:
+                                pass
 
     def get_effective_timeout(self, session_data: dict) -> int:
         """Get the effective timeout for a session (session-specific or default)"""
@@ -4617,7 +4665,15 @@ You can mention an agent in your prompt and it will auto-delegate:
         name_lower = name.lower().strip("\"'")
 
         # Ensure env models are loaded/cached by triggering fetch for this runtime
-        if runtime in ("claude", "claude-sdk", "gemini", "codex", "devin", "cursor", "wee"):
+        if runtime in (
+            "claude",
+            "claude-sdk",
+            "gemini",
+            "codex",
+            "devin",
+            "cursor",
+            "wee",
+        ):
             self.get_models_for_runtime(runtime)
 
         # Step 1: check env-loaded or static alias tables for all runtimes that have them.
@@ -7970,60 +8026,68 @@ User Request:
         Issue #108: Saves the full message array (system + user + assistant +
         tool) so the next turn can reconstruct the conversation.
         Caps at MAX_WEE_MESSAGES to prevent unbounded growth.
+
+        Thread-safe: acquires both global and per-session locks to prevent
+        concurrent modifications.
         """
         MAX_WEE_MESSAGES = 100
-        with self._session_map_lock:
-            session_map = self.load_session_map()
-            if n8n_session_id in session_map:
-                # Keep system prompt + last N messages
-                if len(messages) > MAX_WEE_MESSAGES:
-                    system_msgs = [m for m in messages if m.get("role") == "system"]
-                    non_system = [m for m in messages if m.get("role") != "system"]
-                    saved = (
-                        system_msgs
-                        + non_system[-(MAX_WEE_MESSAGES - len(system_msgs)) :]
-                    )
-                else:
-                    saved = list(messages)
-                # Strip tool_calls from assistant messages for JSON serialization
-                clean = []
-                for m in saved:
-                    if m.get("tool_calls"):
-                        mc = dict(m)
-                        mc["tool_calls"] = [
-                            {
-                                "id": (
-                                    tc.get("id", "")
-                                    if isinstance(tc, dict)
-                                    else getattr(tc, "id", "")
-                                ),
-                                "type": "function",
-                                "function": {
-                                    "name": (
-                                        tc.get("function", {}).get("name", "")
-                                        if isinstance(tc, dict)
-                                        else getattr(
-                                            getattr(tc, "function", None), "name", ""
-                                        )
-                                    ),
-                                    "arguments": (
-                                        tc.get("function", {}).get("arguments", "")
-                                        if isinstance(tc, dict)
-                                        else getattr(
-                                            getattr(tc, "function", None),
-                                            "arguments",
-                                            "",
-                                        )
-                                    ),
-                                },
-                            }
-                            for tc in m["tool_calls"]
-                        ]
-                        clean.append(mc)
+        session_lock = self._get_per_session_lock(n8n_session_id)
+        with session_lock:
+            with self._session_map_lock:
+                session_map = self.load_session_map()
+                if n8n_session_id in session_map:
+                    # Keep system prompt + last N messages
+                    if len(messages) > MAX_WEE_MESSAGES:
+                        system_msgs = [m for m in messages if m.get("role") == "system"]
+                        non_system = [m for m in messages if m.get("role") != "system"]
+                        saved = (
+                            system_msgs
+                            + non_system[-(MAX_WEE_MESSAGES - len(system_msgs)) :]
+                        )
                     else:
-                        clean.append(m)
-                session_map[n8n_session_id]["wee_messages"] = clean
-                self.save_session_map(session_map)
+                        saved = list(messages)
+                    # Strip tool_calls from assistant messages for JSON
+                    # serialization
+                    clean = []
+                    for m in saved:
+                        if m.get("tool_calls"):
+                            mc = dict(m)
+                            mc["tool_calls"] = [
+                                {
+                                    "id": (
+                                        tc.get("id", "")
+                                        if isinstance(tc, dict)
+                                        else getattr(tc, "id", "")
+                                    ),
+                                    "type": "function",
+                                    "function": {
+                                        "name": (
+                                            tc.get("function", {}).get("name", "")
+                                            if isinstance(tc, dict)
+                                            else getattr(
+                                                getattr(tc, "function", None),
+                                                "name",
+                                                "",
+                                            )
+                                        ),
+                                        "arguments": (
+                                            tc.get("function", {}).get("arguments", "")
+                                            if isinstance(tc, dict)
+                                            else getattr(
+                                                getattr(tc, "function", None),
+                                                "arguments",
+                                                "",
+                                            )
+                                        ),
+                                    },
+                                }
+                                for tc in m["tool_calls"]
+                            ]
+                            clean.append(mc)
+                        else:
+                            clean.append(m)
+                    session_map[n8n_session_id]["wee_messages"] = clean
+                    self.save_session_map(session_map)
 
     def _wee_augment_system_prompt_with_tools(self, system_prompt: str) -> str:
         """Issue #111: Append explicit tool capability declaration to system prompt.
@@ -8755,8 +8819,8 @@ def _send_pairing_code(channel: str, identity: str, code: str) -> bool:
             #   email       → toPersonEmail
             #   person ID   → toPersonId  (base64 of ciscospark://us/PEOPLE/...)
             #   anything else → roomId
-            import re as _re
             import base64 as _b64
+            import re as _re
 
             if _re.match(r"[^@]+@[^@]+\.[^@]+", identity):
                 payload = {"toPersonEmail": identity, "text": msg, "markdown": msg}
@@ -11466,9 +11530,12 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 cmd = [
                     sys.executable,
                     agent_manager_script,
-                    "--runtime", runtime,
-                    "--model", model,
-                    "--agent", agent,
+                    "--runtime",
+                    runtime,
+                    "--model",
+                    model,
+                    "--agent",
+                    agent,
                     context_prompt,
                     session_id or str(uuid4()),
                 ]
