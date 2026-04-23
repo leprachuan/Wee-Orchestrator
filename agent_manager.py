@@ -8680,7 +8680,6 @@ User Request:
         Fallback switches are streamed to user for visibility (fixes B02).
         time.sleep is safe: sync function runs in thread-pool worker (M01).
         """
-        import json as _json
         import time as _time
 
         try:
@@ -8710,6 +8709,11 @@ User Request:
 
         stream_buffer = getattr(self, "_stream_buffers", {}).get(n8n_session_id)
 
+        # Initialize loop-state variables; _chain_idx>0 block reads these.
+        collected_output: list = []
+        messages: list = []
+        _got_429 = False
+
         for _chain_idx, _attempt_model in enumerate(_chain):
             # Issue #175: Finalize previous model's output (fallback iterations only).
             # On first iteration, messages and collected_output are not yet defined.
@@ -8718,14 +8722,15 @@ User Request:
                 # Issue #112: surface last tool result when synthesis is empty
                 if not output.strip():
                     tool_results = [
-                        m["content"] for m in messages
+                        m["content"]
+                        for m in messages
                         if m.get("role") == "tool" and m.get("content")
                     ]
                     if tool_results:
                         last_result = tool_results[-1]
                         output = f"Tool execution result:\n{last_result[:4000]}"
                         print(
-                            f"[Wee Native] Empty synthesis fallback: surfacing last tool result ({len(last_result)} chars)",
+                            f"[Wee Native] Empty synthesis fallback: surfacing last tool result ({len(last_result)} chars)",  # noqa: E501
                             file=sys.stderr,
                         )
                         if stream_buffer:
@@ -8733,7 +8738,7 @@ User Request:
                     elif any(m.get("role") == "tool" for m in messages):
                         output = "(Tool executed but produced no output)"
                         print(
-                            "[Wee Native] Empty synthesis fallback: tool produced no output",
+                            "[Wee Native] Empty synthesis fallback: tool produced no output",  # noqa: E501
                             file=sys.stderr,
                         )
                         if stream_buffer:
@@ -8741,9 +8746,6 @@ User Request:
 
                 # Issue #108: Persist conversation history
                 self._wee_save_messages(n8n_session_id, messages)
-
-                if stream_buffer:
-                    stream_buffer.push("done", output)
 
                 # B02: surface fallback model switch to user
                 _fb_short = _attempt_model.split("/")[-1]
@@ -8779,7 +8781,9 @@ User Request:
             )
             # Issue #108: Load conversation history for multi-turn context.
             # Issue #175: Apply proactive compaction if context exceeds 80% capacity.
-            messages = self._wee_load_messages(n8n_session_id, context_prompt, resume=resume)
+            messages = self._wee_load_messages(
+                n8n_session_id, context_prompt, resume=resume
+            )
             messages.append({"role": "user", "content": prompt})
             messages = self._wee_maybe_compact(
                 client, n8n_session_id, messages, resolved_model, context_prompt
@@ -9189,7 +9193,9 @@ User Request:
                 json.dump(messages, f, indent=2, default=str)
             return str(path)
         except Exception as e:
-            print(f"[Wee Native] Warning: could not save transcript: {e}", file=sys.stderr)
+            print(
+                f"[Wee Native] Warning: could not save transcript: {e}", file=sys.stderr
+            )
             return ""
 
     def _wee_compact_context(
@@ -9232,7 +9238,7 @@ User Request:
 
         # Build summary request: ask LLM to condense the history
         def _fmt_msg(content: str, budget: int = 6000) -> str:
-            """Preserve head and tail of a message so error tails / stack traces survive."""
+            """Preserve head and tail of a message so error tails / stack traces survive."""  # noqa: E501
             if len(content) <= budget:
                 return content
             half = budget // 2
@@ -9243,16 +9249,19 @@ User Request:
             for m in history
         )
         summary_prompt = (
-            "You are a session compaction assistant. Produce a dense, structured summary of "
-            "the following conversation segment. Preserve all key facts, decisions, code "
-            "changes, file paths, error messages, and action results. Be thorough but concise.\n\n"
+            "You are a session compaction assistant. Produce a dense, structured summary of "  # noqa: E501
+            "the following conversation segment. Preserve all key facts, decisions, code "  # noqa: E501
+            "changes, file paths, error messages, and action results. Be thorough but concise.\n\n"  # noqa: E501
             "CONVERSATION TO SUMMARIZE:\n" + history_text
         )
         try:
             summary_resp = client.chat.completions.create(
                 model=resolved_model,
                 messages=[
-                    {"role": "system", "content": "You summarize conversations accurately."},
+                    {
+                        "role": "system",
+                        "content": "You summarize conversations accurately.",
+                    },
                     {"role": "user", "content": summary_prompt},
                 ],
                 max_tokens=2048,
@@ -9271,7 +9280,7 @@ User Request:
         )
         summary_block = (
             "=== SESSION CONTEXT SUMMARY ===\n"
-            "The following is a summary of the conversation history prior to this point.\n"
+            "The following is a summary of the conversation history prior to this point.\n"  # noqa: E501
             "For full details, refer to the transcript path below.\n\n"
             + summary_text  # noqa: W503
             + transcript_ref  # noqa: W503
@@ -9284,7 +9293,7 @@ User Request:
             compact_messages.append(latest_user)
 
         print(
-            f"[Wee Native] Context compacted: {len(messages)} → {len(compact_messages)} messages",
+            f"[Wee Native] Context compacted: {len(messages)} → {len(compact_messages)} messages",  # noqa: E501
             file=sys.stderr,
         )
         return compact_messages
@@ -9312,7 +9321,7 @@ User Request:
             return messages
 
         print(
-            f"[Wee Native] Context at {ratio:.1%} capacity ({estimated}/{limit} tokens) — "
+            f"[Wee Native] Context at {ratio:.1%} capacity ({estimated}/{limit} tokens) — "  # noqa: E501
             "triggering compaction",
             file=sys.stderr,
         )
@@ -13219,8 +13228,9 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         # global primary runtime preference; else fall back to env/default.
         if body.runtime:
             runtime = body.runtime
-            print(f"[RuntimePref] Explicit runtime override: {runtime}",
-                  file=sys.stderr)
+            print(
+                f"[RuntimePref] Explicit runtime override: {runtime}", file=sys.stderr
+            )
         else:
             _session_rt = defaults.get("runtime")
             _pref_primary = _get_runtime_pref_mgr().primary()
@@ -13229,8 +13239,9 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 _session_rt or _pref_primary or _pref_backup or get_default_runtime()
             )
             if _session_rt:
-                print(f"[RuntimePref] Using session runtime: {runtime}",
-                      file=sys.stderr)
+                print(
+                    f"[RuntimePref] Using session runtime: {runtime}", file=sys.stderr
+                )
             elif _pref_primary:
                 print(
                     f"[RuntimePref] Using primary preference runtime: {runtime}",

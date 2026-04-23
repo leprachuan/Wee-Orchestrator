@@ -10,15 +10,16 @@ Tests cover:
   - Integration: _wee_maybe_compact called from run_wee_native
 """
 
-from agent_manager import SessionManager
-import sys
-import os
 import json
+import os
+import sys
 import tempfile
 import threading
 import unittest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
+
+from agent_manager import SessionManager
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
@@ -63,10 +64,12 @@ def _run_wee_native_test(mgr, test_session, model="ollama/gemma4:e4b", **kwargs)
         {"runtime": "wee", "model": model, "channel": "api"},
     )
     with patch.object(mgr, "get_or_create_session_data", return_value=session_data):
-        with patch.object(mgr, "build_agent_context_prompt",
-                          return_value="You are helpful."):
-            with patch.object(mgr, "load_session_map",
-                              return_value=dict(mgr.session_map)):
+        with patch.object(
+            mgr, "build_agent_context_prompt", return_value="You are helpful."
+        ):
+            with patch.object(
+                mgr, "load_session_map", return_value=dict(mgr.session_map)
+            ):
                 with patch.object(mgr, "save_session_map"):
                     return mgr.run_wee_native(**defaults)
 
@@ -74,6 +77,7 @@ def _run_wee_native_test(mgr, test_session, model="ollama/gemma4:e4b", **kwargs)
 # ---------------------------------------------------------------------------
 # Token estimation
 # ---------------------------------------------------------------------------
+
 
 class TestWeeEstimateTokens(unittest.TestCase):
     def test_empty_messages(self):
@@ -101,6 +105,7 @@ class TestWeeEstimateTokens(unittest.TestCase):
 # Context limits
 # ---------------------------------------------------------------------------
 
+
 class TestWeeGetContextLimit(unittest.TestCase):
     def setUp(self):
         self.mgr = _make_mgr()
@@ -109,8 +114,9 @@ class TestWeeGetContextLimit(unittest.TestCase):
         self.assertEqual(self.mgr._wee_get_context_limit("gemma4:e4b"), 128000)
 
     def test_known_model_openrouter(self):
-        self.assertEqual(self.mgr._wee_get_context_limit(
-            "meta-llama/llama-4-scout:free"), 131072)
+        self.assertEqual(
+            self.mgr._wee_get_context_limit("meta-llama/llama-4-scout:free"), 131072
+        )
 
     def test_default_for_unknown_model(self):
         self.assertEqual(
@@ -119,8 +125,9 @@ class TestWeeGetContextLimit(unittest.TestCase):
         )
 
     def test_heuristic_128k(self):
-        self.assertEqual(self.mgr._wee_get_context_limit(
-            "some-model-128k-version"), 128000)
+        self.assertEqual(
+            self.mgr._wee_get_context_limit("some-model-128k-version"), 128000
+        )
 
     def test_heuristic_32k(self):
         self.assertEqual(self.mgr._wee_get_context_limit("some-model-32k"), 32768)
@@ -129,6 +136,7 @@ class TestWeeGetContextLimit(unittest.TestCase):
 # ---------------------------------------------------------------------------
 # Transcript saving
 # ---------------------------------------------------------------------------
+
 
 class TestWeeSaveTranscript(unittest.TestCase):
     def setUp(self):
@@ -148,8 +156,9 @@ class TestWeeSaveTranscript(unittest.TestCase):
                 real_path.mkdir(parents=True, exist_ok=True)
 
             mock_dir = MagicMock(spec=Path)
-            mock_dir.__truediv__ = lambda self, other: Path(
-                tmpdir) / "logs" / "transcripts" / other
+            mock_dir.__truediv__ = (
+                lambda self, other: Path(tmpdir) / "logs" / "transcripts" / other
+            )
             mock_dir.mkdir = fake_mkdir
 
             # Patch Path(__file__).parent to return tmpdir-based path object
@@ -160,9 +169,7 @@ class TestWeeSaveTranscript(unittest.TestCase):
                 MockPath.return_value.parent = real_path_parent
                 MockPath.side_effect = lambda x: Path(x)
                 # Use the real Path but redirect the transcript dir
-                path = self.mgr._wee_save_transcript.__func__(
-                    self.mgr, "sess123", msgs
-                )
+                path = self.mgr._wee_save_transcript.__func__(self.mgr, "sess123", msgs)
                 # Won't work easily — let's just call the real method with a real dir
 
         # Simpler approach: just call with real filesystem
@@ -214,15 +221,14 @@ class TestWeeSaveTranscript(unittest.TestCase):
                 # The resolved path must NOT be under /tmp (traversal escaped)
                 self.assertFalse(
                     norm.startswith("/tmp/"),
-                    f"Path traversal succeeded — transcript written to {path}"
+                    f"Path traversal succeeded — transcript written to {path}",
                 )
                 # It must stay inside a 'transcripts' sub-directory
                 self.assertIn("transcripts", norm)
                 # No raw ".." components must survive in the output path
                 for part in norm.split(os.sep):
                     self.assertNotEqual(
-                        part, "..",
-                        f"Traversal sequence '..' in path: {norm}"
+                        part, "..", f"Traversal sequence '..' in path: {norm}"
                     )
         finally:
             if path and os.path.exists(path):
@@ -243,6 +249,7 @@ class TestWeeSaveTranscript(unittest.TestCase):
         finally:
             if path and os.path.exists(path):
                 os.remove(path)
+
 
 # ---------------------------------------------------------------------------
 # _wee_maybe_compact threshold logic
@@ -272,8 +279,9 @@ class TestWeeMaybeCompact(unittest.TestCase):
         ]
         client = _make_client("Summary of prior messages.")
         with patch.object(self.mgr, "_wee_get_context_limit", return_value=10):
-            with patch.object(self.mgr, "_wee_save_transcript",
-                              return_value="/tmp/fake.json"):
+            with patch.object(
+                self.mgr, "_wee_save_transcript", return_value="/tmp/fake.json"
+            ):
                 result = self.mgr._wee_maybe_compact(
                     client, "sess2", msgs, "gemma4:e4b", "sys"
                 )
@@ -293,6 +301,7 @@ class TestWeeMaybeCompact(unittest.TestCase):
 # ---------------------------------------------------------------------------
 # _wee_compact_context output structure
 # ---------------------------------------------------------------------------
+
 
 class TestWeeCompactContext(unittest.TestCase):
     def setUp(self):
@@ -366,8 +375,7 @@ class TestWeeCompactContext(unittest.TestCase):
         ]
         client = _make_client("SUMMARY_CONTENT")
         with patch.object(
-            self.mgr, "_wee_save_transcript",
-            return_value="/special/path.json"
+            self.mgr, "_wee_save_transcript", return_value="/special/path.json"
         ):
             result = self.mgr._wee_compact_context(
                 client, "sess-tp", msgs, "gemma4:e4b", "sys"
@@ -404,30 +412,28 @@ class TestWeeCompactContext(unittest.TestCase):
         client = MagicMock()
         mock_choice = MagicMock()
         mock_choice.message.content = "summary"
-        client.chat.completions.create.side_effect = (
-            lambda **kw: (captured_prompts.append(kw["messages"]),
-                          type("R", (), {"choices": [mock_choice]})())[-1]
-        )
+        client.chat.completions.create.side_effect = lambda **kw: (
+            captured_prompts.append(kw["messages"]),
+            type("R", (), {"choices": [mock_choice]})(),
+        )[-1]
 
         with patch.object(self.mgr, "_wee_save_transcript", return_value="/tmp/t.json"):
             self.mgr._wee_compact_context(
                 client, "sess-tail", msgs, "gemma4:e4b", "system context"
             )
 
-        self.assertTrue(
-            captured_prompts,
-            "LLM should have been called for compaction"
-        )
+        self.assertTrue(captured_prompts, "LLM should have been called for compaction")
         # The prompt sent to the LLM must contain the error tail
         summary_user_msg = next(
-            (m for m in captured_prompts[0] if m.get("role") == "user"),
-            None
+            (m for m in captured_prompts[0] if m.get("role") == "user"), None
         )
         self.assertIsNotNone(summary_user_msg, "LLM call should have a user message")
         self.assertIn(
-            error_tail, summary_user_msg["content"],
-            "Error tail must survive compaction and appear in the LLM summary request"
+            error_tail,
+            summary_user_msg["content"],
+            "Error tail must survive compaction and appear in the LLM summary request",
         )
+
 
 # ---------------------------------------------------------------------------
 # Integration: run_wee_native calls _wee_maybe_compact
@@ -461,8 +467,9 @@ class TestRunWeeNativeCompactionIntegration(unittest.TestCase):
         mock_instance.chat.completions.create.return_value = iter([chunk])
 
         with patch.object(
-            self.mgr, "_wee_maybe_compact",
-            return_value=[{"role": "user", "content": "test"}]
+            self.mgr,
+            "_wee_maybe_compact",
+            return_value=[{"role": "user", "content": "test"}],
         ) as mock_compact:
             _run_wee_native_test(self.mgr, self.session_id)
             mock_compact.assert_called_once()
@@ -492,7 +499,7 @@ class TestIssue175WEESaveMessagesPersistedOnly(unittest.TestCase):
             sm.session_map = {}
             sm._wee_save_messages(
                 "persisted-only",
-                [{"role": "user", "content": "hello from persisted session"}]
+                [{"role": "user", "content": "hello from persisted session"}],
             )
             saved_map = json.loads(p.read_text())
             assert "persisted-only" in saved_map
@@ -512,8 +519,7 @@ class TestIssue175WEESaveMessagesPersistedOnly(unittest.TestCase):
             sm.session_map_file = p
             sm.session_map = {}
             sm._wee_save_messages(
-                "totally-unknown",
-                [{"role": "user", "content": "should not be saved"}]
+                "totally-unknown", [{"role": "user", "content": "should not be saved"}]
             )
             saved_map = json.loads(p.read_text())
             assert "totally-unknown" not in saved_map
@@ -521,3 +527,146 @@ class TestIssue175WEESaveMessagesPersistedOnly(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+# ---------------------------------------------------------------------------
+# Regression: Issue #175 — 429->fallback stream ordering (no early done)
+# ---------------------------------------------------------------------------
+
+
+class TestIssue175FallbackStreamOrdering(unittest.TestCase):
+    """Regression test: stream_buffer must not emit 'done' before the
+    fallback model has run.
+
+    On the broken branch (commit 356e217 and earlier) the fallback iteration
+    block called stream_buffer.push('done', output) *before* switching to
+    the fallback model.  StreamBuffer.push('done', ...) immediately sets
+    finished=True, so SSE consumers broke their drain loop and dropped all
+    subsequent fallback chunks and the real terminal 'done'.
+
+    The correct event ordering for a 429->fallback-success path is:
+      chunk  (rate-limit message)  - optional warning to the user
+      chunk  (fallback output)     - real assistant tokens
+      done   (final result)        - exactly once, after all chunks
+    """
+
+    def setUp(self):
+        self.mgr = _make_mgr()
+        self.session_id = "wee-fallback-stream-175"
+        self.mgr.session_map[self.session_id] = {
+            "agent": "orchestrator",
+            "runtime": "wee",
+            "model": "openrouter/free-a",
+            "prompt": "",
+            "output": "",
+            "wee_messages": [],
+        }
+        # Attach a real StreamBuffer so we can inspect event ordering.
+        from session_manager_components import StreamBuffer
+
+        buf = StreamBuffer()
+        self.mgr._stream_buffers = {self.session_id: buf}
+        self.buf = buf
+
+    @patch("openai.OpenAI")
+    def test_no_early_done_before_fallback_chunks(self, MockOpenAI):
+        """done must not appear in the buffer before the fallback chunk."""
+
+        def make_stream_iter(tokens=None, raise_429=False):
+            if raise_429:
+                raise Exception("429 Too Many Requests: rate limit exceeded")
+            mock_chunks = []
+            for t in tokens or ["OK"]:
+                c = MagicMock()
+                c.choices = [MagicMock()]
+                c.choices[0].delta.content = t
+                c.choices[0].delta.tool_calls = None
+                c.usage = None
+                mock_chunks.append(c)
+            return iter(mock_chunks)
+
+        call_count = [0]
+
+        def side_effect(**kwargs):
+            call_count[0] += 1
+            model = kwargs.get("model", "")
+            if "free-a" in model:
+                return make_stream_iter(raise_429=True)
+            # fallback model returns success
+            return make_stream_iter(tokens=["Fallback", " response"])
+
+        mock_client = MagicMock()
+        mock_client.chat.completions.create.side_effect = side_effect
+        MockOpenAI.return_value = mock_client
+
+        with patch.object(
+            self.mgr,
+            "_wee_load_free_config",
+            return_value={
+                "max_retries_per_model": 1,
+                "retry_backoff_seconds": [0],
+                "free_model_fallback_chain": ["openrouter/free-b"],
+            },
+        ):
+            with patch.object(self.mgr, "_wee_is_free_model", return_value=True):
+                with patch.object(
+                    self.mgr,
+                    "_wee_resolve_endpoint",
+                    side_effect=lambda m, base, key: ("http://fake", "fake-key", m),
+                ):
+                    with patch.object(
+                        self.mgr,
+                        "_wee_maybe_compact",
+                        side_effect=lambda cl, sid, msgs, mdl, ctx: msgs,
+                    ):
+                        result = _run_wee_native_test(
+                            self.mgr, self.session_id, model="openrouter/free-a"
+                        )
+
+        # ---- Verify stream event ordering ----
+        events = list(self.buf.chunks)
+        kinds = [k for k, _ in events]
+
+        # 1. There must be exactly one 'done' event.
+        done_count = kinds.count("done")
+        self.assertEqual(
+            done_count,
+            1,
+            "Expected exactly 1 'done', got %d. Events: %r" % (done_count, events),
+        )
+
+        done_index = kinds.index("done")
+
+        # 2. 'done' must be the last event.
+        self.assertEqual(
+            done_index,
+            len(events) - 1,
+            "'done' is not the last event (index %d of %d). "
+            "Events after done: %r"
+            % (done_index, len(events), events[done_index + 1 :]),
+        )
+
+        # 3. Fallback chunk(s) must appear BEFORE 'done'.
+        chunk_indices = [i for i, (k, _) in enumerate(events) if k == "chunk"]
+        self.assertTrue(
+            len(chunk_indices) > 0,
+            "No chunk events found -- fallback output was dropped",
+        )
+        last_chunk_index = max(chunk_indices)
+        self.assertLess(
+            last_chunk_index,
+            done_index,
+            "Chunk at index %d appears after done at %d"
+            % (last_chunk_index, done_index),  # noqa: E501
+        )
+
+        # 4. Verify the final result contains the fallback output.
+        self.assertIn(
+            "Fallback", result, "Fallback output missing from result: %r" % result
+        )
+
+        # 5. done event data must match the final result.
+        done_data = events[done_index][1]
+        self.assertIn(
+            "Fallback", done_data, "done event data does not contain fallback output"
+        )
