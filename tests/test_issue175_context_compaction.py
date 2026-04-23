@@ -467,6 +467,7 @@ class TestRunWeeNativeCompactionIntegration(unittest.TestCase):
             _run_wee_native_test(self.mgr, self.session_id)
             mock_compact.assert_called_once()
 
+
 class TestIssue175WEESaveMessagesPersistedOnly(unittest.TestCase):
     """Regression: _wee_save_messages must save even when the session exists
     only in the persisted session_map_file (not self.session_map).

@@ -9175,15 +9175,14 @@ User Request:
         exceed one JSON file per compaction event. The path is injected into
         the compact context so the model can look back if needed.
         """
-        import json
         import re as _re
-        from datetime import datetime
+        from datetime import datetime, timezone
 
         # Sanitize session_id to prevent path traversal (e.g. ../../../tmp/...)
         safe_id = _re.sub(r"[^A-Za-z0-9_\-]", "_", n8n_session_id)[:80] or "unknown"
         transcript_dir = Path(__file__).parent / "logs" / "transcripts" / safe_id
         transcript_dir.mkdir(parents=True, exist_ok=True)
-        ts = datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
+        ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
         path = transcript_dir / f"transcript_{ts}.json"
         try:
             with open(path, "w") as f:
@@ -9210,7 +9209,6 @@ User Request:
         Returns a new messages list with the structure:
           [system_msg, assistant_summary_msg, user_latest_msg]
         """
-        import json
 
         # Save full transcript before compacting
         transcript_path = self._wee_save_transcript(n8n_session_id, messages)
@@ -9275,9 +9273,9 @@ User Request:
             "=== SESSION CONTEXT SUMMARY ===\n"
             "The following is a summary of the conversation history prior to this point.\n"
             "For full details, refer to the transcript path below.\n\n"
-            + summary_text
-            + transcript_ref
-            + "\n=== END SUMMARY ==="
+            + summary_text  # noqa: W503
+            + transcript_ref  # noqa: W503
+            + "\n=== END SUMMARY ==="  # noqa: W503
         )
 
         compact_messages = list(system_msgs)
