@@ -298,11 +298,21 @@ class TestIssue125HelperMethods(unittest.TestCase):
         self.assertEqual(model, "anthropic/claude:free")
 
     def test_issue_125_time_sleep_not_asyncio_sleep(self):
-        """M01: run_wee_native must use time.sleep, not asyncio.sleep."""
+        """M01: run_wee_native/_wee_run_attempt must use time.sleep, not asyncio.sleep.
+
+        Issue #175: sleep logic was moved to _wee_run_attempt(); verify both
+        the orchestration path and the attempt helper use _time.sleep (not asyncio).
+        """
         import inspect
-        src = inspect.getsource(SessionManager.run_wee_native)
-        self.assertIn("_time.sleep", src, "Must use time.sleep via _time alias")
-        self.assertNotIn("asyncio.sleep", src, "Must NOT use asyncio.sleep in sync function")
+        src_native = inspect.getsource(SessionManager.run_wee_native)
+        src_attempt = inspect.getsource(SessionManager._wee_run_attempt)
+        combined_src = src_native + src_attempt
+        self.assertIn(
+            "_time.sleep", combined_src, "Must use time.sleep via _time alias"
+        )
+        self.assertNotIn(
+            "asyncio.sleep", combined_src, "Must NOT use asyncio.sleep in sync function"
+        )
 
 
 if __name__ == "__main__":

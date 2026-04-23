@@ -8867,10 +8867,19 @@ User Request:
             # _got_429=True — continue outer loop to next fallback model
 
         # B01: all models exhausted — iterative approach, no stack overflow
-        exhausted_msg = (
-            "\n\u274c All free model fallbacks exhausted. "
-            "Please try again later or switch to a paid model.\n"
-        )
+        if not _is_free:
+            # Non-free model: rate limited with no fallback chain
+            exhausted_msg = (
+                "\n\u274c Error: Rate limited (model: "
+                + model.split("/")[-1]
+                + "). No fallback configured for non-free models."
+                " Please try again later.\n"
+            )
+        else:
+            exhausted_msg = (
+                "\n\u274c All free model fallbacks exhausted. "
+                "Please try again later or switch to a paid model.\n"
+            )
         logger.info("[Wee Native] " + exhausted_msg.strip())
         if stream_buffer:
             stream_buffer.push("done", exhausted_msg)
