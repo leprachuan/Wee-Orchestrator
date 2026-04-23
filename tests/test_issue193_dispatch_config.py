@@ -527,6 +527,7 @@ class TestQueuedTaskPermissionModePreserved(unittest.TestCase):
         try:
             with tempfile.TemporaryDirectory() as tmp:
                 cfg_path = os.path.join(tmp, "agents.json")
+                tasks_file = os.path.join(tmp, "bg-tasks-test.json")
                 with open(cfg_path, "w") as f:
                     json.dump(
                         {
@@ -550,6 +551,10 @@ class TestQueuedTaskPermissionModePreserved(unittest.TestCase):
                     )
                 os.environ["AGENT_CONFIG_FILE"] = cfg_path
                 app = am.create_api_app()
+                # Redirect background task storage to an isolated temp file so
+                # tasks from previous test cases do not contaminate this test.
+                app.state.bg_task_mgr._path = tasks_file
+                app.state.bg_task_mgr._tasks_cache = None
                 client = TestClient(app, raise_server_exceptions=False)
                 headers = {
                     "Authorization": f"Bearer shared_{_test_key}",
