@@ -13796,6 +13796,13 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             )
         if not isinstance(data["agents"], list):
             raise HTTPException(status_code=400, detail="'agents' must be an array")
+        locked_dispatch = {
+            "wee-dev": {"runtime": "claude", "model": "sonnet"},
+            "wee-qa": {"runtime": "codex", "model": "gpt-5.4"},
+        }
+        allow_locked_dispatch_override = (
+            os.environ.get("ALLOW_LOCKED_DISPATCH_CONFIG_CHANGES", "").strip() == "1"
+        )
         for idx, ag in enumerate(data["agents"]):
             if not isinstance(ag, dict):
                 raise HTTPException(
@@ -13812,6 +13819,19 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                         status_code=400,
                         detail=f"agents[{idx}].max_concurrent must be an integer >= 1",
                     )
+            locked = locked_dispatch.get(ag["name"])
+            if locked and not allow_locked_dispatch_override:
+                dispatch = ag.get("dispatch_config") or {}
+                for field, expected in locked.items():
+                    if dispatch.get(field) != expected:
+                        raise HTTPException(
+                            status_code=400,
+                            detail=(
+                                f"{ag['name']}.dispatch_config.{field} is locked to "
+                                f"{expected!r}. Set "
+                                "ALLOW_LOCKED_DISPATCH_CONFIG_CHANGES=1 to override."
+                            ),
+                        )
         # Backup existing file
         backup = _agents_json_path.with_suffix(".json.bak")
         if _agents_json_path.exists():
