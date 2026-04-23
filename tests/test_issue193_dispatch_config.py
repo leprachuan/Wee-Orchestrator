@@ -532,24 +532,29 @@ class TestQueuedTaskPermissionModePreserved(unittest.TestCase):
     def test_queued_task_via_api_preserves_dispatch_config_perm_mode(self):
         """Full API path: queued task stores permission_mode from dispatch_config.
 
-        POST /api/v1/background-tasks with concurrency slot full forces a
-        queued status. The response and the stored record must both reflect
-        the dispatch_config-resolved permission_mode.
+        Pre-seed a running task to occupy the only concurrency slot, then POST
+        a second task which must be queued. The response and the stored record
+        must both reflect the dispatch_config-resolved permission_mode.
+
+        NOTE: Do NOT mock concurrent.futures.ThreadPoolExecutor globally here.
+        That patch intercepts asyncio's default-executor creation (asyncio calls
+        ThreadPoolExecutor() lazily for asyncio.to_thread), which causes every
+        awaited asyncio.to_thread() call in the endpoint to hang forever.
+        Instead we pre-seed the bg_task_mgr directly so no executor thread is
+        needed to fill the slot.
         """
         from fastapi.testclient import TestClient
 
         import agent_manager as am
 
-        # Use a dedicated test key so the test is not coupled to the production key.
         _test_key = "qatest_perm_mode_key_193"
         orig_key = os.environ.get("API_SHARED_KEY")
         os.environ["API_SHARED_KEY"] = _test_key
 
         try:
-            tmp = tempfile.TemporaryDirectory()
-            try:
-                cfg_path = os.path.join(tmp.name, "agents.json")
-                tasks_file = os.path.join(tmp.name, "bg-tasks-test.json")
+            with tempfile.TemporaryDirectory() as tmp:
+                cfg_path = os.path.join(tmp, "agents.json")
+                tasks_file = os.path.join(tmp, "bg-tasks-test.json")
                 with open(cfg_path, "w") as f:
                     json.dump(
                         {
@@ -572,65 +577,71 @@ class TestQueuedTaskPermissionModePreserved(unittest.TestCase):
                         f,
                     )
                 os.environ["AGENT_CONFIG_FILE"] = cfg_path
-                with patch("concurrent.futures.ThreadPoolExecutor") as mock_executor:
-                    from concurrent.futures import Future
+                app = am.create_api_app()
+                # Redirect storage to an isolated temp file.
+                app.state.bg_task_mgr._path = tasks_file
+                app.state.bg_task_mgr._tasks_cache = None
 
-                    mock_executor.return_value.submit.side_effect = (
-                        lambda *args, **kwargs: Future()
-                    )
-                    app = am.create_api_app()
-                    # Redirect background task storage to an isolated temp file so
-                    # tasks from previous test cases do not contaminate this test.
-                    app.state.bg_task_mgr._path = tasks_file
-                    app.state.bg_task_mgr._tasks_cache = None
-                    client = TestClient(app, raise_server_exceptions=False)
-                    headers = {
-                        "Authorization": f"Bearer shared_{_test_key}",
-                        "X-User-Identity": "testuser",
-                        "X-Auth-Channel": "telegram",
-                    }
+                # TestClient without context manager — lifespan is not invoked,
+                # so the seed task is never reconciled away between requests.
+                client = TestClient(app, raise_server_exceptions=False)
+                # When TestClient uses a shared_key token and the client host is
+                # "testclient" (not 127.0.0.1/localhost), authenticate() ignores
+                # X-User-Identity and resolves identity to "shared_key_user".
+                # The seed task must use the same identity so create_task_checked
+                # counts it when enforcing max_concurrent.
+                _resolved_identity = "shared_key_user"
+                headers = {
+                    "Authorization": f"Bearer shared_{_test_key}",
+                    "X-Auth-Channel": "telegram",
+                }
 
-                    # First task — takes the only slot
-                    r1 = client.post(
-                        "/api/v1/background-tasks",
-                        json={"prompt": "first", "agent": "wee-qa"},
-                        headers=headers,
-                    )
-                    self.assertIn(r1.status_code, (200, 201), r1.text[:200])
-                    self.assertEqual(r1.json().get("status"), "running")
+                # Pre-seed a running task to occupy the only slot.
+                # Use os.getpid() so that reconcile_stale_tasks (if ever invoked)
+                # treats this task as still alive and does not evict it.
+                app.state.bg_task_mgr.create_task(
+                    task_id="seed-running-slot",
+                    session_id="seed-session-slot",
+                    user_identity=_resolved_identity,
+                    channel="telegram",
+                    agent="wee-qa",
+                    runtime="openai",
+                    model="gpt-5.4-mini",
+                    prompt="seed task holding the slot",
+                    status="running",
+                    permission_mode="elevated",
+                    pid=os.getpid(),
+                )
 
-                    # Second task — must be queued
-                    r2 = client.post(
-                        "/api/v1/background-tasks",
-                        json={"prompt": "second", "agent": "wee-qa"},
-                        headers=headers,
-                    )
-                    self.assertIn(r2.status_code, (200, 201), r2.text[:200])
-                    data2 = r2.json()
-                    self.assertEqual(
-                        data2.get("status"),
-                        "queued",
-                        "second task must be queued (slot occupied)",
-                    )
-                    # API response must reflect resolved permission_mode
-                    self.assertEqual(
-                        data2.get("permission_mode"),
-                        "elevated",
-                        "queued task API response must include permission_mode='elevated'",
-                    )
+                # POST a second task — slot is occupied, so it must be queued.
+                r2 = client.post(
+                    "/api/v1/background-tasks",
+                    json={"prompt": "second", "agent": "wee-qa"},
+                    headers=headers,
+                )
+                self.assertIn(r2.status_code, (200, 201), r2.text[:200])
+                data2 = r2.json()
+                self.assertEqual(
+                    data2.get("status"),
+                    "queued",
+                    "second task must be queued (slot occupied by seed task)",
+                )
+                # API response must reflect the dispatch_config-resolved perm_mode.
+                self.assertEqual(
+                    data2.get("permission_mode"),
+                    "elevated",
+                    "queued task API response must include permission_mode='elevated'",
+                )
 
-                    # Verify the stored record also has it
-                    bg_mgr = app.state.bg_task_mgr
-                    stored = bg_mgr.get_task(data2["task_id"])
-                    self.assertIsNotNone(stored)
-                    self.assertEqual(
-                        stored.get("permission_mode"),
-                        "elevated",
-                        "queued task stored record must have permission_mode='elevated'; "
-                        "got: " + repr(stored.get("permission_mode")),
-                    )
-            finally:
-                tmp.cleanup()
+                # Verify the stored record also preserves it.
+                stored = app.state.bg_task_mgr.get_task(data2["task_id"])
+                self.assertIsNotNone(stored)
+                self.assertEqual(
+                    stored.get("permission_mode"),
+                    "elevated",
+                    "queued task stored record must have permission_mode='elevated'; "
+                    "got: " + repr(stored.get("permission_mode")),
+                )
         finally:
             if orig_key is None:
                 os.environ.pop("API_SHARED_KEY", None)
