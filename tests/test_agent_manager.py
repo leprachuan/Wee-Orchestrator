@@ -714,7 +714,7 @@ class TestDynamicModelListing(unittest.TestCase):
         self.assertIn("Sonnet", desc)
 
     def test_get_model_description_known_codex(self):
-        desc = self.manager._get_model_description("gpt-5.1-codex", "codex")
+        desc = self.manager._get_model_description("gpt-5.5", "codex")
         self.assertIsNotNone(desc)
 
     def test_get_model_description_unknown_model(self):
