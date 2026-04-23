@@ -1250,7 +1250,8 @@ def check_runtime_blocked(runtime: str, state_file_path=None) -> bool:
 
         try:
             import re as _re
-            from datetime import timezone as _tz, datetime as _dt
+            from datetime import datetime as _dt
+            from datetime import timezone as _tz
 
             dt_str = _re.sub(r"\s+UTC$", "+00:00", blocked_until_clean).strip()
             if "T" in dt_str or "+" in dt_str or dt_str.endswith("Z"):
@@ -4456,8 +4457,8 @@ You can mention an agent in your prompt and it will auto-delegate:
 
     def save_session_map_atomic(self, session_map: dict) -> None:
         """Save session map with atomic write using tempfile."""
-        import tempfile
         import shutil
+        import tempfile
 
         # Prune TTL before saving
         session_map = self._prune_session_map_ttl(session_map)
@@ -6385,7 +6386,7 @@ User Request:
 
     def _get_or_create_stream_buffer(self, session_id: str):
         """Get existing buffer for session or create a new one."""
-        if not hasattr(self, 'streaming_manager'):
+        if not hasattr(self, "streaming_manager"):
             self.streaming_manager = StreamingManager()
         return self.streaming_manager.get_or_create_buffer(session_id)
 
@@ -10120,7 +10121,7 @@ User Request:
         # Touch before dispatch to keep session alive during long operations
         self.touch_session(n8n_session_id)
 
-        if not hasattr(self, 'runtime_executor'):
+        if not hasattr(self, "runtime_executor"):
             self.runtime_executor = RuntimeExecutor()
             self._register_runtime_executors()
         handler = self.runtime_executor.get(runtime)
@@ -11282,12 +11283,6 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         built-in static model list when the runtime CLI is unavailable or does
         not expose a model-listing command.
         """
-        await authenticate(
-            request,
-            authorization=request.headers.get("authorization"),
-            x_user_identity=request.headers.get("x-user-identity"),
-            x_auth_channel=request.headers.get("x-auth-channel"),
-        )
         runtime = runtime.lower().strip()
         known_runtimes = {
             "copilot",
