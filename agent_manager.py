@@ -1255,9 +1255,9 @@ def check_runtime_blocked(runtime: str, state_file_path=None) -> bool:
             if "T" in dt_str or "+" in dt_str or dt_str.endswith("Z"):
                 blocked_dt = _dt.fromisoformat(dt_str.replace("Z", "+00:00"))
             else:
-                blocked_dt = _dt.strptime(
-                    dt_str, "%Y-%m-%d %H:%M"
-                ).replace(tzinfo=_tz.utc)
+                blocked_dt = _dt.strptime(dt_str, "%Y-%m-%d %H:%M").replace(
+                    tzinfo=_tz.utc
+                )
             return _dt.now(_tz.utc) < blocked_dt
         except (ValueError, ImportError):
             return True  # Unparseable date — treat as blocked
@@ -4448,18 +4448,22 @@ You can mention an agent in your prompt and it will auto-delegate:
         """Save session map with atomic write using tempfile."""
         import tempfile
         import shutil
-        
+
         # Prune TTL before saving
         session_map = self._prune_session_map_ttl(session_map)
-        
+
         # Write to temporary file first
         tmp_path = None
         try:
-            with tempfile.NamedTemporaryFile(mode='w', dir=os.path.dirname(self.session_map_file), 
-                                            delete=False, suffix='.tmp') as tmp:
+            with tempfile.NamedTemporaryFile(
+                mode="w",
+                dir=os.path.dirname(self.session_map_file),
+                delete=False,
+                suffix=".tmp",
+            ) as tmp:
                 json.dump(session_map, tmp, indent=2)
                 tmp_path = tmp.name
-            
+
             # Atomic rename
             shutil.move(tmp_path, self.session_map_file)
             self._session_map_cache = dict(session_map)
@@ -4468,10 +4472,9 @@ You can mention an agent in your prompt and it will auto-delegate:
             if tmp_path is not None and os.path.exists(tmp_path):
                 try:
                     os.remove(tmp_path)
-                except:
+                except OSError:
                     pass
             raise e
-
 
     def get_cached_session_count(self) -> int:
         """Return the in-memory session count without touching disk."""
@@ -6372,6 +6375,8 @@ User Request:
 
     def _get_or_create_stream_buffer(self, session_id: str):
         """Get existing buffer for session or create a new one."""
+        if not hasattr(self, 'streaming_manager'):
+            self.streaming_manager = StreamingManager()
         return self.streaming_manager.get_or_create_buffer(session_id)
 
     def _register_stream(
@@ -10105,6 +10110,8 @@ User Request:
         # Touch before dispatch to keep session alive during long operations
         self.touch_session(n8n_session_id)
 
+        if not hasattr(self, 'runtime_executor'):
+            self.runtime_executor = RuntimeExecutor()
         handler = self.runtime_executor.get(runtime)
         if handler is None:
             return f"Error: Unknown runtime '{runtime}'"
