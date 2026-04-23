@@ -4416,14 +4416,23 @@ You can mention an agent in your prompt and it will auto-delegate:
         cutoff = now - self.session_map_ttl
         pruned = {}
         evicted = 0
+        evicted_keys = []
         for key, entry in session_map.items():
             last_activity = (
                 entry.get("last_activity") if isinstance(entry, dict) else None
             )
             if last_activity is not None and last_activity < cutoff:
                 evicted += 1
+                evicted_keys.append(key)
                 continue
             pruned[key] = entry
+
+        # Clean up orphaned locks for evicted sessions (memory leak prevention)
+        if evicted_keys:
+            with self._per_session_locks_lock:
+                for session_id in evicted_keys:
+                    self._per_session_locks.pop(session_id, None)
+
         if evicted:
             logger.warning(
                 f"[SessionMap] TTL evicted {evicted} inactive entries "
