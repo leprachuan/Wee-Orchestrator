@@ -180,7 +180,7 @@ def _resolve_silent_default(channel: str) -> bool:
     env_val = os.environ.get("WEE_VERBOSE", "").strip().lower()
     if env_val in ("true", "1", "on"):
         return False  # verbose = not silent
-    if env_val in ("false", "0", "of"):
+    if env_val in ("false", "0", "off"):
         return True  # not verbose = silent
     # Default: channel-based
     return channel in ("telegram", "webex")
@@ -2812,7 +2812,7 @@ You can mention an agent in your prompt and it will auto-delegate:
             if self._notification_mgr:
                 enabled = self._notification_mgr.is_global_enabled()
             else:
-                enabled = session_data.get("notification_preference", "all") != "of"
+                enabled = session_data.get("notification_preference", "all") != "off"
             status = "ON (all channels)" if enabled else "OFF (suppressed)"
             return f"🔔 **Background Notifications:** `{status}`"
 
@@ -2827,14 +2827,14 @@ You can mention an agent in your prompt and it will auto-delegate:
                 self._notification_mgr.set_global_enabled(True)
             return "✓ Background task notifications enabled for all channels."
 
-        elif argument in ["of", "mute"]:
-            self.update_session_field(n8n_session_id, "notification_preference", "of")
+        elif argument in ["off", "mute"]:
+            self.update_session_field(n8n_session_id, "notification_preference", "off")
             if self._notification_mgr:
                 if _notif_identity:
                     self._notification_mgr.set_user_pref(
-                        _notif_identity, _notif_channel, "of"
+                        _notif_identity, _notif_channel, "off"
                     )
-                self._notification_mgr.set_user_pref("_global", _notif_channel, "of")
+                self._notification_mgr.set_user_pref("_global", _notif_channel, "off")
                 self._notification_mgr.set_global_enabled(False)
             return (
                 "✓ Background task notifications suppressed globally.\n"
@@ -2859,7 +2859,7 @@ You can mention an agent in your prompt and it will auto-delegate:
         if arg in ("on", "true", "1", "enable"):
             self.update_session_field(n8n_session_id, "silent_mode", True)
             return "\u2713 Silent mode enabled \u2014 tool call output hidden."
-        elif arg in ("of", "false", "0", "disable"):
+        elif arg in ("off", "false", "0", "disable"):
             self.update_session_field(n8n_session_id, "silent_mode", False)
             return "\u2713 Silent mode disabled \u2014 tool call output visible."
         else:
@@ -2887,7 +2887,7 @@ You can mention an agent in your prompt and it will auto-delegate:
         if arg in ("on", "true", "1", "enable"):
             self.update_session_field(n8n_session_id, "silent_mode", False)
             return "\u2713 Verbose mode enabled \u2014 tool call output visible."
-        elif arg in ("of", "false", "0", "disable"):
+        elif arg in ("off", "false", "0", "disable"):
             self.update_session_field(n8n_session_id, "silent_mode", True)
             return "\u2713 Verbose mode disabled \u2014 tool call output hidden."
         else:
@@ -9695,7 +9695,7 @@ User Request:
         storage_root = Path.home() / ".local" / "share" / "opencode" / "storage"
         candidates = []
         # Newer OpenCode layout observed on this host.
-        session_diff_dir = storage_root / "session_dif"
+        session_diff_dir = storage_root / "session_diff"
         if session_diff_dir.exists():
             candidates.extend(session_diff_dir.glob("ses_*.json"))
         # Legacy layout used by older OpenCode versions.
