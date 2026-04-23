@@ -9058,7 +9058,9 @@ User Request:
                 "type": "function",
                 "function": {
                     "name": "bash",
-                    "description": "Execute a bash shell command and return its output.",
+                    "description": (
+                        "Execute a bash shell command and return its output."
+                    ),
                     "parameters": {
                         "type": "object",
                         "properties": {
@@ -9355,7 +9357,10 @@ User Request:
         """
         import time as _time
 
-        create_kwargs: dict = {"stream": True, "stream_options": {"include_usage": True}}
+        create_kwargs: dict = {
+            "stream": True,
+            "stream_options": {"include_usage": True},
+        }
         if wee_tools:
             create_kwargs["tools"] = wee_tools
             create_kwargs["tool_choice"] = "auto"
