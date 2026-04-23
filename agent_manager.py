@@ -6,7 +6,6 @@ Manages session ID mapping between N8N chat sessions and AI backend sessions
 """
 
 import argparse
-import calendar
 import copy
 import hashlib
 import hmac
@@ -181,7 +180,7 @@ def _resolve_silent_default(channel: str) -> bool:
     env_val = os.environ.get("WEE_VERBOSE", "").strip().lower()
     if env_val in ("true", "1", "on"):
         return False  # verbose = not silent
-    if env_val in ("false", "0", "off"):
+    if env_val in ("false", "0", "of"):
         return True  # not verbose = silent
     # Default: channel-based
     return channel in ("telegram", "webex")
@@ -1229,14 +1228,14 @@ def get_command_timeout() -> int:
         # Ensure minimum timeout of 30 seconds
         if timeout < 30:
             print(
-                f"Warning: COMMAND_TIMEOUT must be at least 30 seconds, using 30",
+                "Warning: COMMAND_TIMEOUT must be at least 30 seconds, using 30",
                 file=sys.stderr,
             )
             return 30
         return timeout
     except ValueError:
         print(
-            f"Warning: COMMAND_TIMEOUT must be an integer, using default 300 seconds",
+            "Warning: COMMAND_TIMEOUT must be an integer, using default 300 seconds",
             file=sys.stderr,
         )
 
@@ -2433,7 +2432,7 @@ You can mention an agent in your prompt and it will auto-delegate:
         elapsed_sec = elapsed % 60
         last_output = query_info.get("last_output", "")
 
-        status_msg = f"""🔄 **Query Running**
+        status_msg = """🔄 **Query Running**
 
 **Runtime:** {runtime}
 **Agent:** {agent}
@@ -2813,7 +2812,7 @@ You can mention an agent in your prompt and it will auto-delegate:
             if self._notification_mgr:
                 enabled = self._notification_mgr.is_global_enabled()
             else:
-                enabled = session_data.get("notification_preference", "all") != "off"
+                enabled = session_data.get("notification_preference", "all") != "of"
             status = "ON (all channels)" if enabled else "OFF (suppressed)"
             return f"🔔 **Background Notifications:** `{status}`"
 
@@ -2828,14 +2827,14 @@ You can mention an agent in your prompt and it will auto-delegate:
                 self._notification_mgr.set_global_enabled(True)
             return "✓ Background task notifications enabled for all channels."
 
-        elif argument in ["off", "mute"]:
-            self.update_session_field(n8n_session_id, "notification_preference", "off")
+        elif argument in ["of", "mute"]:
+            self.update_session_field(n8n_session_id, "notification_preference", "of")
             if self._notification_mgr:
                 if _notif_identity:
                     self._notification_mgr.set_user_pref(
-                        _notif_identity, _notif_channel, "off"
+                        _notif_identity, _notif_channel, "of"
                     )
-                self._notification_mgr.set_user_pref("_global", _notif_channel, "off")
+                self._notification_mgr.set_user_pref("_global", _notif_channel, "of")
                 self._notification_mgr.set_global_enabled(False)
             return (
                 "✓ Background task notifications suppressed globally.\n"
@@ -2860,7 +2859,7 @@ You can mention an agent in your prompt and it will auto-delegate:
         if arg in ("on", "true", "1", "enable"):
             self.update_session_field(n8n_session_id, "silent_mode", True)
             return "\u2713 Silent mode enabled \u2014 tool call output hidden."
-        elif arg in ("off", "false", "0", "disable"):
+        elif arg in ("of", "false", "0", "disable"):
             self.update_session_field(n8n_session_id, "silent_mode", False)
             return "\u2713 Silent mode disabled \u2014 tool call output visible."
         else:
@@ -2888,7 +2887,7 @@ You can mention an agent in your prompt and it will auto-delegate:
         if arg in ("on", "true", "1", "enable"):
             self.update_session_field(n8n_session_id, "silent_mode", False)
             return "\u2713 Verbose mode enabled \u2014 tool call output visible."
-        elif arg in ("off", "false", "0", "disable"):
+        elif arg in ("of", "false", "0", "disable"):
             self.update_session_field(n8n_session_id, "silent_mode", True)
             return "\u2713 Verbose mode disabled \u2014 tool call output hidden."
         else:
@@ -3099,7 +3098,7 @@ You can mention an agent in your prompt and it will auto-delegate:
                 j = result["result"]
                 cron_line = f"\n• **Cron:** `{j['cron']}`" if j.get("cron") else ""
                 return (
-                    f"✅ **Job scheduled!**\n\n"
+                    "✅ **Job scheduled!**\n\n"
                     f"• **ID:** `{j['id']}`\n"
                     f"• **Name:** {j['name']}\n"
                     f"• **Schedule:** `{j['schedule']}`{cron_line}\n"
@@ -3288,13 +3287,13 @@ You can mention an agent in your prompt and it will auto-delegate:
         )
         if _status == "queued":
             return (
-                f"⏳ **Background task queued.**\n\n"
+                "⏳ **Background task queued.**\n\n"
                 f"• **Task ID:** `{task_id}`\n"
                 f"• **Agent:** `{bg_agent}`"
                 f" | Runtime: `{bg_runtime}` | Model: `{bg_model}`\n"
                 f"• **Reason:** Maximum {_max_concurrent}"
-                f" concurrent tasks for this agent.\n\n"
-                f"The task will start automatically when a slot opens. "
+                " concurrent tasks for this agent.\n\n"
+                "The task will start automatically when a slot opens. "
                 f"Use `/background status {task_id}` to monitor."
             )
         # Launch in background thread
@@ -3313,7 +3312,7 @@ You can mention an agent in your prompt and it will auto-delegate:
         )
 
         return (
-            f"⚡ **Background task started!**\n\n"
+            "⚡ **Background task started!**\n\n"
             f"• **Task ID:** `{task_id}`\n"
             f"• **Agent:** `{bg_agent}` | Runtime: `{bg_runtime}` | Model: `{bg_model}`\n"
             f"• **Timeout:** `{bg_timeout}s` ({bg_timeout // 60}m)\n"
@@ -3348,11 +3347,11 @@ You can mention an agent in your prompt and it will auto-delegate:
             return (
                 f"🔄 **Update Commands** ({_env_label})\n\n"
                 f"• `/update` — Pull latest code from `{_branch}` and restart all {_env_label} services\n"
-                f"• `/update status` — Show last update log\n"
-                f"• `/update help` — This message\n\n"
-                f"Aliases: `/upgrade`, `/pull`\n\n"
-                f"The update runs fully detached — it survives the service restart.\n"
-                f"You'll get a Telegram notification when it completes."
+                "• `/update status` — Show last update log\n"
+                "• `/update help` — This message\n\n"
+                "Aliases: `/upgrade`, `/pull`\n\n"
+                "The update runs fully detached — it survives the service restart.\n"
+                "You'll get a Telegram notification when it completes."
             )
 
         # Launch the detached update process
@@ -3366,9 +3365,9 @@ You can mention an agent in your prompt and it will auto-delegate:
         return (
             f"🔄 **Update started** (PID: `{pid}`)\n\n"
             f"Pulling latest `{_branch}` and restarting {_env_label} services.\n"
-            f"I may go offline briefly — you will receive a Telegram notification when complete.\n\n"
+            "I may go offline briefly — you will receive a Telegram notification when complete.\n\n"
             f"Log: `{_log_path}`\n"
-            f"Check status later: `/update status`"
+            "Check status later: `/update status`"
         )
 
     def _load_agents_config(self, config_file: Optional[str] = None) -> Dict:
@@ -3411,7 +3410,7 @@ You can mention an agent in your prompt and it will auto-delegate:
                     name = agent.get("name")
                     if not name:
                         print(
-                            f"[Warning] Agent entry missing 'name' field",
+                            "[Warning] Agent entry missing 'name' field",
                             file=sys.stderr,
                         )
                         continue
@@ -5362,7 +5361,7 @@ You can mention an agent in your prompt and it will auto-delegate:
             # If there's no output, indicate success
             if not output.strip():
                 if result.returncode == 0:
-                    output = f"✓ Command executed successfully (exit code: 0)"
+                    output = "✓ Command executed successfully (exit code: 0)"
                 else:
                     output = f"✗ Command failed with exit code: {result.returncode}"
 
@@ -5408,7 +5407,7 @@ You can mention an agent in your prompt and it will auto-delegate:
 
             if not output.strip():
                 if result.returncode == 0:
-                    output = f"✓ Command executed successfully (exit code: 0)"
+                    output = "✓ Command executed successfully (exit code: 0)"
                 else:
                     output = f"✗ Command failed with exit code: {result.returncode}"
 
@@ -5452,7 +5451,7 @@ You can mention an agent in your prompt and it will auto-delegate:
 
             if not output.strip():
                 if result.returncode == 0:
-                    output = f"✓ Command executed successfully (exit code: 0)"
+                    output = "✓ Command executed successfully (exit code: 0)"
                 else:
                     output = f"✗ Command failed with exit code: {result.returncode}"
 
@@ -5638,7 +5637,7 @@ Example skill structure:
                 try:
                     # Clean up old temp directory
                     subprocess.run(
-                        ["rm", "-rf", temp_dir], capture_output=True, timeout=5
+                        ["rm", "-r", temp_dir], capture_output=True, timeout=5
                     )
 
                     # Clone the repository (shallow clone for speed)
@@ -5693,7 +5692,7 @@ Example skill structure:
 
                     # Clean up
                     subprocess.run(
-                        ["rm", "-rf", temp_dir], capture_output=True, timeout=5
+                        ["rm", "-r", temp_dir], capture_output=True, timeout=5
                     )
 
                 except Exception as e:
@@ -5717,7 +5716,7 @@ Example skill structure:
                 result_text += f"  • {skill['name']} - {skill['description']}\n"
 
             result_text += (
-                f"\nTo load any skill, use: /load-skill <skill-name> [repository-name]"
+                "\nTo load any skill, use: /load-skill <skill-name> [repository-name]"
             )
             return result_text
 
@@ -5778,7 +5777,7 @@ Example skill structure:
                 try:
                     # Clean up old temp directory
                     subprocess.run(
-                        ["rm", "-rf", temp_dir], capture_output=True, timeout=5
+                        ["rm", "-r", temp_dir], capture_output=True, timeout=5
                     )
 
                     # Clone repository (shallow clone)
@@ -5804,7 +5803,7 @@ Example skill structure:
                             file=sys.stderr,
                         )
                         subprocess.run(
-                            ["rm", "-rf", temp_dir], capture_output=True, timeout=5
+                            ["rm", "-r", temp_dir], capture_output=True, timeout=5
                         )
                         continue
 
@@ -5813,7 +5812,7 @@ Example skill structure:
 
                     # Clean up temp directory
                     subprocess.run(
-                        ["rm", "-rf", temp_dir], capture_output=True, timeout=5
+                        ["rm", "-r", temp_dir], capture_output=True, timeout=5
                     )
 
                     # Verify installation
@@ -5936,7 +5935,7 @@ Example skill structure:
         # Add render type instruction to the context
         render_instruction = ""
         if render_type == "markdown":
-            render_instruction = f"""
+            render_instruction = """
 [Output Format: markdown]
 [Image Retrieval — MANDATORY: When the user asks for any image, picture, photo, or logo, you MUST retrieve and display a real image. Never say you cannot retrieve images — use your tools.
 
@@ -6001,7 +6000,7 @@ Do NOT use <img> tags (unsupported). Do NOT create files, generate ASCII art, or
         if render_type in ("markdown", "telegram_html"):
             size_limits = {"telegram": "50 MB", "webex": "100 MB", "webui": "500 MB"}
             channel_limit = size_limits.get(channel, "100 MB")
-            file_handling = f"""
+            file_handling = """
 [File Handling — YOUR CHANNEL: {channel.upper()}]
   Files:     [FILE:/path/to/file.ext:Your caption here]
   Images:    ![caption](url) or ![caption](/ai-media/session/file.png)
@@ -6038,7 +6037,7 @@ Do NOT use <img> tags (unsupported). Do NOT create files, generate ASCII art, or
             timeout_instruction = f"\n[⏱️ EXECUTION DEADLINE: You have {agent_timeout:.0f} seconds ({agent_timeout_min:.1f} minutes) to complete this task. Plan your approach efficiently and wrap up before this deadline. If an operation might take too long, skip it or provide a summary instead.]"
 
         # Add runtime, model, and slash commands information
-        runtime_instruction = f"""
+        runtime_instruction = """
 [System Configuration]
 - Runtime: {runtime}
 - Model: {model}
@@ -6167,7 +6166,7 @@ To add custom skill repositories or manage repository settings:
         _curl_insecure = " -k" if _api_scheme == "https" else ""
         bg_task_instruction = ""
         if _shared_key:
-            bg_task_instruction = f"""
+            bg_task_instruction = """
 [Background Tasks] Run long USER-INITIATED tasks via the orchestrator API (visible in ⚡ Tasks tab). ONLY use this when the USER explicitly asks to run something in the background. Full docs: {SCRIPT_BASE_DIR}/docs/background-tasks.md
 curl -s{_curl_insecure} -X POST {_api_scheme}://127.0.0.1:{_api_port_bg}/api/v1/background-tasks -H "Content-Type: application/json" -H "Authorization: Bearer shared_{_shared_key}" -H "X-User-Identity: {_user_identity}" -H "X-Auth-Channel: {channel}" -d '{{"prompt": "...", "agent": "{agent}", "timeout": 900}}'
 
@@ -6181,11 +6180,11 @@ python3 {SCRIPT_BASE_DIR}/agent_manager.py --agent <agent_name> --runtime copilo
 Example: python3 {SCRIPT_BASE_DIR}/agent_manager.py --agent research-dev --runtime copilot --config {SCRIPT_BASE_DIR}/agents.json "get crude oil pricing stats" {n8n_session_id}"""
 
         # Inject Wee Canvas capability hint
-        canvas_instruction = f"""
+        canvas_instruction = """
 [Wee Canvas] Native real-time visual panel in the WebUI (progress boards, charts, forms, approval flows). Client: `{SCRIPT_BASE_DIR}/canvas.py` — `from canvas import Canvas; c = Canvas(); c.open()`. Full docs: {SCRIPT_BASE_DIR}/docs/canvas.md"""
 
         # Inject Wee Executor capability hint
-        wee_executor_instruction = f"""
+        wee_executor_instruction = """
 [Wee Executor] Unified privileged operations interface — use instead of raw curl/API calls.
   python3 {SCRIPT_BASE_DIR}/scripts/wee_executor.py -c create_background_task -a '{{"agent": "<name>", "prompt": "...", "model": "claude-haiku-4.5"}}'
   python3 {SCRIPT_BASE_DIR}/scripts/wee_executor.py -c get_secret -a '{{"name": "SECRET_NAME"}}'
@@ -6227,7 +6226,7 @@ When to use: Prefer wee_executor over direct curl for background tasks — it ha
         # Mobile channel context: instruct LLM to emit periodic status updates
         mobile_channel_instruction = ""
         if channel in ("telegram", "webex"):
-            mobile_channel_instruction = f"""
+            mobile_channel_instruction = """
 [Mobile Channel: {channel}]
 You are communicating through {channel} (a mobile messaging app). Your responses are delivered
 via message editing in {channel}. During long-running operations (installing packages, running
@@ -6303,7 +6302,7 @@ Do NOT emit status updates for quick operations (< 15 seconds)."""
                 flush=True,
             )
 
-        context = f"""{handoff_prefix}[Session ID: {n8n_session_id}]
+        context = """{handoff_prefix}[Session ID: {n8n_session_id}]
 {runtime_instruction}{injection_text}{mobile_channel_instruction}{silent_mode_instruction}{memory_section}{agent_desc}{files_context}{render_instruction}{bg_task_instruction}{canvas_instruction}{wee_executor_instruction}{timeout_instruction}
 
 User Request:
@@ -8076,7 +8075,7 @@ User Request:
 
         if not _captured_sid:
             print(
-                f"[Session] WARNING: Could not extract session_id from claude stream-json "
+                "[Session] WARNING: Could not extract session_id from claude stream-json "
                 f"output for n8n_session={n8n_session_id}. Session context may be lost on "
                 f"next message. Output length={len(output)} chars.",
                 file=sys.stderr,
@@ -8161,7 +8160,7 @@ User Request:
         # Using "--resume latest" automatically continues with the most recent session.
         if resume:
             cmd.extend(["--resume", "latest"])
-            print(f"[Session] Resuming Gemini session (latest)", file=sys.stderr)
+            print("[Session] Resuming Gemini session (latest)", file=sys.stderr)
         else:
             print(
                 f"[Session] Starting new Gemini session in {mode} mode", file=sys.stderr
@@ -9696,7 +9695,7 @@ User Request:
         storage_root = Path.home() / ".local" / "share" / "opencode" / "storage"
         candidates = []
         # Newer OpenCode layout observed on this host.
-        session_diff_dir = storage_root / "session_diff"
+        session_diff_dir = storage_root / "session_dif"
         if session_diff_dir.exists():
             candidates.extend(session_diff_dir.glob("ses_*.json"))
         # Legacy layout used by older OpenCode versions.
@@ -10220,7 +10219,7 @@ def _ddg_image_search(query: str, max_results: int = 4) -> list:
                 "o": "json",
                 "l": "us-en",
                 "s": "0",
-                "f": ",,,,,",
+                "": ",,,,,",
                 "p": "1",
                 "vqd": vqd,
             },
@@ -10751,7 +10750,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         _reconcile_result = await asyncio.to_thread(bg_task_mgr.reconcile_stale_tasks)
         if _reconcile_result["stale_running"] or _reconcile_result["queued_ready"]:
             print(
-                f"[Startup] Task reconciliation: "
+                "[Startup] Task reconciliation: "
                 f"{_reconcile_result['stale_running']} stale running → failed, "
                 f"{_reconcile_result['queued_ready']} queued tasks ready for promotion",
                 flush=True,
@@ -11350,13 +11349,13 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             if session_id not in session_ids_in_history:
                 print(
                     f"[Session Recovery] Stream: session {session_id} not in "
-                    f"history — returning 404",
+                    "history — returning 404",
                     file=sys.stderr,
                 )
                 raise HTTPException(status_code=404, detail="Session not found")
             print(
                 f"[Session Recovery] Stream: restored session {session_id} "
-                f"from chat history — backend will be recreated",
+                "from chat history — backend will be recreated",
                 file=sys.stderr,
             )
             existing = session_mgr.get_or_create_session_data(
@@ -11976,7 +11975,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         ".png",
         ".jpg",
         ".jpeg",
-        ".gif",
+        ".gi",
         ".webp",
         ".svg",
         ".ico",
@@ -11997,7 +11996,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         ".toml",
         ".cfg",
         ".ini",
-        ".conf",
+        ".con",
         ".sh",
         ".bash",
         ".zsh",
@@ -12032,7 +12031,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         ".dockerignore",
         ".csv",
         ".log",
-        ".diff",
+        ".dif",
         ".patch",
         "",  # extensionless files (Makefile, Dockerfile, etc.)
     }
@@ -12746,10 +12745,10 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             context_prompt += (
                 f"\n\n[STEERING] You are background task `{task_id}`. Periodically "
                 f"(every 3-5 tool calls), check the file `{steering_path}` for new "
-                f"instructions from the user. If the file exists and has content, read "
-                f"it, incorporate the guidance into your current work, then continue. "
-                f"New instructions are appended with timestamps -- only act on ones you "
-                f"have not seen yet. This is how the user steers your work in real time."
+                "instructions from the user. If the file exists and has content, read "
+                "it, incorporate the guidance into your current work, then continue. "
+                "New instructions are appended with timestamps -- only act on ones you "
+                "have not seen yet. This is how the user steers your work in real time."
             )
 
             # ── Build runtime-specific command ──────────────────────────
@@ -13257,7 +13256,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                     notify_pref = False
             if notify_pref is None:
                 session_pref = defaults.get("notification_preference", "all")
-                notify_pref = session_pref != "off"
+                notify_pref = session_pref != "of"
 
         # Memory injection is handled at session creation in build_agent_context_prompt
         # (not here at API time) so queued/promoted tasks get fresh context.
@@ -14637,12 +14636,12 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             f"Local path: {skill_path}\n"
             f"Origin URL: {origin.get('origin_url', '')}\n"
             f"Origin path in repo: {origin.get('origin_path', '')}\n\n"
-            f"Steps:\n"
-            f"1. Run: python3 -c \"import sys; sys.path.insert(0, '/opt/n8n-copilot-shim-dev'); "
-            f"from skill_manager import apply_update; import json; "
+            "Steps:\n"
+            "1. Run: python3 -c \"import sys; sys.path.insert(0, '/opt/n8n-copilot-shim-dev'); "
+            "from skill_manager import apply_update; import json; "
             f"r = apply_update('{skill_key}'); print(json.dumps(r, indent=2))\"\n"
-            f"2. Report the result — files changed, any errors, and whether a backup was created.\n"
-            f"3. If the update succeeded, confirm the skill is still valid."
+            "2. Report the result — files changed, any errors, and whether a backup was created.\n"
+            "3. If the update succeeded, confirm the skill is still valid."
         )
 
         # Dispatch as background task
@@ -15444,14 +15443,14 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             "task-scheduler-executor-dev",
         }
         if service not in allowed_services:
-            raise HTTPException(status_code=400, detail=f"Service not allowed")
+            raise HTTPException(status_code=400, detail="Service not allowed")
 
         async def _event_generator():
             proc = await asyncio.create_subprocess_exec(
                 "journalctl",
                 "-u",
                 service,
-                "-f",
+                "-",
                 "--no-pager",
                 "-o",
                 "short-iso",
@@ -15474,7 +15473,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                         else:
                             break
                     except asyncio.TimeoutError:
-                        yield f": keepalive\n\n"
+                        yield ": keepalive\n\n"
             finally:
                 proc.terminate()
                 try:
