@@ -219,9 +219,13 @@ class TestWeeSaveTranscript(unittest.TestCase):
             if path:
                 norm = os.path.normpath(path)
                 # The resolved path must NOT be under /tmp (traversal escaped)
-                self.assertFalse(
-                    norm.startswith("/tmp/"),
-                    f"Path traversal succeeded — transcript written to {path}",
+                # Must stay inside the agent_manager module's parent directory tree
+                # (environment-independent: works even when the repo itself lives under /tmp)
+                import agent_manager as _am_mod
+                am_parent = str(Path(_am_mod.__file__).resolve().parent)
+                self.assertTrue(
+                    norm.startswith(am_parent),
+                    f"Path traversal succeeded — transcript at {path} escaped {am_parent}",
                 )
                 # It must stay inside a 'transcripts' sub-directory
                 self.assertIn("transcripts", norm)

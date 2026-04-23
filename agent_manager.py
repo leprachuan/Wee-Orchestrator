@@ -8718,7 +8718,7 @@ User Request:
             # Issue #175: Finalize previous model's output (fallback iterations only).
             # On first iteration, messages and collected_output are not yet defined.
             if _chain_idx > 0:
-                output = "".join(collected_output)
+                output = collected_output or ""
                 # Issue #112: surface last tool result when synthesis is empty
                 if not output.strip():
                     tool_results = [
@@ -8789,70 +8789,31 @@ User Request:
                 client, n8n_session_id, messages, resolved_model, context_prompt
             )
 
-            collected_output = []
-            _got_429 = False
+            # Issue #175 BLOCKER fix: use _wee_run_attempt() so tools are available
+            # (makes the compaction transcript pointer actionable) and so messages
+            # are persisted on every successful turn, not only on fallback iterations.
+            wee_tools = self._wee_get_tool_schemas()
             _wee_start = _time.time()
-            _last_usage = [None]
             _max_attempts = _max_retries if _is_free else 1
-
-            for _retry in range(_max_attempts):
-                try:
-                    stream = client.chat.completions.create(
-                        model=resolved_model,  # noqa: F821
-                        messages=messages,
-                        stream=True,
-                        stream_options={"include_usage": True},
-                    )
-                    for chunk in stream:
-                        if chunk.choices and chunk.choices[0].delta.content:
-                            token = chunk.choices[0].delta.content
-                            collected_output.append(token)
-                            if stream_buffer:
-                                stream_buffer.push("chunk", {"text": token})
-                        if hasattr(chunk, "usage") and chunk.usage is not None:
-                            _last_usage[0] = chunk.usage
-                    _got_429 = False
-                    break  # success
-
-                except Exception as _e:
-                    _e_str = str(_e)
-                    _is_rate_limit = "429" in _e_str or "rate limit" in _e_str.lower()
-                    if _is_rate_limit and _is_free:
-                        _got_429 = True
-                        if _retry < _max_attempts - 1:
-                            _wait = (
-                                _backoff[_retry]
-                                if _retry < len(_backoff)
-                                else (_backoff[-1] if _backoff else 5)
-                            )
-                            _retry_msg = (
-                                "\n\u26a0\ufe0f Rate limited, retrying in "
-                                + str(_wait)
-                                + "s ("
-                                + str(_retry + 1)
-                                + "/"
-                                + str(_max_attempts)
-                                + ")...\n"
-                            )
-                            logger.info("[Wee Native] " + _retry_msg.strip())
-                            if stream_buffer:
-                                stream_buffer.push("chunk", {"text": _retry_msg})
-                            # M01: time.sleep is correct here — sync function in thread-pool  # noqa: E501
-                            # worker
-                            _time.sleep(_wait)
-                    else:
-                        error_msg = "Error: Wee native runtime failed: " + str(_e)
-                        logger.info("[Wee Native] " + error_msg)
-                        if stream_buffer:
-                            stream_buffer.push("done", error_msg)
-                        return error_msg
+            collected_output, _got_429, _last_usage_obj = self._wee_run_attempt(
+                client,
+                resolved_model,
+                messages,
+                stream_buffer,
+                n8n_session_id,
+                agent,
+                wee_tools,
+                _max_attempts,
+                _backoff,
+                _attempt_model,
+            )
 
             if not _got_429:
-                output = "".join(collected_output)
+                output = collected_output or ""
                 try:
                     _duration_ms = int((_time.time() - _wee_start) * 1000)
-                    if _last_usage[0] is not None:
-                        _u = _last_usage[0]
+                    if _last_usage_obj is not None:
+                        _u = _last_usage_obj
                         _pt = getattr(_u, "prompt_tokens", 0) or 0
                         _ct = getattr(_u, "completion_tokens", 0) or 0
                         _total = getattr(_u, "total_tokens", _pt + _ct)
@@ -9084,6 +9045,50 @@ User Request:
             return f"Error: Tool '{func_name}' timed out"
         except Exception as e:
             return f"Error executing {func_name}: {e}"
+
+    @staticmethod
+    def _wee_get_tool_schemas() -> list:
+        """Return OpenAI-format tool schemas for bash and python tools.
+
+        Passed to _wee_run_attempt() so the LLM can invoke tools (e.g., read
+        a compaction transcript path injected by _wee_compact_context()).
+        """
+        return [
+            {
+                "type": "function",
+                "function": {
+                    "name": "bash",
+                    "description": "Execute a bash shell command and return its output.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "command": {
+                                "type": "string",
+                                "description": "The bash command to execute.",
+                            }
+                        },
+                        "required": ["command"],
+                    },
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "python",
+                    "description": "Execute Python 3 code and return its output.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "code": {
+                                "type": "string",
+                                "description": "The Python 3 code to execute.",
+                            }
+                        },
+                        "required": ["code"],
+                    },
+                },
+            },
+        ]
 
     @staticmethod
     def _wee_is_free_model(model: str) -> bool:  # noqa: F811
@@ -9342,14 +9347,20 @@ User Request:
         backoff: list,
         attempt_model: str,
     ):
-        """Try one model with 429 retry+backoff. Returns (output, is_429_exhausted)."""
+        """Try one model with 429 retry+backoff.
+
+        Returns (output, is_429_exhausted, last_usage).
+        Streams tokens to stream_buffer as they arrive so callers retain
+        real-time output. Persists wee_messages on every successful turn.
+        """
         import time as _time
 
-        create_kwargs = {"stream": True}
+        create_kwargs: dict = {"stream": True, "stream_options": {"include_usage": True}}
         if wee_tools:
             create_kwargs["tools"] = wee_tools
             create_kwargs["tool_choice"] = "auto"
 
+        last_usage = None
         last_exc = None
         attempts = max(max_retries, 1)
         for attempt in range(attempts):
@@ -9363,10 +9374,15 @@ User Request:
                 tool_calls_acc = {}
                 for chunk in stream:
                     if not chunk.choices:
+                        # Usage-only trailing chunk from stream_options
+                        if hasattr(chunk, "usage") and chunk.usage is not None:
+                            last_usage = chunk.usage
                         continue
                     delta = chunk.choices[0].delta
                     if delta.content:
                         collected.append(delta.content)
+                        if stream_buffer:
+                            stream_buffer.push("chunk", {"text": delta.content})
                     if delta.tool_calls:
                         for tc in delta.tool_calls:
                             idx = getattr(tc, "index", 0) or 0
@@ -9379,6 +9395,8 @@ User Request:
                                     tool_calls_acc[idx]["name"] += tc.function.name
                                 if tc.function.arguments:
                                     tool_calls_acc[idx]["args"] += tc.function.arguments
+                    if hasattr(chunk, "usage") and chunk.usage is not None:
+                        last_usage = chunk.usage
 
                 output = "".join(collected)
 
@@ -9400,12 +9418,12 @@ User Request:
                         )
 
                 self._wee_save_messages(n8n_session_id, messages)
-                return output, False
+                return output, False, last_usage
 
             except Exception as e:
                 err_str = str(e)
                 if "429" not in err_str and "rate limit" not in err_str.lower():
-                    return f"Error: {err_str}", False
+                    return f"Error: {err_str}", False, None
                 last_exc = e  # noqa: F841
                 if attempt < attempts - 1:
                     wait = (
@@ -9413,9 +9431,21 @@ User Request:
                         if attempt < len(backoff)
                         else (backoff[-1] if backoff else 5)
                     )
+                    _retry_msg = (
+                        "\n\u26a0\ufe0f Rate limited, retrying in "
+                        + str(wait)
+                        + "s ("
+                        + str(attempt + 1)
+                        + "/"
+                        + str(attempts)
+                        + ")...\n"
+                    )
+                    logger.info("[Wee Native] " + _retry_msg.strip())
+                    if stream_buffer:
+                        stream_buffer.push("chunk", {"text": _retry_msg})
                     _time.sleep(wait)
 
-        return None, True
+        return None, True, None
 
     def _get_cursor_session_id(self, n8n_session_id: str) -> Optional[str]:
         """Return the stored cursor session flag for this n8n session, or None."""
