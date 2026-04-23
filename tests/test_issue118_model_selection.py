@@ -13,7 +13,6 @@ import os
 import sys
 import threading
 import unittest
-from unittest import skip
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -22,7 +21,7 @@ os.environ.setdefault("API_SHARED_KEY", "test_key_123")
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
 
-from agent_manager import SessionManager
+from agent_manager import SessionManager  # noqa: E402
 
 
 def _make_mgr():
@@ -55,7 +54,9 @@ class TestFetchWeeModels(unittest.TestCase):
         """All returned items must be plain strings (not tuples)."""
         with patch("urllib.request.urlopen") as mock_urlopen:
             mock_resp = MagicMock()
-            mock_resp.read.return_value = b'{"models": [{"name": "gemma4:e4b"}, {"name": "qwen3.5:latest"}]}'
+            mock_resp.read.return_value = (
+                b'{"models": [{"name": "gemma4:e4b"}, {"name": "qwen3.5:latest"}]}'
+            )
             mock_resp.__enter__ = lambda s: s
             mock_resp.__exit__ = MagicMock(return_value=False)
             mock_urlopen.return_value = mock_resp
@@ -67,13 +68,19 @@ class TestFetchWeeModels(unittest.TestCase):
         for section, models in result.items():
             self.assertIsInstance(models, list, f"Section {section!r} must be a list")
             for m in models:
-                self.assertIsInstance(m, str, f"Model {m!r} in section {section!r} must be a str, not {type(m)}")
+                self.assertIsInstance(
+                    m, str,
+                    f"Model {m!r} in section {section!r} must be a str, not {type(m)}",
+                )
 
     def test_fetch_wee_models_ollama_prefix(self):
         """Ollama models must be prefixed with 'ollama/'."""
         with patch("urllib.request.urlopen") as mock_urlopen:
             mock_resp = MagicMock()
-            mock_resp.read.return_value = b'{"models": [{"name": "gemma4:e4b"}, {"name": "granite3.3-tuned:latest"}]}'
+            mock_resp.read.return_value = (
+                b'{"models": [{"name": "gemma4:e4b"},'
+                b' {"name": "granite3.3-tuned:latest"}]}'
+            )
             mock_resp.__enter__ = lambda s: s
             mock_resp.__exit__ = MagicMock(return_value=False)
             mock_urlopen.return_value = mock_resp
@@ -96,18 +103,28 @@ class TestFetchWeeModels(unittest.TestCase):
             result = self.mgr.fetch_wee_models()
 
         openrouter_models = result.get("OpenRouter Models", [])
-        self.assertTrue(len(openrouter_models) > 0, "OpenRouter section must not be empty")
+        self.assertTrue(
+            len(openrouter_models) > 0, "OpenRouter section must not be empty"
+        )
         for m in openrouter_models:
-            self.assertTrue(m.startswith("openrouter/"), f"OpenRouter model {m!r} must start with 'openrouter/'")
+            self.assertTrue(
+                m.startswith("openrouter/"),
+                f"OpenRouter model {m!r} must start with 'openrouter/'",
+            )
 
     def test_fetch_wee_models_fallback_on_error(self):
         """Falls back to static list when Ollama is unreachable."""
-        with patch("urllib.request.urlopen", side_effect=Exception("connection refused")):
+        with patch(
+            "urllib.request.urlopen",
+            side_effect=Exception("connection refused"),
+        ):
             result = self.mgr.fetch_wee_models()
 
         self.assertIsInstance(result, dict)
         all_models = [m for section in result.values() for m in section]
-        self.assertTrue(len(all_models) > 0, "Fallback must return at least some models")
+        self.assertTrue(
+            len(all_models) > 0, "Fallback must return at least some models"
+        )
         for m in all_models:
             self.assertIsInstance(m, str)
 
@@ -169,7 +186,9 @@ class TestOllamaPort(unittest.TestCase):
         wee_runtime_path = REPO / "wee_runtime.py"
         source = wee_runtime_path.read_text()
         # Must NOT have 11436
-        self.assertNotIn("11436", source, "wee_runtime.py must not reference port 11436")
+        self.assertNotIn(
+            "11436", source, "wee_runtime.py must not reference port 11436"
+        )
         # Must have 11434
         self.assertIn("11434", source, "wee_runtime.py must reference port 11434")
 
@@ -208,8 +227,12 @@ class TestRunWeeNativeModelPassthrough(unittest.TestCase):
             captured["model"] = kwargs.get("model", "")
             client = MagicMock()
             client.chat.completions.create.return_value = iter([
-                MagicMock(choices=[MagicMock(delta=MagicMock(content="hi"), finish_reason=None)]),
-                MagicMock(choices=[MagicMock(delta=MagicMock(content=None), finish_reason="stop")]),
+                MagicMock(choices=[
+                    MagicMock(delta=MagicMock(content="hi"), finish_reason=None)
+                ]),
+                MagicMock(choices=[
+                    MagicMock(delta=MagicMock(content=None), finish_reason="stop")
+                ]),
             ])
             return client
 
@@ -244,8 +267,11 @@ class TestRunWeeNativeModelPassthrough(unittest.TestCase):
                     pass  # We only care about what was captured
 
         if captured.get("base_url"):
-            self.assertIn("11434", captured["base_url"],
-                          f"api_base {captured['base_url']!r} must use port 11434 for Ollama model")
+            self.assertIn(
+                "11434",
+                captured["base_url"],
+                f"api_base {captured['base_url']!r} must use port 11434",
+            )
             self.assertNotIn("11436", captured["base_url"])
 
 
@@ -343,4 +369,3 @@ class TestStaticAliasMap(unittest.TestCase):
 
 
 # ── fetch_wee_models() ──
-
