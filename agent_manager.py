@@ -4295,7 +4295,8 @@ You can mention an agent in your prompt and it will auto-delegate:
             }
 
             # Deduplicate by stripping variant suffixes (Issue #172)
-            # e.g. meta-llama/llama-3.3-70b-instruct:free -> meta-llama/llama-3.3-70b-instruct
+            # e.g. meta-llama/llama-3.3-70b-instruct:free
+            # -> meta-llama/llama-3.3-70b-instruct
             seen_base_ids: set = set()
             deduped: list = []
             for m in all_models:
@@ -4635,14 +4636,15 @@ You can mention an agent in your prompt and it will auto-delegate:
         # Live OpenRouter discovery — deduplicated, single group (Issue #172)
         try:
             or_groups = self.fetch_openrouter_models()
-            # Flatten all groups into "OpenRouter Models" (deduplication done in fetch_openrouter_models)
+            # Flatten all groups into "OpenRouter Models"
+            # (deduplication done in fetch_openrouter_models)
             live_or = []
             for entries in or_groups.values():
                 live_or.extend(entries)
             if live_or:
                 result["OpenRouter Models"] = live_or
                 print(
-                    "[wee] OpenRouter: %d models merged into model picker" % len(live_or),
+                    "[wee] OpenRouter: %d models loaded" % len(live_or),
                     file=sys.stderr,
                 )
         except Exception as or_err:
