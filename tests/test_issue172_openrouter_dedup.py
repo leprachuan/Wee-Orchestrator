@@ -220,10 +220,10 @@ class TestIssue172Deduplication(unittest.TestCase):
     @patch("keyring.get_password", return_value="test-key")
     @patch("urllib.request.urlopen")
     def test_large_api_response_deduplicates(self, mock_urlopen, _keyring):
-        """Simulate 345-model API response (like production) — dedup should reduce count."""
+        """Simulate 345-model API response (like production) —
+        dedup should reduce count."""
         # Build a realistic large set: 200 base models + 145 variant duplicates
         raw = []
-        suffixes = [":free", ":thinking", ":nitro"]
         providers = [
             "anthropic",
             "openai",
