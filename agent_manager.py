@@ -8949,11 +8949,20 @@ User Request:
         """
         MAX_WEE_MESSAGES = 100
         with self._session_map_lock:
-            # Fast-path: skip disk access when the session isn't registered at all.
-            # This keeps fresh (resume=False) calls from requiring session_map_file.
+            # Skip only if the session is absent from both in-memory map and
+            # persisted storage.  Sessions that exist solely in session_map_file
+            # (e.g. after a restart or lazy restore) must still be able to save.
             if n8n_session_id not in self.session_map:
-                return
-            session_map = self.load_session_map()
+                # Consult persisted state before early-returning.
+                # Guard against partially-initialised objects (e.g. unit tests
+                # that use __new__ without calling __init__).
+                if not hasattr(self, "session_map_file"):
+                    return
+                session_map = self.load_session_map()
+                if n8n_session_id not in session_map:
+                    return
+            else:
+                session_map = self.load_session_map()
             if n8n_session_id in session_map:
                 # Keep system prompt + last N messages
                 if len(messages) > MAX_WEE_MESSAGES:

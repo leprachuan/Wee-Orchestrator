@@ -467,6 +467,56 @@ class TestRunWeeNativeCompactionIntegration(unittest.TestCase):
             _run_wee_native_test(self.mgr, self.session_id)
             mock_compact.assert_called_once()
 
+class TestIssue175WEESaveMessagesPersistedOnly(unittest.TestCase):
+    """Regression: _wee_save_messages must save even when the session exists
+    only in the persisted session_map_file (not self.session_map).
+
+    Bug on commit 6b5559c: early-return gate checked self.session_map only,
+    so sessions present solely on disk were silently dropped.
+    """
+
+    def test_issue_175_save_messages_persisted_only_session(self):
+        sm = SessionManager()
+        with tempfile.TemporaryDirectory() as d:
+            persisted = {
+                "persisted-only": {
+                    "agent": "orchestrator",
+                    "runtime": "wee",
+                    "model": "ollama/test",
+                }
+            }
+            p = Path(d) / "session_map.json"
+            p.write_text(json.dumps(persisted))
+            sm.session_map_file = p
+            sm.session_map = {}
+            sm._wee_save_messages(
+                "persisted-only",
+                [{"role": "user", "content": "hello from persisted session"}]
+            )
+            saved_map = json.loads(p.read_text())
+            assert "persisted-only" in saved_map
+            assert "wee_messages" in saved_map["persisted-only"], (
+                "wee_messages missing - returned early without consulting "
+                "persisted session_map_file (regression: issue #175)"
+            )
+            msgs = saved_map["persisted-only"]["wee_messages"]
+            assert len(msgs) == 1
+            assert msgs[0]["content"] == "hello from persisted session"
+
+    def test_issue_175_save_messages_absent_session_skipped(self):
+        sm = SessionManager()
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d) / "session_map.json"
+            p.write_text(json.dumps({}))
+            sm.session_map_file = p
+            sm.session_map = {}
+            sm._wee_save_messages(
+                "totally-unknown",
+                [{"role": "user", "content": "should not be saved"}]
+            )
+            saved_map = json.loads(p.read_text())
+            assert "totally-unknown" not in saved_map
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
