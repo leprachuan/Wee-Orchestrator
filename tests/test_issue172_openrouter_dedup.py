@@ -319,5 +319,106 @@ class TestIssue172BASE_MODEL_RE(unittest.TestCase):
         self.assertEqual(self.sm.BASE_MODEL_RE.sub("", mid), mid)
 
 
+class TestIssue172StaticFallbackDedup(unittest.TestCase):
+    """Regression tests for Issue #172: static fallback path must also deduplicate.
+
+    When no OpenRouter API key is available (or on network error), the code falls
+    back to WEE_MODELS["OpenRouter Models"].  Several of those static entries carry
+    variant suffixes (e.g. :free).  The picker must never expose those raw IDs.
+    """
+
+    def setUp(self):
+        self.sm = _make_session_manager()
+
+    @patch("keyring.get_password", side_effect=Exception("no keyring"))
+    @patch.dict("os.environ", {}, clear=True)
+    def test_no_key_fallback_no_variant_suffix_ids(self, _keyring):
+        """No-key static fallback must not return any :free/:thinking/... IDs."""
+        result = self.sm.fetch_openrouter_models()
+        self.assertIn("OpenRouter Models", result)
+        all_ids = [m[0] for m in result["OpenRouter Models"]]
+        suffixes = (
+            ":free",
+            ":thinking",
+            ":extended",
+            ":beta",
+            ":nitro",
+            ":floor",
+            ":preview",
+        )
+        for mid in all_ids:
+            for suf in suffixes:
+                self.assertFalse(
+                    mid.endswith(suf),
+                    f"Static fallback exposes variant ID {mid!r} (suffix {suf!r})",
+                )
+
+    @patch("keyring.get_password", side_effect=Exception("no keyring"))
+    @patch.dict("os.environ", {}, clear=True)
+    def test_no_key_fallback_no_duplicate_base_ids(self, _keyring):
+        """No-key static fallback must not contain duplicate base model IDs."""
+        result = self.sm.fetch_openrouter_models()
+        all_ids = [m[0] for m in result.get("OpenRouter Models", [])]
+        self.assertEqual(
+            len(all_ids), len(set(all_ids)), "Duplicate IDs in static fallback"
+        )
+
+    @patch("keyring.get_password", side_effect=Exception("no keyring"))
+    @patch.dict("os.environ", {}, clear=True)
+    def test_no_key_fallback_known_variant_models_normalized(self, _keyring):
+        """Specific WEE_MODELS variant IDs must be stripped in the no-key path."""
+        # These are the known :free IDs present in the static WEE_MODELS definition.
+        known_variants = [
+            "openrouter/google/gemma-3-27b-it:free",
+            "openrouter/qwen/qwen3-32b:free",
+            "openrouter/deepseek/deepseek-r1:free",
+            "openrouter/microsoft/phi-4-reasoning-plus:free",
+        ]
+        result = self.sm.fetch_openrouter_models()
+        all_ids = [m[0] for m in result.get("OpenRouter Models", [])]
+        for variant_id in known_variants:
+            self.assertNotIn(
+                variant_id,
+                all_ids,
+                f"Known variant {variant_id!r} must be stripped in static fallback",
+            )
+        # The normalized base IDs must be present instead
+        expected_base = [
+            "openrouter/google/gemma-3-27b-it",
+            "openrouter/qwen/qwen3-32b",
+            "openrouter/deepseek/deepseek-r1",
+            "openrouter/microsoft/phi-4-reasoning-plus",
+        ]
+        for base_id in expected_base:
+            self.assertIn(
+                base_id,
+                all_ids,
+                f"Expected base ID {base_id!r} missing from static fallback",
+            )
+
+    @patch("keyring.get_password", return_value="test-key")
+    @patch("urllib.request.urlopen", side_effect=OSError("network error"))
+    def test_network_error_fallback_no_variant_suffix_ids(self, _urlopen, _keyring):
+        """Network-error fallback must also strip variant suffix IDs."""
+        result = self.sm.fetch_openrouter_models()
+        self.assertIn("OpenRouter Models", result)
+        all_ids = [m[0] for m in result["OpenRouter Models"]]
+        suffixes = (
+            ":free",
+            ":thinking",
+            ":extended",
+            ":beta",
+            ":nitro",
+            ":floor",
+            ":preview",
+        )
+        for mid in all_ids:
+            for suf in suffixes:
+                self.assertFalse(
+                    mid.endswith(suf),
+                    f"Network-error fallback exposes variant ID {mid!r} (suffix {suf!r})",
+                )
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

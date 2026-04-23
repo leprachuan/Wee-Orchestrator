@@ -104,19 +104,46 @@ class TestFetchOpenrouterModels(unittest.TestCase):
     @patch("keyring.get_password", side_effect=Exception("no keyring"))
     @patch.dict("os.environ", {}, clear=True)
     def test_fallback_no_api_key(self, mock_keyring):
-        """Without an API key, returns static WEE_MODELS fallback."""
+        """Without an API key, returns normalized static WEE_MODELS fallback."""
         result = self.sm.fetch_openrouter_models()
         self.assertIn("OpenRouter Models", result)
-        # Should not be empty
-        self.assertTrue(len(result["OpenRouter Models"]) > 0)
+        models = result["OpenRouter Models"]
+        self.assertTrue(len(models) > 0)
+        # Issue #172: static fallback must not expose variant suffix IDs
+        all_ids = [m[0] for m in models]
+        for mid in all_ids:
+            self.assertFalse(
+                mid.endswith(":free")
+                or mid.endswith(":thinking")
+                or mid.endswith(":extended")
+                or mid.endswith(":beta")
+                or mid.endswith(":nitro")
+                or mid.endswith(":floor")
+                or mid.endswith(":preview"),
+                f"Static fallback exposes variant ID: {mid}",
+            )
 
     @patch("keyring.get_password", return_value="test-key-123")
     @patch("urllib.request.urlopen", side_effect=Exception("network error"))
     def test_fallback_on_network_error(self, mock_urlopen, mock_keyring):
-        """On network error, returns static WEE_MODELS fallback."""
+        """On network error, returns normalized static WEE_MODELS fallback."""
         result = self.sm.fetch_openrouter_models()
         self.assertIn("OpenRouter Models", result)
-        self.assertTrue(len(result["OpenRouter Models"]) > 0)
+        models = result["OpenRouter Models"]
+        self.assertTrue(len(models) > 0)
+        # Issue #172: network-error fallback must also strip variant suffixes
+        all_ids = [m[0] for m in models]
+        for mid in all_ids:
+            self.assertFalse(
+                mid.endswith(":free")
+                or mid.endswith(":thinking")
+                or mid.endswith(":extended")
+                or mid.endswith(":beta")
+                or mid.endswith(":nitro")
+                or mid.endswith(":floor")
+                or mid.endswith(":preview"),
+                f"Network-error fallback exposes variant ID: {mid}",
+            )
 
     @patch("keyring.get_password", return_value="test-key-123")
     @patch("urllib.request.urlopen")
