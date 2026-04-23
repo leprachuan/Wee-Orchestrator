@@ -93,7 +93,8 @@ class TestFetchOpenrouterModels(unittest.TestCase):
     @patch("keyring.get_password", return_value="test-key-123")
     @patch("urllib.request.urlopen")
     def test_models_sorted_alphabetically(self, mock_urlopen, mock_keyring):
-        """Models within the OpenRouter group should be sorted alphabetically (Issue #172)."""
+        """Models within the OpenRouter group should be sorted
+        alphabetically (Issue #172)."""
         mock_urlopen.side_effect = self._urlopen_mock
         result = self.sm.fetch_openrouter_models()
         self.assertIn("OpenRouter", result)
@@ -209,7 +210,8 @@ class TestFetchOpenrouterModels(unittest.TestCase):
     @patch("keyring.get_password", return_value="test-key-123")
     @patch("urllib.request.urlopen")
     def test_unknown_provider_in_single_group(self, mock_urlopen, mock_keyring):
-        """Unknown providers are included in the single 'OpenRouter' group (Issue #172)."""
+        """Unknown providers are included in the single 'OpenRouter' group
+        (Issue #172)."""
         models = [{"id": "some-new-provider/a-model", "name": "A Model"}]
         mock_urlopen.return_value = _mock_api_response(models)
         result = self.sm.fetch_openrouter_models()
