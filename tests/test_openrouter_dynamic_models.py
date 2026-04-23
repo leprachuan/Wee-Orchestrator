@@ -106,8 +106,8 @@ class TestFetchOpenrouterModels(unittest.TestCase):
     def test_fallback_no_api_key(self, mock_keyring):
         """Without an API key, returns normalized static WEE_MODELS fallback."""
         result = self.sm.fetch_openrouter_models()
-        self.assertIn("OpenRouter Models", result)
-        models = result["OpenRouter Models"]
+        self.assertIn("OpenRouter", result)
+        models = result["OpenRouter"]
         self.assertTrue(len(models) > 0)
         # Issue #172: static fallback must not expose variant suffix IDs
         all_ids = [m[0] for m in models]
@@ -128,8 +128,8 @@ class TestFetchOpenrouterModels(unittest.TestCase):
     def test_fallback_on_network_error(self, mock_urlopen, mock_keyring):
         """On network error, returns normalized static WEE_MODELS fallback."""
         result = self.sm.fetch_openrouter_models()
-        self.assertIn("OpenRouter Models", result)
-        models = result["OpenRouter Models"]
+        self.assertIn("OpenRouter", result)
+        models = result["OpenRouter"]
         self.assertTrue(len(models) > 0)
         # Issue #172: network-error fallback must also strip variant suffixes
         all_ids = [m[0] for m in models]

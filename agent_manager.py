@@ -4230,7 +4230,7 @@ You can mention an agent in your prompt and it will auto-delegate:
                 _normalized_static.append(
                     (_sid, _entry[1], _entry[2] if len(_entry) > 2 else [])
                 )
-        static_fallback = {"OpenRouter Models": _normalized_static}
+        static_fallback = {"OpenRouter": _normalized_static}
 
         cache_ttl = 300
         if (

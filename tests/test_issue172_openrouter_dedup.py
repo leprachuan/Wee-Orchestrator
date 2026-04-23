@@ -323,7 +323,7 @@ class TestIssue172StaticFallbackDedup(unittest.TestCase):
     """Regression tests for Issue #172: static fallback path must also deduplicate.
 
     When no OpenRouter API key is available (or on network error), the code falls
-    back to WEE_MODELS["OpenRouter Models"].  Several of those static entries carry
+    back to WEE_MODELS["OpenRouter"].  Several of those static entries carry
     variant suffixes (e.g. :free).  The picker must never expose those raw IDs.
     """
 
@@ -335,8 +335,8 @@ class TestIssue172StaticFallbackDedup(unittest.TestCase):
     def test_no_key_fallback_no_variant_suffix_ids(self, _keyring):
         """No-key static fallback must not return any :free/:thinking/... IDs."""
         result = self.sm.fetch_openrouter_models()
-        self.assertIn("OpenRouter Models", result)
-        all_ids = [m[0] for m in result["OpenRouter Models"]]
+        self.assertIn("OpenRouter", result)
+        all_ids = [m[0] for m in result["OpenRouter"]]
         suffixes = (
             ":free",
             ":thinking",
@@ -358,7 +358,7 @@ class TestIssue172StaticFallbackDedup(unittest.TestCase):
     def test_no_key_fallback_no_duplicate_base_ids(self, _keyring):
         """No-key static fallback must not contain duplicate base model IDs."""
         result = self.sm.fetch_openrouter_models()
-        all_ids = [m[0] for m in result.get("OpenRouter Models", [])]
+        all_ids = [m[0] for m in result.get("OpenRouter", [])]
         self.assertEqual(
             len(all_ids), len(set(all_ids)), "Duplicate IDs in static fallback"
         )
@@ -375,7 +375,7 @@ class TestIssue172StaticFallbackDedup(unittest.TestCase):
             "openrouter/microsoft/phi-4-reasoning-plus:free",
         ]
         result = self.sm.fetch_openrouter_models()
-        all_ids = [m[0] for m in result.get("OpenRouter Models", [])]
+        all_ids = [m[0] for m in result.get("OpenRouter", [])]
         for variant_id in known_variants:
             self.assertNotIn(
                 variant_id,
@@ -401,8 +401,8 @@ class TestIssue172StaticFallbackDedup(unittest.TestCase):
     def test_network_error_fallback_no_variant_suffix_ids(self, _urlopen, _keyring):
         """Network-error fallback must also strip variant suffix IDs."""
         result = self.sm.fetch_openrouter_models()
-        self.assertIn("OpenRouter Models", result)
-        all_ids = [m[0] for m in result["OpenRouter Models"]]
+        self.assertIn("OpenRouter", result)
+        all_ids = [m[0] for m in result["OpenRouter"]]
         suffixes = (
             ":free",
             ":thinking",
@@ -416,7 +416,8 @@ class TestIssue172StaticFallbackDedup(unittest.TestCase):
             for suf in suffixes:
                 self.assertFalse(
                     mid.endswith(suf),
-                    f"Network-error fallback exposes variant ID {mid!r} (suffix {suf!r})",
+                    "Network-error fallback exposes variant ID "
+                    f"{mid!r} (suffix {suf!r})",
                 )
 
 
