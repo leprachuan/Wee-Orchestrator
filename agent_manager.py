@@ -1178,6 +1178,131 @@ def check_runtime_available(runtime: str) -> bool:
     return False
 
 
+def check_runtime_blocked(runtime: str, state_file_path=None) -> bool:
+    """Check if a runtime is listed as blocked in RUNTIME_STATE.md.
+
+    Parses the Active Incidents table and checks if the runtime appears
+    with a future Blocked Until timestamp.  Returns True only when the
+    incident is still active (not yet expired).
+    """
+    if state_file_path is None:
+        state_file_path = "/opt/RUNTIME_STATE.md"
+
+    state_path = Path(state_file_path)
+    if not state_path.exists():
+        return False
+
+    try:
+        content = state_path.read_text(encoding="utf-8")
+    except OSError:
+        return False
+
+    in_table = False
+    header_passed = False
+    for line in content.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("## Active Incidents"):
+            in_table = True
+            continue
+        if not in_table:
+            continue
+        if stripped.startswith("## ") and "Active Incidents" not in stripped:
+            break
+        if not stripped.startswith("|"):
+            continue
+        # Skip separator rows
+        is_sep = (
+            stripped.startswith("|---")
+            or stripped.startswith("| ---")
+            or set(stripped.replace("|", "").replace("-", "").replace(" ", "")) == set()
+        )
+        if is_sep:
+            continue
+        if "| ID " in stripped or "| ID|" in stripped:
+            header_passed = True
+            continue
+        if not header_passed:
+            header_passed = True
+            if "Blocked Until" in stripped:
+                continue
+
+        # Parse: | ID | Runtime/Service | Issue | Blocked Until | Written By | Fallback |
+        cols = [c.strip() for c in stripped.split("|")]
+        if len(cols) < 5:
+            continue
+
+        runtime_col = cols[2] if len(cols) > 2 else ""
+        blocked_until_col = cols[4] if len(cols) > 4 else ""
+        runtime_col_clean = runtime_col.strip("`").strip()
+
+        runtime_matches = (
+            runtime_col_clean == runtime
+            or runtime_col_clean.startswith(f"{runtime}/")
+            or runtime_col_clean.startswith(f"{runtime} ")
+        )
+        if not runtime_matches:
+            continue
+
+        blocked_until_clean = blocked_until_col.strip()
+        if not blocked_until_clean:
+            return True  # No expiry — treat as blocked
+
+        try:
+            import re as _re
+            from datetime import timezone as _tz, datetime as _dt
+
+            dt_str = _re.sub(r"\s+UTC$", "+00:00", blocked_until_clean).strip()
+            if "T" in dt_str or "+" in dt_str or dt_str.endswith("Z"):
+                blocked_dt = _dt.fromisoformat(dt_str.replace("Z", "+00:00"))
+            else:
+                blocked_dt = _dt.strptime(
+                    dt_str, "%Y-%m-%d %H:%M"
+                ).replace(tzinfo=_tz.utc)
+            return _dt.now(_tz.utc) < blocked_dt
+        except (ValueError, ImportError):
+            return True  # Unparseable date — treat as blocked
+
+    return False
+
+
+def resolve_dispatch_runtime_model(
+    agent: str,
+    requested_runtime: str,
+    requested_model: str,
+    agents_map: Dict,
+    state_file_path=None,
+) -> tuple:
+    """Resolve effective runtime/model, applying dispatch_config fallback.
+
+    Checks whether the primary runtime is blocked in RUNTIME_STATE.md or
+    unavailable on this host.  If so, and the agent's dispatch_config defines
+    fallback_runtime / fallback_model, the fallback values are returned.
+
+    Returns:
+        (effective_runtime, effective_model, used_fallback: bool, fallback_reason: str)
+    """
+    agent_config = agents_map.get(agent, {})
+    dispatch_cfg = agent_config.get("dispatch_config", {})
+    fallback_runtime = dispatch_cfg.get("fallback_runtime")
+    fallback_model = dispatch_cfg.get("fallback_model")
+
+    if not fallback_runtime and not fallback_model:
+        return requested_runtime, requested_model, False, ""
+
+    reason = ""
+    if check_runtime_blocked(requested_runtime, state_file_path):
+        reason = f"runtime '{requested_runtime}' blocked in RUNTIME_STATE.md"
+    elif not check_runtime_available(requested_runtime):
+        reason = f"runtime '{requested_runtime}' not available on this host"
+
+    if not reason:
+        return requested_runtime, requested_model, False, ""
+
+    effective_runtime = fallback_runtime or requested_runtime
+    effective_model = fallback_model or requested_model
+    return effective_runtime, effective_model, True, reason
+
+
 def get_available_runtimes() -> List[Dict[str, str]]:
     """Get list of available runtimes on this system.
 
@@ -13434,6 +13559,19 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                     file=sys.stderr,
                 )
         model = body.model or defaults.get("model", get_default_model())
+
+        # Apply dispatch_config fallback if primary runtime is blocked/unavailable
+        eff_rt, eff_model, used_fallback, fb_reason = resolve_dispatch_runtime_model(
+            agent, runtime, model, session_mgr.AGENTS
+        )
+        if used_fallback:
+            print(
+                f"[Dispatch] Fallback activated for agent='{agent}': {fb_reason}. "
+                f"Using runtime={eff_rt}, model={eff_model} "
+                f"(was {runtime}/{model})"
+            )
+            runtime = eff_rt
+            model = eff_model
 
         task_id = f"bg_{str(uuid4())[:8]}"
         session_id = str(uuid4())  # Must be valid UUID format for Copilot CLI
