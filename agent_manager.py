@@ -4254,9 +4254,19 @@ You can mention an agent in your prompt and it will auto-delegate:
 
         Authentication: keyring("openrouter", "api_key") -> OPENROUTER_API_KEY env var
         """
-        static_fallback = {
-            "OpenRouter Models": list(self.WEE_MODELS.get("OpenRouter Models", []))
-        }
+        # Normalize static fallback by stripping variant suffixes (Issue #172)
+        # e.g. openrouter/google/gemma-3-27b-it:free -> openrouter/google/gemma-3-27b-it
+        _static_raw = self.WEE_MODELS.get("OpenRouter Models", [])
+        _seen_static: set = set()
+        _normalized_static: list = []
+        for _entry in _static_raw:
+            _sid = self.BASE_MODEL_RE.sub("", _entry[0])
+            if _sid not in _seen_static:
+                _seen_static.add(_sid)
+                _normalized_static.append(
+                    (_sid, _entry[1], _entry[2] if len(_entry) > 2 else [])
+                )
+        static_fallback = {"OpenRouter Models": _normalized_static}
 
         cache_ttl = 300
         if (
