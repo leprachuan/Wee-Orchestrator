@@ -3221,6 +3221,7 @@ You can mention an agent in your prompt and it will auto-delegate:
                         "max_concurrent": agent.get("max_concurrent", 1),
                         "runtime": agent.get("runtime", "copilot"),
                         "model": agent.get("model", ""),
+                        "dispatch_config": agent.get("dispatch_config", {}),
                     }
                 return agents
         except json.JSONDecodeError as e:
@@ -10969,6 +10970,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         permission_mode: Optional[str] = (
             None  # elevated, restricted (default), sandboxed
         )
+        yolo: Optional[bool] = None  # Issue #193: auto-approval override
         description: Optional[str] = (
             None  # human-readable task name shown in Agents panel
         )
@@ -11825,8 +11827,30 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         defaults = _compute_bg_task_defaults(session_map, identity, channel)
 
         agent = body.agent or defaults.get("agent", get_default_agent())
-        runtime = body.runtime or defaults.get("runtime", get_default_runtime())
-        model = body.model or defaults.get("model", get_default_model())
+
+        # Get the agent's dispatch_config from agents.json (Issue #193)
+        agent_config = session_mgr.AGENTS.get(agent, {})
+        dispatch_config = agent_config.get("dispatch_config", {})
+
+        # Priority order: body > dispatch_config > session defaults > global defaults
+        runtime = (
+            body.runtime
+            or dispatch_config.get("runtime")
+            or defaults.get("runtime", get_default_runtime())
+        )
+        model = (
+            body.model
+            or dispatch_config.get("model")
+            or defaults.get("model", get_default_model())
+        )
+        permission_mode = (
+            body.permission_mode
+            or dispatch_config.get("permission_mode")
+            or "restricted"
+        )
+        yolo = (
+            body.yolo if body.yolo is not None else dispatch_config.get("yolo", False)
+        )
 
         task_id = f"bg_{str(uuid4())[:8]}"
         session_id = str(uuid4())  # Must be valid UUID format for Copilot CLI
@@ -11859,7 +11883,6 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         running = await asyncio.to_thread(
             bg_task_mgr.count_running, channel, identity, agent
         )
-        agent_config = session_mgr.AGENTS.get(agent, {})
         max_concurrent = agent_config.get(
             "max_concurrent", BackgroundTaskManager.MAX_TASKS_PER_USER
         )
@@ -11892,7 +11915,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 "agent": agent,
                 "runtime": runtime,
                 "model": model,
-                "permission_mode": body.permission_mode or "restricted",
+                "permission_mode": permission_mode,
                 "status": "queued",
                 "queue_position": queue_pos,
                 "timeout": bg_timeout,
@@ -11916,7 +11939,8 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         )
 
         # Resolve permission mode (default: restricted)
-        perm_mode = body.permission_mode or "restricted"
+        # Note: permission_mode was already resolved from dispatch_config above
+        perm_mode = permission_mode
         if perm_mode not in ("elevated", "restricted", "sandboxed"):
             perm_mode = "restricted"
 
