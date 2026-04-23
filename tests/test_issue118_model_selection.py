@@ -35,9 +35,13 @@ def _make_mgr():
     }
     mgr._stream_buffers = {}
     mgr._env_wee_models = None
+    mgr._env_claude_models = None
+    mgr._env_gemini_models = None
+    mgr._env_codex_models = None
+    mgr._env_devin_models = None
+    mgr._env_cursor_models = None
     mgr._openrouter_cache_ts = 0
     mgr._openrouter_models_cache = None
-    mgr.WEE_MODELS = {}
     return mgr
 
 
@@ -65,7 +69,6 @@ class TestFetchWeeModels(unittest.TestCase):
             for m in models:
                 self.assertIsInstance(m, str, f"Model {m!r} in section {section!r} must be a str, not {type(m)}")
 
-    @skip("Fixture initialization - pre-existing test issue")
     def test_fetch_wee_models_ollama_prefix(self):
         """Ollama models must be prefixed with 'ollama/'."""
         with patch("urllib.request.urlopen") as mock_urlopen:
@@ -77,11 +80,10 @@ class TestFetchWeeModels(unittest.TestCase):
 
             result = self.mgr.fetch_wee_models()
 
-        ollama_section = result.get("Ollama (Local)", [])
+        ollama_section = result.get("Ollama Models", [])
         self.assertIn("ollama/gemma4:e4b", ollama_section)
         self.assertIn("ollama/granite3.3-tuned:latest", ollama_section)
 
-    @skip("Fixture initialization - pre-existing test issue")
     def test_fetch_wee_models_includes_openrouter(self):
         """OpenRouter section must be present with correct model IDs."""
         with patch("urllib.request.urlopen") as mock_urlopen:
@@ -93,7 +95,7 @@ class TestFetchWeeModels(unittest.TestCase):
 
             result = self.mgr.fetch_wee_models()
 
-        openrouter_models = result.get("OpenRouter (Cloud)", [])
+        openrouter_models = result.get("OpenRouter Models", [])
         self.assertTrue(len(openrouter_models) > 0, "OpenRouter section must not be empty")
         for m in openrouter_models:
             self.assertTrue(m.startswith("openrouter/"), f"OpenRouter model {m!r} must start with 'openrouter/'")
@@ -144,7 +146,6 @@ class TestGetModelsForRuntime(unittest.TestCase):
                 assert isinstance(desc, str)
                 assert isinstance(aliases, list)
 
-    @skip("Fixture initialization - pre-existing test issue")
     def test_wee_models_contains_gemma(self):
         """WEE_MODELS must include gemma4:e4b (the model that was being ignored)."""
         all_ids = [
@@ -152,7 +153,6 @@ class TestGetModelsForRuntime(unittest.TestCase):
         ]
         assert "ollama/gemma4:e4b" in all_ids
 
-    @skip("Fixture initialization - pre-existing test issue")
     def test_wee_models_contains_granite(self):
         """WEE_MODELS must include granite3.3-tuned (the default that was always used)."""  # noqa: E501
         all_ids = [
@@ -192,7 +192,6 @@ class TestRunWeeNativeModelPassthrough(unittest.TestCase):
     def setUp(self):
         self.mgr = _make_mgr()
 
-    @skip("Fixture initialization - pre-existing test issue")
     def test_returns_flat_strings(self):
         """All model IDs must be flat strings, not tuples."""
         result = self.mgr.get_models_for_runtime("wee")
@@ -201,6 +200,8 @@ class TestRunWeeNativeModelPassthrough(unittest.TestCase):
                 assert isinstance(
                     mid, str
                 ), f"Model ID in {category} is {type(mid).__name__}, not str: {mid}"
+
+        captured = {}
 
         def fake_openai(**kwargs):
             captured["base_url"] = kwargs.get("base_url", "")
@@ -292,7 +293,6 @@ class TestSessionValidationWee(unittest.TestCase):
             session_data["model"] = os.getenv("WEE_DEFAULT_MODEL", "ollama/gemma4:e4b")
         assert session_data["model"] == "ollama/gemma4:e4b"
 
-    @skip("Fixture initialization - pre-existing test issue")
     def test_valid_model_preserved(self):
         """When a valid wee model is set, it should be preserved."""
         session_data = {"runtime": "wee", "model": "ollama/gemma4:e4b"}
@@ -304,7 +304,6 @@ class TestSessionValidationWee(unittest.TestCase):
             session_data["model"] = "ollama/gemma4:e4b"
         assert session_data["model"] == "ollama/gemma4:e4b"
 
-    @skip("Fixture initialization - pre-existing test issue")
     def test_stale_copilot_model_replaced(self):
         """A stale copilot model (e.g. gpt-5-mini) should be replaced for wee."""
         session_data = {"runtime": "wee", "model": "gpt-5-mini"}
