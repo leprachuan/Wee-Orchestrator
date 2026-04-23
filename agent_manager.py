@@ -1158,8 +1158,14 @@ def get_default_model() -> str:
 
 
 def get_default_runtime() -> str:
-    """Get default runtime from environment or use copilot"""
-    return os.environ.get("COPILOT_DEFAULT_RUNTIME", "copilot")
+    """Get default runtime, preferring env var; falls back to first available runtime."""
+    preferred = os.environ.get("COPILOT_DEFAULT_RUNTIME", "copilot")
+    if check_runtime_available(preferred):
+        return preferred
+    available = get_available_runtimes()
+    if available:
+        return available[0]["id"]
+    return preferred  # nothing available at all — return as last resort
 
 
 MODEL_MANIFEST_PATH = Path(SCRIPT_BASE_DIR) / "model-manifest.json"
@@ -14362,7 +14368,8 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                         file=sys.stderr,
                     )
                 else:
-                    # Primary unavailable — validate backup before using it
+                    # Primary configured but unavailable — validate backup before using it;
+                    # get_default_runtime() will scan all available runtimes as last resort.
                     if _pref_backup and check_runtime_available(_pref_backup):
                         runtime = _pref_backup
                     else:
