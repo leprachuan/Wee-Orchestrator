@@ -13256,7 +13256,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                     notify_pref = False
             if notify_pref is None:
                 session_pref = defaults.get("notification_preference", "all")
-                notify_pref = session_pref != "of"
+                notify_pref = session_pref != "off"
 
         # Memory injection is handled at session creation in build_agent_context_prompt
         # (not here at API time) so queued/promoted tasks get fresh context.
