@@ -13544,30 +13544,47 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 }
             return None
 
-        # Fallback eligibility patterns for bg tasks (Issue #219)
+        # Fallback eligibility patterns for bg tasks (Issue #219).
+        # All patterns use \b word boundaries so tokens embedded inside
+        # underscore-separated identifiers (e.g. status_code_429_count,
+        # unauthorized_users, timeout_value, api_key_invalid_count) are NOT
+        # matched.  Python's \w class includes '_', so \b fires only at
+        # alphanumeric↔non-alphanumeric transitions, not at '_' boundaries.
         _BG_FALLBACK_PATTERNS = [
             re.compile(p, re.IGNORECASE)
             for p in [
-                r"429",
-                r"rate.?limit",
-                r"quota.?exceeded",
-                r"401",
-                r"unauthorized",
-                r"missing.?authentication",
-                r"api[_\\-]?key.?(invalid|expired|missing)",
-                r"503",
-                r"service.?unavailable",
-                r"502",
-                r"bad.?gateway",
-                r"connection.?refused",
-                r"timed?.?out",
-                r"etimedout",
-                r"overloaded",
+                r"\b429\b",
+                r"\brate[\s\-]?limit(?:ed|ing)?\b",
+                r"\bquota[\s\-]exceeded\b",
+                r"\b401\b",
+                r"\bunauthorized\b",
+                r"\bmissing[\s\-]authentication\b",
+                r"\bapi[\s_\-]?key[\s_\-]?(?:invalid|expired|missing)\b",
+                r"\b503\b",
+                r"\bservice[\s\-]unavailable\b",
+                r"\b502\b",
+                r"\bbad[\s\-]gateway\b",
+                r"\bconnection[\s\-]refused\b",
+                r"\btimed?\s*out\b",
+                r"\betimedout\b",
+                r"\boverloaded\b",
             ]
         ]
 
+        # Errors starting with Python application-exception prefixes are
+        # not infrastructure failures; exclude them so test-assertion text
+        # like "AssertionError: expected fixture text 503 …" doesn't trigger
+        # a fallback retry.
+        _BG_EXCLUSION_RE = re.compile(
+            r"^(?:assert(?:ion)?error|typeerror|valueerror|keyerror"
+            r"|attributeerror|nameerror|runtimeerror)\s*:",
+            re.IGNORECASE,
+        )
+
         def _is_bg_fallback_eligible(error_text):
             if not error_text:
+                return False
+            if _BG_EXCLUSION_RE.match(error_text.strip()):
                 return False
             for pat in _BG_FALLBACK_PATTERNS:
                 if pat.search(error_text):
