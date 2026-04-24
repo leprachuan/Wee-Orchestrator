@@ -2221,6 +2221,7 @@ class SessionManager:
         self._env_cursor_models = None
         self._env_wee_models = None
         self._manifest_model_metadata = {}
+        self._manifest_mtime: float = 0.0
         self._openrouter_cache_ts = 0.0
 
         # Load command timeout from environment
@@ -3803,6 +3804,14 @@ You can mention an agent in your prompt and it will auto-delegate:
         }
 
     def _model_manifest_models(self, runtime: str) -> Optional[List[str]]:
+        # Invalidate per-runtime metadata cache when file has changed on disk.
+        try:
+            current_mtime = MODEL_MANIFEST_PATH.stat().st_mtime
+        except OSError:
+            current_mtime = 0.0
+        if current_mtime != self._manifest_mtime:
+            self._manifest_model_metadata = {}
+            self._manifest_mtime = current_mtime
         manifest = load_model_manifest()
         runtime_key = _model_manifest_runtime_key(runtime)
         models = manifest.get(runtime_key)
