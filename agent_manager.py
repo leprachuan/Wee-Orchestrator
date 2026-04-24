@@ -994,6 +994,44 @@ def get_default_runtime() -> str:
     return os.environ.get("COPILOT_DEFAULT_RUNTIME", "copilot")
 
 
+MODEL_MANIFEST_PATH = Path(SCRIPT_BASE_DIR) / "model-manifest.json"
+
+
+def _model_manifest_runtime_key(runtime: str) -> str:
+    """Map runtime aliases onto model-manifest.json keys."""
+    runtime = (runtime or "").lower().strip()
+    if runtime == "copilot-sdk":
+        return "copilot"
+    return runtime
+
+
+def load_model_manifest(path: Optional[Path] = None) -> Dict[str, List[str]]:
+    """Load runtime->models from model-manifest.json.
+
+    Returns an empty dict when the manifest is missing or invalid so callers can
+    fall back to their existing dispatch/static defaults.
+    """
+    manifest_path = path or MODEL_MANIFEST_PATH
+    try:
+        with open(manifest_path, "r") as f:
+            data = json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        return {}
+
+    runtimes = data.get("runtimes", {})
+    if not isinstance(runtimes, dict):
+        return {}
+
+    normalized = {}
+    for runtime, models in runtimes.items():
+        if not isinstance(runtime, str) or not isinstance(models, list):
+            continue
+        clean_models = [m for m in models if isinstance(m, str) and m.strip()]
+        if clean_models:
+            normalized[runtime.lower().strip()] = clean_models
+    return normalized
+
+
 def check_runtime_available(runtime: str) -> bool:
     """Check if a runtime is available on the system.
 
@@ -2046,6 +2084,7 @@ class SessionManager:
         self._env_devin_models = None
         self._env_cursor_models = None
         self._env_wee_models = None
+        self._manifest_model_metadata = {}
         self._openrouter_cache_ts = 0.0
 
         # Load command timeout from environment
@@ -2561,28 +2600,8 @@ You can mention an agent in your prompt and it will auto-delegate:
             # (e.g., OpenCode uses "ses_*" format, Claude uses UUID format, CODEX uses UUID format, etc.)
             self.update_session_field(n8n_session_id, "session_id", new_session_id)
 
-            # When switching runtime, also reset the model to a default for that runtime
-            default_model = "gpt-5-mini"  # Default fallback
-            if new_runtime == "copilot":
-                default_model = "gpt-5-mini"
-            elif new_runtime == "copilot-sdk":
-                default_model = "gpt-5-mini"
-            elif new_runtime == "claude-sdk":
-                default_model = "haiku"
-            elif new_runtime == "opencode":
-                default_model = "opencode/gpt-5-nano"
-            elif new_runtime == "claude":
-                default_model = "haiku"
-            elif new_runtime == "gemini":
-                default_model = "gemini-1.5-flash"
-            elif new_runtime == "codex":
-                default_model = "gpt-5.4"
-            elif new_runtime == "devin":
-                default_model = os.getenv("DEVIN_DEFAULT_MODEL", "claude-sonnet-4")
-            elif new_runtime == "cursor":
-                default_model = os.getenv("CURSOR_DEFAULT_MODEL", "auto")
-            elif new_runtime == "wee":
-                default_model = os.getenv("WEE_DEFAULT_MODEL", "ollama/gemma4:e4b")
+            # When switching runtime, also reset the model to that runtime's default.
+            default_model = self._runtime_default_model(new_runtime)
 
             self.update_session_field(n8n_session_id, "model", default_model)
             return f"✓ Switched runtime to **{new_runtime}**. Model set to `{default_model}`. Session reset."
@@ -3647,8 +3666,117 @@ You can mention an agent in your prompt and it will auto-delegate:
             ],
         }
 
+    def _model_manifest_models(self, runtime: str) -> Optional[List[str]]:
+        manifest = load_model_manifest()
+        runtime_key = _model_manifest_runtime_key(runtime)
+        models = manifest.get(runtime_key)
+        return list(models) if models else None
+
+    def _model_label_from_id(self, model_id: str) -> str:
+        words = re.split(r"[-_/]+", model_id)
+        return " ".join(
+            w.upper() if w.lower() == "gpt" else w.capitalize() for w in words
+        )
+
+    def _model_group_from_id(self, model_id: str, runtime: str) -> str:
+        model_lower = model_id.lower()
+        runtime = (runtime or "").lower()
+        if "claude" in model_lower:
+            return "Claude Models"
+        if "gpt" in model_lower or model_lower.startswith("o"):
+            return "GPT Models"
+        if "gemini" in model_lower:
+            return "Google Models"
+        if runtime == "opencode" and "/" in model_id:
+            return model_id.split("/", 1)[0]
+        return "Manifest Models"
+
+    def _model_aliases_from_id(self, model_id: str) -> List[str]:
+        aliases = []
+        model_lower = model_id.lower()
+        for family in ("sonnet", "haiku", "opus"):
+            if family in model_lower:
+                aliases.append(family)
+                version = re.search(rf"{family}[-.]?([0-9][0-9.-]*)", model_lower)
+                if version:
+                    version_text = version.group(1).strip("-.")
+                    aliases.append(f"{family}-{version_text}")
+                    aliases.append(f"{family}-{version_text.replace('.', '-')}")
+        return aliases
+
+    def _manifest_models_to_metadata(self, runtime: str) -> Optional[Dict]:
+        models = self._model_manifest_models(runtime)
+        if not models:
+            return None
+
+        metadata = {}
+        for model_id in models:
+            group = self._model_group_from_id(model_id, runtime)
+            metadata.setdefault(group, []).append(
+                (
+                    model_id,
+                    self._model_label_from_id(model_id),
+                    self._model_aliases_from_id(model_id),
+                )
+            )
+        self._manifest_model_metadata[runtime] = metadata
+        return metadata
+
+    def _manifest_models_to_dict(self, runtime: str) -> Optional[Dict]:
+        metadata = self._manifest_models_to_metadata(runtime)
+        if not metadata:
+            return None
+        return self._static_models_to_dict(metadata)
+
+    def _runtime_default_model(self, runtime: str) -> str:
+        manifest_models = self._model_manifest_models(runtime)
+        if manifest_models:
+            return manifest_models[0]
+
+        dispatch_defaults = []
+        for agent in self.AGENTS.values():
+            dispatch_config = agent.get("dispatch_config", {})
+            if dispatch_config.get("runtime") == runtime and dispatch_config.get(
+                "model"
+            ):
+                dispatch_defaults.append(dispatch_config["model"])
+        if dispatch_defaults:
+            return dispatch_defaults[0]
+
+        env_default = {
+            "copilot": os.getenv("COPILOT_DEFAULT_MODEL"),
+            "copilot-sdk": os.getenv("COPILOT_DEFAULT_MODEL"),
+            "claude": os.getenv("CLAUDE_DEFAULT_MODEL"),
+            "claude-sdk": os.getenv("CLAUDE_DEFAULT_MODEL"),
+            "gemini": os.getenv("GEMINI_DEFAULT_MODEL"),
+            "codex": os.getenv("CODEX_DEFAULT_MODEL"),
+            "devin": os.getenv("DEVIN_DEFAULT_MODEL"),
+            "cursor": os.getenv("CURSOR_DEFAULT_MODEL"),
+            "wee": os.getenv("WEE_DEFAULT_MODEL"),
+        }.get(runtime)
+        if env_default:
+            return env_default
+
+        fallback = {
+            "copilot": "gpt-5-mini",
+            "copilot-sdk": "gpt-5-mini",
+            "claude": "haiku",
+            "claude-sdk": "haiku",
+            "opencode": "opencode/gpt-5-nano",
+            "gemini": "gemini-1.5-flash",
+            "codex": "gpt-5.4",
+            "devin": "claude-sonnet-4",
+            "cursor": "auto",
+            "wee": "ollama/gemma4:e4b",
+        }
+        return fallback.get(runtime, get_default_model())
+
     def fetch_copilot_models(self) -> Dict:
         """Fetch available models from copilot CLI help text"""
+        manifest_models = self._manifest_models_to_dict("copilot")
+        if manifest_models:
+            return manifest_models
+
         if not self.copilot_bin:
             print("Copilot executable not found in any search paths", file=sys.stderr)
             return self._copilot_static_fallback()
@@ -3770,13 +3898,17 @@ You can mention an agent in your prompt and it will auto-delegate:
                     f"[Error] opencode models failed (exit {result.returncode}): {result.stderr}",
                     file=sys.stderr,
                 )
-                return self._static_models_to_dict(self.OPENCODE_MODELS)
+                return self._manifest_models_to_dict(
+                    "opencode"
+                ) or self._static_models_to_dict(self.OPENCODE_MODELS)
 
             if not result.stdout.strip():
                 print(
                     "[Warning] opencode models returned empty output", file=sys.stderr
                 )
-                return self._static_models_to_dict(self.OPENCODE_MODELS)
+                return self._manifest_models_to_dict(
+                    "opencode"
+                ) or self._static_models_to_dict(self.OPENCODE_MODELS)
 
             models_by_provider = {}
             for line in result.stdout.splitlines():
@@ -3802,10 +3934,14 @@ You can mention an agent in your prompt and it will auto-delegate:
                 f"[Error] opencode models command timed out after {self.command_timeout}s",
                 file=sys.stderr,
             )
-            return self._static_models_to_dict(self.OPENCODE_MODELS)
+            return self._manifest_models_to_dict(
+                "opencode"
+            ) or self._static_models_to_dict(self.OPENCODE_MODELS)
         except Exception as e:
             print(f"Error fetching opencode models: {e}", file=sys.stderr)
-            return self._static_models_to_dict(self.OPENCODE_MODELS)
+            return self._manifest_models_to_dict(
+                "opencode"
+            ) or self._static_models_to_dict(self.OPENCODE_MODELS)
 
     def _static_models_to_dict(self, static_dict: Dict) -> Dict:
         """Convert static model config {cat: [(id, desc, aliases)...]} to {cat: [id,...]}."""
@@ -3958,9 +4094,13 @@ You can mention an agent in your prompt and it will auto-delegate:
                         return desc
         return None
 
-    def _get_runtime_model_metadata(self, runtime: str) -> tuple[Optional[Dict], Optional[Dict]]:
+    def _get_runtime_model_metadata(
+        self, runtime: str
+    ) -> tuple[Optional[Dict], Optional[Dict]]:
         """Return (env_models, static_models) for a runtime."""
         if runtime in (
+            "copilot",
+            "copilot-sdk",
             "claude",
             "claude-sdk",
             "gemini",
@@ -3973,6 +4113,8 @@ You can mention an agent in your prompt and it will auto-delegate:
             self.get_models_for_runtime(runtime)
 
         env_models_map = {
+            "copilot": self._manifest_model_metadata.get("copilot"),
+            "copilot-sdk": self._manifest_model_metadata.get("copilot"),
             "claude": self._env_claude_models,
             "claude-sdk": self._env_claude_models,
             "gemini": self._env_gemini_models,
@@ -3981,7 +4123,10 @@ You can mention an agent in your prompt and it will auto-delegate:
             "cursor": self._env_cursor_models,
             "wee": self._env_wee_models,
         }
+        manifest_models = self._manifest_model_metadata.get(runtime)
         static_map = {
+            "copilot": None,
+            "copilot-sdk": None,
             "claude": self.CLAUDE_MODELS,
             "claude-sdk": self.CLAUDE_MODELS,
             "gemini": self.GEMINI_MODELS,
@@ -3991,15 +4136,19 @@ You can mention an agent in your prompt and it will auto-delegate:
             "cursor": self.CURSOR_MODELS,
             "wee": self.WEE_MODELS,
         }
-        return env_models_map.get(runtime), static_map.get(runtime)
+        return env_models_map.get(runtime) or manifest_models, static_map.get(runtime)
 
-    def fetch_claude_models(self) -> Dict:
+    def fetch_claude_models(self, runtime: str = "claude") -> Dict:
         """Return available Claude models from environment or fallback to static list.
 
         Claude Code CLI does not currently expose a model-listing subcommand.
         Models are read from CLAUDE_MODELS_JSON environment variable, with
         static CLAUDE_MODELS as fallback.
         """
+        manifest_models = self._manifest_models_to_dict(runtime)
+        if manifest_models:
+            return manifest_models
+
         # Try to load from environment variable first
         env_models = os.getenv("CLAUDE_MODELS_JSON")
         if env_models:
@@ -4026,6 +4175,10 @@ You can mention an agent in your prompt and it will auto-delegate:
         Models are read from GEMINI_MODELS_JSON environment variable, with
         static GEMINI_MODELS as fallback.
         """
+        manifest_models = self._manifest_models_to_dict("gemini")
+        if manifest_models:
+            return manifest_models
+
         # Try to load from environment variable first
         env_models = os.getenv("GEMINI_MODELS_JSON")
         if env_models:
@@ -4052,6 +4205,10 @@ You can mention an agent in your prompt and it will auto-delegate:
         Models are read from CODEX_MODELS_JSON environment variable, with
         static CODEX_MODELS as fallback.
         """
+        manifest_models = self._manifest_models_to_dict("codex")
+        if manifest_models:
+            return manifest_models
+
         # Try to load from environment variable first
         env_models = os.getenv("CODEX_MODELS_JSON")
         if env_models:
@@ -4298,9 +4455,9 @@ You can mention an agent in your prompt and it will auto-delegate:
         dispatch = {
             "copilot": self.fetch_copilot_models,
             "copilot-sdk": self.fetch_copilot_models,
-            "claude-sdk": self.fetch_claude_models,
+            "claude-sdk": lambda: self.fetch_claude_models("claude-sdk"),
             "opencode": self.fetch_opencode_models,
-            "claude": self.fetch_claude_models,
+            "claude": lambda: self.fetch_claude_models("claude"),
             "gemini": self.fetch_gemini_models,
             "codex": self.fetch_codex_models,
             "devin": self.fetch_devin_models,
@@ -4309,6 +4466,9 @@ You can mention an agent in your prompt and it will auto-delegate:
         }
         fetcher = dispatch.get(runtime)
         if fetcher is None:
+            manifest_models = self._manifest_models_to_dict(runtime)
+            if manifest_models:
+                return manifest_models
             print(
                 f"[Warning] Unknown runtime for model listing: {runtime}",
                 file=sys.stderr,
@@ -4411,19 +4571,9 @@ You can mention an agent in your prompt and it will auto-delegate:
         default_runtime = get_default_runtime()
         default_model = get_default_model()
 
-        # Adjust default model based on runtime if using defaults
-        if default_runtime == "claude":
-            default_model = "haiku"
-        elif default_runtime == "opencode":
-            default_model = "opencode/gpt-5-nano"
-        elif default_runtime == "gemini":
-            default_model = "gemini-1.5-flash"
-        elif default_runtime == "codex":
-            default_model = "gpt-5.4"
-        elif default_runtime == "devin":
-            default_model = os.getenv("DEVIN_DEFAULT_MODEL", "claude-sonnet-4")
-        elif default_runtime == "cursor":
-            default_model = os.getenv("CURSOR_DEFAULT_MODEL", "auto")
+        # Adjust default model based on runtime if using defaults.
+        if not os.environ.get("COPILOT_DEFAULT_MODEL"):
+            default_model = self._runtime_default_model(default_runtime)
 
         # Extract bot identifier from session ID (last 4 chars of numeric part)
         bot_id = self._extract_bot_identifier(n8n_session_id)
@@ -4478,18 +4628,18 @@ You can mention an agent in your prompt and it will auto-delegate:
             runtime = merged.get("runtime", default_runtime)
             if runtime == "claude":
                 if not merged.get("model") or "gpt" in merged.get("model", "").lower():
-                    merged["model"] = "haiku"
+                    merged["model"] = self._runtime_default_model(runtime)
             elif runtime == "opencode":
                 # For opencode, only force default if model is truly empty.
                 # Allow any non-empty model string (opencode/*, openai-compatible/*, etc.)
                 if not merged.get("model"):
-                    merged["model"] = "opencode/gpt-5-nano"
+                    merged["model"] = self._runtime_default_model(runtime)
             elif runtime == "gemini":
                 if (
                     not merged.get("model")
                     or "gemini" not in merged.get("model", "").lower()
                 ):
-                    merged["model"] = "gemini-1.5-flash"
+                    merged["model"] = self._runtime_default_model(runtime)
             elif runtime == "codex":
                 current_model = merged.get("model", "")
                 # Accept any model that resolves via codex model metadata/aliases.
@@ -4498,29 +4648,25 @@ You can mention an agent in your prompt and it will auto-delegate:
                 if not current_model or not self.get_model_from_name(
                     current_model, "codex"
                 ):
-                    merged["model"] = "gpt-5.4"
+                    merged["model"] = self._runtime_default_model(runtime)
             elif runtime == "devin":
                 current_model = merged.get("model", "")
                 if not current_model or not self.get_model_from_name(
                     current_model, "devin"
                 ):
-                    merged["model"] = os.getenv(
-                        "DEVIN_DEFAULT_MODEL", "claude-sonnet-4"
-                    )
+                    merged["model"] = self._runtime_default_model(runtime)
             elif runtime == "cursor":
                 current_model = merged.get("model", "")
                 if not current_model or not self.get_model_from_name(
                     current_model, "cursor"
                 ):
-                    merged["model"] = os.getenv("CURSOR_DEFAULT_MODEL", "auto")
+                    merged["model"] = self._runtime_default_model(runtime)
             elif runtime == "wee":
                 current_model = merged.get("model", "")
                 if not current_model or not self.get_model_from_name(
                     current_model, "wee"
                 ):
-                    merged["model"] = os.getenv(
-                        "WEE_DEFAULT_MODEL", "ollama/gemma4:e4b"
-                    )
+                    merged["model"] = self._runtime_default_model(runtime)
 
             # Validate and fix session_id if corrupted
             session_id = merged.get("session_id", "")
@@ -10874,6 +11020,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             "cursor",
             "wee",
         }
+        known_runtimes.update(load_model_manifest().keys())
         if runtime not in known_runtimes:
             return {
                 "runtime": runtime,

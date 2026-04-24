@@ -3115,7 +3115,7 @@ function renderJobEditForm(job, container) {
   const fbRtEl = document.getElementById('sched-fallback-runtime');
   const fbModelEl = document.getElementById('sched-fallback-model');
   if (fbRtEl && job && job.fallback_runtime) fbRtEl.value = job.fallback_runtime;
-  if (fbModelEl && job && job.fallback_model) fbModelEl.value = job.fallback_model;
+  if (fbModelEl) populateFallbackModelDropdown(fbModelEl, fbRtEl?.value || '', job?.fallback_model || '');
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -3357,29 +3357,43 @@ async function populateModelDropdown(container, runtime) {
   }
 }
 
-function populateFallbackRuntimeDropdown(selectEl) {
-  const runtimes = ['copilot','claude','claude-sdk','gemini','opencode','wee','ollama'];
+async function populateFallbackRuntimeDropdown(selectEl, current = '') {
+  let runtimes = ['copilot','claude','claude-sdk','gemini','opencode','wee'];
+  try {
+    const data = await apiRequest('GET', '/runtimes');
+    const apiRuntimes = (data.runtimes || []).map(r => r.id).filter(Boolean);
+    if (apiRuntimes.length) runtimes = apiRuntimes;
+  } catch (e) {
+    // Keep the conservative fallback list when the API is unavailable.
+  }
+  current = current || selectEl.value;
   selectEl.innerHTML = '<option value="">None (no fallback)</option>';
   runtimes.forEach(r => {
     const opt = document.createElement('option');
     opt.value = r; opt.textContent = r;
+    if (r === current) opt.selected = true;
     selectEl.appendChild(opt);
   });
 }
 
-function populateFallbackModelDropdown(selectEl) {
-  const models = [
-    'claude-haiku-4.5','claude-sonnet-4.6','claude-opus-4.6',
-    'gpt-4.1','gpt-5-mini','gpt-5.2',
-    'gemini-1.5-pro','gemini-2.0-flash',
-    'sonnet','haiku','opus'
-  ];
+async function populateFallbackModelDropdown(selectEl, runtime = '', current = '') {
+  const selectedRuntime = runtime || document.getElementById('sched-fallback-runtime')?.value || 'copilot';
   selectEl.innerHTML = '<option value="">None (no fallback)</option>';
-  models.forEach(m => {
+  try {
+    const data = await apiRequest('GET', `/models?runtime=${encodeURIComponent(selectedRuntime)}`);
+    const models = data.models || [];
+    models.forEach(m => {
+      const opt = document.createElement('option');
+      opt.value = m.id; opt.textContent = m.label || m.id;
+      if (m.id === current) opt.selected = true;
+      selectEl.appendChild(opt);
+    });
+  } catch (e) {
+    if (!current) return;
     const opt = document.createElement('option');
-    opt.value = m; opt.textContent = m;
+    opt.value = current; opt.textContent = current; opt.selected = true;
     selectEl.appendChild(opt);
-  });
+  }
 }
 
 function wireJobForm(container, onSubmit) {
@@ -3388,6 +3402,9 @@ function wireJobForm(container, onSubmit) {
   const fbModelEl = document.getElementById('sched-fallback-model');
   if (fbRtEl) populateFallbackRuntimeDropdown(fbRtEl);
   if (fbModelEl) populateFallbackModelDropdown(fbModelEl);
+  if (fbRtEl && fbModelEl) {
+    fbRtEl.addEventListener('change', () => populateFallbackModelDropdown(fbModelEl, fbRtEl.value));
+  }
 
   const form = container.querySelector('#sched-job-form');
   const errEl = container.querySelector('#sched-form-error');
