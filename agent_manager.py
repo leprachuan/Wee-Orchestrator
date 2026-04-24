@@ -5948,19 +5948,20 @@ Do NOT use <img> tags (unsupported). Do NOT create files, generate ASCII art, or
             render_instruction = ""
 
         # Add channel-specific file handling instructions (only for render types that support media)
+        channel_limit = "100 MB"
         if render_type in ("markdown", "telegram_html"):
             size_limits = {"telegram": "50 MB", "webex": "100 MB", "webui": "500 MB"}
             channel_limit = size_limits.get(channel, "100 MB")
             file_handling = """
-[File Handling — YOUR CHANNEL: {channel.upper()}]
+[File Handling — YOUR CHANNEL: {channel_upper}]
   Files:     [FILE:/path/to/file.ext:Your caption here]
   Images:    ![caption](url) or ![caption](/ai-media/session/file.png)
-  Save to:   {SCRIPT_BASE_DIR}/{channel}_downloads/
+  Save to:   {script_base_dir}/{channel}_downloads/
   Size limit: {channel_limit}
 
-  1. Save file → {SCRIPT_BASE_DIR}/{channel}_downloads/
+  1. Save file → {script_base_dir}/{channel}_downloads/
   2. Include [FILE:path:caption] or ![caption](url) in your response
-  3. System sends it to {channel.upper()} automatically ✓
+  3. System sends it to {channel_upper} automatically ✓
   ✓ Use absolute paths  ✓ Only save to {channel}_downloads"""
             render_instruction += file_handling
 
@@ -5974,6 +5975,7 @@ Do NOT use <img> tags (unsupported). Do NOT create files, generate ASCII art, or
             render_instruction = render_instruction.format(
                 channel=channel,
                 channel_upper=channel_upper,
+                channel_limit=channel_limit,
                 script_base_dir=SCRIPT_BASE_DIR,
                 n8n_session_id=n8n_session_id,
             )
