@@ -3,6 +3,7 @@
   "last_updated": "2026-04-24T22:19:00Z",
   "runtimes": {
     "copilot": [
+      "auto",
       "gpt-5.4",
       "gpt-5.5",
       "gpt-5.3-codex",
@@ -22,6 +23,7 @@
       "gpt-5.5"
     ],
     "copilot-sdk": [
+      "auto",
       "gpt-5.4",
       "gpt-5.5",
       "gpt-5.3-codex",
