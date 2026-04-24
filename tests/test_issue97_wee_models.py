@@ -12,7 +12,7 @@ import unittest
 from unittest.mock import patch
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from agent_manager import SessionManager
+from agent_manager import SessionManager  # noqa: E402
 
 
 class TestIssue97WeeModelsKnownRuntimes(unittest.TestCase):
@@ -22,14 +22,16 @@ class TestIssue97WeeModelsKnownRuntimes(unittest.TestCase):
         """GET /api/v1/models?runtime=wee should not return 'Unknown runtime'."""
         # Read the source file and verify wee is in known_runtimes
         import pathlib
+
         src = pathlib.Path(__file__).parent.parent / "agent_manager.py"
         text = src.read_text()
         # Find the known_runtimes block
         idx = text.index("known_runtimes = {")
         block_end = text.index("}", idx)
         block = text[idx:block_end]
-        self.assertIn('"wee"', block,
-                       "wee must be in known_runtimes set in get_models endpoint")
+        self.assertIn(
+            '"wee"', block, "wee must be in known_runtimes set in get_models endpoint"
+        )
 
 
 class TestIssue97WeeModelsFormat(unittest.TestCase):
@@ -54,8 +56,11 @@ class TestIssue97WeeModelsFormat(unittest.TestCase):
             self.assertIsInstance(category, str)
             self.assertIsInstance(models, list)
             for model_id in models:
-                self.assertIsInstance(model_id, str,
-                    f"Model in category '{category}' should be str, got {type(model_id)}: {model_id}")
+                self.assertIsInstance(
+                    model_id,
+                    str,
+                    f"Model in category '{category}' should be str, got {type(model_id)}: {model_id}",  # noqa: E501
+                )
 
     def test_wee_models_contains_expected_models(self):
         """Default WEE_MODELS should include known model IDs."""
@@ -94,7 +99,9 @@ class TestIssue97WeeModelsConstant(unittest.TestCase):
         """WEE_MODELS should have an Ollama category."""
         categories = list(SessionManager.WEE_MODELS.keys())
         ollama_cats = [c for c in categories if "ollama" in c.lower()]
-        self.assertGreater(len(ollama_cats), 0, f"Should have Ollama category, got: {categories}")
+        self.assertGreater(
+            len(ollama_cats), 0, f"Should have Ollama category, got: {categories}"
+        )
 
 
 class TestIssue97FetchWeeModels(unittest.TestCase):
@@ -122,12 +129,19 @@ class TestIssue97FetchWeeModels(unittest.TestCase):
             for m in models:
                 self.assertIsInstance(m, str, f"Expected str, got {type(m)}: {m}")
 
-    @patch.dict(os.environ, {"WEE_MODELS_JSON": json.dumps({
-        "Custom Ollama": [
-            ["custom/model-1", "Custom Model 1", []],
-            ["custom/model-2", "Custom Model 2", ["cm2"]],
-        ]
-    })})
+    @patch.dict(
+        os.environ,
+        {
+            "WEE_MODELS_JSON": json.dumps(
+                {
+                    "Custom Ollama": [
+                        ["custom/model-1", "Custom Model 1", []],
+                        ["custom/model-2", "Custom Model 2", ["cm2"]],
+                    ]
+                }
+            )
+        },
+    )
     def test_wee_models_json_env_override(self):
         """WEE_MODELS_JSON env var should override static WEE_MODELS."""
         shim = SessionManager.__new__(SessionManager)
@@ -137,9 +151,10 @@ class TestIssue97FetchWeeModels(unittest.TestCase):
         self.assertIn("custom/model-1", result["Custom Ollama"])
         self.assertIn("custom/model-2", result["Custom Ollama"])
 
-    @patch.dict(os.environ, {"WEE_MODELS_JSON": json.dumps({
-        "Test": [["test/m1", "Test Model", ["tm1"]]]
-    })})
+    @patch.dict(
+        os.environ,
+        {"WEE_MODELS_JSON": json.dumps({"Test": [["test/m1", "Test Model", ["tm1"]]]})},
+    )
     def test_wee_models_json_caches_env_models(self):
         """fetch_wee_models should cache env models in _env_wee_models."""
         shim = SessionManager.__new__(SessionManager)
@@ -243,10 +258,14 @@ class TestIssue97DispatchTable(unittest.TestCase):
     def test_dispatch_wee_is_not_lambda(self):
         """The wee dispatch entry should be a bound method, not an inline lambda."""
         import inspect
+
         source = inspect.getsource(self.shim.get_models_for_runtime)
         # Should NOT contain a lambda for wee
-        self.assertNotIn('lambda:', source.split('"wee"')[1].split('\n')[0] if '"wee"' in source else "",
-                         "wee dispatch should use fetch_wee_models, not a lambda")
+        self.assertNotIn(
+            "lambda:",
+            source.split('"wee"')[1].split("\n")[0] if '"wee"' in source else "",
+            "wee dispatch should use fetch_wee_models, not a lambda",
+        )
 
 
 if __name__ == "__main__":

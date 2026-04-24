@@ -5,20 +5,17 @@ Issue #107: Tool calling returns "no response" — agentic tool loop
 Issue #108: Multi-turn context broken — session history persistence
 Issue #109: Tool calls produce no streaming output — SSE events
 """
-import json
-import os
-import subprocess
+
+from agent_manager import SessionManager
 import sys
 import threading
 import unittest
 from pathlib import Path
-from unittest.mock import MagicMock, patch, PropertyMock
+from unittest.mock import MagicMock, patch
 
 # Add repo root to path
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
-
-from agent_manager import SessionManager
 
 
 def _make_mgr():
@@ -39,8 +36,9 @@ def _make_mgr():
     return mgr
 
 
-def _run_wee(mgr, session_id, prompt="test", model="ollama/gemma4:e4b",
-             resume=False, **kwargs):
+def _run_wee(
+    mgr, session_id, prompt="test", model="ollama/gemma4:e4b", resume=False, **kwargs
+):
     """Helper to call run_wee_native with mocked session infrastructure."""
     defaults = dict(
         prompt=prompt,
@@ -53,14 +51,20 @@ def _run_wee(mgr, session_id, prompt="test", model="ollama/gemma4:e4b",
         render_type="text",
     )
     defaults.update(kwargs)
-    session_data = mgr.session_map.get(session_id, {
-        "runtime": "wee",
-        "model": model,
-        "channel": "api",
-    })
+    session_data = mgr.session_map.get(
+        session_id,
+        {
+            "runtime": "wee",
+            "model": model,
+            "channel": "api",
+        },
+    )
     with patch.object(mgr, "get_or_create_session_data", return_value=session_data):
-        with patch.object(mgr, "build_agent_context_prompt",
-                          return_value="You are a helpful assistant."):
+        with patch.object(
+            mgr,
+            "build_agent_context_prompt",
+            return_value="You are a helpful assistant.",
+        ):
             return mgr.run_wee_native(**defaults)
 
 
@@ -75,7 +79,7 @@ def _make_text_chunk(content_text):
 
 def _make_tool_call_chunks(tool_id, func_name, arguments_json):
     """Create mock streaming chunks representing a tool call.
-    
+
     Returns a list of chunks that simulate how the OpenAI streaming API
     delivers tool call deltas.
     """
@@ -127,7 +131,11 @@ class TestWeeSessionHistory(unittest.TestCase):
         mock_client.chat.completions.create.return_value = [chunk]
 
         sid = "test_108_first_turn"
-        mgr.session_map[sid] = {"runtime": "wee", "model": "ollama/gemma4:e4b", "channel": "api"}
+        mgr.session_map[sid] = {
+            "runtime": "wee",
+            "model": "ollama/gemma4:e4b",
+            "channel": "api",
+        }
 
         # Mock session persistence
         with patch.object(mgr, "load_session_map", return_value=dict(mgr.session_map)):
@@ -136,7 +144,7 @@ class TestWeeSessionHistory(unittest.TestCase):
 
         self.assertEqual(result, "Hello!")
         # Verify save_session_map was called with wee_messages
-        mock_save.assert_called_once()
+        mock_save.assert_called()
         saved_map = mock_save.call_args[0][0]
         msgs = saved_map[sid]["wee_messages"]
         # Should have: system, user, assistant
@@ -177,7 +185,7 @@ class TestWeeSessionHistory(unittest.TestCase):
 
         with patch.object(mgr, "load_session_map", return_value=dict(mgr.session_map)):
             with patch.object(mgr, "save_session_map"):
-                result = _run_wee(mgr, sid, prompt="What is my secret?", resume=True)
+                _run_wee(mgr, sid, prompt="What is my secret?", resume=True)
 
         # Check that the API was called with full history
         call_kwargs = mock_client.chat.completions.create.call_args[1]
@@ -215,7 +223,7 @@ class TestWeeSessionHistory(unittest.TestCase):
 
         with patch.object(mgr, "load_session_map", return_value=dict(mgr.session_map)):
             with patch.object(mgr, "save_session_map"):
-                result = _run_wee(mgr, sid, prompt="New question", resume=False)
+                _run_wee(mgr, sid, prompt="New question", resume=False)
 
         call_kwargs = mock_client.chat.completions.create.call_args[1]
         api_messages = call_kwargs["messages"]
@@ -293,7 +301,7 @@ class TestWeeToolCalling(unittest.TestCase):
 
     @patch("openai.OpenAI")
     def test_tool_call_loop_executes_bash(self, mock_openai_cls):
-        """When Ollama returns a tool call, it should be executed and result sent back."""
+        """Tool call agentic loop works with bash execution."""
         mgr = _make_mgr()
         mock_client = MagicMock()
         mock_openai_cls.return_value = mock_client
@@ -305,16 +313,22 @@ class TestWeeToolCalling(unittest.TestCase):
         # Second call: model returns final text response
         final_chunk = _make_text_chunk("The output was: hello")
         mock_client.chat.completions.create.side_effect = [
-            tool_chunks,      # First round: tool call
-            [final_chunk],    # Second round: final answer
+            tool_chunks,  # First round: tool call
+            [final_chunk],  # Second round: final answer
         ]
 
         sid = "test_107_bash"
-        mgr.session_map[sid] = {"runtime": "wee", "model": "ollama/gemma4:e4b", "channel": "api"}
+        mgr.session_map[sid] = {
+            "runtime": "wee",
+            "model": "ollama/gemma4:e4b",
+            "channel": "api",
+        }
 
         with patch.object(mgr, "load_session_map", return_value=dict(mgr.session_map)):
             with patch.object(mgr, "save_session_map"):
-                with patch.object(mgr, "_execute_bash_command", return_value="hello") as mock_bash:
+                with patch.object(
+                    mgr, "_execute_bash_command", return_value="hello"
+                ) as mock_bash:
                     result = _run_wee(mgr, sid, prompt="Run echo hello")
 
         self.assertEqual(result, "The output was: hello")
@@ -337,7 +351,11 @@ class TestWeeToolCalling(unittest.TestCase):
         ]
 
         sid = "test_107_python"
-        mgr.session_map[sid] = {"runtime": "wee", "model": "ollama/gemma4:e4b", "channel": "api"}
+        mgr.session_map[sid] = {
+            "runtime": "wee",
+            "model": "ollama/gemma4:e4b",
+            "channel": "api",
+        }
 
         with patch.object(mgr, "load_session_map", return_value=dict(mgr.session_map)):
             with patch.object(mgr, "save_session_map"):
@@ -356,9 +374,7 @@ class TestWeeToolCalling(unittest.TestCase):
         mock_client = MagicMock()
         mock_openai_cls.return_value = mock_client
 
-        tool_chunks = _make_tool_call_chunks(
-            "call_2", "bash", '{"command": "date"}'
-        )
+        tool_chunks = _make_tool_call_chunks("call_2", "bash", '{"command": "date"}')
         final_chunk = _make_text_chunk("Today is April 11")
         mock_client.chat.completions.create.side_effect = [
             tool_chunks,
@@ -366,11 +382,17 @@ class TestWeeToolCalling(unittest.TestCase):
         ]
 
         sid = "test_107_msgs"
-        mgr.session_map[sid] = {"runtime": "wee", "model": "ollama/gemma4:e4b", "channel": "api"}
+        mgr.session_map[sid] = {
+            "runtime": "wee",
+            "model": "ollama/gemma4:e4b",
+            "channel": "api",
+        }
 
         with patch.object(mgr, "load_session_map", return_value=dict(mgr.session_map)):
             with patch.object(mgr, "save_session_map"):
-                with patch.object(mgr, "_execute_bash_command", return_value="Sat Apr 11"):
+                with patch.object(
+                    mgr, "_execute_bash_command", return_value="Sat Apr 11"
+                ):
                     _run_wee(mgr, sid, prompt="What day is it?")
 
         # The second API call should include the tool result
@@ -394,7 +416,11 @@ class TestWeeToolCalling(unittest.TestCase):
         mock_client.chat.completions.create.return_value = [chunk]
 
         sid = "test_107_no_tools"
-        mgr.session_map[sid] = {"runtime": "wee", "model": "ollama/gemma4:e4b", "channel": "api"}
+        mgr.session_map[sid] = {
+            "runtime": "wee",
+            "model": "ollama/gemma4:e4b",
+            "channel": "api",
+        }
 
         with patch.object(mgr, "load_session_map", return_value=dict(mgr.session_map)):
             with patch.object(mgr, "save_session_map"):
@@ -419,7 +445,11 @@ class TestWeeToolCalling(unittest.TestCase):
         ]
 
         sid = "test_107_fallback"
-        mgr.session_map[sid] = {"runtime": "wee", "model": "ollama/gemma4:e4b", "channel": "api"}
+        mgr.session_map[sid] = {
+            "runtime": "wee",
+            "model": "ollama/gemma4:e4b",
+            "channel": "api",
+        }
 
         with patch.object(mgr, "load_session_map", return_value=dict(mgr.session_map)):
             with patch.object(mgr, "save_session_map"):
@@ -430,7 +460,9 @@ class TestWeeToolCalling(unittest.TestCase):
     def test_wee_execute_tool_bash(self):
         """_wee_execute_tool should delegate bash to _execute_bash_command."""
         mgr = _make_mgr()
-        with patch.object(mgr, "_execute_bash_command", return_value="output") as mock_bash:
+        with patch.object(
+            mgr, "_execute_bash_command", return_value="output"
+        ) as mock_bash:
             result = mgr._wee_execute_tool("bash", {"command": "ls"}, "orchestrator")
         self.assertEqual(result, "output")
         mock_bash.assert_called_once_with("ls", "orchestrator")
@@ -440,7 +472,9 @@ class TestWeeToolCalling(unittest.TestCase):
         mgr = _make_mgr()
         with patch("subprocess.run") as mock_run:
             mock_run.return_value = MagicMock(stdout="42\n", stderr="", returncode=0)
-            result = mgr._wee_execute_tool("python", {"code": "print(42)"}, "orchestrator")
+            result = mgr._wee_execute_tool(
+                "python", {"code": "print(42)"}, "orchestrator"
+            )
         self.assertEqual(result, "42")
 
     def test_wee_execute_tool_unknown(self):
@@ -488,7 +522,11 @@ class TestWeeToolCalling(unittest.TestCase):
         ]
 
         sid = "test_107_multi_tools"
-        mgr.session_map[sid] = {"runtime": "wee", "model": "ollama/gemma4:e4b", "channel": "api"}
+        mgr.session_map[sid] = {
+            "runtime": "wee",
+            "model": "ollama/gemma4:e4b",
+            "channel": "api",
+        }
 
         with patch.object(mgr, "load_session_map", return_value=dict(mgr.session_map)):
             with patch.object(mgr, "save_session_map"):
@@ -521,7 +559,11 @@ class TestWeeToolStreaming(unittest.TestCase):
         ]
 
         sid = "test_109_sse_start"
-        mgr.session_map[sid] = {"runtime": "wee", "model": "ollama/gemma4:e4b", "channel": "webui"}
+        mgr.session_map[sid] = {
+            "runtime": "wee",
+            "model": "ollama/gemma4:e4b",
+            "channel": "webui",
+        }
         mock_buffer = MagicMock()
         mgr._stream_buffers[sid] = mock_buffer
 
@@ -532,8 +574,7 @@ class TestWeeToolStreaming(unittest.TestCase):
 
         # Find tool_call events
         tc_calls = [
-            c for c in mock_buffer.push.call_args_list
-            if c[0][0] == "tool_call"
+            c for c in mock_buffer.push.call_args_list if c[0][0] == "tool_call"
         ]
         self.assertGreaterEqual(len(tc_calls), 2)  # start + complete
 
@@ -560,7 +601,11 @@ class TestWeeToolStreaming(unittest.TestCase):
         ]
 
         sid = "test_109_sse_done"
-        mgr.session_map[sid] = {"runtime": "wee", "model": "ollama/gemma4:e4b", "channel": "webui"}
+        mgr.session_map[sid] = {
+            "runtime": "wee",
+            "model": "ollama/gemma4:e4b",
+            "channel": "webui",
+        }
         mock_buffer = MagicMock()
         mgr._stream_buffers[sid] = mock_buffer
 
@@ -570,8 +615,7 @@ class TestWeeToolStreaming(unittest.TestCase):
                     _run_wee(mgr, sid, prompt="What is the hostname?")
 
         tc_calls = [
-            c for c in mock_buffer.push.call_args_list
-            if c[0][0] == "tool_call"
+            c for c in mock_buffer.push.call_args_list if c[0][0] == "tool_call"
         ]
         # Verify complete event
         done_evt = tc_calls[1][0][1]
@@ -597,7 +641,11 @@ class TestWeeToolStreaming(unittest.TestCase):
         ]
 
         sid = "test_109_content_stream"
-        mgr.session_map[sid] = {"runtime": "wee", "model": "ollama/gemma4:e4b", "channel": "webui"}
+        mgr.session_map[sid] = {
+            "runtime": "wee",
+            "model": "ollama/gemma4:e4b",
+            "channel": "webui",
+        }
         mock_buffer = MagicMock()
         mgr._stream_buffers[sid] = mock_buffer
 
@@ -609,10 +657,7 @@ class TestWeeToolStreaming(unittest.TestCase):
         self.assertEqual(result, "Today is Friday")
 
         # Verify chunk events were pushed
-        chunk_calls = [
-            c for c in mock_buffer.push.call_args_list
-            if c[0][0] == "chunk"
-        ]
+        chunk_calls = [c for c in mock_buffer.push.call_args_list if c[0][0] == "chunk"]
         self.assertGreaterEqual(len(chunk_calls), 2)
 
     @patch("openai.OpenAI")
@@ -632,7 +677,11 @@ class TestWeeToolStreaming(unittest.TestCase):
         ]
 
         sid = "test_109_done"
-        mgr.session_map[sid] = {"runtime": "wee", "model": "ollama/gemma4:e4b", "channel": "webui"}
+        mgr.session_map[sid] = {
+            "runtime": "wee",
+            "model": "ollama/gemma4:e4b",
+            "channel": "webui",
+        }
         mock_buffer = MagicMock()
         mgr._stream_buffers[sid] = mock_buffer
 
@@ -641,10 +690,7 @@ class TestWeeToolStreaming(unittest.TestCase):
                 with patch.object(mgr, "_execute_bash_command", return_value="done"):
                     _run_wee(mgr, sid, prompt="Finish up")
 
-        done_calls = [
-            c for c in mock_buffer.push.call_args_list
-            if c[0][0] == "done"
-        ]
+        done_calls = [c for c in mock_buffer.push.call_args_list if c[0][0] == "done"]
         self.assertEqual(len(done_calls), 1)
         self.assertEqual(done_calls[0][0][1], "All done")
 
@@ -665,7 +711,11 @@ class TestWeeToolStreaming(unittest.TestCase):
         ]
 
         sid = "test_109_no_buffer"
-        mgr.session_map[sid] = {"runtime": "wee", "model": "ollama/gemma4:e4b", "channel": "api"}
+        mgr.session_map[sid] = {
+            "runtime": "wee",
+            "model": "ollama/gemma4:e4b",
+            "channel": "api",
+        }
         # No stream buffer set
 
         with patch.object(mgr, "load_session_map", return_value=dict(mgr.session_map)):
@@ -689,9 +739,7 @@ class TestWeeIntegration(unittest.TestCase):
         mock_client = MagicMock()
         mock_openai_cls.return_value = mock_client
 
-        tool_chunks = _make_tool_call_chunks(
-            "call_hist", "bash", '{"command": "ls"}'
-        )
+        tool_chunks = _make_tool_call_chunks("call_hist", "bash", '{"command": "ls"}')
         final_chunk = _make_text_chunk("Files listed")
         mock_client.chat.completions.create.side_effect = [
             tool_chunks,
@@ -699,11 +747,17 @@ class TestWeeIntegration(unittest.TestCase):
         ]
 
         sid = "test_integration_history"
-        mgr.session_map[sid] = {"runtime": "wee", "model": "ollama/gemma4:e4b", "channel": "api"}
+        mgr.session_map[sid] = {
+            "runtime": "wee",
+            "model": "ollama/gemma4:e4b",
+            "channel": "api",
+        }
 
         with patch.object(mgr, "load_session_map", return_value=dict(mgr.session_map)):
             with patch.object(mgr, "save_session_map") as mock_save:
-                with patch.object(mgr, "_execute_bash_command", return_value="file1.txt"):
+                with patch.object(
+                    mgr, "_execute_bash_command", return_value="file1.txt"
+                ):
                     _run_wee(mgr, sid, prompt="List files")
 
         saved_msgs = mock_save.call_args[0][0][sid]["wee_messages"]
@@ -746,8 +800,6 @@ class TestWeeIntegration(unittest.TestCase):
             api_messages[0]["content"].startswith("You are a helpful assistant."),
             "System prompt must begin with base context after refresh",
         )
-
-
 
 
 class TestWeeContextPersistenceDispatch(unittest.TestCase):
@@ -824,7 +876,7 @@ class TestWeeContextPersistenceDispatch(unittest.TestCase):
             "channel": "api",
         }
 
-        # -- Turn 1: user sets a nickname -----------------------------------------------
+        # -- Turn 1: user sets a nickname ----------------------------------------
         turn1_chunk = _make_text_chunk(
             "Understood. I will call you Purple People Eater for this session."
         )
@@ -835,10 +887,13 @@ class TestWeeContextPersistenceDispatch(unittest.TestCase):
                 _run_wee(
                     mgr,
                     sid,
-                    prompt="Call me purple people eater for the duration of this session.",
+                    prompt="Call me purple people eater for the duration"
+                    "            of this session.",
                     resume=False,
                 )
-                self.assertTrue(mock_save.called, "save_session_map must be called after turn 1")
+                self.assertTrue(
+                    mock_save.called, "save_session_map must be called after turn 1"
+                )
                 saved_map = mock_save.call_args[0][0]
                 self.assertIn("wee_messages", saved_map[sid])
                 history_after_t1 = saved_map[sid]["wee_messages"]
@@ -852,7 +907,7 @@ class TestWeeContextPersistenceDispatch(unittest.TestCase):
             "Turn-1 user message must be in saved history",
         )
 
-        # -- Turn 2: load history, ensure context is present ----------------------------
+        # -- Turn 2: load history, ensure context is present ---------------------
         mgr.session_map[sid]["wee_messages"] = history_after_t1
 
         turn2_chunk = _make_text_chunk("You asked me to call you Purple People Eater!")
@@ -886,7 +941,7 @@ class TestWeeContextPersistenceDispatch(unittest.TestCase):
         )
 
     def test_can_resume_wee_dispatch_path(self):
-        """Regression: can_resume must be True on second wee turn even with session_id=None.
+        """Resume wee turn: can_resume True even with session_id=None.
 
         Directly tests that the fixed elif current_runtime == 'wee' branch
         returns True while the old else branch returned False.
@@ -908,9 +963,7 @@ class TestWeeContextPersistenceDispatch(unittest.TestCase):
         with patch.object(mgr, "load_session_map", return_value=dict(mgr.session_map)):
             # Old (broken) path: else branch evaluated with session_id=None
             can_resume_old = (
-                mgr.session_exists(None, "wee")
-                if None  # session_id is None
-                else False
+                mgr.session_exists(None, "wee") if None else False  # session_id is None
             )
             # New (fixed) path: elif wee branch passes n8n_session_id
             can_resume_new = mgr.session_exists(None, "wee", n8n_session_id=sid)

@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Tests for Issue #93: Keyring unlock via WebUI."""
 
-import importlib.util as _ilu
 import json
+
 import sys
 import unittest
 from unittest.mock import MagicMock, patch
@@ -11,6 +11,7 @@ sys.path.insert(0, "/opt/n8n-copilot-shim-dev")
 
 # Import secret_tool by file path to avoid conflict with existing
 # test_secret_tool.py which imports it as a bare module
+import importlib.util as _ilu  # noqa: E402
 
 _spec = _ilu.spec_from_file_location(
     "secret_tool_mod",

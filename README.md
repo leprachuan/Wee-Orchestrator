@@ -313,7 +313,6 @@ mkdir skills/my-custom-skill
   - ✅ Security policy file
   - ✅ Public issue tracking
 
-
 #### Domain Folders
 Organize bot work by area of focus:
 - Keep related scripts, templates, and documentation together
@@ -593,72 +592,20 @@ All AI runtimes in this system are configured with **full tool access** to enabl
   - Background task subprocess execution via `wee_runtime.py`
 - **Implementation:** `run_wee_native()` in `agent_manager.py`; `wee_runtime.py` standalone CLI for background tasks
 - **Usage:** `/runtime set wee`
+
 - **Features & Improvements:**
   - OpenRouter integration: Full UI support for cloud-based models with 300s cached discovery & keyring-based API key management (Issue #119)
+  - Global notification toggle: Suppress all background task notifications with `/notifications off`; critical alerts always deliver (Issue #146)
   - Model grouping in UI: Ollama and OpenRouter models displayed in separate dropdown optgroups
-  - Dynamic OpenRouter model discovery: Live catalog fetch from OpenRouter API with per-provider grouping (Issue #157)
+  - All OpenRouter models in model listing: Removed hardcoded filter to show 350+ OpenRouter models instead of ~12 (Issue #145)
+
 - **Bug Fixes:**
   - Wrong Ollama port corrected: `11436` → `11434` (Issue #105)
   - `httpx.Timeout(connect=15s)` and `max_retries=0` added to OpenAI client for fast-fail on bad endpoints (Issue #105)
   - Model resolution fixed: `get_models_for_runtime('wee')` returns flat strings; `get_model_from_name()` strips provider prefix (`ollama/`) and prefers exact/shortest match (Issue #105)
 - **Bug Fixes (continued):**
   - OpenRouter 401 auth fixed: `OPENROUTER_API_KEY` env var + keyring resolution replaces silent `'ollama'` fallback; raises clear error when no key found (Issue #153)
-- **Issues:** [#88](../../issues/88), [#105](../../issues/105), [#119](../../issues/119), [#153](../../issues/153), [#157](../../issues/157)
-
-
-#### Wee CLI (`wee_cli.py`)
-- **Also Known As:** `wee` — standalone terminal AI assistant
-- **Description:** A user-facing command-line tool for the Wee ecosystem. Similar in style to GitHub Copilot CLI, Claude Code CLI, and Codex CLI. Supports single-shot prompts, interactive REPL, stdin piping, and tool calling via any OpenAI-compatible backend.
-- **Supported Backends:** Same as Wee Native Runtime (Ollama, OpenRouter, LM Studio)
-- **Quick Start:**
-  ```bash
-  # Single-shot
-  python3 wee_cli.py "What is the capital of France?"
-  # Interactive REPL
-  python3 wee_cli.py --interactive
-  # Pipe from stdin
-  echo "summarize this" | python3 wee_cli.py --model ollama/qwen3:8b
-  ```
-- **Key Flags:**
-
-  | Flag | Short | Default | Description |
-  |------|-------|---------|-------------|
-  | `--model` | `-m` | `ollama/qwen3:8b` | Model ID with provider prefix |
-  | `--permission` | `-p` | `restricted` | Tool execution level: `restricted` / `auto` / `elevated` |
-  | `--output` | `-o` | `text` | Output format: `text` / `json` / `markdown` |
-  | `--tools` | `-t` | off | Enable tool calling (bash, python) |
-  | `--interactive` | `-i` | off | Enter interactive REPL mode |
-  | `--system` | `-s` | none | System prompt override |
-  | `--temperature` | `-T` | none | Sampling temperature |
-  | `--timeout` | | 120s | Request timeout |
-  | `--api-key` | `-k` | env/keyring | API key override (prefer env var) |
-  | `--api-base` | `-b` | auto | Custom API base URL |
-  | `--config` | | `~/.wee/config.json` | Config file path |
-
-- **Permission Levels:**
-  - `restricted` (default) — tool calls blocked; safe for untrusted input
-  - `auto` — tool calls confirmed per invocation; suitable for interactive use
-  - `elevated` — tool calls unrestricted; use in trusted automation
-- **Output Formats:**
-  - `text` (default) — plain streamed output
-  - `json` — full response as a JSON object `{"response": "...", "model": "..."}`
-  - `markdown` — rich-rendered markdown via `rich` library (falls back to plain text)
-- **Config File** (`~/.wee/config.json`):
-  ```json
-  {
-    "model": "ollama/qwen3:8b",
-    "system_prompt": "You are a helpful assistant",
-    "tools": false,
-    "permission": "restricted",
-    "output_format": "text"
-  }
-  ```
-- **Environment Variables:**
-  - `WEE_MODEL` — Default model (overridden by `--model`)
-  - `WEE_API_KEY` — API key (prefer over `--api-key` to avoid exposure in `ps aux`)
-  - `WEE_API_BASE` — API base URL override
-- **Implementation:** `wee_cli.py` (re-uses core from `wee_runtime.py`)
-- **Issues:** [#158](../../issues/158)
+- **Issues:** [#88](../../issues/88), [#105](../../issues/105), [#119](../../issues/119), [#146](../../issues/146), [#153](../../issues/153)
 
 ### Security Considerations
 
@@ -1311,7 +1258,6 @@ For scheduling memory promotion via the task scheduler or cron:
 bash scripts/promote_all_agents_memory.sh
 ```
 
-
 **PATCH /api/v1/sessions/{id}/settings** — Update session settings
 
 Modify session-level settings like verbose mode (tool call visibility). Settings are persisted and returned in subsequent session queries.
@@ -1347,89 +1293,6 @@ Error responses:
 **Security:**
 - Requires API authentication (Bearer token)
 - Per-session settings — each user session has independent configuration
-
----
-
-### 🔧 Tool Call Visualization
-
-**Issue #115: Inline Expandable Tool Call Blocks**
-
-The WebUI now displays tool invocations with inline expandable blocks in the streaming panel. Each tool call shows a disclosure triangle (▶); clicking expands a scrollable output pane with the full tool result, markdown formatting preserved.
-
-**Features:**
-- ✅ **Expandable blocks** — Click ▶ to expand/collapse tool output
-- ✅ **Markdown rendering** — Tool results support markdown (code blocks, lists, tables)
-- ✅ **Error highlighting** — Failed tool calls shown in red
-- ✅ **Dark/light themes** — CSS automatically adapts to UI theme
-- ✅ **Silent mode integration** — Tool blocks hidden when `silent_mode=true`
-- ✅ **All runtimes supported** — Works with copilot-sdk, claude-sdk, claude, and gemini
-
-**UI Behavior:**
-- Tool started: Shows block with "Running ⌛" spinner
-- Tool completed: Output filled in, user can expand to view result
-- Tool error: Red highlight, error message displayed
-- Silent mode on: Blocks completely hidden from view
-
-**CSS Classes:**
-- `.tc-block` — Container for tool call block
-- `.tc-toggle` — Expand/collapse button (▶)
-- `.tc-output` — Scrollable output pane
-- `.tc-error` — Error state styling
-- `.tc-expanded` — Expanded state
-
-**Related Issues:**
-- [#115](../../issues/115) — Inline Expandable Tool Call Blocks (QA Approved)
-- [#87](../../issues/87) — Streaming + Tool Call support for copilot-sdk and claude-sdk
-
----
-
-### 💰 Token Usage Tracking & Cost Estimation
-
-**Issue #128: Token Usage Tracking + Cost Estimation + WebUI Footer**
-
-The WebUI now displays real-time token usage statistics in the footer after each message. Tracks cumulative prompt and completion tokens across all runtimes, calculates costs based on per-model pricing, and displays live usage summary.
-
-**Features:**
-- ✅ **Real-time tracking** — Token counts updated after each message
-- ✅ **Multi-runtime support** — Tracks tokens across copilot-sdk, claude-sdk, openrouter, wee (Ollama/OpenRouter/LM Studio)
-- ✅ **Cost estimation** — Calculates costs based on current model pricing
-- ✅ **Accuracy** — ±1% margin within expected pricing for all supported models
-- ✅ **Session-level aggregation** — Cumulative counts show total tokens and estimated costs for entire session
-- ✅ **Per-message tracking** — Individual message metadata includes token counts and partial costs
-- ✅ **WebUI footer display** — Live stats accessible without API calls (cached locally)
-
-**Displayed Metrics:**
-- **Prompt tokens:** Total tokens in all input messages
-- **Completion tokens:** Total tokens in all model responses
-- **Total tokens:** Sum of prompt + completion tokens
-- **Estimated cost:** Calculated from per-model pricing (e.g., $0.15 per 1M input tokens)
-- **Model pricing:** Retrieved from token_calculator.py (based on published pricing)
-
-**Footer Display Format:**
-```
-💰 Tokens: 1,234 prompt + 567 completion = 1,801 total | Est. cost: $0.023 | Model: claude-3.5-sonnet
-```
-
-**Token Calculation Logic:**
-1. Each runtime reports token usage after completing a message
-2. Tokens summed by type (prompt vs completion)
-3. Cost calculated: `(prompt_tokens * model_input_price + completion_tokens * model_output_price) / 1_000_000`
-4. Metadata stored in session history for audit/replay purposes
-5. Wee runtime strips internal `__WEE_META__` before counting to avoid inflating token estimates
-
-**Supported Models:**
-- **Claude (claude-sdk):** claude-3.5-sonnet, claude-3-opus, claude-3-haiku
-- **Copilot (copilot-sdk):** GPT-4o, GPT-4 Turbo, GPT-3.5 Turbo
-- **OpenRouter:** 200+ models with live pricing via OpenRouter API
-- **Wee (Ollama):** Ollama local models (token count via token_calculator.py estimate)
-- **Wee (OpenRouter):** Same as OpenRouter routing
-- **Wee (LM Studio):** LM Studio models (token estimate via calculator)
-
-**Related Issues:**
-- [#128](../../issues/128) — Token Usage Tracking + Cost Estimation + WebUI Footer (QA Approved)
-- [#91](../../issues/91) — Background task permissions (Token tracking uses elevated permissions)
-
----
 
 **POST /api/v1/query** — Stateless one-shot query endpoint
 
@@ -1491,7 +1354,6 @@ Error response body (JSON):
 }
 ```
 
-
 **Code Generation Improvements** (#68): Additional handling for empty/null responses and connection errors:
 
 | HTTP Status | Error Code | Triggers |
@@ -1547,7 +1409,6 @@ curl -s -X POST http://localhost:8000/api/v1/query \
   -d '{"prompt": "What is 2 + 2?", "runtime": "copilot", "model": "claude-haiku-4.5"}'
 ```
 
-
 **POST /api/v1/history/sessions/{session_id}/generate-title** — LLM title generation
 
 Force (re)generate a descriptive title for a session using an LLM or smart heuristic fallback. Useful when you want an immediate title refresh outside of the auto-trigger cycle.
@@ -1600,7 +1461,6 @@ Error responses:
 curl -s -X POST http://localhost:8000/api/v1/history/sessions/abc123/generate-title \
   -H "Authorization: Bearer $API_TOKEN"
 ```
-
 
 ### Quick Start
 
@@ -1855,7 +1715,6 @@ The scheduler is resilient to system clock adjustments (NTP corrections, manual 
 }
 ```
 
-
 ### REST API Endpoints
 
 | Method | Path | Description |
@@ -1870,6 +1729,117 @@ The scheduler is resilient to system clock adjustments (NTP corrections, manual 
 | `POST` | `/api/v1/scheduler/jobs/{id}/resume` | Resume a paused job |
 | `GET` | `/api/v1/scheduler/jobs/{id}/results` | Retrieve execution results |
 | `GET` | `/api/v1/scheduler/jobs/{id}/logs` | Retrieve execution logs |
+| `POST` | `/api/v1/scheduler/jobs/{id}/run` | Trigger job execution immediately |
+
+## Run Now Endpoint Documentation
+
+The `/api/v1/scheduler/jobs/{job_id}/run` endpoint (added in Issue #96) allows
+triggering job execution immediately, bypassing the normal schedule.
+
+### Mode Behavior
+
+Jobs can run in two modes:
+
+#### Command Mode (`mode: "command"`)
+Executes shell commands directly via subprocess:
+- No LLM invocation — direct shell execution
+- Input: `task` field contains the shell command
+- Output: stdout/stderr captured in task results
+- Working directory: `working_dir` field (default: `/opt`)
+- Timeout: `timeout` field applies
+- Results: Saved to scheduler logs/results
+
+#### AI Mode (`mode: "ai"` or default)
+Executes through the LLM pipeline:
+- Input: `task` field is a prompt for the AI
+- AI processes and executes the prompt
+- Results: Background task with full response
+- Backward compatible (default if `mode` not specified)
+
+### Examples
+
+**POST /api/v1/scheduler/jobs/{job_id}/run** — Trigger job execution immediately
+
+Command-mode request (execute shell command):
+```bash
+curl -X POST "http://localhost:8000/api/v1/scheduler/jobs/backup-db-1/run" \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json"
+```
+
+If job has:
+```json
+{
+  "id": "backup-db-1",
+  "name": "Backup Database",
+  "mode": "command",
+  "task": "pg_dump mydb | gzip > /backup/mydb_$(date +%Y%m%d).sql.gz",
+  "working_dir": "/opt/backups",
+  "timeout": 600
+}
+```
+
+Response (200 OK):
+```json
+{
+  "success": true,
+  "task_id": "sched_backup-db-1_a7f2k9",
+  "job_id": "backup-db-1",
+  "mode": "command",
+  "status": "running",
+  "agent": "command",
+  "runtime": "shell"
+}
+```
+
+AI-mode request (execute through LLM):
+```bash
+curl -X POST "http://localhost:8000/api/v1/scheduler/jobs/summary-daily-1/run" \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json"
+```
+
+If job has:
+```json
+{
+  "id": "summary-daily-1",
+  "name": "Daily Summary",
+  "mode": "ai",
+  "agent": "orchestrator",
+  "runtime": "claude",
+  "model": "claude-opus-4.6",
+  "task": "Summarize system health from /opt/HEARTBEAT.md and report any issues",
+  "timeout": 300
+}
+```
+
+Response (200 OK):
+```json
+{
+  "success": true,
+  "task_id": "sched_summary-daily-1_b4c3x2",
+  "job_id": "summary-daily-1",
+  "mode": "ai",
+  "status": "running",
+  "agent": "orchestrator",
+  "runtime": "claude"
+}
+```
+
+### Error Handling
+
+- **Job not found:** 404 with message "Not found"
+- **Rate limit exceeded:** 429 (max 20 requests/min per IP)
+- **Authentication failed:** 401 (invalid or missing bearer token)
+- **Scheduler unavailable:** 503 (scheduler daemon offline)
+
+### Result Retrieval
+
+After triggering a job, retrieve results via:
+- `GET /api/v1/scheduler/jobs/{job_id}/results` — Last execution results
+- `GET /api/v1/scheduler/jobs/{job_id}/logs` — Execution logs
+- `/api/v1/background-tasks/{task_id}` — Real-time background task status
+
 
 ### TODO Management
 
@@ -2065,7 +2035,6 @@ For scheduling memory promotion via the task scheduler or cron:
 bash scripts/promote_all_agents_memory.sh
 ```
 
-
 **PATCH /api/v1/sessions/{id}/settings** — Update session settings
 
 Modify session-level settings like verbose mode (tool call visibility). Settings are persisted and returned in subsequent session queries.
@@ -2101,7 +2070,6 @@ Error responses:
 **Security:**
 - Requires API authentication (Bearer token)
 - Per-session settings — each user session has independent configuration
-
 
 ### Quick Start
 
@@ -2378,7 +2346,6 @@ For scheduling memory promotion via the task scheduler or cron:
 bash scripts/promote_all_agents_memory.sh
 ```
 
-
 **PATCH /api/v1/sessions/{id}/settings** — Update session settings
 
 Modify session-level settings like verbose mode (tool call visibility). Settings are persisted and returned in subsequent session queries.
@@ -2414,7 +2381,6 @@ Error responses:
 **Security:**
 - Requires API authentication (Bearer token)
 - Per-session settings — each user session has independent configuration
-
 
 ### Quick Start
 

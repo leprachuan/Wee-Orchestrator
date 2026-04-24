@@ -57,11 +57,24 @@ class TestSlashCommandRegistry(unittest.TestCase):
     def test_all_expected_commands_registered(self):
         """All known slash commands should be present in the registry."""
         expected = [
-            "/help", "/status", "/cancel", "/capabilities",
-            "/runtime", "/model", "/agent", "/session",
-            "/timeout", "/render", "/notifications", "/mode",
-            "/schedule", "/background", "/update", "/upgrade",
-            "/pull", "/secret",
+            "/help",
+            "/status",
+            "/cancel",
+            "/capabilities",
+            "/runtime",
+            "/model",
+            "/agent",
+            "/session",
+            "/timeout",
+            "/render",
+            "/notifications",
+            "/mode",
+            "/schedule",
+            "/background",
+            "/update",
+            "/upgrade",
+            "/pull",
+            "/secret",
         ]
         reg = self.sm._slash_command_registry
         for cmd in expected:
@@ -77,8 +90,10 @@ class TestSlashCommandRegistry(unittest.TestCase):
 
     def test_register_slash_adds_command(self):
         """register_slash should add a new command to the registry."""
+
         def handler(a, s, n):
             return "test"
+
         self.sm._register_slash("/test_f020", handler, "Test command")
         entry = self.sm._slash_command_registry.get("/test_f020")
         self.assertIsNotNone(entry)
@@ -128,9 +143,7 @@ class TestSlashHandlerBehavior(unittest.TestCase):
         self.assertIn("No running query", result)
 
     def test_capabilities_returns_text(self):
-        result = self.sm._slash_capabilities(
-            None, self.session_data, self.session_id
-        )
+        result = self.sm._slash_capabilities(None, self.session_data, self.session_id)
         self.assertIsInstance(result, str)
         self.assertGreater(len(result), 50)
 
@@ -141,9 +154,7 @@ class TestSlashHandlerBehavior(unittest.TestCase):
         self.assertIn("cursor", result)
 
     def test_runtime_current(self):
-        result = self.sm._slash_runtime(
-            "current", self.session_data, self.session_id
-        )
+        result = self.sm._slash_runtime("current", self.session_data, self.session_id)
         self.assertIn("Current Runtime", result)
 
     def test_runtime_no_args(self):
@@ -155,9 +166,7 @@ class TestSlashHandlerBehavior(unittest.TestCase):
         self.assertIn("model", result.lower())
 
     def test_model_current(self):
-        result = self.sm._slash_model(
-            "current", self.session_data, self.session_id
-        )
+        result = self.sm._slash_model("current", self.session_data, self.session_id)
         self.assertIn("Current Model", result)
 
     def test_agent_list(self):
@@ -165,9 +174,7 @@ class TestSlashHandlerBehavior(unittest.TestCase):
         self.assertIn("orchestrator", result)
 
     def test_agent_current(self):
-        result = self.sm._slash_agent(
-            "current", self.session_data, self.session_id
-        )
+        result = self.sm._slash_agent("current", self.session_data, self.session_id)
         self.assertIn("Current Agent", result)
 
     def test_agent_no_args(self):
@@ -175,27 +182,19 @@ class TestSlashHandlerBehavior(unittest.TestCase):
         self.assertIn("Usage", result)
 
     def test_timeout_current(self):
-        result = self.sm._slash_timeout(
-            None, self.session_data, self.session_id
-        )
+        result = self.sm._slash_timeout(None, self.session_data, self.session_id)
         self.assertIn("Timeout", result)
 
     def test_timeout_set_valid(self):
-        result = self.sm._slash_timeout(
-            "set 120", self.session_data, self.session_id
-        )
+        result = self.sm._slash_timeout("set 120", self.session_data, self.session_id)
         self.assertIn("120", result)
 
     def test_timeout_set_too_low(self):
-        result = self.sm._slash_timeout(
-            "set 5", self.session_data, self.session_id
-        )
+        result = self.sm._slash_timeout("set 5", self.session_data, self.session_id)
         self.assertIn("at least 30", result)
 
     def test_render_current(self):
-        result = self.sm._slash_render(
-            None, self.session_data, self.session_id
-        )
+        result = self.sm._slash_render(None, self.session_data, self.session_id)
         self.assertIn("Render Type", result)
 
     def test_render_set_valid(self):
@@ -211,35 +210,25 @@ class TestSlashHandlerBehavior(unittest.TestCase):
         self.assertIn("Invalid", result)
 
     def test_notifications_status(self):
-        result = self.sm._slash_notifications(
-            None, self.session_data, self.session_id
-        )
+        result = self.sm._slash_notifications(None, self.session_data, self.session_id)
         self.assertIn("Notifications", result)
 
     def test_mode_current(self):
-        result = self.sm._slash_mode(
-            "current", self.session_data, self.session_id
-        )
+        result = self.sm._slash_mode("current", self.session_data, self.session_id)
         self.assertIn("Mode", result)
 
     def test_mode_list(self):
-        result = self.sm._slash_mode(
-            "list", self.session_data, self.session_id
-        )
+        result = self.sm._slash_mode("list", self.session_data, self.session_id)
         self.assertIn("elevated", result)
         self.assertIn("restricted", result)
         self.assertIn("sandboxed", result)
 
     def test_background_help(self):
-        result = self.sm._slash_background(
-            None, self.session_data, self.session_id
-        )
+        result = self.sm._slash_background(None, self.session_data, self.session_id)
         self.assertIn("Background Task", result)
 
     def test_background_list(self):
-        result = self.sm._slash_background(
-            "list", self.session_data, self.session_id
-        )
+        result = self.sm._slash_background("list", self.session_data, self.session_id)
         # Returns task list (possibly empty) or error if scheduler not init
         self.assertIsInstance(result, str)
         self.assertTrue(
@@ -285,6 +274,9 @@ class TestSlashSecretHandler(unittest.TestCase):
         )
 
     def test_secret_set_and_delete(self):
+        # Clean up any stale secret from a previous failed run
+        self.sm._slash_secret("delete _f020_test_secret", {}, "test-session")
+
         result = self.sm._slash_secret(
             "set _f020_test_secret testvalue123", {}, "test-session"
         )
@@ -299,9 +291,7 @@ class TestSlashSecretHandler(unittest.TestCase):
         )
         self.assertIn("updated", result)
 
-        result = self.sm._slash_secret(
-            "delete _f020_test_secret", {}, "test-session"
-        )
+        result = self.sm._slash_secret("delete _f020_test_secret", {}, "test-session")
         self.assertIn("deleted", result)
 
     def test_secret_set_missing_value(self):
@@ -313,21 +303,15 @@ class TestSlashSecretHandler(unittest.TestCase):
         self.assertIn("Secret Commands", result)
 
     def test_secret_set_invalid_name(self):
-        result = self.sm._slash_secret(
-            "set ../evil/path myvalue", {}, "test-session"
-        )
+        result = self.sm._slash_secret("set ../evil/path myvalue", {}, "test-session")
         self.assertIn("Invalid name", result)
 
     def test_secret_set_slash_in_name(self):
-        result = self.sm._slash_secret(
-            "set na/me value", {}, "test-session"
-        )
+        result = self.sm._slash_secret("set na/me value", {}, "test-session")
         self.assertIn("Invalid name", result)
 
     def test_secret_delete_invalid_name(self):
-        result = self.sm._slash_secret(
-            "delete ../evil", {}, "test-session"
-        )
+        result = self.sm._slash_secret("delete ../evil", {}, "test-session")
         self.assertIn("Invalid name", result)
 
     def test_secret_delete_nonexistent(self):
@@ -419,9 +403,7 @@ class TestSlashRegistryInExecute(unittest.TestCase):
     def test_execute_secret_set_bypasses_llm(self):
         session_id = "test_f020_bypass"
         self.sm.get_or_create_session_data(session_id)
-        result = self.sm.execute(
-            "/secret set _f020_bypass_test bypassval", session_id
-        )
+        result = self.sm.execute("/secret set _f020_bypass_test bypassval", session_id)
         self.assertTrue(
             len(result) < 200,
             f"Response too long — possibly sent to LLM: {result[:200]}",

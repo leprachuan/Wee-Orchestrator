@@ -12,13 +12,39 @@ import json
 import logging
 import os
 import re
-import shlex
 import subprocess
 import sys
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Dict, Optional
+
+try:
+    from scheduler.management import (
+        cron_next_run,
+        is_valid_cron,
+        parse_schedule_to_next_run,
+    )
+except ImportError:
+    from management import (  # type: ignore[no-redef]
+        cron_next_run,
+        is_valid_cron,
+        parse_schedule_to_next_run,
+    )
+
+# Gate check support (Issue #148)
+try:
+    from scheduler.qa_gate import is_wee_dev_gated
+except ImportError:
+    try:
+        from qa_gate import is_wee_dev_gated
+    except ImportError:
+        is_wee_dev_gated = None  # type: ignore[assignment]
+
+# Registry of gate_check names to callables
+_GATE_REGISTRY: Dict[str, object] = {}
+if is_wee_dev_gated is not None:
+    _GATE_REGISTRY["wee_dev_qa"] = is_wee_dev_gated
 
 # Repo root is parent of scheduler/ directory (e.g. /opt/n8n-copilot-shim-dev)
 _REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -69,6 +95,19 @@ def _brief_notification(icon: str, job_name: str, verb: str) -> str:
     return msg
 
 
+def _split_command_args(command: str) -> list[str]:
+    """Parse a command string into argv without invoking a shell."""
+    if not isinstance(command, str) or not command.strip():
+        raise ValueError("No command provided")
+    try:
+        argv = shlex.split(command, posix=True)
+    except ValueError as exc:
+        raise ValueError(f"Invalid command syntax: {exc}") from exc
+    if not argv:
+        raise ValueError("No command provided")
+    return argv
+
+
 # Telegram connector for direct per-user delivery
 sys.path.insert(0, str(_REPO_ROOT))
 try:
@@ -81,12 +120,6 @@ try:
     from webex_connector import WebEXConnector as _WebEXConnector
 except ImportError:
     _WebEXConnector = None
-
-from scheduler.management import (
-    cron_next_run,
-    is_valid_cron,
-    parse_schedule_to_next_run,
-)
 
 
 class TaskSchedulerExecutor:
@@ -224,7 +257,8 @@ class TaskSchedulerExecutor:
                 started_at = checkpoint.get("started_at", "unknown")
                 pid = checkpoint.get("pid", 0)
                 logger.warning(
-                    f"Found stale checkpoint for job {job_id} (started: {started_at}, pid: {pid})"
+                    f"Found stale checkpoint for job {job_id} "
+                    f"(started: {started_at}, pid: {pid})"
                 )
                 checkpoint_file.unlink()
             except Exception as e:
@@ -296,10 +330,11 @@ class TaskSchedulerExecutor:
             logger.error(f"Failed to save result for job {job_id}: {e}")
 
     def _notify_creator(self, job: Dict, message: str) -> bool:
-        """Send notification to the user who created the job, via their original channel.
+        """Send notification to the job creator via their original channel.
 
-        Reads job["created_by"] = {"identity": ..., "channel": "telegram"|"webex", "username": ...}
-        Falls back to logging a warning if the channel is unknown or connectors are unavailable.
+        Reads job["created_by"] = {"identity": ..., "channel": "telegram"|"webex",
+        "username": ...}
+        Falls back to logging a warning if channel is unknown or connectors unavailable.
         """
         job_id = job.get("id", "unknown")
         created_by = job.get("created_by", {})
@@ -382,9 +417,50 @@ class TaskSchedulerExecutor:
             self._log_job(job_id, f"WebEx notification failed: {e}")
             return False
 
+    def _check_gate(self, job: Dict) -> bool:
+        """Check if a job's gate_check condition blocks execution.
+
+        Jobs can define a ``gate_check`` field (e.g. ``"wee_dev_qa"``) that
+        names a pre-dispatch gate. If the gate returns True (blocked), the
+        job is skipped for this cycle. (Issue #148)
+
+        Returns:
+            True if the job is allowed to execute, False if gated/blocked.
+        """
+        gate_name = job.get("gate_check")
+        if not gate_name:
+            return True  # no gate configured — always allowed
+
+        gate_fn = _GATE_REGISTRY.get(gate_name)
+        if gate_fn is None:
+            logger.warning(
+                f"Job {job.get('id', '?')} has gate_check={gate_name!r} "
+                f"but no gate function is registered for it — allowing execution"
+            )
+            return True
+
+        try:
+            gated, reason, details = gate_fn()
+            if gated:
+                logger.info(
+                    f"Job {job.get('id', '?')} blocked by gate {gate_name!r}: {reason}"
+                )
+                self._log_job(
+                    job.get("id", "?"),
+                    f"Skipped — gate {gate_name!r} blocked: {reason}",
+                )
+                return False
+            return True
+        except Exception as exc:
+            logger.error(
+                f"Gate check {gate_name!r} for job {job.get('id', '?')} "
+                f"raised an exception: {exc} — allowing execution (fail-open)"
+            )
+            return True
+
     def _execute_task(self, job: Dict) -> Optional[str]:
         """
-        Execute a job in either AI mode (via agent_manager.py) or command mode (direct shell).
+        Execute a job in AI mode (via agent_manager.py) or command mode (direct shell).
 
         Modes:
         - 'ai' (default): Execute via LLM agent through agent_manager.py
@@ -563,11 +639,13 @@ class TaskSchedulerExecutor:
         cmd.extend([task, session_id])
 
         logger.info(
-            f"[AI Mode] Executing job {job_id}: agent={agent}, runtime={runtime}, model={model}, task={task[:60]}..."
+            f"[AI Mode] Executing job {job_id}: agent={agent},"
+            f" runtime={runtime}, model={model}, task={task[:60]}..."
         )
         self._log_job(
             job_id,
-            f"Executing (AI mode): agent={agent}, runtime={runtime}, model={model}, session={session_id}",
+            f"Executing (AI mode): agent={agent}, runtime={runtime},"
+            f" model={model}, session={session_id}",
         )
 
         self._write_checkpoint(job_id)
@@ -582,7 +660,7 @@ class TaskSchedulerExecutor:
 
             if result.returncode == 0:
                 output = result.stdout.strip()
-                self._log_job(job_id, f"Execution succeeded")
+                self._log_job(job_id, "Execution succeeded")
                 self._save_result(job_id, job["name"], success=True, output=output)
                 logger.info(f"Job {job_id} completed successfully")
                 return output, None
@@ -619,7 +697,8 @@ class TaskSchedulerExecutor:
         )
 
         logger.info(
-            f"[Command Mode] Executing job {job_id}: working_dir={working_dir}, task={task[:60]}..."
+            f"[Command Mode] Executing job {job_id}: working_dir={working_dir},"
+            f" task={task[:60]}..."
         )
         self._log_job(
             job_id,
@@ -639,7 +718,7 @@ class TaskSchedulerExecutor:
 
             if result.returncode == 0:
                 output = result.stdout.strip()
-                self._log_job(job_id, f"Command executed successfully")
+                self._log_job(job_id, "Command executed successfully")
                 self._save_result(job_id, job["name"], success=True, output=output)
                 logger.info(f"Job {job_id} (command mode) completed successfully")
 
@@ -779,7 +858,8 @@ class TaskSchedulerExecutor:
                 gap = (next_run - now).total_seconds()
                 logger.info(
                     f"Job {job_id} recovered via backward-drift compensation "
-                    f"(next_run {gap:.0f}s in future, debt={self._wall_clock_debt:.1f}s)"
+                    f"(next_run {gap:.0f}s in future,"
+                    f" debt={self._wall_clock_debt:.1f}s)"
                 )
                 self._drift_recovered_count += 1
             elif overdue_seconds > _CLOCK_DRIFT_THRESHOLD:
@@ -797,8 +877,8 @@ class TaskSchedulerExecutor:
             return False
 
     def _calculate_next_run(self, job: Dict) -> Optional[str]:
-        """Calculate next run time using cron (preferred) or schedule string fallback."""
-        # Prefer cron expression (set during job creation via AI or deterministic conversion)
+        """Calculate next run using cron (preferred) or schedule string fallback."""
+        # Prefer cron expression (set during job creation via AI or conversion)
         cron_expr = job.get("cron") if isinstance(job, dict) else None
         if cron_expr and is_valid_cron(cron_expr):
             next_run = cron_next_run(cron_expr)
@@ -812,7 +892,7 @@ class TaskSchedulerExecutor:
             if next_run:
                 return next_run
 
-        logger.warning(f"Could not calculate next run for job")
+        logger.warning("Could not calculate next run for job")
         return None
 
     def _recalculate_stale_jobs(self, data: Dict) -> Dict[str, Dict]:
@@ -887,7 +967,7 @@ class TaskSchedulerExecutor:
         double-execution after backward clock jumps.
         """
         # --- clock drift detection ---
-        drift = self._detect_clock_drift()
+        self._detect_clock_drift()
 
         if self._wall_clock_debt > 0:
             logger.debug(
@@ -911,12 +991,16 @@ class TaskSchedulerExecutor:
             job_id = job["id"]
             logger.info(f"Job ready: {job_id}")
 
+            # Gate check — skip this job if a pre-dispatch gate blocks it
+            if not self._check_gate(job):
+                continue
+
             # Record monotonic execution time BEFORE executing to close any
             # race window on backward clock jumps.
             self._job_last_exec_mono[job_id] = time.monotonic()
 
             # Execute the job
-            result = self._execute_task(job)
+            self._execute_task(job)
 
             # Update job record
             now = datetime.now(timezone.utc)

@@ -19,6 +19,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 def _make_mgr():
     """Return a lightweight SessionManager for testing strip_metadata."""
     from agent_manager import SessionManager
+
     return SessionManager.__new__(SessionManager)
 
 

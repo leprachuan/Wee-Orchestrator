@@ -17,11 +17,11 @@ Scenarios tested:
 - Reproduces T3, T7, T9 from issue report
 """
 
+import json
 import os
 import sys
-import json
-from unittest.mock import MagicMock, patch
 from types import SimpleNamespace
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -77,8 +77,14 @@ def session_mgr():
     return mgr
 
 
-def _run_wee_with_mock(session_mgr, prompt, tool_result, round_chunks_list,
-                       session_id="test-112", stream_buffer=None):
+def _run_wee_with_mock(
+    session_mgr,
+    prompt,
+    tool_result,
+    round_chunks_list,
+    session_id="test-112",
+    stream_buffer=None,
+):
     """Helper to run run_wee_native with mocked OpenAI client."""
     call_count = {"n": 0}
 
@@ -97,20 +103,35 @@ def _run_wee_with_mock(session_mgr, prompt, tool_result, round_chunks_list,
     execute_side = tool_result if callable(tool_result) else None
     execute_return = None if callable(tool_result) else tool_result
 
-    with patch.object(session_mgr, "get_or_create_session_data", return_value={
-        "channel": "webui",
-    }), patch.object(session_mgr, "_wee_load_messages", return_value=[
-        {"role": "system", "content": "You are a helpful assistant."},
-    ]), patch.object(session_mgr, "_wee_save_messages"), \
-         patch.object(session_mgr, "build_agent_context_prompt", return_value="ctx"), \
-         patch.object(session_mgr, "_wee_augment_system_prompt_with_tools", return_value="ctx"), \
-         patch.object(session_mgr, "_wee_anti_hallucination_prompt", return_value=""), \
-         patch.object(
-             session_mgr, "_wee_execute_tool",
-             side_effect=execute_side,
-             return_value=execute_return,
-         ), \
-         patch("openai.OpenAI", return_value=mock_client):
+    with (
+        patch.object(
+            session_mgr,
+            "get_or_create_session_data",
+            return_value={
+                "channel": "webui",
+            },
+        ),
+        patch.object(
+            session_mgr,
+            "_wee_load_messages",
+            return_value=[
+                {"role": "system", "content": "You are a helpful assistant."},
+            ],
+        ),
+        patch.object(session_mgr, "_wee_save_messages"),
+        patch.object(session_mgr, "build_agent_context_prompt", return_value="ctx"),
+        patch.object(
+            session_mgr, "_wee_augment_system_prompt_with_tools", return_value="ctx"
+        ),
+        patch.object(session_mgr, "_wee_anti_hallucination_prompt", return_value=""),
+        patch.object(
+            session_mgr,
+            "_wee_execute_tool",
+            side_effect=execute_side,
+            return_value=execute_return,
+        ),
+        patch("openai.OpenAI", return_value=mock_client),
+    ):
 
         result = session_mgr.run_wee_native(
             prompt=prompt,
@@ -127,12 +148,16 @@ def _run_wee_with_mock(session_mgr, prompt, tool_result, round_chunks_list,
 def _tool_call_chunks(tc_id="tc_1", cmd="ls"):
     """Chunks for a single bash tool call round."""
     return [
-        _make_chunk(tool_calls=[
-            _make_tool_call_delta(0, tc_id=tc_id, name="bash", arguments=None),
-        ]),
-        _make_chunk(tool_calls=[
-            _make_tool_call_delta(0, arguments=json.dumps({"command": cmd})),
-        ]),
+        _make_chunk(
+            tool_calls=[
+                _make_tool_call_delta(0, tc_id=tc_id, name="bash", arguments=None),
+            ]
+        ),
+        _make_chunk(
+            tool_calls=[
+                _make_tool_call_delta(0, arguments=json.dumps({"command": cmd})),
+            ]
+        ),
         _make_chunk(finish_reason="tool_calls"),
     ]
 
@@ -274,15 +299,31 @@ class TestNormalSynthesisNoFallback:
         mock_client = MagicMock()
         mock_client.chat.completions.create.return_value = iter(chunks)
 
-        with patch.object(session_mgr, "get_or_create_session_data", return_value={
-            "channel": "webui",
-        }), patch.object(session_mgr, "_wee_load_messages", return_value=[
-            {"role": "system", "content": "ctx"},
-        ]), patch.object(session_mgr, "_wee_save_messages"), \
-             patch.object(session_mgr, "build_agent_context_prompt", return_value="ctx"), \
-             patch.object(session_mgr, "_wee_augment_system_prompt_with_tools", return_value="ctx"), \
-             patch.object(session_mgr, "_wee_anti_hallucination_prompt", return_value=""), \
-             patch("openai.OpenAI", return_value=mock_client):
+        with (
+            patch.object(
+                session_mgr,
+                "get_or_create_session_data",
+                return_value={
+                    "channel": "webui",
+                },
+            ),
+            patch.object(
+                session_mgr,
+                "_wee_load_messages",
+                return_value=[
+                    {"role": "system", "content": "ctx"},
+                ],
+            ),
+            patch.object(session_mgr, "_wee_save_messages"),
+            patch.object(session_mgr, "build_agent_context_prompt", return_value="ctx"),
+            patch.object(
+                session_mgr, "_wee_augment_system_prompt_with_tools", return_value="ctx"
+            ),
+            patch.object(
+                session_mgr, "_wee_anti_hallucination_prompt", return_value=""
+            ),
+            patch("openai.OpenAI", return_value=mock_client),
+        ):
 
             result = session_mgr.run_wee_native(
                 prompt="Hello",
@@ -329,7 +370,7 @@ class TestStreamBufferFallback:
         fake_buffer = FakeStreamBuffer()
         tool_result = "service is running"
 
-        result = _run_wee_with_mock(
+        result = _run_wee_with_mock(  # noqa: F841
             session_mgr,
             prompt="Check service status",
             tool_result=tool_result,
@@ -385,7 +426,9 @@ class TestIssueScenarios:
 
     def test_issue_112_t3_filesystem_read(self, session_mgr):
         """T3: Read MEMORY.md - model calls tool, empty synthesis."""
-        content = "# Lipkey Family Memory\n- Foster is the father\n- Leslie is the mother"
+        content = (
+            "# Lipkey Family Memory\n- Foster is the father\n- Leslie is the mother"
+        )
         result = _run_wee_with_mock(
             session_mgr,
             prompt="Read /opt/memories/MEMORY.md and tell me about the Lipkey family.",
@@ -424,7 +467,9 @@ class TestIssueScenarios:
             prompt="SSH to 192.168.1.100 and list active dev services",
             tool_result=output,
             round_chunks_list=[
-                _tool_call_chunks(cmd="ssh root@192.168.1.100 systemctl list-units | grep dev"),
+                _tool_call_chunks(
+                    cmd="ssh root@192.168.1.100 systemctl list-units | grep dev"
+                ),
                 _empty_synthesis_chunks(),
             ],
             session_id="112-t9",
