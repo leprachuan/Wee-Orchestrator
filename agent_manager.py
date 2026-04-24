@@ -2424,7 +2424,7 @@ You can mention an agent in your prompt and it will auto-delegate:
         elapsed_sec = elapsed % 60
         last_output = query_info.get("last_output", "")
 
-        status_msg = """🔄 **Query Running**
+        status_msg = f"""🔄 **Query Running**
 
 **Runtime:** {runtime}
 **Agent:** {agent}
@@ -5952,7 +5952,7 @@ Do NOT use <img> tags (unsupported). Do NOT create files, generate ASCII art, or
         if render_type in ("markdown", "telegram_html"):
             size_limits = {"telegram": "50 MB", "webex": "100 MB", "webui": "500 MB"}
             channel_limit = size_limits.get(channel, "100 MB")
-            file_handling = """
+            file_handling = f"""
 [File Handling — YOUR CHANNEL: {channel_upper}]
   Files:     [FILE:/path/to/file.ext:Your caption here]
   Images:    ![caption](url) or ![caption](/ai-media/session/file.png)
@@ -5990,7 +5990,7 @@ Do NOT use <img> tags (unsupported). Do NOT create files, generate ASCII art, or
             timeout_instruction = f"\n[⏱️ EXECUTION DEADLINE: You have {agent_timeout:.0f} seconds ({agent_timeout_min:.1f} minutes) to complete this task. Plan your approach efficiently and wrap up before this deadline. If an operation might take too long, skip it or provide a summary instead.]"
 
         # Add runtime, model, and slash commands information
-        runtime_instruction = """
+        runtime_instruction = f"""
 [System Configuration]
 - Runtime: {runtime}
 - Model: {model}
@@ -6119,7 +6119,7 @@ To add custom skill repositories or manage repository settings:
         _curl_insecure = " -k" if _api_scheme == "https" else ""
         bg_task_instruction = ""
         if _shared_key:
-            bg_task_instruction = """
+            bg_task_instruction = f"""
 [Background Tasks] Run long USER-INITIATED tasks via the orchestrator API (visible in ⚡ Tasks tab). ONLY use this when the USER explicitly asks to run something in the background. Full docs: {SCRIPT_BASE_DIR}/docs/background-tasks.md
 curl -s{_curl_insecure} -X POST {_api_scheme}://127.0.0.1:{_api_port_bg}/api/v1/background-tasks -H "Content-Type: application/json" -H "Authorization: Bearer shared_{_shared_key}" -H "X-User-Identity: {_user_identity}" -H "X-Auth-Channel: {channel}" -d '{{"prompt": "...", "agent": "{agent}", "timeout": 900}}'
 
@@ -6133,11 +6133,11 @@ python3 {SCRIPT_BASE_DIR}/agent_manager.py --agent <agent_name> --runtime copilo
 Example: python3 {SCRIPT_BASE_DIR}/agent_manager.py --agent research-dev --runtime copilot --config {SCRIPT_BASE_DIR}/agents.json "get crude oil pricing stats" {n8n_session_id}"""
 
         # Inject Wee Canvas capability hint
-        canvas_instruction = """
+        canvas_instruction = f"""
 [Wee Canvas] Native real-time visual panel in the WebUI (progress boards, charts, forms, approval flows). Client: `{SCRIPT_BASE_DIR}/canvas.py` — `from canvas import Canvas; c = Canvas(); c.open()`. Full docs: {SCRIPT_BASE_DIR}/docs/canvas.md"""
 
         # Inject Wee Executor capability hint
-        wee_executor_instruction = """
+        wee_executor_instruction = f"""
 [Wee Executor] Unified privileged operations interface — use instead of raw curl/API calls.
   python3 {SCRIPT_BASE_DIR}/scripts/wee_executor.py -c create_background_task -a '{{"agent": "<name>", "prompt": "...", "model": "claude-haiku-4.5"}}'
   python3 {SCRIPT_BASE_DIR}/scripts/wee_executor.py -c get_secret -a '{{"name": "SECRET_NAME"}}'
@@ -6179,7 +6179,7 @@ When to use: Prefer wee_executor over direct curl for background tasks — it ha
         # Mobile channel context: instruct LLM to emit periodic status updates
         mobile_channel_instruction = ""
         if channel in ("telegram", "webex"):
-            mobile_channel_instruction = """
+            mobile_channel_instruction = f"""
 [Mobile Channel: {channel}]
 You are communicating through {channel} (a mobile messaging app). Your responses are delivered
 via message editing in {channel}. During long-running operations (installing packages, running
@@ -6255,7 +6255,7 @@ Do NOT emit status updates for quick operations (< 15 seconds)."""
                 flush=True,
             )
 
-        context = """{handoff_prefix}[Session ID: {n8n_session_id}]
+        context = f"""{handoff_prefix}[Session ID: {n8n_session_id}]
 {runtime_instruction}{injection_text}{mobile_channel_instruction}{silent_mode_instruction}{memory_section}{agent_desc}{files_context}{render_instruction}{bg_task_instruction}{canvas_instruction}{wee_executor_instruction}{timeout_instruction}
 
 User Request:
