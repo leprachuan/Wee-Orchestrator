@@ -85,15 +85,15 @@
       "description": "Wee Orchestrator developer agent - handles feature development, bug fixes, and testing exclusively on the dev environment (192.168.1.100)",
       "path": "/opt/wee-dev",
       "dispatch_config": {
-        "runtime": "claude",
-        "model": "sonnet",
-        "vendor": "Anthropic Claude (Sonnet 4.6)",
+        "runtime": "copilot",
+        "model": "auto",
+        "vendor": "Copilot CLI (auto)",
         "locked_notice": "# LOCKED - Do not modify wee-dev dispatch runtime/model without Foster approval.",
         "permission_mode": "elevated",
         "yolo": true,
         "timeout": 3600,
         "fallback_runtime": "copilot",
-        "fallback_model": "claude-sonnet-4.6"
+        "fallback_model": "auto"
       },
       "bots": {
         "telegram": {
