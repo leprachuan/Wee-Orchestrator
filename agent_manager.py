@@ -34,6 +34,49 @@ from session_manager_components import (
 # Dynamically determine the repo base directory (works regardless of where repo is cloned)  # noqa: E501
 SCRIPT_BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
+# ── Copilot token refresh constants (Issue #203) ────────────────────────
+# Copilot session tokens expire ~30 min after creation. We proactively
+# restart the subprocess every COPILOT_TOKEN_REFRESH_INTERVAL seconds
+# and reactively recover when the 'Session token expired' error appears.
+COPILOT_TOKEN_REFRESH_INTERVAL = int(
+    os.environ.get("COPILOT_TOKEN_REFRESH_INTERVAL", str(25 * 60))
+)  # 25 minutes default
+COPILOT_TOKEN_REFRESH_MAX_RETRIES = int(
+    os.environ.get("COPILOT_TOKEN_REFRESH_MAX_RETRIES", "10")
+)
+COPILOT_CONTEXT_SUMMARY_MAX_CHARS = int(
+    os.environ.get("COPILOT_CONTEXT_SUMMARY_MAX_CHARS", "8000")
+)
+_COPILOT_TOKEN_EXPIRED_PHRASE = "Session token expired"
+# Full Copilot auth-failure pattern anchored to the end of the tail window.
+# The real error is: "Session token expired. Please resend your message. (Request ID: ...)"
+# Requiring the suffix and anchoring with \Z prevents false positives when an
+# agent merely mentions the bare phrase in transcript text (e.g. summarising a
+# prior failure) — such mentions never have the specific suffix at the very end.
+_COPILOT_EXPIRY_TAIL_WINDOW = 500
+_COPILOT_TOKEN_EXPIRED_FULL_RE = re.compile(
+    r"Session token expired\. Please resend your message\.\s*\([^)]+\)\s*\Z"
+)
+
+
+def _is_copilot_token_expired(output: str) -> bool:
+    """Return True only when output ends with the real Copilot auth-expiry signal.
+
+    Matches the full Copilot error format anchored to the end of the tail
+    window.  The real failure always terminates output with:
+      "Session token expired. Please resend your message. (Request ID: ...)"
+    An agent summarising a past failure will have additional text after the
+    phrase, so the \\Z anchor prevents false positives.  The bare phrase alone
+    (without the suffix) is not treated as a real auth failure.
+    """
+    tail = (
+        output[-_COPILOT_EXPIRY_TAIL_WINDOW:]
+        if len(output) > _COPILOT_EXPIRY_TAIL_WINDOW
+        else output
+    )
+    return bool(_COPILOT_TOKEN_EXPIRED_FULL_RE.search(tail))
+
+
 # ── Theme constants (F025) ──────────────────────────────────────────────
 _BUILTIN_THEMES = [
     {
@@ -7253,21 +7296,71 @@ User Request:
 
                 _stdout_lines_bl: list = []
                 try:
-                    for _line_bl in process.stdout:
+                    # Enforce the segment timeout while stdout is still open.
+                    # A plain `for line in process.stdout` loop blocks until the
+                    # process closes its pipe, so a chatty-but-slow subprocess can
+                    # exceed the deadline without ever being interrupted.
+                    # Fix: drain stdout on a background thread and poll it via a
+                    # Queue with per-iteration timeouts so we can honour the
+                    # deadline even when lines keep arriving.
+                    import queue as _q_bl
+
+                    _stdout_q_bl: _q_bl.Queue = _q_bl.Queue()
+                    _deadline_bl = time.time() + timeout
+
+                    def _read_stdout_bl():
+                        try:
+                            for _ln in process.stdout:
+                                _stdout_q_bl.put(_ln)
+                        except Exception:
+                            pass
+                        finally:
+                            _stdout_q_bl.put(None)  # EOF sentinel
+
+                    _stdout_reader_t = _thr_bl.Thread(
+                        target=_read_stdout_bl, daemon=True
+                    )
+                    _stdout_reader_t.start()
+
+                    _timed_out_bl = False
+                    while True:
+                        _remaining_bl = _deadline_bl - time.time()
+                        if _remaining_bl <= 0:
+                            _timed_out_bl = True
+                            break
+                        try:
+                            _line_bl = _stdout_q_bl.get(
+                                timeout=min(_remaining_bl, 0.25)
+                            )
+                        except _q_bl.Empty:
+                            continue
+                        if _line_bl is None:
+                            break  # EOF
                         _stdout_lines_bl.append(_line_bl)
                         _su_m = _status_pattern.search(_line_bl)
                         if _su_m:
                             self.set_live_status(n8n_session_id, _su_m.group(1).strip())
 
-                    # Wait for process to fully exit
-                    try:
-                        process.wait(timeout=timeout)
-                    except subprocess.TimeoutExpired:
+                    if _timed_out_bl:
                         process.kill()
+                        _stdout_reader_t.join(timeout=2)
+                        _stderr_t.join(timeout=5)
                         process.wait()
                         self.clear_live_status(n8n_session_id)
                         timeout_min = timeout / 60
-                        return f"Error: Command timed out (exceeded {timeout}s / {timeout_min:.1f}min)"  # noqa: E501
+                        return (
+                            f"Error: Command timed out "
+                            f"(exceeded {timeout}s / {timeout_min:.1f}min)"
+                        )
+
+                    _stdout_reader_t.join(timeout=2)
+
+                    # Process has closed stdout; wait for clean exit.
+                    try:
+                        process.wait(timeout=5)
+                    except subprocess.TimeoutExpired:
+                        process.kill()
+                        process.wait()
                     finally:
                         _stderr_t.join(timeout=5)
 
@@ -7398,9 +7491,198 @@ User Request:
                 f"[Session] Starting new Copilot session in {mode} permission mode"
             )
 
-        output = self._execute_subprocess_with_tracking(
-            cmd, agent_dir, effective_timeout, "copilot", agent, prompt, n8n_session_id
-        )
+        # ── Token refresh loop (Issue #203) ──────────────────────────────
+        # Copilot session tokens expire ~30 min. We proactively restart every
+        # COPILOT_TOKEN_REFRESH_INTERVAL seconds, and reactively recover when
+        # the "Session token expired" error appears. Each refresh injects a
+        # context summary so the agent continues without repeating prior work.
+        _task_start = time.time()
+        _accumulated_chunks: list = []
+        _refresh_count = 0
+        _current_cmd = list(cmd)
+
+        while True:
+            _elapsed = time.time() - _task_start
+            _remaining = effective_timeout - _elapsed
+            # If less than 1 second remains, stop — dispatching any more segments
+            # would either overshoot the budget or produce a zero-second timeout.
+            # When _remaining >= 1, int(min(..., _remaining)) naturally gives >= 1.
+            if _remaining < 1:
+                break
+            # Proactive: cap each segment at the refresh interval
+            _segment_timeout = int(min(COPILOT_TOKEN_REFRESH_INTERVAL, _remaining))
+
+            _seg_output = self._execute_subprocess_with_tracking(
+                _current_cmd,
+                agent_dir,
+                _segment_timeout,
+                "copilot",
+                agent,
+                prompt,
+                n8n_session_id,
+            )
+            _accumulated_chunks.append(_seg_output)
+
+            _token_expired = _is_copilot_token_expired(_seg_output)
+            _segment_timed_out = _seg_output.startswith("Error: Command timed out")
+
+            if not _token_expired and not _segment_timed_out:
+                # Natural completion (success or non-token error) — stop looping
+                break
+
+            # Check retry budget
+            if _refresh_count >= COPILOT_TOKEN_REFRESH_MAX_RETRIES:
+                print(
+                    f"[TokenRefresh] Max retries ({COPILOT_TOKEN_REFRESH_MAX_RETRIES}) "
+                    f"reached for session {n8n_session_id}",
+                    file=sys.stderr,
+                )
+                break
+
+            # Check remaining time
+            _remaining_after = effective_timeout - (time.time() - _task_start)
+            if _remaining_after < 60:
+                break
+
+            _refresh_count += 1
+            _reason = "token expired" if _token_expired else "proactive refresh"
+            print(
+                f"[TokenRefresh] Refresh #{_refresh_count} for {n8n_session_id}"
+                f" ({_reason})",
+                file=sys.stderr,
+            )
+
+            # Build context: strip error marker and take the last N chars
+            _prior_raw = "".join(_accumulated_chunks)
+            if _token_expired:
+                _expire_idx = _prior_raw.rfind(_COPILOT_TOKEN_EXPIRED_PHRASE)
+                if _expire_idx > 0:
+                    _prior_raw = _prior_raw[:_expire_idx]
+            _prior_summary = (
+                _prior_raw[-COPILOT_CONTEXT_SUMMARY_MAX_CHARS:]
+                if len(_prior_raw) > COPILOT_CONTEXT_SUMMARY_MAX_CHARS
+                else _prior_raw
+            ).strip()
+
+            _continuation_prompt = (
+                f"[SESSION CONTINUATION #{_refresh_count} - {_reason}]\n\n"
+                "Your previous Copilot session was interrupted. Below is the "
+                "original task and a summary of work completed before the "
+                "interruption.\n\n"
+                f"ORIGINAL TASK:\n{prompt}\n\n"
+            )
+            if _prior_summary:
+                _continuation_prompt += (
+                    f"PRIOR SESSION PROGRESS (last {len(_prior_summary)} chars):\n"
+                    f"{_prior_summary}\n\n"
+                )
+            _continuation_prompt += (
+                "INSTRUCTIONS: Continue from where the session was interrupted. "
+                "Do NOT repeat work already listed above. Complete all remaining steps."
+            )
+
+            _refresh_context = self.build_agent_context_prompt(
+                agent,
+                _continuation_prompt,
+                n8n_session_id,
+                render_type,
+                effective_timeout,
+                "copilot",
+                model,
+                channel,
+            )
+            if mode == "elevated":
+                _refresh_context += (
+                    "\n\n[ELEVATED MODE ENABLED]\n"
+                    "Full permissions granted. ALL commands requiring elevated "
+                    "privileges MUST automatically prefix with 'sudo'. "
+                    "Sudo is configured without password prompt (NOPASSWD:ALL)."
+                )
+            elif mode == "sandboxed":
+                _refresh_context += (
+                    "\n\n[SANDBOXED MODE ENABLED]\n"
+                    "Read-only access only. Do NOT modify any files or make "
+                    "network requests. Analysis and reporting only."
+                )
+
+            _current_cmd = [
+                self.copilot_bin,
+                "-p",
+                _refresh_context,
+                "--allow-all-tools",
+                "--no-color",
+                "--model",
+                model,
+                "--additional-mcp-config",
+                f"@{mcp_config_path}",
+            ]
+            if mode == "elevated":
+                _current_cmd.insert(4, "--allow-all-paths")
+                _current_cmd.append("--yolo")
+
+            # Notify streaming consumers about the refresh
+            _sbuf = self._stream_buffers.get(n8n_session_id)
+            if _sbuf:
+                _sbuf.push(
+                    "chunk",
+                    f"\n\n🔄 **Session refresh #{_refresh_count}**"
+                    f" ({_reason}) - continuing...\n\n",
+                )
+
+        # If the final chunk still has the token-expiry phrase or is a timeout
+        # error it means the loop exited because recovery was abandoned (max
+        # retries reached or insufficient time remaining).  Silently stripping
+        # these markers and returning partial output is a false-success; instead
+        # we must fail explicitly so the caller knows the task did not complete.
+        _last_chunk = _accumulated_chunks[-1] if _accumulated_chunks else ""
+        _recovery_abandoned = _is_copilot_token_expired(
+            _last_chunk
+        ) or _last_chunk.startswith("Error: Command timed out")
+        if _recovery_abandoned:
+            # Collect the work completed before the failure for diagnostics.
+            _partial_chunks = _accumulated_chunks[:-1]
+            _partial = "".join(
+                (
+                    _c[: _c.rfind(_COPILOT_TOKEN_EXPIRED_PHRASE)]
+                    if _is_copilot_token_expired(_c)
+                    else _c
+                )
+                for _c in _partial_chunks
+            ).strip()
+            _reason_str = (
+                "token expiry"
+                if _is_copilot_token_expired(_last_chunk)
+                else "segment timeout"
+            )
+            return (
+                f"Error: Copilot session recovery abandoned after "
+                f"{_refresh_count} refresh(es) due to {_reason_str}. "
+                + (f"Partial output: {_partial}" if _partial else "No partial output.")
+            )
+
+        # All segments completed normally.  Strip internal markers and join.
+        # - Token-expiry phrase: stripped only when the chunk IS a real expiry
+        #   signal (_is_copilot_token_expired() True).  Chunks whose agent prose
+        #   merely mentions the phrase are left intact to avoid truncating valid
+        #   output.
+        # - "Error: Command timed out …": stripped from INTERMEDIATE chunks only
+        #   (they indicate a proactive segment refresh, not a final task failure).
+        _clean_chunks = []
+        _n_chunks = len(_accumulated_chunks)
+        for _i, _chunk in enumerate(_accumulated_chunks):
+            _is_final = _i == _n_chunks - 1
+            # Only strip the expiry marker when this chunk is an actual Copilot
+            # auth-failure signal, not normal prose that mentions the phrase.
+            if _is_copilot_token_expired(_chunk):
+                _idx = _chunk.rfind(_COPILOT_TOKEN_EXPIRED_PHRASE)
+                if _idx >= 0:
+                    _chunk = _chunk[:_idx]
+            # Strip proactive-refresh timeout error from non-final chunks only
+            if not _is_final and _chunk.startswith("Error: Command timed out"):
+                _newline = _chunk.find("\n")
+                _chunk = _chunk[_newline + 1 :] if _newline >= 0 else ""
+            _clean_chunks.append(_chunk)
+        output = "".join(_clean_chunks)
         return self.strip_metadata(output, "copilot")
 
     def run_copilot_sdk(
