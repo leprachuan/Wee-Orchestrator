@@ -2436,7 +2436,7 @@ You can mention an agent in your prompt and it will auto-delegate:
         elapsed_sec = elapsed % 60
         last_output = query_info.get("last_output", "")
 
-        status_msg = """🔄 **Query Running**
+        status_msg = f"""🔄 **Query Running**
 
 **Runtime:** {runtime}
 **Agent:** {agent}

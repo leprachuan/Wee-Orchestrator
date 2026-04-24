@@ -9,7 +9,7 @@ import re
 
 sys.path.insert(0, ".")
 
-from agent_manager import SessionManager
+from agent_manager import SessionManager  # noqa: E402
 
 
 class TestIssue193TypoFixes:

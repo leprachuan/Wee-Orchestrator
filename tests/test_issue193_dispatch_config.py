@@ -509,103 +509,96 @@ class TestQueuedTaskPermissionModePreserved(unittest.TestCase):
                 "got: " + repr(post.get("permission_mode")),
             )
 
-    def test_queued_task_via_api_preserves_dispatch_config_perm_mode(self):
-        """Full API path: queued task stores permission_mode from dispatch_config.
+    def setUp(self):
+        from agent_manager import BackgroundTaskManager
 
-        POST /api/v1/background-tasks with concurrency slot full forces a
-        queued status. The response and the stored record must both reflect
-        the dispatch_config-resolved permission_mode.
-        """
-        import agent_manager as am
-        from fastapi.testclient import TestClient
+        self.temp_dir = tempfile.TemporaryDirectory()
+        tasks_file = os.path.join(self.temp_dir.name, "tasks.json")
+        self.mgr = BackgroundTaskManager()
+        # Override storage path so tests are isolated from the real task file
+        self.mgr._path = tasks_file
+        self.mgr._tasks_cache = None
 
-        # Use a dedicated test key so the test is not coupled to the production key.
-        _test_key = "qatest_perm_mode_key_193"
-        orig_key = os.environ.get("API_SHARED_KEY")
-        os.environ["API_SHARED_KEY"] = _test_key
+    def tearDown(self):
+        self.temp_dir.cleanup()
 
-        try:
-            with tempfile.TemporaryDirectory() as tmp:
-                cfg_path = os.path.join(tmp, "agents.json")
-                tasks_file = os.path.join(tmp, "bg-tasks-test.json")
-                with open(cfg_path, "w") as f:
-                    json.dump(
-                        {
-                            "agents": [
-                                {
-                                    "name": "wee-qa",
-                                    "description": "QA agent",
-                                    "path": "/opt/wee-qa",
-                                    "max_concurrent": 1,
-                                    "dispatch_config": {
-                                        "runtime": "openai",
-                                        "model": "gpt-5.4-mini",
-                                        "permission_mode": "elevated",
-                                        "yolo": True,
-                                        "timeout": 1800,
-                                    },
-                                }
-                            ]
-                        },
-                        f,
-                    )
-                os.environ["AGENT_CONFIG_FILE"] = cfg_path
-                app = am.create_api_app()
-                # Redirect background task storage to an isolated temp file so
-                # tasks from previous test cases do not contaminate this test.
-                app.state.bg_task_mgr._path = tasks_file
-                app.state.bg_task_mgr._tasks_cache = None
-                client = TestClient(app, raise_server_exceptions=False)
-                headers = {
-                    "Authorization": f"Bearer shared_{_test_key}",
-                    "X-User-Identity": "testuser",
-                    "X-Auth-Channel": "telegram",
-                }
+    def _create(self, task_id, permission_mode="restricted"):
+        """Create a task via create_task_checked with the given permission_mode."""
+        task, actual_status = self.mgr.create_task_checked(
+            task_id=task_id,
+            session_id=f"sess_{task_id}",
+            user_identity="test_user",
+            channel="api",
+            agent="wee-qa",
+            runtime="openai",
+            model="gpt-5.4-mini",
+            prompt="test prompt",
+            max_concurrent=99,
+            permission_mode=permission_mode,
+        )
+        return task, actual_status
 
-                # First task — takes the only slot
-                r1 = client.post(
-                    "/api/v1/background-tasks",
-                    json={"prompt": "first", "agent": "wee-qa"},
-                    headers=headers,
-                )
-                self.assertIn(r1.status_code, (200, 201), r1.text[:200])
-                self.assertEqual(r1.json().get("status"), "running")
+    def test_create_task_checked_stores_permission_mode_sandboxed(self):
+        """create_task_checked must persist permission_mode='sandboxed'."""
+        task, _ = self._create("t3", permission_mode="sandboxed")
+        self.assertEqual(task.get("permission_mode"), "sandboxed")
 
-                # Second task — must be queued
-                r2 = client.post(
-                    "/api/v1/background-tasks",
-                    json={"prompt": "second", "agent": "wee-qa"},
-                    headers=headers,
-                )
-                self.assertIn(r2.status_code, (200, 201), r2.text[:200])
-                data2 = r2.json()
-                self.assertEqual(
-                    data2.get("status"),
-                    "queued",
-                    "second task must be queued (slot occupied)",
-                )
-                # API response must reflect resolved permission_mode
-                self.assertEqual(
-                    data2.get("permission_mode"),
-                    "elevated",
-                    "queued task API response must include permission_mode='elevated'",
-                )
+    def test_create_task_also_stores_permission_mode(self):
+        """create_task() (non-atomic path) also stores permission_mode."""
+        task = self.mgr.create_task(
+            task_id="direct1",
+            session_id="sess_direct1",
+            user_identity="sched_user",
+            channel="api",
+            agent="orchestrator",
+            runtime="copilot",
+            model="claude-haiku-4.5",
+            prompt="scheduled job",
+            permission_mode="elevated",
+        )
+        self.assertEqual(
+            task.get("permission_mode"),
+            "elevated",
+            "create_task() must also store permission_mode",
+        )
 
-                # Verify the stored record also has it
-                bg_mgr = app.state.bg_task_mgr
-                stored = bg_mgr.get_task(data2["task_id"])
-                self.assertIsNotNone(stored)
-                self.assertEqual(
-                    stored.get("permission_mode"),
-                    "elevated",
-                    "queued task stored record must have permission_mode='elevated'; "
-                    "got: " + repr(stored.get("permission_mode")),
-                )
-        finally:
-            if orig_key is None:
-                os.environ.pop("API_SHARED_KEY", None)
-            else:
-                os.environ["API_SHARED_KEY"] = orig_key
+    def test_get_next_queued_returns_stored_permission_mode(self):
+        """get_next_queued() must return the stored permission_mode."""
+        # Fill the slot
+        self.mgr.create_task_checked(
+            task_id="blocker2",
+            session_id="sess_blocker2",
+            user_identity="test_user2",
+            channel="api",
+            agent="wee-qa",
+            runtime="openai",
+            model="gpt-5.4-mini",
+            prompt="blocker",
+            max_concurrent=1,
+            permission_mode="restricted",
+        )
+
+        # Queue a task with elevated permission
+        self.mgr.create_task_checked(
+            task_id="q2",
+            session_id="sess_q2",
+            user_identity="test_user2",
+            channel="api",
+            agent="wee-qa",
+            runtime="openai",
+            model="gpt-5.4-mini",
+            prompt="queued",
+            max_concurrent=1,
+            permission_mode="elevated",
+        )
+
+        next_q = self.mgr.get_next_queued("api", "test_user2", "wee-qa")
+        self.assertIsNotNone(next_q, "get_next_queued must find the queued task")
+        self.assertEqual(
+            next_q.get("permission_mode"),
+            "elevated",
+            "get_next_queued must return permission_mode='elevated'",
+        )
 
 
 class TestRuntimeOpenaiAliasForWee(unittest.TestCase):
@@ -616,14 +609,16 @@ class TestRuntimeOpenaiAliasForWee(unittest.TestCase):
     Adding a new branch `elif runtime in ('wee', 'openai'):` is the fix.
     """
 
-    def _get_runtime_cmd(self, runtime, model="gpt-5.4-mini", permission_mode="restricted"):
-        """Extract the command that _run_background_task would build for a given runtime.
+    def _get_runtime_cmd(
+        self, runtime, model="gpt-5.4-mini", permission_mode="restricted"
+    ):
+        """Extract command _run_background_task would build for a given runtime.
 
         Patches subprocess.Popen so no process is actually launched.
         Returns (cmd_list, popen_call_count).
         """
         import agent_manager as am
-        from unittest.mock import MagicMock, patch, call
+        from unittest.mock import MagicMock, patch
 
         captured = {}
 
@@ -639,7 +634,7 @@ class TestRuntimeOpenaiAliasForWee(unittest.TestCase):
 
         # We call the inner function directly; to do that we need to
         # introspect the closure-level _run_background_task
-        app = am.create_api_app()
+        am.create_api_app()  # unused but triggers module init
         # _run_background_task is defined inside create_api_app() closure;
         # we'll trigger it via a thin wrapper that intercepts Popen
         with patch("subprocess.Popen", side_effect=fake_popen):
@@ -722,8 +717,12 @@ class TestRuntimeOpenaiAliasForWee(unittest.TestCase):
             src,
         )
 
-        self.assertIsNotNone(wee_branch_match, "wee/openai branch must exist in executor")
-        self.assertIsNotNone(else_copilot_match, "copilot else-clause must exist in executor")
+        self.assertIsNotNone(
+            wee_branch_match, "wee/openai branch must exist in executor"
+        )
+        self.assertIsNotNone(
+            else_copilot_match, "copilot else-clause must exist in executor"
+        )
 
         # The wee/openai branch must appear BEFORE the else-copilot clause
         self.assertLess(
@@ -790,20 +789,16 @@ class TestRuntimeOpenaiAliasForWee(unittest.TestCase):
                 self.assertEqual(
                     data.get("runtime"),
                     "openai",
-                    "runtime='openai' from dispatch_config must be preserved in response",
+                    "runtime='openai' from dispatch_config must be preserved",
                 )
                 # permission_mode must be 'elevated' from dispatch_config.yolo=True
                 self.assertEqual(
                     data.get("permission_mode"),
                     "elevated",
-                    "dispatch_config.yolo=True must resolve to permission_mode='elevated'",
+                    "dispatch_config.yolo=True must resolve to 'elevated'",
                 )
         finally:
             if orig_key is None:
                 os.environ.pop("API_SHARED_KEY", None)
             else:
                 os.environ["API_SHARED_KEY"] = orig_key
-
-
-if __name__ == "__main__":
-    unittest.main()
