@@ -9,7 +9,9 @@ not as a method call, so it raises:
     AttributeError: 'str' object has no attribute 'upper()'
 
 Additionally, {channel_limit} was missing from the format() kwargs, causing a
-secondary KeyError after the above was fixed.
+secondary KeyError after the above was fixed. A later regression accidentally
+turned the inner template into an f-string, which raised UnboundLocalError by
+referencing channel_upper before assignment.
 
 Fixed by:
   - Replacing {channel.upper()} with {channel_upper} in the file_handling template
@@ -94,9 +96,9 @@ class TestIssue223StrUpperRuntimeFailure(unittest.TestCase):
     def test_issue_223_str_object_upper_runtime_failure_webui_markdown(self):
         try:
             self._call("webui", "markdown")
-        except AttributeError as e:
+        except (AttributeError, UnboundLocalError) as e:
             self.fail(
-                f"build_agent_context_prompt raised AttributeError for "
+                f"build_agent_context_prompt raised {type(e).__name__} for "
                 f"channel=webui render_type=markdown: {e}"
             )
 
@@ -152,6 +154,17 @@ class TestIssue223StrUpperRuntimeFailure(unittest.TestCase):
             src,
             "channel_limit= kwarg missing from render_instruction.format() call — "
             "KeyError would follow the upper() fix",
+        )
+
+    def test_issue_223_file_handling_template_is_not_an_f_string(self):
+        """The file_handling template must stay deferred until format()."""
+        src_path = Path(__file__).parent.parent / "agent_manager.py"
+        src = src_path.read_text()
+        self.assertIn(
+            'file_handling = """',
+            src,
+            "file_handling template became an f-string again — channel_upper "
+            "would be evaluated before assignment",
         )
 
 

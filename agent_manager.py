@@ -5952,7 +5952,7 @@ Do NOT use <img> tags (unsupported). Do NOT create files, generate ASCII art, or
         if render_type in ("markdown", "telegram_html"):
             size_limits = {"telegram": "50 MB", "webex": "100 MB", "webui": "500 MB"}
             channel_limit = size_limits.get(channel, "100 MB")
-            file_handling = f"""
+            file_handling = """
 [File Handling — YOUR CHANNEL: {channel_upper}]
   Files:     [FILE:/path/to/file.ext:Your caption here]
   Images:    ![caption](url) or ![caption](/ai-media/session/file.png)
