@@ -798,6 +798,18 @@ class BackgroundTaskManager:
                     break
             self._save_unlocked(tasks)
 
+    def _trim_tool_call(self, tool_call: dict) -> dict:
+        """Truncate large string fields in a tool call to MAX_TOOL_FIELD_CHARS."""
+        max_chars = self.MAX_TOOL_FIELD_CHARS
+        trimmed = {}
+        for k, v in tool_call.items():
+            if isinstance(v, str) and len(v) > max_chars:
+                extra = len(v) - max_chars
+                trimmed[k] = v[:max_chars] + f"...[truncated {extra} chars]"
+            else:
+                trimmed[k] = v
+        return trimmed
+
     def append_tool_call(self, task_id: str, tool_call: dict):
         """Append a new tool call event to the task."""
         with self._lock:
@@ -1912,6 +1924,7 @@ class SessionManager:
     CODEX_MODELS = {
         "OpenAI Models": [
             ("gpt-5.4", "GPT-5.4", ["gpt-5.4", "gpt-5.4-pro"]),
+            ("gpt-5.4-mini", "GPT-5.4 mini", ["gpt-5.4-mini"]),
             ("gpt-5.3-codex", "GPT-5.3 Codex", ["gpt-5.3", "codex-latest"]),
             ("gpt-5.2-codex", "GPT-5.2 Codex", ["gpt-5.2-codex"]),
             ("gpt-5.2", "GPT-5.2", ["gpt-5.2"]),
