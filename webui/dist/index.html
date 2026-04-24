@@ -655,7 +655,45 @@
           </div>
         </div>
 
-        <!-- Danger Zone -->
+        <!-- Runtime Preferences -->
+        <div class="asf-section" id="runtime-prefs-section">
+          <div class="asf-section-title">🔄 Runtime Preferences</div>
+          <p class="asf-hint" style="margin:0 0 12px;">Configure the default primary and backup runtimes for background tasks. Agents can still override these.</p>
+          <div class="asf-grid">
+            <div class="asf-field">
+              <label class="asf-label" for="rp-primary">Primary Runtime</label>
+              <select id="rp-primary" class="glass-input glass-select asf-select">
+                <option value="copilot">copilot</option>
+                <option value="copilot-sdk">copilot-sdk</option>
+                <option value="claude">claude</option>
+                <option value="claude-sdk">claude-sdk</option>
+                <option value="gemini">gemini</option>
+                <option value="opencode">opencode</option>
+                <option value="codex">codex</option>
+                <option value="devin">devin</option>
+              </select>
+            </div>
+            <div class="asf-field">
+              <label class="asf-label" for="rp-backup">Backup Runtime <span class="asf-hint">(fallback)</span></label>
+              <select id="rp-backup" class="glass-input glass-select asf-select">
+                <option value="claude">claude</option>
+                <option value="copilot">copilot</option>
+                <option value="copilot-sdk">copilot-sdk</option>
+                <option value="claude-sdk">claude-sdk</option>
+                <option value="gemini">gemini</option>
+                <option value="opencode">opencode</option>
+                <option value="codex">codex</option>
+                <option value="devin">devin</option>
+              </select>
+            </div>
+          </div>
+          <div style="margin-top:10px;display:flex;align-items:center;gap:10px;">
+            <button id="rp-save" class="btn btn-primary btn-sm">💾 Save Runtime Prefs</button>
+            <span id="rp-status" class="asf-hint hidden"></span>
+          </div>
+        </div>
+
+        <- Enables embedding live interactive pages ( e.g. noVNC, Proxmox consoles Danger Zone -->
         <div class="asf-section asf-danger-section">
           <div class="asf-section-title">⚠️ Danger Zone</div>
           <button id="asf-delete-agent" class="asf-delete-btn">🗑 Delete Agent</button>

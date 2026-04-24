@@ -2,19 +2,20 @@
 Regression tests for Issue #125 — 429 retry + free model fallback chain.
 Tests: B01 (no recursion), B02 (user visibility), M01 (sync sleep), M03 (coverage).
 """
+
 import os
 import sys
 import threading
 import unittest
 from pathlib import Path
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
 
 os.environ.setdefault("API_SHARED_KEY", "test_key_123")
 
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
 
-from agent_manager import SessionManager
+from agent_manager import SessionManager  # noqa: E402
 
 
 def _make_mgr():
@@ -51,9 +52,9 @@ class TestIssue125RetryFallbackChain(unittest.TestCase):
 
     def setUp(self):
         self.mgr = _make_mgr()
-        self.mgr.get_or_create_session_data = MagicMock(return_value={
-            "channel": "test", "api_base": None, "api_key": None
-        })
+        self.mgr.get_or_create_session_data = MagicMock(
+            return_value={"channel": "test", "api_base": None, "api_key": None}
+        )
         self.mgr.build_agent_context_prompt = MagicMock(return_value="")
         self.mgr.update_session_field = MagicMock()
         self.mgr._fetch_openrouter_pricing = MagicMock(return_value={})
@@ -63,7 +64,8 @@ class TestIssue125RetryFallbackChain(unittest.TestCase):
     @patch("agent_manager.time.sleep")
     @patch("openai.OpenAI")
     def test_issue_125_retry_fallback_chain(self, mock_openai_cls, mock_sleep):
-        """Main regression: 429 retries exhaust on primary, then falls back to next model."""
+        """Main regression: 429 retries exhaust on primary,
+        then falls back to next model."""
         free_cfg = {
             "max_retries_per_model": 2,
             "retry_backoff_seconds": [1, 2],
@@ -101,11 +103,15 @@ class TestIssue125RetryFallbackChain(unittest.TestCase):
         self.assertIn("fallback works", result)
         # primary was tried max_retries times before switching
         primary_calls = [c for c in call_tracker if "primary" in c]
-        self.assertEqual(len(primary_calls), 2, "Should retry primary 2x before fallback")
+        self.assertEqual(
+            len(primary_calls), 2, "Should retry primary 2x before fallback"
+        )
 
     @patch("agent_manager.time.sleep")
     @patch("openai.OpenAI")
-    def test_issue_125_all_fallbacks_exhausted_no_crash(self, mock_openai_cls, mock_sleep):
+    def test_issue_125_all_fallbacks_exhausted_no_crash(
+        self, mock_openai_cls, mock_sleep
+    ):
         """B01: When all fallbacks are 429, return error message (no stack overflow)."""
         free_cfg = {
             "max_retries_per_model": 1,
@@ -133,7 +139,9 @@ class TestIssue125RetryFallbackChain(unittest.TestCase):
 
     @patch("agent_manager.time.sleep")
     @patch("openai.OpenAI")
-    def test_issue_125_fallback_notification_in_stream(self, mock_openai_cls, mock_sleep):
+    def test_issue_125_fallback_notification_in_stream(
+        self, mock_openai_cls, mock_sleep
+    ):
         """B02: stream buffer should receive fallback notification message."""
         free_cfg = {
             "max_retries_per_model": 1,
@@ -173,10 +181,15 @@ class TestIssue125RetryFallbackChain(unittest.TestCase):
 
         push_calls = stream_buf.push.call_args_list
         fallback_pushed = any(
-            any(kw in str(c).lower() for kw in ("fallback", "rate limited", "switching"))
+            any(
+                kw in str(c).lower() for kw in ("fallback", "rate limited", "switching")
+            )
             for c in push_calls
         )
-        self.assertTrue(fallback_pushed, "B02: fallback notification must be pushed to stream buffer")
+        self.assertTrue(
+            fallback_pushed,
+            "B02: fallback notification must be pushed to stream buffer",
+        )
         self.assertIn("backup ok", result)
 
     @patch("agent_manager.time.sleep")
@@ -252,7 +265,8 @@ class TestIssue125RetryFallbackChain(unittest.TestCase):
 
 
 class TestIssue125HelperMethods(unittest.TestCase):
-    """Unit tests for _wee_load_free_config, _wee_is_free_model, _wee_resolve_endpoint."""
+    """Unit tests for _wee_load_free_config, _wee_is_free_model,
+    _wee_resolve_endpoint."""
 
     def setUp(self):
         self.mgr = _make_mgr()
@@ -260,6 +274,7 @@ class TestIssue125HelperMethods(unittest.TestCase):
     def test_issue_125_config_file_exists(self):
         """wee_free_models.json config file must exist in repo root."""
         import json
+
         config_path = REPO / "wee_free_models.json"
         self.assertTrue(config_path.exists(), "wee_free_models.json must exist")
         with open(config_path) as f:
@@ -278,8 +293,12 @@ class TestIssue125HelperMethods(unittest.TestCase):
 
     def test_issue_125_free_model_detection(self):
         """_wee_is_free_model must correctly identify :free models."""
-        self.assertTrue(self.mgr._wee_is_free_model("openrouter/anthropic/claude-3-haiku:free"))
-        self.assertTrue(self.mgr._wee_is_free_model("openrouter/mistral/mistral-7b-instruct:free"))
+        self.assertTrue(
+            self.mgr._wee_is_free_model("openrouter/anthropic/claude-3-haiku:free")
+        )
+        self.assertTrue(
+            self.mgr._wee_is_free_model("openrouter/mistral/mistral-7b-instruct:free")
+        )
         self.assertFalse(self.mgr._wee_is_free_model("ollama/llama3.2"))
         self.assertFalse(self.mgr._wee_is_free_model("anthropic/claude-3-haiku"))
 
@@ -298,11 +317,22 @@ class TestIssue125HelperMethods(unittest.TestCase):
         self.assertEqual(model, "anthropic/claude:free")
 
     def test_issue_125_time_sleep_not_asyncio_sleep(self):
-        """M01: run_wee_native must use time.sleep, not asyncio.sleep."""
+        """M01: run_wee_native/_wee_run_attempt must use time.sleep, not asyncio.sleep.
+
+        Issue #175: sleep logic was moved to _wee_run_attempt(); verify both
+        the orchestration path and the attempt helper use _time.sleep (not asyncio).
+        """
         import inspect
-        src = inspect.getsource(SessionManager.run_wee_native)
-        self.assertIn("_time.sleep", src, "Must use time.sleep via _time alias")
-        self.assertNotIn("asyncio.sleep", src, "Must NOT use asyncio.sleep in sync function")
+
+        src_native = inspect.getsource(SessionManager.run_wee_native)
+        src_attempt = inspect.getsource(SessionManager._wee_run_attempt)
+        combined_src = src_native + src_attempt
+        self.assertIn(
+            "_time.sleep", combined_src, "Must use time.sleep via _time alias"
+        )
+        self.assertNotIn(
+            "asyncio.sleep", combined_src, "Must NOT use asyncio.sleep in sync function"
+        )
 
 
 if __name__ == "__main__":
