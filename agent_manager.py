@@ -34,6 +34,49 @@ from session_manager_components import (
 # Dynamically determine the repo base directory (works regardless of where repo is cloned)
 SCRIPT_BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
+# ── Copilot token refresh constants (Issue #203) ────────────────────────
+# Copilot session tokens expire ~30 min after creation. We proactively
+# restart the subprocess every COPILOT_TOKEN_REFRESH_INTERVAL seconds
+# and reactively recover when the 'Session token expired' error appears.
+COPILOT_TOKEN_REFRESH_INTERVAL = int(
+    os.environ.get("COPILOT_TOKEN_REFRESH_INTERVAL", str(25 * 60))
+)  # 25 minutes default
+COPILOT_TOKEN_REFRESH_MAX_RETRIES = int(
+    os.environ.get("COPILOT_TOKEN_REFRESH_MAX_RETRIES", "10")
+)
+COPILOT_CONTEXT_SUMMARY_MAX_CHARS = int(
+    os.environ.get("COPILOT_CONTEXT_SUMMARY_MAX_CHARS", "8000")
+)
+_COPILOT_TOKEN_EXPIRED_PHRASE = "Session token expired"
+# Full Copilot auth-failure pattern anchored to the end of the tail window.
+# The real error is: "Session token expired. Please resend your message. (Request ID: ...)"
+# Requiring the suffix and anchoring with \Z prevents false positives when an
+# agent merely mentions the bare phrase in transcript text (e.g. summarising a
+# prior failure) — such mentions never have the specific suffix at the very end.
+_COPILOT_EXPIRY_TAIL_WINDOW = 500
+_COPILOT_TOKEN_EXPIRED_FULL_RE = re.compile(
+    r"Session token expired\. Please resend your message\.\s*\([^)]+\)\s*\Z"
+)
+
+
+def _is_copilot_token_expired(output: str) -> bool:
+    """Return True only when output ends with the real Copilot auth-expiry signal.
+
+    Matches the full Copilot error format anchored to the end of the tail
+    window.  The real failure always terminates output with:
+      "Session token expired. Please resend your message. (Request ID: ...)"
+    An agent summarising a past failure will have additional text after the
+    phrase, so the \\Z anchor prevents false positives.  The bare phrase alone
+    (without the suffix) is not treated as a real auth failure.
+    """
+    tail = (
+        output[-_COPILOT_EXPIRY_TAIL_WINDOW:]
+        if len(output) > _COPILOT_EXPIRY_TAIL_WINDOW
+        else output
+    )
+    return bool(_COPILOT_TOKEN_EXPIRED_FULL_RE.search(tail))
+
+
 # ── Theme constants (F025) ──────────────────────────────────────────────
 _BUILTIN_THEMES = [
     {
@@ -755,6 +798,18 @@ class BackgroundTaskManager:
                     break
             self._save_unlocked(tasks)
 
+    def _trim_tool_call(self, tool_call: dict) -> dict:
+        """Truncate large string fields in a tool call to MAX_TOOL_FIELD_CHARS."""
+        max_chars = self.MAX_TOOL_FIELD_CHARS
+        trimmed = {}
+        for k, v in tool_call.items():
+            if isinstance(v, str) and len(v) > max_chars:
+                extra = len(v) - max_chars
+                trimmed[k] = v[:max_chars] + f"...[truncated {extra} chars]"
+            else:
+                trimmed[k] = v
+        return trimmed
+
     def append_tool_call(self, task_id: str, tool_call: dict):
         """Append a new tool call event to the task."""
         with self._lock:
@@ -992,6 +1047,125 @@ def get_default_model() -> str:
 def get_default_runtime() -> str:
     """Get default runtime from environment or use copilot"""
     return os.environ.get("COPILOT_DEFAULT_RUNTIME", "copilot")
+
+
+MODEL_MANIFEST_PATH = Path(SCRIPT_BASE_DIR) / "model-manifest.json"
+
+
+def _model_manifest_runtime_key(runtime: str) -> str:
+    """Map runtime aliases onto model-manifest.json keys."""
+    runtime = (runtime or "").lower().strip()
+    if runtime == "copilot-sdk":
+        return "copilot"
+    return runtime
+
+
+def load_model_manifest(path: Optional[Path] = None) -> Dict[str, List[str]]:
+    """Load runtime->models from model-manifest.json.
+
+    Returns an empty dict when the manifest is missing or invalid so callers can
+    fall back to their existing dispatch/static defaults.
+    """
+    manifest_path = path or MODEL_MANIFEST_PATH
+    try:
+        with open(manifest_path, "r") as f:
+            data = json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        return {}
+
+    runtimes = data.get("runtimes", {})
+    if not isinstance(runtimes, dict):
+        return {}
+
+    normalized = {}
+    for runtime, models in runtimes.items():
+        if not isinstance(runtime, str) or not isinstance(models, list):
+            continue
+        clean_models = [m for m in models if isinstance(m, str) and m.strip()]
+        if clean_models:
+            normalized[runtime.lower().strip()] = clean_models
+    return normalized
+
+
+class RuntimePreferencesManager:
+    """Manages global runtime preferences (primary/backup) persisted to disk."""
+
+    _DEFAULT_PRIMARY = "copilot"
+    _DEFAULT_BACKUP = "claude"
+
+    def __init__(self, pref_file: str):
+        self._pref_file = pref_file
+        self._lock = threading.Lock()
+        self._prefs: Dict[str, str] = {}
+        self._load()
+
+    def _load(self) -> None:
+        """Load preferences from disk, falling back to defaults."""
+        try:
+            if os.path.exists(self._pref_file):
+                with open(self._pref_file, "r") as f:
+                    data = json.load(f)
+                self._prefs = {
+                    "primary_runtime": str(
+                        data.get("primary_runtime", self._DEFAULT_PRIMARY)
+                    ),
+                    "backup_runtime": str(
+                        data.get("backup_runtime", self._DEFAULT_BACKUP)
+                    ),
+                }
+                return
+        except Exception as e:
+            print(f"[RuntimePref] Failed to load preferences: {e}", file=sys.stderr)
+        self._prefs = {
+            "primary_runtime": self._DEFAULT_PRIMARY,
+            "backup_runtime": self._DEFAULT_BACKUP,
+        }
+
+    def get(self) -> Dict[str, str]:
+        """Return a copy of current preferences."""
+        with self._lock:
+            return dict(self._prefs)
+
+    def set(self, primary_runtime: str, backup_runtime: str) -> None:
+        """Save preferences to disk."""
+        with self._lock:
+            self._prefs = {
+                "primary_runtime": primary_runtime,
+                "backup_runtime": backup_runtime,
+            }
+            try:
+                with open(self._pref_file, "w") as f:
+                    json.dump(self._prefs, f, indent=2)
+                print(
+                    f"[RuntimePref] Saved: primary={primary_runtime},"  # noqa: E501
+                    f" backup={backup_runtime}",
+                    file=sys.stderr,
+                )
+            except Exception as e:
+                print(f"[RuntimePref] Failed to save preferences: {e}", file=sys.stderr)
+
+    def primary(self) -> str:
+        """Return primary runtime, falling back to env/default."""
+        with self._lock:
+            return self._prefs.get("primary_runtime", self._DEFAULT_PRIMARY)
+
+    def backup(self) -> str:
+        """Return backup runtime."""
+        with self._lock:
+            return self._prefs.get("backup_runtime", self._DEFAULT_BACKUP)
+
+
+# Global runtime preferences manager (loaded once at startup)
+_runtime_pref_mgr: "RuntimePreferencesManager" = None  # noqa: F821
+
+
+def _get_runtime_pref_mgr() -> "RuntimePreferencesManager":  # noqa: F821
+    """Get (or lazily initialize) the global runtime preferences manager."""
+    global _runtime_pref_mgr
+    if _runtime_pref_mgr is None:
+        pref_file = os.path.join(SCRIPT_BASE_DIR, "runtime_preferences.json")
+        _runtime_pref_mgr = RuntimePreferencesManager(pref_file)
+    return _runtime_pref_mgr
 
 
 def check_runtime_available(runtime: str) -> bool:
@@ -2046,6 +2220,7 @@ class SessionManager:
         self._env_devin_models = None
         self._env_cursor_models = None
         self._env_wee_models = None
+        self._manifest_model_metadata = {}
         self._openrouter_cache_ts = 0.0
 
         # Load command timeout from environment
@@ -2561,28 +2736,8 @@ You can mention an agent in your prompt and it will auto-delegate:
             # (e.g., OpenCode uses "ses_*" format, Claude uses UUID format, CODEX uses UUID format, etc.)
             self.update_session_field(n8n_session_id, "session_id", new_session_id)
 
-            # When switching runtime, also reset the model to a default for that runtime
-            default_model = "gpt-5-mini"  # Default fallback
-            if new_runtime == "copilot":
-                default_model = "gpt-5-mini"
-            elif new_runtime == "copilot-sdk":
-                default_model = "gpt-5-mini"
-            elif new_runtime == "claude-sdk":
-                default_model = "haiku"
-            elif new_runtime == "opencode":
-                default_model = "opencode/gpt-5-nano"
-            elif new_runtime == "claude":
-                default_model = "haiku"
-            elif new_runtime == "gemini":
-                default_model = "gemini-1.5-flash"
-            elif new_runtime == "codex":
-                default_model = "gpt-5.4"
-            elif new_runtime == "devin":
-                default_model = os.getenv("DEVIN_DEFAULT_MODEL", "claude-sonnet-4")
-            elif new_runtime == "cursor":
-                default_model = os.getenv("CURSOR_DEFAULT_MODEL", "auto")
-            elif new_runtime == "wee":
-                default_model = os.getenv("WEE_DEFAULT_MODEL", "ollama/gemma4:e4b")
+            # When switching runtime, also reset the model to that runtime's default.
+            default_model = self._runtime_default_model(new_runtime)
 
             self.update_session_field(n8n_session_id, "model", default_model)
             return f"✓ Switched runtime to **{new_runtime}**. Model set to `{default_model}`. Session reset."
@@ -3647,8 +3802,117 @@ You can mention an agent in your prompt and it will auto-delegate:
             ],
         }
 
+    def _model_manifest_models(self, runtime: str) -> Optional[List[str]]:
+        manifest = load_model_manifest()
+        runtime_key = _model_manifest_runtime_key(runtime)
+        models = manifest.get(runtime_key)
+        return list(models) if models else None
+
+    def _model_label_from_id(self, model_id: str) -> str:
+        words = re.split(r"[-_/]+", model_id)
+        return " ".join(
+            w.upper() if w.lower() == "gpt" else w.capitalize() for w in words
+        )
+
+    def _model_group_from_id(self, model_id: str, runtime: str) -> str:
+        model_lower = model_id.lower()
+        runtime = (runtime or "").lower()
+        if "claude" in model_lower:
+            return "Claude Models"
+        if "gpt" in model_lower or model_lower.startswith("o"):
+            return "GPT Models"
+        if "gemini" in model_lower:
+            return "Google Models"
+        if runtime == "opencode" and "/" in model_id:
+            return model_id.split("/", 1)[0]
+        return "Manifest Models"
+
+    def _model_aliases_from_id(self, model_id: str) -> List[str]:
+        aliases = []
+        model_lower = model_id.lower()
+        for family in ("sonnet", "haiku", "opus"):
+            if family in model_lower:
+                aliases.append(family)
+                version = re.search(rf"{family}[-.]?([0-9][0-9.-]*)", model_lower)
+                if version:
+                    version_text = version.group(1).strip("-.")
+                    aliases.append(f"{family}-{version_text}")
+                    aliases.append(f"{family}-{version_text.replace('.', '-')}")
+        return aliases
+
+    def _manifest_models_to_metadata(self, runtime: str) -> Optional[Dict]:
+        models = self._model_manifest_models(runtime)
+        if not models:
+            return None
+
+        metadata = {}
+        for model_id in models:
+            group = self._model_group_from_id(model_id, runtime)
+            metadata.setdefault(group, []).append(
+                (
+                    model_id,
+                    self._model_label_from_id(model_id),
+                    self._model_aliases_from_id(model_id),
+                )
+            )
+        self._manifest_model_metadata[runtime] = metadata
+        return metadata
+
+    def _manifest_models_to_dict(self, runtime: str) -> Optional[Dict]:
+        metadata = self._manifest_models_to_metadata(runtime)
+        if not metadata:
+            return None
+        return self._static_models_to_dict(metadata)
+
+    def _runtime_default_model(self, runtime: str) -> str:
+        manifest_models = self._model_manifest_models(runtime)
+        if manifest_models:
+            return manifest_models[0]
+
+        dispatch_defaults = []
+        for agent in self.AGENTS.values():
+            dispatch_config = agent.get("dispatch_config", {})
+            if dispatch_config.get("runtime") == runtime and dispatch_config.get(
+                "model"
+            ):
+                dispatch_defaults.append(dispatch_config["model"])
+        if dispatch_defaults:
+            return dispatch_defaults[0]
+
+        env_default = {
+            "copilot": os.getenv("COPILOT_DEFAULT_MODEL"),
+            "copilot-sdk": os.getenv("COPILOT_DEFAULT_MODEL"),
+            "claude": os.getenv("CLAUDE_DEFAULT_MODEL"),
+            "claude-sdk": os.getenv("CLAUDE_DEFAULT_MODEL"),
+            "gemini": os.getenv("GEMINI_DEFAULT_MODEL"),
+            "codex": os.getenv("CODEX_DEFAULT_MODEL"),
+            "devin": os.getenv("DEVIN_DEFAULT_MODEL"),
+            "cursor": os.getenv("CURSOR_DEFAULT_MODEL"),
+            "wee": os.getenv("WEE_DEFAULT_MODEL"),
+        }.get(runtime)
+        if env_default:
+            return env_default
+
+        fallback = {
+            "copilot": "gpt-5-mini",
+            "copilot-sdk": "gpt-5-mini",
+            "claude": "haiku",
+            "claude-sdk": "haiku",
+            "opencode": "opencode/gpt-5-nano",
+            "gemini": "gemini-1.5-flash",
+            "codex": "gpt-5.4",
+            "devin": "claude-sonnet-4",
+            "cursor": "auto",
+            "wee": "ollama/gemma4:e4b",
+        }
+        return fallback.get(runtime, get_default_model())
+
     def fetch_copilot_models(self) -> Dict:
         """Fetch available models from copilot CLI help text"""
+        manifest_models = self._manifest_models_to_dict("copilot")
+        if manifest_models:
+            return manifest_models
+
         if not self.copilot_bin:
             print("Copilot executable not found in any search paths", file=sys.stderr)
             return self._copilot_static_fallback()
@@ -3770,13 +4034,15 @@ You can mention an agent in your prompt and it will auto-delegate:
                     f"[Error] opencode models failed (exit {result.returncode}): {result.stderr}",
                     file=sys.stderr,
                 )
-                return self._static_models_to_dict(self.OPENCODE_MODELS)
+                return self._manifest_models_to_dict(
+                    "opencode"
+                ) or self._static_models_to_dict(self.OPENCODE_MODELS)
 
             if not result.stdout.strip():
-                print(
-                    "[Warning] opencode models returned empty output", file=sys.stderr
-                )
-                return self._static_models_to_dict(self.OPENCODE_MODELS)
+                logger.warning("[Warning] opencode models returned empty output")
+                return self._manifest_models_to_dict(
+                    "opencode"
+                ) or self._static_models_to_dict(self.OPENCODE_MODELS)
 
             models_by_provider = {}
             for line in result.stdout.splitlines():
@@ -3802,10 +4068,14 @@ You can mention an agent in your prompt and it will auto-delegate:
                 f"[Error] opencode models command timed out after {self.command_timeout}s",
                 file=sys.stderr,
             )
-            return self._static_models_to_dict(self.OPENCODE_MODELS)
+            return self._manifest_models_to_dict(
+                "opencode"
+            ) or self._static_models_to_dict(self.OPENCODE_MODELS)
         except Exception as e:
-            print(f"Error fetching opencode models: {e}", file=sys.stderr)
-            return self._static_models_to_dict(self.OPENCODE_MODELS)
+            logger.error(f"Error fetching opencode models: {e}")
+            return self._manifest_models_to_dict(
+                "opencode"
+            ) or self._static_models_to_dict(self.OPENCODE_MODELS)
 
     def _static_models_to_dict(self, static_dict: Dict) -> Dict:
         """Convert static model config {cat: [(id, desc, aliases)...]} to {cat: [id,...]}."""
@@ -3958,9 +4228,13 @@ You can mention an agent in your prompt and it will auto-delegate:
                         return desc
         return None
 
-    def _get_runtime_model_metadata(self, runtime: str) -> tuple[Optional[Dict], Optional[Dict]]:
+    def _get_runtime_model_metadata(
+        self, runtime: str
+    ) -> tuple[Optional[Dict], Optional[Dict]]:
         """Return (env_models, static_models) for a runtime."""
         if runtime in (
+            "copilot",
+            "copilot-sdk",
             "claude",
             "claude-sdk",
             "gemini",
@@ -3973,6 +4247,8 @@ You can mention an agent in your prompt and it will auto-delegate:
             self.get_models_for_runtime(runtime)
 
         env_models_map = {
+            "copilot": self._manifest_model_metadata.get("copilot"),
+            "copilot-sdk": self._manifest_model_metadata.get("copilot"),
             "claude": self._env_claude_models,
             "claude-sdk": self._env_claude_models,
             "gemini": self._env_gemini_models,
@@ -3981,7 +4257,10 @@ You can mention an agent in your prompt and it will auto-delegate:
             "cursor": self._env_cursor_models,
             "wee": self._env_wee_models,
         }
+        manifest_models = self._manifest_model_metadata.get(runtime)
         static_map = {
+            "copilot": None,
+            "copilot-sdk": None,
             "claude": self.CLAUDE_MODELS,
             "claude-sdk": self.CLAUDE_MODELS,
             "gemini": self.GEMINI_MODELS,
@@ -3991,15 +4270,19 @@ You can mention an agent in your prompt and it will auto-delegate:
             "cursor": self.CURSOR_MODELS,
             "wee": self.WEE_MODELS,
         }
-        return env_models_map.get(runtime), static_map.get(runtime)
+        return env_models_map.get(runtime) or manifest_models, static_map.get(runtime)
 
-    def fetch_claude_models(self) -> Dict:
+    def fetch_claude_models(self, runtime: str = "claude") -> Dict:
         """Return available Claude models from environment or fallback to static list.
 
         Claude Code CLI does not currently expose a model-listing subcommand.
         Models are read from CLAUDE_MODELS_JSON environment variable, with
         static CLAUDE_MODELS as fallback.
         """
+        manifest_models = self._manifest_models_to_dict(runtime)
+        if manifest_models:
+            return manifest_models
+
         # Try to load from environment variable first
         env_models = os.getenv("CLAUDE_MODELS_JSON")
         if env_models:
@@ -4026,6 +4309,10 @@ You can mention an agent in your prompt and it will auto-delegate:
         Models are read from GEMINI_MODELS_JSON environment variable, with
         static GEMINI_MODELS as fallback.
         """
+        manifest_models = self._manifest_models_to_dict("gemini")
+        if manifest_models:
+            return manifest_models
+
         # Try to load from environment variable first
         env_models = os.getenv("GEMINI_MODELS_JSON")
         if env_models:
@@ -4052,6 +4339,10 @@ You can mention an agent in your prompt and it will auto-delegate:
         Models are read from CODEX_MODELS_JSON environment variable, with
         static CODEX_MODELS as fallback.
         """
+        manifest_models = self._manifest_models_to_dict("codex")
+        if manifest_models:
+            return manifest_models
+
         # Try to load from environment variable first
         env_models = os.getenv("CODEX_MODELS_JSON")
         if env_models:
@@ -4298,9 +4589,9 @@ You can mention an agent in your prompt and it will auto-delegate:
         dispatch = {
             "copilot": self.fetch_copilot_models,
             "copilot-sdk": self.fetch_copilot_models,
-            "claude-sdk": self.fetch_claude_models,
+            "claude-sdk": lambda: self.fetch_claude_models("claude-sdk"),
             "opencode": self.fetch_opencode_models,
-            "claude": self.fetch_claude_models,
+            "claude": lambda: self.fetch_claude_models("claude"),
             "gemini": self.fetch_gemini_models,
             "codex": self.fetch_codex_models,
             "devin": self.fetch_devin_models,
@@ -4309,10 +4600,10 @@ You can mention an agent in your prompt and it will auto-delegate:
         }
         fetcher = dispatch.get(runtime)
         if fetcher is None:
-            print(
-                f"[Warning] Unknown runtime for model listing: {runtime}",
-                file=sys.stderr,
-            )
+            manifest_models = self._manifest_models_to_dict(runtime)
+            if manifest_models:
+                return manifest_models
+            logger.warning(f"[Warning] Unknown runtime for model listing: {runtime}")
             return {}
         return fetcher()
 
@@ -4411,19 +4702,9 @@ You can mention an agent in your prompt and it will auto-delegate:
         default_runtime = get_default_runtime()
         default_model = get_default_model()
 
-        # Adjust default model based on runtime if using defaults
-        if default_runtime == "claude":
-            default_model = "haiku"
-        elif default_runtime == "opencode":
-            default_model = "opencode/gpt-5-nano"
-        elif default_runtime == "gemini":
-            default_model = "gemini-1.5-flash"
-        elif default_runtime == "codex":
-            default_model = "gpt-5.4"
-        elif default_runtime == "devin":
-            default_model = os.getenv("DEVIN_DEFAULT_MODEL", "claude-sonnet-4")
-        elif default_runtime == "cursor":
-            default_model = os.getenv("CURSOR_DEFAULT_MODEL", "auto")
+        # Adjust default model based on runtime if using defaults.
+        if not os.environ.get("COPILOT_DEFAULT_MODEL"):
+            default_model = self._runtime_default_model(default_runtime)
 
         # Extract bot identifier from session ID (last 4 chars of numeric part)
         bot_id = self._extract_bot_identifier(n8n_session_id)
@@ -4478,18 +4759,18 @@ You can mention an agent in your prompt and it will auto-delegate:
             runtime = merged.get("runtime", default_runtime)
             if runtime == "claude":
                 if not merged.get("model") or "gpt" in merged.get("model", "").lower():
-                    merged["model"] = "haiku"
+                    merged["model"] = self._runtime_default_model(runtime)
             elif runtime == "opencode":
                 # For opencode, only force default if model is truly empty.
                 # Allow any non-empty model string (opencode/*, openai-compatible/*, etc.)
                 if not merged.get("model"):
-                    merged["model"] = "opencode/gpt-5-nano"
+                    merged["model"] = self._runtime_default_model(runtime)
             elif runtime == "gemini":
                 if (
                     not merged.get("model")
                     or "gemini" not in merged.get("model", "").lower()
                 ):
-                    merged["model"] = "gemini-1.5-flash"
+                    merged["model"] = self._runtime_default_model(runtime)
             elif runtime == "codex":
                 current_model = merged.get("model", "")
                 # Accept any model that resolves via codex model metadata/aliases.
@@ -4498,29 +4779,25 @@ You can mention an agent in your prompt and it will auto-delegate:
                 if not current_model or not self.get_model_from_name(
                     current_model, "codex"
                 ):
-                    merged["model"] = "gpt-5.4"
+                    merged["model"] = self._runtime_default_model(runtime)
             elif runtime == "devin":
                 current_model = merged.get("model", "")
                 if not current_model or not self.get_model_from_name(
                     current_model, "devin"
                 ):
-                    merged["model"] = os.getenv(
-                        "DEVIN_DEFAULT_MODEL", "claude-sonnet-4"
-                    )
+                    merged["model"] = self._runtime_default_model(runtime)
             elif runtime == "cursor":
                 current_model = merged.get("model", "")
                 if not current_model or not self.get_model_from_name(
                     current_model, "cursor"
                 ):
-                    merged["model"] = os.getenv("CURSOR_DEFAULT_MODEL", "auto")
+                    merged["model"] = self._runtime_default_model(runtime)
             elif runtime == "wee":
                 current_model = merged.get("model", "")
                 if not current_model or not self.get_model_from_name(
                     current_model, "wee"
                 ):
-                    merged["model"] = os.getenv(
-                        "WEE_DEFAULT_MODEL", "ollama/gemma4:e4b"
-                    )
+                    merged["model"] = self._runtime_default_model(runtime)
 
             # Validate and fix session_id if corrupted
             session_id = merged.get("session_id", "")
@@ -4875,7 +5152,8 @@ You can mention an agent in your prompt and it will auto-delegate:
         """
         name_lower = name.lower().strip("\"'")
 
-        # Step 1: check env-loaded or static alias tables for runtimes with metadata.
+        # Step 1: check env-loaded or static alias tables for all runtimes that have
+        # them.
         env_models, static_models = self._get_runtime_model_metadata(runtime)
 
         for models_to_check in (env_models, static_models):
@@ -7108,21 +7386,71 @@ User Request:
 
                 _stdout_lines_bl: list = []
                 try:
-                    for _line_bl in process.stdout:
+                    # Enforce the segment timeout while stdout is still open.
+                    # A plain `for line in process.stdout` loop blocks until the
+                    # process closes its pipe, so a chatty-but-slow subprocess can
+                    # exceed the deadline without ever being interrupted.
+                    # Fix: drain stdout on a background thread and poll it via a
+                    # Queue with per-iteration timeouts so we can honour the
+                    # deadline even when lines keep arriving.
+                    import queue as _q_bl
+
+                    _stdout_q_bl: _q_bl.Queue = _q_bl.Queue()
+                    _deadline_bl = time.time() + timeout
+
+                    def _read_stdout_bl():
+                        try:
+                            for _ln in process.stdout:
+                                _stdout_q_bl.put(_ln)
+                        except Exception:
+                            pass
+                        finally:
+                            _stdout_q_bl.put(None)  # EOF sentinel
+
+                    _stdout_reader_t = _thr_bl.Thread(
+                        target=_read_stdout_bl, daemon=True
+                    )
+                    _stdout_reader_t.start()
+
+                    _timed_out_bl = False
+                    while True:
+                        _remaining_bl = _deadline_bl - time.time()
+                        if _remaining_bl <= 0:
+                            _timed_out_bl = True
+                            break
+                        try:
+                            _line_bl = _stdout_q_bl.get(
+                                timeout=min(_remaining_bl, 0.25)
+                            )
+                        except _q_bl.Empty:
+                            continue
+                        if _line_bl is None:
+                            break  # EOF
                         _stdout_lines_bl.append(_line_bl)
                         _su_m = _status_pattern.search(_line_bl)
                         if _su_m:
                             self.set_live_status(n8n_session_id, _su_m.group(1).strip())
 
-                    # Wait for process to fully exit
-                    try:
-                        process.wait(timeout=timeout)
-                    except subprocess.TimeoutExpired:
+                    if _timed_out_bl:
                         process.kill()
+                        _stdout_reader_t.join(timeout=2)
+                        _stderr_t.join(timeout=5)
                         process.wait()
                         self.clear_live_status(n8n_session_id)
                         timeout_min = timeout / 60
-                        return f"Error: Command timed out (exceeded {timeout}s / {timeout_min:.1f}min)"
+                        return (
+                            f"Error: Command timed out "
+                            f"(exceeded {timeout}s / {timeout_min:.1f}min)"
+                        )
+
+                    _stdout_reader_t.join(timeout=2)
+
+                    # Process has closed stdout; wait for clean exit.
+                    try:
+                        process.wait(timeout=5)
+                    except subprocess.TimeoutExpired:
+                        process.kill()
+                        process.wait()
                     finally:
                         _stderr_t.join(timeout=5)
 
@@ -7254,9 +7582,198 @@ User Request:
                 file=sys.stderr,
             )
 
-        output = self._execute_subprocess_with_tracking(
-            cmd, agent_dir, effective_timeout, "copilot", agent, prompt, n8n_session_id
-        )
+        # ── Token refresh loop (Issue #203) ──────────────────────────────
+        # Copilot session tokens expire ~30 min. We proactively restart every
+        # COPILOT_TOKEN_REFRESH_INTERVAL seconds, and reactively recover when
+        # the "Session token expired" error appears. Each refresh injects a
+        # context summary so the agent continues without repeating prior work.
+        _task_start = time.time()
+        _accumulated_chunks: list = []
+        _refresh_count = 0
+        _current_cmd = list(cmd)
+
+        while True:
+            _elapsed = time.time() - _task_start
+            _remaining = effective_timeout - _elapsed
+            # If less than 1 second remains, stop — dispatching any more segments
+            # would either overshoot the budget or produce a zero-second timeout.
+            # When _remaining >= 1, int(min(..., _remaining)) naturally gives >= 1.
+            if _remaining < 1:
+                break
+            # Proactive: cap each segment at the refresh interval
+            _segment_timeout = int(min(COPILOT_TOKEN_REFRESH_INTERVAL, _remaining))
+
+            _seg_output = self._execute_subprocess_with_tracking(
+                _current_cmd,
+                agent_dir,
+                _segment_timeout,
+                "copilot",
+                agent,
+                prompt,
+                n8n_session_id,
+            )
+            _accumulated_chunks.append(_seg_output)
+
+            _token_expired = _is_copilot_token_expired(_seg_output)
+            _segment_timed_out = _seg_output.startswith("Error: Command timed out")
+
+            if not _token_expired and not _segment_timed_out:
+                # Natural completion (success or non-token error) — stop looping
+                break
+
+            # Check retry budget
+            if _refresh_count >= COPILOT_TOKEN_REFRESH_MAX_RETRIES:
+                print(
+                    f"[TokenRefresh] Max retries ({COPILOT_TOKEN_REFRESH_MAX_RETRIES}) "
+                    f"reached for session {n8n_session_id}",
+                    file=sys.stderr,
+                )
+                break
+
+            # Check remaining time
+            _remaining_after = effective_timeout - (time.time() - _task_start)
+            if _remaining_after < 60:
+                break
+
+            _refresh_count += 1
+            _reason = "token expired" if _token_expired else "proactive refresh"
+            print(
+                f"[TokenRefresh] Refresh #{_refresh_count} for {n8n_session_id}"
+                f" ({_reason})",
+                file=sys.stderr,
+            )
+
+            # Build context: strip error marker and take the last N chars
+            _prior_raw = "".join(_accumulated_chunks)
+            if _token_expired:
+                _expire_idx = _prior_raw.rfind(_COPILOT_TOKEN_EXPIRED_PHRASE)
+                if _expire_idx > 0:
+                    _prior_raw = _prior_raw[:_expire_idx]
+            _prior_summary = (
+                _prior_raw[-COPILOT_CONTEXT_SUMMARY_MAX_CHARS:]
+                if len(_prior_raw) > COPILOT_CONTEXT_SUMMARY_MAX_CHARS
+                else _prior_raw
+            ).strip()
+
+            _continuation_prompt = (
+                f"[SESSION CONTINUATION #{_refresh_count} - {_reason}]\n\n"
+                "Your previous Copilot session was interrupted. Below is the "
+                "original task and a summary of work completed before the "
+                "interruption.\n\n"
+                f"ORIGINAL TASK:\n{prompt}\n\n"
+            )
+            if _prior_summary:
+                _continuation_prompt += (
+                    f"PRIOR SESSION PROGRESS (last {len(_prior_summary)} chars):\n"
+                    f"{_prior_summary}\n\n"
+                )
+            _continuation_prompt += (
+                "INSTRUCTIONS: Continue from where the session was interrupted. "
+                "Do NOT repeat work already listed above. Complete all remaining steps."
+            )
+
+            _refresh_context = self.build_agent_context_prompt(
+                agent,
+                _continuation_prompt,
+                n8n_session_id,
+                render_type,
+                effective_timeout,
+                "copilot",
+                model,
+                channel,
+            )
+            if mode == "elevated":
+                _refresh_context += (
+                    "\n\n[ELEVATED MODE ENABLED]\n"
+                    "Full permissions granted. ALL commands requiring elevated "
+                    "privileges MUST automatically prefix with 'sudo'. "
+                    "Sudo is configured without password prompt (NOPASSWD:ALL)."
+                )
+            elif mode == "sandboxed":
+                _refresh_context += (
+                    "\n\n[SANDBOXED MODE ENABLED]\n"
+                    "Read-only access only. Do NOT modify any files or make "
+                    "network requests. Analysis and reporting only."
+                )
+
+            _current_cmd = [
+                self.copilot_bin,
+                "-p",
+                _refresh_context,
+                "--allow-all-tools",
+                "--no-color",
+                "--model",
+                model,
+                "--additional-mcp-config",
+                f"@{mcp_config_path}",
+            ]
+            if mode == "elevated":
+                _current_cmd.insert(4, "--allow-all-paths")
+                _current_cmd.append("--yolo")
+
+            # Notify streaming consumers about the refresh
+            _sbuf = self._stream_buffers.get(n8n_session_id)
+            if _sbuf:
+                _sbuf.push(
+                    "chunk",
+                    f"\n\n🔄 **Session refresh #{_refresh_count}**"
+                    f" ({_reason}) - continuing...\n\n",
+                )
+
+        # If the final chunk still has the token-expiry phrase or is a timeout
+        # error it means the loop exited because recovery was abandoned (max
+        # retries reached or insufficient time remaining).  Silently stripping
+        # these markers and returning partial output is a false-success; instead
+        # we must fail explicitly so the caller knows the task did not complete.
+        _last_chunk = _accumulated_chunks[-1] if _accumulated_chunks else ""
+        _recovery_abandoned = _is_copilot_token_expired(
+            _last_chunk
+        ) or _last_chunk.startswith("Error: Command timed out")
+        if _recovery_abandoned:
+            # Collect the work completed before the failure for diagnostics.
+            _partial_chunks = _accumulated_chunks[:-1]
+            _partial = "".join(
+                (
+                    _c[: _c.rfind(_COPILOT_TOKEN_EXPIRED_PHRASE)]
+                    if _is_copilot_token_expired(_c)
+                    else _c
+                )
+                for _c in _partial_chunks
+            ).strip()
+            _reason_str = (
+                "token expiry"
+                if _is_copilot_token_expired(_last_chunk)
+                else "segment timeout"
+            )
+            return (
+                f"Error: Copilot session recovery abandoned after "
+                f"{_refresh_count} refresh(es) due to {_reason_str}. "
+                + (f"Partial output: {_partial}" if _partial else "No partial output.")
+            )
+
+        # All segments completed normally.  Strip internal markers and join.
+        # - Token-expiry phrase: stripped only when the chunk IS a real expiry
+        #   signal (_is_copilot_token_expired() True).  Chunks whose agent prose
+        #   merely mentions the phrase are left intact to avoid truncating valid
+        #   output.
+        # - "Error: Command timed out …": stripped from INTERMEDIATE chunks only
+        #   (they indicate a proactive segment refresh, not a final task failure).
+        _clean_chunks = []
+        _n_chunks = len(_accumulated_chunks)
+        for _i, _chunk in enumerate(_accumulated_chunks):
+            _is_final = _i == _n_chunks - 1
+            # Only strip the expiry marker when this chunk is an actual Copilot
+            # auth-failure signal, not normal prose that mentions the phrase.
+            if _is_copilot_token_expired(_chunk):
+                _idx = _chunk.rfind(_COPILOT_TOKEN_EXPIRED_PHRASE)
+                if _idx >= 0:
+                    _chunk = _chunk[:_idx]
+            # Strip proactive-refresh timeout error from non-final chunks only
+            if not _is_final and _chunk.startswith("Error: Command timed out"):
+                _newline = _chunk.find("\n")
+                _chunk = _chunk[_newline + 1 :] if _newline >= 0 else ""
+            _clean_chunks.append(_chunk)
+        output = "".join(_clean_chunks)
         return self.strip_metadata(output, "copilot")
 
     def run_copilot_sdk(
@@ -10874,6 +11391,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             "cursor",
             "wee",
         }
+        known_runtimes.update(load_model_manifest().keys())
         if runtime not in known_runtimes:
             return {
                 "runtime": runtime,
