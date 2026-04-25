@@ -13732,9 +13732,104 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             stderr_lines = []
 
             def _drain_stderr():
+                """
+                Drain stderr from the process.
+                For Claude runtime (stream-json), stderr contains stream_event JSON
+                that needs to be parsed for tool calls, including content_block_delta events.
+                For other runtimes, stderr is just collected as plain text.
+
+                Issue #230: Parse full Claude stream events from stderr, not just content_block_start.
+                Track active tool calls and accumulate input_json_delta parts into tool_calls.
+                Do NOT leak raw JSON into output_lines if it's valid structured protocol.
+                """
+                nonlocal _tool_call_counter
+                _active_tool_calls = {}  # Maps cb_index -> {"id": id, "name": name, "input_parts": [...]}
+
                 try:
                     for err_line in process.stderr:
+                        err_text = err_line.rstrip("\n\r")
+                        if not err_text:
+                            continue
                         stderr_lines.append(err_line)
+
+                        # For Claude (stream-json), parse stderr as structured events
+                        parsed_as_event = False
+                        if runtime == "claude" and err_text.strip().startswith("{"):
+                            try:
+                                _obj = _json.loads(err_text.strip())
+                                _otype = _obj.get("type", "")
+
+                                if _otype == "stream_event":
+                                    parsed_as_event = True
+                                    _event = _obj.get("event") or {}
+                                    _inner = _event.get("type", "")
+                                    cb_index = _event.get("index", 0)
+
+                                    if _inner == "content_block_start":
+                                        _cb = _event.get("content_block") or {}
+                                        if _cb.get("type") == "tool_use":
+                                            _tool_call_counter += 1
+                                            tool_id = _cb.get("id", f"bg_{task_id[:8]}_{_tool_call_counter}")
+                                            tc = {
+                                                "id": tool_id,
+                                                "name": _cb.get("name", "tool"),
+                                                "input": _json.dumps(_cb.get("input", {})),
+                                                "status": "running",
+                                                "runtime": runtime,
+                                                "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                                            }
+                                            bg_task_mgr.append_tool_call(task_id, tc)
+                                            # Track for delta accumulation; start empty because
+                                            # content_block_start always sends input:{} and the
+                                            # real data arrives via input_json_delta deltas.
+                                            _active_tool_calls[cb_index] = {
+                                                "id": tool_id,
+                                                "name": _cb.get("name", "tool"),
+                                                "input_parts": [],
+                                            }
+
+                                    elif _inner == "content_block_delta":
+                                        delta = _event.get("delta") or {}
+                                        delta_type = delta.get("type")
+                                        if delta_type == "input_json_delta":
+                                            partial = delta.get("partial_json", "")
+                                            if cb_index in _active_tool_calls and partial:
+                                                _active_tool_calls[cb_index]["input_parts"].append(partial)
+                                                # Update tool call with accumulated partial
+                                                full_input_so_far = "".join(_active_tool_calls[cb_index]["input_parts"])
+                                                bg_task_mgr.update_tool_call(
+                                                    task_id,
+                                                    _active_tool_calls[cb_index]["id"],
+                                                    input=full_input_so_far,
+                                                )
+
+                                    elif _inner == "content_block_stop":
+                                        if cb_index in _active_tool_calls:
+                                            tc_info = _active_tool_calls.pop(cb_index)
+                                            full_input = "".join(tc_info["input_parts"])
+                                            try:
+                                                parsed_input = _json.loads(full_input) if full_input else {}
+                                                bg_task_mgr.update_tool_call(
+                                                    task_id,
+                                                    tc_info["id"],
+                                                    status="completed",
+                                                    input=_json.dumps(parsed_input),
+                                                )
+                                            except (ValueError, KeyError):
+                                                bg_task_mgr.update_tool_call(
+                                                    task_id,
+                                                    tc_info["id"],
+                                                    status="completed",
+                                                    input=full_input,
+                                                )
+                            except (ValueError, KeyError, TypeError):
+                                # Not valid JSON or missing expected fields — treat as plain stderr
+                                parsed_as_event = False
+
+                        # Only append to output_lines if NOT a successfully parsed stream_event
+                        # This prevents raw JSON from polluting the live log view
+                        if not parsed_as_event:
+                            bg_task_mgr.append_output(task_id, f"[stderr] {err_text}")
                 except Exception:
                     pass
 
