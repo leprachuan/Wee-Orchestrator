@@ -3674,8 +3674,11 @@ You can mention an agent in your prompt and it will auto-delegate:
                 "path": agent.get("path", ""),
                 "description": agent.get("description", ""),
                 "max_concurrent": agent.get("max_concurrent", 1),
-                "runtime": agent.get("runtime", "copilot"),
-                "model": agent.get("model", ""),
+                # Support both new (primary_runtime/primary_model) and old (runtime/model) fields
+                "primary_runtime": agent.get("primary_runtime") or agent.get("runtime", "copilot"),
+                "primary_model": agent.get("primary_model") or agent.get("model", ""),
+                "fallback_runtime": agent.get("fallback_runtime"),
+                "fallback_model": agent.get("fallback_model"),
                 "dispatch_config": agent.get("dispatch_config", {}),
             }
 

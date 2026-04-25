@@ -246,6 +246,56 @@ class TestRuntimeConfigConsolidation:
         assert collected["fallback_runtime"] == "claude"
         assert collected["fallback_model"] == "claude-3-opus"
 
+    def test_reload_agents_preserves_primary_fallback_and_dispatch_config(
+        self, sample_agent_config
+    ):
+        """Test that reload_agents_from_disk preserves primary/fallback and dispatch_config.
+        
+        This is a regression test for the QA failure where reload_agents_from_disk() 
+        was using old 'runtime'/'model' field names instead of 'primary_runtime'/'primary_model'.
+        """
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".json", delete=False
+        ) as tmp:
+            json.dump(sample_agent_config, tmp)
+            tmp_path = tmp.name
+
+        try:
+            from agent_manager import SessionManager
+            from pathlib import Path
+
+            sm = SessionManager.__new__(SessionManager)
+            sm._agents_config_path = Path(tmp_path)
+            sm._agents_json_mtime = 0
+            
+            # Load agents via _load_agents_config
+            agents = sm._load_agents_config(tmp_path)
+            sm.AGENTS = agents
+            
+            # Verify initial load has all fields
+            agent = sm.AGENTS["test-agent"]
+            assert agent["primary_runtime"] == "copilot"
+            assert agent["primary_model"] == "claude-sonnet-4.6"
+            assert agent["fallback_runtime"] == "claude"
+            assert agent["fallback_model"] == "claude-3-opus"
+            
+            # Now trigger reload_agents_from_disk (simulating hot-reload)
+            success, msg = sm.reload_agents_from_disk()
+            assert success
+            
+            # Verify all fields are preserved after reload
+            agent_after = sm.AGENTS["test-agent"]
+            assert agent_after["primary_runtime"] == "copilot", \
+                "primary_runtime not preserved after reload"
+            assert agent_after["primary_model"] == "claude-sonnet-4.6", \
+                "primary_model not preserved after reload"
+            assert agent_after["fallback_runtime"] == "claude", \
+                "fallback_runtime not preserved after reload"
+            assert agent_after["fallback_model"] == "claude-3-opus", \
+                "fallback_model not preserved after reload"
+        finally:
+            Path(tmp_path).unlink()
+
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
