@@ -13954,9 +13954,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                                             tc = {
                                                 "id": tool_id,
                                                 "name": _cb.get("name", "tool"),
-                                                "input": _json.dumps(
-                                                    _cb.get("input", {})
-                                                ),
+                                                "input": "{}",
                                                 "status": "running",
                                                 "runtime": runtime,
                                                 "timestamp": time.strftime(
