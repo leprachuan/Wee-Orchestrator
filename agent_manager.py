@@ -13883,8 +13883,34 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 stdout_lines.append(line)
 
                 # Append to output_lines for live log viewing
+                # Issue #230: For Claude stream-json stdout, extract human-readable text
+                # instead of appending raw JSON blobs to the live log.
                 if line_text:
-                    bg_task_mgr.append_output(task_id, line_text)
+                    _live_line = line_text
+                    if runtime == "claude" and line_text.strip().startswith("{"):
+                        try:
+                            _stdout_obj = _json.loads(line_text.strip())
+                            _stdout_type = _stdout_obj.get("type", "")
+                            if _stdout_type == "assistant":
+                                # Extract text content from assistant message blocks
+                                _parts = []
+                                for _blk in (_stdout_obj.get("message") or {}).get("content", []):
+                                    if _blk.get("type") == "text" and _blk.get("text"):
+                                        _parts.append(_blk["text"].rstrip())
+                                _live_line = "\n".join(_parts).strip() if _parts else None
+                            elif _stdout_type in ("system", "stream_event"):
+                                # system init and stream events are not user-visible
+                                _live_line = None
+                            elif _stdout_type == "result":
+                                # Only show error results inline; success result is surfaced separately
+                                if _stdout_obj.get("is_error"):
+                                    _live_line = _stdout_obj.get("result", "").strip() or None
+                                else:
+                                    _live_line = None
+                        except (ValueError, KeyError, TypeError):
+                            pass  # Not valid JSON -- keep original line
+                    if _live_line:
+                        bg_task_mgr.append_output(task_id, _live_line)
 
                 # Capture [STATUS_UPDATE: ...] markers for mobile channel progress
                 # (F004)
