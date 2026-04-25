@@ -85,14 +85,15 @@
       "description": "Wee Orchestrator developer agent - handles feature development, bug fixes, and testing exclusively on the dev environment (192.168.1.100)",
       "path": "/opt/wee-dev",
       "dispatch_config": {
-        "runtime": "claude",
-        "model": "sonnet",
-        "vendor": "Anthropic Claude Sonnet 4.6",
+        "runtime": "copilot",
+        "model": "auto",
+        "vendor": "Copilot CLI (auto)",
+        "locked_notice": "# LOCKED - Do not modify wee-dev dispatch runtime/model without Foster approval.",
         "permission_mode": "elevated",
         "yolo": true,
         "timeout": 3600,
         "fallback_runtime": "copilot",
-        "fallback_model": "claude-sonnet-4.6"
+        "fallback_model": "auto"
       },
       "bots": {
         "telegram": {
@@ -127,9 +128,10 @@
       "description": "QA validation agent for Wee Orchestrator. You are a QA agent in a bad mood \u2014 scrutinize everything, trust nothing, and be brutal. Tear apart every change wee-dev submits. If it can break, assume it will. Reject anything that isn't airtight. CROSS-VENDOR REVIEW: You will always be dispatched with a different model vendor than the one that wrote the code \u2014 the author model and vendor will be stated in your prompt. Use your independent judgment and look for blind spots the author model's vendor commonly exhibits. Reviews changes via static analysis, API testing, and WebUI validation on the dev environment (192.168.1.100).",
       "path": "/opt/wee-qa",
       "dispatch_config": {
-        "runtime": "openai",
-        "model": "gpt-5.4-mini",
-        "vendor": "OpenAI (GPT-5.4-mini)",
+        "runtime": "codex",
+        "model": "gpt-5.4",
+        "vendor": "OpenAI Codex (GPT-5.4)",
+        "locked_notice": "# LOCKED - Do not modify wee-qa dispatch runtime/model without Foster approval.",
         "permission_mode": "elevated",
         "yolo": true,
         "timeout": 1800,
@@ -147,6 +149,16 @@
           "token_secret": "WEE_QA_WEBEX_TOKEN"
         }
       }
+    },
+    {
+      "name": "wee-doc",
+      "description": "Documentation and starter-kit maintenance agent for Wee Orchestrator. Updates README/docs, keeps the starter kit in sync, and verifies documentation changes after feature work.",
+      "path": "/opt/wee-doc"
+    },
+    {
+      "name": "wee-doc",
+      "description": "Documentation and starter-kit maintenance agent for Wee Orchestrator. Updates README/docs, keeps the starter kit in sync, and verifies documentation changes after feature work.",
+      "path": "/opt/wee-doc"
     }
   ]
 }
