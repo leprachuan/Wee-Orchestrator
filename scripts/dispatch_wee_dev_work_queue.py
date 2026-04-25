@@ -360,6 +360,90 @@ def _is_pid_alive(pid: int) -> bool:
         return False
 
 
+def dispatch_via_api(
+    agent: str,
+    prompt: str,
+    model: str,
+    timeout: int,
+) -> str:
+    """Dispatch work via the background-tasks API (visible, tracked, notifiable).
+
+    Uses the orchestrator's background-tasks API instead of direct subprocess spawning
+    so tasks are properly registered, visible in the Tasks menu, and fully audited.
+    
+    Returns the task_id.
+    """
+    import hashlib
+    import hmac
+
+    # Get API key from environment
+    env_vars = {}
+    if ENV_PATH.exists():
+        with open(ENV_PATH) as f:
+            for line in f:
+                line = line.strip()
+                if line and "=" in line and not line.startswith("#"):
+                    k, v = line.split("=", 1)
+                    env_vars[k] = v
+
+    api_key = env_vars.get("API_SHARED_KEY")
+    if not api_key:
+        raise RuntimeError("API_SHARED_KEY not found in /opt/n8n-copilot-shim/.env")
+
+    # Prepare request
+    body = {
+        "prompt": prompt,
+        "agent": agent,
+        "runtime": "claude",
+        "model": model,
+        "timeout": timeout,
+        "notify": False,
+    }
+
+    # Sign request for authentication
+    import json as _json
+
+    payload_json = _json.dumps(body, sort_keys=True)
+    signature = hmac.new(
+        api_key.encode("utf-8"), payload_json.encode("utf-8"), hashlib.sha256
+    ).hexdigest()
+
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer shared_{api_key}",
+        "X-User-Identity": USER_IDENTITY,
+        "X-Auth-Channel": AUTH_CHANNEL,
+        "X-Wee-Executor-Signature": signature,
+    }
+
+    # Create SSL context (self-signed cert)
+    ssl_context = ssl.create_default_context()
+    ssl_context.check_hostname = False
+    ssl_context.verify_mode = ssl.CERT_NONE
+
+    # Make request
+    req = request.Request(
+        BACKGROUND_TASKS_URL,
+        data=_json.dumps(body).encode("utf-8"),
+        headers=headers,
+        method="POST",
+    )
+
+    try:
+        with request.urlopen(req, context=ssl_context, timeout=30) as resp:
+            result = _json.loads(resp.read().decode("utf-8"))
+            task_id = result.get("task_id", "")
+            if task_id:
+                log(
+                    f"Dispatched {agent} via API: task_id={task_id} status={result.get('status')}"
+                )
+                return task_id
+            else:
+                raise RuntimeError(f"No task_id in response: {result}")
+    except Exception as e:
+        raise RuntimeError(f"Failed to dispatch via API: {e}")
+
+
 def dispatch_via_subprocess(
     agent: str,
     prompt: str,
@@ -367,25 +451,35 @@ def dispatch_via_subprocess(
     timeout: int,
     session_id: str | None = None,
 ) -> int:
-    """Spawn agent_manager.py as a detached subprocess, bypassing the public API.
+    """DEPRECATED: Spawn agent_manager.py as a detached subprocess.
 
-    Using the public background-tasks API causes session leakage (issue #74).
-    This function calls agent_manager.py directly with start_new_session=True
-    so the child is fully detached and does not inherit the parent session context.
+    ⚠️ This method is deprecated. Use dispatch_via_api() instead.
+    
+    Old design: bypassed API due to session leakage concerns (issue #74).
+    New design: use API with proper session isolation to keep tasks visible.
+    
+    Kept for backward compatibility only.
     Returns the PID of the spawned process.
     """
     sid = session_id or str(uuid.uuid4())
     DISPATCH_LOG_DIR.mkdir(exist_ok=True)
     log_file = DISPATCH_LOG_DIR / f"{agent}-{sid[:8]}.log"
+    
+    # Use claude runtime (copilot runtime hangs in background mode)
+    # Map models appropriately: for claude runtime, use claude models
+    runtime = "claude"
+    # For claude runtime, use claude-opus-4.6 as default (works with claude runtime)
+    effective_model = "claude-opus-4.6" if model and "gpt" in model.lower() else model
+    
     cmd = [
         sys.executable,
         str(AGENT_MANAGER_PATH),
         "--agent",
         agent,
         "--runtime",
-        "copilot",
+        runtime,
         "--model",
-        model,
+        effective_model,
         "--config",
         str(AGENTS_CONFIG_PATH),
         prompt,
@@ -398,7 +492,7 @@ def dispatch_via_subprocess(
             stderr=lf,
             start_new_session=True,
         )
-    log(f"Spawned {agent} subprocess PID={proc.pid} log={log_file}")
+    log(f"[DEPRECATED] Spawned {agent} subprocess PID={proc.pid} log={log_file}")
     return proc.pid
 
 
@@ -449,10 +543,15 @@ def has_running_wee_dev_task() -> bool:
 
 
 def has_running_wee_qa_task() -> bool:
-    """Return True if a wee-qa subprocess from the lock file is still alive."""
+    """Return True if a wee-qa task from the lock file is still active."""
     lock = read_lock()
     if lock is None:
         return False
+    # Check task_id first (API dispatch - new default)
+    task_id = lock.get("wee_qa_task_id")
+    if task_id is not None:
+        return _is_bg_task_running(task_id)
+    # Fall back to PID check (subprocess dispatch - deprecated)
     pid = lock.get("wee_qa_pid")
     return pid is not None and _is_pid_alive(int(pid))
 
@@ -463,7 +562,7 @@ def has_running_wee_qa_task() -> bool:
 
 
 def dispatch_wee_dev(item: dict) -> dict:
-    """Dispatch wee-dev via detached subprocess (bypasses public API, see issue #74)."""
+    """Dispatch wee-dev via background-tasks API (visible, tracked, audited)."""
     prompt = (
         f"Work on GitHub issue #{item['number']} in {REPO}: {item['title']}.\n\n"
         f"Issue body:\n{item['body'][:2000]}\n\n"
@@ -475,13 +574,17 @@ def dispatch_wee_dev(item: dict) -> dict:
     )
     if DRY_RUN:
         log(f"[dry-run] Would dispatch wee-dev for {item['id']}: {item['title']}")
-        return {"pid": -1}
-    pid = dispatch_via_subprocess("wee-dev", prompt, "claude-opus-4.6", 3600)
-    return {"pid": pid}
+        return {"task_id": "dry-run"}
+    try:
+        task_id = dispatch_via_api("wee-dev", prompt, "gpt-5.4", 3600)
+        return {"task_id": task_id}
+    except Exception as e:
+        log(f"ERROR: Failed to dispatch wee-dev: {e}")
+        raise
 
 
 def dispatch_wee_qa(item: dict) -> dict:
-    """Dispatch wee-qa via detached subprocess (bypasses public API, see issue #74)."""
+    """Dispatch wee-qa via background-tasks API (visible, tracked, audited)."""
     prompt = (
         f"QA review for GitHub issue #{item['number']} in {REPO}: "
         f"{item['title']}. "
@@ -493,9 +596,13 @@ def dispatch_wee_qa(item: dict) -> dict:
     )
     if DRY_RUN:
         log(f"[dry-run] Would dispatch wee-qa for {item['id']}: {item['title']}")
-        return {"pid": -1}
-    pid = dispatch_via_subprocess("wee-qa", prompt, "claude-sonnet-4.6", 1800)
-    return {"pid": pid}
+        return {"task_id": "dry-run"}
+    try:
+        task_id = dispatch_via_api("wee-qa", prompt, "gpt-5.4", 1800)
+        return {"task_id": task_id}
+    except Exception as e:
+        log(f"ERROR: Failed to dispatch wee-qa: {e}")
+        raise
 
 
 # ---------------------------------------------------------------------------
@@ -523,6 +630,11 @@ def main() -> int:
         "--dry-run",
         action="store_true",
         help="Print what would happen without making changes",
+    )
+    parser.add_argument(
+        "--skip-blocked",
+        action="store_true",
+        help="Skip items with blocking dependencies (only dispatch ready items)",
     )
     args = parser.parse_args()
 
@@ -570,8 +682,8 @@ def main() -> int:
         )
         try:
             result = dispatch_wee_qa(active_item)
-        except OSError as exc:
-            log(f"Failed to re-dispatch wee-qa subprocess: {exc}")
+        except Exception as exc:
+            log(f"Failed to re-dispatch wee-qa: {exc}")
             return 1
         write_lock(
             {
@@ -580,11 +692,11 @@ def main() -> int:
                 "work_item_id": active_item["id"],
                 "work_item_title": active_item["title"],
                 "github_issue": active_item["number"],
-                "wee_qa_pid": result.get("pid"),
+                "wee_qa_task_id": result.get("task_id"),
             }
         )
         log(
-            f"Re-dispatched wee-qa subprocess PID={result.get('pid')} "
+            f"Re-dispatched wee-qa task_id={result.get('task_id')} "
             f"for {active_item['id']}."
         )
         return 0
@@ -690,6 +802,18 @@ def main() -> int:
             log("No approved actionable issues remain.")
             return 0
 
+    # --- Skip blocked check ---
+    if args.skip_blocked:
+        # If skip-blocked is enabled, only dispatch if no blocking issues exist
+        if next_item.get("draft"):
+            log(f"Skipping {next_item['id']} — marked as draft.")
+            return 0
+        # Check for linked issues that might be blockers
+        body = next_item.get("body", "")
+        if "depends on" in body.lower() or "blocked by" in body.lower():
+            log(f"Skipping {next_item['id']} — has blocking dependencies.")
+            return 0
+
     log(f"Dispatching: {next_item['id']} — {next_item['title']}")
 
     # --- Clean stale lock and create new one ---
@@ -740,11 +864,11 @@ def main() -> int:
             "work_item_id": next_item["id"],
             "work_item_title": next_item["title"],
             "github_issue": next_item["number"],
-            "wee_dev_pid": result.get("pid"),
+            "wee_dev_task_id": result.get("task_id"),
         }
     )
     log(
-        f"Dispatched wee-dev subprocess PID={result.get('pid')} "
+        f"Dispatched wee-dev task_id={result.get('task_id')} "
         f"for issue {next_item['id']}."
     )
     return 0
