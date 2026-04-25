@@ -551,6 +551,8 @@ class BackgroundTaskManager:
         timeout: int = None,
         notify: bool = True,
         origin_session_id: str = None,
+        fallback_runtime: str = None,  # Issue #219
+        fallback_model: str = None,  # Issue #219
         permission_mode: str = "restricted",
     ) -> dict:
         task = {
@@ -579,6 +581,8 @@ class BackgroundTaskManager:
             "timeout": timeout,
             "notify": notify,
             "origin_session_id": origin_session_id,
+            "fallback_runtime": fallback_runtime,
+            "fallback_model": fallback_model,
             "permission_mode": permission_mode,
         }
         with self._lock:
@@ -693,6 +697,8 @@ class BackgroundTaskManager:
         notify: bool = True,
         origin_session_id: str = None,
         permission_mode: str = "restricted",
+        fallback_runtime: str = None,  # Issue #219
+        fallback_model: str = None,  # Issue #219
     ) -> tuple:
         """Atomically check concurrency limit and create task (TOCTOU-safe).
 
@@ -736,6 +742,8 @@ class BackgroundTaskManager:
                 "notify": notify,
                 "origin_session_id": origin_session_id,
                 "permission_mode": permission_mode,
+                "fallback_runtime": fallback_runtime,
+                "fallback_model": fallback_model,
             }
             tasks = self._evict_oldest_terminal(tasks)
             tasks.append(task)
@@ -995,6 +1003,52 @@ class BackgroundTaskManager:
                 os.remove(path)
         except OSError:
             pass
+
+    # --- Fallback retry helpers (Issue #219) ---
+
+    @staticmethod
+    def _is_fallback_eligible(error_text: str) -> bool:
+        """Check if error is an infrastructure failure eligible for fallback retry."""
+        if not error_text:
+            return False
+        fallback_patterns = [
+            r"429",
+            r"rate.?limit",
+            r"quota.?exceeded",
+            r"401",
+            r"unauthorized",
+            r"missing.?authentication",
+            r"api[_\-]?key.?(invalid|expired|missing)",
+            r"503",
+            r"service.?unavailable",
+            r"502",
+            r"bad.?gateway",
+            r"connection.?refused",
+            r"timed?.?out",
+            r"etimedout",
+            r"overloaded",
+        ]
+        for pattern in fallback_patterns:
+            if re.search(pattern, error_text, re.IGNORECASE):
+                return True
+        return False
+
+    def _resolve_fallback(self, task: dict):
+        """Resolve fallback runtime/model from task config.
+
+        Returns (fallback_runtime, fallback_model) or (None, None).
+        """
+        fb_rt = task.get("fallback_runtime")
+        fb_model = task.get("fallback_model")
+
+        # If fallback is same as primary, don't retry
+        if fb_rt == task.get("runtime") and fb_model == task.get("model"):
+            return None, None
+
+        if not fb_rt and not fb_model:
+            return None, None
+
+        return fb_rt, fb_model
 
 
 # Executable resolution
@@ -10192,7 +10246,10 @@ User Request:
     def _execute_background_task(
         self, task_id, session_id, prompt, agent, runtime, model, channel, timeout=None
     ):
-        """Run a background task in the current thread (called from thread pool)."""
+        """Run a background task in the current thread (called from thread pool).
+
+        Implements fallback retry on infrastructure failures (Issue #219).
+        """
         self.get_or_create_session_data(session_id)
         self.update_session_field(session_id, "agent", agent)
         self.update_session_field(session_id, "model", model)
@@ -10206,10 +10263,14 @@ User Request:
         self.update_session_field(session_id, "bg_task_id", task_id)
         if timeout is not None:
             self.update_session_field(session_id, "timeout", timeout)
+
+        # Primary attempt
+        primary_result = None
+        primary_error = None
         try:
-            result = self.execute(prompt, session_id)
+            primary_result = self.execute(prompt, session_id)
             if self._bg_task_mgr:
-                self._bg_task_mgr.complete_task(task_id, result)
+                self._bg_task_mgr.complete_task(task_id, primary_result)
                 task_rec = self._bg_task_mgr.get_task(task_id)
                 o_sid = task_rec.get("origin_session_id") if task_rec else None
                 if o_sid:
@@ -10226,26 +10287,108 @@ User Request:
                             ),
                         },
                     )
-
+            return
         except Exception as exc:
-            if self._bg_task_mgr:
-                self._bg_task_mgr.fail_task(task_id, str(exc))
-                task_rec = self._bg_task_mgr.get_task(task_id)
-                o_sid = task_rec.get("origin_session_id") if task_rec else None
-                if o_sid:
-                    self._bg_task_mgr.push_bg_event(
-                        o_sid,
-                        {
-                            "task_id": task_id,
-                            "summary": prompt[:80],
-                            "status": "failed",
-                            "agent": agent,
-                            "timestamp": time.strftime(
-                                "%Y-%m-%dT%H:%M:%SZ",
-                                time.gmtime(),
-                            ),
-                        },
+            primary_error = str(exc)
+
+        # Fallback retry logic (Issue #219)
+        if self._bg_task_mgr and self._bg_task_mgr._is_fallback_eligible(primary_error):
+            task_rec = self._bg_task_mgr.get_task(task_id)
+            if task_rec:
+                fb_runtime, fb_model = self._bg_task_mgr._resolve_fallback(task_rec)
+                if fb_runtime or fb_model:
+                    fb_rt_label = fb_runtime or runtime
+                    fb_model_label = fb_model or model
+                    logger.warning(
+                        f"[Fallback] Task {task_id}: primary failed ({primary_error[:120]}), "
+                        f"retrying with runtime={fb_rt_label}, model={fb_model_label}"
                     )
+
+                    # Retry with fallback runtime/model on a fresh session
+                    fallback_session_id = str(uuid4())
+                    self.get_or_create_session_data(fallback_session_id)
+                    self.update_session_field(fallback_session_id, "agent", agent)
+                    self.update_session_field(
+                        fallback_session_id, "model", fb_model or model
+                    )
+                    self.update_session_field(
+                        fallback_session_id, "runtime", fb_runtime or runtime
+                    )
+                    self.update_session_field(fallback_session_id, "channel", channel)
+                    self.update_session_field(fallback_session_id, "render_type", "text")
+                    self.update_session_field(
+                        fallback_session_id, "permissions", {"mode": "elevated"}
+                    )
+                    self.update_session_field(fallback_session_id, "bg_task_id", task_id)
+                    if timeout is not None:
+                        self.update_session_field(fallback_session_id, "timeout", timeout)
+
+                    try:
+                        fallback_result = self.execute(prompt, fallback_session_id)
+                        if self._bg_task_mgr:
+                            self._bg_task_mgr.complete_task(task_id, fallback_result)
+                            task_rec = self._bg_task_mgr.get_task(task_id)
+                            o_sid = task_rec.get("origin_session_id") if task_rec else None
+                            if o_sid:
+                                self._bg_task_mgr.push_bg_event(
+                                    o_sid,
+                                    {
+                                        "task_id": task_id,
+                                        "summary": prompt[:80],
+                                        "status": "completed",
+                                        "agent": agent,
+                                        "timestamp": time.strftime(
+                                            "%Y-%m-%dT%H:%M:%SZ",
+                                            time.gmtime(),
+                                        ),
+                                    },
+                                )
+                        return
+                    except Exception as fb_exc:
+                        # Both attempts failed
+                        combined_error = (
+                            f"Primary: {primary_error[:200]}; "
+                            f"Fallback ({fb_rt_label}): {str(fb_exc)[:200]}"
+                        )
+                        if self._bg_task_mgr:
+                            self._bg_task_mgr.fail_task(task_id, combined_error)
+                            task_rec = self._bg_task_mgr.get_task(task_id)
+                            o_sid = task_rec.get("origin_session_id") if task_rec else None
+                            if o_sid:
+                                self._bg_task_mgr.push_bg_event(
+                                    o_sid,
+                                    {
+                                        "task_id": task_id,
+                                        "summary": prompt[:80],
+                                        "status": "failed",
+                                        "agent": agent,
+                                        "timestamp": time.strftime(
+                                            "%Y-%m-%dT%H:%M:%SZ",
+                                            time.gmtime(),
+                                        ),
+                                    },
+                                )
+                        return
+
+        # Primary failed, no fallback eligible or configured
+        if self._bg_task_mgr:
+            self._bg_task_mgr.fail_task(task_id, primary_error)
+            task_rec = self._bg_task_mgr.get_task(task_id)
+            o_sid = task_rec.get("origin_session_id") if task_rec else None
+            if o_sid:
+                self._bg_task_mgr.push_bg_event(
+                    o_sid,
+                    {
+                        "task_id": task_id,
+                        "summary": prompt[:80],
+                        "status": "failed",
+                        "agent": agent,
+                        "timestamp": time.strftime(
+                            "%Y-%m-%dT%H:%M:%SZ",
+                            time.gmtime(),
+                        ),
+                    },
+                )
 
     def _dispatch_single_runtime(
         self,
@@ -12785,6 +12928,8 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         agent: Optional[str] = None
         runtime: Optional[str] = None
         model: Optional[str] = None
+        fallback_runtime: Optional[str] = None  # Issue #219: fallback on infrastructure errors
+        fallback_model: Optional[str] = None  # Issue #219: fallback on infrastructure errors
         timeout: Optional[int] = None
         notify: Optional[bool] = None
         permission_mode: Optional[str] = (
@@ -13770,6 +13915,11 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         if perm_mode not in ("elevated", "restricted", "sandboxed"):
             perm_mode = "restricted"
 
+        # Resolve fallback_runtime / fallback_model from body or dispatch_config (Issue #219)
+        # Priority: body > dispatch_config > None
+        fallback_rt = body.fallback_runtime or _dispatch_config.get("fallback_runtime")
+        fallback_model = body.fallback_model or _dispatch_config.get("fallback_model")
+
         # Atomically check concurrency limit and create task — TOCTOU-safe (Issue #192)
         agent_config = session_mgr.AGENTS.get(agent, {})
         max_concurrent = agent_config.get(
@@ -13790,6 +13940,8 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             notify=notify_pref,
             origin_session_id=body.origin_session_id,
             permission_mode=perm_mode,
+            fallback_runtime=fallback_rt,
+            fallback_model=fallback_model,
         )
 
         if task_status == "queued":
