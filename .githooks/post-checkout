@@ -1,0 +1,23 @@
+#!/bin/bash
+# Post-checkout hook: Prevent accidental checkout to non-main branches on PRODUCTION
+
+BRANCH=$(git rev-parse --abbrev-ref HEAD)
+PROD_HOST="/opt/n8n-copilot-shim"
+CURRENT_DIR="$(pwd)"
+
+# Only enforce on production repo
+if [[ "$CURRENT_DIR" == "$PROD_HOST" && "$BRANCH" != "main" ]]; then
+    echo "❌ PRODUCTION SAFETY LOCK VIOLATED"
+    echo "Production host is locked to 'main' branch only."
+    echo "Current branch: $BRANCH"
+    echo ""
+    echo "To unlock this, contact devops. Emergency override:"
+    echo "  git config hooks.allowNonMain true && git checkout $BRANCH"
+    echo ""
+    
+    # Reset to main
+    git checkout main
+    exit 1
+fi
+
+exit 0
