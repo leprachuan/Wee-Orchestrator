@@ -1,4 +1,5 @@
-"""Regression test for Issue #230: Claude runtime stderr JSON parsing in background tasks.
+"""Regression test for Issue #230: Claude runtime stderr JSON parsing in background
+tasks.
 
 Tests that the actual _drain_stderr implementation in agent_manager.py correctly:
 1. Parses Claude stream_event JSON from stderr

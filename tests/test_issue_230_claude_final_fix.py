@@ -18,7 +18,8 @@ class TestIssue230InputPartsBug(unittest.TestCase):
     """Regression tests proving the input_parts initialization bug and its fix."""
 
     def test_buggy_init_produces_invalid_json(self):
-        """Pre-fix: seeding with json.dumps({}) == '{}' then appending deltas yields invalid JSON."""
+        """Pre-fix: seeding with json.dumps({}) == '{}' then appending deltas yields
+        invalid JSON."""
         # Reproduce the old line: "input_parts": [_json.dumps(_cb.get("input", {}))]
         input_parts = [json.dumps({})]  # → ["{}"]
 
@@ -32,7 +33,8 @@ class TestIssue230InputPartsBug(unittest.TestCase):
             json.loads(accumulated)
 
     def test_fixed_init_produces_valid_json(self):
-        """Post-fix: seeding with [] and appending partial_json deltas yields valid JSON."""
+        """Post-fix: seeding with [] and appending partial_json deltas yields valid
+        JSON."""
         input_parts = []  # ← the fix
 
         deltas = ['{"path": "/tmp/foo.txt"', ', "content": "hello"', "}"]
@@ -45,14 +47,16 @@ class TestIssue230InputPartsBug(unittest.TestCase):
         self.assertEqual(parsed["content"], "hello")
 
     def test_empty_input_parts_on_content_block_stop_no_deltas(self):
-        """When no input_json_delta events arrive, input_parts stays [] and stop produces {}."""
+        """When no input_json_delta events arrive, input_parts stays [] and stop
+        produces {}."""
         input_parts = []
         full_input = "".join(input_parts)
         result = json.loads(full_input) if full_input else {}
         self.assertEqual(result, {})
 
     def test_partial_json_accumulation_multi_chunk(self):
-        """Complex input split across many deltas round-trips correctly with the fixed init."""
+        """Complex input split across many deltas round-trips correctly with the fixed
+        init."""
         input_parts = []
         full_expected = {
             "command": "write",
