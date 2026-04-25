@@ -213,6 +213,60 @@ class TestCopilotTokenRefresh(unittest.TestCase):
         self.assertIn("SESSION CONTINUATION", continuation_prompt)
         self.assertIn(prior_work[:20], continuation_prompt)
 
+    def test_expiry_without_prior_output_is_not_used_as_progress(self):
+        """A pure expiry chunk must not be injected as prior session progress."""
+        from agent_manager import _COPILOT_TOKEN_EXPIRED_PHRASE
+
+        expiry_only = (
+            f"{_COPILOT_TOKEN_EXPIRED_PHRASE}. Please resend your message."
+            " (Request ID: req-test-002b)"
+        )
+        call_outputs = [expiry_only, "Recovered successfully."]
+        call_index = [0]
+        captured_context_prompts = []
+
+        def fake_exec(cmd, cwd, timeout, runtime, agent, prompt, session_id):
+            out = call_outputs[call_index[0]]
+            call_index[0] += 1
+            return out
+
+        def fake_build_context(
+            agent, user_prompt, sess_id, render, timeout, runtime, model, channel
+        ):
+            captured_context_prompts.append(user_prompt)
+            return f"[ctx] {user_prompt}"
+
+        with (
+            patch.object(
+                self.mgr, "_execute_subprocess_with_tracking", side_effect=fake_exec
+            ),
+            patch.object(
+                self.mgr,
+                "_parse_mode_command",
+                return_value=("Recover task", "restricted"),
+            ),
+            patch.object(
+                self.mgr, "_resolve_permission_mode", return_value="restricted"
+            ),
+            patch.object(
+                self.mgr,
+                "get_or_create_session_data",
+                return_value={"channel": "webui"},
+            ),
+            patch.object(
+                self.mgr, "build_agent_context_prompt", side_effect=fake_build_context
+            ),
+        ):
+            result = self.mgr.run_copilot(**self._make_run_copilot_args(prompt="Recover task"))
+
+        self.assertEqual(call_index[0], 2)
+        self.assertIn("Recovered successfully.", result)
+        self.assertNotIn("Session token expired", result)
+        self.assertGreaterEqual(len(captured_context_prompts), 2)
+        continuation_prompt = captured_context_prompts[1]
+        self.assertNotIn("PRIOR SESSION PROGRESS", continuation_prompt)
+        self.assertNotIn("Please resend your message", continuation_prompt)
+
     # ── Test 4: Proactive refresh — segment timed out ────────────────────
 
     def test_proactive_refresh_on_segment_timeout(self):

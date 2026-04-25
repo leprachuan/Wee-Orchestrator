@@ -7680,7 +7680,7 @@ User Request:
             _prior_raw = "".join(_accumulated_chunks)
             if _token_expired:
                 _expire_idx = _prior_raw.rfind(_COPILOT_TOKEN_EXPIRED_PHRASE)
-                if _expire_idx > 0:
+                if _expire_idx >= 0:
                     _prior_raw = _prior_raw[:_expire_idx]
             _prior_summary = (
                 _prior_raw[-COPILOT_CONTEXT_SUMMARY_MAX_CHARS:]
