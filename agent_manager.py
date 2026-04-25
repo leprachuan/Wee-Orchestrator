@@ -480,6 +480,7 @@ _FALLBACK_FAILURE_PATTERNS = [
     ]
 ]
 
+
 def _is_fallback_eligible(error_text: str) -> bool:
     """Check if error text indicates a fallback-eligible infrastructure failure."""
     if not error_text:
@@ -489,24 +490,28 @@ def _is_fallback_eligible(error_text: str) -> bool:
             return True
     return False
 
+
 def _resolve_bg_fallback(task: dict) -> tuple:
     """Resolve fallback runtime/model for background task.
-    
+
     Priority: task fallback_runtime > env > None
     Returns (fallback_runtime, fallback_model) or (None, None)
     """
     import os
-    fb_rt = task.get("fallback_runtime") or os.environ.get("BACKGROUND_FALLBACK_RUNTIME")
+
+    fb_rt = task.get("fallback_runtime") or os.environ.get(
+        "BACKGROUND_FALLBACK_RUNTIME"
+    )
     fb_model = task.get("fallback_model") or os.environ.get("BACKGROUND_FALLBACK_MODEL")
-    
+
     # Don't use fallback if identical to primary
     if fb_rt == task.get("runtime") and fb_model == task.get("model"):
         return None, None
-    
+
     # Don't use if neither configured
     if not fb_rt and not fb_model:
         return None, None
-    
+
     return fb_rt, fb_model
 
 
@@ -10534,7 +10539,7 @@ User Request:
         self, task_id, session_id, prompt, agent, runtime, model, channel, timeout=None
     ):
         """Run a background task in the current thread (called from thread pool).
-        
+
         Issue #219: Implements retry logic with fallback_runtime/fallback_model
         on infrastructure failures (429, rate_limit, quota_exceeded, 503, etc.)
         """
@@ -10551,7 +10556,7 @@ User Request:
         self.update_session_field(session_id, "bg_task_id", task_id)
         if timeout is not None:
             self.update_session_field(session_id, "timeout", timeout)
-        
+
         # Issue #219: Fallback retry logic
         try:
             result = self.execute(prompt, session_id)
@@ -10576,22 +10581,26 @@ User Request:
 
         except Exception as exc:
             exc_text = str(exc)
-            
+
             # Check if error is fallback-eligible (Issue #219)
             if _is_fallback_eligible(exc_text):
-                task_rec = self._bg_task_mgr.get_task(task_id) if self._bg_task_mgr else None
-                fb_rt, fb_model = _resolve_bg_fallback(task_rec) if task_rec else (None, None)
-                
+                task_rec = (
+                    self._bg_task_mgr.get_task(task_id) if self._bg_task_mgr else None
+                )
+                fb_rt, fb_model = (
+                    _resolve_bg_fallback(task_rec) if task_rec else (None, None)
+                )
+
                 if fb_rt or fb_model:
                     # Prepare fallback attempt
                     fb_rt = fb_rt or runtime
                     fb_model = fb_model or model
-                    
+
                     logger.warning(
                         f"[BG-Task {task_id}] Primary failure (runtime={runtime}, model={model}): {exc_text[:120]}. "
                         f"Retrying with fallback runtime={fb_rt}, model={fb_model}"
                     )
-                    
+
                     try:
                         # Create new session for fallback attempt
                         fb_session_id = str(uuid4())
@@ -10601,19 +10610,23 @@ User Request:
                         self.update_session_field(fb_session_id, "runtime", fb_rt)
                         self.update_session_field(fb_session_id, "channel", channel)
                         self.update_session_field(fb_session_id, "render_type", "text")
-                        self.update_session_field(fb_session_id, "permissions", {"mode": "elevated"})
+                        self.update_session_field(
+                            fb_session_id, "permissions", {"mode": "elevated"}
+                        )
                         self.update_session_field(fb_session_id, "bg_task_id", task_id)
                         if timeout is not None:
                             self.update_session_field(fb_session_id, "timeout", timeout)
-                        
+
                         # Execute with fallback runtime/model
                         result = self.execute(prompt, fb_session_id)
-                        
+
                         if self._bg_task_mgr:
                             # Success with fallback
                             self._bg_task_mgr.complete_task(task_id, result)
                             task_rec = self._bg_task_mgr.get_task(task_id)
-                            o_sid = task_rec.get("origin_session_id") if task_rec else None
+                            o_sid = (
+                                task_rec.get("origin_session_id") if task_rec else None
+                            )
                             if o_sid:
                                 self._bg_task_mgr.push_bg_event(
                                     o_sid,
@@ -10630,7 +10643,7 @@ User Request:
                                     },
                                 )
                         return  # Success
-                        
+
                     except Exception as fb_exc:
                         # Fallback also failed -- combine errors
                         fb_exc_text = str(fb_exc)
@@ -10638,11 +10651,15 @@ User Request:
                             f"Primary (runtime={runtime}, model={model}): {exc_text[:200]}; "
                             f"Fallback (runtime={fb_rt}, model={fb_model}): {fb_exc_text[:200]}"
                         )
-                        logger.error(f"[BG-Task {task_id}] Both attempts failed: {combined_error[:300]}")
+                        logger.error(
+                            f"[BG-Task {task_id}] Both attempts failed: {combined_error[:300]}"
+                        )
                         if self._bg_task_mgr:
                             self._bg_task_mgr.fail_task(task_id, combined_error)
                             task_rec = self._bg_task_mgr.get_task(task_id)
-                            o_sid = task_rec.get("origin_session_id") if task_rec else None
+                            o_sid = (
+                                task_rec.get("origin_session_id") if task_rec else None
+                            )
                             if o_sid:
                                 self._bg_task_mgr.push_bg_event(
                                     o_sid,
@@ -10659,7 +10676,7 @@ User Request:
                                     },
                                 )
                         return  # Logged as failed
-            
+
             # Not eligible for fallback or no fallback configured -- fail immediately
             if self._bg_task_mgr:
                 self._bg_task_mgr.fail_task(task_id, exc_text)
@@ -13902,7 +13919,9 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 Do NOT leak raw JSON into output_lines if it's valid structured protocol.
                 """
                 nonlocal _tool_call_counter
-                _active_tool_calls = {}  # Maps cb_index -> {"id": id, "name": name, "input_parts": [...]}
+                _active_tool_calls = (
+                    {}
+                )  # Maps cb_index -> {"id": id, "name": name, "input_parts": [...]}
 
                 try:
                     for err_line in process.stderr:
@@ -13928,14 +13947,21 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                                         _cb = _event.get("content_block") or {}
                                         if _cb.get("type") == "tool_use":
                                             _tool_call_counter += 1
-                                            tool_id = _cb.get("id", f"bg_{task_id[:8]}_{_tool_call_counter}")
+                                            tool_id = _cb.get(
+                                                "id",
+                                                f"bg_{task_id[:8]}_{_tool_call_counter}",
+                                            )
                                             tc = {
                                                 "id": tool_id,
                                                 "name": _cb.get("name", "tool"),
-                                                "input": _json.dumps(_cb.get("input", {})),
+                                                "input": _json.dumps(
+                                                    _cb.get("input", {})
+                                                ),
                                                 "status": "running",
                                                 "runtime": runtime,
-                                                "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                                                "timestamp": time.strftime(
+                                                    "%Y-%m-%dT%H:%M:%SZ", time.gmtime()
+                                                ),
                                             }
                                             bg_task_mgr.append_tool_call(task_id, tc)
                                             # Track for delta accumulation; start empty because
@@ -13952,10 +13978,19 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                                         delta_type = delta.get("type")
                                         if delta_type == "input_json_delta":
                                             partial = delta.get("partial_json", "")
-                                            if cb_index in _active_tool_calls and partial:
-                                                _active_tool_calls[cb_index]["input_parts"].append(partial)
+                                            if (
+                                                cb_index in _active_tool_calls
+                                                and partial
+                                            ):
+                                                _active_tool_calls[cb_index][
+                                                    "input_parts"
+                                                ].append(partial)
                                                 # Update tool call with accumulated partial
-                                                full_input_so_far = "".join(_active_tool_calls[cb_index]["input_parts"])
+                                                full_input_so_far = "".join(
+                                                    _active_tool_calls[cb_index][
+                                                        "input_parts"
+                                                    ]
+                                                )
                                                 bg_task_mgr.update_tool_call(
                                                     task_id,
                                                     _active_tool_calls[cb_index]["id"],
@@ -13967,7 +14002,11 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                                             tc_info = _active_tool_calls.pop(cb_index)
                                             full_input = "".join(tc_info["input_parts"])
                                             try:
-                                                parsed_input = _json.loads(full_input) if full_input else {}
+                                                parsed_input = (
+                                                    _json.loads(full_input)
+                                                    if full_input
+                                                    else {}
+                                                )
                                                 bg_task_mgr.update_tool_call(
                                                     task_id,
                                                     tc_info["id"],
@@ -14053,17 +14092,23 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                             if _stdout_type == "assistant":
                                 # Extract text content from assistant message blocks
                                 _parts = []
-                                for _blk in (_stdout_obj.get("message") or {}).get("content", []):
+                                for _blk in (_stdout_obj.get("message") or {}).get(
+                                    "content", []
+                                ):
                                     if _blk.get("type") == "text" and _blk.get("text"):
                                         _parts.append(_blk["text"].rstrip())
-                                _live_line = "\n".join(_parts).strip() if _parts else None
+                                _live_line = (
+                                    "\n".join(_parts).strip() if _parts else None
+                                )
                             elif _stdout_type in ("system", "stream_event"):
                                 # system init and stream events are not user-visible
                                 _live_line = None
                             elif _stdout_type == "result":
                                 # Only show error results inline; success result is surfaced separately
                                 if _stdout_obj.get("is_error"):
-                                    _live_line = _stdout_obj.get("result", "").strip() or None
+                                    _live_line = (
+                                        _stdout_obj.get("result", "").strip() or None
+                                    )
                                 else:
                                     _live_line = None
                         except (ValueError, KeyError, TypeError):
