@@ -13894,6 +13894,10 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 try:
                     for err_line in process.stderr:
                         stderr_lines.append(err_line)
+                        # Append stderr to live output lines for real-time viewing
+                        line_text = err_line.rstrip("\n\r")
+                        if line_text:
+                            bg_task_mgr.append_output(task_id, f"[stderr] {line_text}")
                 except Exception:
                     pass
 
