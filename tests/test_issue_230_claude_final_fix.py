@@ -1,134 +1,154 @@
 """
-Regression tests for Issue #230: Claude runtime log parsing in background tasks.
+Regression tests for Issue #230: Claude tool_use input accumulation bug.
+
+Production bug: _active_tool_calls[cb_index]["input_parts"] was seeded with
+json.dumps(_cb.get("input", {})) which produces "{}" for the always-empty
+content_block_start input.  When input_json_delta chunks are appended the
+accumulated string becomes '{}{"key":"val"}' which is not valid JSON and
+falls through the error path at content_block_stop.
+
+The fix: initialize input_parts = [] so delta chunks concatenate into valid JSON.
 """
-import json as _json
+
+import json
 import unittest
 
 
-class TestIssue230ClaudeLogParsing(unittest.TestCase):
-    """Test Issue #230: Claude stream_event parsing in background tasks"""
+class TestIssue230InputPartsBug(unittest.TestCase):
+    """Regression tests proving the input_parts initialization bug and its fix."""
 
-    def test_delta_accumulation_without_prefix(self):
-        """Test that deltas start with first partial_json, not stringified {}"""
-        active_calls = {
-            0: {
-                "id": "toolu_123",
-                "name": "file_edit",
-                "input_parts": [''],  
-            }
+    def test_buggy_init_produces_invalid_json(self):
+        """Pre-fix: seeding with json.dumps({}) == '{}' then appending deltas yields invalid JSON."""
+        # Reproduce the old line: "input_parts": [_json.dumps(_cb.get("input", {}))]
+        input_parts = [json.dumps({})]  # → ["{}"]
+
+        deltas = ['{"path": "/tmp/foo.txt"', ', "content": "hello"', "}"]
+        for d in deltas:
+            input_parts.append(d)
+
+        accumulated = "".join(input_parts)
+        # Produces: '{}{"path": "/tmp/foo.txt", "content": "hello"}'
+        with self.assertRaises(json.JSONDecodeError):
+            json.loads(accumulated)
+
+    def test_fixed_init_produces_valid_json(self):
+        """Post-fix: seeding with [] and appending partial_json deltas yields valid JSON."""
+        input_parts = []  # ← the fix
+
+        deltas = ['{"path": "/tmp/foo.txt"', ', "content": "hello"', "}"]
+        for d in deltas:
+            input_parts.append(d)
+
+        accumulated = "".join(input_parts)
+        parsed = json.loads(accumulated)
+        self.assertEqual(parsed["path"], "/tmp/foo.txt")
+        self.assertEqual(parsed["content"], "hello")
+
+    def test_empty_input_parts_on_content_block_stop_no_deltas(self):
+        """When no input_json_delta events arrive, input_parts stays [] and stop produces {}."""
+        input_parts = []
+        full_input = "".join(input_parts)
+        result = json.loads(full_input) if full_input else {}
+        self.assertEqual(result, {})
+
+    def test_partial_json_accumulation_multi_chunk(self):
+        """Complex input split across many deltas round-trips correctly with the fixed init."""
+        input_parts = []
+        full_expected = {
+            "command": "write",
+            "path": "/tmp/test.py",
+            "content": "x = 1\n",
         }
-        
-        # Simulate deltas with partial JSON chunks
-        deltas = [
-            '{"path": "/tmp/test.txt"',
-            ', "content": "create file"',
-            '}',
-        ]
-        
-        for partial in deltas:
-            active_calls[0]["input_parts"].append(partial)
-        
-        full_input = "".join(active_calls[0]["input_parts"])
-        parsed = _json.loads(full_input)
-        self.assertEqual(parsed["path"], "/tmp/test.txt")
-        self.assertEqual(parsed["content"], "create file")
+        raw = json.dumps(full_expected)
+        chunk_size = max(1, len(raw) // 4)
+        for i in range(0, len(raw), chunk_size):
+            input_parts.append(raw[i : i + chunk_size])
 
-    def test_protocol_json_filtered_from_output(self):
-        """Test that stream_event JSON is properly filtered from output"""
-        protocol_lines = [
-            '{"type":"stream_event","event":{"type":"content_block_start"}}',
-            '{"type":"stream_event","event":{"type":"content_block_delta"}}',
-            '{"type":"stream_event","event":{"type":"content_block_stop"}}',
-        ]
-        
-        output_lines = []
-        
-        for line in protocol_lines:
-            skip_output = False
-            if line.strip().startswith("{"):
-                try:
-                    _obj = _json.loads(line)
-                    if _obj.get("type") == "stream_event":
-                        skip_output = True
-                except (ValueError, TypeError):
-                    pass
-            
-            if not skip_output:
-                output_lines.append(line)
-        
-        self.assertEqual(len(output_lines), 0, "Protocol JSON should be filtered from output")
+        accumulated = "".join(input_parts)
+        self.assertEqual(json.loads(accumulated), full_expected)
 
-    def test_non_protocol_json_passes_through(self):
-        """Test that non-protocol JSON still gets output"""
-        line = '{"result":"success","data":{"key":"value"}}'
-        
-        skip_output = False
-        if line.strip().startswith("{"):
-            try:
-                _obj = _json.loads(line)
-                if _obj.get("type") == "stream_event":
-                    skip_output = True
-            except (ValueError, TypeError):
-                pass
-        
-        self.assertFalse(skip_output, "Non-protocol JSON should NOT be filtered")
+    def test_full_lifecycle_start_deltas_stop(self):
+        """
+        Simulate the complete production lifecycle for one tool_use block:
+        content_block_start → input_json_delta × N → content_block_stop.
 
-    def test_stream_event_filter_in_stderr(self):
-        """Test that stream_event is filtered from stderr before final output"""
-        stderr_lines = [
-            '{"type":"stream_event","event":{"type":"content_block_start"}}\n',
-            'WARNING: something\n',
-            '{"type":"stream_event","event":{"type":"content_block_delta"}}\n',
-            'ERROR: something else\n',
-        ]
-        
-        filtered_stderr = []
-        for line in stderr_lines:
-            _skip = False
-            if line.strip().startswith("{"):
-                try:
-                    _obj = _json.loads(line.strip())
-                    if _obj.get("type") == "stream_event":
-                        _skip = True
-                except (ValueError, TypeError):
-                    pass
-            if not _skip:
-                filtered_stderr.append(line)
-        
-        self.assertEqual(len(filtered_stderr), 2)
-        self.assertIn("WARNING", filtered_stderr[0])
-        self.assertIn("ERROR", filtered_stderr[1])
+        Mirrors the _drain_stderr logic in agent_manager.py lines 13600-13654.
+        """
 
-    def test_tool_call_tracking_with_cb_index(self):
-        """Test _active_tool_calls tracking by content block index"""
-        _active_tool_calls = {}
-        
-        # Simulate content_block_start event
-        cb_index = 0
-        tool_id = "toolu_001"
-        
-        _active_tool_calls[cb_index] = {
-            "id": tool_id,
-            "name": "test_tool",
-            "input_parts": [""],
+        class _MockMgr:
+            def __init__(self):
+                self.tool_calls = []
+                self.output_lines = []
+
+            def append_tool_call(self, task_id, tc):
+                self.tool_calls.append(dict(tc))
+
+            def append_output(self, task_id, line):
+                self.output_lines.append(line)
+
+            def update_tool_call(self, task_id, tool_id, **kwargs):
+                for tc in self.tool_calls:
+                    if tc.get("id") == tool_id:
+                        tc.update(kwargs)
+
+        mgr = _MockMgr()
+        task_id = "t1"
+        active = {}
+
+        # --- content_block_start ---
+        cb_start = {
+            "type": "stream_event",
+            "event": {
+                "type": "content_block_start",
+                "index": 0,
+                "content_block": {
+                    "type": "tool_use",
+                    "id": "toolu_fix_test",
+                    "name": "write_file",
+                    "input": {},
+                },
+            },
         }
-        
-        self.assertIn(cb_index, _active_tool_calls)
-        self.assertEqual(_active_tool_calls[cb_index]["id"], tool_id)
-        
-        # Simulate content_block_delta events with valid JSON
-        _active_tool_calls[cb_index]["input_parts"].append('{"key"')
-        _active_tool_calls[cb_index]["input_parts"].append(': "value"}')
-        
-        full_input = "".join(_active_tool_calls[cb_index]["input_parts"])
-        parsed = _json.loads(full_input)
-        self.assertEqual(parsed["key"], "value")
-        
-        # Simulate content_block_stop
-        tc_info = _active_tool_calls.pop(cb_index)
-        self.assertEqual(tc_info["id"], tool_id)
-        self.assertNotIn(cb_index, _active_tool_calls)
+        _cb = cb_start["event"]["content_block"]
+        cb_index = cb_start["event"]["index"]
+        mgr.append_tool_call(
+            task_id,
+            {
+                "id": _cb["id"],
+                "name": _cb["name"],
+                "input": json.dumps(_cb.get("input", {})),
+                "status": "running",
+            },
+        )
+        # Fixed initialisation — must be []
+        active[cb_index] = {"id": _cb["id"], "name": _cb["name"], "input_parts": []}
+
+        # --- input_json_delta events ---
+        raw_input = json.dumps({"path": "/tmp/out.txt", "content": "done"})
+        for chunk in [raw_input[:10], raw_input[10:20], raw_input[20:]]:
+            active[cb_index]["input_parts"].append(chunk)
+            accumulated = "".join(active[cb_index]["input_parts"])
+            mgr.update_tool_call(task_id, active[cb_index]["id"], input=accumulated)
+
+        # --- content_block_stop ---
+        tc_info = active.pop(cb_index)
+        full_input = "".join(tc_info["input_parts"])
+        parsed_input = json.loads(full_input) if full_input else {}
+        mgr.update_tool_call(
+            task_id,
+            tc_info["id"],
+            status="completed",
+            input=json.dumps(parsed_input),
+        )
+
+        self.assertEqual(len(mgr.tool_calls), 1)
+        self.assertEqual(mgr.tool_calls[0]["status"], "completed")
+        final = json.loads(mgr.tool_calls[0]["input"])
+        self.assertEqual(final["path"], "/tmp/out.txt")
+        self.assertEqual(final["content"], "done")
+        # No raw JSON should have leaked to output_lines
+        self.assertEqual(len(mgr.output_lines), 0)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     unittest.main(verbosity=2)

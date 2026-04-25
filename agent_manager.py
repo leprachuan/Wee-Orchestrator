@@ -13611,11 +13611,13 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                                                 "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
                                             }
                                             bg_task_mgr.append_tool_call(task_id, tc)
-                                            # Track for delta accumulation
+                                            # Track for delta accumulation; start empty because
+                                            # content_block_start always sends input:{} and the
+                                            # real data arrives via input_json_delta deltas.
                                             _active_tool_calls[cb_index] = {
                                                 "id": tool_id,
                                                 "name": _cb.get("name", "tool"),
-                                                "input_parts": [_json.dumps(_cb.get("input", {}))],
+                                                "input_parts": [],
                                             }
                                     
                                     elif _inner == "content_block_delta":
