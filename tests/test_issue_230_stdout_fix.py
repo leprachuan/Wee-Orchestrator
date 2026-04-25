@@ -16,7 +16,6 @@ before appending to output_lines:
 """
 
 import json
-import pytest
 
 
 def _extract_claude_stdout_log_line(line_text, runtime="claude"):
@@ -52,86 +51,113 @@ class TestIssue230ClaudeStdoutParsing:
 
     def test_assistant_text_block_extracted(self):
         """Assistant message with text content should produce readable text."""
-        line = json.dumps({
-            "type": "assistant",
-            "message": {
-                "role": "assistant",
-                "content": [{"type": "text", "text": "Hello, I am working on this."}],
-            },
-            "session_id": "abc123",
-        })
+        line = json.dumps(
+            {
+                "type": "assistant",
+                "message": {
+                    "role": "assistant",
+                    "content": [
+                        {"type": "text", "text": "Hello, I am working on this."}
+                    ],
+                },
+                "session_id": "abc123",
+            }
+        )
         result = _extract_claude_stdout_log_line(line)
         assert result == "Hello, I am working on this."
 
     def test_assistant_multi_text_blocks_joined(self):
         """Multiple text blocks in assistant message should be joined with newline."""
-        line = json.dumps({
-            "type": "assistant",
-            "message": {
-                "content": [
-                    {"type": "text", "text": "First paragraph."},
-                    {"type": "text", "text": "Second paragraph."},
-                ],
-            },
-        })
+        line = json.dumps(
+            {
+                "type": "assistant",
+                "message": {
+                    "content": [
+                        {"type": "text", "text": "First paragraph."},
+                        {"type": "text", "text": "Second paragraph."},
+                    ],
+                },
+            }
+        )
         result = _extract_claude_stdout_log_line(line)
         assert result == "First paragraph.\nSecond paragraph."
 
     def test_assistant_tool_use_only_block_returns_none(self):
-        """Assistant message with only tool_use blocks (no text) → skip (returns None)."""
-        line = json.dumps({
-            "type": "assistant",
-            "message": {
-                "content": [
-                    {"type": "tool_use", "id": "tu1", "name": "Bash", "input": {"command": "ls"}}
-                ],
-            },
-        })
+        """Assistant message with only tool_use blocks (no text).
+
+        Returns None (skip).
+        """
+        line = json.dumps(
+            {
+                "type": "assistant",
+                "message": {
+                    "content": [
+                        {
+                            "type": "tool_use",
+                            "id": "tu1",
+                            "name": "Bash",
+                            "input": {"command": "ls"},
+                        }
+                    ],
+                },
+            }
+        )
         result = _extract_claude_stdout_log_line(line)
         assert result is None
 
     def test_system_init_event_skipped(self):
         """System init event (metadata) should be skipped — returns None."""
-        line = json.dumps({
-            "type": "system",
-            "subtype": "init",
-            "session_id": "abc123",
-            "tools": [],
-            "cwd": "/opt",
-        })
+        line = json.dumps(
+            {
+                "type": "system",
+                "subtype": "init",
+                "session_id": "abc123",
+                "tools": [],
+                "cwd": "/opt",
+            }
+        )
         result = _extract_claude_stdout_log_line(line)
         assert result is None
 
     def test_stream_event_skipped(self):
         """stream_event lines on stdout should be skipped — returns None."""
-        line = json.dumps({
-            "type": "stream_event",
-            "event": {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "hi"}},
-        })
+        line = json.dumps(
+            {
+                "type": "stream_event",
+                "event": {
+                    "type": "content_block_delta",
+                    "delta": {"type": "text_delta", "text": "hi"},
+                },
+            }
+        )
         result = _extract_claude_stdout_log_line(line)
         assert result is None
 
     def test_result_success_skipped(self):
         """Successful result event should be skipped (output shown separately)."""
-        line = json.dumps({
-            "type": "result",
-            "subtype": "success",
-            "result": "Task complete.",
-            "is_error": False,
-            "session_id": "abc123",
-        })
+        line = json.dumps(
+            {
+                "type": "result",
+                "subtype": "success",
+                "result": "Task complete.",
+                "is_error": False,
+                "session_id": "abc123",
+            }
+        )
         result = _extract_claude_stdout_log_line(line)
         assert result is None
 
     def test_result_error_shown(self):
         """Error result event should surface the error text."""
-        line = json.dumps({
-            "type": "result",
-            "subtype": "error_during_generation",
-            "result": "API Error: rate_limit_error",
-            "is_error": True,
-            "session_id": "abc123",
-        })
+        line = json.dumps(
+            {
+                "type": "result",
+                "subtype": "error_during_generation",
+                "result": "API Error: rate_limit_error",
+                "is_error": True,
+                "session_id": "abc123",
+            }
+        )
         result = _extract_claude_stdout_log_line(line)
         assert result == "API Error: rate_limit_error"
 
@@ -155,10 +181,12 @@ class TestIssue230ClaudeStdoutParsing:
 
     def test_assistant_empty_content_list_returns_none(self):
         """Assistant message with empty content list should return None (skip)."""
-        line = json.dumps({
-            "type": "assistant",
-            "message": {"content": []},
-        })
+        line = json.dumps(
+            {
+                "type": "assistant",
+                "message": {"content": []},
+            }
+        )
         result = _extract_claude_stdout_log_line(line)
         assert result is None
 
@@ -170,21 +198,34 @@ class TestIssue230ClaudeStdoutParsing:
         """
         # Simulate Claude background task stdout lines
         stdout_lines = [
-            json.dumps({"type": "system", "subtype": "init", "session_id": "s1", "tools": []}),
-            json.dumps({
-                "type": "assistant",
-                "message": {"content": [{"type": "text", "text": "I'll check the file."}]},
-            }),
-            json.dumps({
-                "type": "stream_event",
-                "event": {"type": "content_block_start", "content_block": {"type": "tool_use", "name": "Read"}},
-            }),
-            json.dumps({
-                "type": "result",
-                "subtype": "success",
-                "result": "File contents here.",
-                "is_error": False,
-            }),
+            json.dumps(
+                {"type": "system", "subtype": "init", "session_id": "s1", "tools": []}
+            ),
+            json.dumps(
+                {
+                    "type": "assistant",
+                    "message": {
+                        "content": [{"type": "text", "text": "I'll check the file."}]
+                    },
+                }
+            ),
+            json.dumps(
+                {
+                    "type": "stream_event",
+                    "event": {
+                        "type": "content_block_start",
+                        "content_block": {"type": "tool_use", "name": "Read"},
+                    },
+                }
+            ),
+            json.dumps(
+                {
+                    "type": "result",
+                    "subtype": "success",
+                    "result": "File contents here.",
+                    "is_error": False,
+                }
+            ),
         ]
 
         output_lines = []

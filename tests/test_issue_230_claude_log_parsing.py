@@ -1,14 +1,8 @@
-"""Regression test for Issue #230: Claude runtime stderr JSON parsing in background tasks."""
+"""Regression tests for Issue #230: Claude stderr JSON parsing in background tasks."""
 
 import json
-import os
-import sys
-import tempfile
-import threading
 import time
 import unittest
-from io import StringIO
-from unittest import mock
 
 
 # Mock the background task manager and necessary components
@@ -164,7 +158,10 @@ class TestIssue230ClaudeStderrParsing(unittest.TestCase):
         )
 
     def test_claude_stderr_multiple_events(self):
-        """Multiple Claude stream_event objects on stderr — none should reach output_lines."""
+        """Multiple Claude stream_event objects on stderr.
+
+        None should reach output_lines.
+        """
         mock_mgr = MockBgTaskMgr()
         runtime = "claude"
         task_id = "test_task_789"
