@@ -110,3 +110,4 @@ logs/wee_executor.log
 
 # Transcript storage (contains sensitive session data)
 logs/transcripts/
+webui/dist/index.html.old

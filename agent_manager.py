@@ -5,6 +5,7 @@ Wraps GitHub Copilot CLI and OpenCode CLI
 Manages session ID mapping between N8N chat sessions and AI backend sessions
 """
 
+import re as _re
 import argparse
 import copy
 import hashlib
@@ -457,7 +458,6 @@ class AuthManager:
 # Issue #219: Background task fallback on infrastructure failure
 # ─────────────────────────────────────────────────────────────────────────────────
 
-import re as _re
 
 _FALLBACK_FAILURE_PATTERNS = [
     _re.compile(p, _re.IGNORECASE)
@@ -480,6 +480,7 @@ _FALLBACK_FAILURE_PATTERNS = [
     ]
 ]
 
+
 def _is_fallback_eligible(error_text: str) -> bool:
     """Check if error text indicates a fallback-eligible infrastructure failure."""
     if not error_text:
@@ -489,24 +490,25 @@ def _is_fallback_eligible(error_text: str) -> bool:
             return True
     return False
 
+
 def _resolve_bg_fallback(task: dict) -> tuple:
     """Resolve fallback runtime/model for background task.
-    
+
     Priority: task fallback_runtime > env > None
     Returns (fallback_runtime, fallback_model) or (None, None)
     """
     import os
     fb_rt = task.get("fallback_runtime") or os.environ.get("BACKGROUND_FALLBACK_RUNTIME")
     fb_model = task.get("fallback_model") or os.environ.get("BACKGROUND_FALLBACK_MODEL")
-    
+
     # Don't use fallback if identical to primary
     if fb_rt == task.get("runtime") and fb_model == task.get("model"):
         return None, None
-    
+
     # Don't use if neither configured
     if not fb_rt and not fb_model:
         return None, None
-    
+
     return fb_rt, fb_model
 
 
@@ -10534,7 +10536,7 @@ User Request:
         self, task_id, session_id, prompt, agent, runtime, model, channel, timeout=None
     ):
         """Run a background task in the current thread (called from thread pool).
-        
+
         Issue #219: Implements retry logic with fallback_runtime/fallback_model
         on infrastructure failures (429, rate_limit, quota_exceeded, 503, etc.)
         """
@@ -10551,7 +10553,7 @@ User Request:
         self.update_session_field(session_id, "bg_task_id", task_id)
         if timeout is not None:
             self.update_session_field(session_id, "timeout", timeout)
-        
+
         # Issue #219: Fallback retry logic
         try:
             result = self.execute(prompt, session_id)
@@ -10576,22 +10578,22 @@ User Request:
 
         except Exception as exc:
             exc_text = str(exc)
-            
+
             # Check if error is fallback-eligible (Issue #219)
             if _is_fallback_eligible(exc_text):
                 task_rec = self._bg_task_mgr.get_task(task_id) if self._bg_task_mgr else None
                 fb_rt, fb_model = _resolve_bg_fallback(task_rec) if task_rec else (None, None)
-                
+
                 if fb_rt or fb_model:
                     # Prepare fallback attempt
                     fb_rt = fb_rt or runtime
                     fb_model = fb_model or model
-                    
+
                     logger.warning(
                         f"[BG-Task {task_id}] Primary failure (runtime={runtime}, model={model}): {exc_text[:120]}. "
                         f"Retrying with fallback runtime={fb_rt}, model={fb_model}"
                     )
-                    
+
                     try:
                         # Create new session for fallback attempt
                         fb_session_id = str(uuid4())
@@ -10605,10 +10607,10 @@ User Request:
                         self.update_session_field(fb_session_id, "bg_task_id", task_id)
                         if timeout is not None:
                             self.update_session_field(fb_session_id, "timeout", timeout)
-                        
+
                         # Execute with fallback runtime/model
                         result = self.execute(prompt, fb_session_id)
-                        
+
                         if self._bg_task_mgr:
                             # Success with fallback
                             self._bg_task_mgr.complete_task(task_id, result)
@@ -10630,7 +10632,7 @@ User Request:
                                     },
                                 )
                         return  # Success
-                        
+
                     except Exception as fb_exc:
                         # Fallback also failed -- combine errors
                         fb_exc_text = str(fb_exc)
@@ -10659,7 +10661,7 @@ User Request:
                                     },
                                 )
                         return  # Logged as failed
-            
+
             # Not eligible for fallback or no fallback configured -- fail immediately
             if self._bg_task_mgr:
                 self._bg_task_mgr.fail_task(task_id, exc_text)

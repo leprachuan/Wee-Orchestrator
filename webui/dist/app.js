@@ -6067,7 +6067,9 @@ if (document.readyState !== 'loading') {
     runtime:     () => document.getElementById('asf-runtime'),
     model:       () => document.getElementById('asf-model'),
     maxConcurrent: () => document.getElementById('asf-max-concurrent'),
-    permMode:    () => document.getElementById('asf-perm-mode'),
+    permMode:        () => document.getElementById('asf-perm-mode'),
+    fallbackRuntime: () => document.getElementById('asf-fallback-runtime'),
+    fallbackModel:   () => document.getElementById('asf-fallback-model'),
   };
 
   /** Permission list field ids → [section, key] mapping */
@@ -6215,6 +6217,8 @@ if (document.readyState !== 'loading') {
     set(F.model,       agent.model);
     const mcEl = F.maxConcurrent();
     if (mcEl) mcEl.value = agent.max_concurrent != null ? String(agent.max_concurrent) : '1';
+    set(F.fallbackRuntime, agent.fallback_runtime);
+    set(F.fallbackModel,   agent.fallback_model);
 
     const perms = agent.permissions || emptyPermissions();
     set(F.permMode, perms.mode);
@@ -6239,8 +6243,10 @@ if (document.readyState !== 'loading') {
       name:        get(F.name),
       path:        get(F.path),
       description: get(F.description) || undefined,
-      runtime:     get(F.runtime)     || undefined,
-      model:       get(F.model)       || undefined,
+      runtime:         get(F.runtime)         || undefined,
+      model:           get(F.model)           || undefined,
+      fallback_runtime: get(F.fallbackRuntime) || undefined,
+      fallback_model:   get(F.fallbackModel)   || undefined,
       max_concurrent: (() => {
         const el = F.maxConcurrent();
         if (!el || el.value.trim() === '') return undefined;

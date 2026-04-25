@@ -550,6 +550,26 @@
             </div>
           </div>
         </div>
+
+        <!-- Permissions -->
+        <div class="asf-section">
+          <div class="asf-section-title">
+            🔒 Permissions
+            <span id="asf-perm-mode-badge" class="asf-mode-badge"></span>
+            <span id="asf-perm-changed" class="asf-changed-badge hidden">⚠ changed</span>
+          </div>
+
+          <!-- Mode -->
+          <div class="asf-field" style="margin-bottom:14px;">
+            <label class="asf-label" for="asf-perm-mode">Mode</label>
+            <select id="asf-perm-mode" class="glass-input glass-select asf-select">
+              <option value="elevated">elevated — full access</option>
+              <option value="restricted">restricted — curated tools only</option>
+              <option value="sandboxed">sandboxed — no external access</option>
+            </select>
+          </div>
+
+          <!-- Directories -->
           <details class="asf-details" open>
             <summary class="asf-details-summary">📁 Directories</summary>
             <div class="asf-details-body">
@@ -667,6 +687,11 @@
           </div>
         </div>
 
+        <!-- Danger Zone -->
+        <div class="asf-section asf-danger-section">
+          <div class="asf-section-title">⚠️ Danger Zone</div>
+          <button id="asf-delete-agent" class="asf-delete-btn">🗑 Delete Agent</button>
+        </div>
 
       </div><!-- /asf-body -->
 

@@ -142,5 +142,57 @@ class TestIssue225RuntimeConsolidation(unittest.TestCase):
                          f"HTML should have consistent field ID: {field_id}")
 
 
+    def test_dist_html_has_danger_zone(self):
+        """Danger Zone section must be present in built HTML (regression for QA BLOCKER 2)."""
+        if not self.dist_html:
+            self.skipTest("Dist HTML not found")
+        self.assertIn('asf-danger-section', self.dist_html,
+                      "HTML must contain Danger Zone section (asf-danger-section)")
+        self.assertIn('asf-delete-agent', self.dist_html,
+                      "HTML must contain delete-agent button (asf-delete-agent)")
+        self.assertIn('Danger Zone', self.dist_html,
+                      "HTML must contain 'Danger Zone' title text")
+
+    def test_dist_html_has_perm_mode(self):
+        """Permissions section with asf-perm-mode must be present (regression for QA BLOCKER 3)."""
+        if not self.dist_html:
+            self.skipTest("Dist HTML not found")
+        self.assertIn('asf-perm-mode', self.dist_html,
+                      "HTML must have asf-perm-mode select element")
+        self.assertIn('asf-perm-mode-badge', self.dist_html,
+                      "HTML must have asf-perm-mode-badge span element")
+        self.assertIn('🔒 Permissions', self.dist_html,
+                      "HTML must contain '🔒 Permissions' section title")
+        self.assertIn('elevated', self.dist_html,
+                      "HTML perm-mode must have 'elevated' option")
+        self.assertIn('restricted', self.dist_html,
+                      "HTML perm-mode must have 'restricted' option")
+        self.assertIn('sandboxed', self.dist_html,
+                      "HTML perm-mode must have 'sandboxed' option")
+
+    def test_app_js_has_fallback_field_wiring(self):
+        """app.js must wire fallback_runtime and fallback_model for save/load (QA BLOCKER 4)."""
+        project_root = Path(__file__).parent.parent
+        app_js_path = project_root / "webui/dist/app.js"
+        if not app_js_path.exists():
+            self.skipTest("app.js not found")
+        with open(app_js_path, 'r') as f:
+            js = f.read()
+        # F object must have fallback field refs
+        self.assertIn("'asf-fallback-runtime'", js,
+                      "app.js F object must reference asf-fallback-runtime")
+        self.assertIn("'asf-fallback-model'", js,
+                      "app.js F object must reference asf-fallback-model")
+        # populateForm must set fallback values
+        self.assertIn('fallbackRuntime', js,
+                      "app.js populateForm must wire fallbackRuntime")
+        self.assertIn('fallbackModel', js,
+                      "app.js populateForm must wire fallbackModel")
+        # collectFormData must include fallback fields
+        self.assertIn('fallback_runtime', js,
+                      "app.js collectFormData must include fallback_runtime")
+        self.assertIn('fallback_model', js,
+                      "app.js collectFormData must include fallback_model")
+
 if __name__ == '__main__':
     unittest.main()
