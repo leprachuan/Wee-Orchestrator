@@ -307,36 +307,78 @@ export function AgentSettingsPanel({ onClose }: AgentSettingsPanelProps) {
                 </div>
               </section>
 
-              {/* Runtime Config */}
+              {/* Runtime Config - Primary & Fallback */}
               <section className="asp-section">
-                <h4 className="asp-section-title">Runtime Config</h4>
-                <div className="asp-grid">
-                  <div className="form-group">
-                    <label htmlFor="asp-runtime">Runtime</label>
-                    <select
-                      id="asp-runtime"
-                      className="glass-input glass-select"
-                      value={draft.runtime ?? ''}
-                      onChange={e => setField('runtime', e.target.value || undefined)}
-                    >
-                      <option value="">Default</option>
-                      {['copilot', 'claude', 'gemini', 'opencode', 'codex', 'cursor'].map(r => (
-                        <option key={r} value={r}>{r}</option>
-                      ))}
-                    </select>
+                <h4 className="asp-section-title">🔄 Runtime Config</h4>
+                <div className="asp-hint" style={{ marginBottom: '12px' }}>Primary and fallback runtimes for background tasks</div>
+                
+                {/* Primary Runtime / Model */}
+                <div style={{ marginBottom: '20px' }}>
+                  <h5 style={{ fontSize: '0.95rem', fontWeight: 600, marginBottom: '8px', color: '#e0e0e0' }}>Primary</h5>
+                  <div className="asp-grid">
+                    <div className="form-group">
+                      <label htmlFor="asp-runtime">Runtime</label>
+                      <select
+                        id="asp-runtime"
+                        className="glass-input glass-select"
+                        value={draft.runtime ?? ''}
+                        onChange={e => setField('runtime', e.target.value || undefined)}
+                      >
+                        <option value="">Default</option>
+                        {['copilot', 'claude', 'gemini', 'opencode', 'codex', 'cursor'].map(r => (
+                          <option key={r} value={r}>{r}</option>
+                        ))}
+                      </select>
+                    </div>
+                    <div className="form-group">
+                      <label htmlFor="asp-model">Model</label>
+                      <input
+                        id="asp-model"
+                        type="text"
+                        className="glass-input"
+                        placeholder="e.g. claude-sonnet-4.6"
+                        value={draft.model ?? ''}
+                        onChange={e => setField('model', e.target.value || undefined)}
+                      />
+                    </div>
                   </div>
-                  <div className="form-group">
-                    <label htmlFor="asp-model">Model</label>
-                    <input
-                      id="asp-model"
-                      type="text"
-                      className="glass-input"
-                      placeholder="e.g. claude-sonnet-4.6"
-                      value={draft.model ?? ''}
-                      onChange={e => setField('model', e.target.value || undefined)}
-                    />
+                </div>
+
+                {/* Fallback Runtime / Model */}
+                <div style={{ marginBottom: '16px' }}>
+                  <h5 style={{ fontSize: '0.95rem', fontWeight: 600, marginBottom: '8px', color: '#c0c0c0' }}>Fallback (optional)</h5>
+                  <div className="asp-grid">
+                    <div className="form-group">
+                      <label htmlFor="asp-fallback-runtime">Fallback Runtime</label>
+                      <select
+                        id="asp-fallback-runtime"
+                        className="glass-input glass-select"
+                        value={draft.fallback_runtime ?? ''}
+                        onChange={e => setField('fallback_runtime', e.target.value || undefined)}
+                      >
+                        <option value="">None</option>
+                        {['copilot', 'claude', 'gemini', 'opencode', 'codex', 'cursor'].map(r => (
+                          <option key={r} value={r}>{r}</option>
+                        ))}
+                      </select>
+                    </div>
+                    <div className="form-group">
+                      <label htmlFor="asp-fallback-model">Fallback Model</label>
+                      <input
+                        id="asp-fallback-model"
+                        type="text"
+                        className="glass-input"
+                        placeholder="e.g. claude-opus-4.7"
+                        value={draft.fallback_model ?? ''}
+                        onChange={e => setField('fallback_model', e.target.value || undefined)}
+                      />
+                    </div>
                   </div>
-                  <div className="form-group">
+                </div>
+
+                {/* Max Concurrent Tasks */}
+                <div>
+                  <div className="form-group" style={{ maxWidth: '300px' }}>
                     <label htmlFor="asp-max-concurrent">Max Concurrent Tasks</label>
                     <input
                       id="asp-max-concurrent"
