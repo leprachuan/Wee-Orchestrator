@@ -38,6 +38,7 @@ from wee_runtime import (  # noqa: E402
     MAX_TOOL_ROUNDS,
     execute_tool,
     resolve_model_and_endpoint,
+    list_available_models,
 )
 
 # ---------------------------------------------------------------------------
@@ -367,6 +368,7 @@ Wee CLI Interactive Mode — Commands:
   /clear          Clear conversation history
   /history        Show conversation history
   /model MODEL    Switch model
+  /model list     List available models
   /tokens         Show token usage
   /system PROMPT  Set system prompt
   /config         Show current configuration
@@ -442,6 +444,8 @@ def run_interactive(
             elif cmd == "/model":
                 if not arg:
                     _print_info(f"Current model: {model}")
+                elif arg.lower() == "list":
+                    list_available_models()
                 else:
                     old_model = model
                     model, api_base, api_key = resolve_model_and_endpoint(arg)
