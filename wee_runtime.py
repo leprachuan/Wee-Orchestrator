@@ -248,97 +248,98 @@ _WEE_TOOL_CAPABILITY_PROMPT = (
 )
 
 
-def list_available_models():
-    """List available models from all configured providers."""
+def list_available_models(provider: str = None):
+    """List available models from all configured providers.
+    
+    Args:
+        provider: Optional filter ('ollama', 'openrouter', 'lmstudio').
+                 If None, shows all. Case-insensitive.
+    """
     import httpx
     
     _ollama_host = os.environ.get("OLLAMA_HOST", "192.168.1.101")
     _ollama_port = os.environ.get("OLLAMA_PORT", "11434")
     
+    if provider:
+        provider = provider.lower()
+    
     print("Available Models by Provider:")
     print("=" * 60)
     
     # Ollama models
-    print("\nOllama (http://%s:%s):" % (_ollama_host, _ollama_port))
-    try:
-        resp = httpx.get(
-            f"http://{_ollama_host}:{_ollama_port}/api/tags",
-            timeout=httpx.Timeout(
-                connect=5.0, read=10.0, write=10.0, pool=10.0
-            ),
-        )
-        if resp.status_code == 200:
-            models = resp.json().get("models", [])
-            for m in models:
-                name = m.get("name", "")
-                size_bytes = m.get("size", 0)
-                size_gb = size_bytes / (1024**3)
-                print(f"  ollama/{name:<40} ({size_gb:.1f} GB)")
-            if not models:
-                print("  (no models available)")
-        else:
-            print("  (unreachable)")
-    except Exception as e:
-        print(f"  (error: {e})")
+    if not provider or provider == "ollama":
+        print("\nOllama (http://%s:%s):" % (_ollama_host, _ollama_port))
+        try:
+            resp = httpx.get(
+                f"http://{_ollama_host}:{_ollama_port}/api/tags",
+                timeout=httpx.Timeout(connect=5.0, read=10.0, write=10.0, pool=10.0),
+            )
+            if resp.status_code == 200:
+                models = resp.json().get("models", [])
+                for m in models:
+                    name = m.get("name", "")
+                    size_bytes = m.get("size", 0)
+                    size_gb = size_bytes / (1024**3)
+                    print(f"  ollama/{name:<40} ({size_gb:.1f} GB)")
+                if not models:
+                    print("  (no models available)")
+            else:
+                print("  (unreachable)")
+        except Exception as e:
+            print(f"  (error: {e})")
     
     # OpenRouter models
-    print("\nOpenRouter (https://openrouter.ai):")
-    try:
-        resp = httpx.get(
-            "https://openrouter.ai/api/v1/models",
-            timeout=10.0
-        )
-        if resp.status_code == 200:
-            data = resp.json()
-            models = data.get("data", [])
-            if models:
-                print(f"  Found {len(models)} models. Use 'openrouter/<model-id>'")
-                # Show all providers and all their models
-                providers = {}
-                for m in models:
-                    model_id = m.get("id", "")
-                    if "/" in model_id:
-                        provider = model_id.split("/")[0]
-                        if provider not in providers:
-                            providers[provider] = []
-                        providers[provider].append(model_id)
-                
-                # Show all providers and all models
-                for provider in sorted(providers.keys()):
-                    print(f"    {provider}:")
-                    for model_id in sorted(providers[provider]):
-                        print(f"      openrouter/{model_id}")
+    if not provider or provider == "openrouter":
+        print("\nOpenRouter (https://openrouter.ai):")
+        try:
+            resp = httpx.get("https://openrouter.ai/api/v1/models", timeout=10.0)
+            if resp.status_code == 200:
+                data = resp.json()
+                models = data.get("data", [])
+                if models:
+                    print(f"  Found {len(models)} models. Use 'openrouter/<model-id>'")
+                    providers_dict = {}
+                    for m in models:
+                        model_id = m.get("id", "")
+                        if "/" in model_id:
+                            prov = model_id.split("/")[0]
+                            if prov not in providers_dict:
+                                providers_dict[prov] = []
+                            providers_dict[prov].append(model_id)
+                    for prov in sorted(providers_dict.keys()):
+                        print(f"    {prov}:")
+                        for model_id in sorted(providers_dict[prov]):
+                            print(f"      openrouter/{model_id}")
+                else:
+                    print("  (no models available)")
             else:
-                print("  (no models available)")
-        else:
-            print(f"  (error: HTTP {resp.status_code})")
-    except Exception as e:
-        print(f"  (error: {e})")
+                print(f"  (error: HTTP {resp.status_code})")
+        except Exception as e:
+            print(f"  (error: {e})")
     
     # LM Studio
-    print("\nLM Studio (http://localhost:1234):")
-    _lmstudio_host = os.environ.get("LMSTUDIO_HOST", "localhost")
-    _lmstudio_port = os.environ.get("LMSTUDIO_PORT", "1234")
-    try:
-        resp = httpx.get(
-            f"http://{_lmstudio_host}:{_lmstudio_port}/v1/models",
-            timeout=httpx.Timeout(
-                connect=5.0, read=10.0, write=10.0, pool=10.0
-            ),
-        )
-        if resp.status_code == 200:
-            data = resp.json()
-            models = data.get("data", [])
-            if models:
-                for m in models:
-                    model_id = m.get("id", "")
-                    print(f"  lmstudio/{model_id}")
+    if not provider or provider == "lmstudio":
+        print("\nLM Studio (http://localhost:1234):")
+        _lmstudio_host = os.environ.get("LMSTUDIO_HOST", "localhost")
+        _lmstudio_port = os.environ.get("LMSTUDIO_PORT", "1234")
+        try:
+            resp = httpx.get(
+                f"http://{_lmstudio_host}:{_lmstudio_port}/v1/models",
+                timeout=httpx.Timeout(connect=5.0, read=10.0, write=10.0, pool=10.0),
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                models = data.get("data", [])
+                if models:
+                    for m in models:
+                        model_id = m.get("id", "")
+                        print(f"  lmstudio/{model_id}")
+                else:
+                    print("  (no models available)")
             else:
-                print("  (no models available)")
-        else:
-            print("  (unreachable or no models loaded)")
-    except Exception as e:
-        print(f"  (unreachable: {e})")
+                print("  (unreachable or no models loaded)")
+        except Exception as e:
+            print(f"  (unreachable: {e})")
 
 
 def main():
@@ -347,8 +348,10 @@ def main():
     )
     parser.add_argument(
         "--list-models",
-        action="store_true",
-        help="List available models and exit",
+        nargs="?",
+        const=True,
+        metavar="PROVIDER",
+        help="List available models (optional: ollama, openrouter, lmstudio)",
     )
     parser.add_argument(
         "--model", help="Model name (e.g., ollama/gemma4:e4b)"
@@ -372,8 +375,9 @@ def main():
     args = parser.parse_args()
     
     # Handle --list-models
-    if args.list_models:
-        list_available_models()
+    if args.list_models is not None:
+        provider = None if args.list_models is True else args.list_models
+        list_available_models(provider)
         sys.exit(0)
     
     # Validate required arguments for normal operation
