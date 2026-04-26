@@ -420,7 +420,7 @@ def chat_stream(
             except json.JSONDecodeError:
                 func_args = {"command": tc_info["function"]["arguments"]}
 
-            _print_info(f"[Wee] Executing: {func_name}({json.dumps(func_args)[:100]})")
+            _print_info(f"[Wee] Executing: {func_name}({json.dumps(func_args)[:300]})" + ("..." if len(json.dumps(func_args)) > 300 else ""))
             tool_result = execute_tool(func_name, func_args, permission=permission)
             messages.append(
                 {
