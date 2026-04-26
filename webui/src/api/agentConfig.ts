@@ -96,6 +96,31 @@ export function validateConfig(agent: Partial<Agent>): ValidationResult {
     errors.push({ field: 'path', message: 'Working path must be an absolute path starting with /' });
   }
 
+  // Validate primary runtime config
+  if (agent.primary_runtime !== undefined && agent.primary_runtime !== null && agent.primary_runtime !== '') {
+    if (typeof agent.primary_runtime !== 'string') {
+      errors.push({ field: 'primary_runtime', message: 'Primary runtime must be a string' });
+    }
+  }
+
+  if (agent.primary_model !== undefined && agent.primary_model !== null && agent.primary_model !== '') {
+    if (typeof agent.primary_model !== 'string') {
+      errors.push({ field: 'primary_model', message: 'Primary model must be a string' });
+    }
+  }
+
+  // Validate fallback runtime config
+  if (agent.fallback_runtime !== undefined && agent.fallback_runtime !== null && agent.fallback_runtime !== '') {
+    if (typeof agent.fallback_runtime !== 'string') {
+      errors.push({ field: 'fallback_runtime', message: 'Fallback runtime must be a string' });
+    }
+  }
+
+  if (agent.fallback_model !== undefined && agent.fallback_model !== null && agent.fallback_model !== '') {
+    if (typeof agent.fallback_model !== 'string') {
+      errors.push({ field: 'fallback_model', message: 'Fallback model must be a string' });
+    }
+  }
 
   if (agent.max_concurrent !== undefined && agent.max_concurrent !== null) {
     if (typeof agent.max_concurrent !== 'number' || !Number.isInteger(agent.max_concurrent) || agent.max_concurrent < 1) {
