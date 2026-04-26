@@ -9,7 +9,7 @@ Usage:
     wee --model openrouter/meta-llama/llama-2-70b "Explain quantum computing"
     wee --model ollama/gemma4:e4b --tools "List Python files in /opt"
     wee --interactive
-    echo "summarize this" | wee --model ollama/qwen3:8b
+    echo "summarize this" | wee --model ollama/qwen3.5:4b
     wee  # enters interactive mode by default
 
 Issue #158: https://github.com/leprachuan/Wee-Orchestrator/issues/158
@@ -372,7 +372,7 @@ Wee CLI Interactive Mode — Commands:
   /config         Show current configuration
   /version        Show version
   /help           Show this help
-  exit, quit      Exit interactive mode
+  /exit, /quit    Exit interactive mode
 """
 
 
@@ -401,7 +401,7 @@ def run_interactive(
     messages.append({"role": "system", "content": effective_system})
 
     _print_info(f"Wee CLI v{__version__} — model: {model}")
-    _print_info("Type /help for commands, exit to quit.\n")
+    _print_info("Type /help for commands, /exit to quit.\n")
 
     while True:
         try:
@@ -414,15 +414,15 @@ def run_interactive(
             continue
 
         # Handle slash commands
-        if user_input.lower() in ("exit", "quit"):
-            break
-
         if user_input.startswith("/"):
             parts = user_input.split(None, 1)
             cmd = parts[0].lower()
             arg = parts[1] if len(parts) > 1 else ""
 
-            if cmd == "/clear":
+            if cmd == "/exit" or cmd == "/quit":
+                break
+
+            elif cmd == "/clear":
                 messages = [{"role": "system", "content": effective_system}]
                 token_tracker = TokenTracker()
                 _print_info("Conversation cleared.")
@@ -569,7 +569,7 @@ def build_parser() -> argparse.ArgumentParser:
         description="Wee CLI — Standalone command-line AI assistant",
         epilog=(
             "Examples:\n"
-            '  wee --model ollama/qwen3:8b "What is 2+2?"\n'
+            '  wee --model ollama/qwen3.5:4b "What is 2+2?"\n'
             '  wee --model openrouter/meta-llama/llama-2-70b --tools "List files"\n'
             "  wee --interactive\n"
             '  echo "summarize" | wee --model ollama/gemma4:e4b\n'
@@ -583,8 +583,8 @@ def build_parser() -> argparse.ArgumentParser:
         "--model",
         "-m",
         default=None,
-        help="Model ID (e.g. ollama/qwen3:8b, openrouter/meta-llama/llama-2-70b). "
-        "Default: $WEE_MODEL or ollama/qwen3:8b",
+        help="Model ID (e.g. ollama/qwen3.5:4b, openrouter/meta-llama/llama-2-70b). "
+        "Default: $WEE_MODEL or ollama/qwen3.5:4b",
     )
     parser.add_argument(
         "--api-key",
@@ -655,6 +655,11 @@ def build_parser() -> argparse.ArgumentParser:
         help=f"Config file path (default: {DEFAULT_CONFIG_FILE})",
     )
     parser.add_argument(
+        "--list-models",
+        action="store_true",
+        help="List available models and exit",
+    )
+    parser.add_argument(
         "prompt",
         nargs="*",
         help="Prompt text (omit for interactive mode or pipe from stdin)",
@@ -669,6 +674,12 @@ def main(argv=None):
     """Main entry point for wee CLI."""
     parser = build_parser()
     args = parser.parse_args(argv)
+
+    # Handle --list-models
+    if args.list_models:
+        from wee_runtime import list_available_models
+        list_available_models()
+        sys.exit(0)
 
     # Load config file defaults
     config_path = args.config or DEFAULT_CONFIG_FILE
@@ -685,7 +696,7 @@ def main(argv=None):
         args.model
         or os.environ.get("WEE_MODEL")
         or cfg.get("model")
-        or "ollama/qwen3:8b"
+        or "ollama/qwen3.5:4b"
     )
 
     # Resolve other settings from config
