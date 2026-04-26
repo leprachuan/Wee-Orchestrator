@@ -100,15 +100,18 @@ class AgentDispatchConfig(BaseModel):
         return values
 
 
-_AGENT_KNOWN = {
+_AGENT_KNOWN: set[str] = {
     "name",
     "description",
     "path",
-    "bots",
-    "dispatch_config",
     "max_concurrent",
-    "runtime",
-    "model",
+    "primary_runtime",
+    "primary_model",
+    "fallback_runtime",
+    "fallback_model",
+    "permissions",
+    "permission_mode",
+    "yolo",
 }
 
 
@@ -120,11 +123,14 @@ class AgentEntry(BaseModel):
     name: str
     description: Optional[str] = ""
     path: Optional[str] = ""
-    bots: Optional[AgentBotsConfig] = None
-    dispatch_config: Optional[AgentDispatchConfig] = None
     max_concurrent: Optional[int] = 1
-    runtime: Optional[str] = "copilot"
-    model: Optional[str] = ""
+    primary_runtime: Optional[str] = None
+    primary_model: Optional[str] = None
+    fallback_runtime: Optional[str] = None
+    fallback_model: Optional[str] = None
+    permissions: Optional[Dict[str, Any]] = None
+    permission_mode: Optional[str] = None
+    yolo: Optional[bool] = None
 
     @model_validator(mode="before")
     @classmethod
@@ -265,6 +271,11 @@ def validate_agents_config(data: dict) -> AgentsConfig:
 
     Raises pydantic.ValidationError on structural failures (e.g. missing
     required fields, wrong types). Unknown keys produce UserWarnings.
+
+    Note: agents.json is intentionally excluded from CONNECTOR_VALIDATORS
+    because it is loaded by agent_manager._load_agents_config(), not by
+    BaseConfig._load_config(). It is called directly at load time in
+    agent_manager.py instead.
     """
     return AgentsConfig.model_validate(data)
 
