@@ -617,8 +617,8 @@ def build_parser() -> argparse.ArgumentParser:
         "--permission",
         "-p",
         choices=["restricted", "auto", "elevated"],
-        default="restricted",
-        help="Permission level for tool execution (default: restricted)",
+        default="auto",
+        help="Permission level for tool execution (default: auto)",
     )
     parser.add_argument(
         "--system",
@@ -706,7 +706,7 @@ def main(argv=None):
     # Resolve other settings from config
     system_prompt = args.system or cfg.get("system_prompt", "")
     tools_enabled = args.tools or cfg.get("tools", False)
-    permission = args.permission or cfg.get("permission", "restricted")
+    permission = args.permission or cfg.get("permission", "auto")
     temperature = (
         args.temperature if args.temperature is not None else cfg.get("temperature")
     )
@@ -725,6 +725,9 @@ def main(argv=None):
 
     # If --interactive explicitly set, go straight to REPL
     if args.interactive:
+        # Enable tools by default in interactive mode (unless explicitly disabled)
+        if not args.tools and not cfg.get("tools"):
+            tools_enabled = True
         run_interactive(
             model=model,
             api_base=api_base,
@@ -750,6 +753,9 @@ def main(argv=None):
 
     if not prompt_text and not stdin_is_pipe:
         # Interactive REPL (no args, tty)
+        # Enable tools by default in interactive mode (unless explicitly disabled)
+        if not args.tools and not cfg.get("tools"):
+            tools_enabled = True
         run_interactive(
             model=model,
             api_base=api_base,
