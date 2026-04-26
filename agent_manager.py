@@ -6606,8 +6606,26 @@ Do NOT emit status updates for quick operations (< 15 seconds)."""
                 flush=True,
             )
 
+        # Build agent registry for discovery
+        agent_registry = ""
+        try:
+            if self.AGENTS:
+                agents_list = []
+                for agent_name, agent_info in self.AGENTS.items():
+                    desc = agent_info.get("description", "").strip()
+                    path = agent_info.get("path", "")
+                    agents_list.append(f"- **{agent_name}** — {desc} (path: {path})")
+                
+                if agents_list:
+                    agent_registry = "\n\n[Available Agents in Wee Orchestrator]\n" + "\n".join(agents_list)
+        except Exception as _agents_exc:
+            print(
+                f"[Agent Registry] Injection skipped: {_agents_exc}",
+                flush=True,
+            )
+
         context = f"""{handoff_prefix}[Session ID: {n8n_session_id}]
-{runtime_instruction}{injection_text}{mobile_channel_instruction}{silent_mode_instruction}{memory_section}{agent_desc}{files_context}{render_instruction}{bg_task_instruction}{canvas_instruction}{wee_executor_instruction}{timeout_instruction}
+{runtime_instruction}{injection_text}{mobile_channel_instruction}{silent_mode_instruction}{memory_section}{agent_desc}{files_context}{agent_registry}{render_instruction}{bg_task_instruction}{canvas_instruction}{wee_executor_instruction}{timeout_instruction}
 
 User Request:
 {prompt}"""
