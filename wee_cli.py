@@ -368,7 +368,8 @@ Wee CLI Interactive Mode — Commands:
   /clear              Clear conversation history
   /history            Show conversation history
   /model MODEL        Switch model
-  /model list         List available models
+  /model list         List all available models
+  /model list PROVIDER List models from specific provider (ollama, openrouter, lmstudio)
   /tokens             Show token usage
   /system PROMPT      Set system prompt
   /config             Show current configuration
@@ -449,6 +450,10 @@ def run_interactive(
                     _print_info(f"Current model: {model}")
                 elif arg.lower() == "list":
                     list_available_models()
+                elif arg.lower().startswith("list "):
+                    # /model list <provider>
+                    provider = arg[5:].strip()
+                    list_available_models(provider)
                 else:
                     old_model = model
                     model, api_base, api_key = resolve_model_and_endpoint(arg)
@@ -688,8 +693,10 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--list-models",
-        action="store_true",
-        help="List available models and exit",
+        nargs="?",
+        const=True,
+        metavar="PROVIDER",
+        help="List available models (optional: ollama, openrouter, lmstudio)",
     )
     parser.add_argument(
         "prompt",
@@ -708,9 +715,10 @@ def main(argv=None):
     args = parser.parse_args(argv)
 
     # Handle --list-models
-    if args.list_models:
+    if args.list_models is not None:
         from wee_runtime import list_available_models
-        list_available_models()
+        provider = None if args.list_models is True else args.list_models
+        list_available_models(provider)
         sys.exit(0)
 
     # Load config file defaults
