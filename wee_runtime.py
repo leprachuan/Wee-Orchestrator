@@ -218,6 +218,58 @@ def execute_tool(func_name: str, func_args: dict, permission: str = "auto") -> s
         return f"Error executing tool {func_name}: {e}"
 
 
+def _load_agents_config() -> dict:
+    """Load agents.json from common locations."""
+    import json
+    
+    locations = [
+        os.path.join(os.getcwd(), "agents.json"),
+        "/opt/n8n-copilot-shim/agents.json",
+        os.path.expanduser("~/.wee/agents.json"),
+    ]
+    
+    for path in locations:
+        if os.path.isfile(path):
+            try:
+                with open(path, 'r', encoding='utf-8') as f:
+                    return json.load(f)
+            except (json.JSONDecodeError, OSError):
+                pass
+    
+    return {"agents": []}
+
+
+def _get_agent_config(agent_name: str) -> dict:
+    """Get config for a specific agent from agents.json.
+    
+    Supports both old format (runtime/model) and new format (primary_runtime/primary_model).
+    """
+    config = _load_agents_config()
+    for agent in config.get("agents", []):
+        if agent.get("name") == agent_name:
+            # Handle both old and new config formats
+            agent_config = agent.copy()
+            
+            # If new format (primary_runtime), use it as-is
+            if "primary_runtime" in agent_config:
+                return agent_config
+            
+            # Convert old format (runtime/model) to new format for consistency
+            if "runtime" in agent_config:
+                agent_config["primary_runtime"] = agent_config.pop("runtime")
+            if "model" in agent_config:
+                agent_config["primary_model"] = agent_config.pop("model")
+            
+            # Provide sensible fallbacks if not specified
+            if "fallback_runtime" not in agent_config:
+                agent_config["fallback_runtime"] = "copilot" if agent_config.get("primary_runtime") == "claude" else "claude"
+            if "fallback_model" not in agent_config:
+                agent_config["fallback_model"] = "auto"
+            
+            return agent_config
+    return {}
+
+
 def _call_agent_handler(func_args: dict) -> str:
     """Handle call_agent tool calls to invoke Wee Orchestrator agents.
 
@@ -226,6 +278,9 @@ def _call_agent_handler(func_args: dict) -> str:
 
     Returns:
         Result string or task ID
+    
+    On infrastructure errors (429, 503, 502, 401, timeout), automatically retries
+    with agent's fallback_runtime and fallback_model from agents.json.
     """
     import json
     import urllib.request
@@ -242,58 +297,107 @@ def _call_agent_handler(func_args: dict) -> str:
     if mode not in ("quick", "background"):
         return "Error: mode must be 'quick' or 'background'"
 
-    try:
-        api_url = os.environ.get("WEE_ORCHESTRATOR_API", "https://127.0.0.1:8000")
-        token = os.environ.get("WEE_ORCHESTRATOR_TOKEN", "shared_R6R6wReORUV6bouLntScMTowbsh30Rzqa3hzjs3bWgU")
-
-        if mode == "quick":
-            # Use /api/v1/query for sync calls
-            endpoint = "/api/v1/query"
-            task_data = {
-                "prompt": prompt,
-                "agent": agent,
-                "runtime": "copilot",
-                "model": "claude-haiku-4.5",
-                "timeout": 60,
-            }
-        else:
-            # Use /api/v1/background-tasks for async calls
-            endpoint = "/api/v1/background-tasks"
-            task_data = {
-                "prompt": prompt,
-                "agent": agent,
-                "runtime": "copilot",
-                "model": "claude-haiku-4.5",
-                "timeout": 1800,
-            }
-
-        url = f"{api_url}{endpoint}"
-        req = urllib.request.Request(url, method="POST")
-        req.add_header("Content-Type", "application/json")
-        req.add_header("Authorization", f"Bearer {token}")
-
-        import ssl
-        ctx = ssl.create_default_context()
-        ctx.check_hostname = False
-        ctx.verify_mode = ssl.CERT_NONE
-
-        with urllib.request.urlopen(req, data=json.dumps(task_data).encode(), context=ctx, timeout=30) as response:
-            result = json.loads(response.read().decode())
-            if mode == "background":
-                task_id = result.get("id", result.get("task_id"))
-                return f"✓ Task started: {agent}\nTask ID: {task_id}\nCheck status with: /background status {task_id}"
+    # Get agent config for fallback info
+    agent_config = _get_agent_config(agent)
+    
+    api_url = os.environ.get("WEE_ORCHESTRATOR_API", "https://127.0.0.1:8000")
+    token = os.environ.get("WEE_ORCHESTRATOR_TOKEN", "shared_R6R6wReORUV6bouLntScMTowbsh30Rzqa3hzjs3bWgU")
+    
+    # Try with primary runtime first, then fallback
+    runtimes_to_try = [
+        {
+            "runtime": agent_config.get("primary_runtime", "copilot"),
+            "model": agent_config.get("primary_model", "claude-haiku-4.5"),
+            "is_fallback": False,
+        }
+    ]
+    
+    # Add fallback if different from primary
+    fallback_runtime = agent_config.get("fallback_runtime")
+    fallback_model = agent_config.get("fallback_model")
+    if fallback_runtime and fallback_runtime != runtimes_to_try[0]["runtime"]:
+        runtimes_to_try.append({
+            "runtime": fallback_runtime,
+            "model": fallback_model or "auto",
+            "is_fallback": True,
+        })
+    
+    last_error = None
+    
+    for runtime_config in runtimes_to_try:
+        try:
+            runtime = runtime_config["runtime"]
+            model = runtime_config["model"]
+            is_fallback = runtime_config["is_fallback"]
+            
+            if mode == "quick":
+                endpoint = "/api/v1/query"
+                task_data = {
+                    "prompt": prompt,
+                    "agent": agent,
+                    "runtime": runtime,
+                    "model": model,
+                    "timeout": 60,
+                }
             else:
-                # For quick mode, extract response field or return full result
-                response_text = result.get('response', result.get('result', str(result)))
-                return f"✓ {agent} agent response:\n{response_text}"
+                endpoint = "/api/v1/background-tasks"
+                task_data = {
+                    "prompt": prompt,
+                    "agent": agent,
+                    "runtime": runtime,
+                    "model": model,
+                    "timeout": 1800,
+                }
 
-    except urllib.error.HTTPError as e:
-        error_text = e.read().decode() if e.fp else str(e)
-        if e.code == 429:
-            return "Error: Rate limit exceeded on orchestrator. If this persists, check orchestrator health or try again in 60 seconds."
-        return f"Error calling orchestrator API ({e.code}): {error_text}"
-    except Exception as e:
-        return f"Error calling agent '{agent}': {e}"
+            url = f"{api_url}{endpoint}"
+            req = urllib.request.Request(url, method="POST")
+            req.add_header("Content-Type", "application/json")
+            req.add_header("Authorization", f"Bearer {token}")
+
+            import ssl
+            ctx = ssl.create_default_context()
+            ctx.check_hostname = False
+            ctx.verify_mode = ssl.CERT_NONE
+
+            with urllib.request.urlopen(req, data=json.dumps(task_data).encode(), context=ctx, timeout=30) as response:
+                result = json.loads(response.read().decode())
+                if mode == "background":
+                    task_id = result.get("id", result.get("task_id"))
+                    prefix = "[Fallback] " if is_fallback else ""
+                    return f"✓ {prefix}Task started: {agent}\nTask ID: {task_id}\nCheck status with: /background status {task_id}"
+                else:
+                    response_text = result.get('response', result.get('result', str(result)))
+                    prefix = "[Fallback] " if is_fallback else ""
+                    return f"✓ {prefix}{agent} agent response:\n{response_text}"
+
+        except urllib.error.HTTPError as e:
+            error_code = e.code
+            error_text = e.read().decode() if e.fp else str(e)
+            
+            # Check if this is a retryable error
+            retryable_codes = {429, 503, 502, 401, 408}
+            if error_code in retryable_codes and not runtime_config["is_fallback"]:
+                # Will retry with fallback on next iteration
+                last_error = f"HTTP {error_code}: {error_text[:100]}"
+                continue
+            
+            # Not retryable or already on fallback
+            return f"Error calling {agent} ({runtime}/{model}): HTTP {error_code} - {error_text[:200]}"
+        
+        except (urllib.error.URLError, TimeoutError, OSError) as e:
+            # Network/timeout errors are retryable if not on fallback
+            if not runtime_config["is_fallback"]:
+                last_error = str(e)[:100]
+                continue
+            return f"Error calling {agent} ({runtime}/{model}): {e}"
+        
+        except Exception as e:
+            return f"Error calling agent '{agent}': {e}"
+    
+    # All retries exhausted
+    if last_error:
+        return f"Error: All retry attempts failed for {agent}. Last error: {last_error}"
+    return f"Error: No valid runtime configuration found for agent '{agent}'"
 
 
 # Issue #113: SSH command sanitisation
