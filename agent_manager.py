@@ -8800,6 +8800,8 @@ User Request:
                 # Apply sandbox bypass and environment inheritance for elevated sessions
                 cmd.append("--dangerously-bypass-approvals-and-sandbox")
                 cmd += ["-c", "shell_environment_policy.inherit=all"]
+                # Use danger-full-access sandbox mode to work around bwrap namespace issues
+                cmd += ["--sandbox", "danger-full-access"]
             if model:
                 cmd += ["-m", model]
             cmd += [session_id, context_prompt]
@@ -8815,6 +8817,8 @@ User Request:
                 cmd.append("--dangerously-bypass-approvals-and-sandbox")
                 # Inherit full shell environment so sudo PATH and DNS resolv.conf are available
                 cmd += ["-c", "shell_environment_policy.inherit=all"]
+                # Use danger-full-access sandbox mode to work around bwrap namespace issues
+                cmd += ["--sandbox", "danger-full-access"]
             if model:
                 cmd += ["-m", model]
             cmd.append(context_prompt)
