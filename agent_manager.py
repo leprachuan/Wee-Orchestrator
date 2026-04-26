@@ -1006,30 +1006,93 @@ class BackgroundTaskManager:
 
     # --- Fallback retry helpers (Issue #219) ---
 
-    @staticmethod
-    def _is_fallback_eligible(error_text: str) -> bool:
-        """Check if error is an infrastructure failure eligible for fallback retry."""
+    # Test/assertion context markers — when these appear in error text, we treat
+    # the failure as an application/test error and skip fallback even if the text
+    # mentions HTTP codes or infra phrases (e.g. fixture data, expected values).
+    _BG_FALLBACK_TEST_MARKERS = (
+        r"\bAssertionError\b",
+        r"\bassert\s",
+        r"\bexpected\s+.{0,80}?\bto\s+(?:be|equal|contain|match)\b",
+        r"\bfixture\b",
+        r"\bpytest\b",
+        r"\bmismatch\b",
+        r"\bunit\s+test\b",
+        r"^\s*tests?/",  # path like tests/foo.py in a traceback
+        r"\bFAILED\s+tests?/",
+    )
+
+    # Contextual infrastructure-failure phrases. Word-boundaried so they cannot
+    # match identifiers like ``unauthorized_users`` or ``timeout_value``.
+    _BG_FALLBACK_PHRASES = (
+        r"\brate[\s_-]?limit(?:ed|\s+exceeded|\s+reached|\s+hit)?\b",
+        r"\bquota\s+(?:exceeded|exhausted|reached)\b",
+        r"\bservice\s+unavailable\b",
+        r"\bbad\s+gateway\b",
+        r"\bgateway\s+time(?:d\s+)?out\b",
+        r"\bconnection\s+refused\b",
+        r"\bconnection\s+reset\b",
+        r"\bconnection\s+time(?:d\s+)?out\b",
+        r"\brequest\s+time(?:d\s+)?out\b",
+        r"\b(?:read|write)\s+time(?:d\s+)?out\b",
+        r"\bsocket\s+timeout\b",
+        r"\boverloaded\b",
+        r"\bauthentication\s+(?:failed|required|error)\b",
+        r"\bmissing\s+authentication\b",
+        r"\b(?:invalid|expired|missing)\s+api[\s_-]?key\b",
+        r"\bapi[\s_-]?key\s+(?:is\s+)?(?:invalid|expired|missing|required|not\s+found)\b",
+        r"\bunauthorized\s+request\b",
+        r"\bunauthorized\s+access\b",
+        r"\bunauthenticated\b",
+        r"\bECONNREFUSED\b",
+        r"\bETIMEDOUT\b",
+        r"\bECONNRESET\b",
+        r"\bEAI_AGAIN\b",
+    )
+
+    # HTTP status patterns: status code must appear in a recognisable HTTP/status
+    # context, not as a substring of an identifier or arbitrary numeric value.
+    _BG_FALLBACK_HTTP_STATUS = (
+        r"\bHTTP(?:/[\d.]+)?\s+(?:429|503|502|401|504|408|499)\b",
+        r"\bstatus[\s_-]?code\s*[:=]\s*(?:429|503|502|401|504|408|499)\b",
+        r"\bstatus\s*[:=]\s*(?:429|503|502|401|504|408|499)\b",
+        r"\bcode\s*[:=]\s*(?:429|503|502|401|504|408|499)\b",
+        (
+            r"\b(?:429|503|502|401|504|408|499)\s+"
+            r"(?:too\s+many\s+requests|service\s+unavailable|bad\s+gateway|"
+            r"unauthorized|gateway\s+timeout|request\s+timeout|client\s+closed)\b"
+        ),
+        r"\(\s*(?:429|503|502|401|504|408|499)\s*\)",
+        r"^(?:429|503|502|401|504|408|499)\s+\w",
+        r":\s+(?:429|503|502|401|504|408|499)\s+\w",
+    )
+
+    @classmethod
+    def _is_fallback_eligible(cls, error_text: str) -> bool:
+        """Return True iff *error_text* indicates an infrastructure failure
+        eligible for a single fallback retry.
+
+        Issue #219: this matcher is intentionally conservative. It must NOT
+        trigger fallback on ordinary application/test errors that merely
+        mention infra-related words (e.g. ``status_code_429_count``,
+        ``unauthorized_users``, ``timeout_value``, ``AssertionError: expected
+        503 Service Unavailable``). It MUST still trigger on prefix-wrapped
+        infra failures (e.g. ``RuntimeError: 503 Service Unavailable from
+        upstream``, ``ValueError: API key invalid``).
+        """
         if not error_text:
             return False
-        fallback_patterns = [
-            r"429",
-            r"rate.?limit",
-            r"quota.?exceeded",
-            r"401",
-            r"unauthorized",
-            r"missing.?authentication",
-            r"api[_\-]?key.?(invalid|expired|missing)",
-            r"503",
-            r"service.?unavailable",
-            r"502",
-            r"bad.?gateway",
-            r"connection.?refused",
-            r"timed?.?out",
-            r"etimedout",
-            r"overloaded",
-        ]
-        for pattern in fallback_patterns:
-            if re.search(pattern, error_text, re.IGNORECASE):
+
+        text = error_text
+
+        # If the failure is clearly a test/assertion failure, do not retry —
+        # even if the text mentions infra words. Test failures are
+        # deterministic and re-running on a fallback runtime won't help.
+        for marker in cls._BG_FALLBACK_TEST_MARKERS:
+            if re.search(marker, text, re.IGNORECASE | re.MULTILINE):
+                return False
+
+        for pattern in cls._BG_FALLBACK_PHRASES + cls._BG_FALLBACK_HTTP_STATUS:
+            if re.search(pattern, text, re.IGNORECASE | re.MULTILINE):
                 return True
         return False
 
