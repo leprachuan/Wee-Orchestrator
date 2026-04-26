@@ -70,8 +70,25 @@ def save_config(cfg: dict) -> None:
 # ---------------------------------------------------------------------------
 # Agent & Skill Discovery
 # ---------------------------------------------------------------------------
-def load_agents_json() -> dict:
-    """Load agents.json from the wee orchestrator folder (script's directory)."""
+def load_agents_json(search_cwd: bool = True) -> dict:
+    """Load agents.json from CWD first, then fallback to script folder.
+    
+    Args:
+        search_cwd: If True, search CWD first. If False, only use script folder.
+    
+    Returns:
+        Parsed agents.json content or empty dict if not found
+    """
+    # Try CWD first if requested
+    if search_cwd:
+        cwd_agents = os.path.join(os.getcwd(), "agents.json")
+        try:
+            with open(cwd_agents) as f:
+                return json.load(f)
+        except (FileNotFoundError, json.JSONDecodeError):
+            pass
+    
+    # Fall back to script folder
     agents_file = os.path.join(_HERE, "agents.json")
     try:
         with open(agents_file) as f:
@@ -80,17 +97,29 @@ def load_agents_json() -> dict:
         return {"agents": []}
 
 
-def discover_skills() -> dict:
-    """Discover available skills from skill repositories.
+def discover_skills(search_cwd: bool = True) -> dict:
+    """Discover available skills from skill repositories and CWD.
+    
+    Args:
+        search_cwd: If True, search CWD first. If False, only use default dirs.
     
     Returns:
         Dict mapping skill_name -> {description, path, loaded}
     """
     skills = {}
-    skill_dirs = [
+    skill_dirs = []
+    
+    # Add CWD first if requested
+    if search_cwd:
+        cwd_skills_dir = os.path.join(os.getcwd(), "skills")
+        if os.path.isdir(cwd_skills_dir):
+            skill_dirs.append(cwd_skills_dir)
+    
+    # Always add default directories
+    skill_dirs.extend([
         "/opt/foster-skills",
         "/opt/skills",
-    ]
+    ])
     
     for skill_dir in skill_dirs:
         if not os.path.isdir(skill_dir):
@@ -498,6 +527,9 @@ def run_interactive(
 
     _print_info(f"Wee CLI v{__version__} — model: {model}")
     _print_info("Type /help for commands, /exit to quit.\n")
+    
+    # Track if this is the first message (for CWD context injection)
+    first_message = True
 
     while True:
         try:
@@ -615,7 +647,7 @@ def run_interactive(
                 continue
 
             elif cmd == "/skills" or (cmd == "/discover-skills"):
-                skills = discover_skills()
+                skills = discover_skills(search_cwd=True)
                 if skills:
                     _print_info(f"Available Skills ({len(skills)} found):")
                     for skill_name, skill_info in sorted(skills.items()):
@@ -633,6 +665,60 @@ def run_interactive(
             else:
                 _print_info(f"Unknown command: {cmd}. Type /help for commands.")
                 continue
+
+        # On first message, inject context about CWD agents/skills
+        if first_message:
+            first_message = False
+            cwd_agents = load_agents_json(search_cwd=True)
+            cwd_skills = discover_skills(search_cwd=True)
+            
+            # Check if CWD has its own agents.json
+            cwd_agents_file = os.path.join(os.getcwd(), "agents.json")
+            cwd_has_agents = os.path.isfile(cwd_agents_file)
+            
+            # Check if CWD/skills exists
+            cwd_skills_dir = os.path.join(os.getcwd(), "skills")
+            cwd_has_skills_dir = os.path.isdir(cwd_skills_dir)
+            
+            # If CWD has local agents/skills, add system context
+            if cwd_has_agents or cwd_has_skills_dir:
+                context = "\nContext from current working directory:"
+                if cwd_has_agents:
+                    agents = cwd_agents.get("agents", [])
+                    if agents:
+                        context += f"\n\nAvailable agents ({len(agents)}):"
+                        for agent in agents[:5]:
+                            context += f"\n  - {agent.get('name', 'unknown')}: {agent.get('description', '')[:60]}"
+                        if len(agents) > 5:
+                            context += f"\n  ... and {len(agents) - 5} more"
+                
+                if cwd_has_skills_dir:
+                    # Re-discover to get only CWD skills
+                    cwd_only_skills = {}
+                    if os.path.isdir(cwd_skills_dir):
+                        try:
+                            for entry in os.listdir(cwd_skills_dir):
+                                skill_path = os.path.join(cwd_skills_dir, entry)
+                                metadata_file = os.path.join(skill_path, "skill_metadata.json")
+                                if os.path.isfile(metadata_file):
+                                    try:
+                                        with open(metadata_file) as f:
+                                            metadata = json.load(f)
+                                        cwd_only_skills[entry] = metadata.get("description", "")
+                                    except (json.JSONDecodeError, OSError):
+                                        pass
+                        except OSError:
+                            pass
+                    
+                    if cwd_only_skills:
+                        context += f"\n\nAvailable skills in ./skills ({len(cwd_only_skills)}):"
+                        for skill_name in list(cwd_only_skills.keys())[:5]:
+                            context += f"\n  - {skill_name}: {cwd_only_skills[skill_name][:50]}"
+                        if len(cwd_only_skills) > 5:
+                            context += f"\n  ... and {len(cwd_only_skills) - 5} more"
+                
+                # Prepend context to first user message
+                user_input = context + "\n\n" + user_input
 
         # Regular prompt
         messages.append({"role": "user", "content": user_input})
