@@ -35,6 +35,7 @@ RUNNING_STATUSES = {"created", "queued", "pending", "running", "in_progress"}
 
 AGENT_MANAGER_PATH = Path("/opt/n8n-copilot-shim/agent_manager.py")
 AGENTS_CONFIG_PATH = Path("/opt/n8n-copilot-shim/agents.json")
+AGENTS_DISPATCH_CONFIG_PATH = Path("/opt/n8n-copilot-shim/config/agents.json")
 DISPATCH_LOG_DIR = Path("/tmp/wee-dispatch-logs")
 
 # Labels required in the repository (name → colour hex without #)
@@ -324,6 +325,64 @@ def clear_lock() -> None:
 # ---------------------------------------------------------------------------
 # Wee Orchestrator API helpers
 # ---------------------------------------------------------------------------
+
+
+def get_agent_dispatch_config(agent_name: str) -> dict:
+    """Get dispatch configuration for an agent.
+
+    Resolution order (issue #238 consolidation):
+    1. ``dispatch_config`` block in agents.json (legacy / explicit override)
+    2. ``dispatch_config`` block in config/agents.json (protected overlay)
+    3. Flat ``primary_runtime``/``primary_model`` fields in agents.json (issue #225 format)
+
+    Raises RuntimeError if no configuration can be found.
+    """
+    # Load main agents.json
+    if not AGENTS_CONFIG_PATH.exists():
+        raise RuntimeError(f"agents.json not found at {AGENTS_CONFIG_PATH}")
+    main_config = json.loads(AGENTS_CONFIG_PATH.read_text())
+
+    main_agent = next(
+        (a for a in main_config.get("agents", []) if a.get("name") == agent_name),
+        None,
+    )
+    if main_agent is None:
+        raise RuntimeError(f"Agent {agent_name!r} not found in agents.json")
+
+    # 1. Explicit dispatch_config in agents.json
+    if main_agent.get("dispatch_config"):
+        return dict(main_agent["dispatch_config"])
+
+    # 2. Protected overlay in config/agents.json
+    if AGENTS_DISPATCH_CONFIG_PATH.exists():
+        overlay = json.loads(AGENTS_DISPATCH_CONFIG_PATH.read_text())
+        for a in overlay.get("agents", []):
+            if a.get("name") == agent_name and a.get("dispatch_config"):
+                cfg = dict(a["dispatch_config"])
+                # Back-fill fallback from main agents.json flat fields if absent
+                if "fallback_runtime" not in cfg and main_agent.get("fallback_runtime"):
+                    cfg["fallback_runtime"] = main_agent["fallback_runtime"]
+                if "fallback_model" not in cfg and main_agent.get("fallback_model"):
+                    cfg["fallback_model"] = main_agent["fallback_model"]
+                return cfg
+
+    # 3. Build from flat primary_runtime/primary_model fields (issue #225 format)
+    if main_agent.get("primary_runtime"):
+        return {
+            "runtime": main_agent["primary_runtime"],
+            "model": main_agent.get("primary_model", "auto"),
+            "fallback_runtime": main_agent.get("fallback_runtime", "copilot"),
+            "fallback_model": main_agent.get("fallback_model", "auto"),
+            "permission_mode": "elevated",
+            "yolo": True,
+            "timeout": 3600,
+            "vendor": f"{main_agent['primary_runtime']}/{main_agent.get('primary_model', 'auto')}",
+        }
+
+    raise RuntimeError(
+        f"No dispatch_config found for agent {agent_name!r}. "
+        f"Add a dispatch_config block to agents.json or config/agents.json."
+    )
 
 
 def load_api_key() -> str:
