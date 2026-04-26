@@ -309,6 +309,7 @@ def chat_stream(
     token_tracker: TokenTracker = None,
     permission: str = "auto",
     stream_output: bool = True,
+    tool_results_buffer: dict = None,
 ) -> str:
     """Send a chat completion request and stream the response.
 
@@ -318,10 +319,14 @@ def chat_stream(
         permission: Tool execution permission level. "restricted" blocks all tool
             execution. "auto" (default) executes tools as requested. "elevated" is
             treated the same as "auto" (no additional privilege escalation in CLI).
+        tool_results_buffer: Optional dict to collect tool results. Will be populated
+            with {tool_name: result} entries during tool execution.
     Returns the full response text. Handles tool-calling loops.
     """
     tool_call_counter = 0
     collected_output = []
+    if tool_results_buffer is None:
+        tool_results_buffer = {}
 
     for round_num in range(MAX_TOOL_ROUNDS + 1):
         create_kwargs = {
@@ -422,6 +427,16 @@ def chat_stream(
 
             _print_info(f"[Wee] Executing: {func_name}({json.dumps(func_args)[:300]})" + ("..." if len(json.dumps(func_args)) > 300 else ""))
             tool_result = execute_tool(func_name, func_args, permission=permission)
+            
+            # Store tool result for later viewing
+            if func_name not in tool_results_buffer:
+                tool_results_buffer[func_name] = []
+            tool_results_buffer[func_name].append({
+                "args": func_args,
+                "result": tool_result or "No output",
+                "tool_id": tc_id,
+            })
+            
             messages.append(
                 {
                     "role": "tool",
@@ -488,12 +503,16 @@ Wee CLI Interactive Mode — Commands:
   /config             Show current configuration
   /tools              Show tool status
   /tools on|off       Enable/disable tool calling
+  /tools-output       Show last tool call outputs
   /permission MODE    Set permission level (restricted, auto, elevated)
   /agents             List agents. Use call_agent tool to dispatch work
   /skills             List available skills (alias: /discover-skills)
   /version            Show version
   /help               Show this help
   /exit, /quit        Exit interactive mode
+
+Keyboard Shortcuts:
+  Ctrl+O              Show last tool call outputs (same as /tools-output)
 """
 
 
@@ -530,6 +549,8 @@ def run_interactive(
     
     # Track if this is the first message (for CWD context injection)
     first_message = True
+    # Buffer to store tool results from the last interaction
+    tool_results_buffer = {}
 
     while True:
         try:
@@ -621,7 +642,23 @@ def run_interactive(
                     _print_error(f"Invalid argument: {arg}. Use 'on' or 'off'.")
                 continue
 
-            elif cmd == "/permission":
+            elif cmd == "/tools-output":
+                if not tool_results_buffer:
+                    _print_info("No tool results from recent calls.")
+                else:
+                    _print_info("Tool Execution Results:")
+                    for tool_name, results in tool_results_buffer.items():
+                        for i, entry in enumerate(results, 1):
+                            _print_info(f"\n  [{tool_name}#{i}]")
+                            _print_info(f"    Args: {json.dumps(entry['args'])[:150]}")
+                            if len(json.dumps(entry['args'])) > 150:
+                                _print_info("           ...")
+                            result_lines = str(entry['result']).split('\n')
+                            for line in result_lines[:20]:
+                                _print_info(f"    {line}")
+                            if len(result_lines) > 20:
+                                _print_info(f"    ... ({len(result_lines) - 20} more lines)")
+                continue
                 if not arg:
                     _print_info(f"Permission level: {permission}")
                 elif arg.lower() in ("restricted", "auto", "elevated"):
@@ -724,6 +761,7 @@ def run_interactive(
         messages.append({"role": "user", "content": user_input})
 
         try:
+            tool_results_buffer = {}  # Clear buffer for new interaction
             response = chat_stream(
                 client=client,
                 model=model,
@@ -732,6 +770,7 @@ def run_interactive(
                 temperature=temperature,
                 token_tracker=token_tracker,
                 permission=permission,
+                tool_results_buffer=tool_results_buffer,
             )
             messages.append({"role": "assistant", "content": response})
         except KeyboardInterrupt:
