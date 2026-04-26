@@ -453,6 +453,68 @@ class AuthManager:
         self._save_sessions()
 
 
+# ─────────────────────────────────────────────────────────────────────────────────
+# Issue #219: Background task fallback on infrastructure failure
+# ─────────────────────────────────────────────────────────────────────────────────
+
+import re as _re
+
+_FALLBACK_FAILURE_PATTERNS = [
+    _re.compile(p, _re.IGNORECASE)
+    for p in [
+        r"429",
+        r"rate.?limit",
+        r"quota.?exceeded",
+        r"401",
+        r"unauthorized",
+        r"missing.?authentication",
+        r"api[_\-]?key.?(invalid|expired|missing)",
+        r"503",
+        r"service.?unavailable",
+        r"502",
+        r"bad.?gateway",
+        r"connection.?refused",
+        r"timed?.?out",
+        r"etimedout",
+        r"overloaded",
+    ]
+]
+
+
+def _is_fallback_eligible(error_text: str) -> bool:
+    """Check if error text indicates a fallback-eligible infrastructure failure."""
+    if not error_text:
+        return False
+    for pattern in _FALLBACK_FAILURE_PATTERNS:
+        if pattern.search(error_text):
+            return True
+    return False
+
+
+def _resolve_bg_fallback(task: dict) -> tuple:
+    """Resolve fallback runtime/model for background task.
+
+    Priority: task fallback_runtime > env > None
+    Returns (fallback_runtime, fallback_model) or (None, None)
+    """
+    import os
+
+    fb_rt = task.get("fallback_runtime") or os.environ.get(
+        "BACKGROUND_FALLBACK_RUNTIME"
+    )
+    fb_model = task.get("fallback_model") or os.environ.get("BACKGROUND_FALLBACK_MODEL")
+
+    # Don't use fallback if identical to primary
+    if fb_rt == task.get("runtime") and fb_model == task.get("model"):
+        return None, None
+
+    # Don't use if neither configured
+    if not fb_rt and not fb_model:
+        return None, None
+
+    return fb_rt, fb_model
+
+
 class BackgroundTaskManager:
     """Manages background task lifecycle: creation, tracking, output capture, cleanup."""  # noqa: E501
 
@@ -598,6 +660,8 @@ class BackgroundTaskManager:
         timeout: int = None,
         notify: bool = True,
         origin_session_id: str = None,
+        fallback_runtime: str = None,  # Issue #219
+        fallback_model: str = None,  # Issue #219
     ) -> dict:
         task = {
             "task_id": task_id,
@@ -625,6 +689,8 @@ class BackgroundTaskManager:
             "timeout": timeout,
             "notify": notify,
             "origin_session_id": origin_session_id,
+            "fallback_runtime": fallback_runtime,  # Issue #219
+            "fallback_model": fallback_model,  # Issue #219
         }
         with self._lock:
             tasks = self._load()
@@ -737,6 +803,8 @@ class BackgroundTaskManager:
         timeout: int = None,
         notify: bool = True,
         origin_session_id: str = None,
+        fallback_runtime: str = None,  # Issue #219
+        fallback_model: str = None,  # Issue #219
     ) -> tuple:
         """Atomically check concurrency limit and create task (TOCTOU-safe).
 
@@ -779,6 +847,8 @@ class BackgroundTaskManager:
                 "timeout": timeout,
                 "notify": notify,
                 "origin_session_id": origin_session_id,
+                "fallback_runtime": fallback_runtime,  # Issue #219
+                "fallback_model": fallback_model,  # Issue #219
             }
             tasks = self._evict_oldest_terminal(tasks)
             tasks.append(task)
@@ -10468,7 +10538,11 @@ User Request:
     def _execute_background_task(
         self, task_id, session_id, prompt, agent, runtime, model, channel, timeout=None
     ):
-        """Run a background task in the current thread (called from thread pool)."""
+        """Run a background task in the current thread (called from thread pool).
+
+        Issue #219: Implements retry logic with fallback_runtime/fallback_model
+        on infrastructure failures (429, rate_limit, quota_exceeded, 503, etc.)
+        """
         self.get_or_create_session_data(session_id)
         self.update_session_field(session_id, "agent", agent)
         self.update_session_field(session_id, "model", model)
@@ -10482,6 +10556,8 @@ User Request:
         self.update_session_field(session_id, "bg_task_id", task_id)
         if timeout is not None:
             self.update_session_field(session_id, "timeout", timeout)
+
+        # Issue #219: Fallback retry logic
         try:
             result = self.execute(prompt, session_id)
             if self._bg_task_mgr:
@@ -10504,8 +10580,106 @@ User Request:
                     )
 
         except Exception as exc:
+            exc_text = str(exc)
+
+            # Check if error is fallback-eligible (Issue #219)
+            if _is_fallback_eligible(exc_text):
+                task_rec = (
+                    self._bg_task_mgr.get_task(task_id) if self._bg_task_mgr else None
+                )
+                fb_rt, fb_model = (
+                    _resolve_bg_fallback(task_rec) if task_rec else (None, None)
+                )
+
+                if fb_rt or fb_model:
+                    # Prepare fallback attempt
+                    fb_rt = fb_rt or runtime
+                    fb_model = fb_model or model
+
+                    logger.warning(
+                        f"[BG-Task {task_id}] Primary failure (runtime={runtime}, model={model}): {exc_text[:120]}. "
+                        f"Retrying with fallback runtime={fb_rt}, model={fb_model}"
+                    )
+
+                    try:
+                        # Create new session for fallback attempt
+                        fb_session_id = str(uuid4())
+                        self.get_or_create_session_data(fb_session_id)
+                        self.update_session_field(fb_session_id, "agent", agent)
+                        self.update_session_field(fb_session_id, "model", fb_model)
+                        self.update_session_field(fb_session_id, "runtime", fb_rt)
+                        self.update_session_field(fb_session_id, "channel", channel)
+                        self.update_session_field(fb_session_id, "render_type", "text")
+                        self.update_session_field(
+                            fb_session_id, "permissions", {"mode": "elevated"}
+                        )
+                        self.update_session_field(fb_session_id, "bg_task_id", task_id)
+                        if timeout is not None:
+                            self.update_session_field(fb_session_id, "timeout", timeout)
+
+                        # Execute with fallback runtime/model
+                        result = self.execute(prompt, fb_session_id)
+
+                        if self._bg_task_mgr:
+                            # Success with fallback
+                            self._bg_task_mgr.complete_task(task_id, result)
+                            task_rec = self._bg_task_mgr.get_task(task_id)
+                            o_sid = (
+                                task_rec.get("origin_session_id") if task_rec else None
+                            )
+                            if o_sid:
+                                self._bg_task_mgr.push_bg_event(
+                                    o_sid,
+                                    {
+                                        "task_id": task_id,
+                                        "summary": prompt[:80],
+                                        "status": "completed",
+                                        "agent": agent,
+                                        "timestamp": time.strftime(
+                                            "%Y-%m-%dT%H:%M:%SZ",
+                                            time.gmtime(),
+                                        ),
+                                        "fallback": f"via {fb_rt}/{fb_model}",
+                                    },
+                                )
+                        return  # Success
+
+                    except Exception as fb_exc:
+                        # Fallback also failed -- combine errors
+                        fb_exc_text = str(fb_exc)
+                        combined_error = (
+                            f"Primary (runtime={runtime}, model={model}): {exc_text[:200]}; "
+                            f"Fallback (runtime={fb_rt}, model={fb_model}): {fb_exc_text[:200]}"
+                        )
+                        logger.error(
+                            f"[BG-Task {task_id}] Both attempts failed: {combined_error[:300]}"
+                        )
+                        if self._bg_task_mgr:
+                            self._bg_task_mgr.fail_task(task_id, combined_error)
+                            task_rec = self._bg_task_mgr.get_task(task_id)
+                            o_sid = (
+                                task_rec.get("origin_session_id") if task_rec else None
+                            )
+                            if o_sid:
+                                self._bg_task_mgr.push_bg_event(
+                                    o_sid,
+                                    {
+                                        "task_id": task_id,
+                                        "summary": prompt[:80],
+                                        "status": "failed",
+                                        "agent": agent,
+                                        "timestamp": time.strftime(
+                                            "%Y-%m-%dT%H:%M:%SZ",
+                                            time.gmtime(),
+                                        ),
+                                        "error": "Both primary and fallback attempts failed",
+                                    },
+                                )
+                        return  # Logged as failed
+
+            # Not eligible for fallback or no fallback configured -- fail immediately
             if self._bg_task_mgr:
-                self._bg_task_mgr.fail_task(task_id, str(exc))
+                self._bg_task_mgr.fail_task(task_id, exc_text)
                 task_rec = self._bg_task_mgr.get_task(task_id)
                 o_sid = task_rec.get("origin_session_id") if task_rec else None
                 if o_sid:
@@ -13109,6 +13283,8 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         agent: Optional[str] = None
         runtime: Optional[str] = None
         model: Optional[str] = None
+        fallback_runtime: Optional[str] = None  # Issue #219: fallback on 429/quota
+        fallback_model: Optional[str] = None  # Issue #219: fallback on 429/quota
         timeout: Optional[int] = None
         notify: Optional[bool] = None
         permission_mode: Optional[str] = (
@@ -13732,9 +13908,124 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             stderr_lines = []
 
             def _drain_stderr():
+                """
+                Drain stderr from the process.
+                For Claude runtime (stream-json), stderr contains stream_event JSON
+                that needs to be parsed for tool calls, including content_block_delta events.
+                For other runtimes, stderr is just collected as plain text.
+
+                Issue #230: Parse full Claude stream events from stderr, not just content_block_start.
+                Track active tool calls and accumulate input_json_delta parts into tool_calls.
+                Do NOT leak raw JSON into output_lines if it's valid structured protocol.
+                """
+                nonlocal _tool_call_counter
+                _active_tool_calls = (
+                    {}
+                )  # Maps cb_index -> {"id": id, "name": name, "input_parts": [...]}
+
                 try:
                     for err_line in process.stderr:
+                        err_text = err_line.rstrip("\n\r")
+                        if not err_text:
+                            continue
                         stderr_lines.append(err_line)
+
+                        # For Claude (stream-json), parse stderr as structured events
+                        parsed_as_event = False
+                        if runtime == "claude" and err_text.strip().startswith("{"):
+                            try:
+                                _obj = _json.loads(err_text.strip())
+                                _otype = _obj.get("type", "")
+
+                                if _otype == "stream_event":
+                                    parsed_as_event = True
+                                    _event = _obj.get("event") or {}
+                                    _inner = _event.get("type", "")
+                                    cb_index = _event.get("index", 0)
+
+                                    if _inner == "content_block_start":
+                                        _cb = _event.get("content_block") or {}
+                                        if _cb.get("type") == "tool_use":
+                                            _tool_call_counter += 1
+                                            tool_id = _cb.get(
+                                                "id",
+                                                f"bg_{task_id[:8]}_{_tool_call_counter}",
+                                            )
+                                            tc = {
+                                                "id": tool_id,
+                                                "name": _cb.get("name", "tool"),
+                                                "input": "{}",
+                                                "status": "running",
+                                                "runtime": runtime,
+                                                "timestamp": time.strftime(
+                                                    "%Y-%m-%dT%H:%M:%SZ", time.gmtime()
+                                                ),
+                                            }
+                                            bg_task_mgr.append_tool_call(task_id, tc)
+                                            # Track for delta accumulation; start empty because
+                                            # content_block_start always sends input:{} and the
+                                            # real data arrives via input_json_delta deltas.
+                                            _active_tool_calls[cb_index] = {
+                                                "id": tool_id,
+                                                "name": _cb.get("name", "tool"),
+                                                "input_parts": [],
+                                            }
+
+                                    elif _inner == "content_block_delta":
+                                        delta = _event.get("delta") or {}
+                                        delta_type = delta.get("type")
+                                        if delta_type == "input_json_delta":
+                                            partial = delta.get("partial_json", "")
+                                            if (
+                                                cb_index in _active_tool_calls
+                                                and partial
+                                            ):
+                                                _active_tool_calls[cb_index][
+                                                    "input_parts"
+                                                ].append(partial)
+                                                # Update tool call with accumulated partial
+                                                full_input_so_far = "".join(
+                                                    _active_tool_calls[cb_index][
+                                                        "input_parts"
+                                                    ]
+                                                )
+                                                bg_task_mgr.update_tool_call(
+                                                    task_id,
+                                                    _active_tool_calls[cb_index]["id"],
+                                                    input=full_input_so_far,
+                                                )
+
+                                    elif _inner == "content_block_stop":
+                                        if cb_index in _active_tool_calls:
+                                            tc_info = _active_tool_calls.pop(cb_index)
+                                            full_input = "".join(tc_info["input_parts"])
+                                            try:
+                                                parsed_input = (
+                                                    _json.loads(full_input)
+                                                    if full_input
+                                                    else {}
+                                                )
+                                                bg_task_mgr.update_tool_call(
+                                                    task_id,
+                                                    tc_info["id"],
+                                                    status="completed",
+                                                    input=_json.dumps(parsed_input),
+                                                )
+                                            except (ValueError, KeyError):
+                                                bg_task_mgr.update_tool_call(
+                                                    task_id,
+                                                    tc_info["id"],
+                                                    status="completed",
+                                                    input=full_input,
+                                                )
+                            except (ValueError, KeyError, TypeError):
+                                # Not valid JSON or missing expected fields — treat as plain stderr
+                                parsed_as_event = False
+
+                        # Only append to output_lines if NOT a successfully parsed stream_event
+                        # This prevents raw JSON from polluting the live log view
+                        if not parsed_as_event:
+                            bg_task_mgr.append_output(task_id, f"[stderr] {err_text}")
                 except Exception:
                     pass
 
@@ -13788,8 +14079,40 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 stdout_lines.append(line)
 
                 # Append to output_lines for live log viewing
+                # Issue #230: For Claude stream-json stdout, extract human-readable text
+                # instead of appending raw JSON blobs to the live log.
                 if line_text:
-                    bg_task_mgr.append_output(task_id, line_text)
+                    _live_line = line_text
+                    if runtime == "claude" and line_text.strip().startswith("{"):
+                        try:
+                            _stdout_obj = _json.loads(line_text.strip())
+                            _stdout_type = _stdout_obj.get("type", "")
+                            if _stdout_type == "assistant":
+                                # Extract text content from assistant message blocks
+                                _parts = []
+                                for _blk in (_stdout_obj.get("message") or {}).get(
+                                    "content", []
+                                ):
+                                    if _blk.get("type") == "text" and _blk.get("text"):
+                                        _parts.append(_blk["text"].rstrip())
+                                _live_line = (
+                                    "\n".join(_parts).strip() if _parts else None
+                                )
+                            elif _stdout_type in ("system", "stream_event"):
+                                # system init and stream events are not user-visible
+                                _live_line = None
+                            elif _stdout_type == "result":
+                                # Only show error results inline; success result is surfaced separately
+                                if _stdout_obj.get("is_error"):
+                                    _live_line = (
+                                        _stdout_obj.get("result", "").strip() or None
+                                    )
+                                else:
+                                    _live_line = None
+                        except (ValueError, KeyError, TypeError):
+                            pass  # Not valid JSON -- keep original line
+                    if _live_line:
+                        bg_task_mgr.append_output(task_id, _live_line)
 
                 # Capture [STATUS_UPDATE: ...] markers for mobile channel progress
                 # (F004)
@@ -14104,6 +14427,8 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             timeout=bg_timeout,
             notify=notify_pref,
             origin_session_id=body.origin_session_id,
+            fallback_runtime=body.fallback_runtime,  # Issue #219
+            fallback_model=body.fallback_model,  # Issue #219
         )
 
         if task_status == "queued":
