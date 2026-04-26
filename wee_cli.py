@@ -68,6 +68,90 @@ def save_config(cfg: dict) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Agent & Skill Discovery
+# ---------------------------------------------------------------------------
+def load_agents_json() -> dict:
+    """Load agents.json from the wee orchestrator folder (script's directory)."""
+    agents_file = os.path.join(_HERE, "agents.json")
+    try:
+        with open(agents_file) as f:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return {"agents": []}
+
+
+def discover_skills() -> dict:
+    """Discover available skills from skill repositories.
+    
+    Returns:
+        Dict mapping skill_name -> {description, path, loaded}
+    """
+    skills = {}
+    skill_dirs = [
+        "/opt/foster-skills",
+        "/opt/skills",
+    ]
+    
+    for skill_dir in skill_dirs:
+        if not os.path.isdir(skill_dir):
+            continue
+        try:
+            for entry in os.listdir(skill_dir):
+                skill_path = os.path.join(skill_dir, entry)
+                
+                # Check for skill_metadata.json (standard format)
+                metadata_file = os.path.join(skill_path, "skill_metadata.json")
+                if os.path.isfile(metadata_file):
+                    try:
+                        with open(metadata_file) as f:
+                            metadata = json.load(f)
+                        skills[entry] = {
+                            "description": metadata.get("description", "No description"),
+                            "path": skill_path,
+                            "loaded": False,
+                        }
+                    except (json.JSONDecodeError, OSError):
+                        pass
+                
+                # Check for .skill file (alternate format)
+                skill_file = os.path.join(skill_dir, f"{entry}.skill")
+                if os.path.isfile(skill_file) and entry not in skills:
+                    try:
+                        with open(skill_file, encoding='utf-8', errors='ignore') as f:
+                            content = f.read()
+                            # Extract description from first lines
+                            desc_line = next((line for line in content.split("\n") if "description" in line.lower()), "")
+                            skills[entry] = {
+                                "description": desc_line.strip() if desc_line else "Custom skill",
+                                "path": skill_file,
+                                "loaded": False,
+                            }
+                    except OSError:
+                        pass
+        except OSError:
+            pass
+    
+    return skills
+
+
+def get_agent_info() -> list:
+    """Get list of agents from agents.json.
+    
+    Returns:
+        List of agent dicts with name and description
+    """
+    agents_data = load_agents_json()
+    agents = []
+    for agent in agents_data.get("agents", []):
+        agents.append({
+            "name": agent.get("name", "unknown"),
+            "description": agent.get("description", "No description"),
+            "path": agent.get("path", ""),
+        })
+    return agents
+
+
+# ---------------------------------------------------------------------------
 # Readline history
 # ---------------------------------------------------------------------------
 def _init_readline():
@@ -376,6 +460,8 @@ Wee CLI Interactive Mode — Commands:
   /tools              Show tool status
   /tools on|off       Enable/disable tool calling
   /permission MODE    Set permission level (restricted, auto, elevated)
+  /agents             List available agents from agents.json
+  /skills             List available skills (alias: /discover-skills)
   /version            Show version
   /help               Show this help
   /exit, /quit        Exit interactive mode
@@ -512,6 +598,28 @@ def run_interactive(
 
             elif cmd == "/version":
                 _print_info(f"Wee CLI v{__version__}")
+                continue
+
+            elif cmd == "/agents":
+                agents = get_agent_info()
+                if agents:
+                    _print_info("Available Agents (from agents.json):")
+                    for agent in agents:
+                        print(f"  {agent['name']:20} — {agent['description'][:70]}")
+                else:
+                    _print_info("No agents configured")
+                continue
+
+            elif cmd == "/skills" or (cmd == "/discover-skills"):
+                skills = discover_skills()
+                if skills:
+                    _print_info(f"Available Skills ({len(skills)} found):")
+                    for skill_name, skill_info in sorted(skills.items()):
+                        status = "✓ loaded" if skill_info["loaded"] else ""
+                        print(f"  {skill_name:30} {status}")
+                        print(f"    {skill_info['description'][:70]}")
+                else:
+                    _print_info("No skills discovered")
                 continue
 
             elif cmd == "/help":
