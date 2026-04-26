@@ -478,8 +478,12 @@ def run_interactive(
     system_prompt: str,
     output_format: str,
     permission: str,
-):
-    """Run the interactive REPL."""
+) -> str:
+    """Run the interactive REPL.
+    
+    Returns:
+        Updated model string (to persist across sessions)
+    """
     _init_readline()
 
     client = _make_client(api_base, api_key, timeout)
@@ -654,6 +658,7 @@ def run_interactive(
     _save_readline()
     _print_info(f"\n{token_tracker.summary()}")
     _print_info("Goodbye!")
+    return model
 
 
 # ---------------------------------------------------------------------------
@@ -872,7 +877,7 @@ def main(argv=None):
         # Enable tools by default in interactive mode (unless explicitly disabled)
         if not args.tools and not cfg.get("tools"):
             tools_enabled = True
-        run_interactive(
+        updated_model = run_interactive(
             model=model,
             api_base=api_base,
             api_key=api_key,
@@ -883,6 +888,9 @@ def main(argv=None):
             output_format=output_format,
             permission=permission,
         )
+        # Persist model choice for next session
+        cfg["model"] = updated_model
+        save_config(cfg)
         return
 
     # Check for piped stdin
@@ -900,7 +908,7 @@ def main(argv=None):
         # Enable tools by default in interactive mode (unless explicitly disabled)
         if not args.tools and not cfg.get("tools"):
             tools_enabled = True
-        run_interactive(
+        updated_model = run_interactive(
             model=model,
             api_base=api_base,
             api_key=api_key,
@@ -911,6 +919,9 @@ def main(argv=None):
             output_format=output_format,
             permission=permission,
         )
+        # Persist model choice for next session
+        cfg["model"] = updated_model
+        save_config(cfg)
     elif prompt_text:
         # Single-shot mode
         run_single_shot(
