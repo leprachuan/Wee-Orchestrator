@@ -489,7 +489,7 @@ Wee CLI Interactive Mode — Commands:
   /tools              Show tool status
   /tools on|off       Enable/disable tool calling
   /permission MODE    Set permission level (restricted, auto, elevated)
-  /agents             List available agents from agents.json
+  /agents             List agents. Use call_agent tool to dispatch work
   /skills             List available skills (alias: /discover-skills)
   /version            Show version
   /help               Show this help

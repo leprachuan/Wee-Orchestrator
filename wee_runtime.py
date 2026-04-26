@@ -71,6 +71,32 @@ _WEE_TOOLS = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "call_agent",
+            "description": "Call a Wee Orchestrator agent to execute a task. Use for delegating work to specialized agents (devops, email-triage, family-knowledge, research, smarthome, wee-dev, wee-qa, wee-doc).",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "agent": {
+                        "type": "string",
+                        "description": "Agent name to call (e.g., 'devops', 'email-triage', 'research')",
+                    },
+                    "prompt": {
+                        "type": "string",
+                        "description": "Task prompt or instruction for the agent",
+                    },
+                    "mode": {
+                        "type": "string",
+                        "enum": ["quick", "background"],
+                        "description": "Execution mode: 'quick' waits for result (sync), 'background' returns task_id immediately (async)",
+                    },
+                },
+                "required": ["agent", "prompt"],
+            },
+        },
+    },
 ]
 
 MAX_TOOL_ROUNDS = 10
@@ -182,12 +208,80 @@ def execute_tool(func_name: str, func_args: dict, permission: str = "auto") -> s
             if result.returncode != 0 and result.stderr:
                 output += f"\nSTDERR: {result.stderr}"
             return output.strip() or "(no output)"
+        elif func_name == "call_agent":
+            return _call_agent_handler(func_args)
         else:
             return f"Error: Unknown tool {func_name}"
     except subprocess.TimeoutExpired:
         return f"Error: Tool {func_name} timed out after {TOOL_TIMEOUT}s"
     except Exception as e:
         return f"Error executing tool {func_name}: {e}"
+
+
+def _call_agent_handler(func_args: dict) -> str:
+    """Handle call_agent tool calls to invoke Wee Orchestrator agents.
+
+    Args:
+        func_args: Dict with 'agent', 'prompt', and optional 'mode' ('quick'|'background')
+
+    Returns:
+        Result string or task ID
+    """
+    import json
+    import urllib.request
+    import urllib.error
+
+    agent = func_args.get("agent", "").strip()
+    prompt = func_args.get("prompt", "").strip()
+    mode = func_args.get("mode", "quick").strip().lower()
+
+    if not agent:
+        return "Error: agent parameter required"
+    if not prompt:
+        return "Error: prompt parameter required"
+    if mode not in ("quick", "background"):
+        return "Error: mode must be 'quick' or 'background'"
+
+    try:
+        api_url = os.environ.get("WEE_ORCHESTRATOR_API", "https://127.0.0.1:8000")
+        token = os.environ.get("WEE_ORCHESTRATOR_TOKEN", "shared_R6R6wReORUV6bouLntScMTowbsh30Rzqa3hzjs3bWgU")
+
+        task_data = {
+            "prompt": prompt,
+            "agent": agent,
+            "runtime": "copilot",
+            "model": "claude-haiku-4.5",
+            "timeout": 1800,
+        }
+
+        if mode == "quick":
+            endpoint = "/api/v1/chat"
+        else:
+            endpoint = "/api/v1/background-tasks"
+
+        url = f"{api_url}{endpoint}"
+        req = urllib.request.Request(url, method="POST")
+        req.add_header("Content-Type", "application/json")
+        req.add_header("Authorization", f"Bearer {token}")
+
+        import ssl
+        ctx = ssl.create_default_context()
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+
+        with urllib.request.urlopen(req, data=json.dumps(task_data).encode(), context=ctx, timeout=30) as response:
+            result = json.loads(response.read().decode())
+            if mode == "background":
+                task_id = result.get("id", result.get("task_id"))
+                return f"✓ Task started: {agent}\nTask ID: {task_id}\nCheck status with: /background status {task_id}"
+            else:
+                return f"✓ Agent response:\n{result.get('response', str(result))}"
+
+    except urllib.error.HTTPError as e:
+        error_text = e.read().decode() if e.fp else str(e)
+        return f"Error calling orchestrator API ({e.code}): {error_text}"
+    except Exception as e:
+        return f"Error calling agent '{agent}': {e}"
 
 
 # Issue #113: SSH command sanitisation
