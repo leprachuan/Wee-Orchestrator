@@ -13849,7 +13849,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 error_msg = f"Task failed with code {process.returncode}: {output}"
                 # Check for fallback eligibility before marking as failed (Issue #219)
                 if (fallback_runtime and fallback_model and 
-                    any(p in error_msg.lower() for p in ['rate_limit', 'rate limit', '429', 'quota', 'overload', '503', '502', '401', 'timeout'])):
+                    any(p in error_msg.lower() for p in ['rate_limit', 'rate limit', '429', 'quota', 'overload', '503', '502', '401', 'timeout', 'bwrap', 'operation not permitted', 'connection refused', 'connection reset'])):
                     print(f"[Fallback] Task {task_id}: primary {runtime}/{model} failed with infrastructure error, retrying with {fallback_runtime}/{fallback_model}", file=sys.stderr)
                     # Retry with fallback runtime/model
                     return _run_background_task(
