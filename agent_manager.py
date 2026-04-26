@@ -13947,7 +13947,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         if body.runtime:
             runtime = body.runtime
             print(
-                f[RuntimePref] Explicit runtime override: {runtime}, file=sys.stderr
+                f"[RuntimePref] Explicit runtime override: {runtime}", file=sys.stderr
             )
         else:
             _dispatch_rt = _dispatch_config.get(runtime)
@@ -13957,19 +13957,19 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             if _dispatch_rt:
                 runtime = _dispatch_rt
                 print(
-                    f[RuntimePref] Using dispatch_config runtime: {runtime},
+                    f"[RuntimePref] Using dispatch_config runtime: {runtime}",
                     file=sys.stderr,
                 )
             elif _session_rt:
                 runtime = _session_rt
                 print(
-                    f[RuntimePref] Using session runtime: {runtime}, file=sys.stderr
+                    f"[RuntimePref] Using session runtime: {runtime}", file=sys.stderr
                 )
             elif _pref_primary:
                 if check_runtime_available(_pref_primary):
                     runtime = _pref_primary
                     print(
-                        f[RuntimePref] Using primary preference runtime: {runtime},
+                        f"[RuntimePref] Using primary preference runtime: {runtime}",
                         file=sys.stderr,
                     )
                 else:
@@ -13981,8 +13981,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                     else:
                         runtime = get_default_runtime()
                     print(
-                        f[RuntimePref] Primary '{_pref_primary}' unavailable, 
-                        ffalling back to: {runtime},
+                        f"[RuntimePref] Primary '{_pref_primary}' unavailable, falling back to: {runtime}",
                         file=sys.stderr,
                     )
             elif _pref_backup:
@@ -13991,13 +13990,13 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 else:
                     runtime = get_default_runtime()
                 print(
-                    f[RuntimePref] Using backup preference runtime: {runtime},
+                    f"[RuntimePref] Using backup preference runtime: {runtime}",
                     file=sys.stderr,
                 )
             else:
                 runtime = get_default_runtime()
                 print(
-                    f[RuntimePref] Using default runtime: {runtime},
+                    f"[RuntimePref] Using default runtime: {runtime}",
                     file=sys.stderr,
                 )
         model = body.model or _dispatch_config.get(model) or defaults.get(model, get_default_model())
