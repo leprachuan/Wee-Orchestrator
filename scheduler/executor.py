@@ -80,9 +80,13 @@ def _split_command_args(command: str) -> list[str]:
     if not isinstance(command, str) or not command.strip():
         raise ValueError("No command provided")
     try:
-        argv = shlex.split(command, posix=True)
+        # Explicit check that shlex is available
+        import shlex as shlex_module
+        argv = shlex_module.split(command, posix=True)
     except ValueError as exc:
         raise ValueError(f"Invalid command syntax: {exc}") from exc
+    except NameError as exc:
+        raise NameError(f"shlex module not available: {exc}") from exc
     if not argv:
         raise ValueError("No command provided")
     return argv
@@ -94,19 +98,6 @@ def _brief_notification(icon: str, job_name: str, verb: str) -> str:
     if len(msg) > _MAX_NOTIFICATION_LENGTH:
         msg = msg[: _MAX_NOTIFICATION_LENGTH - 3] + "..."
     return msg
-
-
-def _split_command_args(command: str) -> list[str]:
-    """Parse a command string into argv without invoking a shell."""
-    if not isinstance(command, str) or not command.strip():
-        raise ValueError("No command provided")
-    try:
-        argv = shlex.split(command, posix=True)
-    except ValueError as exc:
-        raise ValueError(f"Invalid command syntax: {exc}") from exc
-    if not argv:
-        raise ValueError("No command provided")
-    return argv
 
 
 # Telegram connector for direct per-user delivery
