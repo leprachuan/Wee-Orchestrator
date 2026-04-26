@@ -31,7 +31,7 @@ from session_manager_components import (
     StreamingManager,
 )
 
-# Dynamically determine the repo base directory (works regardless of where repo is cloned)  # noqa: E501
+# Repo base dir — resolved at runtime, works in any clone or Docker path
 SCRIPT_BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 # ── Theme constants (F025) ──────────────────────────────────────────────
@@ -3286,40 +3286,42 @@ You can mention an agent in your prompt and it will auto-delegate:
             self._agents_json_mtime = config_path.stat().st_mtime
             with open(config_path, "r") as f:
                 config = json.load(f)
-                try:
-                    from pydantic import ValidationError as _ValidationError
-
-                    from config_schemas import validate_agents_config
-
-                    validate_agents_config(config)
-                except ImportError:
-                    pass
-                except _ValidationError as _schema_exc:
-                    logger.error(
-                        f"[config] agents.json schema validation failed: "
-                        f"{_schema_exc}. Refusing to load agents from invalid config."
-                    )
-                    return {}
-                agents = {}
-                for agent in config.get("agents", []):
-                    name = agent.get("name")
-                    if not name:
-                        logger.warning("[Warning] Agent entry missing 'name' field")
-                        continue
-                    agents[name] = {
-                        "path": agent.get("path", ""),
-                        "description": agent.get("description", ""),
-                        "max_concurrent": agent.get("max_concurrent", 1),
-                        "runtime": agent.get("runtime", "copilot"),
-                        "model": agent.get("model", ""),
-                    }
-                return agents
         except json.JSONDecodeError as e:
-            logger.error(f"[Error] Failed to parse agents config: {e}")
+            logger.error("[Error] Failed to parse agents config: %s", e)
             return {}
         except Exception as e:
-            logger.error(f"[Error] Failed to load agents config: {e}")
+            logger.error("[Error] Failed to load agents config: %s", e)
             return {}
+
+        try:
+            from pydantic import ValidationError as _ValidationError
+
+            from config_schemas import validate_agents_config
+
+            validate_agents_config(config)
+        except ImportError:
+            pass
+        except _ValidationError as _schema_exc:
+            logger.critical(
+                "[config] agents.json schema validation failed: %s",
+                _schema_exc,
+            )
+            raise
+
+        agents = {}
+        for agent in config.get("agents", []):
+            name = agent.get("name")
+            if not name:
+                logger.warning("[Warning] Agent entry missing 'name' field")
+                continue
+            agents[name] = {
+                "path": agent.get("path", ""),
+                "description": agent.get("description", ""),
+                "max_concurrent": agent.get("max_concurrent", 1),
+                "runtime": agent.get("runtime", "copilot"),
+                "model": agent.get("model", ""),
+            }
+        return agents
 
     def reload_agents_from_disk(self) -> tuple:
         """Hot-reload agents.json with validation and safe fallback.

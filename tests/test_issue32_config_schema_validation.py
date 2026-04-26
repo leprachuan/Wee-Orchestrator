@@ -528,14 +528,13 @@ class TestAgentManagerIntegration:
 
 
 class TestAgentManagerInvalidSchemaRejected:
-    """Regression: _load_agents_config must not load agents when schema
-    validation fails.
+    """Regression: _load_agents_config must raise on schema validation failure.
 
-    Issue #32 Round 5 — max_concurrent="oops" was previously loaded silently.
+    Issue #32 — invalid agents.json must halt startup, not silently return {}.
     """
 
-    def test_invalid_max_concurrent_returns_empty_agents(self, tmp_path):
-        """_load_agents_config returns {} when max_concurrent has wrong type."""
+    def test_invalid_max_concurrent_raises(self, tmp_path):
+        """_load_agents_config raises ValidationError when max_concurrent has wrong type."""
         config = {
             "agents": [
                 {
@@ -554,15 +553,11 @@ class TestAgentManagerInvalidSchemaRejected:
         mgr._agents_config_path = config_file
         mgr._agents_json_mtime = 0.0
 
-        result = mgr._load_agents_config(str(config_file))
+        with pytest.raises(ValidationError):
+            mgr._load_agents_config(str(config_file))
 
-        assert result == {}, (
-            f"Expected empty dict when schema validation fails, got: {result!r}. "
-            "Invalid agents.json must not be loaded into the live agent roster."
-        )
-
-    def test_invalid_schema_does_not_load_any_agents(self, tmp_path):
-        """_load_agents_config rejects the entire config, not just the bad entry."""
+    def test_invalid_schema_raises_not_partial_load(self, tmp_path):
+        """_load_agents_config raises on any schema failure — no partial loading."""
         config = {
             "agents": [
                 {
@@ -585,12 +580,8 @@ class TestAgentManagerInvalidSchemaRejected:
         mgr._agents_config_path = config_file
         mgr._agents_json_mtime = 0.0
 
-        result = mgr._load_agents_config(str(config_file))
-
-        assert result == {}, (
-            f"Expected empty dict for any schema failure, got: {result!r}. "
-            "A single invalid entry must prevent loading the entire file."
-        )
+        with pytest.raises(ValidationError):
+            mgr._load_agents_config(str(config_file))
 
     def test_valid_config_still_loads_normally(self, tmp_path):
         """_load_agents_config loads valid config without regression."""
@@ -618,6 +609,20 @@ class TestAgentManagerInvalidSchemaRejected:
             "good-agent" in result
         ), f"Valid config should load cleanly, got: {result!r}"
         assert result["good-agent"]["max_concurrent"] == 2
+
+    def test_missing_agents_key_raises_on_load(self, tmp_path):
+        """agents.json = {} (missing 'agents') must fail loudly, not return {}."""
+        config_file = tmp_path / "agents.json"
+        config_file.write_text("{}")
+
+        import agent_manager as am
+
+        mgr = am.SessionManager.__new__(am.SessionManager)
+        mgr._agents_config_path = config_file
+        mgr._agents_json_mtime = 0.0
+
+        with pytest.raises(ValidationError):
+            mgr._load_agents_config(str(config_file))
 
 
 # ===========================================================================
