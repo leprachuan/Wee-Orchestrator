@@ -10365,7 +10365,6 @@ User Request:
             primary_error = str(exc)
 
         # Fallback retry logic (Issue #219)
-        print(f"[DEBUG] Checking fallback: eligible={self._bg_task_mgr._is_fallback_eligible(primary_error) if self._bg_task_mgr else False}, error={primary_error[:100]}", file=sys.stderr)
         if self._bg_task_mgr and self._bg_task_mgr._is_fallback_eligible(primary_error):
             task_rec = self._bg_task_mgr.get_task(task_id)
             if task_rec:
@@ -13190,8 +13189,6 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         import json as _json
         import re as _re
         import subprocess
-        from uuid import uuid4
-
         _tool_call_counter = 0
 
         def _parse_tool_call_from_line(line_text, rt):
@@ -13911,8 +13908,8 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             else:
                 error_msg = f"Task failed with code {process.returncode}: {output}"
                 # Check for fallback eligibility before marking as failed (Issue #219)
-                if (fallback_runtime and fallback_model and 
-                    any(p in error_msg.lower() for p in ['rate_limit', 'rate limit', '429', 'quota', 'overload', '503', '502', '401', 'timeout'])):
+                if (fallback_runtime and fallback_model and
+                    BackgroundTaskManager._is_fallback_eligible(error_msg)):
                     print(f"[Fallback] Task {task_id}: primary {runtime}/{model} failed with infrastructure error, retrying with {fallback_runtime}/{fallback_model}", file=sys.stderr)
                     # Retry with fallback runtime/model
                     return _run_background_task(
@@ -14167,7 +14164,6 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         # Priority: body > dispatch_config > None
         fallback_rt = body.fallback_runtime or _dispatch_config.get("fallback_runtime")
         fallback_model = body.fallback_model or _dispatch_config.get("fallback_model")
-        print(f"[DEBUG] Task {task_id}: fallback_rt={fallback_rt} fallback_model={fallback_model}", file=sys.stderr)
 
         # Atomically check concurrency limit and create task — TOCTOU-safe (Issue #192)
         agent_config = session_mgr.AGENTS.get(agent, {})
