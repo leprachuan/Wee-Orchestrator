@@ -449,15 +449,25 @@ def dispatch_via_api(
     if not api_key:
         raise RuntimeError("API_SHARED_KEY not found in /opt/n8n-copilot-shim/.env")
 
+    # Get dispatch config for the agent
+    dispatch_config = get_agent_dispatch_config(agent)
+    runtime = dispatch_config.get("runtime", "claude")
+    permission_mode = dispatch_config.get("permission_mode")
+    yolo = dispatch_config.get("yolo", False)
+
     # Prepare request
     body = {
         "prompt": prompt,
         "agent": agent,
-        "runtime": "claude",
+        "runtime": runtime,
         "model": model,
         "timeout": timeout,
         "notify": False,
     }
+    if permission_mode is not None:
+        body["permission_mode"] = permission_mode
+    if yolo:
+        body["yolo"] = yolo
 
     # Sign request for authentication
     import json as _json
