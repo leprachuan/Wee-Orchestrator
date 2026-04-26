@@ -4535,7 +4535,7 @@ You can mention an agent in your prompt and it will auto-delegate:
                     current_model, "cursor"
                 ):
                     merged["model"] = os.getenv("CURSOR_DEFAULT_MODEL", "auto")
-            elif runtime == "wee":
+            elif runtime in ("wee", "openai"):
                 current_model = merged.get("model", "")
                 if not current_model or not self.get_model_from_name(
                     current_model, "wee"
@@ -5310,7 +5310,7 @@ You can mention an agent in your prompt and it will auto-delegate:
                     continue
                 result.append(clean_line)
 
-        elif runtime == "wee":
+        elif runtime in ("wee", "openai"):
             # Wee native runtime outputs clean text - pass through directly
             for line in lines:
                 if not line.strip() and not result:
@@ -9580,7 +9580,7 @@ User Request:
             # Cursor session mappings are keyed by n8n_session_id
             key = n8n_session_id if n8n_session_id else session_id
             return (self.cursor_session_dir / f"{key}.json").exists()
-        elif runtime == "wee":
+        elif runtime in ("wee", "openai"):
             # Issue #123: Wee stores conversation history in session_map
             data = self.load_session_data(n8n_session_id or session_id)
             return bool(data and data.get("wee_messages"))
@@ -12493,6 +12493,13 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         import json as _json
         import re as _re
         import subprocess
+
+        # Normalize "openai" alias to "wee" — both target the OpenAI-compatible
+        # wee_runtime.py execution path; normalizing here prevents downstream
+        # model-default resolution, output parsing, and session-exists checks
+        # from falling through when runtime="openai" is passed.
+        if runtime == "openai":
+            runtime = "wee"
 
         _tool_call_counter = 0
 
