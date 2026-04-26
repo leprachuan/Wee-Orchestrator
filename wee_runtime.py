@@ -219,13 +219,19 @@ def execute_tool(func_name: str, func_args: dict, permission: str = "auto") -> s
 
 
 def _load_agents_config() -> dict:
-    """Load agents.json from common locations."""
+    """Load agents.json from common locations.
+    
+    Priority (in order):
+    1. Wee Orchestrator's agents.json (source of truth with new format)
+    2. CWD agents.json (project-specific overrides)
+    3. ~/.wee/agents.json (user config)
+    """
     import json
     
     locations = [
-        os.path.join(os.getcwd(), "agents.json"),
-        "/opt/n8n-copilot-shim/agents.json",
-        os.path.expanduser("~/.wee/agents.json"),
+        "/opt/n8n-copilot-shim/agents.json",  # Wee Orchestrator config (primary)
+        os.path.join(os.getcwd(), "agents.json"),  # CWD project config
+        os.path.expanduser("~/.wee/agents.json"),  # User config
     ]
     
     for path in locations:
