@@ -10302,6 +10302,7 @@ User Request:
             primary_error = str(exc)
 
         # Fallback retry logic (Issue #219)
+        print(f"[DEBUG] Checking fallback: eligible={self._bg_task_mgr._is_fallback_eligible(primary_error) if self._bg_task_mgr else False}, error={primary_error[:100]}", file=sys.stderr)
         if self._bg_task_mgr and self._bg_task_mgr._is_fallback_eligible(primary_error):
             task_rec = self._bg_task_mgr.get_task(task_id)
             if task_rec:
@@ -13108,6 +13109,8 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         timeout: int = None,
         notify: bool = True,
         permission_mode: str = "restricted",
+        fallback_runtime: str = None,  # Issue #219
+        fallback_model: str = None,  # Issue #219
     ):
         """Blocking function that runs a background task in a subprocess.
         Called from a thread pool executor.
@@ -13124,6 +13127,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         import json as _json
         import re as _re
         import subprocess
+        from uuid import uuid4
 
         _tool_call_counter = 0
 
@@ -13843,6 +13847,26 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 )
             else:
                 error_msg = f"Task failed with code {process.returncode}: {output}"
+                # Check for fallback eligibility before marking as failed (Issue #219)
+                if (fallback_runtime and fallback_model and 
+                    any(p in error_msg.lower() for p in ['rate_limit', 'rate limit', '429', 'quota', 'overload', '503', '502', '401', 'timeout'])):
+                    print(f"[Fallback] Task {task_id}: primary {runtime}/{model} failed with infrastructure error, retrying with {fallback_runtime}/{fallback_model}", file=sys.stderr)
+                    # Retry with fallback runtime/model
+                    return _run_background_task(
+                        task_id,
+                        str(uuid4()),  # New session
+                        prompt,
+                        agent,
+                        fallback_runtime,
+                        fallback_model,
+                        channel,
+                        user_identity,
+                        timeout,
+                        notify,
+                        permission_mode,
+                        None,  # No more fallbacks after first retry
+                        None,
+                    )
                 bg_task_mgr.fail_task(task_id, error_msg)
                 if task_id.startswith("sched_"):
                     try:
@@ -13943,15 +13967,26 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
 
         agent = body.agent or defaults.get("agent", get_default_agent())
         # Priority order: body > dispatch_config (#193) > session > pref-manager (#168) > default
-        _dispatch_config = session_mgr.AGENTS.get(agent, {}).get(dispatch_config, {})
+        agent_cfg = session_mgr.AGENTS.get(agent, {})
+        # Support both old (dispatch_config) and new (primary_runtime/model) schemas
+        _dispatch_config = agent_cfg.get("dispatch_config", {})
+        if not _dispatch_config and "primary_runtime" in agent_cfg:
+            _dispatch_config = {
+                "runtime": agent_cfg.get("primary_runtime"),
+                "model": agent_cfg.get("primary_model"),
+                "fallback_runtime": agent_cfg.get("fallback_runtime"),
+                "fallback_model": agent_cfg.get("fallback_model"),
+                "timeout": agent_cfg.get("timeout", 3600),
+            }
+            print(f"[DispatchConfig] Built from new schema for agent={agent}: {_dispatch_config}", file=sys.stderr)
         if body.runtime:
             runtime = body.runtime
             print(
                 f"[RuntimePref] Explicit runtime override: {runtime}", file=sys.stderr
             )
         else:
-            _dispatch_rt = _dispatch_config.get(runtime)
-            _session_rt = defaults.get(runtime)
+            _dispatch_rt = _dispatch_config.get("runtime")
+            _session_rt = defaults.get("runtime")
             _pref_primary = _get_runtime_pref_mgr().primary()
             _pref_backup = _get_runtime_pref_mgr().backup()
             if _dispatch_rt:
@@ -13999,7 +14034,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                     f"[RuntimePref] Using default runtime: {runtime}",
                     file=sys.stderr,
                 )
-        model = body.model or _dispatch_config.get(model) or defaults.get(model, get_default_model())
+        model = body.model or _dispatch_config.get("model") or defaults.get("model", get_default_model())
 
         # Apply dispatch_config fallback if primary runtime is blocked/unavailable
         eff_runtime, eff_model, used_fallback, fallback_reason = (
@@ -14069,6 +14104,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         # Priority: body > dispatch_config > None
         fallback_rt = body.fallback_runtime or _dispatch_config.get("fallback_runtime")
         fallback_model = body.fallback_model or _dispatch_config.get("fallback_model")
+        print(f"[DEBUG] Task {task_id}: fallback_rt={fallback_rt} fallback_model={fallback_model}", file=sys.stderr)
 
         # Atomically check concurrency limit and create task — TOCTOU-safe (Issue #192)
         agent_config = session_mgr.AGENTS.get(agent, {})
@@ -14133,6 +14169,8 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             bg_timeout,
             notify_pref,
             perm_mode,
+            fallback_rt,
+            fallback_model,
         )
 
         return {
@@ -14204,6 +14242,8 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                     "created_at": t["created_at"],
                     "completed_at": t.get("completed_at"),
                     "error": t.get("error"),
+                    "fallback_runtime": t.get("fallback_runtime"),
+                    "fallback_model": t.get("fallback_model"),
                 }
             )
         return {
@@ -14241,6 +14281,8 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             "error": task.get("error"),
             "tool_call_count": len(tool_calls),
             "recent_tool_calls": tool_calls[-20:],
+            "fallback_runtime": task.get("fallback_runtime"),
+            "fallback_model": task.get("fallback_model"),
         }
 
     @app.get("/api/v1/background-tasks/{task_id}/transcript")
