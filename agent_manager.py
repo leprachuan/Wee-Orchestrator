@@ -4600,8 +4600,11 @@ You can mention an agent in your prompt and it will auto-delegate:
         try:
             import httpx
 
+            _ollama_host = os.environ.get("OLLAMA_HOST", "192.168.1.101")
+            _ollama_port = os.environ.get("OLLAMA_PORT", "11434")
+            _ollama_tags_url = f"http://{_ollama_host}:{_ollama_port}/api/tags"
             resp = httpx.get(
-                "http://192.168.1.101:11434/api/tags",
+                _ollama_tags_url,
                 timeout=httpx.Timeout(connect=5.0, read=10.0, write=10.0, pool=10.0),
             )
             if resp.status_code == 200:
@@ -9252,10 +9255,15 @@ User Request:
 
     def _wee_resolve_endpoint(self, model, session_api_base, session_api_key):
         """Resolve (api_base, api_key, resolved_model) for a wee model string."""
+        _ollama_host = os.environ.get("OLLAMA_HOST", "192.168.1.101")
+        _ollama_port = os.environ.get("OLLAMA_PORT", "11434")
+        _lmstudio_host = os.environ.get("LMSTUDIO_HOST", "localhost")
+        _lmstudio_port = os.environ.get("LMSTUDIO_PORT", "1234")
+        
         _PRESETS = {
-            "ollama": ("http://192.168.1.101:11434/v1", "ollama"),
+            "ollama": (f"http://{_ollama_host}:{_ollama_port}/v1", "ollama"),
             "openrouter": ("https://openrouter.ai/api/v1", None),
-            "lmstudio": ("http://localhost:1234/v1", "lm-studio"),
+            "lmstudio": (f"http://{_lmstudio_host}:{_lmstudio_port}/v1", "lm-studio"),
         }
         api_base = session_api_base or os.environ.get("WEE_API_BASE")
         api_key = session_api_key or os.environ.get("WEE_API_KEY")
@@ -9270,7 +9278,7 @@ User Request:
                     api_key = preset_key
                 break
         if not api_base:
-            api_base = "http://192.168.1.101:11434/v1"
+            api_base = f"http://{_ollama_host}:{_ollama_port}/v1"
         if not api_key:
             if "openrouter" in api_base.lower():
                 api_key = os.environ.get("OPENROUTER_API_KEY")
@@ -9320,10 +9328,15 @@ User Request:
 
     def _wee_resolve_endpoint(self, model, session_api_base, session_api_key):
         """Resolve (api_base, api_key, resolved_model) for a wee model string."""
+        _ollama_host = os.environ.get("OLLAMA_HOST", "192.168.1.101")
+        _ollama_port = os.environ.get("OLLAMA_PORT", "11434")
+        _lmstudio_host = os.environ.get("LMSTUDIO_HOST", "localhost")
+        _lmstudio_port = os.environ.get("LMSTUDIO_PORT", "1234")
+        
         _PRESETS = {
-            "ollama": ("http://192.168.1.101:11434/v1", "ollama"),
+            "ollama": (f"http://{_ollama_host}:{_ollama_port}/v1", "ollama"),
             "openrouter": ("https://openrouter.ai/api/v1", None),
-            "lmstudio": ("http://localhost:1234/v1", "lm-studio"),
+            "lmstudio": (f"http://{_lmstudio_host}:{_lmstudio_port}/v1", "lm-studio"),
         }
         api_base = session_api_base or os.environ.get("WEE_API_BASE")
         api_key = session_api_key or os.environ.get("WEE_API_KEY")
@@ -9337,7 +9350,7 @@ User Request:
                     api_key = preset_key
                 break
         if not api_base:
-            api_base = "http://192.168.1.101:11434/v1"
+            api_base = f"http://{_ollama_host}:{_ollama_port}/v1"
         if not api_key:
             if "openrouter" in api_base.lower():
                 try:

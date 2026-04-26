@@ -23,10 +23,16 @@ import subprocess
 import sys
 
 # Provider presets: prefix → (api_base, default_api_key)
+# Use env vars for Ollama and LM Studio to allow customization
+_OLLAMA_HOST = os.environ.get("OLLAMA_HOST", "192.168.1.101")
+_OLLAMA_PORT = os.environ.get("OLLAMA_PORT", "11434")
+_LMSTUDIO_HOST = os.environ.get("LMSTUDIO_HOST", "localhost")
+_LMSTUDIO_PORT = os.environ.get("LMSTUDIO_PORT", "1234")
+
 PROVIDER_PRESETS = {
-    "ollama": ("http://192.168.1.101:11434/v1", "ollama"),
+    "ollama": (f"http://{_OLLAMA_HOST}:{_OLLAMA_PORT}/v1", "ollama"),
     "openrouter": ("https://openrouter.ai/api/v1", None),
-    "lmstudio": ("http://localhost:1234/v1", "lm-studio"),
+    "lmstudio": (f"http://{_LMSTUDIO_HOST}:{_LMSTUDIO_PORT}/v1", "lm-studio"),
 }
 
 # Tool definitions (Issue #107)
@@ -97,7 +103,11 @@ def resolve_model_and_endpoint(model: str, api_base: str = None, api_key: str = 
 
     # Defaults
     if not resolved_base:
-        resolved_base = os.environ.get("WEE_API_BASE", "http://192.168.1.101:11434/v1")
+        _ollama_host = os.environ.get("OLLAMA_HOST", "192.168.1.101")
+        _ollama_port = os.environ.get("OLLAMA_PORT", "11434")
+        resolved_base = os.environ.get(
+            "WEE_API_BASE", f"http://{_ollama_host}:{_ollama_port}/v1"
+        )
     if not resolved_key:
         # Issue #153: Check OPENROUTER_API_KEY env var for OpenRouter first
         if "openrouter" in (resolved_base or "").lower():
@@ -238,12 +248,61 @@ _WEE_TOOL_CAPABILITY_PROMPT = (
 )
 
 
+def list_available_models():
+    """List available models from all configured providers."""
+    import httpx
+    
+    _ollama_host = os.environ.get("OLLAMA_HOST", "192.168.1.101")
+    _ollama_port = os.environ.get("OLLAMA_PORT", "11434")
+    
+    print("Available Models by Provider:")
+    print("=" * 60)
+    
+    # Ollama models
+    print("\nOllama (http://%s:%s):" % (_ollama_host, _ollama_port))
+    try:
+        resp = httpx.get(
+            f"http://{_ollama_host}:{_ollama_port}/api/tags",
+            timeout=httpx.Timeout(
+                connect=5.0, read=10.0, write=10.0, pool=10.0
+            ),
+        )
+        if resp.status_code == 200:
+            models = resp.json().get("models", [])
+            for m in models:
+                name = m.get("name", "")
+                size_bytes = m.get("size", 0)
+                size_gb = size_bytes / (1024**3)
+                print(f"  ollama/{name:<40} ({size_gb:.1f} GB)")
+            if not models:
+                print("  (no models available)")
+        else:
+            print("  (unreachable)")
+    except Exception as e:
+        print(f"  (error: {e})")
+    
+    # OpenRouter (read-only, no auth needed for listing)
+    print("\nOpenRouter: Use 'openrouter/<provider>/<model>'")
+    print("  Example: openrouter/meta-llama/llama-2-70b")
+    print("  (See https://openrouter.ai/docs/models for full list)")
+    
+    # LM Studio
+    print("\nLM Studio (http://localhost:1234):")
+    print("  (Configure models in LM Studio UI)")
+    print("  Example: lmstudio/model-name")
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Wee Native Runtime — OpenAI-compatible chat completions"
     )
     parser.add_argument(
-        "--model", required=True, help="Model name (e.g., ollama/gemma4:e4b)"
+        "--list-models",
+        action="store_true",
+        help="List available models and exit",
+    )
+    parser.add_argument(
+        "--model", help="Model name (e.g., ollama/gemma4:e4b)"
     )
     parser.add_argument("--api-base", default=None, help="API base URL")
     parser.add_argument("--api-key", default=None, help="API key")
@@ -260,8 +319,19 @@ def main():
         default=False,
         help="Enable tool calling (bash, python)",
     )
-    parser.add_argument("prompt", help="User prompt")
+    parser.add_argument("prompt", nargs="?", help="User prompt")
     args = parser.parse_args()
+    
+    # Handle --list-models
+    if args.list_models:
+        list_available_models()
+        sys.exit(0)
+    
+    # Validate required arguments for normal operation
+    if not args.model:
+        parser.error("--model is required (unless using --list-models)")
+    if not args.prompt:
+        parser.error("prompt is required (unless using --list-models)")
 
     model, api_base, api_key = resolve_model_and_endpoint(
         args.model, args.api_base, args.api_key
