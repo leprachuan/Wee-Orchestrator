@@ -1158,8 +1158,15 @@ def get_default_model() -> str:
 
 
 def get_default_runtime() -> str:
-    """Get default runtime from environment or use copilot"""
-    return os.environ.get("COPILOT_DEFAULT_RUNTIME", "copilot")
+    """Get default runtime, preferring env var; falls back to
+    first available runtime."""
+    preferred = os.environ.get("COPILOT_DEFAULT_RUNTIME", "copilot")
+    if check_runtime_available(preferred):
+        return preferred
+    available = get_available_runtimes()
+    if available:
+        return available[0]["id"]
+    return preferred  # nothing available at all — return as last resort
 
 
 MODEL_MANIFEST_PATH = Path(SCRIPT_BASE_DIR) / "model-manifest.json"
@@ -14349,21 +14356,44 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             _session_rt = defaults.get("runtime")
             _pref_primary = _get_runtime_pref_mgr().primary()
             _pref_backup = _get_runtime_pref_mgr().backup()
-            runtime = (
-                _session_rt or _pref_primary or _pref_backup or get_default_runtime()
-            )
             if _session_rt:
+                runtime = _session_rt
                 print(
                     f"[RuntimePref] Using session runtime: {runtime}", file=sys.stderr
                 )
             elif _pref_primary:
+                if check_runtime_available(_pref_primary):
+                    runtime = _pref_primary
+                    print(
+                        f"[RuntimePref] Using primary preference runtime: {runtime}",
+                        file=sys.stderr,
+                    )
+                else:
+                    # Primary configured but unavailable — validate
+                    # backup before using it; get_default_runtime()
+                    # will scan all available runtimes as last resort.
+                    if _pref_backup and check_runtime_available(_pref_backup):
+                        runtime = _pref_backup
+                    else:
+                        runtime = get_default_runtime()
+                    print(
+                        f"[RuntimePref] Primary '{_pref_primary}' unavailable, "
+                        f"falling back to: {runtime}",
+                        file=sys.stderr,
+                    )
+            elif _pref_backup:
+                if check_runtime_available(_pref_backup):
+                    runtime = _pref_backup
+                else:
+                    runtime = get_default_runtime()
                 print(
-                    f"[RuntimePref] Using primary preference runtime: {runtime}",
+                    f"[RuntimePref] Using backup preference runtime: {runtime}",
                     file=sys.stderr,
                 )
             else:
+                runtime = get_default_runtime()
                 print(
-                    f"[RuntimePref] Using backup preference runtime: {runtime}",
+                    f"[RuntimePref] Using default runtime: {runtime}",
                     file=sys.stderr,
                 )
         model = body.model or defaults.get("model", get_default_model())

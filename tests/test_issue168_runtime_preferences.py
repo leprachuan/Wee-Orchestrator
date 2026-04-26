@@ -536,6 +536,349 @@ class TestBackupRuntimeFallback(unittest.TestCase):
             if os.path.exists(tmp):
                 os.unlink(tmp)
 
+    def test_backup_used_when_primary_unavailable(self):
+        """Regression test for #168 BLOCKER: when primary is configured but
+        unavailable (not installed), the backup runtime must be selected."""
+        import tempfile
+        from unittest.mock import patch
+
+        from fastapi.testclient import TestClient
+
+        import agent_manager
+
+        tmp = tempfile.mktemp(suffix="_168_fallback_unavailable.json")
+        mgr = agent_manager.RuntimePreferencesManager(tmp)
+        # Set primary to something definitely not installed; backup to a real one
+        mgr.set("definitely-not-installed", "gemini")
+
+        try:
+            with patch.object(agent_manager, "_runtime_pref_mgr", mgr), patch.object(
+                agent_manager,
+                "check_runtime_available",
+                side_effect=lambda rt: rt != "definitely-not-installed",
+            ), patch.object(
+                agent_manager,
+                "get_default_runtime",
+                return_value="copilot",
+            ), patch.object(
+                agent_manager,
+                "_resolve_telegram_identity",
+                side_effect=lambda x: x,
+            ), patch.object(
+                agent_manager,
+                "_send_pairing_code",
+                return_value=True,
+            ), patch.object(
+                agent_manager,
+                "_compute_bg_task_defaults",
+                return_value={},
+            ):
+                captured = []
+
+                async def fake_bg(
+                    self_sm,
+                    task_id,
+                    session_id,
+                    prompt,
+                    agent,
+                    runtime,
+                    model,
+                    *a,
+                    **kw,
+                ):
+                    captured.append(runtime)
+
+                with patch.object(
+                    agent_manager.SessionManager,
+                    "_execute_background_task",
+                    fake_bg,
+                ):
+                    app = agent_manager.create_api_app()
+                    client = TestClient(app)
+                    resp = client.post(
+                        "/api/v1/background-tasks",
+                        json={
+                            "prompt": "test unavailable primary fallback",
+                            "agent": "orchestrator",
+                        },
+                        headers={
+                            "Authorization": "Bearer shared_test_key_168",
+                        },
+                    )
+                self.assertIn(resp.status_code, [200, 201, 202])
+                task_data = resp.json()
+                self.assertIn("runtime", task_data)
+                self.assertEqual(
+                    task_data["runtime"],
+                    "gemini",
+                    f"Expected backup 'gemini' but got '{task_data['runtime']}'. "
+                    "Primary 'definitely-not-installed' should be skipped.",
+                )
+        finally:
+            import os
+
+            if os.path.exists(tmp):
+                os.unlink(tmp)
+
+    def test_default_used_when_primary_unavailable_and_no_backup(self):
+        """When primary is unavailable and no backup is set, use the default runtime."""
+        import tempfile
+        from unittest.mock import patch
+
+        from fastapi.testclient import TestClient
+
+        import agent_manager
+
+        tmp = tempfile.mktemp(suffix="_168_fallback_default.json")
+        mgr = agent_manager.RuntimePreferencesManager(tmp)
+        mgr.set("definitely-not-installed", "")
+
+        try:
+            with patch.object(agent_manager, "_runtime_pref_mgr", mgr), patch.object(
+                agent_manager,
+                "check_runtime_available",
+                side_effect=lambda rt: rt != "definitely-not-installed",
+            ), patch.object(
+                agent_manager,
+                "get_default_runtime",
+                return_value="copilot",
+            ), patch.object(
+                agent_manager,
+                "_resolve_telegram_identity",
+                side_effect=lambda x: x,
+            ), patch.object(
+                agent_manager,
+                "_send_pairing_code",
+                return_value=True,
+            ), patch.object(
+                agent_manager,
+                "_compute_bg_task_defaults",
+                return_value={},
+            ):
+                captured = []
+
+                async def fake_bg(
+                    self_sm,
+                    task_id,
+                    session_id,
+                    prompt,
+                    agent,
+                    runtime,
+                    model,
+                    *a,
+                    **kw,
+                ):
+                    captured.append(runtime)
+
+                with patch.object(
+                    agent_manager.SessionManager,
+                    "_execute_background_task",
+                    fake_bg,
+                ):
+                    app = agent_manager.create_api_app()
+                    client = TestClient(app)
+                    resp = client.post(
+                        "/api/v1/background-tasks",
+                        json={
+                            "prompt": "test unavailable primary no backup",
+                            "agent": "orchestrator",
+                        },
+                        headers={
+                            "Authorization": "Bearer shared_test_key_168",
+                        },
+                    )
+                self.assertIn(resp.status_code, [200, 201, 202])
+                task_data = resp.json()
+                self.assertIn("runtime", task_data)
+                self.assertEqual(
+                    task_data["runtime"],
+                    "copilot",
+                    f"Expected default 'copilot' but got '{task_data['runtime']}'.",
+                )
+        finally:
+            import os
+
+            if os.path.exists(tmp):
+                os.unlink(tmp)
+
+    def test_default_used_when_both_primary_and_backup_unavailable(self):
+        """Regression test for #168 MAJOR: when both primary AND backup runtimes are
+        configured but unavailable, the code must fall back to the default runtime —
+        NOT select the unavailable backup. Reproduction:
+        primary='definitely-not-installed',
+        backup='also-not-installed', default='copilot' -> must return 'copilot'."""
+        import tempfile
+        from unittest.mock import patch
+
+        from fastapi.testclient import TestClient
+
+        import agent_manager
+
+        tmp = tempfile.mktemp(suffix="_168_both_unavailable.json")
+        mgr = agent_manager.RuntimePreferencesManager(tmp)
+        mgr.set("definitely-not-installed", "also-not-installed")
+
+        try:
+            with patch.object(agent_manager, "_runtime_pref_mgr", mgr), patch.object(
+                agent_manager,
+                "check_runtime_available",
+                side_effect=lambda rt: rt
+                not in ("definitely-not-installed", "also-not-installed"),
+            ), patch.object(
+                agent_manager,
+                "get_default_runtime",
+                return_value="copilot",
+            ), patch.object(
+                agent_manager,
+                "_resolve_telegram_identity",
+                side_effect=lambda x: x,
+            ), patch.object(
+                agent_manager,
+                "_send_pairing_code",
+                return_value=True,
+            ), patch.object(
+                agent_manager,
+                "_compute_bg_task_defaults",
+                return_value={},
+            ):
+                captured = []
+
+                async def fake_bg(
+                    self_sm,
+                    task_id,
+                    session_id,
+                    prompt,
+                    agent,
+                    runtime,
+                    model,
+                    *a,
+                    **kw,
+                ):
+                    captured.append(runtime)
+
+                with patch.object(
+                    agent_manager.SessionManager,
+                    "_execute_background_task",
+                    fake_bg,
+                ):
+                    app = agent_manager.create_api_app()
+                    client = TestClient(app)
+                    resp = client.post(
+                        "/api/v1/background-tasks",
+                        json={
+                            "prompt": "test both runtimes unavailable",
+                            "agent": "orchestrator",
+                        },
+                        headers={
+                            "Authorization": "Bearer shared_test_key_168",
+                        },
+                    )
+                self.assertIn(resp.status_code, [200, 201, 202])
+                task_data = resp.json()
+                self.assertIn("runtime", task_data)
+                self.assertEqual(
+                    task_data["runtime"],
+                    "copilot",
+                    f"Expected default 'copilot' but got '{task_data['runtime']}'. "
+                    "Both primary 'definitely-not-installed' and backup"
+                    " 'also-not-installed' "
+                    "are unavailable — must fall back to default 'copilot'.",
+                )
+        finally:
+            import os
+
+            if os.path.exists(tmp):
+                os.unlink(tmp)
+
+    def test_available_runtime_selected_when_primary_backup_default_all_dead(self):
+        """Regression for #168 BLOCKER: when primary, backup AND default are all
+        unavailable, the background task must be assigned an actually-available
+        runtime (not the dead default string)."""
+        import tempfile
+        from unittest.mock import patch
+
+        from fastapi.testclient import TestClient
+
+        import agent_manager
+
+        tmp = tempfile.mktemp(suffix="_168_all_dead.json")
+        mgr = agent_manager.RuntimePreferencesManager(tmp)
+        # primary and backup both dead
+        mgr.set("dead-primary", "dead-backup")
+
+        ALIVE_RUNTIME = "opencode"
+
+        def _available(rt):
+            return rt == ALIVE_RUNTIME
+
+        try:
+            with patch.object(agent_manager, "_runtime_pref_mgr", mgr), patch.object(
+                agent_manager,
+                "check_runtime_available",
+                side_effect=_available,
+            ), patch.object(
+                agent_manager,
+                "get_available_runtimes",
+                return_value=[{"id": ALIVE_RUNTIME, "label": ALIVE_RUNTIME}],
+            ), patch.object(
+                agent_manager,
+                "_resolve_telegram_identity",
+                side_effect=lambda x: x,
+            ), patch.object(
+                agent_manager,
+                "_send_pairing_code",
+                return_value=True,
+            ), patch.object(
+                agent_manager,
+                "_compute_bg_task_defaults",
+                return_value={},
+            ):
+                async def fake_bg(
+                    self_sm,
+                    task_id,
+                    session_id,
+                    prompt,
+                    agent,
+                    runtime,
+                    model,
+                    *a,
+                    **kw,
+                ):
+                    pass
+
+                with patch.object(
+                    agent_manager.SessionManager,
+                    "_execute_background_task",
+                    fake_bg,
+                ):
+                    app = agent_manager.create_api_app()
+                    client = TestClient(app)
+                    resp = client.post(
+                        "/api/v1/background-tasks",
+                        json={
+                            "prompt": "test all-dead fallback to available runtime",
+                            "agent": "orchestrator",
+                        },
+                        headers={
+                            "Authorization": "Bearer shared_test_key_168",
+                        },
+                    )
+                self.assertIn(resp.status_code, [200, 201, 202])
+                task_data = resp.json()
+                self.assertIn("runtime", task_data)
+                self.assertEqual(
+                    task_data["runtime"],
+                    ALIVE_RUNTIME,
+                    f"Expected alive runtime '{ALIVE_RUNTIME}' but got "
+                    f"'{task_data['runtime']}'. When primary, backup, and default "
+                    "are all unavailable, the task must use an actually-available "
+                    "runtime.",
+                )
+        finally:
+            import os
+            if os.path.exists(tmp):
+                os.unlink(tmp)
+
 
 if __name__ == "__main__":
     unittest.main()
