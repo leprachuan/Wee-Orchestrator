@@ -365,16 +365,19 @@ def _make_client(api_base: str, api_key: str, timeout: float):
 # ---------------------------------------------------------------------------
 REPL_HELP = """\
 Wee CLI Interactive Mode — Commands:
-  /clear          Clear conversation history
-  /history        Show conversation history
-  /model MODEL    Switch model
-  /model list     List available models
-  /tokens         Show token usage
-  /system PROMPT  Set system prompt
-  /config         Show current configuration
-  /version        Show version
-  /help           Show this help
-  /exit, /quit    Exit interactive mode
+  /clear              Clear conversation history
+  /history            Show conversation history
+  /model MODEL        Switch model
+  /model list         List available models
+  /tokens             Show token usage
+  /system PROMPT      Set system prompt
+  /config             Show current configuration
+  /tools              Show tool status
+  /tools on|off       Enable/disable tool calling
+  /permission MODE    Set permission level (restricted, auto, elevated)
+  /version            Show version
+  /help               Show this help
+  /exit, /quit        Exit interactive mode
 """
 
 
@@ -475,6 +478,31 @@ def run_interactive(
                 _print_info(f"Timeout:     {timeout}s")
                 _print_info(f"Permission:  {permission}")
                 _print_info(f"Output:      {output_format}")
+                continue
+
+            elif cmd == "/tools":
+                if not arg:
+                    status = "enabled" if tools_enabled else "disabled"
+                    _print_info(f"Tool calling is {status}.")
+                elif arg.lower() in ("on", "enable", "yes", "true"):
+                    tools_enabled = True
+                    _print_info("Tool calling enabled.")
+                elif arg.lower() in ("off", "disable", "no", "false"):
+                    tools_enabled = False
+                    _print_info("Tool calling disabled.")
+                else:
+                    _print_error(f"Invalid argument: {arg}. Use 'on' or 'off'.")
+                continue
+
+            elif cmd == "/permission":
+                if not arg:
+                    _print_info(f"Permission level: {permission}")
+                elif arg.lower() in ("restricted", "auto", "elevated"):
+                    old_perm = permission
+                    permission = arg.lower()
+                    _print_info(f"Permission: {old_perm} → {permission}")
+                else:
+                    _print_error(f"Invalid permission: {arg}. Use 'restricted', 'auto', or 'elevated'.")
                 continue
 
             elif cmd == "/version":
