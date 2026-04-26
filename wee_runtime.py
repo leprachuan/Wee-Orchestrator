@@ -246,18 +246,26 @@ def _call_agent_handler(func_args: dict) -> str:
         api_url = os.environ.get("WEE_ORCHESTRATOR_API", "https://127.0.0.1:8000")
         token = os.environ.get("WEE_ORCHESTRATOR_TOKEN", "shared_R6R6wReORUV6bouLntScMTowbsh30Rzqa3hzjs3bWgU")
 
-        task_data = {
-            "prompt": prompt,
-            "agent": agent,
-            "runtime": "copilot",
-            "model": "claude-haiku-4.5",
-            "timeout": 1800,
-        }
-
         if mode == "quick":
-            endpoint = "/api/v1/chat"
+            # Use /api/v1/query for sync calls
+            endpoint = "/api/v1/query"
+            task_data = {
+                "prompt": prompt,
+                "agent": agent,
+                "runtime": "copilot",
+                "model": "claude-haiku-4.5",
+                "timeout": 60,
+            }
         else:
+            # Use /api/v1/background-tasks for async calls
             endpoint = "/api/v1/background-tasks"
+            task_data = {
+                "prompt": prompt,
+                "agent": agent,
+                "runtime": "copilot",
+                "model": "claude-haiku-4.5",
+                "timeout": 1800,
+            }
 
         url = f"{api_url}{endpoint}"
         req = urllib.request.Request(url, method="POST")
@@ -275,7 +283,9 @@ def _call_agent_handler(func_args: dict) -> str:
                 task_id = result.get("id", result.get("task_id"))
                 return f"✓ Task started: {agent}\nTask ID: {task_id}\nCheck status with: /background status {task_id}"
             else:
-                return f"✓ Agent response:\n{result.get('response', str(result))}"
+                # For quick mode, extract response field or return full result
+                response_text = result.get('response', result.get('result', str(result)))
+                return f"✓ {agent} agent response:\n{response_text}"
 
     except urllib.error.HTTPError as e:
         error_text = e.read().decode() if e.fp else str(e)
