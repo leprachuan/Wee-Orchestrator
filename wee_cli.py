@@ -526,11 +526,16 @@ def run_interactive(
     system_prompt: str,
     output_format: str,
     permission: str,
+    model_str: str = None,
 ) -> str:
     """Run the interactive REPL.
     
+    Args:
+        model: Resolved model name (without provider prefix)
+        model_str: Original model string from CLI (with provider prefix if used)
+    
     Returns:
-        Updated model string (to persist across sessions)
+        Updated model string (to persist across sessions, in original form)
     """
     _init_readline()
 
@@ -551,6 +556,9 @@ def run_interactive(
     first_message = True
     # Buffer to store tool results from the last interaction
     tool_results_buffer = {}
+    # Track original user input for model persistence (with provider prefix if used)
+    # If model_str wasn't passed, default to the resolved model name
+    model_for_persistence = model_str if model_str else model
 
     while True:
         try:
@@ -599,8 +607,10 @@ def run_interactive(
                     list_available_models(provider)
                 else:
                     old_model = model
-                    model, api_base, api_key = resolve_model_and_endpoint(arg)
+                    model_for_persistence = arg  # Keep original user input for persistence
+                    resolved_model, api_base, api_key = resolve_model_and_endpoint(arg)
                     client = _make_client(api_base, api_key, timeout)
+                    model = resolved_model  # Use resolved model for API calls
                     _print_info(f"Model switched: {old_model} → {model}")
                 continue
 
@@ -783,7 +793,7 @@ def run_interactive(
     _save_readline()
     _print_info(f"\n{token_tracker.summary()}")
     _print_info("Goodbye!")
-    return model
+    return model_for_persistence
 
 
 # ---------------------------------------------------------------------------
@@ -1012,6 +1022,7 @@ def main(argv=None):
             system_prompt=system_prompt,
             output_format=output_format,
             permission=permission,
+            model_str=model_str,
         )
         # Persist model choice for next session
         cfg["model"] = updated_model
@@ -1043,6 +1054,7 @@ def main(argv=None):
             system_prompt=system_prompt,
             output_format=output_format,
             permission=permission,
+            model_str=model_str,
         )
         # Persist model choice for next session
         cfg["model"] = updated_model
