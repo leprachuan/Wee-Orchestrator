@@ -6064,8 +6064,10 @@ if (document.readyState !== 'loading') {
     name:        () => document.getElementById('asf-name'),
     path:        () => document.getElementById('asf-path'),
     description: () => document.getElementById('asf-description'),
-    runtime:     () => document.getElementById('asf-runtime'),
-    model:       () => document.getElementById('asf-model'),
+    primaryRuntime:   () => document.getElementById('asf-primary-runtime'),
+    primaryModel:     () => document.getElementById('asf-primary-model'),
+    fallbackRuntime:  () => document.getElementById('asf-fallback-runtime'),
+    fallbackModel:    () => document.getElementById('asf-fallback-model'),
     maxConcurrent: () => document.getElementById('asf-max-concurrent'),
     permMode:    () => document.getElementById('asf-perm-mode'),
   };
@@ -6211,8 +6213,10 @@ if (document.readyState !== 'loading') {
     set(F.name,        agent.name);
     set(F.path,        agent.path);
     set(F.description, agent.description);
-    set(F.runtime,     agent.runtime);
-    set(F.model,       agent.model);
+    set(F.primaryRuntime,   agent.primary_runtime || agent.runtime);
+    set(F.primaryModel,     agent.primary_model || agent.model);
+    set(F.fallbackRuntime,  agent.fallback_runtime);
+    set(F.fallbackModel,    agent.fallback_model);
     const mcEl = F.maxConcurrent();
     if (mcEl) mcEl.value = agent.max_concurrent != null ? String(agent.max_concurrent) : '1';
 
@@ -6239,8 +6243,10 @@ if (document.readyState !== 'loading') {
       name:        get(F.name),
       path:        get(F.path),
       description: get(F.description) || undefined,
-      runtime:     get(F.runtime)     || undefined,
-      model:       get(F.model)       || undefined,
+      primary_runtime:  get(F.primaryRuntime)   || undefined,
+      primary_model:    get(F.primaryModel)     || undefined,
+      fallback_runtime: get(F.fallbackRuntime)  || undefined,
+      fallback_model:   get(F.fallbackModel)    || undefined,
       max_concurrent: (() => {
         const el = F.maxConcurrent();
         if (!el || el.value.trim() === '') return undefined;
@@ -6485,7 +6491,7 @@ if (document.readyState !== 'loading') {
 
   // Dirty detection on basic text fields
   if (modalSettings) {
-    ['asf-name','asf-path','asf-description','asf-runtime','asf-model','asf-max-concurrent'].forEach(id => {
+    ['asf-name','asf-path','asf-description','asf-primary-runtime','asf-primary-model','asf-fallback-runtime','asf-fallback-model','asf-max-concurrent'].forEach(id => {
       const el = document.getElementById(id);
       if (el) el.addEventListener('input', updateDirtyIndicator);
     });
@@ -6649,85 +6655,7 @@ if (document.readyState !== 'loading') {
   }
 })();
 
-/* ── Runtime Preferences Panel ──────────────────────────────────────────────── */
-(function initRuntimePreferences() {
-  const rpPrimary  = document.getElementById('rp-primary');
-  const rpBackup   = document.getElementById('rp-backup');
-  const rpSave     = document.getElementById('rp-save');
-  const rpStatus   = document.getElementById('rp-status');
 
-
-  function showRpStatus(msg, isErr) {
-    rpStatus.textContent = msg;
-    rpStatus.className = isErr ? 'asf-hint rp-err' : 'asf-hint rp-ok';
-    rpStatus.classList.remove('hidden');
-    setTimeout(() => rpStatus && rpStatus.classList.add('hidden'), 3500);
-  }
-
-  /** Populate dropdowns from available runtimes and set selected values */
-  async function loadRuntimePrefs() {
-    try {
-      // Fetch available runtimes for dynamic dropdown population
-      const rtRes = await apiRequest('GET', '/runtimes');
-      const available = (rtRes.runtimes || []).map(r => r.id || r);
-      const allRuntimes = available.length ? available : [
-        'copilot', 'copilot-sdk', 'claude', 'claude-sdk', 'gemini', 'opencode', 'codex', 'devin'
-      ];
-
-      // Rebuild dropdowns with available runtimes
-      [rpPrimary, rpBackup].forEach(sel => {
-        const cur = sel.value;
-        sel.innerHTML = '';
-        allRuntimes.forEach(id => {
-          const opt = document.createElement('option');
-          opt.value = id;
-          opt.textContent = id;
-          sel.appendChild(opt);
-        });
-        if (cur) sel.value = cur;
-      });
-
-      // Fetch current preferences
-      const prefs = await apiRequest('GET', '/runtime-preferences');
-      if (prefs.primary_runtime) rpPrimary.value = prefs.primary_runtime;
-      if (prefs.backup_runtime)  rpBackup.value  = prefs.backup_runtime;
-    } catch (e) {
-      // Non-fatal: leave dropdown with static defaults
-    }
-  }
-
-  async function saveRuntimePrefs() {
-    if (rpSave) { rpSave.disabled = true; rpSave.textContent = 'Saving…'; }
-    try {
-      await apiRequest('PUT', '/runtime-preferences', {
-        primary_runtime: rpPrimary.value,
-        backup_runtime:  rpBackup.value,
-      });
-      showRpStatus('✓ Runtime preferences saved', false);
-    } catch (e) {
-      showRpStatus('✗ Save failed: ' + e.message, true);
-    } finally {
-      if (rpSave) { rpSave.disabled = false; rpSave.textContent = '💾 Save Runtime Prefs'; }
-    }
-  }
-
-  rpSave.addEventListener('click', saveRuntimePrefs);
-
-  // Load preferences whenever the Settings modal opens
-  const modalSettings = document.getElementById('modal-settings');
-  if (modalSettings) {
-    const observer = new MutationObserver((mutations) => {
-      for (const m of mutations) {
-        if (m.attributeName === 'class') {
-          const hidden = modalSettings.classList.contains('hidden');
-        }
-      }
-    });
-    observer.observe(modalSettings, { attributes: true });
-  }
-  // Also load on init in case modal starts open
-  loadRuntimePrefs();
-})();
 
 // ─── Skills Manager Panel ────────────────────────────────────────────────────
 // Mirrors the Canvas pushover panel pattern.

@@ -492,25 +492,52 @@
           </div>
         </div>
 
-        <!-- Runtime Config -->
+        <!-- Runtime Configuration (Primary + Fallback) -->
         <div class="asf-section">
-          <div class="asf-section-title">⚡ Runtime Config</div>
+          <div class="asf-section-title">⚡ Runtime Configuration</div>
+          <p class="asf-hint" style="margin:0 0 12px;">Configure primary runtime/model and optional fallback for infrastructure failures (rate limits, quota, 5xx errors).</p>
           <div class="asf-grid">
+            <!-- Primary Runtime -->
             <div class="asf-field">
-              <label class="asf-label" for="asf-runtime">Runtime</label>
-              <select id="asf-runtime" class="glass-input glass-select asf-select">
+              <label class="asf-label" for="asf-primary-runtime">Primary Runtime</label>
+              <select id="asf-primary-runtime" class="glass-input glass-select asf-select">
                 <option value="">Default</option>
                 <option value="copilot">copilot</option>
+                <option value="copilot-sdk">copilot-sdk</option>
                 <option value="claude">claude</option>
+                <option value="claude-sdk">claude-sdk</option>
                 <option value="gemini">gemini</option>
                 <option value="opencode">opencode</option>
                 <option value="codex">codex</option>
+                <option value="devin">devin</option>
               </select>
             </div>
+            <!-- Primary Model -->
             <div class="asf-field">
-              <label class="asf-label" for="asf-model">Model</label>
-              <input id="asf-model" type="text" class="glass-input asf-input asf-mono" placeholder="e.g. claude-sonnet-4.6" autocomplete="off" />
+              <label class="asf-label" for="asf-primary-model">Primary Model</label>
+              <input id="asf-primary-model" type="text" class="glass-input asf-input asf-mono" placeholder="e.g. claude-sonnet-4.6" autocomplete="off" />
             </div>
+            <!-- Fallback Runtime -->
+            <div class="asf-field">
+              <label class="asf-label" for="asf-fallback-runtime">Fallback Runtime <span class="asf-hint">(optional)</span></label>
+              <select id="asf-fallback-runtime" class="glass-input glass-select asf-select">
+                <option value="">None</option>
+                <option value="copilot">copilot</option>
+                <option value="copilot-sdk">copilot-sdk</option>
+                <option value="claude">claude</option>
+                <option value="claude-sdk">claude-sdk</option>
+                <option value="gemini">gemini</option>
+                <option value="opencode">opencode</option>
+                <option value="codex">codex</option>
+                <option value="devin">devin</option>
+              </select>
+            </div>
+            <!-- Fallback Model -->
+            <div class="asf-field">
+              <label class="asf-label" for="asf-fallback-model">Fallback Model <span class="asf-hint">(optional)</span></label>
+              <input id="asf-fallback-model" type="text" class="glass-input asf-input asf-mono" placeholder="e.g. gpt-4-turbo" autocomplete="off" />
+            </div>
+            <!-- Max Concurrent -->
             <div class="asf-field">
               <label class="asf-label" for="asf-max-concurrent">Max Concurrent Tasks</label>
               <input id="asf-max-concurrent" type="number" class="glass-input asf-input" min="1" step="1" placeholder="1" autocomplete="off" />
@@ -655,43 +682,7 @@
           </div>
         </div>
 
-        <!-- Runtime Preferences -->
-        <div class="asf-section" id="runtime-prefs-section">
-          <div class="asf-section-title">🔄 Runtime Preferences</div>
-          <p class="asf-hint" style="margin:0 0 12px;">Configure the default primary and backup runtimes for background tasks. Agents can still override these.</p>
-          <div class="asf-grid">
-            <div class="asf-field">
-              <label class="asf-label" for="rp-primary">Primary Runtime</label>
-              <select id="rp-primary" class="glass-input glass-select asf-select">
-                <option value="copilot">copilot</option>
-                <option value="copilot-sdk">copilot-sdk</option>
-                <option value="claude">claude</option>
-                <option value="claude-sdk">claude-sdk</option>
-                <option value="gemini">gemini</option>
-                <option value="opencode">opencode</option>
-                <option value="codex">codex</option>
-                <option value="devin">devin</option>
-              </select>
-            </div>
-            <div class="asf-field">
-              <label class="asf-label" for="rp-backup">Backup Runtime <span class="asf-hint">(fallback)</span></label>
-              <select id="rp-backup" class="glass-input glass-select asf-select">
-                <option value="claude">claude</option>
-                <option value="copilot">copilot</option>
-                <option value="copilot-sdk">copilot-sdk</option>
-                <option value="claude-sdk">claude-sdk</option>
-                <option value="gemini">gemini</option>
-                <option value="opencode">opencode</option>
-                <option value="codex">codex</option>
-                <option value="devin">devin</option>
-              </select>
-            </div>
-          </div>
-          <div style="margin-top:10px;display:flex;align-items:center;gap:10px;">
-            <button id="rp-save" class="btn btn-primary btn-sm">💾 Save Runtime Prefs</button>
-            <span id="rp-status" class="asf-hint hidden"></span>
-          </div>
-        </div>
+
 
         <- Enables embedding live interactive pages ( e.g. noVNC, Proxmox consoles Danger Zone -->
         <div class="asf-section asf-danger-section">
