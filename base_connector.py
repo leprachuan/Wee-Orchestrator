@@ -35,14 +35,35 @@ class BaseConfig:
         self.config = self._load_config()
 
     def _load_config(self) -> Dict:
-        """Load configuration from file or create defaults."""
+        """Load configuration from file or create defaults.
+
+        Validates telegram_config.json and webex_config.json schemas.
+        Raises pydantic.ValidationError if config has structural errors.
+        File I/O errors fall back to defaults.
+        """
         if self.config_file.exists():
             try:
                 with open(self.config_file, "r") as f:
-                    return json.load(f)
-            except Exception as e:
+                    cfg = json.load(f)
+            except (FileNotFoundError, json.JSONDecodeError) as e:
                 print(f"Error loading config: {e}", file=sys.stderr)
                 return self._default_config()
+
+            # Validate using config_schemas if available
+            config_file_name = self.config_file.name
+            if config_file_name in ("telegram_config.json", "webex_config.json"):
+                try:
+                    from config_schemas import CONNECTOR_VALIDATORS
+
+                    validator = CONNECTOR_VALIDATORS.get(config_file_name)
+                    if validator:
+                        validated = validator(cfg)
+                        return validated.model_dump()
+                except ImportError:
+                    # config_schemas not available, use raw config
+                    pass
+
+            return cfg
         return self._default_config()
 
     def _default_config(self) -> Dict:
