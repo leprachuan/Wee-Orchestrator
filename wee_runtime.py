@@ -281,15 +281,66 @@ def list_available_models():
     except Exception as e:
         print(f"  (error: {e})")
     
-    # OpenRouter (read-only, no auth needed for listing)
-    print("\nOpenRouter: Use 'openrouter/<provider>/<model>'")
-    print("  Example: openrouter/meta-llama/llama-2-70b")
-    print("  (See https://openrouter.ai/docs/models for full list)")
+    # OpenRouter models
+    print("\nOpenRouter (https://openrouter.ai):")
+    try:
+        resp = httpx.get(
+            "https://openrouter.ai/api/v1/models",
+            timeout=10.0
+        )
+        if resp.status_code == 200:
+            data = resp.json()
+            models = data.get("data", [])
+            if models:
+                print(f"  Found {len(models)} models. Use 'openrouter/<model-id>'")
+                # Show top providers
+                providers = {}
+                for m in models:
+                    model_id = m.get("id", "")
+                    if "/" in model_id:
+                        provider = model_id.split("/")[0]
+                        if provider not in providers:
+                            providers[provider] = []
+                        providers[provider].append(model_id)
+                
+                # Show first 3 models per provider (max 9 providers)
+                for provider in sorted(providers.keys())[:9]:
+                    print(f"    {provider}:")
+                    for model_id in providers[provider][:3]:
+                        print(f"      openrouter/{model_id}")
+                    if len(providers[provider]) > 3:
+                        print(f"      ... and {len(providers[provider]) - 3} more")
+            else:
+                print("  (no models available)")
+        else:
+            print(f"  (error: HTTP {resp.status_code})")
+    except Exception as e:
+        print(f"  (error: {e})")
     
     # LM Studio
     print("\nLM Studio (http://localhost:1234):")
-    print("  (Configure models in LM Studio UI)")
-    print("  Example: lmstudio/model-name")
+    _lmstudio_host = os.environ.get("LMSTUDIO_HOST", "localhost")
+    _lmstudio_port = os.environ.get("LMSTUDIO_PORT", "1234")
+    try:
+        resp = httpx.get(
+            f"http://{_lmstudio_host}:{_lmstudio_port}/v1/models",
+            timeout=httpx.Timeout(
+                connect=5.0, read=10.0, write=10.0, pool=10.0
+            ),
+        )
+        if resp.status_code == 200:
+            data = resp.json()
+            models = data.get("data", [])
+            if models:
+                for m in models:
+                    model_id = m.get("id", "")
+                    print(f"  lmstudio/{model_id}")
+            else:
+                print("  (no models available)")
+        else:
+            print("  (unreachable or no models loaded)")
+    except Exception as e:
+        print(f"  (unreachable: {e})")
 
 
 def main():
