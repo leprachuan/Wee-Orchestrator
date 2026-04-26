@@ -289,6 +289,8 @@ def _call_agent_handler(func_args: dict) -> str:
 
     except urllib.error.HTTPError as e:
         error_text = e.read().decode() if e.fp else str(e)
+        if e.code == 429:
+            return "Error: Rate limit exceeded on orchestrator. If this persists, check orchestrator health or try again in 60 seconds."
         return f"Error calling orchestrator API ({e.code}): {error_text}"
     except Exception as e:
         return f"Error calling agent '{agent}': {e}"

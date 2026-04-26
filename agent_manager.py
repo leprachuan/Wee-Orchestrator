@@ -11870,7 +11870,11 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         )
 
         client_ip = request.client.host if request.client else "unknown"
-        if not rate_limiter.check(client_ip, "query", max_requests=30, window=60):
+        # Increased rate limit for /api/v1/query to 100 req/60s to handle internal agent calls
+        # Local/internal calls (127.0.0.1, localhost, ::1) exempt from rate limiting
+        is_local = client_ip in ("127.0.0.1", "localhost", "::1")
+        max_reqs = 1000 if is_local else 100
+        if not rate_limiter.check(client_ip, "query", max_requests=max_reqs, window=60):
             raise HTTPException(status_code=429, detail="Rate limit exceeded")
 
         session_id = f"query_{str(uuid4())[:8]}"
