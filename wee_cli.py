@@ -723,13 +723,31 @@ def run_interactive(
             cwd_agents_file = os.path.join(os.getcwd(), "agents.json")
             cwd_has_agents = os.path.isfile(cwd_agents_file)
             
+            # Check if CWD has AGENTS.md
+            cwd_agents_md = os.path.join(os.getcwd(), "AGENTS.md")
+            cwd_has_agents_md = os.path.isfile(cwd_agents_md)
+            
             # Check if CWD/skills exists
             cwd_skills_dir = os.path.join(os.getcwd(), "skills")
             cwd_has_skills_dir = os.path.isdir(cwd_skills_dir)
             
             # If CWD has local agents/skills, add system context
-            if cwd_has_agents or cwd_has_skills_dir:
+            if cwd_has_agents or cwd_has_agents_md or cwd_has_skills_dir:
                 context = "\nContext from current working directory:"
+                
+                # Read AGENTS.md if it exists
+                if cwd_has_agents_md:
+                    try:
+                        with open(cwd_agents_md, 'r', encoding='utf-8', errors='ignore') as f:
+                            agents_md_content = f.read()
+                        # Extract first 500 chars to avoid bloating the context
+                        context += f"\n\nAGENTS.md (available in CWD):\n"
+                        context += agents_md_content[:500]
+                        if len(agents_md_content) > 500:
+                            context += "\n... (see full AGENTS.md in CWD)"
+                    except (OSError, IOError):
+                        pass
+                
                 if cwd_has_agents:
                     agents = cwd_agents.get("agents", [])
                     if agents:
