@@ -1,6 +1,6 @@
 {
-  "source": "manually verified from Copilot CLI model picker 2026-04-24",
-  "last_updated": "2026-04-24T22:19:00Z",
+  "source": "manually verified from Codex CLI model picker 2026-04-26",
+  "last_updated": "2026-04-26T18:28:43Z",
   "runtimes": {
     "copilot": [
       "auto",
@@ -19,8 +19,11 @@
       "claude-sonnet-4"
     ],
     "codex": [
+      "gpt-5.5",
       "gpt-5.4",
-      "gpt-5.5"
+      "gpt-5.4-mini",
+      "gpt-5.3-codex",
+      "gpt-5.2"
     ],
     "copilot-sdk": [
       "auto",
