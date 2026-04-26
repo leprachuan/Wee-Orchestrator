@@ -166,6 +166,7 @@ class TestIssue193BackgroundTaskNormalization(unittest.TestCase):
         """
         import inspect
         import re
+
         import agent_manager as am
 
         src = inspect.getsource(am.create_api_app)
