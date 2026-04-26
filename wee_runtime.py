@@ -293,7 +293,7 @@ def list_available_models():
             models = data.get("data", [])
             if models:
                 print(f"  Found {len(models)} models. Use 'openrouter/<model-id>'")
-                # Show top providers
+                # Show all providers and all their models
                 providers = {}
                 for m in models:
                     model_id = m.get("id", "")
@@ -303,13 +303,11 @@ def list_available_models():
                             providers[provider] = []
                         providers[provider].append(model_id)
                 
-                # Show first 3 models per provider (max 9 providers)
-                for provider in sorted(providers.keys())[:9]:
+                # Show all providers and all models
+                for provider in sorted(providers.keys()):
                     print(f"    {provider}:")
-                    for model_id in providers[provider][:3]:
+                    for model_id in sorted(providers[provider]):
                         print(f"      openrouter/{model_id}")
-                    if len(providers[provider]) > 3:
-                        print(f"      ... and {len(providers[provider]) - 3} more")
             else:
                 print("  (no models available)")
         else:
