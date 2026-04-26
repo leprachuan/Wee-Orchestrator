@@ -6,15 +6,12 @@ Manages session ID mapping between N8N chat sessions and AI backend sessions
 """
 
 import argparse
-import copy
 import hashlib
-import hmac
 import json
 import logging
 import os
 import re
 import secrets as _secrets
-import shlex
 import shutil
 import signal
 import subprocess
@@ -25,83 +22,26 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 from uuid import uuid4
 
-from session_manager_components import (
-    CliCommandHandler,
-    RuntimeExecutor,
-    StreamingManager,
-)
-
 # Dynamically determine the repo base directory (works regardless of where repo is cloned)
 SCRIPT_BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-
-# ── Copilot token refresh constants (Issue #203) ────────────────────────
-# Copilot session tokens expire ~30 min after creation. We proactively
-# restart the subprocess every COPILOT_TOKEN_REFRESH_INTERVAL seconds
-# and reactively recover when the 'Session token expired' error appears.
-COPILOT_TOKEN_REFRESH_INTERVAL = int(
-    os.environ.get("COPILOT_TOKEN_REFRESH_INTERVAL", str(25 * 60))
-)  # 25 minutes default
-COPILOT_TOKEN_REFRESH_MAX_RETRIES = int(
-    os.environ.get("COPILOT_TOKEN_REFRESH_MAX_RETRIES", "10")
-)
-COPILOT_CONTEXT_SUMMARY_MAX_CHARS = int(
-    os.environ.get("COPILOT_CONTEXT_SUMMARY_MAX_CHARS", "8000")
-)
-_COPILOT_TOKEN_EXPIRED_PHRASE = "Session token expired"
-# Full Copilot auth-failure pattern anchored to the end of the tail window.
-# The real error is: "Session token expired. Please resend your message. (Request ID: ...)"
-# Requiring the suffix and anchoring with \Z prevents false positives when an
-# agent merely mentions the bare phrase in transcript text (e.g. summarising a
-# prior failure) — such mentions never have the specific suffix at the very end.
-_COPILOT_EXPIRY_TAIL_WINDOW = 500
-_COPILOT_TOKEN_EXPIRED_FULL_RE = re.compile(
-    r"Session token expired\. Please resend your message\.\s*\([^)]+\)\s*\Z"
-)
-
-
-def _is_copilot_token_expired(output: str) -> bool:
-    """Return True only when output ends with the real Copilot auth-expiry signal.
-
-    Matches the full Copilot error format anchored to the end of the tail
-    window.  The real failure always terminates output with:
-      "Session token expired. Please resend your message. (Request ID: ...)"
-    An agent summarising a past failure will have additional text after the
-    phrase, so the \\Z anchor prevents false positives.  The bare phrase alone
-    (without the suffix) is not treated as a real auth failure.
-    """
-    tail = (
-        output[-_COPILOT_EXPIRY_TAIL_WINDOW:]
-        if len(output) > _COPILOT_EXPIRY_TAIL_WINDOW
-        else output
-    )
-    return bool(_COPILOT_TOKEN_EXPIRED_FULL_RE.search(tail))
-
 
 # ── Theme constants (F025) ──────────────────────────────────────────────
 _BUILTIN_THEMES = [
     {
-        "name": "emerald",
-        "label": "Emerald",
-        "description": "Default glassmorphism",
-        "builtin": True,
+        "name": "emerald", "label": "Emerald",
+        "description": "Default glassmorphism", "builtin": True,
     },
     {
-        "name": "midnight",
-        "label": "Midnight",
-        "description": "Deep blue ocean",
-        "builtin": True,
+        "name": "midnight", "label": "Midnight",
+        "description": "Deep blue ocean", "builtin": True,
     },
     {
-        "name": "sunrise",
-        "label": "Sunrise",
-        "description": "Warm light mode",
-        "builtin": True,
+        "name": "sunrise", "label": "Sunrise",
+        "description": "Warm light mode", "builtin": True,
     },
     {
-        "name": "cyberpunk",
-        "label": "Cyberpunk",
-        "description": "Neon pink & cyan",
-        "builtin": True,
+        "name": "cyberpunk", "label": "Cyberpunk",
+        "description": "Neon pink & cyan", "builtin": True,
     },
 ]
 _THEME_NAME_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$")
@@ -142,7 +82,6 @@ _CURL_USER_RE = re.compile(
     r"""(-u\s+)(\S+)""",
 )
 
-
 def _sanitize_command_for_display(text: str) -> str:
     """Redact sensitive headers and credentials from command strings for UI display.
 
@@ -171,7 +110,6 @@ def _sanitize_command_for_display(text: str) -> str:
     text = _CURL_USER_RE.sub(r"\1[REDACTED]", text)
     return text
 
-
 def _sanitize_tool_call_for_display(data: dict) -> dict:
     """Return a shallow copy of a tool_call event dict with sensitive
     credentials redacted from the ``input`` field.  Other fields are
@@ -198,19 +136,6 @@ def _sanitize_tool_call_for_display(data: dict) -> dict:
                 new_inp[field] = _sanitize_command_for_display(new_inp[field])
         sanitized["input"] = new_inp
     return sanitized
-
-
-def _split_command_args(command: str) -> List[str]:
-    """Parse a command string into argv without an implicit shell."""
-    if not isinstance(command, str) or not command.strip():
-        raise ValueError("No command provided")
-    try:
-        argv = shlex.split(command, posix=True)
-    except ValueError as exc:
-        raise ValueError(f"Invalid command syntax: {exc}") from exc
-    if not argv:
-        raise ValueError("No command provided")
-    return argv
 
 
 def _resolve_silent_default(channel: str) -> bool:
@@ -257,7 +182,6 @@ class RateLimiter:
                 if not self.records[ip]:
                     del self.records[ip]
 
-
 class AuthManager:
     """Manages pairing codes, session tokens, and shared key validation."""
 
@@ -289,7 +213,7 @@ class AuthManager:
         """Validate a Bearer token as a shared key. Expects 'shared_<key>'."""
         if not token.startswith("shared_"):
             return False
-        return hmac.compare_digest(token[7:], self.shared_key)
+        return token[7:] == self.shared_key
 
     def _load_sessions(self):
         """Load persisted sessions from file on startup."""
@@ -405,17 +329,12 @@ class AuthManager:
                     del self.session_tokens[token]
         self._save_sessions()
 
-
 class BackgroundTaskManager:
     """Manages background task lifecycle: creation, tracking, output capture, cleanup."""
 
     MAX_TASKS_PER_USER = int(os.environ.get("BG_MAX_TASKS_PER_USER", "5"))
-    MAX_TOTAL_TASKS = int(os.environ.get("BG_MAX_TOTAL_TASKS", "500"))
     MAX_OUTPUT_LINES = 500
-    MAX_TOOL_CALLS = 200
-    MAX_TOOL_FIELD_CHARS = int(os.environ.get("BG_MAX_TOOL_FIELD_CHARS", "4000"))
     CLEANUP_AGE_HOURS = int(os.environ.get("BG_CLEANUP_HOURS", "24"))
-    BG_CLEANUP_HOURS = int(os.environ.get("BG_CLEANUP_HOURS", "24"))
 
     def __init__(self):
         home = os.path.expanduser("~")
@@ -426,108 +345,19 @@ class BackgroundTaskManager:
         env_suffix = "-dev" if api_port == "8001" else ""
         self._path = os.path.join(copilot_dir, f"background-tasks{env_suffix}.json")
         self._lock = threading.Lock()
-        self._tasks_cache = None  # in-memory cache; avoids disk I/O on every API call
         self._bg_events = {}  # {origin_session_id: [event_dicts]}
         self._bg_events_lock = threading.Lock()
-        self._cleanup_thread_started = False
-
-    def _start_cleanup_thread(self):
-        """Start a background thread that runs cleanup every 5 minutes."""
-        if getattr(self, "_cleanup_thread_started", False):
-            return
-        self._cleanup_thread_started = True
-
-        def _cleanup_loop():
-            while True:
-                time.sleep(300)  # 5 minutes
-                try:
-                    self.cleanup_old()
-                except Exception:
-                    pass
-
-        t = threading.Thread(target=_cleanup_loop, daemon=True)
-        t.start()
 
     def _load(self) -> list:
-        """Return in-memory cache if populated; load from disk only on cold start."""
-        if getattr(self, "_tasks_cache", None) is not None:
-            return self._tasks_cache
         try:
             with open(self._path, "r") as f:
-                self._tasks_cache = json.load(f)
+                return json.load(f)
         except (FileNotFoundError, json.JSONDecodeError):
-            self._tasks_cache = []
-        return self._tasks_cache
+            return []
 
     def _save(self, tasks: list):
-        """Update in-memory cache and atomically flush to disk."""
-        self._tasks_cache = tasks  # fast path: subsequent reads skip disk
-        tmp_path = self._path + ".tmp"
-        try:
-            with open(tmp_path, "w") as f:
-                json.dump(tasks, f, indent=2, default=str)
-            os.replace(tmp_path, self._path)
-        except Exception:
-            # If atomic rename fails, try direct write as fallback
-            try:
-                os.unlink(tmp_path)
-            except OSError:
-                pass
-            with open(self._path, "w") as f:
-                json.dump(tasks, f, indent=2, default=str)
-
-    def _load_unlocked(self, force: bool = False) -> list:
-        """Load tasks without acquiring self._lock (must be called within lock)."""
-        return self._load()
-
-    def _save_unlocked(self, tasks: list) -> None:
-        """Save tasks without acquiring self._lock (must be called within lock)."""
-        self._save(tasks)
-
-    def _evict_oldest_terminal(self, tasks: list) -> list:
-        """Evict tasks to make room for one new task, enforcing the hard cap.
-
-        Called pre-append (trims to MAX_TOTAL_TASKS - 1) so the store never
-        exceeds MAX_TOTAL_TASKS after append.  Terminal tasks (completed /
-        failed / killed) are preferred eviction candidates.  When none are
-        available, the oldest queued task is evicted next; if the store is
-        still at capacity, the oldest running task is evicted as a last resort.
-        """
-        cap = self.MAX_TOTAL_TASKS - 1
-        if len(tasks) <= cap:
-            return tasks
-
-        terminal_statuses = {"completed", "failed", "killed"}
-        terminal_tasks = [
-            (i, t) for i, t in enumerate(tasks) if t.get("status") in terminal_statuses
-        ]
-
-        evict_count = len(tasks) - cap
-
-        if terminal_tasks:
-            terminal_tasks.sort(
-                key=lambda x: x[1].get("completed_at", "") or x[1].get("created_at", "")
-            )
-            evict_indices = {idx for idx, _ in terminal_tasks[:evict_count]}
-            return [t for i, t in enumerate(tasks) if i not in evict_indices]
-
-        # No terminal tasks: evict oldest queued first, then oldest running.
-        evict_indices: set = set()
-        remaining = evict_count
-        for priority_status in ("queued", "running"):
-            if remaining <= 0:
-                break
-            candidates = [
-                (i, t)
-                for i, t in enumerate(tasks)
-                if t.get("status") == priority_status and i not in evict_indices
-            ]
-            candidates.sort(key=lambda x: x[1].get("created_at", ""))
-            for idx, _ in candidates[:remaining]:
-                evict_indices.add(idx)
-                remaining -= 1
-
-        return [t for i, t in enumerate(tasks) if i not in evict_indices]
+        with open(self._path, "w") as f:
+            json.dump(tasks, f, indent=2, default=str)
 
     def _user_key(self, channel: str, identity: str) -> str:
         # Strip channel prefix from identity to avoid double-prefixing
@@ -551,9 +381,6 @@ class BackgroundTaskManager:
         timeout: int = None,
         notify: bool = True,
         origin_session_id: str = None,
-        fallback_runtime: str = None,  # Issue #219
-        fallback_model: str = None,  # Issue #219
-        permission_mode: str = "restricted",
     ) -> dict:
         task = {
             "task_id": task_id,
@@ -581,23 +408,18 @@ class BackgroundTaskManager:
             "timeout": timeout,
             "notify": notify,
             "origin_session_id": origin_session_id,
-            "fallback_runtime": fallback_runtime,
-            "fallback_model": fallback_model,
-            "permission_mode": permission_mode,
         }
         with self._lock:
             tasks = self._load()
-            tasks = self._evict_oldest_terminal(tasks)
             tasks.append(task)
             self._save(tasks)
-        self._start_cleanup_thread()
         return task
 
     def get_task(self, task_id: str) -> Optional[dict]:
         with self._lock:
-            for t in self._load_unlocked():
+            for t in self._load():
                 if t["task_id"] == task_id:
-                    return copy.deepcopy(t)
+                    return t
         return None
 
     def _identity_matches(self, task: dict, channel: str, identity: str) -> bool:
@@ -613,61 +435,13 @@ class BackgroundTaskManager:
     def list_tasks(self, channel: str, identity: str) -> list:
         with self._lock:
             return [
-                copy.deepcopy(t)
-                for t in self._load_unlocked()
-                if self._identity_matches(t, channel, identity)
+                t for t in self._load() if self._identity_matches(t, channel, identity)
             ]
 
     def list_all_tasks(self) -> list:
         """Return all tasks regardless of identity/channel."""
         with self._lock:
-            return copy.deepcopy(self._load_unlocked())
-
-    def list_task_summaries(
-        self,
-        limit: int = 50,
-        offset: int = 0,
-        status: Optional[str] = None,
-        reconcile_running: bool = False,
-    ) -> Tuple[list, int]:
-        """Return paginated task summaries without large transcript payloads."""
-        with self._lock:
-            tasks = list(self._load_unlocked())
-            if reconcile_running:
-                changed = False
-                completed_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-                for task in tasks:
-                    if task.get("status") != "running" or not task.get("pid"):
-                        continue
-                    try:
-                        os.kill(task["pid"], 0)
-                    except ProcessLookupError:
-                        task["status"] = "failed"
-                        task["error"] = "Process terminated unexpectedly"
-                        task["completed_at"] = completed_at
-                        changed = True
-                if changed:
-                    self._save_unlocked(tasks)
-            if status:
-                tasks = [t for t in tasks if t.get("status") == status]
-            tasks.sort(key=lambda t: t.get("created_at", ""), reverse=True)
-            total = len(tasks)
-            page = tasks[offset : offset + limit]
-            summaries = [
-                {
-                    "task_id": t["task_id"],
-                    "agent": t["agent"],
-                    "runtime": t["runtime"],
-                    "model": t["model"],
-                    "prompt": (t.get("prompt") or "")[:200],
-                    "status": t["status"],
-                    "created_at": t["created_at"],
-                    "completed_at": t.get("completed_at"),
-                    "error": t.get("error"),
-                }
-                for t in page
-            ]
-            return summaries, total
+            return list(self._load())
 
     def count_running(self, channel: str, identity: str, agent: str = None) -> int:
         tasks = self.list_tasks(channel, identity)
@@ -680,76 +454,6 @@ class BackgroundTaskManager:
         if agent:
             tasks = [t for t in tasks if t.get("agent") == agent]
         return sum(1 for t in tasks if t["status"] == "queued")
-
-    def create_task_checked(
-        self,
-        task_id: str,
-        session_id: str,
-        user_identity: str,
-        channel: str,
-        agent: str,
-        runtime: str,
-        model: str,
-        prompt: str,
-        max_concurrent: int,
-        pid: int = 0,
-        timeout: int = None,
-        notify: bool = True,
-        origin_session_id: str = None,
-        permission_mode: str = "restricted",
-        fallback_runtime: str = None,  # Issue #219
-        fallback_model: str = None,  # Issue #219
-    ) -> tuple:
-        """Atomically check concurrency limit and create task (TOCTOU-safe).
-
-        Holds self._lock for the entire check-then-create sequence so no
-        concurrent request can slip through the same slot window.
-
-        Returns:
-            (task dict, status string) where status is "running" or "queued".
-        """
-        now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-        with self._lock:
-            tasks = self._load_unlocked()
-            running = sum(
-                1
-                for t in tasks
-                if self._identity_matches(t, channel, user_identity)
-                and (not agent or t.get("agent") == agent)
-                and t["status"] == "running"
-            )
-            status = "queued" if running >= max_concurrent else "running"
-            task = {
-                "task_id": task_id,
-                "session_id": session_id,
-                "user_key": self._user_key(channel, identity=user_identity),
-                "channel": channel,
-                "user_identity": user_identity,
-                "agent": agent,
-                "runtime": runtime,
-                "model": model,
-                "prompt": prompt,
-                "status": status,
-                "pid": pid,
-                "created_at": now,
-                "started_at": now if status == "running" else None,
-                "completed_at": None,
-                "output_lines": [],
-                "tool_calls": [],
-                "final_response": None,
-                "error": None,
-                "timeout": timeout,
-                "notify": notify,
-                "origin_session_id": origin_session_id,
-                "permission_mode": permission_mode,
-                "fallback_runtime": fallback_runtime,
-                "fallback_model": fallback_model,
-            }
-            tasks = self._evict_oldest_terminal(tasks)
-            tasks.append(task)
-            self._save_unlocked(tasks)
-        self._start_cleanup_thread()
-        return task, status
 
     def get_next_queued(
         self, channel: str, identity: str, agent: str = None
@@ -778,7 +482,9 @@ class BackgroundTaskManager:
         if not origin_session_id:
             return
         with self._bg_events_lock:
-            self._bg_events.setdefault(origin_session_id, []).append(event)
+            self._bg_events.setdefault(
+                origin_session_id, []
+            ).append(event)
 
     def pop_bg_events(self, session_id):
         """Return and clear pending bg-task events."""
@@ -787,16 +493,16 @@ class BackgroundTaskManager:
 
     def update_task(self, task_id: str, **fields):
         with self._lock:
-            tasks = self._load_unlocked()
+            tasks = self._load()
             for t in tasks:
                 if t["task_id"] == task_id:
                     t.update(fields)
                     break
-            self._save_unlocked(tasks)
+            self._save(tasks)
 
     def append_output(self, task_id: str, line: str):
         with self._lock:
-            tasks = self._load_unlocked()
+            tasks = self._load()
             for t in tasks:
                 if t["task_id"] == task_id:
                     t["output_lines"].append(line)
@@ -804,47 +510,36 @@ class BackgroundTaskManager:
                     if len(t["output_lines"]) > self.MAX_OUTPUT_LINES:
                         t["output_lines"] = t["output_lines"][-self.MAX_OUTPUT_LINES :]
                     break
-            self._save_unlocked(tasks)
+            self._save(tasks)
 
-    def _trim_tool_call(self, tool_call: dict) -> dict:
-        """Truncate large string fields in a tool call to MAX_TOOL_FIELD_CHARS."""
-        max_chars = self.MAX_TOOL_FIELD_CHARS
-        trimmed = {}
-        for k, v in tool_call.items():
-            if isinstance(v, str) and len(v) > max_chars:
-                extra = len(v) - max_chars
-                trimmed[k] = v[:max_chars] + f"...[truncated {extra} chars]"
-            else:
-                trimmed[k] = v
-        return trimmed
+    MAX_TOOL_CALLS = 200
 
     def append_tool_call(self, task_id: str, tool_call: dict):
         """Append a new tool call event to the task."""
         with self._lock:
-            tasks = self._load_unlocked()
+            tasks = self._load()
             for t in tasks:
                 if t["task_id"] == task_id:
                     if "tool_calls" not in t:
                         t["tool_calls"] = []
-                    t["tool_calls"].append(self._trim_tool_call(tool_call))
+                    t["tool_calls"].append(tool_call)
                     if len(t["tool_calls"]) > self.MAX_TOOL_CALLS:
                         t["tool_calls"] = t["tool_calls"][-self.MAX_TOOL_CALLS :]
                     break
-            self._save_unlocked(tasks)
+            self._save(tasks)
 
     def update_tool_call(self, task_id: str, call_id: str, **fields):
         """Update an existing tool call by its id."""
         with self._lock:
-            tasks = self._load_unlocked()
+            tasks = self._load()
             for t in tasks:
                 if t["task_id"] == task_id:
                     for tc in t.get("tool_calls", []):
                         if tc.get("id") == call_id:
                             tc.update(fields)
-                            tc.update(self._trim_tool_call(tc))
                             break
                     break
-            self._save_unlocked(tasks)
+            self._save(tasks)
 
     def complete_task(self, task_id: str, final_response: str):
         self.update_task(
@@ -891,25 +586,21 @@ class BackgroundTaskManager:
 
     def delete_task(self, task_id: str) -> bool:
         with self._lock:
-            tasks = self._load_unlocked()
+            tasks = self._load()
             before = len(tasks)
             tasks = [t for t in tasks if t["task_id"] != task_id]
             if len(tasks) < before:
-                self._save_unlocked(tasks)
+                self._save(tasks)
                 return True
         return False
 
     def cleanup_old(self):
-        """Purge terminal tasks older than CLEANUP_AGE_HOURS and enforce MAX_TOTAL_TASKS cap."""
         cutoff = time.time() - (self.CLEANUP_AGE_HOURS * 3600)
         with self._lock:
             tasks = self._load()
             kept = []
             for t in tasks:
                 if t["status"] == "running":
-                    kept.append(t)
-                    continue
-                if t["status"] == "queued":
                     kept.append(t)
                     continue
                 completed = t.get("completed_at")
@@ -924,10 +615,9 @@ class BackgroundTaskManager:
                         continue
                 else:
                     kept.append(t)
-            # Enforce total task cap after TTL cleanup
-            kept = self._evict_oldest_terminal(kept)
             if len(kept) < len(tasks):
-                self._save_unlocked(kept)
+                self._save(kept)
+
 
     def reconcile_stale_tasks(self) -> dict:
         """Reconcile orphaned tasks after a service restart.
@@ -938,7 +628,7 @@ class BackgroundTaskManager:
         now_str = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
         reconciled = {"stale_running": 0, "queued_ready": 0}
         with self._lock:
-            tasks = self._load_unlocked()
+            tasks = self._load()
             changed = False
             for t in tasks:
                 if t["status"] == "running":
@@ -957,7 +647,7 @@ class BackgroundTaskManager:
                         reconciled["stale_running"] += 1
                         changed = True
             if changed:
-                self._save_unlocked(tasks)
+                self._save(tasks)
             # Count queued tasks that are now promotable
             reconciled["queued_ready"] = sum(
                 1 for t in tasks if t["status"] == "queued"
@@ -1004,53 +694,6 @@ class BackgroundTaskManager:
         except OSError:
             pass
 
-    # --- Fallback retry helpers (Issue #219) ---
-
-    @staticmethod
-    def _is_fallback_eligible(error_text: str) -> bool:
-        """Check if error is an infrastructure failure eligible for fallback retry."""
-        if not error_text:
-            return False
-        fallback_patterns = [
-            r"429",
-            r"rate.?limit",
-            r"quota.?exceeded",
-            r"401",
-            r"unauthorized",
-            r"missing.?authentication",
-            r"api[_\-]?key.?(invalid|expired|missing)",
-            r"503",
-            r"service.?unavailable",
-            r"502",
-            r"bad.?gateway",
-            r"connection.?refused",
-            r"timed?.?out",
-            r"etimedout",
-            r"overloaded",
-        ]
-        for pattern in fallback_patterns:
-            if re.search(pattern, error_text, re.IGNORECASE):
-                return True
-        return False
-
-    def _resolve_fallback(self, task: dict):
-        """Resolve fallback runtime/model from task config.
-
-        Returns (fallback_runtime, fallback_model) or (None, None).
-        """
-        fb_rt = task.get("fallback_runtime")
-        fb_model = task.get("fallback_model")
-
-        # If fallback is same as primary, don't retry
-        if fb_rt == task.get("runtime") and fb_model == task.get("model"):
-            return None, None
-
-        if not fb_rt and not fb_model:
-            return None, None
-
-        return fb_rt, fb_model
-
-
 # Executable resolution
 def find_executable(name: str) -> Optional[str]:
     """Find executable in multiple common locations
@@ -1086,194 +729,64 @@ def find_executable(name: str) -> Optional[str]:
 
     return None
 
-
 # Environment-based configuration
 def get_default_agent() -> str:
     """Get default agent from environment or use orchestrator"""
     return os.environ.get("COPILOT_DEFAULT_AGENT", "orchestrator")
 
-
 def get_default_model() -> str:
     """Get default model from environment or use gpt-5-mini"""
     return os.environ.get("COPILOT_DEFAULT_MODEL", "gpt-5-mini")
 
-
 def get_default_runtime() -> str:
-    """Get default runtime, preferring env var; falls back to
-    first available runtime."""
-    preferred = os.environ.get("COPILOT_DEFAULT_RUNTIME", "copilot")
-    if check_runtime_available(preferred):
-        return preferred
-    available = get_available_runtimes()
-    if available:
-        return available[0]["id"]
-    return preferred  # nothing available at all — return as last resort
-
-
-MODEL_MANIFEST_PATH = Path(SCRIPT_BASE_DIR) / "model-manifest.json"
-
-
-def _model_manifest_runtime_key(runtime: str) -> str:
-    """Map runtime aliases onto model-manifest.json keys."""
-    runtime = (runtime or "").lower().strip()
-    if runtime == "copilot-sdk":
-        return "copilot"
-    return runtime
-
-
-def load_model_manifest(path: Optional[Path] = None) -> Dict[str, List[str]]:
-    """Load runtime->models from model-manifest.json.
-
-    Returns an empty dict when the manifest is missing or invalid so callers can
-    fall back to their existing dispatch/static defaults.
-    """
-    manifest_path = path or MODEL_MANIFEST_PATH
-    try:
-        with open(manifest_path, "r") as f:
-            data = json.load(f)
-    except (FileNotFoundError, json.JSONDecodeError, OSError):
-        return {}
-
-    runtimes = data.get("runtimes", {})
-    if not isinstance(runtimes, dict):
-        return {}
-
-    normalized = {}
-    for runtime, models in runtimes.items():
-        if not isinstance(runtime, str) or not isinstance(models, list):
-            continue
-        clean_models = [m for m in models if isinstance(m, str) and m.strip()]
-        if clean_models:
-            normalized[runtime.lower().strip()] = clean_models
-    return normalized
-
-
-class RuntimePreferencesManager:
-    """Manages global runtime preferences (primary/backup) persisted to disk."""
-
-    _DEFAULT_PRIMARY = "copilot"
-    _DEFAULT_BACKUP = "claude"
-
-    def __init__(self, pref_file: str):
-        self._pref_file = pref_file
-        self._lock = threading.Lock()
-        self._prefs: Dict[str, str] = {}
-        self._load()
-
-    def _load(self) -> None:
-        """Load preferences from disk, falling back to defaults."""
-        try:
-            if os.path.exists(self._pref_file):
-                with open(self._pref_file, "r") as f:
-                    data = json.load(f)
-                self._prefs = {
-                    "primary_runtime": str(
-                        data.get("primary_runtime", self._DEFAULT_PRIMARY)
-                    ),
-                    "backup_runtime": str(
-                        data.get("backup_runtime", self._DEFAULT_BACKUP)
-                    ),
-                }
-                return
-        except Exception as e:
-            print(f"[RuntimePref] Failed to load preferences: {e}", file=sys.stderr)
-        self._prefs = {
-            "primary_runtime": self._DEFAULT_PRIMARY,
-            "backup_runtime": self._DEFAULT_BACKUP,
-        }
-
-    def get(self) -> Dict[str, str]:
-        """Return a copy of current preferences."""
-        with self._lock:
-            return dict(self._prefs)
-
-    def set(self, primary_runtime: str, backup_runtime: str) -> None:
-        """Save preferences to disk."""
-        with self._lock:
-            self._prefs = {
-                "primary_runtime": primary_runtime,
-                "backup_runtime": backup_runtime,
-            }
-            try:
-                with open(self._pref_file, "w") as f:
-                    json.dump(self._prefs, f, indent=2)
-                print(
-                    f"[RuntimePref] Saved: primary={primary_runtime},"  # noqa: E501
-                    f" backup={backup_runtime}",
-                    file=sys.stderr,
-                )
-            except Exception as e:
-                print(f"[RuntimePref] Failed to save preferences: {e}", file=sys.stderr)
-
-    def primary(self) -> str:
-        """Return primary runtime, falling back to env/default."""
-        with self._lock:
-            return self._prefs.get("primary_runtime", self._DEFAULT_PRIMARY)
-
-    def backup(self) -> str:
-        """Return backup runtime."""
-        with self._lock:
-            return self._prefs.get("backup_runtime", self._DEFAULT_BACKUP)
-
-
-# Global runtime preferences manager (loaded once at startup)
-_runtime_pref_mgr: "RuntimePreferencesManager" = None  # noqa: F821
-
-
-def _get_runtime_pref_mgr() -> "RuntimePreferencesManager":  # noqa: F821
-    """Get (or lazily initialize) the global runtime preferences manager."""
-    global _runtime_pref_mgr
-    if _runtime_pref_mgr is None:
-        pref_file = os.path.join(SCRIPT_BASE_DIR, "runtime_preferences.json")
-        _runtime_pref_mgr = RuntimePreferencesManager(pref_file)
-    return _runtime_pref_mgr
-
+    """Get default runtime from environment or use copilot"""
+    return os.environ.get("COPILOT_DEFAULT_RUNTIME", "copilot")
 
 def check_runtime_available(runtime: str) -> bool:
     """Check if a runtime is available on the system.
-
+    
     Args:
         runtime: Runtime ID (e.g., 'copilot', 'claude', 'copilot-sdk')
-
+    
     Returns:
         True if the runtime is available, False otherwise
     """
     # Map runtime IDs to their executable/module names
     runtime_map = {
-        "copilot": "copilot",
-        "copilot-sdk": "copilot",  # Python package
-        "claude": "claude",
-        "claude-sdk": "claude-sdk",  # Python package
-        "gemini": "gemini",
-        "codex": "codex",
-        "devin": "devin",
-        "cursor": "agent",  # Cursor uses 'agent' binary
-        "opencode": "opencode",
-        "wee": "openai",  # OpenAI-compatible API (no binary needed),
+        'copilot': 'copilot',
+        'copilot-sdk': 'copilot',  # Python package
+        'claude': 'claude',
+        'claude-sdk': 'claude-sdk',  # Python package
+        'gemini': 'gemini',
+        'codex': 'codex',
+        'devin': 'devin',
+        'cursor': 'agent',  # Cursor uses 'agent' binary
+        'opencode': 'opencode',
+        'wee': 'openai',  # OpenAI-compatible API (no binary needed),
     }
-
+    
     executable_name = runtime_map.get(runtime)
     if not executable_name:
         return False
-
+    
     # For Python packages (SDK runtimes), try importing
-    if runtime in ("copilot-sdk", "claude-sdk", "wee"):
+    if runtime in ('copilot-sdk', 'claude-sdk', 'wee'):
         try:
-            if runtime == "claude-sdk":
+            if runtime == 'claude-sdk':
                 # Package is installed as claude_agent_sdk
-                __import__("claude_agent_sdk")
+                __import__('claude_agent_sdk')
             else:
-                module_name = executable_name.replace("-", "_")
+                module_name = executable_name.replace('-', '_')
                 __import__(module_name)
             return True
         except ImportError:
             return False
-
+    
     # For CLI runtimes, check if executable exists
     # First try system PATH
     if shutil.which(executable_name):
         return True
-
+    
     # Search additional common locations
     search_paths = [
         Path.home() / ".local" / "bin" / executable_name,
@@ -1281,164 +794,16 @@ def check_runtime_available(runtime: str) -> bool:
         Path("/usr/local/bin") / executable_name,
         Path("/usr/bin") / executable_name,
     ]
-
+    
     for path in search_paths:
         if path.exists() and path.is_file():
             return True
-
+    
     return False
-
-
-def check_runtime_blocked(runtime: str, state_file_path: Optional[str] = None) -> bool:
-    """Check if a runtime is listed as blocked in RUNTIME_STATE.md.
-
-    Parses the Active Incidents table and checks if the runtime appears
-    with a future Blocked Until timestamp.  Returns True only when the
-    incident is still active (not yet expired).
-    """
-    if state_file_path is None:
-        state_file_path = "/opt/RUNTIME_STATE.md"
-
-    state_path = Path(state_file_path)
-    if not state_path.exists():
-        return False
-
-    try:
-        content = state_path.read_text(encoding="utf-8")
-    except OSError:
-        return False
-
-    # Locate the Active Incidents table
-    in_table = False
-    header_passed = False
-    for line in content.splitlines():
-        stripped = line.strip()
-        if stripped.startswith("## Active Incidents"):
-            in_table = True
-            continue
-        if not in_table:
-            continue
-        # Any new ## heading ends the Active Incidents section
-        if stripped.startswith("## ") and "Active Incidents" not in stripped:
-            break
-        # Table rows start with '|'
-        if not stripped.startswith("|"):
-            continue
-        # Skip separator row (e.g. |----|...|)
-        is_separator = (
-            stripped.startswith("|---")
-            or stripped.startswith("| ---")
-            or set(stripped.replace("|", "").replace("-", "").replace(" ", "")) == set()
-        )
-        if is_separator:
-            continue
-        # Skip header row (contains 'ID' column)
-        if "| ID " in stripped or "| ID|" in stripped:
-            header_passed = True
-            continue
-        if not header_passed:
-            header_passed = True  # first non-separator row after section start
-            if "Blocked Until" in stripped:
-                continue
-
-        # Parse columns: | ID | Runtime/Service | Issue | Blocked Until | Written By | Fallback |
-        cols = [c.strip() for c in stripped.split("|")]
-        # cols[0] is empty (before first |), cols[1]=ID, cols[2]=Runtime, cols[3]=Issue,
-        # cols[4]=Blocked Until, cols[5]=Written By, cols[6]=Fallback
-        if len(cols) < 5:
-            continue
-
-        runtime_col = cols[2] if len(cols) > 2 else ""
-        blocked_until_col = cols[4] if len(cols) > 4 else ""
-
-        # Strip backtick formatting
-        runtime_col_clean = runtime_col.strip("`").strip()
-
-        # Check if this row covers the requested runtime (exact or prefix match)
-        runtime_matches = (
-            runtime_col_clean == runtime
-            or runtime_col_clean.startswith(f"{runtime}/")
-            or runtime_col_clean.startswith(f"{runtime} ")
-        )
-        if runtime_matches:
-            # Check if still active: Blocked Until is in the future
-            blocked_until_clean = blocked_until_col.strip()
-            if not blocked_until_clean:
-                return True  # No expiry listed — treat as still blocked
-
-            # Try parsing ISO-8601 datetime (YYYY-MM-DD HH:MM UTC or YYYY-MM-DDTHH:MM...)
-            try:
-                import re as _re
-
-                # Normalize: replace space before UTC with +00:00
-                dt_str = _re.sub(r"\s+UTC$", "+00:00", blocked_until_clean).strip()
-                from datetime import datetime as _dt
-                from datetime import timezone as _tz
-
-                if "T" in dt_str or "+" in dt_str or dt_str.endswith("Z"):
-                    blocked_dt = _dt.fromisoformat(dt_str.replace("Z", "+00:00"))
-                else:
-                    # Try YYYY-MM-DD HH:MM
-                    blocked_dt = _dt.strptime(dt_str, "%Y-%m-%d %H:%M").replace(
-                        tzinfo=_tz.utc
-                    )
-                now_utc = _dt.now(_tz.utc)
-                return now_utc < blocked_dt
-            except (ValueError, ImportError):
-                # Cannot parse date — be conservative, treat as still blocked
-                return True
-
-    return False
-
-
-def resolve_dispatch_runtime_model(
-    agent: str,
-    requested_runtime: str,
-    requested_model: str,
-    agents_map: Dict,
-    state_file_path: Optional[str] = None,
-) -> tuple:
-    """Resolve effective runtime/model for an agent, applying dispatch_config fallback.
-
-    Checks:
-    1. Is the requested runtime blocked in RUNTIME_STATE.md?
-    2. Is the requested runtime unavailable (not installed)?
-    If either is true AND the agent's dispatch_config has fallback_runtime/fallback_model,
-    the fallback values are returned.
-
-    Returns:
-        (effective_runtime, effective_model, used_fallback: bool, fallback_reason: str)
-    """
-    agent_config = agents_map.get(agent, {})
-    dispatch_cfg = agent_config.get("dispatch_config", {})
-    fallback_runtime = dispatch_cfg.get("fallback_runtime")
-    fallback_model = dispatch_cfg.get("fallback_model")
-
-    # Only apply fallback if at least one fallback field is set
-    if not fallback_runtime and not fallback_model:
-        return requested_runtime, requested_model, False, ""
-
-    # Determine if primary runtime is unavailable
-    reason = ""
-    primary_blocked = check_runtime_blocked(requested_runtime, state_file_path)
-    primary_unavailable = not check_runtime_available(requested_runtime)
-
-    if primary_blocked:
-        reason = f"runtime '{requested_runtime}' blocked in RUNTIME_STATE.md"
-    elif primary_unavailable:
-        reason = f"runtime '{requested_runtime}' not available on this host"
-
-    if not reason:
-        return requested_runtime, requested_model, False, ""
-
-    effective_runtime = fallback_runtime or requested_runtime
-    effective_model = fallback_model or requested_model
-    return effective_runtime, effective_model, True, reason
-
 
 def get_available_runtimes() -> List[Dict[str, str]]:
     """Get list of available runtimes on this system.
-
+    
     Returns:
         List of runtime dicts with 'id' and 'label' keys
     """
@@ -1454,10 +819,9 @@ def get_available_runtimes() -> List[Dict[str, str]]:
         {"id": "cursor", "label": "cursor", "icon": "🖱️"},
         {"id": "wee", "label": "wee", "icon": "🌿"},
     ]
-
-    available = [rt for rt in all_runtimes if check_runtime_available(rt["id"])]
+    
+    available = [rt for rt in all_runtimes if check_runtime_available(rt['id'])]
     return available
-
 
 def get_command_timeout() -> int:
     """Get command execution timeout from environment or use default 300 seconds"""
@@ -1467,17 +831,16 @@ def get_command_timeout() -> int:
         # Ensure minimum timeout of 30 seconds
         if timeout < 30:
             print(
-                "Warning: COMMAND_TIMEOUT must be at least 30 seconds, using 30",
+                f"Warning: COMMAND_TIMEOUT must be at least 30 seconds, using 30",
                 file=sys.stderr,
             )
             return 30
         return timeout
     except ValueError:
         print(
-            "Warning: COMMAND_TIMEOUT must be an integer, using default 300 seconds",
+            f"Warning: COMMAND_TIMEOUT must be an integer, using default 300 seconds",
             file=sys.stderr,
         )
-
 
 def get_bg_command_timeout() -> int:
     """Get background task timeout from environment or use default 900 seconds (15 minutes)"""
@@ -1489,7 +852,6 @@ def get_bg_command_timeout() -> int:
         return timeout
     except ValueError:
         return 900
-
 
 def estimate_background_timeout(prompt: str, default: int = 900) -> int:
     """Estimate an appropriate timeout for a background task based on the prompt.
@@ -1570,7 +932,6 @@ def estimate_background_timeout(prompt: str, default: int = 900) -> int:
             return 120  # 2 min
 
     return default
-
 
 class HistoryManager:
     """Persists per-user chat history in ~/.copilot/chat-history.json."""
@@ -1774,7 +1135,6 @@ class HistoryManager:
             self._save(data)
             return True
 
-
 class RuntimeUsageTracker:
     """Queries GitHub Copilot premium request usage from the billing API."""
 
@@ -1907,18 +1267,8 @@ class RuntimeUsageTracker:
             "source": "unavailable",
         }
 
-
 class SessionManager:
     """Manages AI CLI sessions (Copilot & OpenCode) for N8N integration"""
-
-    # Default TTL (overridden in __init__ from env); class-level attr prevents
-    # AttributeError in tests that bypass __init__ via __new__.
-    session_map_ttl: int = int(os.environ.get("SESSION_MAP_TTL_DAYS", "30")) * 86400
-
-    # OpenRouter model cache — class-level defaults prevent AttributeError in tests
-    # that bypass __init__ via __new__.
-    _openrouter_models_cache: Optional[Dict] = None
-    _openrouter_models_cache_ts: float = 0.0
 
     # Query tracking constants
     MAX_PROMPT_LENGTH = 200  # Maximum chars to store from prompt
@@ -1984,34 +1334,14 @@ class SessionManager:
     GEMINI_MODELS = {
         "Google Models": [
             (
-                "gemini-3.1-pro",
-                "Gemini 3.1 Pro",
-                ["pro-3.1", "pro-3"],
-            ),
-            (
-                "gemini-3.1-flash-live",
-                "Gemini 3.1 Flash Live",
-                ["flash-live-3.1", "gemini-3.1-flash", "flash-3.1"],
-            ),
-            (
-                "gemini-3.1-flash-lite",
-                "Gemini 3.1 Flash Lite",
-                ["flash-lite-3.1"],
-            ),
-            (
-                "gemini-3-deep-think",
-                "Gemini 3 Deep Think",
-                ["deep-think", "thinking"],
-            ),
-            (
                 "gemini-3-pro-preview",
                 "Gemini 3 Pro (Preview)",
-                ["pro-3-preview", "gemini-3-pro"],
+                ["gemini-3-pro", "pro-3"],
             ),
             (
                 "gemini-3-flash-preview",
                 "Gemini 3 Flash (Preview)",
-                ["flash-3-preview"],
+                ["gemini-3-flash", "flash-3"],
             ),
             (
                 "gemini-2.5-pro",
@@ -2041,7 +1371,6 @@ class SessionManager:
             ("gemini-1.5-pro-latest", "Gemini 1.5 Pro", ["gemini-1.5-pro"]),
             ("gemini-1.5-flash-latest", "Gemini 1.5 Flash", ["gemini-1.5-flash"]),
             ("gemini-2.0-flash-001", "Gemini 2.0 Flash", ["gemini-2.0-flash"]),
-            ("gemini-3.1-pro-latest", "Gemini 3.1 Pro (Latest)", ["gemini-3.1-pro"]),
         ],
     }
 
@@ -2049,10 +1378,22 @@ class SessionManager:
     CODEX_MODELS = {
         "OpenAI Models": [
             ("gpt-5.4", "GPT-5.4", ["gpt-5.4", "gpt-5.4-pro"]),
-            ("gpt-5.5", "GPT-5.5", ["gpt-5.5"]),
-            ("gpt-5.4-mini", "GPT-5.4 Mini", ["gpt-5.4-mini"]),
             ("gpt-5.3-codex", "GPT-5.3 Codex", ["gpt-5.3", "codex-latest"]),
+            ("gpt-5.2-codex", "GPT-5.2 Codex", ["gpt-5.2-codex"]),
             ("gpt-5.2", "GPT-5.2", ["gpt-5.2"]),
+            ("gpt-5.1-codex-max", "GPT-5.1 Codex Max", ["gpt-5.1", "codex-max"]),
+            ("gpt-5.1-codex", "GPT-5.1 Codex", ["codex"]),
+            ("gpt-5.1", "GPT-5.1", []),
+            ("gpt-5.1-codex-mini", "GPT-5.1 Codex Mini", ["codex-mini"]),
+            ("gpt-5-mini", "GPT-5 Mini", ["gpt-5", "mini"]),
+            ("gpt-4.1", "GPT-4.1", ["gpt-4"]),
+        ],
+        "US Frontier Models (Comparison)": [
+            ("gpt-4o", "GPT-4o (Omni)", ["gpt-4o-latest"]),
+            ("gpt-4o-mini", "GPT-4o Mini", ["gpt-4o-mini-latest"]),
+            ("gpt-4-turbo", "GPT-4 Turbo", ["gpt-4-turbo-latest"]),
+            ("o1-preview", "OpenAI o1-preview", ["o1-preview-2024-09-12"]),
+            ("o1-mini", "OpenAI o1-mini", ["o1-mini-2024-09-12"]),
         ],
     }
 
@@ -2126,75 +1467,6 @@ class SessionManager:
             ("grok-4-20-thinking", "Grok 4-20 Thinking", []),
             ("kimi-k2.5", "Kimi K2.5", ["kimi"]),
         ],
-    }
-
-    WEE_MODELS = {
-        "Ollama Models": [
-            ("ollama/granite3.3-tuned", "Granite 3.3 Tuned", ["granite", "granite3.3"]),
-            (
-                "ollama/gemma4:e4b",
-                "Gemma 4 E4B (local)",
-                ["gemma4", "gemma", "gemma4-e4b"],
-            ),
-            ("ollama/gemma4:e2b", "Gemma 4 E2B", ["gemma4-e2b"]),
-            (
-                "ollama/gemma4:e4b-nothinker",
-                "Gemma 4 E4B (No Thinker)",
-                ["gemma4-nothinker"],
-            ),
-            ("ollama/gemma4:e2b-nothinker", "Gemma 4 E2B (No Thinker)", []),
-            ("ollama/qwen3:32b", "Qwen 3 32B", ["qwen", "qwen3"]),
-            ("ollama/llama4:scout", "Llama 4 Scout", ["scout", "llama4"]),
-            ("ollama/phi4:14b", "Phi 4 14B", ["phi4", "phi"]),
-            ("ollama/deepseek-r1:32b", "DeepSeek R1 32B", ["deepseek", "deepseek-r1"]),
-            ("ollama/command-r:35b", "Command R 35B", ["command-r"]),
-        ],
-        "OpenRouter Models": [
-            (
-                "openrouter/meta-llama/llama-4-scout",
-                "Llama 4 Scout (OpenRouter)",
-                ["or-scout"],
-            ),
-            (
-                "openrouter/meta-llama/llama-4-maverick",
-                "Llama 4 Maverick (OpenRouter)",
-                ["or-maverick"],
-            ),
-            (
-                "openrouter/google/gemma-3-27b-it:free",
-                "Gemma 3 27B (OpenRouter Free)",
-                ["or-gemma"],
-            ),
-            (
-                "openrouter/qwen/qwen3-32b:free",
-                "Qwen 3 32B (OpenRouter Free)",
-                ["or-qwen"],
-            ),
-            (
-                "openrouter/deepseek/deepseek-r1:free",
-                "DeepSeek R1 (OpenRouter Free)",
-                ["or-deepseek"],
-            ),
-            (
-                "openrouter/microsoft/phi-4-reasoning-plus:free",
-                "Phi 4 Reasoning Plus (OpenRouter Free)",
-                ["or-phi"],
-            ),
-        ],
-    }
-
-    # Popular OpenRouter models — sorted first in dynamic discovery (Issue #142)
-    OPENROUTER_POPULAR_MODELS = {
-        "meta-llama/llama-4-scout",
-        "meta-llama/llama-4-maverick",
-        "google/gemma-3-27b-it:free",
-        "qwen/qwen3-32b:free",
-        "deepseek/deepseek-r1:free",
-        "microsoft/phi-4-reasoning-plus:free",
-        "anthropic/claude-sonnet-4",
-        "anthropic/claude-haiku-4",
-        "google/gemini-2.5-flash-preview",
-        "openai/gpt-4.1-mini",
     }
 
     def __init__(self, config_file: Optional[str] = None, app_env: str = "PROD"):
@@ -2285,13 +1557,8 @@ class SessionManager:
         self._env_codex_models = None
         self._env_devin_models = None
         self._env_cursor_models = None
-        self._env_wee_models = None
-        self._manifest_model_metadata = {}
-        self._manifest_mtime: float = 0.0
-        self._openrouter_cache_ts = 0.0
-        # Cache for fetch_openrouter_models() (separate from fetch_wee_models cache)
-        self._openrouter_models_cache = None
-        self._openrouter_models_cache_ts = 0.0
+        self._env_wee_models = None  # Cache for dynamically-discovered wee models
+        self._openrouter_cache_ts = 0  # TTL timestamp for OpenRouter discovery cache
 
         # Load command timeout from environment
         self.command_timeout = get_command_timeout()
@@ -2300,20 +1567,17 @@ class SessionManager:
         # candidates for cleanup.  Defaults to 30 min; override via env var.
         self.session_idle_timeout = int(os.environ.get("SESSION_IDLE_TIMEOUT", "1800"))
 
-        # Session map TTL — entries inactive longer than this are evicted on every save.
-        # Defaults to 30 days; override via SESSION_MAP_TTL_DAYS env var.
-        self.session_map_ttl = int(os.environ.get("SESSION_MAP_TTL_DAYS", "30")) * 86400
-
         # Lock for session map file read-modify-write to prevent TOCTOU races
         self._session_map_lock = threading.Lock()
-        self._session_map_cache: Optional[Dict] = None
 
         # Per-session streaming queues: session_id -> (asyncio.Queue, event_loop)
-        # Streaming manager: per-session queues and replay buffers.
-        self.streaming_manager = StreamingManager()
-        # Keep dict refs so existing API handler code keeps working unchanged.
-        self._stream_queues = self.streaming_manager._queues
-        self._stream_buffers = self.streaming_manager._buffers
+        # Populated by the /stream API endpoint; read by _execute_subprocess_with_tracking.
+        self._stream_queues: Dict[str, tuple] = {}
+
+        # Per-session stream buffers for multi-session streaming support.
+        # Buffers all chunks so disconnected clients can reconnect and replay.
+        # session_id -> _StreamBuffer
+        self._stream_buffers: Dict[str, "_StreamBuffer"] = {}
 
         # Last subprocess exit code per n8n_session_id (for debugging/monitoring)
         self._last_exit_codes: Dict[str, int] = {}
@@ -2323,14 +1587,11 @@ class SessionManager:
         self._live_status: Dict[str, Dict] = {}
         self._live_status_lock = threading.Lock()
 
-        # CLI command handler (F020) — slash command registry + dispatcher.
-        self.cli_handler = CliCommandHandler()
-        # Keep registry ref for backward compat with callers using the raw dict.
-        self._slash_command_registry = self.cli_handler._registry
-        # Runtime executor — strategy registry for per-runtime dispatch.
-        self.runtime_executor = RuntimeExecutor()
+        # Slash command registry (F020): maps command -> {handler, description}
+        # Commands with a handler callable bypass the LLM entirely.
+        # Commands with handler=None are handled by the legacy if/elif chain.
+        self._slash_command_registry: Dict[str, dict] = {}
         self._init_slash_commands()
-        self._register_runtime_executors()
 
     # ── Live status helpers for mobile channel progress (F004) ──────────
 
@@ -2355,8 +1616,11 @@ class SessionManager:
     # ── Slash command registry (F020) ───────────────────────────────────
 
     def _register_slash(self, command: str, handler, description: str):
-        """Register a slash command via the CLI handler."""
-        self.cli_handler.register(command, handler, description)
+        """Register a slash command in the registry."""
+        self._slash_command_registry[command] = {
+            "handler": handler,
+            "description": description,
+        }
 
     def _init_slash_commands(self):
         """Initialize the slash command registry.
@@ -2368,45 +1632,23 @@ class SessionManager:
         register it below.
         """
         self._register_slash("/help", self._slash_help, "Show available commands")
-        self._register_slash(
-            "/status", self._slash_status, "Check status of running query"
-        )
+        self._register_slash("/status", self._slash_status, "Check status of running query")
         self._register_slash("/cancel", self._slash_cancel, "Cancel running query")
+        self._register_slash("/capabilities", self._slash_capabilities, "Show agent capabilities")
+        self._register_slash("/runtime", self._slash_runtime, "Manage runtime (list/set/current)")
+        self._register_slash("/agent", self._slash_agent, "Manage agent (list/set/current/invoke)")
+        self._register_slash("/model", self._slash_model, "Manage model (list/set/current)")
+        self._register_slash("/session", self._slash_session, "Manage session (list/reset/info)")
+        self._register_slash("/timeout", self._slash_timeout, "Get/set execution timeout")
+        self._register_slash("/render", self._slash_render, "Get/set output render format")
+        self._register_slash("/notifications", self._slash_notifications, "Toggle background notifications")
+        self._register_slash("/silent", self._slash_silent, "Toggle silent mode (hide tool calls)")
         self._register_slash(
-            "/capabilities", self._slash_capabilities, "Show agent capabilities"
+            "/verbose", self._slash_verbose, "Toggle verbose mode"
         )
-        self._register_slash(
-            "/runtime", self._slash_runtime, "Manage runtime (list/set/current)"
-        )
-        self._register_slash(
-            "/agent", self._slash_agent, "Manage agent (list/set/current/invoke)"
-        )
-        self._register_slash(
-            "/model", self._slash_model, "Manage model (list/set/current)"
-        )
-        self._register_slash(
-            "/session", self._slash_session, "Manage session (list/reset/info)"
-        )
-        self._register_slash(
-            "/timeout", self._slash_timeout, "Get/set execution timeout"
-        )
-        self._register_slash(
-            "/render", self._slash_render, "Get/set output render format"
-        )
-        self._register_slash(
-            "/notifications",
-            self._slash_notifications,
-            "Toggle background notifications",
-        )
-        self._register_slash(
-            "/silent", self._slash_silent, "Toggle silent mode (hide tool calls)"
-        )
-        self._register_slash("/verbose", self._slash_verbose, "Toggle verbose mode")
         self._register_slash("/mode", self._slash_mode, "Set permission mode")
         self._register_slash("/schedule", self._slash_schedule, "Manage scheduled jobs")
-        self._register_slash(
-            "/background", self._slash_background, "Manage background tasks"
-        )
+        self._register_slash("/background", self._slash_background, "Manage background tasks")
         self._register_slash("/update", self._slash_update, "Pull latest and restart")
         self._register_slash("/upgrade", self._slash_update, "Pull latest and restart")
         self._register_slash("/pull", self._slash_update, "Pull latest and restart")
@@ -2418,7 +1660,10 @@ class SessionManager:
 
     def get_slash_commands(self) -> Dict[str, str]:
         """Return a dict of all registered slash commands and descriptions."""
-        return self.cli_handler.list_commands()
+        return {
+            cmd: entry["description"]
+            for cmd, entry in self._slash_command_registry.items()
+        }
 
     def _slash_secret(self, argument, session_data, n8n_session_id):
         """Handle /secret slash command. Values never touch the LLM."""
@@ -2470,9 +1715,13 @@ class SessionManager:
                 return "\U0001f510 **Secrets:** (none)"
             try:
                 data = json.loads(output)
-                names = data if isinstance(data, list) else data.get("names", [])
+                names = (
+                    data if isinstance(data, list) else data.get("names", [])
+                )
             except json.JSONDecodeError:
-                names = [ln.strip() for ln in output.splitlines() if ln.strip()]
+                names = [
+                    ln.strip() for ln in output.splitlines() if ln.strip()
+                ]
             if not names:
                 return "\U0001f510 **Secrets:** (none)"
             lines = ["\U0001f510 **Stored Secrets:**\n"]
@@ -2806,8 +2055,28 @@ You can mention an agent in your prompt and it will auto-delegate:
             # (e.g., OpenCode uses "ses_*" format, Claude uses UUID format, CODEX uses UUID format, etc.)
             self.update_session_field(n8n_session_id, "session_id", new_session_id)
 
-            # When switching runtime, also reset the model to that runtime's default.
-            default_model = self._runtime_default_model(new_runtime)
+            # When switching runtime, also reset the model to a default for that runtime
+            default_model = "gpt-5-mini"  # Default fallback
+            if new_runtime == "copilot":
+                default_model = "gpt-5-mini"
+            elif new_runtime == "copilot-sdk":
+                default_model = "gpt-5-mini"
+            elif new_runtime == "claude-sdk":
+                default_model = "haiku"
+            elif new_runtime == "opencode":
+                default_model = "opencode/gpt-5-nano"
+            elif new_runtime == "claude":
+                default_model = "haiku"
+            elif new_runtime == "gemini":
+                default_model = "gemini-1.5-flash"
+            elif new_runtime == "codex":
+                default_model = "gpt-5.4"
+            elif new_runtime == "devin":
+                default_model = os.getenv("DEVIN_DEFAULT_MODEL", "claude-sonnet-4")
+            elif new_runtime == "cursor":
+                default_model = os.getenv("CURSOR_DEFAULT_MODEL", "auto")
+            elif new_runtime == "wee":
+                default_model = os.getenv("WEE_DEFAULT_MODEL", "ollama/gemma4:e4b")
 
             self.update_session_field(n8n_session_id, "model", default_model)
             return f"✓ Switched runtime to **{new_runtime}**. Model set to `{default_model}`. Session reset."
@@ -2894,7 +2163,9 @@ You can mention an agent in your prompt and it will auto-delegate:
             return out
 
         elif argument == "current":
-            return f"Current Model: `{session_data.get('model')}` ({current_runtime})"
+            return (
+                f"Current Model: `{session_data.get('model')}` ({current_runtime})"
+            )
         elif argument.startswith("set "):
             model_name = argument[4:].strip().strip('"')
             model_id = self.get_model_from_name(model_name, effective_rt)
@@ -2977,7 +2248,9 @@ You can mention an agent in your prompt and it will auto-delegate:
                 self.update_session_field(
                     n8n_session_id, "timeout", str(timeout_seconds)
                 )
-                return f"✓ Timeout set to `{timeout_seconds}` seconds for this session"
+                return (
+                    f"✓ Timeout set to `{timeout_seconds}` seconds for this session"
+                )
             except ValueError:
                 return f"❌ Invalid timeout value '{timeout_str}'. Please provide a number (30-600 seconds)"
         else:
@@ -3012,51 +2285,58 @@ You can mention an agent in your prompt and it will auto-delegate:
             )
 
     def _slash_notifications(self, argument, session_data, n8n_session_id):
-        """Handle /notifications slash command.
-
-        Controls the **global** notification toggle which suppresses ALL
-        background task completion notifications (Telegram, WebEx, and WebUI)
-        when disabled.  Critical alerts (heartbeat, crashes) are never
-        suppressed.
-        """
-        _notif_identity = session_data.get("identity", "") or ""
-        _notif_channel = session_data.get("channel", "webui")
-
+        """Handle /notifications slash command."""
         if not argument:
             argument = "current"
 
+        # Resolve identity for per-user preference store
+        _notif_identity = self._bg_identity or session_data.get("identity")
+        _notif_channel = session_data.get("channel", "webui")
+
         if argument == "current":
+            # Check global preference first, then per-identity, then session
             if self._notification_mgr:
-                enabled = self._notification_mgr.is_global_enabled()
+                if self._notification_mgr.is_muted("_global"):
+                    pref = "off"
+                elif _notif_identity:
+                    pref = self._notification_mgr.get_user_pref(_notif_identity)
+                else:
+                    pref = session_data.get("notification_preference", "all")
             else:
-                enabled = session_data.get("notification_preference", "all") != "off"
-            status = "ON (all channels)" if enabled else "OFF (suppressed)"
+                pref = session_data.get("notification_preference", "all")
+            status = "ON (All updates)" if pref == "all" else "OFF (WebUI only)"
             return f"🔔 **Background Notifications:** `{status}`"
 
         elif argument in ["on", "all"]:
-            self.update_session_field(n8n_session_id, "notification_preference", "all")
+            self.update_session_field(
+                n8n_session_id, "notification_preference", "all"
+            )
             if self._notification_mgr:
+                # Store under specific identity if available
                 if _notif_identity:
                     self._notification_mgr.set_user_pref(
                         _notif_identity, _notif_channel, "all"
                     )
-                self._notification_mgr.set_user_pref("_global", _notif_channel, "all")
-                self._notification_mgr.set_global_enabled(True)
-            return "✓ Background task notifications enabled for all channels."
+                # Always store global preference so it applies across all channels
+                self._notification_mgr.set_user_pref(
+                    "_global", _notif_channel, "all"
+                )
+            return "✓ Background task notifications enabled for Telegram/WebEx."
 
         elif argument in ["off", "mute"]:
-            self.update_session_field(n8n_session_id, "notification_preference", "off")
+            self.update_session_field(
+                n8n_session_id, "notification_preference", "off"
+            )
             if self._notification_mgr:
                 if _notif_identity:
                     self._notification_mgr.set_user_pref(
                         _notif_identity, _notif_channel, "off"
                     )
-                self._notification_mgr.set_user_pref("_global", _notif_channel, "off")
-                self._notification_mgr.set_global_enabled(False)
-            return (
-                "✓ Background task notifications suppressed globally.\n"
-                "Critical alerts (heartbeat, crashes) will still be delivered."
-            )
+                # Always store global preference so it applies across all channels
+                self._notification_mgr.set_user_pref(
+                    "_global", _notif_channel, "off"
+                )
+            return "✓ Background task notifications muted for Telegram/WebEx (WebUI only)."
         else:
             return "Usage: `/notifications [on|off]` to toggle background task notifications."
 
@@ -3157,7 +2437,9 @@ You can mention an agent in your prompt and it will auto-delegate:
             _cur_perms["mode"] = "restricted"
             self.update_session_field(n8n_session_id, "permissions", _cur_perms)
             self.update_session_field(n8n_session_id, "yolo_mode", "restricted")
-            return "\u2713 Restricted mode enabled \U0001f512 - normal prompts enabled"
+            return (
+                "\u2713 Restricted mode enabled \U0001f512 - normal prompts enabled"
+            )
 
         elif argument == "sandboxed":
             _cur_perms = session_data.get("permissions", {})
@@ -3179,11 +2461,11 @@ You can mention an agent in your prompt and it will auto-delegate:
 
     def _slash_schedule(self, argument, session_data, n8n_session_id):
         """Handle /schedule slash command."""
-        if not self.SCHEDULER_ENABLED:
+        if not SCHEDULER_ENABLED:
             return "⚠️ Scheduler is not enabled on this instance."
 
         try:
-            scheduler = self._get_scheduler()
+            scheduler = _get_scheduler()
         except Exception as e:
             return f"⚠️ Scheduler unavailable: {e}"
 
@@ -3315,7 +2597,7 @@ You can mention an agent in your prompt and it will auto-delegate:
                 j = result["result"]
                 cron_line = f"\n• **Cron:** `{j['cron']}`" if j.get("cron") else ""
                 return (
-                    "✅ **Job scheduled!**\n\n"
+                    f"✅ **Job scheduled!**\n\n"
                     f"• **ID:** `{j['id']}`\n"
                     f"• **Name:** {j['name']}\n"
                     f"• **Schedule:** `{j['schedule']}`{cron_line}\n"
@@ -3439,8 +2721,8 @@ You can mention an agent in your prompt and it will auto-delegate:
         # Otherwise it's a prompt to run in the background
         # Parse optional overrides: agent=X runtime=Y model=Z timeout=N
         bg_agent = session_data.get("agent", "orchestrator")
-        bg_runtime = None  # resolved below with dispatch_config fallback
-        bg_model = None
+        bg_runtime = session_data.get("runtime", "copilot")
+        bg_model = session_data.get("model", "gpt-5-mini")
         bg_timeout_override = None
         bg_prompt_parts = []
         for word in sub.split():
@@ -3458,18 +2740,6 @@ You can mention an agent in your prompt and it will auto-delegate:
             else:
                 bg_prompt_parts.append(word)
         bg_prompt = " ".join(bg_prompt_parts)
-        # Apply dispatch_config as 2nd-tier fallback, then session defaults (Issue #193)
-        _bg_dispatch_cfg = self.AGENTS.get(bg_agent, {}).get("dispatch_config", {})
-        bg_runtime = (
-            bg_runtime
-            or _bg_dispatch_cfg.get("runtime")
-            or session_data.get("runtime", "copilot")
-        )
-        bg_model = (
-            bg_model
-            or _bg_dispatch_cfg.get("model")
-            or session_data.get("model", "gpt-5-mini")
-        )
 
         if not bg_prompt:
             return "❌ No prompt provided. Usage: `/background <prompt>`"
@@ -3477,20 +2747,18 @@ You can mention an agent in your prompt and it will auto-delegate:
         channel = session_data.get("channel", "webui")
         identity = self._bg_identity or "unknown"
 
+        running = self._bg_task_mgr.count_running(channel, identity)
+        if running >= BackgroundTaskManager.MAX_TASKS_PER_USER:
+            return f"❌ Maximum {BackgroundTaskManager.MAX_TASKS_PER_USER} concurrent background tasks allowed."
+
         bg_timeout = (
             bg_timeout_override
             if bg_timeout_override is not None
-            else (_bg_dispatch_cfg.get("timeout") or get_bg_command_timeout())
+            else get_bg_command_timeout()
         )
         task_id = f"bg_{str(uuid4())[:8]}"
         bg_session_id = f"bg_{str(uuid4())[:8]}"
-        # Resolve per-agent concurrency limit (falls back to global cap)
-        _agent_cfg = self.AGENTS.get(bg_agent, {})
-        _max_concurrent = _agent_cfg.get(
-            "max_concurrent", BackgroundTaskManager.MAX_TASKS_PER_USER
-        )
-        # Atomic check-and-create prevents TOCTOU race (Issue #192)
-        _task, _status = self._bg_task_mgr.create_task_checked(
+        self._bg_task_mgr.create_task(
             task_id=task_id,
             session_id=bg_session_id,
             user_identity=identity,
@@ -3499,20 +2767,8 @@ You can mention an agent in your prompt and it will auto-delegate:
             runtime=bg_runtime,
             model=bg_model,
             prompt=bg_prompt,
-            max_concurrent=_max_concurrent,
             origin_session_id=n8n_session_id,
         )
-        if _status == "queued":
-            return (
-                "⏳ **Background task queued.**\n\n"
-                f"• **Task ID:** `{task_id}`\n"
-                f"• **Agent:** `{bg_agent}`"
-                f" | Runtime: `{bg_runtime}` | Model: `{bg_model}`\n"
-                f"• **Reason:** Maximum {_max_concurrent}"
-                " concurrent tasks for this agent.\n\n"
-                "The task will start automatically when a slot opens. "
-                f"Use `/background status {task_id}` to monitor."
-            )
         # Launch in background thread
         import concurrent.futures as _cf
 
@@ -3529,7 +2785,7 @@ You can mention an agent in your prompt and it will auto-delegate:
         )
 
         return (
-            "⚡ **Background task started!**\n\n"
+            f"⚡ **Background task started!**\n\n"
             f"• **Task ID:** `{task_id}`\n"
             f"• **Agent:** `{bg_agent}` | Runtime: `{bg_runtime}` | Model: `{bg_model}`\n"
             f"• **Timeout:** `{bg_timeout}s` ({bg_timeout // 60}m)\n"
@@ -3552,9 +2808,7 @@ You can mention an agent in your prompt and it will auto-delegate:
             try:
                 with open(_log_path) as f:
                     tail = f.readlines()[-30:]
-                return (
-                    f"📋 **Last update log** (`{_log_path}`):\n```\n{''.join(tail)}```"
-                )
+                return f"📋 **Last update log** (`{_log_path}`):\n```\n{''.join(tail)}```"
             except FileNotFoundError:
                 return "ℹ️ No update log found. No update has been run yet."
             except Exception as e:
@@ -3564,11 +2818,11 @@ You can mention an agent in your prompt and it will auto-delegate:
             return (
                 f"🔄 **Update Commands** ({_env_label})\n\n"
                 f"• `/update` — Pull latest code from `{_branch}` and restart all {_env_label} services\n"
-                "• `/update status` — Show last update log\n"
-                "• `/update help` — This message\n\n"
-                "Aliases: `/upgrade`, `/pull`\n\n"
-                "The update runs fully detached — it survives the service restart.\n"
-                "You'll get a Telegram notification when it completes."
+                f"• `/update status` — Show last update log\n"
+                f"• `/update help` — This message\n\n"
+                f"Aliases: `/upgrade`, `/pull`\n\n"
+                f"The update runs fully detached — it survives the service restart.\n"
+                f"You'll get a Telegram notification when it completes."
             )
 
         # Launch the detached update process
@@ -3582,9 +2836,9 @@ You can mention an agent in your prompt and it will auto-delegate:
         return (
             f"🔄 **Update started** (PID: `{pid}`)\n\n"
             f"Pulling latest `{_branch}` and restarting {_env_label} services.\n"
-            "I may go offline briefly — you will receive a Telegram notification when complete.\n\n"
+            f"I may go offline briefly — you will receive a Telegram notification when complete.\n\n"
             f"Log: `{_log_path}`\n"
-            "Check status later: `/update status`"
+            f"Check status later: `/update status`"
         )
 
     def _load_agents_config(self, config_file: Optional[str] = None) -> Dict:
@@ -3627,7 +2881,7 @@ You can mention an agent in your prompt and it will auto-delegate:
                     name = agent.get("name")
                     if not name:
                         print(
-                            "[Warning] Agent entry missing 'name' field",
+                            f"[Warning] Agent entry missing 'name' field",
                             file=sys.stderr,
                         )
                         continue
@@ -3635,12 +2889,8 @@ You can mention an agent in your prompt and it will auto-delegate:
                         "path": agent.get("path", ""),
                         "description": agent.get("description", ""),
                         "max_concurrent": agent.get("max_concurrent", 1),
-                        # Support both new (primary_runtime/primary_model) and old (runtime/model) fields
-                        "primary_runtime": agent.get("primary_runtime") or agent.get("runtime", "copilot"),
-                        "primary_model": agent.get("primary_model") or agent.get("model", ""),
-                        "fallback_runtime": agent.get("fallback_runtime"),
-                        "fallback_model": agent.get("fallback_model"),
-                        "dispatch_config": agent.get("dispatch_config", {}),
+                        "runtime": agent.get("runtime", "copilot"),
+                        "model": agent.get("model", ""),
                     }
                 return agents
         except json.JSONDecodeError as e:
@@ -3689,12 +2939,8 @@ You can mention an agent in your prompt and it will auto-delegate:
                 "path": agent.get("path", ""),
                 "description": agent.get("description", ""),
                 "max_concurrent": agent.get("max_concurrent", 1),
-                # Support both new (primary_runtime/primary_model) and old (runtime/model) fields
-                "primary_runtime": agent.get("primary_runtime") or agent.get("runtime", "copilot"),
-                "primary_model": agent.get("primary_model") or agent.get("model", ""),
-                "fallback_runtime": agent.get("fallback_runtime"),
-                "fallback_model": agent.get("fallback_model"),
-                "dispatch_config": agent.get("dispatch_config", {}),
+                "runtime": agent.get("runtime", "copilot"),
+                "model": agent.get("model", ""),
             }
 
         if not fresh and self.AGENTS:
@@ -3868,135 +3114,24 @@ You can mention an agent in your prompt and it will auto-delegate:
             ],
             "GPT Models": [
                 "gpt-5.4",
-                "gpt-5.5",
                 "gpt-5.4-mini",
                 "gpt-5.3-codex",
+                "gpt-5.2-codex",
                 "gpt-5.2",
+                "gpt-5.1-codex-max",
+                "gpt-5.1-codex",
+                "gpt-5.1",
+                "gpt-5.1-codex-mini",
+                "gpt-5-mini",
+                "gpt-4.1",
             ],
             "Google Models": [
                 "gemini-3-pro-preview",
             ],
         }
 
-    def _model_manifest_models(self, runtime: str) -> Optional[List[str]]:
-        # Invalidate per-runtime metadata cache when file has changed on disk.
-        try:
-            current_mtime = MODEL_MANIFEST_PATH.stat().st_mtime
-        except OSError:
-            current_mtime = 0.0
-        if current_mtime != self._manifest_mtime:
-            self._manifest_model_metadata = {}
-            self._manifest_mtime = current_mtime
-        manifest = load_model_manifest()
-        runtime_key = _model_manifest_runtime_key(runtime)
-        models = manifest.get(runtime_key)
-        return list(models) if models else None
-
-    def _model_label_from_id(self, model_id: str) -> str:
-        words = re.split(r"[-_/]+", model_id)
-        return " ".join(
-            w.upper() if w.lower() == "gpt" else w.capitalize() for w in words
-        )
-
-    def _model_group_from_id(self, model_id: str, runtime: str) -> str:
-        model_lower = model_id.lower()
-        runtime = (runtime or "").lower()
-        if "claude" in model_lower:
-            return "Claude Models"
-        if "gpt" in model_lower or model_lower.startswith("o"):
-            return "GPT Models"
-        if "gemini" in model_lower:
-            return "Google Models"
-        if runtime == "opencode" and "/" in model_id:
-            return model_id.split("/", 1)[0]
-        return "Manifest Models"
-
-    def _model_aliases_from_id(self, model_id: str) -> List[str]:
-        aliases = []
-        model_lower = model_id.lower()
-        for family in ("sonnet", "haiku", "opus"):
-            if family in model_lower:
-                aliases.append(family)
-                version = re.search(rf"{family}[-.]?([0-9][0-9.-]*)", model_lower)
-                if version:
-                    version_text = version.group(1).strip("-.")
-                    aliases.append(f"{family}-{version_text}")
-                    aliases.append(f"{family}-{version_text.replace('.', '-')}")
-        return aliases
-
-    def _manifest_models_to_metadata(self, runtime: str) -> Optional[Dict]:
-        models = self._model_manifest_models(runtime)
-        if not models:
-            return None
-
-        metadata = {}
-        for model_id in models:
-            group = self._model_group_from_id(model_id, runtime)
-            metadata.setdefault(group, []).append(
-                (
-                    model_id,
-                    self._model_label_from_id(model_id),
-                    self._model_aliases_from_id(model_id),
-                )
-            )
-        self._manifest_model_metadata[runtime] = metadata
-        return metadata
-
-    def _manifest_models_to_dict(self, runtime: str) -> Optional[Dict]:
-        metadata = self._manifest_models_to_metadata(runtime)
-        if not metadata:
-            return None
-        return self._static_models_to_dict(metadata)
-
-    def _runtime_default_model(self, runtime: str) -> str:
-        manifest_models = self._model_manifest_models(runtime)
-        if manifest_models:
-            return manifest_models[0]
-
-        dispatch_defaults = []
-        for agent in self.AGENTS.values():
-            dispatch_config = agent.get("dispatch_config", {})
-            if dispatch_config.get("runtime") == runtime and dispatch_config.get(
-                "model"
-            ):
-                dispatch_defaults.append(dispatch_config["model"])
-        if dispatch_defaults:
-            return dispatch_defaults[0]
-
-        env_default = {
-            "copilot": os.getenv("COPILOT_DEFAULT_MODEL"),
-            "copilot-sdk": os.getenv("COPILOT_DEFAULT_MODEL"),
-            "claude": os.getenv("CLAUDE_DEFAULT_MODEL"),
-            "claude-sdk": os.getenv("CLAUDE_DEFAULT_MODEL"),
-            "gemini": os.getenv("GEMINI_DEFAULT_MODEL"),
-            "codex": os.getenv("CODEX_DEFAULT_MODEL"),
-            "devin": os.getenv("DEVIN_DEFAULT_MODEL"),
-            "cursor": os.getenv("CURSOR_DEFAULT_MODEL"),
-            "wee": os.getenv("WEE_DEFAULT_MODEL"),
-        }.get(runtime)
-        if env_default:
-            return env_default
-
-        fallback = {
-            "copilot": "gpt-5-mini",
-            "copilot-sdk": "gpt-5-mini",
-            "claude": "haiku",
-            "claude-sdk": "haiku",
-            "opencode": "opencode/gpt-5-nano",
-            "gemini": "gemini-1.5-flash",
-            "codex": "gpt-5.4",
-            "devin": "claude-sonnet-4",
-            "cursor": "auto",
-            "wee": "ollama/gemma4:e4b",
-        }
-        return fallback.get(runtime, get_default_model())
-
     def fetch_copilot_models(self) -> Dict:
         """Fetch available models from copilot CLI help text"""
-        manifest_models = self._manifest_models_to_dict("copilot")
-        if manifest_models:
-            return manifest_models
-
         if not self.copilot_bin:
             print("Copilot executable not found in any search paths", file=sys.stderr)
             return self._copilot_static_fallback()
@@ -4043,10 +3178,16 @@ You can mention an agent in your prompt and it will auto-delegate:
                     "claude-sonnet-4",
                     "gemini-3-pro-preview",
                     "gpt-5.4",
-                    "gpt-5.5",
                     "gpt-5.4-mini",
                     "gpt-5.3-codex",
+                    "gpt-5.2-codex",
                     "gpt-5.2",
+                    "gpt-5.1-codex-max",
+                    "gpt-5.1-codex",
+                    "gpt-5.1",
+                    "gpt-5.1-codex-mini",
+                    "gpt-5-mini",
+                    "gpt-4.1",
                 ]
                 found_fallbacks = [m for m in fallback_models if m in result.stdout]
                 if found_fallbacks:
@@ -4074,10 +3215,16 @@ You can mention an agent in your prompt and it will auto-delegate:
                     ],
                     "GPT Models": [
                         "gpt-5.4",
-                        "gpt-5.5",
                         "gpt-5.4-mini",
                         "gpt-5.3-codex",
+                        "gpt-5.2-codex",
                         "gpt-5.2",
+                        "gpt-5.1-codex-max",
+                        "gpt-5.1-codex",
+                        "gpt-5.1",
+                        "gpt-5.1-codex-mini",
+                        "gpt-5-mini",
+                        "gpt-4.1",
                     ],
                     "Google Models": [
                         "gemini-3-pro-preview",
@@ -4118,15 +3265,13 @@ You can mention an agent in your prompt and it will auto-delegate:
                     f"[Error] opencode models failed (exit {result.returncode}): {result.stderr}",
                     file=sys.stderr,
                 )
-                return self._manifest_models_to_dict(
-                    "opencode"
-                ) or self._static_models_to_dict(self.OPENCODE_MODELS)
+                return self._static_models_to_dict(self.OPENCODE_MODELS)
 
             if not result.stdout.strip():
-                logger.warning("[Warning] opencode models returned empty output")
-                return self._manifest_models_to_dict(
-                    "opencode"
-                ) or self._static_models_to_dict(self.OPENCODE_MODELS)
+                print(
+                    "[Warning] opencode models returned empty output", file=sys.stderr
+                )
+                return self._static_models_to_dict(self.OPENCODE_MODELS)
 
             models_by_provider = {}
             for line in result.stdout.splitlines():
@@ -4145,21 +3290,62 @@ You can mention an agent in your prompt and it will auto-delegate:
                 models_by_provider[provider].append(line)
 
             return models_by_provider
-        except ValueError as e:
-            return f"Error: {e}"
         except subprocess.TimeoutExpired:
             print(
                 f"[Error] opencode models command timed out after {self.command_timeout}s",
                 file=sys.stderr,
             )
-            return self._manifest_models_to_dict(
-                "opencode"
-            ) or self._static_models_to_dict(self.OPENCODE_MODELS)
+            return self._static_models_to_dict(self.OPENCODE_MODELS)
         except Exception as e:
-            logger.error(f"Error fetching opencode models: {e}")
-            return self._manifest_models_to_dict(
-                "opencode"
-            ) or self._static_models_to_dict(self.OPENCODE_MODELS)
+            print(f"Error fetching opencode models: {e}", file=sys.stderr)
+            return self._static_models_to_dict(self.OPENCODE_MODELS)
+
+
+    # Curated popular OpenRouter model IDs for auto-discovery filtering
+    OPENROUTER_POPULAR_MODELS = {
+        "meta-llama/llama-4-maverick",
+        "meta-llama/llama-4-scout",
+        "google/gemma-3-27b-it:free",
+        "google/gemma-4-31b-it:free",
+        "meta-llama/llama-3.3-70b-instruct:free",
+        "nvidia/nemotron-3-super-120b-a12b:free",
+        "nvidia/nemotron-nano-9b-v2:free",
+        "qwen/qwen3-coder:free",
+        "anthropic/claude-sonnet-4.6",
+        "anthropic/claude-opus-4.6",
+        "google/gemini-3.1-flash-lite-preview",
+        "google/gemini-3.1-pro-preview-customtools",
+        "openai/gpt-4.1",
+        "openai/gpt-4.1-mini",
+        "deepseek/deepseek-v3.2",
+        "qwen/qwen3.6-plus",
+        "mistralai/mistral-small-2603",
+        "cohere/command-r-plus-08-2024",
+    }
+
+    WEE_MODELS = {
+        "Wee Native (Ollama)": [
+            ("ollama/gemma4:e4b", "Ollama Gemma 4 E4B (local)", ["gemma4", "gemma"]),
+            ("ollama/qwen3", "Ollama Qwen 3 (local)", ["qwen3", "qwen"]),
+            ("ollama/granite3.3-tuned", "Ollama Granite 3.3 Tuned (local)", ["granite", "granite3.3"]),
+        ],
+        "Wee Native (OpenRouter)": [
+            ("openrouter/meta-llama/llama-4-maverick", "Llama 4 Maverick via OpenRouter", ["llama-4-maverick", "maverick"]),
+            ("openrouter/meta-llama/llama-4-scout", "Llama 4 Scout via OpenRouter", ["llama-4-scout", "scout"]),
+            ("openrouter/anthropic/claude-sonnet-4.6", "Claude Sonnet 4.6 via OpenRouter", ["or-claude-sonnet"]),
+            ("openrouter/google/gemini-3.1-flash-lite-preview", "Gemini 3.1 Flash Lite via OpenRouter", ["or-gemini-flash"]),
+            ("openrouter/openai/gpt-4.1", "GPT-4.1 via OpenRouter", ["or-gpt-4.1"]),
+            ("openrouter/deepseek/deepseek-v3.2", "DeepSeek V3.2 via OpenRouter", ["or-deepseek"]),
+        ],
+        "Wee Native (OpenRouter Free)": [
+            ("openrouter/google/gemma-3-27b-it:free", "Gemma 3 27B FREE via OpenRouter", ["gemma-3-free", "gemma-free"]),
+            ("openrouter/google/gemma-4-31b-it:free", "Gemma 4 31B FREE via OpenRouter", ["gemma-4-free"]),
+            ("openrouter/meta-llama/llama-3.3-70b-instruct:free", "Llama 3.3 70B FREE via OpenRouter", ["llama-free"]),
+            ("openrouter/nvidia/nemotron-3-super-120b-a12b:free", "Nemotron 3 Super 120B FREE via OpenRouter", ["nemotron-free"]),
+            ("openrouter/nvidia/nemotron-nano-9b-v2:free", "Nemotron Nano 9B FREE via OpenRouter", ["nemotron-nano-free"]),
+            ("openrouter/qwen/qwen3-coder:free", "Qwen3 Coder FREE via OpenRouter", ["qwen3-free", "qwen-free"]),
+        ],
+    }
 
     def _static_models_to_dict(self, static_dict: Dict) -> Dict:
         """Convert static model config {cat: [(id, desc, aliases)...]} to {cat: [id,...]}."""
@@ -4168,182 +3354,10 @@ You can mention an agent in your prompt and it will auto-delegate:
             for cat, entries in static_dict.items()
         }
 
-    # Human-readable labels for known OpenRouter provider prefixes
-    OPENROUTER_PROVIDER_NAMES = {
-        "meta-llama": "Meta Llama",
-        "anthropic": "Anthropic",
-        "google": "Google",
-        "openai": "OpenAI",
-        "deepseek": "DeepSeek",
-        "mistralai": "Mistral AI",
-        "qwen": "Qwen",
-        "microsoft": "Microsoft",
-        "nvidia": "NVIDIA",
-        "cohere": "Cohere",
-        "perplexity": "Perplexity",
-        "x-ai": "xAI",
-        "01-ai": "01.AI",
-        "amazon": "Amazon",
-        "nousresearch": "Nous Research",
-        "liquid": "Liquid",
-        "bytedance": "ByteDance",
-    }
-
-    # Priority order for OpenRouter provider groups in the model selector
-    OPENROUTER_PROVIDER_PRIORITY = [
-        "OpenRouter - Anthropic",
-        "OpenRouter - OpenAI",
-        "OpenRouter - Google",
-        "OpenRouter - Meta Llama",
-        "OpenRouter - DeepSeek",
-        "OpenRouter - Mistral AI",
-        "OpenRouter - xAI",
-    ]
-
-    # Regex to strip variant suffixes from OpenRouter model IDs (Issue #172)
-    BASE_MODEL_RE = re.compile(
-        r"(:free|:thinking|:extended|:beta|:nitro|:floor|:preview)$"
-    )
-
-    def fetch_openrouter_models(self) -> Dict:
-        """Fetch ALL available models from the OpenRouter API, grouped by provider.
-
-        Returns {category: [(model_id, description, aliases), ...]} where model_id
-        uses the "openrouter/<provider>/<name>" prefix understood by wee_runtime.py.
-
-        Resolution order:
-          1. Per-call 300s TTL cache (self._openrouter_models_cache)
-          2. Live API call to https://openrouter.ai/api/v1/models
-          3. Static WEE_MODELS["OpenRouter Models"] fallback
-
-        Authentication: keyring("openrouter", "api_key") -> OPENROUTER_API_KEY env var
-        """
-        # Normalize static fallback by stripping variant suffixes (Issue #172)
-        # e.g. openrouter/google/gemma-3-27b-it:free -> openrouter/google/gemma-3-27b-it
-        _static_raw = self.WEE_MODELS.get("OpenRouter Models", [])
-        _seen_static: set = set()
-        _normalized_static: list = []
-        for _entry in _static_raw:
-            _sid = self.BASE_MODEL_RE.sub("", _entry[0])
-            if _sid not in _seen_static:
-                _seen_static.add(_sid)
-                _normalized_static.append(
-                    (_sid, _entry[1], _entry[2] if len(_entry) > 2 else [])
-                )
-        static_fallback = {"OpenRouter": _normalized_static}
-
-        cache_ttl = 300
-        if (
-            self._openrouter_models_cache is not None
-            and time.time() - self._openrouter_models_cache_ts < cache_ttl
-        ):
-            return self._openrouter_models_cache
-
-        api_key = None
-        try:
-            import keyring as _keyring
-
-            api_key = _keyring.get_password("openrouter", "api_key")
-        except Exception:
-            pass
-        if not api_key:
-            api_key = os.getenv("OPENROUTER_API_KEY")
-
-        if not api_key:
-            print(
-                "[wee] OpenRouter: no API key available, using static fallback",
-                file=sys.stderr,
-            )
-            return static_fallback
-
-        try:
-            import urllib.request as _urlreq
-
-            req = _urlreq.Request(
-                "https://openrouter.ai/api/v1/models",
-                headers={"Authorization": "Bearer " + api_key},
-            )
-            resp = _urlreq.urlopen(req, timeout=15)
-            data = json.loads(resp.read())
-            all_models = data.get("data", [])
-
-            static_aliases = {
-                e[0]: e[2] for e in self.WEE_MODELS.get("OpenRouter Models", [])
-            }
-
-            # Deduplicate by stripping variant suffixes (Issue #172)
-            # e.g. meta-llama/llama-3.3-70b-instruct:free
-            # -> meta-llama/llama-3.3-70b-instruct
-            seen_base_ids: set = set()
-            deduped: list = []
-            for m in all_models:
-                mid = m.get("id", "")
-                if not mid:
-                    continue
-                base_id = self.BASE_MODEL_RE.sub("", mid)
-                if base_id in seen_base_ids:
-                    continue
-                seen_base_ids.add(base_id)
-                name = m.get("name", mid)
-                # Use or_id based on the base model ID so aliases apply correctly
-                or_id = "openrouter/" + base_id
-                aliases = static_aliases.get(or_id, [])
-                deduped.append((or_id, name, aliases))
-
-            if not deduped:
-                return static_fallback
-
-            # Collapse all models into a single "OpenRouter" group (Issue #172)
-            deduped.sort(key=lambda t: t[1].lower())
-            ordered = {"OpenRouter": deduped}
-
-            total = len(deduped)
-            print(
-                f"[wee] OpenRouter: discovered {total} models (deduplicated)",
-                file=sys.stderr,
-            )
-
-            self._openrouter_models_cache = ordered
-            self._openrouter_models_cache_ts = time.time()
-            return ordered
-
-        except Exception as e:
-            print(f"[wee] OpenRouter discovery failed: {e}", file=sys.stderr)
-            return static_fallback
-
     def _get_model_description(self, model_id: str, runtime: str) -> Optional[str]:
-        """Look up a human-readable description for a model from metadata."""
-        env_models, static_models = self._get_runtime_model_metadata(runtime)
-        for models_dict in (env_models, static_models):
-            if not models_dict:
-                continue
-            for _cat, entries in models_dict.items():
-                for mid, desc, _aliases in entries:
-                    if mid == model_id:
-                        return desc
-        return None
-
-    def _get_runtime_model_metadata(
-        self, runtime: str
-    ) -> tuple[Optional[Dict], Optional[Dict]]:
-        """Return (env_models, static_models) for a runtime."""
-        if runtime in (
-            "copilot",
-            "copilot-sdk",
-            "claude",
-            "claude-sdk",
-            "gemini",
-            "codex",
-            "devin",
-            "cursor",
-            "wee",
-        ):
-            # Populate env-backed caches when available.
-            self.get_models_for_runtime(runtime)
-
+        """Look up a human-readable description for a model from static metadata."""
+        # First check env-loaded models (if cached)
         env_models_map = {
-            "copilot": self._manifest_model_metadata.get("copilot"),
-            "copilot-sdk": self._manifest_model_metadata.get("copilot"),
             "claude": self._env_claude_models,
             "claude-sdk": self._env_claude_models,
             "gemini": self._env_gemini_models,
@@ -4352,10 +3366,15 @@ You can mention an agent in your prompt and it will auto-delegate:
             "cursor": self._env_cursor_models,
             "wee": self._env_wee_models,
         }
-        manifest_models = self._manifest_model_metadata.get(runtime)
+        env_models = env_models_map.get(runtime)
+        if env_models:
+            for _cat, entries in env_models.items():
+                for mid, desc, _aliases in entries:
+                    if mid == model_id:
+                        return desc
+
+        # Fall back to static models
         static_map = {
-            "copilot": None,
-            "copilot-sdk": None,
             "claude": self.CLAUDE_MODELS,
             "claude-sdk": self.CLAUDE_MODELS,
             "gemini": self.GEMINI_MODELS,
@@ -4365,19 +3384,22 @@ You can mention an agent in your prompt and it will auto-delegate:
             "cursor": self.CURSOR_MODELS,
             "wee": self.WEE_MODELS,
         }
-        return env_models_map.get(runtime) or manifest_models, static_map.get(runtime)
+        models_dict = static_map.get(runtime)
+        if not models_dict:
+            return None
+        for _cat, entries in models_dict.items():
+            for mid, desc, _aliases in entries:
+                if mid == model_id:
+                    return desc
+        return None
 
-    def fetch_claude_models(self, runtime: str = "claude") -> Dict:
+    def fetch_claude_models(self) -> Dict:
         """Return available Claude models from environment or fallback to static list.
 
         Claude Code CLI does not currently expose a model-listing subcommand.
         Models are read from CLAUDE_MODELS_JSON environment variable, with
         static CLAUDE_MODELS as fallback.
         """
-        manifest_models = self._manifest_models_to_dict(runtime)
-        if manifest_models:
-            return manifest_models
-
         # Try to load from environment variable first
         env_models = os.getenv("CLAUDE_MODELS_JSON")
         if env_models:
@@ -4404,10 +3426,6 @@ You can mention an agent in your prompt and it will auto-delegate:
         Models are read from GEMINI_MODELS_JSON environment variable, with
         static GEMINI_MODELS as fallback.
         """
-        manifest_models = self._manifest_models_to_dict("gemini")
-        if manifest_models:
-            return manifest_models
-
         # Try to load from environment variable first
         env_models = os.getenv("GEMINI_MODELS_JSON")
         if env_models:
@@ -4434,10 +3452,6 @@ You can mention an agent in your prompt and it will auto-delegate:
         Models are read from CODEX_MODELS_JSON environment variable, with
         static CODEX_MODELS as fallback.
         """
-        manifest_models = self._manifest_models_to_dict("codex")
-        if manifest_models:
-            return manifest_models
-
         # Try to load from environment variable first
         env_models = os.getenv("CODEX_MODELS_JSON")
         if env_models:
@@ -4557,103 +3571,80 @@ You can mention an agent in your prompt and it will auto-delegate:
 
         return self._static_models_to_dict(self.CURSOR_MODELS)
 
-    def fetch_wee_models(self) -> Dict:
-        """Return available wee models: live Ollama + live OpenRouter (Issue #142).
 
-        Resolution order:
-          1. WEE_MODELS_JSON env var (custom model list)
-          2. Live Ollama discovery + live OpenRouter discovery (300s TTL cache)
-          3. Static WEE_MODELS fallback
+    def fetch_wee_models(self) -> Dict:
+        """Return available wee models: local Ollama + OpenRouter cloud models.
+
+        Queries OpenRouter GET /api/v1/models, filters to
+        OPENROUTER_POPULAR_MODELS, and caches for 300s. Falls back
+        to the static WEE_MODELS list on any error.
         """
         import time as _time
 
-        # Check for env var override first
-        env_models = os.getenv("WEE_MODELS_JSON")
-        if env_models:
-            try:
-                models_dict = json.loads(env_models)
-                normalized = {}
-                for cat, entries in models_dict.items():
-                    normalized[cat] = [
-                        tuple(e) if isinstance(e, list) else e for e in entries
-                    ]
-                self._env_wee_models = normalized
-                return self._static_models_to_dict(normalized)
-            except (json.JSONDecodeError, ValueError):
-                pass
-
         cache_ttl = 300  # 5 minutes
 
-        # Return cached result if still valid
+        # Return cache if still valid
         if (
             self._env_wee_models is not None
             and _time.time() - self._openrouter_cache_ts < cache_ttl
         ):
             return self._static_models_to_dict(self._env_wee_models)
 
-        # Start with static model lists as fallback
-        result = {"Ollama Models": [], "OpenRouter Models": []}
+        # Start with static Ollama models
+        result = {}
         for cat, entries in self.WEE_MODELS.items():
             result[cat] = list(entries)
 
-        # Live Ollama discovery (Issue #142: return all installed models)
+        # Try live OpenRouter discovery
         try:
-            import httpx
+            api_key = None
+            try:
+                import keyring
+                api_key = keyring.get_password("openrouter", "api_key")
+            except Exception:
+                pass
+            if not api_key:
+                api_key = os.environ.get("OPENROUTER_API_KEY")
 
-            _ollama_host = os.environ.get("OLLAMA_HOST", "192.168.1.101")
-            _ollama_port = os.environ.get("OLLAMA_PORT", "11434")
-            _ollama_tags_url = f"http://{_ollama_host}:{_ollama_port}/api/tags"
-            resp = httpx.get(
-                _ollama_tags_url,
-                timeout=httpx.Timeout(connect=5.0, read=10.0, write=10.0, pool=10.0),
+            if not api_key:
+                print("[wee] No OpenRouter API key -- using static list", file=sys.stderr)
+                return self._static_models_to_dict(self.WEE_MODELS)
+
+            import urllib.request
+            req = urllib.request.Request(
+                "https://openrouter.ai/api/v1/models",
+                headers={"Authorization": "Bearer " + api_key},
             )
-            if resp.status_code == 200:
-                tags = resp.json().get("models", [])
-                static_ollama = {
-                    e[0]: e for e in self.WEE_MODELS.get("Ollama Models", [])
-                }
-                merged_ollama = []
-                discovered_ids = set()
-                for t in tags:
-                    or_id = "ollama/" + t["name"]
-                    if or_id in static_ollama:
-                        merged_ollama.append(static_ollama[or_id])
-                    else:
-                        merged_ollama.append((or_id, t["name"], []))
-                    discovered_ids.add(or_id)
-                # Add static models not found in live discovery (preserves aliases)
-                for entry in self.WEE_MODELS.get("Ollama Models", []):
-                    if entry[0] not in discovered_ids:
-                        merged_ollama.append(entry)
-                if merged_ollama:
-                    result["Ollama Models"] = merged_ollama
-                    print(
-                        "[wee] Ollama: discovered %d models" % len(tags),
-                        file=sys.stderr,
-                    )
-        except Exception as ollama_err:
-            print("[wee] Ollama discovery failed: %s" % ollama_err, file=sys.stderr)
+            resp = urllib.request.urlopen(req, timeout=10)
+            data = json.loads(resp.read())
+            all_models = data.get("data", [])
 
-        # Live OpenRouter discovery — deduplicated, single group (Issue #172)
-        try:
-            or_groups = self.fetch_openrouter_models()
-            # Flatten all groups into "OpenRouter Models"
-            # (deduplication done in fetch_openrouter_models)
-            live_or = []
-            for entries in or_groups.values():
-                live_or.extend(entries)
-            if live_or:
-                result["OpenRouter Models"] = live_or
+            discovered = []
+            for m in all_models:
+                mid = m.get("id", "")
+                if mid in self.OPENROUTER_POPULAR_MODELS:
+                    name = m.get("name", mid)
+                    or_id = "openrouter/" + mid
+                    discovered.append((or_id, name + " (OpenRouter)", []))
+
+            if discovered:
+                discovered.sort(key=lambda t: t[1])
+                result["Wee Native (OpenRouter)"] = discovered
                 print(
-                    "[wee] OpenRouter: %d models loaded" % len(live_or),
+                    "[wee] OpenRouter: discovered %d models" % len(discovered),
                     file=sys.stderr,
                 )
-        except Exception as or_err:
-            print("[wee] OpenRouter discovery failed: %s" % or_err, file=sys.stderr)
 
-        self._env_wee_models = result
-        self._openrouter_cache_ts = _time.time()
-        return self._static_models_to_dict(result)
+            self._env_wee_models = result
+            self._openrouter_cache_ts = _time.time()
+            return self._static_models_to_dict(result)
+
+        except Exception as e:
+            print(
+                "[wee] OpenRouter discovery failed, using static list: %s" % e,
+                file=sys.stderr,
+            )
+            return self._static_models_to_dict(self.WEE_MODELS)
 
     def get_models_for_runtime(self, runtime: str) -> Dict:
         """Fetch available models for a runtime, using CLI discovery where possible.
@@ -4665,9 +3656,9 @@ You can mention an agent in your prompt and it will auto-delegate:
         dispatch = {
             "copilot": self.fetch_copilot_models,
             "copilot-sdk": self.fetch_copilot_models,
-            "claude-sdk": lambda: self.fetch_claude_models("claude-sdk"),
+            "claude-sdk": self.fetch_claude_models,
             "opencode": self.fetch_opencode_models,
-            "claude": lambda: self.fetch_claude_models("claude"),
+            "claude": self.fetch_claude_models,
             "gemini": self.fetch_gemini_models,
             "codex": self.fetch_codex_models,
             "devin": self.fetch_devin_models,
@@ -4676,67 +3667,28 @@ You can mention an agent in your prompt and it will auto-delegate:
         }
         fetcher = dispatch.get(runtime)
         if fetcher is None:
-            manifest_models = self._manifest_models_to_dict(runtime)
-            if manifest_models:
-                return manifest_models
-            logger.warning(f"[Warning] Unknown runtime for model listing: {runtime}")
+            print(
+                f"[Warning] Unknown runtime for model listing: {runtime}",
+                file=sys.stderr,
+            )
             return {}
         return fetcher()
 
     def load_session_map(self) -> Dict:
         """Load the N8N -> Session ID mapping"""
         if not self.session_map_file.exists():
-            self._session_map_cache = {}
             return {}
 
         try:
             with open(self.session_map_file, "r") as f:
-                data = json.load(f)
+                return json.load(f)
         except (json.JSONDecodeError, IOError):
-            data = {}
-        self._session_map_cache = data
-        return data
-
-    def _prune_session_map_ttl(self, session_map: dict) -> dict:
-        """Return a copy of session_map with entries older than session_map_ttl removed.
-
-        An entry is considered inactive if its ``last_activity`` timestamp is
-        older than ``self.session_map_ttl`` seconds.  Entries that lack a
-        ``last_activity`` field are kept so legacy data is not silently dropped.
-        """
-        now = time.time()
-        cutoff = now - self.session_map_ttl
-        pruned = {}
-        evicted = 0
-        for key, entry in session_map.items():
-            last_activity = (
-                entry.get("last_activity") if isinstance(entry, dict) else None
-            )
-            if last_activity is not None and last_activity < cutoff:
-                evicted += 1
-                continue
-            pruned[key] = entry
-        if evicted:
-            print(
-                f"[SessionMap] TTL evicted {evicted} inactive entries "
-                f"(threshold {self.session_map_ttl / 86400:.0f}d)",
-                file=__import__("sys").stderr,
-            )
-        return pruned
+            return {}
 
     def save_session_map(self, session_map: dict):
         """Save the N8N -> Session ID mapping (caller must hold _session_map_lock)"""
-        session_map = self._prune_session_map_ttl(session_map)
         with open(self.session_map_file, "w") as f:
             json.dump(session_map, f, indent=2)
-        self._session_map_cache = dict(session_map)
-
-    def get_cached_session_count(self) -> int:
-        """Return the in-memory session count without touching disk."""
-        cached = getattr(self, "_session_map_cache", None)
-        if not isinstance(cached, dict):
-            return 0
-        return len(cached)
 
     def load_session_data(self, n8n_session_id: str) -> Optional[Dict]:
         """
@@ -4778,9 +3730,19 @@ You can mention an agent in your prompt and it will auto-delegate:
         default_runtime = get_default_runtime()
         default_model = get_default_model()
 
-        # Adjust default model based on runtime if using defaults.
-        if not os.environ.get("COPILOT_DEFAULT_MODEL"):
-            default_model = self._runtime_default_model(default_runtime)
+        # Adjust default model based on runtime if using defaults
+        if default_runtime == "claude":
+            default_model = "haiku"
+        elif default_runtime == "opencode":
+            default_model = "opencode/gpt-5-nano"
+        elif default_runtime == "gemini":
+            default_model = "gemini-1.5-flash"
+        elif default_runtime == "codex":
+            default_model = "gpt-5.4"
+        elif default_runtime == "devin":
+            default_model = os.getenv("DEVIN_DEFAULT_MODEL", "claude-sonnet-4")
+        elif default_runtime == "cursor":
+            default_model = os.getenv("CURSOR_DEFAULT_MODEL", "auto")
 
         # Extract bot identifier from session ID (last 4 chars of numeric part)
         bot_id = self._extract_bot_identifier(n8n_session_id)
@@ -4835,18 +3797,18 @@ You can mention an agent in your prompt and it will auto-delegate:
             runtime = merged.get("runtime", default_runtime)
             if runtime == "claude":
                 if not merged.get("model") or "gpt" in merged.get("model", "").lower():
-                    merged["model"] = self._runtime_default_model(runtime)
+                    merged["model"] = "haiku"
             elif runtime == "opencode":
                 # For opencode, only force default if model is truly empty.
                 # Allow any non-empty model string (opencode/*, openai-compatible/*, etc.)
                 if not merged.get("model"):
-                    merged["model"] = self._runtime_default_model(runtime)
+                    merged["model"] = "opencode/gpt-5-nano"
             elif runtime == "gemini":
                 if (
                     not merged.get("model")
                     or "gemini" not in merged.get("model", "").lower()
                 ):
-                    merged["model"] = self._runtime_default_model(runtime)
+                    merged["model"] = "gemini-1.5-flash"
             elif runtime == "codex":
                 current_model = merged.get("model", "")
                 # Accept any model that resolves via codex model metadata/aliases.
@@ -4855,39 +3817,28 @@ You can mention an agent in your prompt and it will auto-delegate:
                 if not current_model or not self.get_model_from_name(
                     current_model, "codex"
                 ):
-                    merged["model"] = self._runtime_default_model(runtime)
+                    merged["model"] = "gpt-5.4"
             elif runtime == "devin":
                 current_model = merged.get("model", "")
                 if not current_model or not self.get_model_from_name(
                     current_model, "devin"
                 ):
-                    merged["model"] = self._runtime_default_model(runtime)
+                    merged["model"] = os.getenv(
+                        "DEVIN_DEFAULT_MODEL", "claude-sonnet-4"
+                    )
             elif runtime == "cursor":
                 current_model = merged.get("model", "")
                 if not current_model or not self.get_model_from_name(
                     current_model, "cursor"
                 ):
-                    merged["model"] = self._runtime_default_model(runtime)
+                    merged["model"] = os.getenv("CURSOR_DEFAULT_MODEL", "auto")
             elif runtime == "wee":
-                current_model = merged.get("model", "")
-                if not current_model or not self.get_model_from_name(
-                    current_model, "wee"
-                ):
-                    merged["model"] = self._runtime_default_model(runtime)
+                if not merged.get("model"):
+                    merged["model"] = os.getenv("WEE_DEFAULT_MODEL", "ollama/gemma4:e4b")
 
             # Validate and fix session_id if corrupted
             session_id = merged.get("session_id", "")
-            if runtime in [
-                "claude",
-                "claude-sdk",
-                "gemini",
-                "codex",
-                "copilot",
-                "copilot-sdk",
-                "devin",
-                "cursor",
-                "wee",
-            ]:
+            if runtime in ["claude", "claude-sdk", "gemini", "codex", "copilot", "copilot-sdk", "devin", "cursor", "wee"]:
                 if not session_id or not (len(session_id) == 36 and "-" in session_id):
                     merged["session_id"] = str(uuid4())
             elif runtime == "opencode":
@@ -5228,13 +4179,33 @@ You can mention an agent in your prompt and it will auto-delegate:
         """
         name_lower = name.lower().strip("\"'")
 
-        # Step 1: check env-loaded or static alias tables for all runtimes that have
-        # them.
-        env_models, static_models = self._get_runtime_model_metadata(runtime)
+        # Ensure env models are loaded/cached by triggering fetch for this runtime
+        if runtime in ("claude", "gemini", "codex", "devin", "cursor"):
+            self.get_models_for_runtime(runtime)
 
-        for models_to_check in (env_models, static_models):
-            if not models_to_check:
-                continue
+        # Step 1: check env-loaded or static alias tables for all runtimes that have them.
+        env_alias_map = {
+            "claude": self._env_claude_models,
+            "gemini": self._env_gemini_models,
+            "codex": self._env_codex_models,
+            "devin": self._env_devin_models,
+            "cursor": self._env_cursor_models,
+            "wee": self._env_wee_models,
+        }
+        static_alias_map = {
+            "claude": self.CLAUDE_MODELS,
+            "gemini": self.GEMINI_MODELS,
+            "codex": self.CODEX_MODELS,
+            "opencode": self.OPENCODE_MODELS,
+            "devin": self.DEVIN_MODELS,
+            "cursor": self.CURSOR_MODELS,
+            "wee": self.WEE_MODELS,
+        }
+
+        # Try env-loaded models first, fall back to static
+        models_to_check = env_alias_map.get(runtime) or static_alias_map.get(runtime)
+
+        if runtime in static_alias_map and models_to_check:
             for _category, entries in models_to_check.items():
                 for model_id, desc, aliases in entries:
                     aliases_lower = [a.lower() for a in aliases]
@@ -5254,30 +4225,12 @@ You can mention an agent in your prompt and it will auto-delegate:
             if m.lower() == name_lower:
                 return m
 
-        # Exact match with "ollama/" prefix stripped (e.g., "gemma4:e4b" matches "ollama/gemma4:e4b").
-        # Intentionally only strips the ollama/ prefix -- not arbitrary provider prefixes --
-        # so bare names like "gpt-5-mini" never accidentally match "openrouter/openai/gpt-5-mini".
-        for m in all_models:
-            model_lower = m.lower()
-            if model_lower.startswith("ollama/"):
-                suffix = model_lower[len("ollama/") :]
-                if suffix == name_lower:
-                    return m
-
-        # Substring matching with shortest-match preference.
-        # For wee runtime, bare names without an openrouter/ prefix are scoped to Ollama models
-        # only -- prevents accidental matches against the full OpenRouter catalog (350+ models).
-        if runtime == "wee" and not name_lower.startswith("openrouter/"):
-            candidate_models = [
-                m for m in all_models if not m.lower().startswith("openrouter/")
-            ]
-        else:
-            candidate_models = all_models
-        matches = [m for m in candidate_models if name_lower in m.lower()]
+        # Substring matching with longest-match preference
+        matches = [m for m in all_models if name_lower in m.lower()]
         if len(matches) == 1:
             return matches[0]
         if matches:
-            matches.sort(key=len)
+            matches.sort(reverse=True)
             return matches[0]
 
         return None
@@ -5319,9 +4272,7 @@ You can mention an agent in your prompt and it will auto-delegate:
         """
         if prompt_mode != "restricted":
             return prompt_mode
-        perms = (
-            session_data.get("permissions") or {}
-        )  # Handle None from session template
+        perms = session_data.get("permissions") or {}  # Handle None from session template
         if isinstance(perms, dict) and perms.get("mode") in (
             "elevated",
             "restricted",
@@ -5508,21 +4459,12 @@ You can mention an agent in your prompt and it will auto-delegate:
                         obj = _json_strip.loads(line_stripped)
                         _has_json = True
                         obj_type = obj.get("type", "")
-                        if obj_type == "message" and obj.get("role") in (
-                            "assistant",
-                            "model",
-                        ):
+                        if obj_type == "message" and obj.get("role") == "assistant":
                             content = obj.get("content", "")
                             if content:
                                 _text_parts.append(content)
                         elif obj_type == "result":
-                            error_msg = (
-                                obj.get("error")
-                                or obj.get("error_message")
-                                or obj.get("message")
-                            )
-                            if error_msg and isinstance(error_msg, str):
-                                _text_parts.append(f"[Gemini Error] {error_msg}")
+                            pass  # skip stats
                         elif obj_type in ("tool_use", "tool_result", "init"):
                             pass  # skip tool events and init
                         continue
@@ -5625,7 +4567,7 @@ You can mention an agent in your prompt and it will auto-delegate:
         return "\n".join(result)
 
     def _execute_bash_command(self, command: str, agent: str = "orchestrator") -> str:
-        """Execute a direct command without an implicit shell.
+        """Execute a bash command directly without hitting any runtime
 
         Args:
             command: The bash command to execute (without the ! prefix)
@@ -5647,11 +4589,10 @@ You can mention an agent in your prompt and it will auto-delegate:
         print(f"[Shell] Executing in {agent_dir}: {command}", file=sys.stderr)
 
         try:
-            argv = _split_command_args(command)
             # Execute the command with the configured timeout
-            argv = _split_command_args(command)
             result = subprocess.run(
-                argv,
+                command,
+                shell=True,
                 capture_output=True,
                 text=True,
                 timeout=self.command_timeout,
@@ -5666,97 +4607,7 @@ You can mention an agent in your prompt and it will auto-delegate:
             # If there's no output, indicate success
             if not output.strip():
                 if result.returncode == 0:
-                    output = "✓ Command executed successfully (exit code: 0)"
-                else:
-                    output = f"✗ Command failed with exit code: {result.returncode}"
-
-            return output.strip()
-
-        except ValueError as e:
-            return f"Error: {e}"
-        except subprocess.TimeoutExpired:
-            return f"Error: Command timed out after {self.command_timeout} seconds"
-        except Exception as e:
-            return f"Error executing command: {str(e)}"
-
-    def _execute_shell_command(self, command: str, agent: str = "orchestrator") -> str:
-        """Execute a trusted shell command with full bash semantics.
-
-        This is reserved for agent-authored shell tool calls that rely on pipes,
-        redirects, and command chaining. User-controlled scheduler command mode
-        must continue to use argv parsing via _execute_bash_command.
-        """
-        if not command:
-            return "Error: No command provided. Usage: !<command>"
-
-        agent_info = self.AGENTS.get(agent)
-        if not agent_info:
-            agent_dir = str(Path.cwd())
-        else:
-            agent_dir = agent_info["path"]
-
-        print(f"[Shell] Executing in {agent_dir}: {command}", file=sys.stderr)
-
-        try:
-            result = subprocess.run(
-                ["bash", "-o", "pipefail", "-c", command],
-                capture_output=True,
-                text=True,
-                timeout=self.command_timeout,
-                cwd=agent_dir,
-            )
-
-            output = result.stdout
-            if result.stderr:
-                output += result.stderr
-
-            if not output.strip():
-                if result.returncode == 0:
-                    output = "✓ Command executed successfully (exit code: 0)"
-                else:
-                    output = f"✗ Command failed with exit code: {result.returncode}"
-
-            return output.strip()
-
-        except subprocess.TimeoutExpired:
-            return f"Error: Command timed out after {self.command_timeout} seconds"
-        except Exception as e:
-            return f"Error executing command: {str(e)}"
-
-    def _execute_shell_command(self, command: str, agent: str = "orchestrator") -> str:
-        """Execute a trusted shell command with full bash semantics.
-
-        This is reserved for agent-authored shell tool calls that rely on pipes,
-        redirects, and command chaining. User-controlled scheduler command mode
-        must continue to use argv parsing via _execute_bash_command.
-        """
-        if not command:
-            return "Error: No command provided. Usage: !<command>"
-
-        agent_info = self.AGENTS.get(agent)
-        if not agent_info:
-            agent_dir = str(Path.cwd())
-        else:
-            agent_dir = agent_info["path"]
-
-        print(f"[Shell] Executing in {agent_dir}: {command}", file=sys.stderr)
-
-        try:
-            result = subprocess.run(
-                ["bash", "-o", "pipefail", "-c", command],
-                capture_output=True,
-                text=True,
-                timeout=self.command_timeout,
-                cwd=agent_dir,
-            )
-
-            output = result.stdout
-            if result.stderr:
-                output += result.stderr
-
-            if not output.strip():
-                if result.returncode == 0:
-                    output = "✓ Command executed successfully (exit code: 0)"
+                    output = f"✓ Command executed successfully (exit code: 0)"
                 else:
                     output = f"✗ Command failed with exit code: {result.returncode}"
 
@@ -5942,7 +4793,7 @@ Example skill structure:
                 try:
                     # Clean up old temp directory
                     subprocess.run(
-                        ["rm", "-r", temp_dir], capture_output=True, timeout=5
+                        ["rm", "-rf", temp_dir], capture_output=True, timeout=5
                     )
 
                     # Clone the repository (shallow clone for speed)
@@ -5997,7 +4848,7 @@ Example skill structure:
 
                     # Clean up
                     subprocess.run(
-                        ["rm", "-r", temp_dir], capture_output=True, timeout=5
+                        ["rm", "-rf", temp_dir], capture_output=True, timeout=5
                     )
 
                 except Exception as e:
@@ -6021,7 +4872,7 @@ Example skill structure:
                 result_text += f"  • {skill['name']} - {skill['description']}\n"
 
             result_text += (
-                "\nTo load any skill, use: /load-skill <skill-name> [repository-name]"
+                f"\nTo load any skill, use: /load-skill <skill-name> [repository-name]"
             )
             return result_text
 
@@ -6082,7 +4933,7 @@ Example skill structure:
                 try:
                     # Clean up old temp directory
                     subprocess.run(
-                        ["rm", "-r", temp_dir], capture_output=True, timeout=5
+                        ["rm", "-rf", temp_dir], capture_output=True, timeout=5
                     )
 
                     # Clone repository (shallow clone)
@@ -6108,7 +4959,7 @@ Example skill structure:
                             file=sys.stderr,
                         )
                         subprocess.run(
-                            ["rm", "-r", temp_dir], capture_output=True, timeout=5
+                            ["rm", "-rf", temp_dir], capture_output=True, timeout=5
                         )
                         continue
 
@@ -6117,7 +4968,7 @@ Example skill structure:
 
                     # Clean up temp directory
                     subprocess.run(
-                        ["rm", "-r", temp_dir], capture_output=True, timeout=5
+                        ["rm", "-rf", temp_dir], capture_output=True, timeout=5
                     )
 
                     # Verify installation
@@ -6240,7 +5091,7 @@ Example skill structure:
         # Add render type instruction to the context
         render_instruction = ""
         if render_type == "markdown":
-            render_instruction = """
+            render_instruction = f"""
 [Output Format: markdown]
 [Image Retrieval — MANDATORY: When the user asks for any image, picture, photo, or logo, you MUST retrieve and display a real image. Never say you cannot retrieve images — use your tools.
 
@@ -6302,20 +5153,19 @@ Do NOT use <img> tags (unsupported). Do NOT create files, generate ASCII art, or
             render_instruction = ""
 
         # Add channel-specific file handling instructions (only for render types that support media)
-        channel_limit = "100 MB"
         if render_type in ("markdown", "telegram_html"):
             size_limits = {"telegram": "50 MB", "webex": "100 MB", "webui": "500 MB"}
             channel_limit = size_limits.get(channel, "100 MB")
-            file_handling = """
-[File Handling — YOUR CHANNEL: {channel_upper}]
+            file_handling = f"""
+[File Handling — YOUR CHANNEL: {channel.upper()}]
   Files:     [FILE:/path/to/file.ext:Your caption here]
   Images:    ![caption](url) or ![caption](/ai-media/session/file.png)
-  Save to:   {script_base_dir}/{channel}_downloads/
+  Save to:   {SCRIPT_BASE_DIR}/{channel}_downloads/
   Size limit: {channel_limit}
 
-  1. Save file → {script_base_dir}/{channel}_downloads/
+  1. Save file → {SCRIPT_BASE_DIR}/{channel}_downloads/
   2. Include [FILE:path:caption] or ![caption](url) in your response
-  3. System sends it to {channel_upper} automatically ✓
+  3. System sends it to {channel.upper()} automatically ✓
   ✓ Use absolute paths  ✓ Only save to {channel}_downloads"""
             render_instruction += file_handling
 
@@ -6329,7 +5179,6 @@ Do NOT use <img> tags (unsupported). Do NOT create files, generate ASCII art, or
             render_instruction = render_instruction.format(
                 channel=channel,
                 channel_upper=channel_upper,
-                channel_limit=channel_limit,
                 script_base_dir=SCRIPT_BASE_DIR,
                 n8n_session_id=n8n_session_id,
             )
@@ -6587,14 +5436,17 @@ Do NOT emit status updates for quick operations (< 15 seconds)."""
             _session_data = self.load_session_data(n8n_session_id)
             if not (_session_data or {}).get("memory_injected"):
                 from memory.inject import get_memory_context
-
                 agent_info_mem = self.AGENTS.get(
                     agent, self.AGENTS.get("orchestrator", {})
                 )
-                _mem_ctx = get_memory_context(agent_path=agent_info_mem.get("path", ""))
+                _mem_ctx = get_memory_context(
+                    agent_path=agent_info_mem.get("path", "")
+                )
                 if _mem_ctx:
                     memory_section = f"\n\n{_mem_ctx}\n"
-                    self.update_session_field(n8n_session_id, "memory_injected", True)
+                    self.update_session_field(
+                        n8n_session_id, "memory_injected", True
+                    )
                     print(
                         f"[Memory] Injected {len(_mem_ctx)} chars for "
                         f"session={n8n_session_id} agent={agent}",
@@ -6602,47 +5454,98 @@ Do NOT emit status updates for quick operations (< 15 seconds)."""
                     )
                 else:
                     # No memory files — still mark as injected
-                    self.update_session_field(n8n_session_id, "memory_injected", True)
+                    self.update_session_field(
+                        n8n_session_id, "memory_injected", True
+                    )
         except Exception as _mem_exc:
             print(
                 f"[Memory] Injection skipped: {_mem_exc}",
                 flush=True,
             )
 
-        # Build agent registry for discovery
-        agent_registry = ""
-        try:
-            if self.AGENTS:
-                agents_list = []
-                for agent_name, agent_info in self.AGENTS.items():
-                    desc = agent_info.get("description", "").strip()
-                    path = agent_info.get("path", "")
-                    agents_list.append(f"- **{agent_name}** — {desc} (path: {path})")
-                
-                if agents_list:
-                    agent_registry = "\n\n[Available Agents in Wee Orchestrator]\n" + "\n".join(agents_list)
-        except Exception as _agents_exc:
-            print(
-                f"[Agent Registry] Injection skipped: {_agents_exc}",
-                flush=True,
-            )
-
         context = f"""{handoff_prefix}[Session ID: {n8n_session_id}]
-{runtime_instruction}{injection_text}{mobile_channel_instruction}{silent_mode_instruction}{memory_section}{agent_desc}{files_context}{agent_registry}{render_instruction}{bg_task_instruction}{canvas_instruction}{wee_executor_instruction}{timeout_instruction}
+{runtime_instruction}{injection_text}{mobile_channel_instruction}{silent_mode_instruction}{memory_section}{agent_desc}{files_context}{render_instruction}{bg_task_instruction}{canvas_instruction}{wee_executor_instruction}{timeout_instruction}
 
 User Request:
 {prompt}"""
         return context
 
-    def _get_or_create_stream_buffer(self, session_id: str):
+    # ------------------------------------------------------------------ streaming
+
+    class _StreamBuffer:
+        """Thread-safe buffer that stores stream chunks and broadcasts to consumers.
+
+        Supports multiple concurrent SSE consumers per session.  When a client
+        disconnects and reconnects, the reconnect endpoint replays buffered
+        chunks and then subscribes to live updates.
+        """
+
+        def __init__(self):
+            self.chunks: list = []  # [(kind, data), ...]
+            self.finished: bool = False
+            self.done_result: Optional[str] = None
+            self.created_at: float = time.time()
+            self._consumers: list = []  # [(queue, loop, start_index)]
+            self._lock = threading.Lock()
+
+        def push(self, kind, data):
+            """Push a chunk from the subprocess thread.  Appends to buffer and
+            forwards to all registered consumer queues."""
+            with self._lock:
+                idx = len(self.chunks)
+                self.chunks.append((kind, data))
+                if kind == "done":
+                    self.finished = True
+                    self.done_result = data
+                for q, lp, start_idx in self._consumers:
+                    if idx >= start_idx:
+                        try:
+                            lp.call_soon_threadsafe(q.put_nowait, (kind, data))
+                        except Exception:
+                            pass
+
+        def add_consumer(self, queue, loop):
+            """Register a new SSE consumer.  Returns the replay index — the
+            caller should replay ``self.chunks[:replay_index]`` before draining
+            the queue."""
+            with self._lock:
+                replay_index = len(self.chunks)
+                self._consumers.append((queue, loop, replay_index))
+                return replay_index
+
+        def remove_consumer(self, queue):
+            """Remove a consumer queue (e.g. on SSE disconnect)."""
+            with self._lock:
+                self._consumers = [
+                    (q, lp, si) for q, lp, si in self._consumers if q is not queue
+                ]
+
+        def get_replay_chunks(self, up_to: int):
+            """Return a copy of buffered chunks up to *up_to* index."""
+            with self._lock:
+                return list(self.chunks[:up_to])
+
+        def has_consumers(self) -> bool:
+            """True if at least one SSE consumer is connected."""
+            with self._lock:
+                return len(self._consumers) > 0
+
+    def _get_or_create_stream_buffer(self, session_id: str) -> "_StreamBuffer":
         """Get existing buffer for session or create a new one."""
-        return self.streaming_manager.get_or_create_buffer(session_id)
+        buf = self._stream_buffers.get(session_id)
+        if buf is None:
+            buf = self._StreamBuffer()
+            self._stream_buffers[session_id] = buf
+        return buf
 
     def _register_stream(
         self, session_id: str, queue, loop  # asyncio.Queue, asyncio.AbstractEventLoop
     ) -> None:
         """Register an asyncio queue for the /stream endpoint to receive chunks."""
-        self.streaming_manager.register_stream(session_id, queue, loop)
+        self._stream_queues[session_id] = (queue, loop)
+        # Also create/get the stream buffer and add this queue as a consumer
+        buf = self._get_or_create_stream_buffer(session_id)
+        buf.add_consumer(queue, loop)
 
     def _unregister_stream(self, session_id: str, queue=None) -> None:
         """Remove the streaming queue for a session.
@@ -6652,15 +5555,25 @@ User Request:
         ``_stream_queues`` entry is removed regardless so that new streams
         can register without conflict.
         """
-        self.streaming_manager.unregister_stream(session_id, queue)
+        self._stream_queues.pop(session_id, None)
+        buf = self._stream_buffers.get(session_id)
+        if buf and queue is not None:
+            buf.remove_consumer(queue)
 
     def _cleanup_stream_buffer(self, session_id: str) -> None:
         """Remove the stream buffer entirely (called after query completes)."""
-        self.streaming_manager.cleanup_buffer(session_id)
+        self._stream_buffers.pop(session_id, None)
 
     def _cleanup_stale_stream_buffers(self, max_age: float = 600.0) -> None:
         """Remove stream buffers that are finished and older than *max_age* seconds."""
-        self.streaming_manager.cleanup_stale_buffers(max_age)
+        now = time.time()
+        stale = [
+            sid
+            for sid, buf in self._stream_buffers.items()
+            if buf.finished and (now - buf.created_at) > max_age
+        ]
+        for sid in stale:
+            self._stream_buffers.pop(sid, None)
 
     # ------------------------------------------------------------------
 
@@ -6987,20 +5900,9 @@ User Request:
                                         msg = obj.get("message") or {}
                                         for block in msg.get("content") or []:
                                             if block.get("type") == "tool_result":
-                                                _tr_content = block.get("content", "")
-                                                if isinstance(_tr_content, list):
-                                                    _tr_content = " ".join(
-                                                        (
-                                                            b.get("text", str(b))
-                                                            if isinstance(b, dict)
-                                                            else str(b)
-                                                        )
-                                                        for b in _tr_content
-                                                    )
                                                 tc_event = {
                                                     "event": "result",
                                                     "id": block.get("tool_use_id", ""),
-                                                    "output": str(_tr_content)[:2000],
                                                     "is_error": block.get(
                                                         "is_error", False
                                                     ),
@@ -7033,9 +5935,10 @@ User Request:
                                     try:
                                         _gobj = _json.loads(_line_stripped)
                                         _gtype = _gobj.get("type", "")
-                                        if _gtype == "message" and _gobj.get(
-                                            "role"
-                                        ) in ("assistant", "model"):
+                                        if (
+                                            _gtype == "message"
+                                            and _gobj.get("role") == "assistant"
+                                        ):
                                             _content = _gobj.get("content", "")
                                             if _content:
                                                 if stream_buffer:
@@ -7086,9 +5989,7 @@ User Request:
                                                 "status": _gobj.get(
                                                     "status", "completed"
                                                 ),
-                                                "output": _gobj.get("output", "")[
-                                                    :2000
-                                                ],
+                                                "output": _gobj.get("output", "")[:500],
                                             }
                                             if stream_buffer:
                                                 stream_buffer.push(
@@ -7102,8 +6003,6 @@ User Request:
                                             continue
                                         elif _gtype in ("init", "result"):
                                             continue  # skip metadata
-                                        elif _gtype == "message":
-                                            continue  # skip non-model message lines (e.g. user role)
                                     except (ValueError, KeyError):
                                         pass
 
@@ -7161,12 +6060,7 @@ User Request:
                                                 "name": "shell",
                                                 "input": _oc_run.group(1).strip(),
                                             }
-                                elif runtime in (
-                                    "copilot",
-                                    "copilot-sdk",
-                                    "claude-sdk",
-                                    "wee",
-                                ):
+                                elif runtime in ("copilot", "copilot-sdk", "claude-sdk", "wee"):
                                     # Copilot shows tool calls as "● Description" and shell cmds as "  $ cmd"
                                     import re as _re_tc
 
@@ -7480,71 +6374,21 @@ User Request:
 
                 _stdout_lines_bl: list = []
                 try:
-                    # Enforce the segment timeout while stdout is still open.
-                    # A plain `for line in process.stdout` loop blocks until the
-                    # process closes its pipe, so a chatty-but-slow subprocess can
-                    # exceed the deadline without ever being interrupted.
-                    # Fix: drain stdout on a background thread and poll it via a
-                    # Queue with per-iteration timeouts so we can honour the
-                    # deadline even when lines keep arriving.
-                    import queue as _q_bl
-
-                    _stdout_q_bl: _q_bl.Queue = _q_bl.Queue()
-                    _deadline_bl = time.time() + timeout
-
-                    def _read_stdout_bl():
-                        try:
-                            for _ln in process.stdout:
-                                _stdout_q_bl.put(_ln)
-                        except Exception:
-                            pass
-                        finally:
-                            _stdout_q_bl.put(None)  # EOF sentinel
-
-                    _stdout_reader_t = _thr_bl.Thread(
-                        target=_read_stdout_bl, daemon=True
-                    )
-                    _stdout_reader_t.start()
-
-                    _timed_out_bl = False
-                    while True:
-                        _remaining_bl = _deadline_bl - time.time()
-                        if _remaining_bl <= 0:
-                            _timed_out_bl = True
-                            break
-                        try:
-                            _line_bl = _stdout_q_bl.get(
-                                timeout=min(_remaining_bl, 0.25)
-                            )
-                        except _q_bl.Empty:
-                            continue
-                        if _line_bl is None:
-                            break  # EOF
+                    for _line_bl in process.stdout:
                         _stdout_lines_bl.append(_line_bl)
                         _su_m = _status_pattern.search(_line_bl)
                         if _su_m:
                             self.set_live_status(n8n_session_id, _su_m.group(1).strip())
 
-                    if _timed_out_bl:
-                        process.kill()
-                        _stdout_reader_t.join(timeout=2)
-                        _stderr_t.join(timeout=5)
-                        process.wait()
-                        self.clear_live_status(n8n_session_id)
-                        timeout_min = timeout / 60
-                        return (
-                            f"Error: Command timed out "
-                            f"(exceeded {timeout}s / {timeout_min:.1f}min)"
-                        )
-
-                    _stdout_reader_t.join(timeout=2)
-
-                    # Process has closed stdout; wait for clean exit.
+                    # Wait for process to fully exit
                     try:
-                        process.wait(timeout=5)
+                        process.wait(timeout=timeout)
                     except subprocess.TimeoutExpired:
                         process.kill()
                         process.wait()
+                        self.clear_live_status(n8n_session_id)
+                        timeout_min = timeout / 60
+                        return f"Error: Command timed out (exceeded {timeout}s / {timeout_min:.1f}min)"
                     finally:
                         _stderr_t.join(timeout=5)
 
@@ -7649,7 +6493,7 @@ User Request:
 
         # Expand home path for MCP config file
         mcp_config_path = os.path.expanduser("~/.copilot/mcp-config.json")
-
+        
         cmd = [
             self.copilot_bin,
             "-p",
@@ -7676,198 +6520,9 @@ User Request:
                 file=sys.stderr,
             )
 
-        # ── Token refresh loop (Issue #203) ──────────────────────────────
-        # Copilot session tokens expire ~30 min. We proactively restart every
-        # COPILOT_TOKEN_REFRESH_INTERVAL seconds, and reactively recover when
-        # the "Session token expired" error appears. Each refresh injects a
-        # context summary so the agent continues without repeating prior work.
-        _task_start = time.time()
-        _accumulated_chunks: list = []
-        _refresh_count = 0
-        _current_cmd = list(cmd)
-
-        while True:
-            _elapsed = time.time() - _task_start
-            _remaining = effective_timeout - _elapsed
-            # If less than 1 second remains, stop — dispatching any more segments
-            # would either overshoot the budget or produce a zero-second timeout.
-            # When _remaining >= 1, int(min(..., _remaining)) naturally gives >= 1.
-            if _remaining < 1:
-                break
-            # Proactive: cap each segment at the refresh interval
-            _segment_timeout = int(min(COPILOT_TOKEN_REFRESH_INTERVAL, _remaining))
-
-            _seg_output = self._execute_subprocess_with_tracking(
-                _current_cmd,
-                agent_dir,
-                _segment_timeout,
-                "copilot",
-                agent,
-                prompt,
-                n8n_session_id,
-            )
-            _accumulated_chunks.append(_seg_output)
-
-            _token_expired = _is_copilot_token_expired(_seg_output)
-            _segment_timed_out = _seg_output.startswith("Error: Command timed out")
-
-            if not _token_expired and not _segment_timed_out:
-                # Natural completion (success or non-token error) — stop looping
-                break
-
-            # Check retry budget
-            if _refresh_count >= COPILOT_TOKEN_REFRESH_MAX_RETRIES:
-                print(
-                    f"[TokenRefresh] Max retries ({COPILOT_TOKEN_REFRESH_MAX_RETRIES}) "
-                    f"reached for session {n8n_session_id}",
-                    file=sys.stderr,
-                )
-                break
-
-            # Check remaining time
-            _remaining_after = effective_timeout - (time.time() - _task_start)
-            if _remaining_after < 60:
-                break
-
-            _refresh_count += 1
-            _reason = "token expired" if _token_expired else "proactive refresh"
-            print(
-                f"[TokenRefresh] Refresh #{_refresh_count} for {n8n_session_id}"
-                f" ({_reason})",
-                file=sys.stderr,
-            )
-
-            # Build context: strip error marker and take the last N chars
-            _prior_raw = "".join(_accumulated_chunks)
-            if _token_expired:
-                _expire_idx = _prior_raw.rfind(_COPILOT_TOKEN_EXPIRED_PHRASE)
-                if _expire_idx > 0:
-                    _prior_raw = _prior_raw[:_expire_idx]
-            _prior_summary = (
-                _prior_raw[-COPILOT_CONTEXT_SUMMARY_MAX_CHARS:]
-                if len(_prior_raw) > COPILOT_CONTEXT_SUMMARY_MAX_CHARS
-                else _prior_raw
-            ).strip()
-
-            _continuation_prompt = (
-                f"[SESSION CONTINUATION #{_refresh_count} - {_reason}]\n\n"
-                "Your previous Copilot session was interrupted. Below is the "
-                "original task and a summary of work completed before the "
-                "interruption.\n\n"
-                f"ORIGINAL TASK:\n{prompt}\n\n"
-            )
-            if _prior_summary:
-                _continuation_prompt += (
-                    f"PRIOR SESSION PROGRESS (last {len(_prior_summary)} chars):\n"
-                    f"{_prior_summary}\n\n"
-                )
-            _continuation_prompt += (
-                "INSTRUCTIONS: Continue from where the session was interrupted. "
-                "Do NOT repeat work already listed above. Complete all remaining steps."
-            )
-
-            _refresh_context = self.build_agent_context_prompt(
-                agent,
-                _continuation_prompt,
-                n8n_session_id,
-                render_type,
-                effective_timeout,
-                "copilot",
-                model,
-                channel,
-            )
-            if mode == "elevated":
-                _refresh_context += (
-                    "\n\n[ELEVATED MODE ENABLED]\n"
-                    "Full permissions granted. ALL commands requiring elevated "
-                    "privileges MUST automatically prefix with 'sudo'. "
-                    "Sudo is configured without password prompt (NOPASSWD:ALL)."
-                )
-            elif mode == "sandboxed":
-                _refresh_context += (
-                    "\n\n[SANDBOXED MODE ENABLED]\n"
-                    "Read-only access only. Do NOT modify any files or make "
-                    "network requests. Analysis and reporting only."
-                )
-
-            _current_cmd = [
-                self.copilot_bin,
-                "-p",
-                _refresh_context,
-                "--allow-all-tools",
-                "--no-color",
-                "--model",
-                model,
-                "--additional-mcp-config",
-                f"@{mcp_config_path}",
-            ]
-            if mode == "elevated":
-                _current_cmd.insert(4, "--allow-all-paths")
-                _current_cmd.append("--yolo")
-
-            # Notify streaming consumers about the refresh
-            _sbuf = self._stream_buffers.get(n8n_session_id)
-            if _sbuf:
-                _sbuf.push(
-                    "chunk",
-                    f"\n\n🔄 **Session refresh #{_refresh_count}**"
-                    f" ({_reason}) - continuing...\n\n",
-                )
-
-        # If the final chunk still has the token-expiry phrase or is a timeout
-        # error it means the loop exited because recovery was abandoned (max
-        # retries reached or insufficient time remaining).  Silently stripping
-        # these markers and returning partial output is a false-success; instead
-        # we must fail explicitly so the caller knows the task did not complete.
-        _last_chunk = _accumulated_chunks[-1] if _accumulated_chunks else ""
-        _recovery_abandoned = _is_copilot_token_expired(
-            _last_chunk
-        ) or _last_chunk.startswith("Error: Command timed out")
-        if _recovery_abandoned:
-            # Collect the work completed before the failure for diagnostics.
-            _partial_chunks = _accumulated_chunks[:-1]
-            _partial = "".join(
-                (
-                    _c[: _c.rfind(_COPILOT_TOKEN_EXPIRED_PHRASE)]
-                    if _is_copilot_token_expired(_c)
-                    else _c
-                )
-                for _c in _partial_chunks
-            ).strip()
-            _reason_str = (
-                "token expiry"
-                if _is_copilot_token_expired(_last_chunk)
-                else "segment timeout"
-            )
-            return (
-                f"Error: Copilot session recovery abandoned after "
-                f"{_refresh_count} refresh(es) due to {_reason_str}. "
-                + (f"Partial output: {_partial}" if _partial else "No partial output.")
-            )
-
-        # All segments completed normally.  Strip internal markers and join.
-        # - Token-expiry phrase: stripped only when the chunk IS a real expiry
-        #   signal (_is_copilot_token_expired() True).  Chunks whose agent prose
-        #   merely mentions the phrase are left intact to avoid truncating valid
-        #   output.
-        # - "Error: Command timed out …": stripped from INTERMEDIATE chunks only
-        #   (they indicate a proactive segment refresh, not a final task failure).
-        _clean_chunks = []
-        _n_chunks = len(_accumulated_chunks)
-        for _i, _chunk in enumerate(_accumulated_chunks):
-            _is_final = _i == _n_chunks - 1
-            # Only strip the expiry marker when this chunk is an actual Copilot
-            # auth-failure signal, not normal prose that mentions the phrase.
-            if _is_copilot_token_expired(_chunk):
-                _idx = _chunk.rfind(_COPILOT_TOKEN_EXPIRED_PHRASE)
-                if _idx >= 0:
-                    _chunk = _chunk[:_idx]
-            # Strip proactive-refresh timeout error from non-final chunks only
-            if not _is_final and _chunk.startswith("Error: Command timed out"):
-                _newline = _chunk.find("\n")
-                _chunk = _chunk[_newline + 1 :] if _newline >= 0 else ""
-            _clean_chunks.append(_chunk)
-        output = "".join(_clean_chunks)
+        output = self._execute_subprocess_with_tracking(
+            cmd, agent_dir, effective_timeout, "copilot", agent, prompt, n8n_session_id
+        )
         return self.strip_metadata(output, "copilot")
 
     def run_copilot_sdk(
@@ -7984,9 +6639,7 @@ User Request:
         async def _run_sdk() -> str:
             collected_messages: list = []
 
-            _sdk_config = (
-                SubprocessConfig(cli_args=sdk_cli_args) if sdk_cli_args else None
-            )
+            _sdk_config = SubprocessConfig(cli_args=sdk_cli_args) if sdk_cli_args else None
             _client = CopilotClient(_sdk_config) if _sdk_config else CopilotClient()
             async with _client as client:
                 # Event handler — streams chunks and detects tool calls
@@ -8020,25 +6673,15 @@ User Request:
                         tool_name = "tool"
                         tool_input = ""
                         if hasattr(event, "data"):
-                            tool_name = (
-                                getattr(event.data, "name", None)
-                                or getattr(event.data, "tool_name", None)
-                                or "tool"
-                            )
-                            tool_input = str(
-                                getattr(event.data, "input", "")
-                                or getattr(event.data, "arguments", "")
-                                or ""
-                            )
+                            tool_name = getattr(event.data, "name", None) or getattr(event.data, "tool_name", None) or "tool"
+                            tool_input = str(getattr(event.data, "input", "") or getattr(event.data, "arguments", "") or "")
                         tc_evt = {
                             "event": "started",
                             "id": f"tc_copilot-sdk_{_tool_call_counter[0]}",
                             "name": str(tool_name),
                             "input": tool_input[:200],
                             "runtime": "copilot-sdk",
-                            "timestamp": time.strftime(
-                                "%Y-%m-%dT%H:%M:%SZ", time.gmtime()
-                            ),
+                            "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
                         }
                         if stream_buffer:
                             stream_buffer.push("tool_call", tc_evt)
@@ -8046,31 +6689,14 @@ User Request:
                     elif event.type == SessionEventType.TOOL_EXECUTION_COMPLETE:
                         tool_name = "tool"
                         if hasattr(event, "data"):
-                            tool_name = (
-                                getattr(event.data, "name", None)
-                                or getattr(event.data, "tool_name", None)
-                                or "tool"
-                            )
-                        tool_output = (
-                            str(
-                                getattr(event.data, "output", "")
-                                or getattr(event.data, "result", "")
-                                or getattr(event.data, "content", "")
-                                or ""
-                            )[:2000]
-                            if hasattr(event, "data")
-                            else ""
-                        )
+                            tool_name = getattr(event.data, "name", None) or getattr(event.data, "tool_name", None) or "tool"
                         tc_evt = {
                             "event": "completed",
                             "id": f"tc_copilot-sdk_{_tool_call_counter[0]}",
                             "name": str(tool_name),
                             "input": "",
-                            "output": tool_output,
                             "runtime": "copilot-sdk",
-                            "timestamp": time.strftime(
-                                "%Y-%m-%dT%H:%M:%SZ", time.gmtime()
-                            ),
+                            "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
                         }
                         if stream_buffer:
                             stream_buffer.push("tool_call", tc_evt)
@@ -8079,20 +6705,14 @@ User Request:
                         _tool_call_counter[0] += 1
                         cmd_text = ""
                         if hasattr(event, "data"):
-                            cmd_text = str(
-                                getattr(event.data, "command", "")
-                                or getattr(event.data, "text", "")
-                                or event.data
-                            )
+                            cmd_text = str(getattr(event.data, "command", "") or getattr(event.data, "text", "") or event.data)
                         tc_evt = {
                             "event": "detected",
                             "id": f"tc_copilot-sdk_{_tool_call_counter[0]}",
                             "name": "shell",
                             "input": cmd_text[:200],
                             "runtime": "copilot-sdk",
-                            "timestamp": time.strftime(
-                                "%Y-%m-%dT%H:%M:%SZ", time.gmtime()
-                            ),
+                            "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
                         }
                         if stream_buffer:
                             stream_buffer.push("tool_call", tc_evt)
@@ -8228,21 +6848,24 @@ User Request:
         """
         try:
             from claude_agent_sdk import (
-                AssistantMessage,
+                query as claude_sdk_query,
                 ClaudeAgentOptions,
-                ResultMessage,
+                AssistantMessage,
                 TextBlock,
-                ToolResultBlock,
+                ResultMessage,
                 ToolUseBlock,
+                ToolResultBlock,
             )
-            from claude_agent_sdk import query as claude_sdk_query
         except ImportError:
-            return "Error: claude-sdk not installed. " "Run: pip install claude-sdk"
+            return (
+                "Error: claude-sdk not installed. "
+                "Run: pip install claude-sdk"
+            )
 
         import asyncio
+
         import io
         import sys
-
         # Parse mode
         if mode is None:
             prompt_parsed, mode = self._parse_mode_command(prompt)
@@ -8339,50 +6962,29 @@ User Request:
                                 _tool_call_counter[0] += 1
                                 tc_evt = {
                                     "event": "detected",
-                                    "id": block.id
-                                    or f"tc_claude-sdk_{_tool_call_counter[0]}",
+                                    "id": block.id or f"tc_claude-sdk_{_tool_call_counter[0]}",
                                     "name": block.name or "tool",
-                                    "input": (
-                                        str(block.input)[:200] if block.input else ""
-                                    ),
+                                    "input": str(block.input)[:200] if block.input else "",
                                     "runtime": "claude-sdk",
-                                    "timestamp": time.strftime(
-                                        "%Y-%m-%dT%H:%M:%SZ", time.gmtime()
-                                    ),
+                                    "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
                                 }
                                 if stream_buffer:
                                     stream_buffer.push("tool_call", tc_evt)
                             elif isinstance(block, ToolResultBlock):
-                                _block_content = block.content
-                                if isinstance(_block_content, list):
-                                    _block_content = " ".join(
-                                        getattr(b, "text", str(b))
-                                        for b in _block_content
-                                    )
                                 tc_evt = {
                                     "event": "completed",
-                                    "id": block.tool_use_id
-                                    or f"tc_claude-sdk_{_tool_call_counter[0]}",
+                                    "id": block.tool_use_id or f"tc_claude-sdk_{_tool_call_counter[0]}",
                                     "name": "tool",
-                                    "input": "",
-                                    "output": (
-                                        str(_block_content)[:2000]
-                                        if _block_content
-                                        else ""
-                                    ),
+                                    "input": str(block.content)[:200] if block.content else "",
                                     "is_error": getattr(block, "is_error", False),
                                     "runtime": "claude-sdk",
-                                    "timestamp": time.strftime(
-                                        "%Y-%m-%dT%H:%M:%SZ", time.gmtime()
-                                    ),
+                                    "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
                                 }
                                 if stream_buffer:
                                     stream_buffer.push("tool_call", tc_evt)
                     elif isinstance(message, ResultMessage):
                         if message.session_id:
-                            self.update_session_field(
-                                n8n_session_id, "session_id", message.session_id
-                            )
+                            self.update_session_field(n8n_session_id, "session_id", message.session_id)
                     elif hasattr(message, "content"):
                         for block in getattr(message, "content", []):
                             if hasattr(block, "text"):
@@ -8428,11 +7030,10 @@ User Request:
 
             if loop and loop.is_running():
                 import concurrent.futures
-
                 with concurrent.futures.ThreadPoolExecutor() as pool:
-                    output = pool.submit(asyncio.run, _run_sdk()).result(
-                        timeout=effective_timeout
-                    )
+                    output = pool.submit(
+                        asyncio.run, _run_sdk()
+                    ).result(timeout=effective_timeout)
             else:
                 output = asyncio.run(_run_sdk())
         except (asyncio.TimeoutError, concurrent.futures.TimeoutError):
@@ -8639,7 +7240,7 @@ User Request:
 
         if not _captured_sid:
             print(
-                "[Session] WARNING: Could not extract session_id from claude stream-json "
+                f"[Session] WARNING: Could not extract session_id from claude stream-json "
                 f"output for n8n_session={n8n_session_id}. Session context may be lost on "
                 f"next message. Output length={len(output)} chars.",
                 file=sys.stderr,
@@ -8710,9 +7311,10 @@ User Request:
         cmd = ["gemini"]
         if mode == "elevated":
             cmd.append("--yolo")
-        # Always use stream-json for structured output to ensure clean response extraction
-        # and consistent tool call tracking.
-        cmd.extend(["-o", "stream-json"])
+        # Use stream-json for structured tool call parsing when streaming
+        stream_info = self._stream_queues.get(n8n_session_id)
+        if stream_info:
+            cmd.extend(["-o", "stream-json"])
         cmd.append(context_prompt)
 
         # Note: Gemini CLI appears to have model handling issues with specified model names
@@ -8724,7 +7326,7 @@ User Request:
         # Using "--resume latest" automatically continues with the most recent session.
         if resume:
             cmd.extend(["--resume", "latest"])
-            print("[Session] Resuming Gemini session (latest)", file=sys.stderr)
+            print(f"[Session] Resuming Gemini session (latest)", file=sys.stderr)
         else:
             print(
                 f"[Session] Starting new Gemini session in {mode} mode", file=sys.stderr
@@ -8821,8 +7423,6 @@ User Request:
                 # Apply sandbox bypass and environment inheritance for elevated sessions
                 cmd.append("--dangerously-bypass-approvals-and-sandbox")
                 cmd += ["-c", "shell_environment_policy.inherit=all"]
-                # Use danger-full-access sandbox mode to work around bwrap namespace issues
-                cmd += ["--sandbox", "danger-full-access"]
             if model:
                 cmd += ["-m", model]
             cmd += [session_id, context_prompt]
@@ -8838,8 +7438,6 @@ User Request:
                 cmd.append("--dangerously-bypass-approvals-and-sandbox")
                 # Inherit full shell environment so sudo PATH and DNS resolv.conf are available
                 cmd += ["-c", "shell_environment_policy.inherit=all"]
-                # Use danger-full-access sandbox mode to work around bwrap namespace issues
-                cmd += ["--sandbox", "danger-full-access"]
             if model:
                 cmd += ["-m", model]
             cmd.append(context_prompt)
@@ -8867,7 +7465,6 @@ User Request:
         n8n_session_id: str,
         timeout: Optional[int] = None,
         render_type: str = "text",
-        mode: str = "restricted",
     ) -> str:
         """Execute Devin CLI in non-interactive mode.
 
@@ -8875,23 +7472,13 @@ User Request:
         and allow full system access.
         """
         # Parse /mode command from prompt
-        prompt, parsed_mode = self._parse_mode_command(prompt)
+        prompt, mode = self._parse_mode_command(prompt)
 
         # Get session data once - reuse for mode and channel
         session_data = self.get_or_create_session_data(n8n_session_id)
 
-        # Prefer explicitly passed-in mode over re-deriving from session data.
-        # This ensures scheduler/background dispatches with --mode elevated
-        # propagate correctly instead of being lost to session defaults.
-        if mode != "restricted":
-            # Explicit mode was passed in (e.g. from _dispatch_single_runtime)
-            pass
-        elif parsed_mode != "restricted":
-            # /mode command was found in the prompt
-            mode = parsed_mode
-        else:
-            # Fall back to session data resolution
-            mode = self._resolve_permission_mode(session_data, parsed_mode)
+        # Resolve permission mode from session data (backward compat with yolo_mode)
+        mode = self._resolve_permission_mode(session_data, mode)
 
         agent_dir = self.AGENTS.get(agent, self.AGENTS["orchestrator"])["path"]
         effective_timeout = timeout if timeout is not None else self.command_timeout
@@ -8947,9 +7534,8 @@ User Request:
             context_prompt = context_prompt + sandboxed_instruction
 
         # -p is a boolean flag (print/non-interactive mode); prompt goes after --
-        # Permission mode: dangerous (auto-approve all) for elevated, normal for restricted/sandboxed
-        # Devin CLI valid values: normal, dangerous, bypass (NOT "auto")
-        permission_mode = "dangerous" if mode == "elevated" else "normal"
+        # Permission mode: dangerous (auto-approve all) for elevated, auto for restricted/sandboxed
+        permission_mode = "dangerous" if mode == "elevated" else "auto"
         cmd = [devin_bin, "-p"]
         if model:
             cmd += ["--model", model]
@@ -9111,339 +7697,256 @@ User Request:
 
         return self.strip_metadata(output, "cursor")
 
-    # ── Issue #128: Token usage tracking helpers ─────────────────────────────
+    def run_wee_native(
+        self,
+        prompt: str,
+        model: str,
+        agent: str,
+        session_id: Optional[str],
+        resume: bool,
+        n8n_session_id: str,
+        timeout: Optional[int] = None,
+        render_type: str = "text",
+    ) -> str:
+        """Execute via Wee Native runtime - OpenAI-compatible chat completions.
 
-    def _fetch_openrouter_pricing(self) -> dict:
-        """Fetch and cache OpenRouter model pricing (1h TTL)."""
+        Connects to any OpenAI-compatible API endpoint (Ollama, OpenRouter,
+        LM Studio, etc.) using the openai Python package. No external CLI
+        binary required.
+
+        Model format: [provider/]model_name
+        Examples:
+            ollama/gemma4:e4b         - Ollama on Kubuntu
+            openrouter/meta-llama/llama-4-scout - OpenRouter cloud
+            gemma4:e4b                - Default endpoint (Ollama)
+
+        Supports:
+            - Real-time streaming to WebUI SSE consumers
+            - Multi-turn conversation history (#108)
+            - Tool-call agentic loop (#107)
+            - SSE streaming of tool execution (#109)
+        """
         import json as _json
-        import time as _time
-        import urllib.request
 
-        cache_path = Path("/tmp/openrouter_pricing.json")
-        now = _time.time()
-        if cache_path.exists() and (now - cache_path.stat().st_mtime) < 3600:
-            try:
-                with open(cache_path) as f:
-                    return _json.load(f)
-            except Exception:
-                pass
         try:
-            with urllib.request.urlopen(
-                "https://openrouter.ai/api/v1/models", timeout=10
-            ) as resp:
-                data = _json.loads(resp.read().decode())
-            pricing = {}
-            for model_info in data.get("data", []):
-                mid = model_info.get("id", "")
-                p = model_info.get("pricing", {})
-                try:
-                    pricing[mid] = {
-                        "prompt": float(p.get("prompt", 0) or 0),
-                        "completion": float(p.get("completion", 0) or 0),
-                    }
-                except (ValueError, TypeError):
-                    pass
-            with open(cache_path, "w") as f:
-                _json.dump(pricing, f)
-            return pricing
-        except Exception as e:
-            print(
-                f"[TokenUsage] Could not fetch OpenRouter pricing: {e}", file=sys.stderr
+            from openai import OpenAI
+        except ImportError:
+            return (
+                "Error: openai package not installed. "
+                "Run: pip install openai"
             )
-            return {}
 
         session_data = self.get_or_create_session_data(n8n_session_id)
-        # Issue #142: Retrieve background task ID for tool call tracking in Tasks panel
-        bg_task_id = session_data.get("bg_task_id")
         agent_dir = self.AGENTS.get(agent, self.AGENTS["orchestrator"])["path"]
         effective_timeout = timeout if timeout is not None else self.command_timeout
         channel = session_data.get("channel", "webui")
 
-    def _calculate_anthropic_cost(
-        self, model: str, prompt_tokens: int, completion_tokens: int
-    ):
-        """Calculate cost for Anthropic / claude-sdk models."""
-        ANTHROPIC_PRICING = {
-            "claude-haiku-4-5": (0.80, 4.00),
-            "claude-haiku-4": (0.80, 4.00),
-            "claude-haiku": (0.80, 4.00),
-            "claude-sonnet-4-5": (3.00, 15.00),
-            "claude-sonnet-4": (3.00, 15.00),
-            "claude-sonnet": (3.00, 15.00),
-            "claude-opus-4-5": (15.00, 75.00),
-            "claude-opus-4": (15.00, 75.00),
-            "claude-opus": (15.00, 75.00),
-        }
-        model_lower = model.lower()
-        input_price, output_price = 3.00, 15.00
-        for key, (inp, out) in ANTHROPIC_PRICING.items():
-            if key in model_lower:
-                input_price, output_price = inp, out
-                break
-        cost = (prompt_tokens * input_price / 1_000_000) + (
-            completion_tokens * output_price / 1_000_000
+        # -- Resolve model, endpoint, and API key --
+        api_base = session_data.get("api_base") or os.environ.get(
+            "WEE_API_BASE"
         )
-        return cost, self._get_cost_label(cost)
+        api_key = session_data.get("api_key") or os.environ.get(
+            "WEE_API_KEY"
+        )
 
-    def _get_cost_label(self, cost_usd: float) -> str:
-        """Format cost as display label."""
-        if cost_usd == 0.0:
-            return "free"
-        if cost_usd < 0.00001:
-            return f"${cost_usd:.8f}".rstrip("0")
-        if cost_usd < 0.001:
-            return f"${cost_usd:.6f}".rstrip("0")
-        return f"${cost_usd:.4f}".rstrip("0").rstrip(".")
-
-    def _log_token_usage(
-        self,
-        session_id: str,
-        model: str,
-        runtime: str,
-        provider: str,
-        prompt_tokens: int,
-        completion_tokens: int,
-        total_tokens: int,
-        cost_usd: float,
-        duration_ms: int,
-    ):
-        """Append a usage entry to logs/token_usage.jsonl."""
-        import json as _json
-        import time as _time
-
-        try:
-            self.logs_dir.mkdir(parents=True, exist_ok=True)
-            entry = {
-                "timestamp": _time.time(),
-                "session_id": session_id,
-                "model": model,
-                "runtime": runtime,
-                "provider": provider,
-                "prompt_tokens": prompt_tokens,
-                "completion_tokens": completion_tokens,
-                "total_tokens": total_tokens,
-                "cost_usd": cost_usd,
-                "duration_ms": duration_ms,
-            }
-            with open(self.logs_dir / "token_usage.jsonl", "a") as f:
-                f.write(_json.dumps(entry) + "\n")
-        except Exception as e:
-            print(f"[TokenUsage] Failed to log usage: {e}", file=sys.stderr)
-
-    # ── End Issue #128 helpers ─────────────────────────────────────────────────
-
-    # ---- Issue #125 helpers ------------------------------------------------
-
-    def _wee_load_free_config(self) -> dict:
-        """Load wee_free_models.json config. Returns defaults if file missing."""
-        import json as _json
-
-        config_path = Path(__file__).parent / "wee_free_models.json"
-        try:
-            with open(config_path) as f:
-                return _json.load(f)
-        except (FileNotFoundError, _json.JSONDecodeError):
-            return {
-                "max_retries_per_model": 3,
-                "retry_backoff_seconds": [2, 5, 10],
-                "free_model_fallback_chain": [],
-            }
-
-    def _wee_is_free_model(self, model: str) -> bool:
-        """Return True if model is an OpenRouter :free model."""
-        return ":free" in model.lower() and "openrouter" in model.lower()
-
-    def _wee_resolve_endpoint(self, model, session_api_base, session_api_key):
-        """Resolve (api_base, api_key, resolved_model) for a wee model string."""
-        _ollama_host = os.environ.get("OLLAMA_HOST", "192.168.1.101")
-        _ollama_port = os.environ.get("OLLAMA_PORT", "11434")
-        _lmstudio_host = os.environ.get("LMSTUDIO_HOST", "localhost")
-        _lmstudio_port = os.environ.get("LMSTUDIO_PORT", "1234")
-        
+        # Provider presets
         _PRESETS = {
-            "ollama": (f"http://{_ollama_host}:{_ollama_port}/v1", "ollama"),
+            "ollama": ("http://192.168.1.101:11434/v1", "ollama"),
             "openrouter": ("https://openrouter.ai/api/v1", None),
-            "lmstudio": (f"http://{_lmstudio_host}:{_lmstudio_port}/v1", "lm-studio"),
+            "lmstudio": ("http://localhost:1234/v1", "lm-studio"),
         }
-        api_base = session_api_base or os.environ.get("WEE_API_BASE")
-        api_key = session_api_key or os.environ.get("WEE_API_KEY")
+
         resolved_model = model
-        print(f"[wee-runtime] Session model: {model}", file=sys.stderr)
         for prefix, (preset_base, preset_key) in _PRESETS.items():
             if model.lower().startswith(f"{prefix}/"):
-                resolved_model = model[len(prefix) + 1 :]
+                resolved_model = model[len(prefix) + 1:]
                 if not api_base:
                     api_base = preset_base
                 if not api_key and preset_key:
                     api_key = preset_key
                 break
+
         if not api_base:
-            api_base = f"http://{_ollama_host}:{_ollama_port}/v1"
+            api_base = "http://192.168.1.101:11434/v1"
         if not api_key:
-            if "openrouter" in api_base.lower():
-                api_key = os.environ.get("OPENROUTER_API_KEY")
             # Try keyring for OpenRouter
-            if not api_key and "openrouter" in api_base.lower():
+            if "openrouter" in api_base.lower():
                 try:
                     import keyring
-
                     api_key = keyring.get_password("openrouter", "api_key")
                 except Exception:
                     pass
                 if not api_key:
                     api_key = os.environ.get("OPENROUTER_API_KEY")
             if not api_key:
-                if "openrouter" in api_base.lower():
-                    raise ValueError(
-                        "OpenRouter API key not found. Set OPENROUTER_API_KEY "
-                        'env var or store via: python3 -c "import keyring; '
-                        "keyring.set_password('openrouter', 'api_key', "
-                        "'sk-or-...')\""
-                    )
                 api_key = "ollama"
-        return api_base, api_key, resolved_model
 
-    # ---- End Issue #125 helpers ---------------------------------------------
-
-    # ---- Issue #125 helpers ------------------------------------------------
-
-    def _wee_load_free_config(self) -> dict:
-        """Load wee_free_models.json config. Returns defaults if file missing."""
-        import json as _json
-
-        config_path = Path(__file__).parent / "wee_free_models.json"
-        try:
-            with open(config_path) as f:
-                return _json.load(f)
-        except (FileNotFoundError, _json.JSONDecodeError):
-            return {
-                "max_retries_per_model": 3,
-                "retry_backoff_seconds": [2, 5, 10],
-                "free_model_fallback_chain": [],
-            }
-
-    def _wee_is_free_model(self, model: str) -> bool:
-        """Return True if model is an OpenRouter :free model."""
-        return ":free" in model.lower() and "openrouter" in model.lower()
-
-    def _wee_resolve_endpoint(self, model, session_api_base, session_api_key):
-        """Resolve (api_base, api_key, resolved_model) for a wee model string."""
-        _ollama_host = os.environ.get("OLLAMA_HOST", "192.168.1.101")
-        _ollama_port = os.environ.get("OLLAMA_PORT", "11434")
-        _lmstudio_host = os.environ.get("LMSTUDIO_HOST", "localhost")
-        _lmstudio_port = os.environ.get("LMSTUDIO_PORT", "1234")
-        
-        _PRESETS = {
-            "ollama": (f"http://{_ollama_host}:{_ollama_port}/v1", "ollama"),
-            "openrouter": ("https://openrouter.ai/api/v1", None),
-            "lmstudio": (f"http://{_lmstudio_host}:{_lmstudio_port}/v1", "lm-studio"),
-        }
-        api_base = session_api_base or os.environ.get("WEE_API_BASE")
-        api_key = session_api_key or os.environ.get("WEE_API_KEY")
-        resolved_model = model
-        for prefix, (preset_base, preset_key) in _PRESETS.items():
-            if model.lower().startswith(f"{prefix}/"):
-                resolved_model = model[len(prefix) + 1 :]
-                if not api_base:
-                    api_base = preset_base
-                if not api_key and preset_key:
-                    api_key = preset_key
-                break
-        if not api_base:
-            api_base = f"http://{_ollama_host}:{_ollama_port}/v1"
-        if not api_key:
-            if "openrouter" in api_base.lower():
-                try:
-                    import keyring
-
-                    api_key = keyring.get_password("openrouter", "api_key")
-                except Exception:
-                    pass
-            if not api_key:
-                api_key = "ollama"
-        return api_base, api_key, resolved_model
-
-    # ---- End Issue #125 helpers ---------------------------------------------
-
-    def run_wee_native(
-        self,
-        prompt: str,
-        model: str,
-        agent: str,
-        session_id,
-        resume: bool,
-        n8n_session_id: str,
-        timeout=None,
-        render_type: str = "text",
-    ) -> str:
-        """Execute via Wee Native runtime - OpenAI-compatible chat completions.
-
-        Issue #125: 429 retry with backoff + iterative model fallback chain.
-        Uses a for-loop over fallback models — no recursion (fixes B01).
-        Fallback switches are streamed to user for visibility (fixes B02).
-        time.sleep is safe: sync function runs in thread-pool worker (M01).
-        """
-        import json as _json
-        import time as _time
-
-        try:
-            from openai import OpenAI
-        except ImportError:
-            return "Error: openai package not installed. Run: pip install openai"
-
-        session_data = self.get_or_create_session_data(n8n_session_id)
-        effective_timeout = timeout if timeout is not None else self.command_timeout
-        channel = session_data.get("channel", "webui")
-        context_prompt = self.build_agent_context_prompt(
-            prompt, agent, channel, n8n_session_id
+        print(
+            f"[Wee Native] model={resolved_model} api_base={api_base} "
+            f"session={n8n_session_id[:8]}...",
+            file=sys.stderr,
         )
-        _sess_api_base = session_data.get("api_base")
-        _sess_api_key = session_data.get("api_key")
 
-        # Issue #125: build iterative fallback chain (B01: no recursion)
-        _free_cfg = self._wee_load_free_config()
-        _max_retries = _free_cfg.get("max_retries_per_model", 3)
-        _backoff = _free_cfg.get("retry_backoff_seconds", [2, 5, 10])
-        _is_free = self._wee_is_free_model(model)
-        if _is_free:
-            _chain_raw = _free_cfg.get("free_model_fallback_chain", [])
-            _chain = [model] + [m for m in _chain_raw if m.lower() != model.lower()]
-        else:
-            _chain = [model]
+        # Issue #111: Build context prompt with correct args (after model resolution)
+        base_context_prompt = self.build_agent_context_prompt(
+            agent,
+            prompt,
+            n8n_session_id,
+            render_type=render_type,
+            timeout=effective_timeout,
+            runtime="wee",
+            model=resolved_model,
+            channel=channel,
+        )
+        # Issue #111: Augment system prompt with explicit tool capability section
+        # so models that ignore JSON schemas still know tools are available.
+        context_prompt = self._wee_augment_system_prompt_with_tools(base_context_prompt)
 
+
+        # -- Streaming infrastructure --
         stream_buffer = getattr(self, "_stream_buffers", {}).get(n8n_session_id)
 
-        for _chain_idx, _attempt_model in enumerate(_chain):
-            if _chain_idx > 0:
-                # B02: surface fallback model switch to user
-                _fb_short = _attempt_model.split("/")[-1]
-                _fb_msg = (
-                    "\n\u26a0\ufe0f Rate limited \u2014 switching to fallback model "
-                    + _fb_short
-                    + " ("
-                    + str(_chain_idx)
-                    + "/"
-                    + str(len(_chain) - 1)
-                    + ")...\n"
+        # -- Create OpenAI client and call API --
+        client = OpenAI(
+            base_url=api_base,
+            api_key=api_key,
+            timeout=effective_timeout,
+        )
+
+        # -- Issue #108: Load conversation history --
+        messages = self._wee_load_messages(n8n_session_id, context_prompt, resume)
+        messages.append({"role": "user", "content": prompt})
+
+        # -- Tool definitions for agentic loop (Issue #107) --
+        _WEE_TOOLS = [
+            {
+                "type": "function",
+                "function": {
+                    "name": "bash",
+                    "description": "Execute a bash shell command and return its output.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "command": {
+                                "type": "string",
+                                "description": "The bash command to execute",
+                            }
+                        },
+                        "required": ["command"],
+                    },
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "python",
+                    "description": "Execute Python 3 code and return the output.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "code": {
+                                "type": "string",
+                                "description": "The Python code to execute",
+                            }
+                        },
+                        "required": ["code"],
+                    },
+                },
+            },
+        ]
+
+        collected_output = []
+        _tool_call_counter = 0
+        MAX_TOOL_ROUNDS = 10
+
+        try:
+            for round_num in range(MAX_TOOL_ROUNDS + 1):
+                # Build create kwargs — include tools unless on final safety round
+                create_kwargs = {
+                    "model": resolved_model,
+                    "messages": messages,
+                    "stream": True,
+                }
+                if round_num < MAX_TOOL_ROUNDS:
+                    create_kwargs["tools"] = _WEE_TOOLS
+
+                try:
+                    stream = client.chat.completions.create(**create_kwargs)
+                except Exception as tools_err:
+                    # Some models/endpoints may not support tools — retry without
+                    if "tools" in create_kwargs:
+                        print(
+                            f"[Wee Native] Tools not supported, retrying without: {tools_err}",
+                            file=sys.stderr,
+                        )
+                        create_kwargs.pop("tools", None)
+                        stream = client.chat.completions.create(**create_kwargs)
+                    else:
+                        raise
+
+                # Accumulate content and tool calls from streaming response
+                round_content = []
+                tool_calls_acc = {}  # index -> {id, name, arguments}
+
+                for chunk in stream:
+                    if not chunk.choices:
+                        continue
+                    delta = chunk.choices[0].delta
+
+                    # Content tokens — stream to user
+                    if delta.content:
+                        token = delta.content
+                        round_content.append(token)
+                        if stream_buffer:
+                            stream_buffer.push("chunk", {"text": token})
+
+                    # Tool call deltas (Issue #107)
+                    if getattr(delta, "tool_calls", None):
+                        for tc_delta in delta.tool_calls:
+                            idx = tc_delta.index
+                            if idx not in tool_calls_acc:
+                                _tool_call_counter += 1
+                                tool_calls_acc[idx] = {
+                                    "id": getattr(tc_delta, "id", None) or f"tc_wee_{_tool_call_counter}",
+                                    "name": "",
+                                    "arguments": "",
+                                }
+                            if tc_delta.id and not tool_calls_acc[idx]["id"].startswith("tc_wee_"):
+                                pass  # keep first real id
+                            elif tc_delta.id:
+                                tool_calls_acc[idx]["id"] = tc_delta.id
+                            if tc_delta.function:
+                                if tc_delta.function.name:
+                                    tool_calls_acc[idx]["name"] = tc_delta.function.name
+                                if tc_delta.function.arguments:
+                                    tool_calls_acc[idx]["arguments"] += tc_delta.function.arguments
+
+                content_text = "".join(round_content)
+
+                # No tool calls — we have the final answer
+                if not tool_calls_acc:
+                    collected_output.append(content_text)
+                    messages.append({"role": "assistant", "content": content_text})
+                    break
+
+                # -- Tool calls detected (Issues #107 + #109) --
+                print(
+                    f"[Wee Native] Round {round_num + 1}: {len(tool_calls_acc)} tool call(s) detected",
+                    file=sys.stderr,
                 )
-                print("[Wee Native] " + _fb_msg.strip(), file=sys.stderr)
-                if stream_buffer:
-                    stream_buffer.push("chunk", {"text": _fb_msg})
 
                 # Build assistant message with tool_calls for conversation history
                 assistant_tool_calls = []
                 for idx in sorted(tool_calls_acc.keys()):
                     tc = tool_calls_acc[idx]
-                    assistant_tool_calls.append(
-                        {
-                            "id": tc["id"],
-                            "type": "function",
-                            "function": {
-                                "name": tc["name"],
-                                "arguments": tc["arguments"],
-                            },
-                        }
-                    )
+                    assistant_tool_calls.append({
+                        "id": tc["id"],
+                        "type": "function",
+                        "function": {
+                            "name": tc["name"],
+                            "arguments": tc["arguments"],
+                        },
+                    })
 
                 assistant_msg = {
                     "role": "assistant",
@@ -9464,36 +7967,15 @@ User Request:
                     except (ValueError, _json.JSONDecodeError):
                         func_args = {"raw": func_args_str}
 
-                    # Issue #109 / #142: Emit tool start event to SSE stream
+                    # Issue #109: Emit tool start event to SSE stream
                     tc_start_event = {
                         "id": tc_id,
                         "name": func_name,
-                        "event": "detected",
-                        "input": func_args,
+                        "arguments": func_args,
                         "status": "running",
                     }
                     if stream_buffer:
                         stream_buffer.push("tool_call", tc_start_event)
-
-                    # Issue #142: Track tool call in bg_task_mgr for Tasks panel
-                    if bg_task_id and self._bg_task_mgr:
-                        self._bg_task_mgr.append_tool_call(
-                            bg_task_id,
-                            {
-                                "id": tc_id,
-                                "name": func_name,
-                                "input": (
-                                    _json.dumps(func_args)
-                                    if isinstance(func_args, dict)
-                                    else str(func_args)
-                                ),
-                                "status": "running",
-                                "runtime": "wee",
-                                "timestamp": time.strftime(
-                                    "%Y-%m-%dT%H:%M:%SZ", time.gmtime()
-                                ),
-                            },
-                        )
 
                     print(
                         f"[Wee Native] Tool: {func_name}({_json.dumps(func_args)[:200]})",
@@ -9503,79 +7985,35 @@ User Request:
                     # Execute the tool
                     tool_result = self._wee_execute_tool(func_name, func_args, agent)
 
-                    # Issue #109 / #142: Emit tool complete event to SSE stream
+                    # Issue #109: Emit tool complete event to SSE stream
                     tc_done_event = {
                         "id": tc_id,
                         "name": func_name,
-                        "event": "result",
-                        "input": func_args,
-                        "output": tool_result[:2000] if tool_result else "",
+                        "arguments": func_args,
+                        "result": tool_result[:2000] if tool_result else "",
                         "status": "complete",
                     }
                     if stream_buffer:
                         stream_buffer.push("tool_call", tc_done_event)
 
-                    # Issue #142: Update tool call completion in bg_task_mgr
-                    if bg_task_id and self._bg_task_mgr:
-                        self._bg_task_mgr.update_tool_call(
-                            bg_task_id,
-                            tc_id,
-                            status="completed",
-                            output=str(tool_result[:500]) if tool_result else "",
-                        )
-
                     # Append tool result to conversation for next round
-                    messages.append(
-                        {
-                            "role": "tool",
-                            "tool_call_id": tc_id,
-                            "content": tool_result or "No output",
-                        }
-                    )
+                    messages.append({
+                        "role": "tool",
+                        "tool_call_id": tc_id,
+                        "content": tool_result or "No output",
+                    })
 
             else:
                 # All MAX_TOOL_ROUNDS had tool calls with no final text
-                last_tool_results = [
-                    m["content"] for m in messages if m.get("role") == "tool"
-                ]
+                last_tool_results = [m["content"] for m in messages if m.get("role") == "tool"]
                 if last_tool_results:
                     collected_output.append(
-                        "Tool execution completed. Last result:\n"
-                        + last_tool_results[-1][:2000]
+                        "Tool execution completed. Last result:\n" + last_tool_results[-1][:2000]
                     )
                 else:
-                    collected_output.append(
-                        "Max tool rounds reached without final response."
-                    )
+                    collected_output.append("Max tool rounds reached without final response.")
 
             output = "".join(collected_output)
-
-            # Issue #112: Fallback when LLM generates empty synthesis after tool execution.
-            # Some models (e.g. qwen3:8b) return zero text tokens after processing
-            # tool results, yielding output=''. Surface the last tool result instead.
-            if not output.strip():
-                tool_results = [
-                    m["content"]
-                    for m in messages
-                    if m.get("role") == "tool" and m.get("content")
-                ]
-                if tool_results:
-                    last_result = tool_results[-1]
-                    output = f"Tool execution result:\n{last_result[:4000]}"
-                    print(
-                        f"[Wee Native] Empty synthesis fallback: surfacing last tool result ({len(last_result)} chars)",
-                        file=sys.stderr,
-                    )
-                    if stream_buffer:
-                        stream_buffer.push("chunk", {"text": output})
-                elif any(m.get("role") == "tool" for m in messages):
-                    output = "(Tool executed but produced no output)"
-                    print(
-                        "[Wee Native] Empty synthesis fallback: tool produced no output",
-                        file=sys.stderr,
-                    )
-                    if stream_buffer:
-                        stream_buffer.push("chunk", {"text": output})
 
             # Issue #108: Persist conversation history
             self._wee_save_messages(n8n_session_id, messages)
@@ -9585,165 +8023,22 @@ User Request:
                 stream_buffer.push("done", output)
 
             print(
-                "[Wee Native] model="
-                + resolved_model
-                + " api_base="
-                + api_base
-                + " session="
-                + n8n_session_id[:8]
-                + "..."
-                + " (chain "
-                + str(_chain_idx + 1)
-                + "/"
-                + str(len(_chain))
-                + ")",
+                f"[Wee Native] Completed. Output length: {len(output)} chars",
                 file=sys.stderr,
             )
+            return output
 
-            import httpx as _httpx_wee
+        except Exception as e:
+            error_msg = f"Error: Wee native runtime failed: {e}"
+            print(f"[Wee Native] {error_msg}", file=sys.stderr)
 
-            client = OpenAI(
-                base_url=api_base,
-                api_key=api_key,
-                timeout=_httpx_wee.Timeout(
-                    connect=15.0, read=float(effective_timeout), write=30.0, pool=15.0
-                ),
-                max_retries=0,
-            )
-            messages = []
-            if context_prompt:
-                messages.append({"role": "system", "content": context_prompt})
-            messages.append({"role": "user", "content": prompt})
+            # Push error as done sentinel
+            if stream_buffer:
+                stream_buffer.push("done", error_msg)
 
-            collected_output = []
-            _got_429 = False
-            _wee_start = _time.time()
-            _last_usage = [None]
-            _max_attempts = _max_retries if _is_free else 1
+            return error_msg
 
-            for _retry in range(_max_attempts):
-                try:
-                    stream = client.chat.completions.create(
-                        model=resolved_model,
-                        messages=messages,
-                        stream=True,
-                        stream_options={"include_usage": True},
-                    )
-                    for chunk in stream:
-                        if chunk.choices and chunk.choices[0].delta.content:
-                            token = chunk.choices[0].delta.content
-                            collected_output.append(token)
-                            if stream_buffer:
-                                stream_buffer.push("chunk", {"text": token})
-                        if hasattr(chunk, "usage") and chunk.usage is not None:
-                            _last_usage[0] = chunk.usage
-                    _got_429 = False
-                    break  # success
-
-                except Exception as _e:
-                    _e_str = str(_e)
-                    _is_rate_limit = "429" in _e_str or "rate limit" in _e_str.lower()
-                    if _is_rate_limit and _is_free:
-                        _got_429 = True
-                        if _retry < _max_attempts - 1:
-                            _wait = (
-                                _backoff[_retry]
-                                if _retry < len(_backoff)
-                                else (_backoff[-1] if _backoff else 5)
-                            )
-                            _retry_msg = (
-                                "\n\u26a0\ufe0f Rate limited, retrying in "
-                                + str(_wait)
-                                + "s ("
-                                + str(_retry + 1)
-                                + "/"
-                                + str(_max_attempts)
-                                + ")...\n"
-                            )
-                            print("[Wee Native] " + _retry_msg.strip(), file=sys.stderr)
-                            if stream_buffer:
-                                stream_buffer.push("chunk", {"text": _retry_msg})
-                            # M01: time.sleep is correct here — sync function in thread-pool worker
-                            _time.sleep(_wait)
-                    else:
-                        error_msg = "Error: Wee native runtime failed: " + str(_e)
-                        print("[Wee Native] " + error_msg, file=sys.stderr)
-                        if stream_buffer:
-                            stream_buffer.push("done", error_msg)
-                        return error_msg
-
-            if not _got_429:
-                output = "".join(collected_output)
-                try:
-                    _duration_ms = int((_time.time() - _wee_start) * 1000)
-                    if _last_usage[0] is not None:
-                        _u = _last_usage[0]
-                        _pt = getattr(_u, "prompt_tokens", 0) or 0
-                        _ct = getattr(_u, "completion_tokens", 0) or 0
-                        _total = getattr(_u, "total_tokens", _pt + _ct)
-                        _provider = (
-                            "ollama"
-                            if "192.168" in api_base
-                            else "openrouter" if "openrouter" in api_base else "wee"
-                        )
-                        _pricing = (
-                            self._fetch_openrouter_pricing()
-                            if _provider == "openrouter"
-                            else {}
-                        )
-                        _cost_usd, _cost_label = self._calculate_wee_cost(
-                            _attempt_model, _pt, _ct, _pricing
-                        )
-                        self.update_session_field(
-                            n8n_session_id,
-                            "wee_meta",
-                            {
-                                "tokens": _total,
-                                "prompt_tokens": _pt,
-                                "completion_tokens": _ct,
-                                "cost_usd": _cost_usd,
-                                "cost_label": _cost_label,
-                                "model": _attempt_model,
-                                "runtime": "wee",
-                            },
-                        )
-                        self._log_token_usage(
-                            session_id=n8n_session_id,
-                            model=_attempt_model,
-                            runtime="wee",
-                            provider=_provider,
-                            prompt_tokens=_pt,
-                            completion_tokens=_ct,
-                            total_tokens=_total,
-                            cost_usd=_cost_usd,
-                            duration_ms=_duration_ms,
-                        )
-                except Exception as _meta_err:
-                    print(
-                        "[Wee Native] wee_meta error: " + str(_meta_err),
-                        file=sys.stderr,
-                    )
-
-                if stream_buffer:
-                    stream_buffer.push("done", output)
-                print(
-                    "[Wee Native] Completed. Output length: "
-                    + str(len(output))
-                    + " chars",
-                    file=sys.stderr,
-                )
-                return output
-            # _got_429=True — continue outer loop to next fallback model
-
-        # B01: all models exhausted — iterative approach, no stack overflow
-        exhausted_msg = (
-            "\n\u274c All free model fallbacks exhausted. "
-            "Please try again later or switch to a paid model.\n"
-        )
-        print("[Wee Native] " + exhausted_msg.strip(), file=sys.stderr)
-        if stream_buffer:
-            stream_buffer.push("done", exhausted_msg)
-        return exhausted_msg
+    # -- Wee runtime helper methods (Issues #107, #108, #109) --
 
     def _wee_load_messages(
         self,
@@ -9753,9 +8048,9 @@ User Request:
     ) -> list:
         """Load wee conversation history from session map.
 
-        Ollama is stateless — the full conversation must be included in every
-        request. This loads persisted messages from the session_map so
-        multi-turn context is preserved.
+        Issue #108: Ollama is stateless — the full conversation must be
+        included in every request.  This loads persisted messages from the
+        session_map so multi-turn context is preserved.
         """
         if resume:
             session_data = self.load_session_data(n8n_session_id)
@@ -9777,8 +8072,8 @@ User Request:
     def _wee_save_messages(self, n8n_session_id: str, messages: list) -> None:
         """Persist wee conversation history to session map.
 
-        Saves the full message array (system + user + assistant + tool)
-        so the next turn can reconstruct the conversation.
+        Issue #108: Saves the full message array (system + user + assistant +
+        tool) so the next turn can reconstruct the conversation.
         Caps at MAX_WEE_MESSAGES to prevent unbounded growth.
         """
         MAX_WEE_MESSAGES = 100
@@ -9789,10 +8084,7 @@ User Request:
                 if len(messages) > MAX_WEE_MESSAGES:
                     system_msgs = [m for m in messages if m.get("role") == "system"]
                     non_system = [m for m in messages if m.get("role") != "system"]
-                    saved = (
-                        system_msgs
-                        + non_system[-(MAX_WEE_MESSAGES - len(system_msgs)) :]
-                    )
+                    saved = system_msgs + non_system[-(MAX_WEE_MESSAGES - len(system_msgs)):]
                 else:
                     saved = list(messages)
                 # Strip tool_calls from assistant messages for JSON serialization
@@ -9802,29 +8094,15 @@ User Request:
                         mc = dict(m)
                         mc["tool_calls"] = [
                             {
-                                "id": (
-                                    tc.get("id", "")
-                                    if isinstance(tc, dict)
-                                    else getattr(tc, "id", "")
-                                ),
+                                "id": tc.get("id", "") if isinstance(tc, dict) else getattr(tc, "id", ""),
                                 "type": "function",
                                 "function": {
-                                    "name": (
-                                        tc.get("function", {}).get("name", "")
-                                        if isinstance(tc, dict)
-                                        else getattr(
-                                            getattr(tc, "function", None), "name", ""
-                                        )
-                                    ),
-                                    "arguments": (
-                                        tc.get("function", {}).get("arguments", "")
-                                        if isinstance(tc, dict)
-                                        else getattr(
-                                            getattr(tc, "function", None),
-                                            "arguments",
-                                            "",
-                                        )
-                                    ),
+                                    "name": (tc.get("function", {}).get("name", "")
+                                             if isinstance(tc, dict)
+                                             else getattr(getattr(tc, "function", None), "name", "")),
+                                    "arguments": (tc.get("function", {}).get("arguments", "")
+                                                  if isinstance(tc, dict)
+                                                  else getattr(getattr(tc, "function", None), "arguments", "")),
                                 },
                             }
                             for tc in m["tool_calls"]
@@ -9836,7 +8114,7 @@ User Request:
                 self.save_session_map(session_map)
 
     def _wee_augment_system_prompt_with_tools(self, system_prompt: str) -> str:
-        """Append explicit tool capability declaration to system prompt.
+        """Issue #111: Append explicit tool capability declaration to system prompt.
 
         Many Ollama models ignore JSON tool schemas entirely and respond as if
         no tools exist. Explicitly stating tool availability in the system
@@ -9848,11 +8126,11 @@ User Request:
             "perform any action -- do NOT say you cannot do something that these tools enable.\n"
             "\n"
             "**bash** -- Execute a bash shell command and return its output.\n"
-            '  Call: bash tool with {"command": "your shell command here"}\n'
+            "  Call: bash tool with {\"command\": \"your shell command here\"}\n"
             "  Use for: running commands, SSH, file operations, checking system state\n"
             "\n"
             "**python** -- Execute Python 3 code and return its output.\n"
-            '  Call: python tool with {"code": "your python code here"}\n'
+            "  Call: python tool with {\"code\": \"your python code here\"}\n"
             "  Use for: data processing, calculations, scripting, file parsing\n"
             "\n"
             "CRITICAL: When asked to run a command, SSH somewhere, check system status,\n"
@@ -9864,8 +8142,8 @@ User Request:
     def _wee_execute_tool(self, func_name: str, func_args: dict, agent: str) -> str:
         """Execute a tool call from the wee runtime agentic loop.
 
-        Supports bash and python tools. Uses the same _execute_bash_command
-        infrastructure as other runtimes.
+        Issue #107: Supports bash and python tools.  Uses the same
+        _execute_bash_command infrastructure as other runtimes.
         """
         try:
             if func_name == "bash":
@@ -9891,9 +8169,9 @@ User Request:
                     output += ("\n" if output else "") + result.stderr
                 if not output.strip():
                     if result.returncode == 0:
-                        return "\u2713 Executed successfully (exit code: 0)"
+                        return "✓ Executed successfully (exit code: 0)"
                     else:
-                        return f"\u2717 Failed with exit code: {result.returncode}"
+                        return f"✗ Failed with exit code: {result.returncode}"
                 return output.strip()
             else:
                 return f"Error: Unknown tool '{func_name}'. Available: bash, python"
@@ -9901,121 +8179,6 @@ User Request:
             return f"Error: Tool '{func_name}' timed out"
         except Exception as e:
             return f"Error executing {func_name}: {e}"
-
-    @staticmethod
-    def _wee_is_free_model(model: str) -> bool:
-        """Return True if model is an OpenRouter free model (openrouter/free or ends with :free)."""
-        m = model.lower()
-        return m == "openrouter/free" or (
-            m.startswith("openrouter/") and m.endswith(":free")
-        )
-
-    @staticmethod
-    def _wee_load_free_config(config_path=None) -> dict:
-        """Load wee_free_models.json; fall back to hardcoded defaults if absent."""
-        _defaults = {
-            "free_model_fallback_chain": ["openrouter/free"],
-            "max_retries_per_model": 3,
-            "retry_backoff_seconds": [2, 5, 10],
-        }
-        if config_path is None:
-            config_path = Path(__file__).parent / "wee_free_models.json"
-        try:
-            with open(config_path) as f:
-                data = json.load(f)
-            result = dict(_defaults)
-            result.update(data)
-            return result
-        except (FileNotFoundError, json.JSONDecodeError, OSError):
-            return dict(_defaults)
-
-    def _wee_run_attempt(
-        self,
-        client,
-        resolved_model: str,
-        messages: list,
-        stream_buffer,
-        n8n_session_id: str,
-        agent: str,
-        wee_tools: list,
-        max_retries: int,
-        backoff: list,
-        attempt_model: str,
-    ):
-        """Try one model with 429 retry+backoff. Returns (output, is_429_exhausted)."""
-        import time as _time
-
-        create_kwargs = {"stream": True}
-        if wee_tools:
-            create_kwargs["tools"] = wee_tools
-            create_kwargs["tool_choice"] = "auto"
-
-        last_exc = None
-        attempts = max(max_retries, 1)
-        for attempt in range(attempts):
-            try:
-                stream = client.chat.completions.create(
-                    model=resolved_model,
-                    messages=messages,
-                    **create_kwargs,
-                )
-                collected = []
-                tool_calls_acc = {}
-                for chunk in stream:
-                    if not chunk.choices:
-                        continue
-                    delta = chunk.choices[0].delta
-                    if delta.content:
-                        collected.append(delta.content)
-                    if delta.tool_calls:
-                        for tc in delta.tool_calls:
-                            idx = getattr(tc, "index", 0) or 0
-                            if idx not in tool_calls_acc:
-                                tool_calls_acc[idx] = {"id": "", "name": "", "args": ""}
-                            if tc.id:
-                                tool_calls_acc[idx]["id"] += tc.id
-                            if tc.function:
-                                if tc.function.name:
-                                    tool_calls_acc[idx]["name"] += tc.function.name
-                                if tc.function.arguments:
-                                    tool_calls_acc[idx]["args"] += tc.function.arguments
-
-                output = "".join(collected)
-
-                if tool_calls_acc and wee_tools:
-                    for tc_data in tool_calls_acc.values():
-                        try:
-                            func_args = json.loads(tc_data["args"] or "{}")
-                        except json.JSONDecodeError:
-                            func_args = {}
-                        result = self._wee_execute_tool(
-                            tc_data["name"], func_args, agent
-                        )
-                        messages.append(
-                            {
-                                "role": "tool",
-                                "tool_call_id": tc_data["id"],
-                                "content": result,
-                            }
-                        )
-
-                self._wee_save_messages(n8n_session_id, messages)
-                return output, False
-
-            except Exception as e:
-                err_str = str(e)
-                if "429" not in err_str and "rate limit" not in err_str.lower():
-                    return f"Error: {err_str}", False
-                last_exc = e
-                if attempt < attempts - 1:
-                    wait = (
-                        backoff[attempt]
-                        if attempt < len(backoff)
-                        else (backoff[-1] if backoff else 5)
-                    )
-                    _time.sleep(wait)
-
-        return None, True
 
     def _get_cursor_session_id(self, n8n_session_id: str) -> Optional[str]:
         """Return the stored cursor session flag for this n8n session, or None."""
@@ -10155,7 +8318,7 @@ User Request:
             key = n8n_session_id if n8n_session_id else session_id
             return (self.cursor_session_dir / f"{key}.json").exists()
         elif runtime == "wee":
-            # Issue #123: Wee stores conversation history in session_map
+            # Issue #108: Wee stores conversation history in session_map
             data = self.load_session_data(n8n_session_id or session_id)
             return bool(data and data.get("wee_messages"))
         return False
@@ -10291,10 +8454,7 @@ User Request:
     def _execute_background_task(
         self, task_id, session_id, prompt, agent, runtime, model, channel, timeout=None
     ):
-        """Run a background task in the current thread (called from thread pool).
-
-        Implements fallback retry on infrastructure failures (Issue #219).
-        """
+        """Run a background task in the current thread (called from thread pool)."""
         self.get_or_create_session_data(session_id)
         self.update_session_field(session_id, "agent", agent)
         self.update_session_field(session_id, "model", model)
@@ -10304,20 +8464,18 @@ User Request:
         # Background tasks run unattended — grant elevated permissions so
         # SDK runtimes (copilot-sdk, claude-sdk) don't block on approval gates
         self.update_session_field(session_id, "permissions", {"mode": "elevated"})
-        # Issue #142: Store task_id so run_wee_native can track tool calls
-        self.update_session_field(session_id, "bg_task_id", task_id)
         if timeout is not None:
             self.update_session_field(session_id, "timeout", timeout)
-
-        # Primary attempt
-        primary_result = None
-        primary_error = None
         try:
-            primary_result = self.execute(prompt, session_id)
+            result = self.execute(prompt, session_id)
             if self._bg_task_mgr:
-                self._bg_task_mgr.complete_task(task_id, primary_result)
+                self._bg_task_mgr.complete_task(task_id, result)
                 task_rec = self._bg_task_mgr.get_task(task_id)
-                o_sid = task_rec.get("origin_session_id") if task_rec else None
+                o_sid = (
+                    task_rec.get("origin_session_id")
+                    if task_rec
+                    else None
+                )
                 if o_sid:
                     self._bg_task_mgr.push_bg_event(
                         o_sid,
@@ -10332,109 +8490,30 @@ User Request:
                             ),
                         },
                     )
-            return
+
         except Exception as exc:
-            primary_error = str(exc)
-
-        # Fallback retry logic (Issue #219)
-        print(f"[DEBUG] Checking fallback: eligible={self._bg_task_mgr._is_fallback_eligible(primary_error) if self._bg_task_mgr else False}, error={primary_error[:100]}", file=sys.stderr)
-        if self._bg_task_mgr and self._bg_task_mgr._is_fallback_eligible(primary_error):
-            task_rec = self._bg_task_mgr.get_task(task_id)
-            if task_rec:
-                fb_runtime, fb_model = self._bg_task_mgr._resolve_fallback(task_rec)
-                if fb_runtime or fb_model:
-                    fb_rt_label = fb_runtime or runtime
-                    fb_model_label = fb_model or model
-                    logger.warning(
-                        f"[Fallback] Task {task_id}: primary failed ({primary_error[:120]}), "
-                        f"retrying with runtime={fb_rt_label}, model={fb_model_label}"
-                    )
-
-                    # Retry with fallback runtime/model on a fresh session
-                    fallback_session_id = str(uuid4())
-                    self.get_or_create_session_data(fallback_session_id)
-                    self.update_session_field(fallback_session_id, "agent", agent)
-                    self.update_session_field(
-                        fallback_session_id, "model", fb_model or model
-                    )
-                    self.update_session_field(
-                        fallback_session_id, "runtime", fb_runtime or runtime
-                    )
-                    self.update_session_field(fallback_session_id, "channel", channel)
-                    self.update_session_field(fallback_session_id, "render_type", "text")
-                    self.update_session_field(
-                        fallback_session_id, "permissions", {"mode": "elevated"}
-                    )
-                    self.update_session_field(fallback_session_id, "bg_task_id", task_id)
-                    if timeout is not None:
-                        self.update_session_field(fallback_session_id, "timeout", timeout)
-
-                    try:
-                        fallback_result = self.execute(prompt, fallback_session_id)
-                        if self._bg_task_mgr:
-                            self._bg_task_mgr.complete_task(task_id, fallback_result)
-                            task_rec = self._bg_task_mgr.get_task(task_id)
-                            o_sid = task_rec.get("origin_session_id") if task_rec else None
-                            if o_sid:
-                                self._bg_task_mgr.push_bg_event(
-                                    o_sid,
-                                    {
-                                        "task_id": task_id,
-                                        "summary": prompt[:80],
-                                        "status": "completed",
-                                        "agent": agent,
-                                        "timestamp": time.strftime(
-                                            "%Y-%m-%dT%H:%M:%SZ",
-                                            time.gmtime(),
-                                        ),
-                                    },
-                                )
-                        return
-                    except Exception as fb_exc:
-                        # Both attempts failed
-                        combined_error = (
-                            f"Primary: {primary_error[:200]}; "
-                            f"Fallback ({fb_rt_label}): {str(fb_exc)[:200]}"
-                        )
-                        if self._bg_task_mgr:
-                            self._bg_task_mgr.fail_task(task_id, combined_error)
-                            task_rec = self._bg_task_mgr.get_task(task_id)
-                            o_sid = task_rec.get("origin_session_id") if task_rec else None
-                            if o_sid:
-                                self._bg_task_mgr.push_bg_event(
-                                    o_sid,
-                                    {
-                                        "task_id": task_id,
-                                        "summary": prompt[:80],
-                                        "status": "failed",
-                                        "agent": agent,
-                                        "timestamp": time.strftime(
-                                            "%Y-%m-%dT%H:%M:%SZ",
-                                            time.gmtime(),
-                                        ),
-                                    },
-                                )
-                        return
-
-        # Primary failed, no fallback eligible or configured
-        if self._bg_task_mgr:
-            self._bg_task_mgr.fail_task(task_id, primary_error)
-            task_rec = self._bg_task_mgr.get_task(task_id)
-            o_sid = task_rec.get("origin_session_id") if task_rec else None
-            if o_sid:
-                self._bg_task_mgr.push_bg_event(
-                    o_sid,
-                    {
-                        "task_id": task_id,
-                        "summary": prompt[:80],
-                        "status": "failed",
-                        "agent": agent,
-                        "timestamp": time.strftime(
-                            "%Y-%m-%dT%H:%M:%SZ",
-                            time.gmtime(),
-                        ),
-                    },
+            if self._bg_task_mgr:
+                self._bg_task_mgr.fail_task(task_id, str(exc))
+                task_rec = self._bg_task_mgr.get_task(task_id)
+                o_sid = (
+                    task_rec.get("origin_session_id")
+                    if task_rec
+                    else None
                 )
+                if o_sid:
+                    self._bg_task_mgr.push_bg_event(
+                        o_sid,
+                        {
+                            "task_id": task_id,
+                            "summary": prompt[:80],
+                            "status": "failed",
+                            "agent": agent,
+                            "timestamp": time.strftime(
+                                "%Y-%m-%dT%H:%M:%SZ",
+                                time.gmtime(),
+                            ),
+                        },
+                    )
 
     def _dispatch_single_runtime(
         self,
@@ -10453,105 +8532,125 @@ User Request:
         # Touch before dispatch to keep session alive during long operations
         self.touch_session(n8n_session_id)
 
-        handler = self.runtime_executor.get(runtime)
-        if handler is None:
+        if runtime == "copilot":
+            result = self.run_copilot(
+                prompt,
+                model,
+                agent,
+                session_id if can_resume else None,
+                can_resume,
+                n8n_session_id,
+                effective_timeout,
+                render_type,
+            )
+        elif runtime == "copilot-sdk":
+            result = self.run_copilot_sdk(
+                prompt,
+                model,
+                agent,
+                session_id if can_resume else None,
+                can_resume,
+                n8n_session_id,
+                effective_timeout,
+                render_type,
+                mode,
+            )
+        elif runtime == "opencode":
+            result = self.run_opencode(
+                prompt,
+                model,
+                agent,
+                session_id if can_resume else None,
+                can_resume,
+                n8n_session_id,
+                effective_timeout,
+                render_type,
+            )
+        elif runtime == "claude":
+            result = self.run_claude(
+                prompt,
+                model,
+                agent,
+                session_id if can_resume else None,
+                can_resume,
+                n8n_session_id,
+                effective_timeout,
+                render_type,
+                mode,
+            )
+        elif runtime == "claude-sdk":
+            result = self.run_claude_sdk(
+                prompt,
+                model,
+                agent,
+                session_id if can_resume else None,
+                can_resume,
+                n8n_session_id,
+                effective_timeout,
+                render_type,
+                mode,
+            )
+        elif runtime == "gemini":
+            result = self.run_gemini(
+                prompt,
+                model,
+                agent,
+                session_id if can_resume else None,
+                can_resume,
+                n8n_session_id,
+                effective_timeout,
+                render_type,
+            )
+        elif runtime == "codex":
+            result = self.run_codex(
+                prompt,
+                model,
+                agent,
+                session_id if can_resume else None,
+                can_resume,
+                n8n_session_id,
+                effective_timeout,
+                render_type,
+            )
+        elif runtime == "devin":
+            result = self.run_devin(
+                prompt,
+                model,
+                agent,
+                session_id if can_resume else None,
+                can_resume,
+                n8n_session_id,
+                effective_timeout,
+                render_type,
+            )
+        elif runtime == "cursor":
+            result = self.run_cursor(
+                prompt,
+                model,
+                agent,
+                session_id if can_resume else None,
+                can_resume,
+                n8n_session_id,
+                effective_timeout,
+                render_type,
+            )
+        elif runtime == "wee":
+            result = self.run_wee_native(
+                prompt,
+                model,
+                agent,
+                session_id if can_resume else None,
+                can_resume,
+                n8n_session_id,
+                effective_timeout,
+                render_type,
+            )
+        else:
             return f"Error: Unknown runtime '{runtime}'"
-
-        result = handler(
-            prompt,
-            model,
-            agent,
-            session_id if can_resume else None,
-            can_resume,
-            n8n_session_id,
-            effective_timeout,
-            render_type,
-            mode,
-        )
 
         # Touch after dispatch to record completion activity
         self.touch_session(n8n_session_id)
         return result
-
-    def _register_runtime_executors(self) -> None:
-        """Populate runtime_executor with per-runtime handler wrappers.
-
-        Wrappers have a uniform signature:
-            handler(prompt, model, agent, session_id, can_resume,
-                    n8n_session_id, timeout, render_type, mode)
-        Runtimes that do not accept *mode* receive it but ignore it.
-        """
-
-        def _mode_handler(fn):
-            """Pass-through wrapper for API uniformity — all runtime dispatch uses the same 9-arg signature."""
-
-            def _h(
-                prompt,
-                model,
-                agent,
-                session_id,
-                can_resume,
-                n8n_session_id,
-                timeout,
-                render_type,
-                mode,
-            ):
-                return fn(
-                    prompt,
-                    model,
-                    agent,
-                    session_id,
-                    can_resume,
-                    n8n_session_id,
-                    timeout,
-                    render_type,
-                    mode,
-                )
-
-            return _h
-
-        def _no_mode_handler(fn):
-            def _h(
-                prompt,
-                model,
-                agent,
-                session_id,
-                can_resume,
-                n8n_session_id,
-                timeout,
-                render_type,
-                _mode,
-            ):
-                return fn(
-                    prompt,
-                    model,
-                    agent,
-                    session_id,
-                    can_resume,
-                    n8n_session_id,
-                    timeout,
-                    render_type,
-                )
-
-            return _h
-
-        for rt, fn in [
-            ("copilot-sdk", self.run_copilot_sdk),
-            ("claude", self.run_claude),
-            ("claude-sdk", self.run_claude_sdk),
-            ("devin", self.run_devin),
-        ]:
-            self.runtime_executor.register(rt, _mode_handler(fn))
-
-        for rt, fn in [
-            ("copilot", self.run_copilot),
-            ("opencode", self.run_opencode),
-            ("gemini", self.run_gemini),
-            ("codex", self.run_codex),
-            ("cursor", self.run_cursor),
-            ("wee", self.run_wee_native),
-        ]:
-            self.runtime_executor.register(rt, _no_mode_handler(fn))
 
     def execute(self, prompt: str, n8n_session_id: str) -> str:
         """Main execution logic"""
@@ -10612,9 +8711,7 @@ User Request:
         effective_timeout = self.get_effective_timeout(session_data)
         render_type = self.get_render_type(session_data)
         # Get permission mode from session (backward compat with yolo_mode)
-        _perms = (
-            session_data.get("permissions") or {}
-        )  # Handle None from session template
+        _perms = session_data.get("permissions") or {}  # Handle None from session template
         if isinstance(_perms, dict) and _perms.get("mode") in (
             "elevated",
             "restricted",
@@ -10726,7 +8823,6 @@ User Request:
 
         return output
 
-
 def _check_command_result(result: str, error_keywords: List[str]) -> None:
     """Helper function to check command results and exit on error
 
@@ -10742,13 +8838,11 @@ def _check_command_result(result: str, error_keywords: List[str]) -> None:
             print(result, file=sys.stderr)
             sys.exit(1)
 
-
 # ---------------------------------------------------------------------------
 # FastAPI Application
 # ---------------------------------------------------------------------------
 
 _api_auth_manager: Optional["AuthManager"] = None
-
 
 def _send_pairing_code(channel: str, identity: str, code: str) -> bool:
     """Deliver a pairing code. Returns True on success, False on failure."""
@@ -10772,16 +8866,10 @@ def _send_pairing_code(channel: str, identity: str, code: str) -> bool:
                     return True
                 except Exception as _exc:
                     last_exc = _exc
-                    print(
-                        f"[API] Telegram send attempt {attempt}/3 failed: {_exc}",
-                        file=sys.stderr,
-                    )
+                    print(f"[API] Telegram send attempt {attempt}/3 failed: {_exc}", file=sys.stderr)
                     if attempt < 3:
                         time.sleep(2)
-            print(
-                f"[API] All 3 Telegram send attempts failed: {last_exc}",
-                file=sys.stderr,
-            )
+            print(f"[API] All 3 Telegram send attempts failed: {last_exc}", file=sys.stderr)
             return False
         elif channel == "webex":
             config_path = os.path.join(script_dir, "webex_config.json")
@@ -10793,28 +8881,13 @@ def _send_pairing_code(channel: str, identity: str, code: str) -> bool:
                 or os.getenv("WEBEX_BOT_TOKEN", "")
             )
             msg = f"Your pairing code is: **{code}**\nIt expires in 5 minutes."
-            # Route to the correct WebEx target based on identity format:
-            #   email       → toPersonEmail
-            #   person ID   → toPersonId  (base64 of ciscospark://us/PEOPLE/...)
-            #   anything else → roomId
-            import base64 as _b64
+            # If identity looks like an email, use toPersonEmail; otherwise treat as roomId
             import re as _re
 
             if _re.match(r"[^@]+@[^@]+\.[^@]+", identity):
                 payload = {"toPersonEmail": identity, "text": msg, "markdown": msg}
             else:
-                # Detect WebEx person IDs (base64-encoded ciscospark://us/PEOPLE/...)
-                _is_person_id = False
-                try:
-                    _padded = identity + "=" * (-len(identity) % 4)
-                    _decoded = _b64.b64decode(_padded).decode("utf-8", errors="replace")
-                    _is_person_id = "/PEOPLE/" in _decoded
-                except Exception:
-                    pass
-                if _is_person_id:
-                    payload = {"toPersonId": identity, "text": msg, "markdown": msg}
-                else:
-                    payload = {"roomId": identity, "text": msg, "markdown": msg}
+                payload = {"roomId": identity, "text": msg, "markdown": msg}
             import requests as _req
 
             resp = _req.post(
@@ -10835,8 +8908,6 @@ def _send_pairing_code(channel: str, identity: str, code: str) -> bool:
             return True
     except Exception as exc:  # noqa: BLE001
         print(f"[API] Warning: could not send pairing code via {channel}: {exc}")
-        return False
-
 
 def _get_telegram_username(user_id: str):
     """Look up @username for a numeric Telegram user_id in telegram_config.json.
@@ -10851,7 +8922,6 @@ def _get_telegram_username(user_id: str):
         return username.lstrip("@") if username else None
     except Exception:
         return None
-
 
 def _ddg_image_search(query: str, max_results: int = 4) -> list:
     """Fetch image results from DuckDuckGo without an API key.
@@ -10887,7 +8957,7 @@ def _ddg_image_search(query: str, max_results: int = 4) -> list:
                 "o": "json",
                 "l": "us-en",
                 "s": "0",
-                "": ",,,,,",
+                "f": ",,,,,",
                 "p": "1",
                 "vqd": vqd,
             },
@@ -10909,7 +8979,6 @@ def _ddg_image_search(query: str, max_results: int = 4) -> list:
     except Exception:
         return []
 
-
 def _resolve_telegram_identity(username: str):
     """Reverse-lookup @username in telegram_config.json user_pairings.
     Returns numeric user_id string, or None if not found (user must message bot first).
@@ -10925,7 +8994,6 @@ def _resolve_telegram_identity(username: str):
         return None
     except Exception:
         return None
-
 
 def _compute_bg_task_defaults(session_map, identity, channel):
     """Compute inheritable defaults from existing sessions for a new background task.
@@ -10991,10 +9059,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
     )
     from fastapi.middleware.cors import CORSMiddleware
     from fastapi.responses import (
-        FileResponse,
-        JSONResponse,
-        Response,
-        StreamingResponse,
+        FileResponse, JSONResponse, Response, StreamingResponse
     )
     from fastapi.staticfiles import StaticFiles
     from pydantic import BaseModel, field_validator
@@ -11046,7 +9111,6 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
     session_mgr._bg_task_mgr = bg_task_mgr
     # Expose for testing/introspection (read-only reference)
     import sys as _sys
-
     _sys.modules[__name__]._session_mgr = session_mgr
     usage_tracker = RuntimeUsageTracker()
 
@@ -11268,9 +9332,9 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 raise ValueError("Query must be 10,000 characters or less")
             return v
 
+
     class QueryRequest(BaseModel):
         """One-shot query without session management."""
-
         prompt: str
         runtime: Optional[str] = None
         model: Optional[str] = None
@@ -11283,7 +9347,6 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             if len(v) > 10000:
                 raise ValueError("Prompt must be 10,000 characters or less")
             return v
-
     # ---- authentication dependency ----
     async def authenticate(
         request: Request,
@@ -11337,10 +9400,10 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 await asyncio.sleep(300)
                 auth_mgr.cleanup_expired()
                 rate_limiter.cleanup()
-                await asyncio.to_thread(bg_task_mgr.cleanup_old)
+                bg_task_mgr.cleanup_old()
                 # Periodic reconciliation: promote queued tasks if slots available
                 try:
-                    _all = await asyncio.to_thread(bg_task_mgr.list_all_tasks)
+                    _all = bg_task_mgr.list_all_tasks()
                     _queued_periodic = [t for t in _all if t["status"] == "queued"]
                     _queued_periodic.sort(key=lambda t: t.get("created_at", ""))
                     for _qt in _queued_periodic:
@@ -11352,15 +9415,11 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                             "max_concurrent",
                             BackgroundTaskManager.MAX_TASKS_PER_USER,
                         )
-                        _rn = await asyncio.to_thread(
-                            bg_task_mgr.count_running, _ch, _uid, _agent
-                        )
+                        _rn = bg_task_mgr.count_running(_ch, _uid, _agent)
                         if _rn >= _mc:
                             continue
                         _nsid = str(uuid4())
-                        await asyncio.to_thread(
-                            bg_task_mgr.promote_queued_task, _qt["task_id"], _nsid
-                        )
+                        bg_task_mgr.promote_queued_task(_qt["task_id"], _nsid)
                         print(
                             f"[Periodic] Promoting queued task {_qt['task_id']}",
                             flush=True,
@@ -11377,7 +9436,6 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                             _qt["user_identity"],
                             _qt.get("timeout") or 900,
                             _qt.get("notify", True),
-                            _qt.get("permission_mode", "restricted"),
                         )
                 except Exception as _rec_exc:
                     print(
@@ -11416,16 +9474,16 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                     )
 
         # Reconcile orphaned tasks from previous process lifetime
-        _reconcile_result = await asyncio.to_thread(bg_task_mgr.reconcile_stale_tasks)
+        _reconcile_result = bg_task_mgr.reconcile_stale_tasks()
         if _reconcile_result["stale_running"] or _reconcile_result["queued_ready"]:
             print(
-                "[Startup] Task reconciliation: "
+                f"[Startup] Task reconciliation: "
                 f"{_reconcile_result['stale_running']} stale running → failed, "
                 f"{_reconcile_result['queued_ready']} queued tasks ready for promotion",
                 flush=True,
             )
             # Promote queued tasks that now have available slots
-            _all_tasks = await asyncio.to_thread(bg_task_mgr.list_all_tasks)
+            _all_tasks = bg_task_mgr.list_all_tasks()
             _queued = [t for t in _all_tasks if t["status"] == "queued"]
             _queued.sort(key=lambda t: t.get("created_at", ""))
             for _qt in _queued:
@@ -11436,15 +9494,11 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 _max_conc = _agent_config.get(
                     "max_concurrent", BackgroundTaskManager.MAX_TASKS_PER_USER
                 )
-                _running_now = await asyncio.to_thread(
-                    bg_task_mgr.count_running, _channel, _identity, _agent
-                )
+                _running_now = bg_task_mgr.count_running(_channel, _identity, _agent)
                 if _running_now >= _max_conc:
                     continue
                 _new_sid = str(uuid4())
-                await asyncio.to_thread(
-                    bg_task_mgr.promote_queued_task, _qt["task_id"], _new_sid
-                )
+                bg_task_mgr.promote_queued_task(_qt["task_id"], _new_sid)
                 print(
                     f"[Startup] Promoting queued task {_qt['task_id']} → running",
                     flush=True,
@@ -11461,7 +9515,6 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                     _qt["user_identity"],
                     _qt.get("timeout") or 900,
                     _qt.get("notify", True),
-                    _qt.get("permission_mode", "restricted"),
                 )
 
         cleanup_task = asyncio.ensure_future(_periodic_cleanup())
@@ -11513,15 +9566,11 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
 
     # ---- endpoints ----
 
+    # ---- endpoints ----
+
     @app.get("/api/v1/agents")
-    async def get_agents(request: Request):
+    async def get_agents():
         """Return list of configured agents for WebUI."""
-        await authenticate(
-            request,
-            authorization=request.headers.get("authorization"),
-            x_user_identity=request.headers.get("x-user-identity"),
-            x_auth_channel=request.headers.get("x-auth-channel"),
-        )
         try:
             agents = []
             for name, info in session_mgr.AGENTS.items():
@@ -11538,8 +9587,6 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
 
     @app.get("/api/v1/health")
     async def health():
-        # Do NOT call load_session_map() or any disk I/O here —
-        # health must return immediately regardless of task store size.
         return {
             "status": "ok",
             "uptime_seconds": time.time() - _start_time,
@@ -11547,6 +9594,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             "environment": APP_ENV,
             "agents_loaded": len(session_mgr.AGENTS),
             "scheduler_enabled": SCHEDULER_ENABLED,
+            "active_sessions": len(session_mgr.load_session_map()),
         }
 
     @app.get("/api/v1/config")
@@ -11558,10 +9606,24 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             "app_env": APP_ENV,
         }
 
+    @app.get("/api/v1/agents")
+    async def get_agents():
+        """Return available agents from agents.json."""
+        agents = []
+        for name, info in session_mgr.AGENTS.items():
+            agents.append(
+                {
+                    "name": name,
+                    "description": info.get("description", ""),
+                    "path": info.get("path", ""),
+                }
+            )
+        return {"agents": agents}
+
     @app.get("/api/v1/runtimes")
     async def get_runtimes():
         """Return list of available runtimes on this system.
-
+        
         Only runtimes that are actually installed/available are returned.
         This prevents the WebUI from showing runtimes that cannot be used.
         """
@@ -11589,7 +9651,6 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             "cursor",
             "wee",
         }
-        known_runtimes.update(load_model_manifest().keys())
         if runtime not in known_runtimes:
             return {
                 "runtime": runtime,
@@ -11605,9 +9666,6 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             models = []
             for group_name, model_ids in raw.items():
                 for model_id in model_ids:
-                    # Support both flat strings and (id, desc, aliases) tuples
-                    if isinstance(model_id, tuple):
-                        model_id = model_id[0]
                     label = (
                         session_mgr._get_model_description(model_id, runtime)
                         or model_id
@@ -11616,44 +9674,6 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             return {"runtime": runtime, "models": models}
         except Exception as e:
             return {"runtime": runtime, "models": [], "error": str(e)}
-
-    @app.get("/api/v1/wee/models")
-    async def get_wee_models(force: bool = False):
-        """Return discovered wee models with enriched metadata.
-
-        Queries Ollama and OpenAI-compatible hosts, returns models grouped
-        by provider with size, status, and modification time.
-
-        Query params:
-            force: bypass cache and re-discover (default false)
-        """
-        try:
-            from wee_model_discovery import get_discovery
-
-            discovery = get_discovery()
-            enriched = discovery.discover_all_enriched(force=force)
-            host_status = discovery.get_host_status()
-            return {
-                "runtime": "wee",
-                "providers": enriched,
-                "host_status": host_status,
-            }
-        except Exception as e:
-            return {"runtime": "wee", "providers": {}, "error": str(e)}
-
-    @app.post("/api/v1/wee/models/refresh")
-    async def refresh_wee_models():
-        """Force refresh the wee model cache."""
-        try:
-            from wee_model_discovery import get_discovery
-
-            discovery = get_discovery()
-            discovery.invalidate_cache()
-            result = discovery.discover_all(force=True)
-            total = sum(len(v) for v in result.values())
-            return {"status": "refreshed", "total_models": total, "providers": result}
-        except Exception as e:
-            return {"status": "error", "error": str(e)}
 
     @app.post("/api/v1/auth/request-pairing")
     async def request_pairing(body: PairingRequest, request: Request):
@@ -11916,7 +9936,9 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
 
         # Strip ANSI escape codes from runtime output (#68)
         _ansi_re = re.compile(
-            r"\x1b\[[0-9;]*[a-zA-Z]" r"|\x1b\][^\x07]*\x07" r"|\x1b\([A-Z0-9]"
+            r"\x1b\[[0-9;]*[a-zA-Z]"
+            r"|\x1b\][^\x07]*\x07"
+            r"|\x1b\([A-Z0-9]"
         )
         if result and isinstance(result, str):
             result = _ansi_re.sub("", result)
@@ -12020,13 +10042,13 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             if session_id not in session_ids_in_history:
                 print(
                     f"[Session Recovery] Stream: session {session_id} not in "
-                    "history — returning 404",
+                    f"history — returning 404",
                     file=sys.stderr,
                 )
                 raise HTTPException(status_code=404, detail="Session not found")
             print(
                 f"[Session Recovery] Stream: restored session {session_id} "
-                "from chat history — backend will be recreated",
+                f"from chat history — backend will be recreated",
                 file=sys.stderr,
             )
             existing = session_mgr.get_or_create_session_data(
@@ -12155,17 +10177,14 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
 
                 session_data = session_mgr.get_or_create_session_data(session_id)
                 runtime = session_data.get("runtime", "copilot")
-                _done_evt = {
-                    "type": "done",
-                    "response": result,
-                    "runtime": runtime,
-                    "model": session_data.get("model"),
-                }
-                # Issue #160: Include wee_meta (token usage + cost) if available
-                _wm = session_data.pop("_wee_meta", None)
-                if _wm:
-                    _done_evt["wee_meta"] = _wm
-                done_payload = _json.dumps(_done_evt)
+                done_payload = _json.dumps(
+                    {
+                        "type": "done",
+                        "response": result,
+                        "runtime": runtime,
+                        "model": session_data.get("model"),
+                    }
+                )
                 yield f"data: {done_payload}\n\n"
                 done_delivered = True
             finally:
@@ -12260,17 +10279,16 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                             session_id
                         )
                         runtime = session_data.get("runtime", "copilot")
-                        _done_evt = {
-                            "type": "done",
-                            "response": (data if isinstance(data, str) else str(data)),
-                            "runtime": runtime,
-                            "model": session_data.get("model"),
-                        }
-                        # Issue #160: Include wee_meta if available
-                        _wm = session_data.pop("_wee_meta", None)
-                        if _wm:
-                            _done_evt["wee_meta"] = _wm
-                        done_payload = _json.dumps(_done_evt)
+                        done_payload = _json.dumps(
+                            {
+                                "type": "done",
+                                "response": (
+                                    data if isinstance(data, str) else str(data)
+                                ),
+                                "runtime": runtime,
+                                "model": session_data.get("model"),
+                            }
+                        )
                         yield f"data: {done_payload}\n\n"
                         return
 
@@ -12279,17 +10297,14 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                     session_data = session_mgr.get_or_create_session_data(session_id)
                     runtime = session_data.get("runtime", "copilot")
                     result = buf.done_result if isinstance(buf.done_result, str) else ""
-                    _done_evt = {
-                        "type": "done",
-                        "response": result,
-                        "runtime": runtime,
-                        "model": session_data.get("model"),
-                    }
-                    # Issue #160: Include wee_meta if available
-                    _wm = session_data.pop("_wee_meta", None)
-                    if _wm:
-                        _done_evt["wee_meta"] = _wm
-                    done_payload = _json.dumps(_done_evt)
+                    done_payload = _json.dumps(
+                        {
+                            "type": "done",
+                            "response": result,
+                            "runtime": runtime,
+                            "model": session_data.get("model"),
+                        }
+                    )
                     yield f"data: {done_payload}\n\n"
                     return
 
@@ -12320,17 +10335,14 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 session_data = session_mgr.get_or_create_session_data(session_id)
                 runtime = session_data.get("runtime", "copilot")
                 result = buf.done_result if isinstance(buf.done_result, str) else ""
-                _done_evt = {
-                    "type": "done",
-                    "response": result,
-                    "runtime": runtime,
-                    "model": session_data.get("model"),
-                }
-                # Issue #160: Include wee_meta if available
-                _wm = session_data.pop("_wee_meta", None)
-                if _wm:
-                    _done_evt["wee_meta"] = _wm
-                done_payload = _json.dumps(_done_evt)
+                done_payload = _json.dumps(
+                    {
+                        "type": "done",
+                        "response": result,
+                        "runtime": runtime,
+                        "model": session_data.get("model"),
+                    }
+                )
                 yield f"data: {done_payload}\n\n"
             finally:
                 buf.remove_consumer(queue)
@@ -12646,7 +10658,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         ".png",
         ".jpg",
         ".jpeg",
-        ".gi",
+        ".gif",
         ".webp",
         ".svg",
         ".ico",
@@ -12667,7 +10679,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         ".toml",
         ".cfg",
         ".ini",
-        ".con",
+        ".conf",
         ".sh",
         ".bash",
         ".zsh",
@@ -12702,7 +10714,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         ".dockerignore",
         ".csv",
         ".log",
-        ".dif",
+        ".diff",
         ".patch",
         "",  # extensionless files (Makefile, Dockerfile, etc.)
     }
@@ -12974,18 +10986,17 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         agent: Optional[str] = None
         runtime: Optional[str] = None
         model: Optional[str] = None
-        fallback_runtime: Optional[str] = None  # Issue #219: fallback on infrastructure errors
-        fallback_model: Optional[str] = None  # Issue #219: fallback on infrastructure errors
         timeout: Optional[int] = None
         notify: Optional[bool] = None
         permission_mode: Optional[str] = (
             None  # elevated, restricted (default), sandboxed
         )
-        yolo: Optional[bool] = None  # shorthand for permission_mode="elevated"
         description: Optional[str] = (
             None  # human-readable task name shown in Agents panel
         )
-        origin_session_id: Optional[str] = None  # chat session that initiated this task
+        origin_session_id: Optional[str] = (
+            None  # chat session that initiated this task
+        )
 
         @field_validator("prompt")
         @classmethod
@@ -13003,20 +11014,18 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         output_preview=None,
         error=None,
         notify: bool = True,
-        is_critical: bool = False,
     ):
-        """Emit a background task completion notification via notification_mgr.
-
-        When ``is_critical`` is True the notification bypasses the global
-        suppression toggle (used for heartbeat alerts and system crashes).
-        """
+        """Emit a background task completion notification via notification_mgr."""
         if notification_mgr is None:
             return
         try:
-            # Re-check per-identity mute preference at emit time
-            # (user may have muted after the task was created).
-            if notify and not is_critical:
-                if notification_mgr.is_muted(user_identity):
+            # Re-check per-identity AND global mute preference at emit time
+            # (user may have muted after the task was created, or muted from
+            # a different channel whose identity doesn't match).
+            if notify:
+                if notification_mgr.is_muted(
+                    user_identity
+                ) or notification_mgr.is_muted("_global"):
                     notify = False
 
             user_key = bg_task_mgr._user_key(channel, user_identity)
@@ -13029,11 +11038,12 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 output_preview=output_preview,
                 error=error,
                 skip_external=not notify,
-                is_critical=is_critical,
             )
             # Push in-thread event to originating session
             task = bg_task_mgr.get_task(task_id)
-            origin_sid = task.get("origin_session_id") if task else None
+            origin_sid = (
+                task.get("origin_session_id") if task else None
+            )
             if origin_sid:
                 bg_task_mgr.push_bg_event(
                     origin_sid,
@@ -13041,7 +11051,11 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                         "task_id": task_id,
                         "summary": prompt[:80],
                         "status": status,
-                        "agent": (task.get("agent", "") if task else ""),
+                        "agent": (
+                            task.get("agent", "")
+                            if task
+                            else ""
+                        ),
                         "timestamp": time.strftime(
                             "%Y-%m-%dT%H:%M:%SZ",
                             time.gmtime(),
@@ -13076,12 +11090,12 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         )
 
         try:
-            argv = _split_command_args(command)
             result = _sp.run(
-                argv,
+                command,
                 capture_output=True,
                 text=True,
                 timeout=timeout,
+                shell=True,
                 cwd=working_dir,
             )
 
@@ -13101,17 +11115,18 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 logger.error(
                     f"[Command Mode] Run Now job {job_id} failed: exit code {result.returncode}"
                 )
-        except ValueError as e:
-            bg_task_mgr.fail_task(task_id, str(e))
-            logger.error(f"[Command Mode] Run Now job {job_id} invalid command: {e}")
         except _sp.TimeoutExpired:
-            bg_task_mgr.fail_task(task_id, f"Command timed out after {timeout}s")
+            bg_task_mgr.fail_task(
+                task_id, f"Command timed out after {timeout}s"
+            )
             logger.error(
                 f"[Command Mode] Run Now job {job_id} timed out after {timeout}s"
             )
         except Exception as e:
             bg_task_mgr.fail_task(task_id, str(e))
-            logger.error(f"[Command Mode] Run Now job {job_id} exception: {e}")
+            logger.error(
+                f"[Command Mode] Run Now job {job_id} exception: {e}"
+            )
 
         # Save result to scheduler logs/results for consistency
         try:
@@ -13126,7 +11141,9 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 error=(task_rec or {}).get("error", ""),
             )
             status_label = "succeeded" if success else "failed"
-            sched._log_job(job_id, f"Run Now (command mode) {status_label}")
+            sched._log_job(
+                job_id, f"Run Now (command mode) {status_label}"
+            )
         except Exception as exc:
             logger.warning(
                 f"[Command Mode] Could not save scheduler result for {job_id}: {exc}"
@@ -13144,8 +11161,6 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         timeout: int = None,
         notify: bool = True,
         permission_mode: str = "restricted",
-        fallback_runtime: str = None,  # Issue #219
-        fallback_model: str = None,  # Issue #219
     ):
         """Blocking function that runs a background task in a subprocess.
         Called from a thread pool executor.
@@ -13162,7 +11177,6 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         import json as _json
         import re as _re
         import subprocess
-        from uuid import uuid4
 
         _tool_call_counter = 0
 
@@ -13421,10 +11435,10 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             context_prompt += (
                 f"\n\n[STEERING] You are background task `{task_id}`. Periodically "
                 f"(every 3-5 tool calls), check the file `{steering_path}` for new "
-                "instructions from the user. If the file exists and has content, read "
-                "it, incorporate the guidance into your current work, then continue. "
-                "New instructions are appended with timestamps -- only act on ones you "
-                "have not seen yet. This is how the user steers your work in real time."
+                f"instructions from the user. If the file exists and has content, read "
+                f"it, incorporate the guidance into your current work, then continue. "
+                f"New instructions are appended with timestamps -- only act on ones you "
+                f"have not seen yet. This is how the user steers your work in real time."
             )
 
             # ── Build runtime-specific command ──────────────────────────
@@ -13432,11 +11446,6 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             # Previously all background tasks used copilot; now we dispatch
             # to the correct binary so the chosen runtime actually executes.
             from shutil import which as _which_bin
-
-            # Set agent working directory for all runtimes
-            agent_dir = session_mgr.AGENTS.get(
-                agent, session_mgr.AGENTS.get("orchestrator", {})
-            ).get("path", os.getcwd())
 
             if runtime == "gemini":
                 _gemini_bin = _which_bin("gemini") or "gemini"
@@ -13479,7 +11488,6 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                     context_prompt,
                     "--output-format",
                     "stream-json",
-                    "--verbose",
                     "--model",
                     model,
                     "--permission-mode",
@@ -13491,10 +11499,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                     if hasattr(session_mgr, "devin_bin") and session_mgr.devin_bin
                     else (_which_bin("devin") or "devin")
                 )
-                # Devin CLI valid values: normal, dangerous, bypass (NOT "auto").
-                # Background tasks are non-interactive (no human to approve),
-                # so always use "dangerous" to prevent tool call rejections.
-                _devin_perm = "dangerous"
+                _devin_perm = "dangerous" if permission_mode == "elevated" else "auto"
                 cmd = [_devin_bin, "-p", "--permission-mode", _devin_perm]
                 if model:
                     cmd.extend(["--model", model])
@@ -13510,28 +11515,25 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 if not _cursor_model or not session_mgr.get_model_from_name(
                     _cursor_model, "cursor"
                 ):
-                    _cursor_model = os.environ.get("CURSOR_DEFAULT_MODEL", "auto")
+                    _cursor_model = os.environ.get(
+                        "CURSOR_DEFAULT_MODEL", "auto"
+                    )
                 cmd = [_cursor_bin, "-p", "--trust"]
                 if permission_mode == "elevated":
                     cmd.append("--yolo")
                 cmd.extend(["--model", _cursor_model])
                 cmd.extend(["--workspace", agent_dir])
                 cmd.extend(["--", context_prompt])
-            elif runtime in ("wee", "openai"):
-                # Wee native runtime - uses standalone script with OpenAI SDK.
-                # "openai" is an accepted alias for "wee" since both target the
-                # wee_runtime.py OpenAI-compatible execution path.
+            elif runtime == "wee":
+                # Wee native runtime - uses standalone script with OpenAI SDK
                 _wee_script = os.path.join(
                     os.path.dirname(os.path.abspath(__file__)),
                     "wee_runtime.py",
                 )
                 cmd = [
-                    sys.executable,
-                    _wee_script,
-                    "--model",
-                    model,
-                    "--timeout",
-                    str(timeout or 300),
+                    sys.executable, _wee_script,
+                    "--model", model,
+                    "--timeout", str(timeout or 300),
                 ]
                 # Resolve api_base and api_key from session/env
                 _wee_api_base = os.environ.get("WEE_API_BASE", "")
@@ -13542,24 +11544,6 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                     cmd.extend(["--api-key", _wee_api_key])
                 cmd.extend(["--system-prompt", context_prompt])
                 cmd.append(prompt)
-            elif runtime == "claude-sdk" or runtime == "copilot-sdk":
-                # SDK runtimes (claude-sdk, copilot-sdk) require in-process execution
-                # so we invoke agent_manager.py which will handle them internally
-                agent_manager_script = os.path.join(
-                    os.path.dirname(os.path.abspath(__file__)), "agent_manager.py"
-                )
-                cmd = [
-                    sys.executable,
-                    agent_manager_script,
-                    "--runtime",
-                    runtime,
-                    "--model",
-                    model,
-                    "--agent",
-                    agent,
-                    context_prompt,
-                    session_id or str(uuid4()),
-                ]
             else:
                 # Default: copilot runtime
                 copilot_bin = (
@@ -13578,6 +11562,11 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 ]
                 if permission_mode == "elevated":
                     cmd.extend(["--allow-all-paths", "--yolo"])
+
+            # Set agent working directory for all runtimes
+            agent_dir = session_mgr.AGENTS.get(
+                agent, session_mgr.AGENTS.get("orchestrator", {})
+            ).get("path", os.getcwd())
 
             proc_timeout = (timeout or 900) + 30
             env = {
@@ -13607,104 +11596,9 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             stderr_lines = []
 
             def _drain_stderr():
-                """
-                Drain stderr from the process.
-                For Claude runtime (stream-json), stderr contains stream_event JSON
-                that needs to be parsed for tool calls, including content_block_delta events.
-                For other runtimes, stderr is just collected as plain text.
-                
-                Issue #230: Parse full Claude stream events from stderr, not just content_block_start.
-                Track active tool calls and accumulate input_json_delta parts into tool_calls.
-                Do NOT leak raw JSON into output_lines if it's valid structured protocol.
-                """
-                nonlocal _tool_call_counter
-                _active_tool_calls = {}  # Maps cb_index -> {"id": id, "name": name, "input_parts": [...]}
-                
                 try:
                     for err_line in process.stderr:
-                        err_text = err_line.rstrip("\n\r")
-                        if not err_text:
-                            continue
                         stderr_lines.append(err_line)
-                        
-                        # For Claude (stream-json), parse stderr as structured events
-                        parsed_as_event = False
-                        if runtime == "claude" and err_text.strip().startswith("{"):
-                            try:
-                                _obj = _json.loads(err_text.strip())
-                                _otype = _obj.get("type", "")
-                                
-                                if _otype == "stream_event":
-                                    parsed_as_event = True
-                                    _event = _obj.get("event") or {}
-                                    _inner = _event.get("type", "")
-                                    cb_index = _event.get("index", 0)
-                                    
-                                    if _inner == "content_block_start":
-                                        _cb = _event.get("content_block") or {}
-                                        if _cb.get("type") == "tool_use":
-                                            _tool_call_counter += 1
-                                            tool_id = _cb.get("id", f"bg_{task_id[:8]}_{_tool_call_counter}")
-                                            tc = {
-                                                "id": tool_id,
-                                                "name": _cb.get("name", "tool"),
-                                                "input": _json.dumps(_cb.get("input", {})),
-                                                "status": "running",
-                                                "runtime": runtime,
-                                                "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-                                            }
-                                            bg_task_mgr.append_tool_call(task_id, tc)
-                                            # Track for delta accumulation; start empty because
-                                            # content_block_start always sends input:{} and the
-                                            # real data arrives via input_json_delta deltas.
-                                            _active_tool_calls[cb_index] = {
-                                                "id": tool_id,
-                                                "name": _cb.get("name", "tool"),
-                                                "input_parts": [],
-                                            }
-                                    
-                                    elif _inner == "content_block_delta":
-                                        delta = _event.get("delta") or {}
-                                        delta_type = delta.get("type")
-                                        if delta_type == "input_json_delta":
-                                            partial = delta.get("partial_json", "")
-                                            if cb_index in _active_tool_calls and partial:
-                                                _active_tool_calls[cb_index]["input_parts"].append(partial)
-                                                # Update tool call with accumulated partial
-                                                full_input_so_far = "".join(_active_tool_calls[cb_index]["input_parts"])
-                                                bg_task_mgr.update_tool_call(
-                                                    task_id,
-                                                    _active_tool_calls[cb_index]["id"],
-                                                    input=full_input_so_far,
-                                                )
-                                    
-                                    elif _inner == "content_block_stop":
-                                        if cb_index in _active_tool_calls:
-                                            tc_info = _active_tool_calls.pop(cb_index)
-                                            full_input = "".join(tc_info["input_parts"])
-                                            try:
-                                                parsed_input = _json.loads(full_input) if full_input else {}
-                                                bg_task_mgr.update_tool_call(
-                                                    task_id,
-                                                    tc_info["id"],
-                                                    status="completed",
-                                                    input=_json.dumps(parsed_input),
-                                                )
-                                            except (ValueError, KeyError):
-                                                bg_task_mgr.update_tool_call(
-                                                    task_id,
-                                                    tc_info["id"],
-                                                    status="completed",
-                                                    input=full_input,
-                                                )
-                            except (ValueError, KeyError, TypeError):
-                                # Not valid JSON or missing expected fields — treat as plain stderr
-                                parsed_as_event = False
-                        
-                        # Only append to output_lines if NOT a successfully parsed stream_event
-                        # This prevents raw JSON from polluting the live log view
-                        if not parsed_as_event:
-                            bg_task_mgr.append_output(task_id, f"[stderr] {err_text}")
                 except Exception:
                     pass
 
@@ -13715,47 +11609,8 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             start_time = time.time()
 
             for line in process.stdout:
-                line_text = line.rstrip("\n\r")
-
-                # Issue #142: Handle wee runtime structured tool call events
-                # These JSON lines are for tool tracking only — skip them from output
-                if runtime == "wee" and line_text.strip().startswith('{"__wee_tc__"'):
-                    try:
-                        _wee_tc = _json.loads(line_text.strip())
-                        if _wee_tc.get("__wee_tc__") == "start":
-                            _tool_call_counter += 1
-                            _tc_input = _wee_tc.get("input", {})
-                            bg_task_mgr.append_tool_call(
-                                task_id,
-                                {
-                                    "id": _wee_tc.get(
-                                        "id", f"bg_{task_id[:8]}_{_tool_call_counter}"
-                                    ),
-                                    "name": _wee_tc.get("name", "tool"),
-                                    "input": (
-                                        _json.dumps(_tc_input)
-                                        if isinstance(_tc_input, dict)
-                                        else str(_tc_input)
-                                    ),
-                                    "status": "running",
-                                    "runtime": "wee",
-                                    "timestamp": time.strftime(
-                                        "%Y-%m-%dT%H:%M:%SZ", time.gmtime()
-                                    ),
-                                },
-                            )
-                        elif _wee_tc.get("__wee_tc__") == "done":
-                            bg_task_mgr.update_tool_call(
-                                task_id,
-                                _wee_tc.get("id", ""),
-                                status="completed",
-                                output=str(_wee_tc.get("output", ""))[:500],
-                            )
-                    except (ValueError, KeyError, TypeError):
-                        pass
-                    continue  # Don't include tool-tracking JSON in output
-
                 stdout_lines.append(line)
+                line_text = line.rstrip("\n\r")
 
                 # Append to output_lines for live log viewing
                 if line_text:
@@ -13882,26 +11737,6 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 )
             else:
                 error_msg = f"Task failed with code {process.returncode}: {output}"
-                # Check for fallback eligibility before marking as failed (Issue #219)
-                if (fallback_runtime and fallback_model and 
-                    any(p in error_msg.lower() for p in ['rate_limit', 'rate limit', '429', 'quota', 'overload', '503', '502', '401', 'timeout', 'bwrap', 'operation not permitted', 'connection refused', 'connection reset'])):
-                    print(f"[Fallback] Task {task_id}: primary {runtime}/{model} failed with infrastructure error, retrying with {fallback_runtime}/{fallback_model}", file=sys.stderr)
-                    # Retry with fallback runtime/model
-                    return _run_background_task(
-                        task_id,
-                        str(uuid4()),  # New session
-                        prompt,
-                        agent,
-                        fallback_runtime,
-                        fallback_model,
-                        channel,
-                        user_identity,
-                        timeout,
-                        notify,
-                        permission_mode,
-                        None,  # No more fallbacks after first retry
-                        None,
-                    )
                 bg_task_mgr.fail_task(task_id, error_msg)
                 if task_id.startswith("sched_"):
                     try:
@@ -13974,7 +11809,6 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                         next_q["user_identity"],
                         next_q.get("timeout") or 900,
                         next_q.get("notify", True),
-                        next_q.get("permission_mode", "restricted"),
                     )
             except Exception as promo_exc:
                 print(f"[BG] Error promoting queued task: {promo_exc}")
@@ -13996,110 +11830,29 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         # Resolve agent/runtime/model — default to user's current session config
         # Determine defaults by searching for ANY session for this identity across all channels
         # to inherit preferences (like notification_preference).
-        session_map = await asyncio.to_thread(session_mgr.load_session_map)
+        session_map = session_mgr.load_session_map()
         # Inherit only safe fields (never 'agent') from prior sessions — see issue #75
         defaults = _compute_bg_task_defaults(session_map, identity, channel)
 
         agent = body.agent or defaults.get("agent", get_default_agent())
-        # Priority order: body > dispatch_config (#193) > session > pref-manager (#168) > default
-        agent_cfg = session_mgr.AGENTS.get(agent, {})
-        # Support both old (dispatch_config) and new (primary_runtime/model) schemas
-        _dispatch_config = agent_cfg.get("dispatch_config", {})
-        if not _dispatch_config and "primary_runtime" in agent_cfg:
-            _dispatch_config = {
-                "runtime": agent_cfg.get("primary_runtime"),
-                "model": agent_cfg.get("primary_model"),
-                "fallback_runtime": agent_cfg.get("fallback_runtime"),
-                "fallback_model": agent_cfg.get("fallback_model"),
-                "timeout": agent_cfg.get("timeout", 3600),
-            }
-            print(f"[DispatchConfig] Built from new schema for agent={agent}: {_dispatch_config}", file=sys.stderr)
-        if body.runtime:
-            runtime = body.runtime
-            print(
-                f"[RuntimePref] Explicit runtime override: {runtime}", file=sys.stderr
-            )
-        else:
-            _dispatch_rt = _dispatch_config.get("runtime")
-            _session_rt = defaults.get("runtime")
-            _pref_primary = _get_runtime_pref_mgr().primary()
-            _pref_backup = _get_runtime_pref_mgr().backup()
-            if _dispatch_rt:
-                runtime = _dispatch_rt
-                print(
-                    f"[RuntimePref] Using dispatch_config runtime: {runtime}",
-                    file=sys.stderr,
-                )
-            elif _session_rt:
-                runtime = _session_rt
-                print(
-                    f"[RuntimePref] Using session runtime: {runtime}", file=sys.stderr
-                )
-            elif _pref_primary:
-                if check_runtime_available(_pref_primary):
-                    runtime = _pref_primary
-                    print(
-                        f"[RuntimePref] Using primary preference runtime: {runtime}",
-                        file=sys.stderr,
-                    )
-                else:
-                    # Primary configured but unavailable — validate
-                    # backup before using it; get_default_runtime()
-                    # will scan all available runtimes as last resort.
-                    if _pref_backup and check_runtime_available(_pref_backup):
-                        runtime = _pref_backup
-                    else:
-                        runtime = get_default_runtime()
-                    print(
-                        f"[RuntimePref] Primary '{_pref_primary}' unavailable, falling back to: {runtime}",
-                        file=sys.stderr,
-                    )
-            elif _pref_backup:
-                if check_runtime_available(_pref_backup):
-                    runtime = _pref_backup
-                else:
-                    runtime = get_default_runtime()
-                print(
-                    f"[RuntimePref] Using backup preference runtime: {runtime}",
-                    file=sys.stderr,
-                )
-            else:
-                runtime = get_default_runtime()
-                print(
-                    f"[RuntimePref] Using default runtime: {runtime}",
-                    file=sys.stderr,
-                )
-        model = body.model or _dispatch_config.get("model") or defaults.get("model", get_default_model())
-
-        # Apply dispatch_config fallback if primary runtime is blocked/unavailable
-        eff_runtime, eff_model, used_fallback, fallback_reason = (
-            resolve_dispatch_runtime_model(agent, runtime, model, session_mgr.AGENTS)
-        )
-        if used_fallback:
-            print(
-                f"[Dispatch] Fallback activated for agent='{agent}': {fallback_reason}. "
-                f"Using runtime={eff_runtime}, model={eff_model} instead of {runtime}/{model}"
-            )
-            runtime = eff_runtime
-            model = eff_model
+        runtime = body.runtime or defaults.get("runtime", get_default_runtime())
+        model = body.model or defaults.get("model", get_default_model())
 
         task_id = f"bg_{str(uuid4())[:8]}"
         session_id = str(uuid4())  # Must be valid UUID format for Copilot CLI
 
         # Use agent-specified timeout or fall back to default (15 min)
         bg_timeout = (
-            body.timeout
-            if body.timeout is not None
-            else (_dispatch_config.get("timeout") or get_bg_command_timeout())
+            body.timeout if body.timeout is not None else get_bg_command_timeout()
         )
 
         # Determine notification preference:
-        #   body override > global toggle > per-identity store > session default > True
+        #   body override > global mute > per-identity store > session default > True
         notify_pref = body.notify
         if notify_pref is None:
             if notification_mgr:
-                # Global toggle takes priority (Issue #146)
-                if not notification_mgr.is_global_enabled():
+                # Global mute takes priority (covers cross-channel identity mismatch)
+                if notification_mgr.is_muted("_global"):
                     notify_pref = False
                 # Per-identity store is authoritative
                 elif notification_mgr.is_muted(identity):
@@ -14112,42 +11865,46 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         # (not here at API time) so queued/promoted tasks get fresh context.
         effective_prompt = body.prompt
 
-        # Resolve permission mode early so queued/running responses both use same value.
-        # Priority: body.permission_mode > body.yolo > dispatch_config >
-        # "restricted" (Issue #193)
-        _dc_perm = (
-            "elevated"
-            if _dispatch_config.get("yolo")
-            else _dispatch_config.get("permission_mode", "")
-        )
-        # Use explicit is-checks so body.yolo=False (falsy but intentional) is not
-        # treated as omitted — otherwise dispatch_config.yolo=True would win.
-        if body.permission_mode:
-            perm_mode = body.permission_mode
-        elif body.yolo is True:
-            perm_mode = "elevated"
-        elif body.yolo is False:
-            # Caller explicitly downgraded: override dispatch_config entirely.
-            perm_mode = "restricted"
-        else:
-            # body.yolo is None (omitted) → fall through to dispatch_config
-            perm_mode = _dc_perm or "restricted"
-        if perm_mode not in ("elevated", "restricted", "sandboxed"):
-            perm_mode = "restricted"
-
-        # Resolve fallback_runtime / fallback_model from body or dispatch_config (Issue #219)
-        # Priority: body > dispatch_config > None
-        fallback_rt = body.fallback_runtime or _dispatch_config.get("fallback_runtime")
-        fallback_model = body.fallback_model or _dispatch_config.get("fallback_model")
-        print(f"[DEBUG] Task {task_id}: fallback_rt={fallback_rt} fallback_model={fallback_model}", file=sys.stderr)
-
-        # Atomically check concurrency limit and create task — TOCTOU-safe (Issue #192)
+        # Check concurrent limit — queue instead of rejecting
+        running = bg_task_mgr.count_running(channel, identity, agent)
         agent_config = session_mgr.AGENTS.get(agent, {})
         max_concurrent = agent_config.get(
             "max_concurrent", BackgroundTaskManager.MAX_TASKS_PER_USER
         )
-        task, task_status = await asyncio.to_thread(
-            bg_task_mgr.create_task_checked,
+        if running >= max_concurrent:
+            # Queue the task — it will be promoted when a running task finishes
+            task = bg_task_mgr.create_task(
+                task_id=task_id,
+                session_id=session_id,
+                user_identity=identity,
+                channel=channel,
+                agent=agent,
+                runtime=runtime,
+                model=model,
+                prompt=effective_prompt,
+                status="queued",
+                timeout=bg_timeout,
+                notify=notify_pref,
+                origin_session_id=body.origin_session_id,
+            )
+            queue_pos = bg_task_mgr.count_queued(channel, identity)
+            print(
+                f"[API] Task {task_id} queued (position {queue_pos}, {running}/{BackgroundTaskManager.MAX_TASKS_PER_USER} slots full)"
+            )
+            return {
+                "task_id": task_id,
+                "session_id": session_id,
+                "agent": agent,
+                "runtime": runtime,
+                "model": model,
+                "permission_mode": body.permission_mode or "restricted",
+                "status": "queued",
+                "queue_position": queue_pos,
+                "timeout": bg_timeout,
+            }
+
+        # Create task record (running immediately)
+        task = bg_task_mgr.create_task(
             task_id=task_id,
             session_id=session_id,
             user_identity=identity,
@@ -14156,37 +11913,16 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             runtime=runtime,
             model=model,
             prompt=effective_prompt,
-            max_concurrent=max_concurrent,
+            status="running",
             timeout=bg_timeout,
             notify=notify_pref,
             origin_session_id=body.origin_session_id,
-            permission_mode=perm_mode,
-            fallback_runtime=fallback_rt,
-            fallback_model=fallback_model,
         )
 
-        if task_status == "queued":
-            queue_pos = await asyncio.to_thread(
-                bg_task_mgr.count_queued, channel, identity
-            )
-            running = await asyncio.to_thread(
-                bg_task_mgr.count_running, channel, identity, agent
-            )
-            print(
-                f"[API] Task {task_id} queued"
-                f" (position {queue_pos}, {running}/{max_concurrent} slots full)"
-            )
-            return {
-                "task_id": task_id,
-                "session_id": session_id,
-                "agent": agent,
-                "runtime": runtime,
-                "model": model,
-                "permission_mode": perm_mode,
-                "status": "queued",
-                "queue_position": queue_pos,
-                "timeout": bg_timeout,
-            }
+        # Resolve permission mode (default: restricted)
+        perm_mode = body.permission_mode or "restricted"
+        if perm_mode not in ("elevated", "restricted", "sandboxed"):
+            perm_mode = "restricted"
 
         # Run in background thread using shared executor
         loop = asyncio.get_running_loop()
@@ -14204,8 +11940,6 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             bg_timeout,
             notify_pref,
             perm_mode,
-            fallback_rt,
-            fallback_model,
         )
 
         return {
@@ -14220,24 +11954,25 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         }
 
     @app.get("/api/v1/sessions/{session_id}/bg-events")
-    async def get_session_bg_events(session_id: str, request: Request):
+    async def get_session_bg_events(
+        session_id: str, request: Request
+    ):
         """Return and clear pending BG task completion events."""
         await authenticate(
             request,
             authorization=request.headers.get("authorization"),
-            x_user_identity=request.headers.get("x-user-identity"),
-            x_auth_channel=request.headers.get("x-auth-channel"),
+            x_user_identity=request.headers.get(
+                "x-user-identity"
+            ),
+            x_auth_channel=request.headers.get(
+                "x-auth-channel"
+            ),
         )
         events = bg_task_mgr.pop_bg_events(session_id)
         return {"events": events}
 
     @app.get("/api/v1/background-tasks")
-    async def list_background_tasks(
-        request: Request,
-        limit: int = 50,
-        offset: int = 0,
-        status: str = None,
-    ):
+    async def list_background_tasks(request: Request):
         user = await authenticate(
             request,
             authorization=request.headers.get("authorization"),
@@ -14255,14 +11990,6 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                         t["task_id"], "Process terminated unexpectedly"
                     )
                     t["status"] = "failed"
-        # Filter by status if provided
-        if status:
-            tasks = [t for t in tasks if t["status"] == status]
-        # Sort by created_at descending (newest first)
-        tasks.sort(key=lambda t: t.get("created_at", ""), reverse=True)
-        total = len(tasks)
-        # Apply pagination
-        tasks = tasks[offset : offset + limit]
         # Return summary (no full output_lines for list)
         result = []
         for t in tasks:
@@ -14277,16 +12004,9 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                     "created_at": t["created_at"],
                     "completed_at": t.get("completed_at"),
                     "error": t.get("error"),
-                    "fallback_runtime": t.get("fallback_runtime"),
-                    "fallback_model": t.get("fallback_model"),
                 }
             )
-        return {
-            "tasks": result,
-            "total": total,
-            "limit": limit,
-            "offset": offset,
-        }
+        return {"tasks": result}
 
     @app.get("/api/v1/background-tasks/{task_id}")
     async def get_background_task(task_id: str, request: Request):
@@ -14296,7 +12016,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             x_user_identity=request.headers.get("x-user-identity"),
             x_auth_channel=request.headers.get("x-auth-channel"),
         )
-        task = await asyncio.to_thread(bg_task_mgr.get_task, task_id)
+        task = bg_task_mgr.get_task(task_id)
         if not task:
             raise HTTPException(status_code=404, detail="Task not found")
         # Return detail with last 50 output lines
@@ -14316,8 +12036,6 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             "error": task.get("error"),
             "tool_call_count": len(tool_calls),
             "recent_tool_calls": tool_calls[-20:],
-            "fallback_runtime": task.get("fallback_runtime"),
-            "fallback_model": task.get("fallback_model"),
         }
 
     @app.get("/api/v1/background-tasks/{task_id}/transcript")
@@ -14328,7 +12046,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             x_user_identity=request.headers.get("x-user-identity"),
             x_auth_channel=request.headers.get("x-auth-channel"),
         )
-        task = await asyncio.to_thread(bg_task_mgr.get_task, task_id)
+        task = bg_task_mgr.get_task(task_id)
         if not task:
             raise HTTPException(status_code=404, detail="Task not found")
         return {
@@ -14348,7 +12066,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             x_user_identity=request.headers.get("x-user-identity"),
             x_auth_channel=request.headers.get("x-auth-channel"),
         )
-        task = await asyncio.to_thread(bg_task_mgr.get_task, task_id)
+        task = bg_task_mgr.get_task(task_id)
         if not task:
             raise HTTPException(status_code=404, detail="Task not found")
         return {
@@ -14369,7 +12087,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             x_user_identity=request.headers.get("x-user-identity"),
             x_auth_channel=request.headers.get("x-auth-channel"),
         )
-        task = await asyncio.to_thread(bg_task_mgr.get_task, task_id)
+        task = bg_task_mgr.get_task(task_id)
         if not task:
             raise HTTPException(status_code=404, detail="Task not found")
         return {
@@ -14389,23 +12107,19 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             x_user_identity=request.headers.get("x-user-identity"),
             x_auth_channel=request.headers.get("x-auth-channel"),
         )
-        task = await asyncio.to_thread(bg_task_mgr.get_task, task_id)
+        task = bg_task_mgr.get_task(task_id)
         if not task:
             raise HTTPException(status_code=404, detail="Task not found")
 
         if task["status"] in ("running", "queued"):
             was_running = task["status"] == "running"
-            await asyncio.to_thread(bg_task_mgr.kill_task, task_id)
+            bg_task_mgr.kill_task(task_id)
             # If a running task was killed, promote the next queued task
             if was_running:
-                next_q = await asyncio.to_thread(
-                    bg_task_mgr.get_next_queued, user["channel"], user["identity"]
-                )
+                next_q = bg_task_mgr.get_next_queued(user["channel"], user["identity"])
                 if next_q:
                     new_sid = str(uuid4())
-                    await asyncio.to_thread(
-                        bg_task_mgr.promote_queued_task, next_q["task_id"], new_sid
-                    )
+                    bg_task_mgr.promote_queued_task(next_q["task_id"], new_sid)
                     print(
                         f"[BG] Kill triggered promotion of queued task {next_q['task_id']}"
                     )
@@ -14427,7 +12141,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                     )
             return {"task_id": task_id, "action": "killed"}
         else:
-            await asyncio.to_thread(bg_task_mgr.delete_task, task_id)
+            bg_task_mgr.delete_task(task_id)
             return {"task_id": task_id, "action": "deleted"}
 
     # --- Background Task Steering ---
@@ -14452,7 +12166,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             x_user_identity=request.headers.get("x-user-identity"),
             x_auth_channel=request.headers.get("x-auth-channel"),
         )
-        task = await asyncio.to_thread(bg_task_mgr.get_task, task_id)
+        task = bg_task_mgr.get_task(task_id)
         if not task:
             raise HTTPException(status_code=404, detail="Task not found")
         if task["status"] != "running":
@@ -14460,12 +12174,8 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 status_code=409,
                 detail=f"Task is {task['status']}, not running -- cannot steer",
             )
-        path = await asyncio.to_thread(
-            bg_task_mgr.write_steering, task_id, body.instruction
-        )
-        logger.info(
-            "[STEER] Steering written for task %s: %s", task_id, body.instruction[:80]
-        )
+        path = bg_task_mgr.write_steering(task_id, body.instruction)
+        logger.info("[STEER] Steering written for task %s: %s", task_id, body.instruction[:80])
         return {
             "task_id": task_id,
             "status": "steering_written",
@@ -14481,10 +12191,10 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             x_user_identity=request.headers.get("x-user-identity"),
             x_auth_channel=request.headers.get("x-auth-channel"),
         )
-        task = await asyncio.to_thread(bg_task_mgr.get_task, task_id)
+        task = bg_task_mgr.get_task(task_id)
         if not task:
             raise HTTPException(status_code=404, detail="Task not found")
-        content = await asyncio.to_thread(bg_task_mgr.read_steering, task_id)
+        content = bg_task_mgr.read_steering(task_id)
         return {
             "task_id": task_id,
             "has_steering": content is not None,
@@ -14583,51 +12293,6 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         deleted = notification_mgr.delete_all_read(user_key)
         return {"deleted": deleted}
 
-    # --- Global Notification Settings (Issue #146) ---
-
-    class NotificationSettingsRequest(BaseModel):
-        notifications_enabled: bool
-
-    @app.get("/api/v1/settings/notifications")
-    async def get_notification_settings(request: Request):
-        """Return the global notification toggle state."""
-        await authenticate(
-            request,
-            authorization=request.headers.get("authorization"),
-            x_user_identity=request.headers.get("x-user-identity"),
-            x_auth_channel=request.headers.get("x-auth-channel"),
-        )
-        if notification_mgr is None:
-            return {"notifications_enabled": True, "available": False}
-        settings = notification_mgr.get_global_settings()
-        settings["available"] = True
-        return settings
-
-    @app.put("/api/v1/settings/notifications")
-    async def set_notification_settings(
-        body: NotificationSettingsRequest, request: Request
-    ):
-        """Set the global notification toggle."""
-        await authenticate(
-            request,
-            authorization=request.headers.get("authorization"),
-            x_user_identity=request.headers.get("x-user-identity"),
-            x_auth_channel=request.headers.get("x-auth-channel"),
-        )
-        if notification_mgr is None:
-            raise HTTPException(
-                status_code=503, detail="Notification manager unavailable"
-            )
-        notification_mgr.set_global_enabled(body.notifications_enabled)
-        return {
-            "notifications_enabled": body.notifications_enabled,
-            "message": (
-                "Notifications enabled for all channels"
-                if body.notifications_enabled
-                else "Notifications suppressed globally (critical alerts still delivered)"
-            ),
-        }
-
     # --- Task Scheduler ---
     if SCHEDULER_ENABLED:
         # Lazy-load TaskScheduler so the API starts even if the scheduler dirs don't exist yet.
@@ -14712,8 +12377,6 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             mode: Optional[str] = None  # "ai" (default, uses LLM) or "command" (shell)
             task: str = ""
             notify: bool = False
-            fallback_runtime: Optional[str] = None
-            fallback_model: Optional[str] = None
             recurring: bool = True
             timeout: Optional[int] = None  # Execution timeout in seconds (default: 300)
             permission_mode: Optional[str] = (
@@ -14729,8 +12392,6 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             mode: Optional[str] = None  # "ai" (default, uses LLM) or "command" (shell)
             task: Optional[str] = None
             notify: Optional[bool] = None
-            fallback_runtime: Optional[str] = None
-            fallback_model: Optional[str] = None
             recurring: Optional[bool] = None
             enabled: Optional[bool] = None
             timeout: Optional[int] = None  # Execution timeout in seconds
@@ -14796,8 +12457,6 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 agent=body.agent,
                 runtime=body.runtime,
                 model=body.model,
-                fallback_runtime=body.fallback_runtime,
-                fallback_model=body.fallback_model,
                 mode=body.mode,
                 task=body.task,
                 notify=body.notify,
@@ -14832,7 +12491,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 client_ip, "scheduler_write", max_requests=20, window=60
             ):
                 raise HTTPException(status_code=429, detail="Rate limit exceeded")
-            updates = body.model_dump(exclude_unset=True)
+            updates = {k: v for k, v in body.model_dump().items() if v is not None}
             if not updates:
                 raise HTTPException(status_code=400, detail="No fields to update")
             result = _get_scheduler().update_job(job_id, updates)
@@ -15023,6 +12682,554 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         async def get_scheduler_job_logs(job_id: str, request: Request):
             await _require_scheduler_auth(request)
             return _get_scheduler().get_logs(job_id)
+
+    # --- TODO list API ---------------------------------------------------
+    def _resolve_todo_dir(agent_name: str | None) -> Path | None:
+        """Resolve the TODOs/ folder for a given agent.
+
+        Returns the agent-specific TODOs/ directory if it exists, else None.
+        Checks both the new folder-based structure (TODOs/) and falls back to
+        the legacy TODOs.md flat file (returned as None to signal legacy mode).
+        """
+        import json as _json
+
+        default_dir = Path("/opt/fosterbot-home/TODOs")
+        default_md = Path("/opt/fosterbot-home/TODOs.md")
+
+        def _pick(base: Path):
+            """Return folder path or md path for a given base directory."""
+            d = base / "TODOs"
+            if d.is_dir():
+                return d
+            md = base / "TODOs.md"
+            if md.exists():
+                return md
+            return None
+
+        if not agent_name:
+            if default_dir.is_dir():
+                return default_dir
+            return default_md if default_md.exists() else None
+
+        try:
+            agents_file = Path(__file__).parent / "agents.json"
+            agents_data = _json.loads(agents_file.read_text())
+            for a in agents_data.get("agents", []):
+                if a.get("name", "").lower() == agent_name.lower():
+                    agent_path = Path(a.get("path", "/opt"))
+                    result = _pick(agent_path)
+                    if result:
+                        return result
+                    # Also check <agent_path>/fosterbot-home/
+                    result = _pick(agent_path / "fosterbot-home")
+                    if result:
+                        return result
+                    # No TODOs found — return non-existent path so UI shows empty
+                    return agent_path / "TODOs"
+        except Exception:
+            pass
+        return Path(f"/opt/{agent_name}/TODOs")
+
+    def _resolve_todo_file(agent_name: str | None) -> Path:
+        """Legacy resolver — returns a Path (may be dir or md file).
+
+        Kept for backwards compatibility. New code should use _resolve_todo_dir.
+        """
+        result = _resolve_todo_dir(agent_name)
+        if result is None:
+            return Path("/opt/fosterbot-home/TODOs.md")
+        return result
+
+    def _parse_todo_file(todo_path: Path) -> dict | None:
+        """Parse a single TODO file with DUE:/LABELS: header format.
+
+        Returns a dict with description, due, labels, details, notes keys,
+        or None if the file cannot be parsed.
+        """
+        import re as _re
+
+        try:
+            lines = todo_path.read_text().splitlines()
+        except Exception:
+            return None
+
+        due = None
+        labels = []
+        detail_start = 0
+
+        for idx, line in enumerate(lines):
+            if line.startswith("DUE:"):
+                due = line[4:].strip()
+                detail_start = idx + 1
+            elif line.startswith("LABELS:"):
+                raw = line[7:].strip()
+                # Parse {LABEL1},{LABEL2} format
+                labels = [
+                    l.strip().strip("{}")
+                    for l in _re.split(r"[,\s]+", raw)
+                    if l.strip().strip("{}")
+                ]
+                detail_start = idx + 1
+            else:
+                break  # headers must be contiguous at top of file
+
+        # Everything after the headers is the details body
+        details_lines = lines[detail_start:]
+        # Strip leading blank line if present
+        while details_lines and not details_lines[0].strip():
+            details_lines = details_lines[1:]
+        details = "\n".join(details_lines).strip()
+
+        return {
+            "description": todo_path.name,
+            "due": due,
+            "labels": labels,
+            "notes": [],
+            "details": details,
+        }
+
+    def _parse_todos_from_dir(todo_dir: Path, limit: int = 100) -> list:
+        """Read TODOs from the folder-based structure (ACTIVE/ subfolder)."""
+        active_dir = todo_dir / "ACTIVE"
+        if not active_dir.is_dir():
+            return []
+        todos = []
+        for entry in sorted(active_dir.iterdir()):
+            if entry.is_file():
+                parsed = _parse_todo_file(entry)
+                if parsed:
+                    todos.append(parsed)
+                    if len(todos) >= limit:
+                        break
+        return todos
+
+    def _parse_todos_from_md(todo_file: Path, limit: int = 100) -> list:
+        """Parse active TODOs from the markdown file, return up to `limit`.
+
+        Supports both the legacy flat TODOs.md format and the new folder-based
+        structure (when todo_file is actually a directory).
+        """
+        # New folder-based structure
+        if todo_file.is_dir():
+            return _parse_todos_from_dir(todo_file, limit)
+
+        if not todo_file.exists():
+            return []
+        todos = []
+        import re
+
+        current_todo = None
+        in_details = False
+        details_lines = []
+
+        with open(todo_file) as f:
+            for line in f:
+                raw_line = line.rstrip("\n")
+                stripped = raw_line.strip()
+
+                # Check for TODO line
+                todo_line = stripped
+                if todo_line.startswith("- "):
+                    todo_line = todo_line[2:]
+
+                if (
+                    todo_line.startswith("[ ]")
+                    or todo_line.startswith("[X]")
+                    or todo_line.startswith("[x]")
+                ):
+                    # Save previous todo with details if exists
+                    if current_todo:
+                        if details_lines:
+                            current_todo["details"] = "\n".join(details_lines).strip()
+                        todos.append(current_todo)
+                        if len(todos) >= limit:
+                            current_todo = None
+                            break
+
+                    # Only keep active (non-completed) todos for this list
+                    completed = todo_line.startswith("[X]") or todo_line.startswith(
+                        "[x]"
+                    )
+
+                    if not completed:
+                        content = re.sub(r"^\[.\]\s+", "", todo_line)
+                        due = None
+                        due_match = re.search(r"\(due ([^)]+)\)", content)
+                        if due_match:
+                            due = due_match.group(1)
+                        labels = []
+                        label_match = re.search(r"\{([^}]+)\}", content)
+                        if label_match:
+                            labels = [
+                                l.strip() for l in label_match.group(1).split(",")
+                            ]
+                        # Remove due and label markers from description
+                        content = re.sub(r"\s*\(due [^)]+\)", "", content)
+                        content = re.sub(r"\s*\{[^}]+\}", "", content).strip()
+                        current_todo = {
+                            "description": content,
+                            "due": due,
+                            "labels": labels,
+                            "notes": [],
+                            "details": "",
+                        }
+                        in_details = False
+                        details_lines = []
+                    else:
+                        # Completed todo — clear state without adding to active list
+                        current_todo = None
+                        in_details = False
+                        details_lines = []
+
+                elif current_todo:
+                    # Check for Details section (inline bold format: **Details**)
+                    if stripped == "**Details**":
+                        in_details = True
+                        details_lines = []
+                    elif (
+                        in_details
+                        and stripped
+                        and not stripped.startswith("## ")
+                        and not stripped.startswith("- [")
+                    ):
+                        # Collect details until we hit a top-level section (## ) or a todo item
+                        details_lines.append(raw_line)
+                    elif raw_line.startswith("    ") and not in_details:
+                        # This is a note for the current TODO
+                        current_todo["notes"].append(raw_line.strip())
+
+        if current_todo:
+            if details_lines:
+                current_todo["details"] = "\n".join(details_lines).strip()
+            todos.append(current_todo)
+
+        return todos[:limit]
+
+    @app.get("/api/v1/todos")
+    async def get_todos(request: Request, agent: str = None, limit: int = 100):
+        await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        limit = min(max(1, limit), 200)
+        todo_path = _resolve_todo_file(agent)
+        todos = _parse_todos_from_md(todo_path, limit)
+        return {
+            "todos": todos,
+            "count": len(todos),
+            "agent": agent or "default",
+            "file": str(todo_path),
+        }
+
+    @app.post("/api/v1/todos")
+    async def create_todo(request: Request):
+        """Create a new TODO in the ACTIVE/ folder."""
+        await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        try:
+            body = await request.json()
+        except Exception:
+            return {"success": False, "error": "Invalid JSON body"}
+
+        title = (body.get("title") or "").strip()
+        due_date = (body.get("due_date") or "").strip()
+        labels = body.get("labels") or []
+        details = (body.get("details") or "").strip()
+        agent = body.get("agent")
+
+        if not title:
+            return {"success": False, "error": "Title is required"}
+
+        # Reject path traversal and dangerous chars
+        if (
+            "/" in title
+            or "\\" in title
+            or "\0" in title
+            or ".." in title
+            or "\n" in title
+            or "\r" in title
+        ):
+            return {
+                "success": False,
+                "error": (
+                    "Invalid title: must not contain"
+                    " path separators, traversal"
+                    " sequences, or control characters"
+                ),
+            }
+
+        todo_path = _resolve_todo_file(agent)
+        if not todo_path.is_dir():
+            return {
+                "success": False,
+                "error": "Folder-based TODO dir not found",
+            }
+
+        active_dir = todo_path / "ACTIVE"
+        active_dir.mkdir(parents=True, exist_ok=True)
+
+        target = active_dir / title
+        # Belt-and-suspenders path traversal check
+        resolved = target.resolve()
+        parent = active_dir.resolve()
+        if not resolved.is_relative_to(parent):
+            return {
+                "success": False,
+                "error": "Invalid title: path traversal",
+            }
+
+        if target.exists():
+            return {
+                "success": False,
+                "error": f"TODO {title!r} already exists",
+            }
+
+        # Build file content with headers
+        lines = []
+        if due_date:
+            lines.append(f"DUE: {due_date}")
+        if labels:
+            fmt = ",".join(f"{{{lb}}}" for lb in labels)
+            lines.append(f"LABELS: {fmt}")
+        if details:
+            if lines:
+                lines.append("")
+            lines.append(details)
+
+        file_content = "\n".join(lines) + "\n" if lines else ""
+        target.write_text(file_content)
+
+        return {
+            "success": True,
+            "todo": title,
+            "file": str(target),
+        }
+
+    @app.post("/api/v1/todos/{todo_title}/complete")
+    async def complete_todo(request: Request, todo_title: str):
+        """Mark a TODO as complete by moving it from ACTIVE/ to COMPLETED/."""
+        await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        try:
+            body = await request.json()
+            agent = body.get("agent")
+        except Exception:
+            agent = None
+
+        todo_path = _resolve_todo_file(agent)
+        if not todo_path.is_dir():
+            return {"success": False, "error": "Folder-based TODO structure not found"}
+
+        active_dir = todo_path / "ACTIVE"
+        completed_dir = todo_path / "COMPLETED"
+        completed_dir.mkdir(parents=True, exist_ok=True)
+
+        # Find the file (exact match or partial)
+        match = None
+        for entry in active_dir.iterdir():
+            if entry.is_file() and (
+                entry.name == todo_title or todo_title in entry.name
+            ):
+                match = entry
+                break
+
+        if not match:
+            return {
+                "success": False,
+                "error": f"TODO '{todo_title}' not found in ACTIVE/",
+            }
+
+        dest = completed_dir / match.name
+        match.rename(dest)
+        return {"success": True, "moved": str(dest), "todo": match.name}
+
+    @app.patch("/api/v1/todos/{todo_title}")
+    async def update_todo_details(request: Request, todo_title: str):
+        """Update a TODO's label, due date, and/or details."""
+        await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+
+        try:
+            body = await request.json()
+            details = body.get("details")
+            new_label = body.get("label")
+            new_due = body.get("due_date")
+            agent = body.get("agent")
+
+            todo_path = _resolve_todo_file(agent)
+
+            # --- New folder-based structure ---
+            if todo_path.is_dir():
+                active_dir = todo_path / "ACTIVE"
+                match = None
+                for entry in active_dir.iterdir():
+                    if entry.is_file() and (
+                        entry.name == todo_title or todo_title in entry.name
+                    ):
+                        match = entry
+                        break
+                if not match:
+                    return {
+                        "success": False,
+                        "error": f"TODO '{todo_title}' not found in ACTIVE/",
+                    }
+
+                # Parse existing file content
+                existing = match.read_text().splitlines()
+                header_lines = []
+                body_lines = []
+                in_body = False
+                for line in existing:
+                    if not in_body and (
+                        line.startswith("DUE:") or line.startswith("LABELS:")
+                    ):
+                        header_lines.append(line)
+                    else:
+                        in_body = True
+                        body_lines.append(line)
+
+                # Update DUE: header if new_due provided
+                if new_due is not None:
+                    header_lines = [
+                        h for h in header_lines if not h.startswith("DUE:")
+                    ]
+                    if new_due.strip():
+                        header_lines.insert(0, f"DUE: {new_due.strip()}")
+
+                # Update details body if provided
+                if details is not None:
+                    body_lines = (
+                        ["", details.strip()] if details.strip() else []
+                    )
+
+                new_content = "\n".join(header_lines)
+                if body_lines:
+                    stripped_body = "\n".join(body_lines).strip()
+                    if stripped_body:
+                        new_content += "\n\n" + stripped_body
+                match.write_text(new_content + "\n")
+
+                # Rename file if label changed
+                result_name = match.name
+                if new_label and new_label.strip():
+                    clean = new_label.strip()
+                    # Reject path traversal and dangerous chars
+                    if (
+                        "/" in clean
+                        or "\\" in clean
+                        or "\0" in clean
+                        or ".." in clean
+                        or "\n" in clean
+                        or "\r" in clean
+                    ):
+                        return {
+                            "success": False,
+                            "error": (
+                                "Invalid label: must not"
+                                " contain path separators,"
+                                " traversal sequences,"
+                                " or control characters"
+                            ),
+                        }
+                    new_path = active_dir / clean
+                    # Belt-and-suspenders: verify resolved
+                    # path is inside active_dir
+                    resolved = new_path.resolve()
+                    parent = active_dir.resolve()
+                    if not resolved.is_relative_to(parent):
+                        return {
+                            "success": False,
+                            "error": "Invalid label:"
+                            " path traversal detected",
+                        }
+                    if clean == match.name:
+                        pass  # no rename needed
+                    elif new_path.exists():
+                        lbl = clean
+                        return {
+                            "success": False,
+                            "error": f"A TODO named"
+                            f" {lbl!r} already exists",
+                        }
+                    else:
+                        match.rename(new_path)
+                    result_name = clean
+
+                return {
+                    "success": True,
+                    "updated": True,
+                    "todo": result_name,
+                }
+
+            # --- Legacy flat-file structure ---
+            todo_file = todo_path
+            if not todo_file.exists():
+                return {"success": False, "error": "TODO file not found"}
+
+            content = todo_file.read_text()
+            lines = content.split("\n")
+
+            updated_lines = []
+            i = 0
+            while i < len(lines):
+                line = lines[i]
+                updated_lines.append(line)
+
+                stripped = line.strip()
+                if stripped.startswith("- "):
+                    stripped = stripped[2:]
+
+                if (
+                    stripped.startswith("[ ]") or stripped.startswith("[X]")
+                ) and todo_title in line:
+                    i += 1
+
+                    while i < len(lines) and lines[i].startswith("    "):
+                        updated_lines.append(lines[i])
+                        i += 1
+
+                    if i < len(lines) and (
+                        lines[i].strip() == "### Details"
+                        or lines[i].strip() == "## Details"
+                    ):
+                        i += 1
+                        while (
+                            i < len(lines) and lines[i] and not lines[i].startswith("#")
+                        ):
+                            i += 1
+
+                    if details and details.strip():
+                        updated_lines.append("")
+                        updated_lines.append("### Details")
+                        updated_lines.append("")
+                        updated_lines.extend(details.split("\n"))
+
+                    continue
+
+                i += 1
+
+            todo_file.write_text("\n".join(updated_lines))
+            return {"success": True, "updated": True, "todo": todo_title}
+
+        except Exception as e:
+            import traceback
+
+            traceback.print_exc()
+            return {"success": False, "error": str(e)}
 
     # --- Wee Canvas ───────────────────────────────────────────────────────────
     # In-memory canvas session state: session_id → {components, connections, action_watchers, pending_actions, name, created_at, last_activity}
@@ -15501,12 +13708,12 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             f"Local path: {skill_path}\n"
             f"Origin URL: {origin.get('origin_url', '')}\n"
             f"Origin path in repo: {origin.get('origin_path', '')}\n\n"
-            "Steps:\n"
-            "1. Run: python3 -c \"import sys; sys.path.insert(0, '/opt/n8n-copilot-shim-dev'); "
-            "from skill_manager import apply_update; import json; "
+            f"Steps:\n"
+            f"1. Run: python3 -c \"import sys; sys.path.insert(0, '/opt/n8n-copilot-shim-dev'); "
+            f"from skill_manager import apply_update; import json; "
             f"r = apply_update('{skill_key}'); print(json.dumps(r, indent=2))\"\n"
-            "2. Report the result — files changed, any errors, and whether a backup was created.\n"
-            "3. If the update succeeded, confirm the skill is still valid."
+            f"2. Report the result — files changed, any errors, and whether a backup was created.\n"
+            f"3. If the update succeeded, confirm the skill is still valid."
         )
 
         # Dispatch as background task
@@ -15580,21 +13787,13 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         )
         try:
             proc = await asyncio.create_subprocess_exec(
-                sys.executable,
-                _SECRET_TOOL_PATH,
-                "list",
-                "--backend",
-                "pass",
+                sys.executable, _SECRET_TOOL_PATH, "list", "--backend", "file",
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
             stdout, stderr = await proc.communicate()
             if proc.returncode != 0:
-                detail = (
-                    stdout.decode().strip()
-                    or stderr.decode().strip()
-                    or "secret-tool list failed"
-                )
+                detail = stdout.decode().strip() or stderr.decode().strip() or "secret-tool list failed"
                 try:
                     err = json.loads(detail)
                     detail = err.get("message", detail)
@@ -15634,32 +13833,22 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             raise HTTPException(status_code=400, detail="Secret value is required")
         # Validate name: alphanumeric, hyphens, underscores, dots only
 
-        if not re.match(r"^[A-Za-z0-9._-]+$", name):
+        if not re.match(r'^[A-Za-z0-9._-]+$', name):
             raise HTTPException(
                 status_code=400,
                 detail="Secret name may only contain letters, digits, hyphens, underscores, and dots",
             )
         try:
             proc = await asyncio.create_subprocess_exec(
-                sys.executable,
-                _SECRET_TOOL_PATH,
-                "set",
-                "--name",
-                name,
-                "--value-stdin",
-                "--backend",
-                "pass",
+                sys.executable, _SECRET_TOOL_PATH, "set",
+                "--name", name, "--value-stdin", "--backend", "file",
                 stdin=asyncio.subprocess.PIPE,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
             stdout, stderr = await proc.communicate(input=f"{value}\n".encode())
             if proc.returncode != 0:
-                detail = (
-                    stdout.decode().strip()
-                    or stderr.decode().strip()
-                    or "secret-tool set failed"
-                )
+                detail = stdout.decode().strip() or stderr.decode().strip() or "secret-tool set failed"
                 try:
                     err = json.loads(detail)
                     detail = err.get("message", detail)
@@ -15694,22 +13883,15 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             )
         try:
             proc = await asyncio.create_subprocess_exec(
-                sys.executable,
-                _SECRET_TOOL_PATH,
-                "delete",
-                "--name",
-                name,
-                "--backend",
-                "pass",
+                sys.executable, _SECRET_TOOL_PATH, "delete",
+                "--name", name, "--backend", "file",
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
             stdout, stderr = await proc.communicate()
             output = stdout.decode().strip()
             if proc.returncode != 0:
-                detail = (
-                    output or stderr.decode().strip() or "secret-tool delete failed"
-                )
+                detail = output or stderr.decode().strip() or "secret-tool delete failed"
                 try:
                     err = json.loads(detail)
                     detail = err.get("message", detail)
@@ -15740,9 +13922,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         )
         try:
             proc = await asyncio.create_subprocess_exec(
-                sys.executable,
-                _SECRET_TOOL_PATH,
-                "status",
+                sys.executable, _SECRET_TOOL_PATH, "status",
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
@@ -15753,10 +13933,8 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                     return json.loads(output)
                 except json.JSONDecodeError:
                     pass
-            return {
-                "status": "unavailable",
-                "message": output or stderr.decode().strip() or "Unknown error",
-            }
+            return {"status": "unavailable",
+                    "message": output or stderr.decode().strip() or "Unknown error"}
         except Exception as e:
             return {"status": "error", "message": str(e)}
 
@@ -15779,14 +13957,14 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             raise HTTPException(status_code=400, detail="password is required")
         try:
             proc = await asyncio.create_subprocess_exec(
-                sys.executable,
-                _SECRET_TOOL_PATH,
-                "unlock",
+                sys.executable, _SECRET_TOOL_PATH, "unlock",
                 stdin=asyncio.subprocess.PIPE,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
-            stdout, stderr = await proc.communicate(input=f"{password}\n".encode())
+            stdout, stderr = await proc.communicate(
+                input=f"{password}\n".encode()
+            )
             output = stdout.decode().strip()
             if proc.returncode == 0 and output:
                 try:
@@ -15809,7 +13987,9 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
 
     # --- Session Permissions API ---
     @app.patch("/api/v1/sessions/{session_id}/settings")
-    async def update_session_settings(session_id: str, request: Request):
+    async def update_session_settings(
+        session_id: str, request: Request
+    ):
         """F027: Update session settings (e.g. silent_mode toggle)."""
         user = await authenticate(
             request,
@@ -15820,7 +14000,9 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
 
         data = session_mgr.load_session_data(session_id)
         if not data:
-            raise HTTPException(status_code=404, detail="Session not found")
+            raise HTTPException(
+                status_code=404, detail="Session not found"
+            )
 
         body = await request.json()
         _allowed = {"silent_mode"}
@@ -15833,7 +14015,9 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                         status_code=422,
                         detail="silent_mode must be boolean",
                     )
-                session_mgr.update_session_field(session_id, field, val)
+                session_mgr.update_session_field(
+                    session_id, field, val
+                )
                 updated[field] = val
 
         if not updated:
@@ -15979,49 +14163,6 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                     "icon": "🏖️",
                 },
             ]
-        }
-
-    @app.get("/api/v1/settings/notifications")
-    async def get_notification_settings(request: Request):
-        """Return the global notification toggle state."""
-        await authenticate(
-            request,
-            authorization=request.headers.get("authorization"),
-            x_user_identity=request.headers.get("x-user-identity"),
-            x_auth_channel=request.headers.get("x-auth-channel"),
-        )
-        if notification_mgr is None:
-            return {"notifications_enabled": True, "available": False}
-        settings = notification_mgr.get_global_settings()
-        settings["available"] = True
-        return settings
-
-    class NotificationSettingsRequest(BaseModel):
-        notifications_enabled: bool
-
-    @app.put("/api/v1/settings/notifications")
-    async def set_notification_settings(
-        body: NotificationSettingsRequest, request: Request
-    ):
-        """Set the global notification toggle."""
-        await authenticate(
-            request,
-            authorization=request.headers.get("authorization"),
-            x_user_identity=request.headers.get("x-user-identity"),
-            x_auth_channel=request.headers.get("x-auth-channel"),
-        )
-        if notification_mgr is None:
-            raise HTTPException(
-                status_code=503, detail="Notification manager unavailable"
-            )
-        notification_mgr.set_global_enabled(body.notifications_enabled)
-        return {
-            "notifications_enabled": body.notifications_enabled,
-            "message": (
-                "Notifications enabled for all channels"
-                if body.notifications_enabled
-                else "Notifications suppressed globally (critical alerts still delivered)"
-            ),
         }
 
     # --- .env File Editor API ---
@@ -16308,14 +14449,14 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             "task-scheduler-executor-dev",
         }
         if service not in allowed_services:
-            raise HTTPException(status_code=400, detail="Service not allowed")
+            raise HTTPException(status_code=400, detail=f"Service not allowed")
 
         async def _event_generator():
             proc = await asyncio.create_subprocess_exec(
                 "journalctl",
                 "-u",
                 service,
-                "-",
+                "-f",
                 "--no-pager",
                 "-o",
                 "short-iso",
@@ -16338,7 +14479,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                         else:
                             break
                     except asyncio.TimeoutError:
-                        yield ": keepalive\n\n"
+                        yield f": keepalive\n\n"
             finally:
                 proc.terminate()
                 try:
@@ -16526,9 +14667,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
 
     # --- Memory Promotion ─────────────────────────────────────────────────────
 
-    MEMORY_PROMOTER_SCRIPT = Path(
-        "/opt/foster-skills/memory-promoter/memory_promoter.py"
-    )
+    MEMORY_PROMOTER_SCRIPT = Path("/opt/foster-skills/memory-promoter/memory_promoter.py")
 
     class PromoteMemoryRequest(BaseModel):
         agent: Optional[str] = None
@@ -16645,33 +14784,27 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                         env=env,
                     ),
                 )
-                results.append(
-                    {
-                        "agent": agent_name,
-                        "agent_path": agent_path,
-                        "status": "ok" if result.returncode == 0 else "error",
-                        "returncode": result.returncode,
-                        "stdout": result.stdout[-500:] if result.stdout else "",
-                        "stderr": result.stderr[-500:] if result.stderr else "",
-                    }
-                )
+                results.append({
+                    "agent": agent_name,
+                    "agent_path": agent_path,
+                    "status": "ok" if result.returncode == 0 else "error",
+                    "returncode": result.returncode,
+                    "stdout": result.stdout[-500:] if result.stdout else "",
+                    "stderr": result.stderr[-500:] if result.stderr else "",
+                })
             except subprocess.TimeoutExpired:
-                results.append(
-                    {
-                        "agent": agent_name,
-                        "agent_path": agent_path,
-                        "status": "timeout",
-                    }
-                )
+                results.append({
+                    "agent": agent_name,
+                    "agent_path": agent_path,
+                    "status": "timeout",
+                })
             except Exception as exc:
-                results.append(
-                    {
-                        "agent": agent_name,
-                        "agent_path": agent_path,
-                        "status": "error",
-                        "error": str(exc),
-                    }
-                )
+                results.append({
+                    "agent": agent_name,
+                    "agent_path": agent_path,
+                    "status": "error",
+                    "error": str(exc),
+                })
 
         ok_count = sum(1 for r in results if r["status"] == "ok")
         return {
@@ -16681,6 +14814,8 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             "failed": len(results) - ok_count,
             "results": results,
         }
+
+
 
     # ── Themes API (F025) ─────────────────────────────────────────────
 
@@ -16701,19 +14836,18 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                     continue
                 if any(t["name"] == name for t in themes):
                     continue
-                themes.append(
-                    {
-                        "name": name,
-                        "label": name.replace("-", " ").replace("_", " ").title(),
-                        "description": "Custom theme",
-                        "builtin": False,
-                        "css": css_file.read_text(encoding="utf-8"),
-                    }
-                )
+                themes.append({
+                    "name": name,
+                    "label": name.replace("-", " ").replace("_", " ").title(),
+                    "description": "Custom theme",
+                    "builtin": False,
+                    "css": css_file.read_text(encoding="utf-8"),
+                })
         return {"themes": themes, "count": len(themes)}
 
-        # --- AI Media ─────────────────────────────────────────────────────────────
 
+
+        # --- AI Media ─────────────────────────────────────────────────────────────
     _ai_media_dir = Path("/tmp/webui_ai_media")
     _ai_media_dir.mkdir(parents=True, exist_ok=True)
     app.mount("/ai-media", StaticFiles(directory=str(_ai_media_dir)), name="ai_media")
@@ -16730,7 +14864,6 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         app.mount("/static", StaticFiles(directory=str(_static_dir)), name="static")
 
     return app
-
 
 def start_api_server():
     """Load dotenv, create the FastAPI app, and run uvicorn."""
@@ -16795,7 +14928,6 @@ def start_api_server():
     else:
         print(f"[API] Listening on {proto}://{host}:{port}", file=sys.stderr)
         uvicorn.run(app, host=host, port=port, **ssl_kwargs)
-
 
 def main():
     parser = argparse.ArgumentParser(
@@ -16888,17 +15020,7 @@ Examples:
     runtime_group.add_argument(
         "--runtime",
         metavar="NAME",
-        choices=[
-            "copilot",
-            "copilot-sdk",
-            "opencode",
-            "claude",
-            "claude-sdk",
-            "gemini",
-            "codex",
-            "devin",
-            "cursor",
-        ],
+        choices=["copilot", "copilot-sdk", "opencode", "claude", "claude-sdk", "gemini", "codex", "devin", "cursor"],
         help="Set the runtime to use (choices: copilot, copilot-sdk, opencode, claude, claude-sdk, gemini, codex, devin, cursor)",
     )
     runtime_group.add_argument(
@@ -16969,7 +15091,6 @@ Examples:
     # Execute the main prompt
     output = manager.execute(args.prompt, args.session_id)
     print(output)
-
 
 if __name__ == "__main__":
     if "--api" in sys.argv:
