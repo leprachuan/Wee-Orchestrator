@@ -202,7 +202,7 @@ class TestIssue32ConfigSchemaValidation(unittest.TestCase):
                 TestConfig(str(config_file))
 
     def test_telegram_helper_functions_return_none_on_missing_file(self):
-        """Helper functions should return None on missing config file (FileNotFoundError caught)."""
+        """Helper functions return None when config file is missing."""
         # This test verifies that when _get_telegram_username is called,
         # it only catches FileNotFoundError/JSONDecodeError, not ValidationError
         from agent_manager import _get_telegram_username
@@ -211,9 +211,8 @@ class TestIssue32ConfigSchemaValidation(unittest.TestCase):
         result = _get_telegram_username("123")
         assert result is None
 
-
     def test_validate_agents_config_real_file_zero_warnings(self):
-        """validate_agents_config() on real agents.json should produce 0 unknown-key warnings."""
+        """validate_agents_config on real agents.json: 0 unknown-key warnings."""
         with open("/opt/n8n-copilot-shim-dev/agents.json") as f:
             data = json.load(f)
         with warnings.catch_warnings(record=True) as w:
@@ -223,8 +222,9 @@ class TestIssue32ConfigSchemaValidation(unittest.TestCase):
         self.assertEqual(
             len(unknown),
             0,
-            msg=f"Unexpected unknown-key warnings: {[str(x.message) for x in unknown]}",
+            msg=f"Unexpected warnings: {[str(x.message) for x in unknown]}",
         )
+
 
 if __name__ == "__main__":
     unittest.main()
