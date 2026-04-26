@@ -21,7 +21,7 @@ os.environ.setdefault("API_SHARED_KEY", "test_key_123")
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
 
-from agent_manager import SessionManager
+from agent_manager import SessionManager  # noqa: E402
 
 
 def _make_mgr():
@@ -33,6 +33,14 @@ def _make_mgr():
         "orchestrator": {"path": "/opt", "description": "test", "name": "orchestrator"}
     }
     mgr._stream_buffers = {}
+    mgr._env_wee_models = None
+    mgr._env_claude_models = None
+    mgr._env_gemini_models = None
+    mgr._env_codex_models = None
+    mgr._env_devin_models = None
+    mgr._env_cursor_models = None
+    mgr._openrouter_cache_ts = 0
+    mgr._openrouter_models_cache = None
     return mgr
 
 
@@ -46,7 +54,9 @@ class TestFetchWeeModels(unittest.TestCase):
         """All returned items must be plain strings (not tuples)."""
         with patch("urllib.request.urlopen") as mock_urlopen:
             mock_resp = MagicMock()
-            mock_resp.read.return_value = b'{"models": [{"name": "gemma4:e4b"}, {"name": "qwen3.5:latest"}]}'
+            mock_resp.read.return_value = (
+                b'{"models": [{"name": "gemma4:e4b"}, {"name": "qwen3.5:latest"}]}'
+            )
             mock_resp.__enter__ = lambda s: s
             mock_resp.__exit__ = MagicMock(return_value=False)
             mock_urlopen.return_value = mock_resp
@@ -58,20 +68,26 @@ class TestFetchWeeModels(unittest.TestCase):
         for section, models in result.items():
             self.assertIsInstance(models, list, f"Section {section!r} must be a list")
             for m in models:
-                self.assertIsInstance(m, str, f"Model {m!r} in section {section!r} must be a str, not {type(m)}")
+                self.assertIsInstance(
+                    m, str,
+                    f"Model {m!r} in section {section!r} must be a str, not {type(m)}",
+                )
 
     def test_fetch_wee_models_ollama_prefix(self):
         """Ollama models must be prefixed with 'ollama/'."""
         with patch("urllib.request.urlopen") as mock_urlopen:
             mock_resp = MagicMock()
-            mock_resp.read.return_value = b'{"models": [{"name": "gemma4:e4b"}, {"name": "granite3.3-tuned:latest"}]}'
+            mock_resp.read.return_value = (
+                b'{"models": [{"name": "gemma4:e4b"},'
+                b' {"name": "granite3.3-tuned:latest"}]}'
+            )
             mock_resp.__enter__ = lambda s: s
             mock_resp.__exit__ = MagicMock(return_value=False)
             mock_urlopen.return_value = mock_resp
 
             result = self.mgr.fetch_wee_models()
 
-        ollama_section = result.get("Ollama (Local)", [])
+        ollama_section = result.get("Ollama Models", [])
         self.assertIn("ollama/gemma4:e4b", ollama_section)
         self.assertIn("ollama/granite3.3-tuned:latest", ollama_section)
 
@@ -86,19 +102,29 @@ class TestFetchWeeModels(unittest.TestCase):
 
             result = self.mgr.fetch_wee_models()
 
-        openrouter_models = result.get("OpenRouter (Cloud)", [])
-        self.assertTrue(len(openrouter_models) > 0, "OpenRouter section must not be empty")
+        openrouter_models = result.get("OpenRouter Models", [])
+        self.assertTrue(
+            len(openrouter_models) > 0, "OpenRouter section must not be empty"
+        )
         for m in openrouter_models:
-            self.assertTrue(m.startswith("openrouter/"), f"OpenRouter model {m!r} must start with 'openrouter/'")
+            self.assertTrue(
+                m.startswith("openrouter/"),
+                f"OpenRouter model {m!r} must start with 'openrouter/'",
+            )
 
     def test_fetch_wee_models_fallback_on_error(self):
         """Falls back to static list when Ollama is unreachable."""
-        with patch("urllib.request.urlopen", side_effect=Exception("connection refused")):
+        with patch(
+            "urllib.request.urlopen",
+            side_effect=Exception("connection refused"),
+        ):
             result = self.mgr.fetch_wee_models()
 
         self.assertIsInstance(result, dict)
         all_models = [m for section in result.values() for m in section]
-        self.assertTrue(len(all_models) > 0, "Fallback must return at least some models")
+        self.assertTrue(
+            len(all_models) > 0, "Fallback must return at least some models"
+        )
         for m in all_models:
             self.assertIsInstance(m, str)
 
@@ -124,9 +150,9 @@ class TestGetModelsForRuntime(unittest.TestCase):
             # This must not raise AttributeError (the original bug)
             self.assertIsInstance(m.lower(), str)
 
-    def test_wee_models_entries_are_tuples(self, session_mgr):
+    def test_wee_models_entries_are_tuples(self):
         """Each model entry must be a (model_id, description, aliases) tuple."""
-        for category, entries in session_mgr.WEE_MODELS.items():
+        for category, entries in self.mgr.WEE_MODELS.items():
             for entry in entries:
                 assert isinstance(
                     entry, tuple
@@ -137,17 +163,17 @@ class TestGetModelsForRuntime(unittest.TestCase):
                 assert isinstance(desc, str)
                 assert isinstance(aliases, list)
 
-    def test_wee_models_contains_gemma(self, session_mgr):
+    def test_wee_models_contains_gemma(self):
         """WEE_MODELS must include gemma4:e4b (the model that was being ignored)."""
         all_ids = [
-            mid for entries in session_mgr.WEE_MODELS.values() for mid, _, _ in entries
+            mid for entries in self.mgr.WEE_MODELS.values() for mid, _, _ in entries
         ]
         assert "ollama/gemma4:e4b" in all_ids
 
-    def test_wee_models_contains_granite(self, session_mgr):
+    def test_wee_models_contains_granite(self):
         """WEE_MODELS must include granite3.3-tuned (the default that was always used)."""  # noqa: E501
         all_ids = [
-            mid for entries in session_mgr.WEE_MODELS.values() for mid, _, _ in entries
+            mid for entries in self.mgr.WEE_MODELS.values() for mid, _, _ in entries
         ]
         assert "ollama/granite3.3-tuned" in all_ids
 
@@ -160,7 +186,9 @@ class TestOllamaPort(unittest.TestCase):
         wee_runtime_path = REPO / "wee_runtime.py"
         source = wee_runtime_path.read_text()
         # Must NOT have 11436
-        self.assertNotIn("11436", source, "wee_runtime.py must not reference port 11436")
+        self.assertNotIn(
+            "11436", source, "wee_runtime.py must not reference port 11436"
+        )
         # Must have 11434
         self.assertIn("11434", source, "wee_runtime.py must reference port 11434")
 
@@ -183,22 +211,28 @@ class TestRunWeeNativeModelPassthrough(unittest.TestCase):
     def setUp(self):
         self.mgr = _make_mgr()
 
-    def test_returns_flat_strings(self, session_mgr):
+    def test_returns_flat_strings(self):
         """All model IDs must be flat strings, not tuples."""
-        result = session_mgr.get_models_for_runtime("wee")
+        result = self.mgr.get_models_for_runtime("wee")
         for category, model_ids in result.items():
             for mid in model_ids:
                 assert isinstance(
                     mid, str
                 ), f"Model ID in {category} is {type(mid).__name__}, not str: {mid}"
 
+        captured = {}
+
         def fake_openai(**kwargs):
             captured["base_url"] = kwargs.get("base_url", "")
             captured["model"] = kwargs.get("model", "")
             client = MagicMock()
             client.chat.completions.create.return_value = iter([
-                MagicMock(choices=[MagicMock(delta=MagicMock(content="hi"), finish_reason=None)]),
-                MagicMock(choices=[MagicMock(delta=MagicMock(content=None), finish_reason="stop")]),
+                MagicMock(choices=[
+                    MagicMock(delta=MagicMock(content="hi"), finish_reason=None)
+                ]),
+                MagicMock(choices=[
+                    MagicMock(delta=MagicMock(content=None), finish_reason="stop")
+                ]),
             ])
             return client
 
@@ -233,8 +267,11 @@ class TestRunWeeNativeModelPassthrough(unittest.TestCase):
                     pass  # We only care about what was captured
 
         if captured.get("base_url"):
-            self.assertIn("11434", captured["base_url"],
-                          f"api_base {captured['base_url']!r} must use port 11434 for Ollama model")
+            self.assertIn(
+                "11434",
+                captured["base_url"],
+                f"api_base {captured['base_url']!r} must use port 11434",
+            )
             self.assertNotIn("11436", captured["base_url"])
 
 
@@ -264,39 +301,41 @@ class TestWeeInKnownRuntimes(unittest.TestCase):
 # ── Session validation ──
 
 
-class TestSessionValidationWee:
+class TestSessionValidationWee(unittest.TestCase):
+    def setUp(self):
+        self.mgr = _make_mgr()
     """Verify session validation properly handles wee model switching."""
 
-    def test_empty_model_gets_default(self, session_mgr):
+    def test_empty_model_gets_default(self):
         """When model is empty for wee runtime, default should be set."""
 
         session_data = {"runtime": "wee", "model": ""}
         # Simulate the validation logic
         runtime = "wee"  # noqa: F841
         current_model = session_data.get("model", "")
-        if not current_model or not session_mgr.get_model_from_name(
+        if not current_model or not self.mgr.get_model_from_name(
             current_model, "wee"
         ):
             session_data["model"] = os.getenv("WEE_DEFAULT_MODEL", "ollama/gemma4:e4b")
         assert session_data["model"] == "ollama/gemma4:e4b"
 
-    def test_valid_model_preserved(self, session_mgr):
+    def test_valid_model_preserved(self):
         """When a valid wee model is set, it should be preserved."""
         session_data = {"runtime": "wee", "model": "ollama/gemma4:e4b"}
         runtime = "wee"  # noqa: F841
         current_model = session_data.get("model", "")
-        if not current_model or not session_mgr.get_model_from_name(
+        if not current_model or not self.mgr.get_model_from_name(
             current_model, "wee"
         ):
             session_data["model"] = "ollama/gemma4:e4b"
         assert session_data["model"] == "ollama/gemma4:e4b"
 
-    def test_stale_copilot_model_replaced(self, session_mgr):
+    def test_stale_copilot_model_replaced(self):
         """A stale copilot model (e.g. gpt-5-mini) should be replaced for wee."""
         session_data = {"runtime": "wee", "model": "gpt-5-mini"}
         runtime = "wee"  # noqa: F841
         current_model = session_data.get("model", "")
-        resolved = session_mgr.get_model_from_name(current_model, "wee")
+        resolved = self.mgr.get_model_from_name(current_model, "wee")
         if not current_model or not resolved:
             session_data["model"] = os.getenv("WEE_DEFAULT_MODEL", "ollama/gemma4:e4b")
         # gpt-5-mini is not a wee model, so it should be replaced
@@ -306,7 +345,7 @@ class TestSessionValidationWee:
 # ── static_alias_map includes wee ──
 
 
-class TestStaticAliasMap:
+class TestStaticAliasMap(unittest.TestCase):
     """Verify static_alias_map in get_model_from_name includes wee."""
 
     def test_wee_in_static_alias_map(self):
@@ -330,29 +369,3 @@ class TestStaticAliasMap:
 
 
 # ── fetch_wee_models() ──
-
-
-class TestFetchWeeModels:
-    """Verify fetch_wee_models returns proper model structure."""
-
-    def test_returns_dict(self, session_mgr):
-        """fetch_wee_models must return a dict."""
-        with patch("httpx.get", side_effect=Exception("offline")):
-            result = session_mgr.fetch_wee_models()
-        assert isinstance(result, dict)
-
-    def test_fallback_returns_flat_strings(self, session_mgr):
-        """When Ollama is unreachable, fallback returns flat strings."""
-        with patch("httpx.get", side_effect=Exception("offline")):
-            result = session_mgr.fetch_wee_models()
-        for category, model_ids in result.items():
-            for mid in model_ids:
-                assert isinstance(mid, str), f"Not a string: {mid}"
-
-    def test_fallback_contains_known_models(self, session_mgr):
-        """Fallback must contain key models from WEE_MODELS."""
-        with patch("httpx.get", side_effect=Exception("offline")):
-            result = session_mgr.fetch_wee_models()
-        all_models = [m for models in result.values() for m in models]
-        assert "ollama/gemma4:e4b" in all_models
-        assert "ollama/granite3.3-tuned" in all_models
