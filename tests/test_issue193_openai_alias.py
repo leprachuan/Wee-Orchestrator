@@ -11,9 +11,9 @@ import json
 import os
 import sys
 import tempfile
-from pathlib import Path
-from unittest.mock import MagicMock, patch
 import unittest
+from pathlib import Path
+from unittest.mock import patch
 
 sys.path.insert(0, "/opt/n8n-copilot-shim-dev")
 os.environ.setdefault("API_SHARED_KEY", "test_key_123")
@@ -63,7 +63,9 @@ class TestIssue193SessionExistsOpenAIAlias(unittest.TestCase):
         self.mgr = _make_manager(self.tmpdir)
 
     def test_session_exists_openai_finds_wee_messages(self):
-        """session_exists with runtime='openai' must look up wee_messages (same as 'wee')."""
+        """session_exists with runtime='openai' must look up
+        wee_messages (same as 'wee').
+        """
         session_data = {
             "session_id": "abc-123",
             "runtime": "openai",
@@ -73,7 +75,9 @@ class TestIssue193SessionExistsOpenAIAlias(unittest.TestCase):
         # Patch load_session_data to return our test data
         with patch.object(self.mgr, "load_session_data", return_value=session_data):
             result = self.mgr.session_exists("abc-123", "openai", n8n_session_id=sid)
-        self.assertTrue(result, "session_exists must return True when wee_messages exist")
+        self.assertTrue(
+            result, "session_exists must return True when wee_messages exist"
+        )
 
     def test_session_exists_openai_false_without_wee_messages(self):
         session_data = {"session_id": "abc-456", "runtime": "openai"}
@@ -83,19 +87,25 @@ class TestIssue193SessionExistsOpenAIAlias(unittest.TestCase):
         self.assertFalse(result)
 
     def test_session_exists_openai_matches_wee_behaviour(self):
-        """session_exists(runtime='openai') must return same result as (runtime='wee')."""
+        """session_exists(runtime='openai') must return same result
+        as (runtime='wee').
+        """
         session_data_with = {
             "session_id": "abc-789",
             "wee_messages": [{"role": "user", "content": "hi"}],
         }
-        with patch.object(self.mgr, "load_session_data", return_value=session_data_with):
+        with patch.object(
+            self.mgr, "load_session_data", return_value=session_data_with
+        ):
             result_openai = self.mgr.session_exists("", "openai", n8n_session_id="s1")
             result_wee = self.mgr.session_exists("", "wee", n8n_session_id="s1")
         self.assertEqual(result_openai, result_wee)
 
 
 class TestIssue193ModelDefaultsOpenAIAlias(unittest.TestCase):
-    """MAJOR regression: model defaults must resolve for sessions with runtime='openai'."""
+    """MAJOR regression: model defaults must resolve for sessions
+    with runtime='openai'.
+    """
 
     def setUp(self):
         self.tmpdir = tempfile.mkdtemp()
@@ -142,10 +152,14 @@ class TestIssue193ModelDefaultsOpenAIAlias(unittest.TestCase):
 
 
 class TestIssue193BackgroundTaskNormalization(unittest.TestCase):
-    """MAJOR regression: _run_background_task must normalize runtime='openai' to 'wee'."""
+    """MAJOR regression: _run_background_task must normalize
+    runtime='openai' to 'wee'.
+    """
 
     def test_run_background_task_source_has_openai_normalization(self):
-        """_run_background_task (inside create_api_app) must normalize runtime='openai' to 'wee'.
+        """_run_background_task (inside create_api_app) must normalize
+        runtime='openai' to 'wee'.
+
 
         Uses source inspection — same pattern as test_issue193_dispatch_config.py —
         to confirm the normalization block exists without spawning subprocesses.
@@ -163,17 +177,20 @@ class TestIssue193BackgroundTaskNormalization(unittest.TestCase):
             "create_api_app source must mention 'openai' runtime somewhere",
         )
 
-        # Look for the exact normalization pattern: if runtime == "openai": runtime = "wee"
+        # Look for the exact normalization pattern:
+        # if runtime == "openai": runtime = "wee"
         normalization_present = bool(
             re.search(
-                r'if\s+runtime\s*==\s*["\']openai["\']\s*:\s*runtime\s*=\s*["\']wee["\']',
+                r'if\s+runtime\s*==\s*["\']openai["\']\s*'
+                r':\s*runtime\s*=\s*["\']wee["\']+',
                 src,
             )
         )
         # OR the branch check pattern: elif runtime in ("wee", "openai"):
         branch_present = bool(
             re.search(
-                r'elif\s+runtime\s+in\s+\([^)]*["\']wee["\'][^)]*["\']openai["\'][^)]*\)',
+                r'elif\s+runtime\s+in\s+\([^)]*["\']wee["\'][^)]*'
+                r'["\']openai["\'][^)]*\)',
                 src,
             )
         )
