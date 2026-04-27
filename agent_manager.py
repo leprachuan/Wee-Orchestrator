@@ -364,24 +364,28 @@ _FALLBACK_PATTERNS = [
 # proactive-restart, and reactive-recovery paths in run_copilot().
 _COPILOT_ELEVATED_MODE_INSTRUCTIONS = (
     "\n\n[ELEVATED MODE ENABLED]\n"
-    "Full permissions granted. ALL commands requiring elevated privileges MUST automatically "
+    "Full permissions granted. ALL commands requiring elevated privileges MUST automatically "  # noqa: E501
     "prefix with 'sudo' \u2014 no exceptions. This includes:\n"
-    "\u2022 Service management: sudo systemctl restart/start/stop/reload/enable/disable <service>\n"
+    "\u2022 Service management: sudo systemctl restart/start/stop/reload/enable/disable <service>\n"  # noqa: E501
     "\u2022 Network commands: sudo ping, sudo ssh, sudo iptables, sudo ip, etc.\n"
-    "\u2022 System administration: sudo journalctl, sudo systemd-*, sudo chmod/chown on system paths\n"
+    "\u2022 System administration: sudo journalctl, sudo systemd-*, sudo chmod/chown on system paths\n"  # noqa: E501
     "\u2022 Any command that would fail due to insufficient permissions\n"
     "Sudo is configured without password prompt (NOPASSWD:ALL). "
-    "Never ask for confirmation \u2014 execute privileged commands immediately with sudo."
+    "Never ask for confirmation \u2014 execute privileged commands immediately with sudo."  # noqa: E501
 )
 _COPILOT_SANDBOXED_MODE_INSTRUCTIONS = (
     "\n\n[SANDBOXED MODE ENABLED]\n"
     "Read-only access only. Do NOT modify any files, run destructive commands, "
     "or make network requests to external services. Analysis and reporting only."
 )
+# Session expiry constants (issue #190).
+# Used in both proactive age check and reactive token expiry recovery.
+_COPILOT_SESSION_MAX_AGE_SEC = 25 * 60  # 25 minutes
+_TOKEN_EXPIRED_MARKER = "Session token expired"
 
 
 class BackgroundTaskManager:
-    """Manages background task lifecycle: creation, tracking, output capture, cleanup."""
+    """Manages background task lifecycle: creation, tracking, output capture, cleanup."""  # noqa: E501
 
     MAX_TASKS_PER_USER = int(os.environ.get("BG_MAX_TASKS_PER_USER", "5"))
     MAX_OUTPUT_LINES = 500
@@ -6775,8 +6779,7 @@ User Request:
         # Proactive session age check (issue #190): Copilot session tokens expire
         # ~30 min after creation. If the session is > 25 min old, start fresh to
         # avoid mid-task "Session token expired" crashes on long-running tasks.
-        _COPILOT_SESSION_MAX_AGE_SEC = 25 * 60
-        _session_age = time.time() - self._copilot_session_start.get(n8n_session_id, 0)
+        _session_age = time.time() - getattr(self, "_copilot_session_start", {}).get(n8n_session_id, 0)
         if resume and session_id and _session_age > _COPILOT_SESSION_MAX_AGE_SEC:
             print(
                 f"[Session] Copilot session age {_session_age:.0f}s exceeds "
@@ -6800,13 +6803,15 @@ User Request:
                 context_prompt = context_prompt + _COPILOT_ELEVATED_MODE_INSTRUCTIONS
             elif mode == "sandboxed":
                 context_prompt = context_prompt + _COPILOT_SANDBOXED_MODE_INSTRUCTIONS
+            # Update cmd[2] so the rebuilt context_prompt is actually used
+            cmd[2] = context_prompt
 
         if resume and session_id:
             cmd.extend(["--resume", session_id])
             print(f"[Session] Resuming Copilot session: {session_id}", file=sys.stderr)
         else:
             # Record session start time for proactive age tracking
-            self._copilot_session_start[n8n_session_id] = time.time()
+            getattr(self, "_copilot_session_start", {}).update({n8n_session_id: time.time()})
             print(
                 f"[Session] Starting new Copilot session in {mode} permission mode",
                 file=sys.stderr,
@@ -6820,7 +6825,6 @@ User Request:
         # Reactive recovery (issue #190): if the session token expired mid-task,
         # restart with a fresh session and inject accumulated context so the agent
         # can continue rather than crashing the background task.
-        _TOKEN_EXPIRED_MARKER = "Session token expired"
         if _TOKEN_EXPIRED_MARKER in result:
             print(
                 "[Session] Copilot session token expired — auto-restarting with fresh session",
@@ -6873,7 +6877,7 @@ User Request:
                 _recovery_cmd.append("--yolo")
 
             # Record new session start for age tracking
-            self._copilot_session_start[n8n_session_id] = time.time()
+            getattr(self, "_copilot_session_start", {}).update({n8n_session_id: time.time()})
             _recovery_output = self._execute_subprocess_with_tracking(
                 _recovery_cmd,
                 agent_dir,

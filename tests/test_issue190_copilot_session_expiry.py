@@ -192,6 +192,14 @@ class TestIssue190ProactiveRestart(unittest.TestCase):
         # Mark session as 26 minutes old
         self.mgr._copilot_session_start["n8n-b04"] = time.time() - (26 * 60)
 
+        # With resume=True, cmd[2] starts as raw prompt ("continue work").
+        # The proactive block calls build_agent_context_prompt ONCE to rebuild context.
+        # The fix (cmd[2] = context_prompt) ensures cmd[2] is updated to the rebuilt value.
+        # Use a distinct return value to prove cmd[2] was actually updated.
+        original_cmd2 = "continue work"  # raw prompt used for resume paths
+        full_ctx = "<ctx>full rebuilt context — must appear in stale restart cmd</ctx>"
+        self.mgr.build_agent_context_prompt = MagicMock(side_effect=[full_ctx])
+
         captured_cmds = []
 
         def fake_execute(cmd, cwd, timeout, runtime, agent, prompt, session_id):
@@ -214,6 +222,15 @@ class TestIssue190ProactiveRestart(unittest.TestCase):
         cmd = captured_cmds[0]
         self.assertNotIn("--resume", cmd, "B04: stale session must NOT use --resume")
         self.assertNotIn("stale-copilot-session", cmd, "B04: stale session ID must not appear in cmd")
+        # MAJOR: cmd[2] must be updated to the rebuilt context_prompt, not left as raw prompt
+        self.assertNotEqual(
+            cmd[2], original_cmd2,
+            "B04: cmd[2] must NOT be the raw prompt after proactive restart"
+        )
+        self.assertEqual(
+            cmd[2], full_ctx,
+            "B04: cmd[2] must be updated to rebuilt context_prompt after proactive restart"
+        )
 
     def test_issue_190_b05_young_session_keeps_resume(self):
         """B05: Session age <= 25 min keeps --resume as expected."""
