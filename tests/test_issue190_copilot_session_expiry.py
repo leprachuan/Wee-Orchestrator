@@ -327,3 +327,57 @@ class TestIssue190SourceInspection(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+class TestIssue190DoubleExpiry(unittest.TestCase):
+    """B07: If the recovery session also expires, a warning is logged and output returned."""
+
+    def setUp(self):
+        self.mgr = _make_mgr()
+        self.mgr.get_most_recent_session_id = MagicMock(return_value=None)
+        self.mgr.update_session_field = MagicMock()
+
+    def test_issue190_double_expiry_recovery_also_expires(self):
+        """B07: double-expiry logs a warning and returns the partial recovery output."""
+        first_expiry_output = (
+            "Partial work.\n"
+            "Session token expired. Please resend your message. (Request ID: aaa)\n"
+        )
+        second_expiry_output = (
+            "Started recovery.\n"
+            "Session token expired. Please resend your message. (Request ID: bbb)\n"
+        )
+
+        call_count = [0]
+
+        def fake_execute(cmd, cwd, timeout, runtime, agent, prompt, session_id):
+            call_count[0] += 1
+            if call_count[0] == 1:
+                return first_expiry_output
+            return second_expiry_output
+
+        self.mgr._execute_subprocess_with_tracking = fake_execute
+
+        import io
+
+        stderr_capture = io.StringIO()
+        with patch("sys.stderr", stderr_capture):
+            result = self.mgr.run_copilot(
+                prompt="long task that double-expires",
+                model="gpt-4o",
+                agent="wee-dev",
+                session_id=None,
+                resume=False,
+                n8n_session_id="n8n-double-expiry",
+            )
+
+        self.assertEqual(call_count[0], 2, "B07: exactly 2 subprocesses launched")
+        self.assertEqual(
+            result, second_expiry_output, "B07: partial recovery output returned"
+        )
+        warning_output = stderr_capture.getvalue()
+        self.assertIn(
+            "double-expiry",
+            warning_output,
+            "B07: double-expiry warning must be logged to stderr",
+        )

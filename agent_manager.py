@@ -100,6 +100,18 @@ _CURL_USER_RE = re.compile(
     r"""(-u\s+)(\S+)""",
 )
 
+_ELEVATED_MODE_INSTRUCTIONS = (
+    "\n\n[ELEVATED MODE ENABLED]\n"
+    "Full permissions granted. ALL commands requiring elevated privileges MUST automatically "
+    "prefix with 'sudo' — no exceptions. This includes:\n"
+    "• Service management: sudo systemctl restart/start/stop/reload/enable/disable <service>\n"
+    "• Network commands: sudo ping, sudo ssh, sudo iptables, sudo ip, etc.\n"
+    "• System administration: sudo journalctl, sudo systemd-*, sudo chmod/chown on system paths\n"
+    "• Any command that would fail due to insufficient permissions\n"
+    "Sudo is configured without password prompt (NOPASSWD:ALL). "
+    "Never ask for confirmation — execute privileged commands immediately with sudo."
+)
+
 
 def _sanitize_command_for_display(text: str) -> str:
     """Redact sensitive headers and credentials from command strings for UI display.
@@ -6984,18 +6996,7 @@ User Request:
 
         # Add elevated mode instructions for unrestricted privileged access
         if mode == "elevated":
-            elevated_instruction = (
-                "\n\n[ELEVATED MODE ENABLED]\n"
-                "Full permissions granted. ALL commands requiring elevated privileges MUST automatically "
-                "prefix with 'sudo' \u2014 no exceptions. This includes:\n"
-                "\u2022 Service management: sudo systemctl restart/start/stop/reload/enable/disable <service>\n"
-                "\u2022 Network commands: sudo ping, sudo ssh, sudo iptables, sudo ip, etc.\n"
-                "\u2022 System administration: sudo journalctl, sudo systemd-*, sudo chmod/chown on system paths\n"
-                "\u2022 Any command that would fail due to insufficient permissions\n"
-                "Sudo is configured without password prompt (NOPASSWD:ALL). "
-                "Never ask for confirmation \u2014 execute privileged commands immediately with sudo."
-            )
-            context_prompt = context_prompt + elevated_instruction
+            context_prompt = context_prompt + _ELEVATED_MODE_INSTRUCTIONS
         elif mode == "sandboxed":
             sandboxed_instruction = (
                 "\n\n[SANDBOXED MODE ENABLED]\n"
@@ -7049,17 +7050,7 @@ User Request:
                 channel,
             )
             if mode == "elevated":
-                context_prompt = context_prompt + (
-                    "\n\n[ELEVATED MODE ENABLED]\n"
-                    "Full permissions granted. ALL commands requiring elevated privileges MUST automatically "
-                    "prefix with 'sudo' — no exceptions. This includes:\n"
-                    "• Service management: sudo systemctl restart/start/stop/reload/enable/disable <service>\n"
-                    "• Network commands: sudo ping, sudo ssh, sudo iptables, sudo ip, etc.\n"
-                    "• System administration: sudo journalctl, sudo systemd-*, sudo chmod/chown on system paths\n"
-                    "• Any command that would fail due to insufficient permissions\n"
-                    "Sudo is configured without password prompt (NOPASSWD:ALL). "
-                    "Never ask for confirmation — execute privileged commands immediately with sudo."
-                )
+                context_prompt = context_prompt + _ELEVATED_MODE_INSTRUCTIONS
             elif mode == "sandboxed":
                 context_prompt = context_prompt + (
                     "\n\n[SANDBOXED MODE ENABLED]\n"
@@ -7126,17 +7117,7 @@ User Request:
                 channel,
             )
             if mode == "elevated":
-                _recovery_context += (
-                    "\n\n[ELEVATED MODE ENABLED]\n"
-                    "Full permissions granted. ALL commands requiring elevated privileges MUST automatically "
-                    "prefix with 'sudo' — no exceptions. This includes:\n"
-                    "• Service management: sudo systemctl restart/start/stop/reload/enable/disable <service>\n"
-                    "• Network commands: sudo ping, sudo ssh, sudo iptables, sudo ip, etc.\n"
-                    "• System administration: sudo journalctl, sudo systemd-*, sudo chmod/chown on system paths\n"
-                    "• Any command that would fail due to insufficient permissions\n"
-                    "Sudo is configured without password prompt (NOPASSWD:ALL). "
-                    "Never ask for confirmation — execute privileged commands immediately with sudo."
-                )
+                _recovery_context += _ELEVATED_MODE_INSTRUCTIONS
             elif mode == "sandboxed":
                 _recovery_context += (
                     "\n\n[SANDBOXED MODE ENABLED]\n"
@@ -7171,12 +7152,22 @@ User Request:
                 n8n_session_id,
             )
             _recovery_result = self.strip_metadata(_recovery_output, "copilot")
-            
+
+            # Double-expiry guard: if the recovery session also expired, log a warning.
+            # The result is still returned as-is — the caller sees partial output rather
+            # than a silent truncation.
+            if _TOKEN_EXPIRED_MARKER in _recovery_result:
+                print(
+                    "[Session] WARNING: Copilot recovery session also expired — "
+                    "double-expiry detected; returning partial output",
+                    file=sys.stderr,
+                )
+
             # Persist the new session_id from reactive recovery (issue #190)
             _new_session_id = self.get_most_recent_session_id("copilot", agent)
             if _new_session_id:
                 self.update_session_field(n8n_session_id, "session_id", _new_session_id)
-            
+
             return _recovery_result
 
         # If proactive recovery was triggered, persist the new session_id (issue #190)
