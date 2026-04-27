@@ -17,29 +17,54 @@ class TestIssue193TypoFixes:
     """Regression tests for issue #193: "of" -> "off" typo fixes."""
 
     def test_notifications_off_sets_value_correctly(self):
-        """Regression: /notifications off must set to 'off', not 'of'."""
+        """Regression: /notifications off must set preference to 'off', not 'of'.
+
+        Updated for issue #250: the handler now calls set_agent_pref() with 'off'
+        for every known agent rather than update_session_field().
+        """
         with tempfile.TemporaryDirectory() as tmpdir:
             with patch.dict(os.environ, {"SESSION_MAP_DIR": tmpdir}):
+                import threading
+
+                from notification_manager import NotificationManager
+
                 manager = SessionManager.__new__(SessionManager)
                 manager._session_map_dir = tmpdir
+                # Provide identity so the per-agent auth check passes
+                manager._bg_identity = "test_user"
+                # Expose a two-element agents list so the bulk-set loop fires
+                manager._agents = [{"name": "orchestrator"}, {"name": "wee-dev"}]
+
+                # Use a real NotificationManager backed by a temp file
+                prefs_file = str(Path(tmpdir) / "notification_prefs.json")
+                settings_file = str(Path(tmpdir) / "notification_settings.json")
+                notif_file = str(Path(tmpdir) / "notifications.json")
+                nm = NotificationManager.__new__(NotificationManager)
+                nm._path = notif_file
+                nm._prefs_path = prefs_file
+                nm._global_settings_path = settings_file
+                nm._notifications = []
+                nm._prefs = {}
+                nm._lock = threading.Lock()
+                nm._prefs_lock = threading.Lock()
+                nm._global_settings_lock = threading.Lock()
+                nm._telegram_send = None
+                nm._webex_send = None
+                manager._notification_mgr = nm
 
                 sid = "test_notif"
                 session_data = {"n8n_session_id": sid, "notification_preference": "all"}
                 p = Path(tmpdir) / f"{sid}.json"
                 p.write_text(json.dumps(session_data))
 
-                with patch.object(manager, "update_session_field") as mock_update:
-                    with patch.object(manager, "_notification_mgr", MagicMock()):
-                        manager._slash_notifications("off", session_data, sid)
+                manager._slash_notifications("off", session_data, sid)
 
-                        # Check that update_session_field was called with "off"
-                        calls = mock_update.call_args_list
-                        found = False
-                        for call in calls:
-                            if len(call[0]) >= 3 and call[0][2] == "off":
-                                found = True
-                                break
-                        assert found, "Should call update_session_field with 'off'"
+                # Verify both agents were set to "off" (not "of")
+                for agent in ("orchestrator", "wee-dev"):
+                    pref = nm.get_agent_pref("test_user", agent)
+                    assert (
+                        pref == "off"
+                    ), f"Agent '{agent}' preference should be 'off', got '{pref}'"
 
     def test_silent_off_disables_mode(self):
         """Regression: /silent off must disable silent mode."""

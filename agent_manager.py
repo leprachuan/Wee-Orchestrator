@@ -2378,9 +2378,11 @@ You can mention an agent in your prompt and it will auto-delegate:
 
     def _slash_notifications(self, argument, session_data, n8n_session_id):
         """Handle /notifications slash command with per-agent preferences.
-        
+
         Usage:
         - /notifications                    Show all agents and their status
+        - /notifications on                 Enable notifications for all agents
+        - /notifications off                Disable notifications for all agents
         - /notifications <agent> on         Enable notifications for agent
         - /notifications <agent> off        Disable notifications for agent
         - /notifications all on             Enable all agents
@@ -2391,7 +2393,6 @@ You can mention an agent in your prompt and it will auto-delegate:
 
         # Resolve identity for per-user preference store
         _notif_identity = self._bg_identity or session_data.get("identity")
-        _notif_channel = session_data.get("channel", "webui")
 
         # Load list of known agents from agents.json
         agents_list = []
@@ -2404,43 +2405,69 @@ You can mention an agent in your prompt and it will auto-delegate:
         if argument == "current":
             # Show per-agent preferences
             if not self._notification_mgr or not _notif_identity:
-                return "❓ Unable to retrieve notification preferences (not authenticated)."
-            
+                return "\u2753 Unable to retrieve notification preferences (not authenticated)."
+
             agent_prefs = self._notification_mgr.get_all_agent_prefs(_notif_identity)
             if not agent_prefs:
                 # No per-agent prefs set yet, show all agents with default "on"
-                result = "🔔 **Per-Agent Notification Preferences:**\n\n"
+                result = "\U0001f514 **Per-Agent Notification Preferences:**\n\n"
                 result += "| Agent | Status |\n"
                 result += "|-------|--------|\n"
                 if agents_list:
                     for agent in sorted(agents_list):
-                        pref = self._notification_mgr.get_agent_pref(_notif_identity, agent)
-                        status = "✅ ON" if pref == "on" else "❌ OFF"
+                        pref = self._notification_mgr.get_agent_pref(
+                            _notif_identity, agent
+                        )
+                        status = "\u2705 ON" if pref == "on" else "\u274c OFF"
                         result += f"| {agent} | {status} |\n"
                 else:
-                    result += "| (No agents configured) | — |\n"
+                    result += "| (No agents configured) | \u2014 |\n"
             else:
-                result = "🔔 **Per-Agent Notification Preferences:**\n\n"
+                result = "\U0001f514 **Per-Agent Notification Preferences:**\n\n"
                 result += "| Agent | Status |\n"
                 result += "|-------|--------|\n"
                 for agent in sorted(agent_prefs.keys()):
                     pref = agent_prefs[agent]
-                    status = "✅ ON" if pref == "on" else "❌ OFF"
+                    status = "\u2705 ON" if pref == "on" else "\u274c OFF"
                     result += f"| {agent} | {status} |\n"
                 # Add agents not in prefs with default status
                 if agents_list:
                     for agent in sorted(agents_list):
                         if agent not in agent_prefs:
-                            result += f"| {agent} | ✅ ON (default) |\n"
-            
+                            result += f"| {agent} | \u2705 ON (default) |\n"
+
             return result
+
+        elif argument in ("on", "all"):
+            # Backward-compat: /notifications on  ->  enable all agents
+            if not self._notification_mgr or not _notif_identity:
+                return "\u2753 Unable to set preferences (not authenticated)."
+            if agents_list:
+                for agent in agents_list:
+                    self._notification_mgr.set_agent_pref(_notif_identity, agent, "on")
+                return "\u2713 Notifications enabled for all agents."
+            return "\u2753 No agents found to configure."
+
+        elif argument in ("off", "mute"):
+            # Backward-compat: /notifications off  ->  disable all agents
+            if not self._notification_mgr or not _notif_identity:
+                return "\u2753 Unable to set preferences (not authenticated)."
+            if agents_list:
+                for agent in agents_list:
+                    self._notification_mgr.set_agent_pref(_notif_identity, agent, "off")
+                return "\u2713 Notifications disabled for all agents."
+            return "\u2753 No agents found to configure."
 
         elif " " in argument:
             # Parse "agent on/off" format
             parts = argument.strip().split()
             if len(parts) != 2:
-                return "Usage: `/notifications <agent> [on|off]` or `/notifications all [on|off]` or `/notifications` to view all"
-            
+                return (
+                    "Usage: `/notifications <agent> [on|off]`"
+                    " or `/notifications all [on|off]`"
+                    " or `/notifications` to view all"
+                )
+
             agent_name = parts[0]
             pref_value = parts[1].lower()
 
@@ -2448,7 +2475,7 @@ You can mention an agent in your prompt and it will auto-delegate:
                 return f"Invalid preference: {pref_value}. Use `on` or `off`."
 
             if not self._notification_mgr or not _notif_identity:
-                return "❓ Unable to set preferences (not authenticated)."
+                return "\u2753 Unable to set preferences (not authenticated)."
 
             if agent_name == "all":
                 # Bulk set all agents
@@ -2458,19 +2485,22 @@ You can mention an agent in your prompt and it will auto-delegate:
                             _notif_identity, agent, pref_value
                         )
                     verb = "enabled" if pref_value == "on" else "disabled"
-                    return f"✓ Notifications {verb} for all agents."
-                else:
-                    return "❓ No agents found to configure."
+                    return f"\u2713 Notifications {verb} for all agents."
+                return "\u2753 No agents found to configure."
             else:
                 # Set specific agent
                 self._notification_mgr.set_agent_pref(
                     _notif_identity, agent_name, pref_value
                 )
                 status = "enabled" if pref_value == "on" else "disabled"
-                return f"✓ Notifications {status} for agent `{agent_name}`."
+                return f"\u2713 Notifications {status} for agent `{agent_name}`."
 
         else:
-            return "Usage: `/notifications` to view all, or `/notifications <agent> [on|off]` to set, or `/notifications all [on|off]` for bulk operations"
+            return (
+                "Usage: `/notifications` to view all,"
+                " or `/notifications <agent> [on|off]` to set,"
+                " or `/notifications all [on|off]` for bulk operations"
+            )
 
     def _slash_silent(self, argument, session_data, n8n_session_id):
         """Handle /silent slash command (F026)."""

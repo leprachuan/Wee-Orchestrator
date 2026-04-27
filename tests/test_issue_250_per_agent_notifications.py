@@ -12,7 +12,8 @@ import unittest
 from pathlib import Path
 
 import sys
-sys.path.insert(0, '/opt/n8n-copilot-shim-dev')
+
+sys.path.insert(0, "/opt/n8n-copilot-shim-dev")
 
 from notification_manager import NotificationManager
 
@@ -37,11 +38,11 @@ class TestPerAgentNotifications(unittest.TestCase):
         """Test setting and getting per-agent preferences."""
         # Set preference for wee-qa to "off"
         self.notif_mgr.set_agent_pref("user123", "wee-qa", "off")
-        
+
         # Verify it was stored
         pref = self.notif_mgr.get_agent_pref("user123", "wee-qa")
         self.assertEqual(pref, "off")
-        
+
         # Verify other agents default to "on"
         pref = self.notif_mgr.get_agent_pref("user123", "research")
         self.assertEqual(pref, "on")
@@ -49,10 +50,10 @@ class TestPerAgentNotifications(unittest.TestCase):
     def test_is_agent_muted(self):
         """Test is_agent_muted convenience method."""
         self.notif_mgr.set_agent_pref("user123", "research", "off")
-        
+
         # research should be muted
         self.assertTrue(self.notif_mgr.is_agent_muted("user123", "research"))
-        
+
         # wee-qa should NOT be muted (default "on")
         self.assertFalse(self.notif_mgr.is_agent_muted("user123", "wee-qa"))
 
@@ -62,10 +63,10 @@ class TestPerAgentNotifications(unittest.TestCase):
         self.notif_mgr.set_agent_pref("user456", "research", "off")
         self.notif_mgr.set_agent_pref("user456", "wee-qa", "on")
         self.notif_mgr.set_agent_pref("user456", "smarthome", "off")
-        
+
         # Get all preferences
         all_prefs = self.notif_mgr.get_all_agent_prefs("user456")
-        
+
         # Verify all are present
         self.assertEqual(all_prefs.get("research"), "off")
         self.assertEqual(all_prefs.get("wee-qa"), "on")
@@ -81,13 +82,13 @@ class TestPerAgentNotifications(unittest.TestCase):
         # Set preference with first instance
         mgr1 = self.notif_mgr
         mgr1.set_agent_pref("persistent_user", "wee-dev", "off")
-        
+
         # Create new instance with same file
         mgr2 = NotificationManager(
             notif_file=os.path.join(self.temp_dir.name, "notif.json"),
             prefs_file=self.prefs_file,
         )
-        
+
         # Verify preference was loaded
         pref = mgr2.get_agent_pref("persistent_user", "wee-dev")
         self.assertEqual(pref, "off")
@@ -96,11 +97,11 @@ class TestPerAgentNotifications(unittest.TestCase):
         """Test that different identity formats map to same preference."""
         # Set preference with raw identity
         self.notif_mgr.set_agent_pref("telegram_12345_67890", "research", "off")
-        
+
         # Retrieve with different formats (should all normalize to same thing)
         pref1 = self.notif_mgr.get_agent_pref("telegram_67890", "research")
         pref2 = self.notif_mgr.get_agent_pref("67890", "research")
-        
+
         # Both should get the stored preference
         self.assertEqual(pref1, "off")
         self.assertEqual(pref2, "off")
@@ -109,7 +110,7 @@ class TestPerAgentNotifications(unittest.TestCase):
         """Test that create_notification accepts agent parameter."""
         # Set agent preference to "off"
         self.notif_mgr.set_agent_pref("user_with_prefs", "research", "off")
-        
+
         # Create notification for muted agent
         notif = self.notif_mgr.create_notification(
             task_id="task_123",
@@ -119,11 +120,11 @@ class TestPerAgentNotifications(unittest.TestCase):
             user_key="user_with_prefs",
             agent="research",  # New parameter
         )
-        
+
         # Notification should still be created
         self.assertIsNotNone(notif)
         self.assertEqual(notif["agent"], "research")
-        
+
         # Verify it's stored in WebUI even though external notif was skipped
         notifications = self.notif_mgr.list_notifications("user_with_prefs")
         self.assertGreater(len(notifications), 0)
@@ -132,15 +133,113 @@ class TestPerAgentNotifications(unittest.TestCase):
         """Test that old global preferences don't interfere with agent prefs."""
         # Set old-style preference (user global)
         self.notif_mgr.set_user_pref("oldstyle_user", "telegram", "off")
-        
+
         # Now set agent-specific pref
         self.notif_mgr.set_agent_pref("oldstyle_user", "wee-qa", "on")
-        
+
         # Agent pref should take precedence
         self.assertFalse(self.notif_mgr.is_agent_muted("oldstyle_user", "wee-qa"))
-        
+
         # User global should still be "off"
         self.assertTrue(self.notif_mgr.is_muted("oldstyle_user"))
+
+
+class TestSlashNotificationsHandler(unittest.TestCase):
+    """Tests for the /notifications slash command handler (per-agent #250)."""
+
+    @classmethod
+    def setUpClass(cls):
+        import agent_manager
+
+        cls.sm = agent_manager.SessionManager(
+            config_file=os.path.join(
+                os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                "agents.json",
+            ),
+            app_env="DEV",
+        )
+
+    def _make_session(self, identity="test_user_250"):
+        return {"identity": identity, "channel": "webui"}
+
+    def test_no_arg_shows_table(self):
+        """No argument (or None) should display the preferences table."""
+        result = self.sm._slash_notifications(None, self._make_session(), "sid1")
+        self.assertIsInstance(result, str)
+        # Should contain the table header or an auth error
+        self.assertTrue(
+            "Per-Agent Notification Preferences" in result
+            or "Unable to retrieve" in result
+        )
+
+    def test_on_arg_enables_all_agents(self):
+        """'/notifications on' should enable notifications for all agents."""
+        result = self.sm._slash_notifications("on", self._make_session(), "sid2")
+        self.assertIsInstance(result, str)
+        # Should confirm success or raise an auth/config issue — never a usage error
+        self.assertNotIn("Usage:", result)
+
+    def test_off_arg_disables_all_agents(self):
+        """'/notifications off' should disable notifications for all agents."""
+        result = self.sm._slash_notifications("off", self._make_session(), "sid3")
+        self.assertIsInstance(result, str)
+        self.assertNotIn("Usage:", result)
+
+    def test_mute_alias_disables_all_agents(self):
+        """'/notifications mute' should be an alias for 'off'."""
+        result = self.sm._slash_notifications("mute", self._make_session(), "sid_mute")
+        self.assertIsInstance(result, str)
+        self.assertNotIn("Usage:", result)
+
+    def test_on_and_off_not_usage_errors(self):
+        """Ensure 'on' and 'off' are handled — NOT returned as usage errors."""
+        for arg in ("on", "off", "mute"):
+            result = self.sm._slash_notifications(arg, self._make_session(), "sid_x")
+            self.assertNotIn(
+                "Usage:",
+                result,
+                msg=f"'/notifications {arg}' should not return a usage error",
+            )
+
+    def test_agent_on_syntax(self):
+        """'/notifications wee-dev on' should enable for that agent."""
+        result = self.sm._slash_notifications(
+            "wee-dev on", self._make_session(), "sid4"
+        )
+        self.assertIsInstance(result, str)
+        self.assertNotIn("Usage:", result)
+
+    def test_agent_off_syntax(self):
+        """'/notifications wee-dev off' should disable for that agent."""
+        result = self.sm._slash_notifications(
+            "wee-dev off", self._make_session(), "sid5"
+        )
+        self.assertIsInstance(result, str)
+        self.assertNotIn("Usage:", result)
+
+    def test_all_on_syntax(self):
+        """'/notifications all on' should enable all agents."""
+        result = self.sm._slash_notifications("all on", self._make_session(), "sid6")
+        self.assertIsInstance(result, str)
+        self.assertNotIn("Usage:", result)
+
+    def test_all_off_syntax(self):
+        """'/notifications all off' should disable all agents."""
+        result = self.sm._slash_notifications("all off", self._make_session(), "sid7")
+        self.assertIsInstance(result, str)
+        self.assertNotIn("Usage:", result)
+
+    def test_bogus_arg_returns_usage(self):
+        """An unrecognized single-word arg should return a usage string."""
+        result = self.sm._slash_notifications("bogus", self._make_session(), "sid8")
+        self.assertIn("Usage:", result)
+
+    def test_invalid_pref_value_returns_error(self):
+        """'agent badvalue' should return an error message, not crash."""
+        result = self.sm._slash_notifications(
+            "wee-dev badvalue", self._make_session(), "sid9"
+        )
+        self.assertIn("Invalid preference", result)
 
 
 if __name__ == "__main__":
