@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
-wee_executor.py — Unified executor for Wee agents to safely perform privileged operations.
+wee_executor.py -- Unified executor for Wee agents to safely perform privileged
+operations.
 
 Provides a secure, audited CLI for agents to execute privileged operations
 (background task creation, etc.) without direct access to API tokens or
@@ -39,6 +40,8 @@ Exit codes:
 
 Capabilities:
     - create_background_task: Create background tasks via orchestrator API
+    - list_background_tasks: List background tasks/counts
+      (direct HTTP, no LLM quota used)
     - get_secret: Retrieve secrets from secure store (elevated mode required)
 
 Future capabilities (not yet implemented):
@@ -331,9 +334,7 @@ def _resolve_identity() -> Tuple[str, str]:
         if SESSIONS_JSON.exists():
             data = json.loads(SESSIONS_JSON.read_text())
             active = [
-                s
-                for s in data.values()
-                if isinstance(s, dict) and s.get("identity")
+                s for s in data.values() if isinstance(s, dict) and s.get("identity")
             ]
             if active:
                 latest = max(active, key=lambda s: s.get("created_at", 0))
@@ -440,9 +441,7 @@ def cap_create_background_task(
                 "monitor_url": f"{api_url}/api/v1/background-tasks/{task_id}",
             }
         else:
-            logger.warning(
-                "Task %s verification returned status=%s", task_id, status
-            )
+            logger.warning("Task %s verification returned status=%s", task_id, status)
 
     return {
         "task_id": task_id,
@@ -452,12 +451,68 @@ def cap_create_background_task(
     }
 
 
+# ── Capability: list_background_tasks ──────────────────────────────────
+
+
+def cap_list_background_tasks(args: Dict, session_id: Optional[str], mode: str) -> Dict:
+    """List background tasks via the orchestrator API.
+
+    Direct HTTP call — does NOT invoke an LLM session. Safe to call frequently
+    for status checks without consuming Copilot/Claude weekly quota.
+
+    Args (in args dict):
+        status_filter: Optional status to filter by (running, queued, done, failed)
+
+    Returns:
+        {total, running, queued, done, failed, tasks: [...summary list...]}
+    """
+    rate_key = session_id or "anonymous"
+    if not _check_rate_limit(rate_key):
+        return {
+            "error": f"Rate limit exceeded ({MAX_RATE_PER_MINUTE}/min)",
+            "code": "RATE_LIMITED",
+        }
+
+    result = _api_request("GET", "/api/v1/background-tasks")
+
+    if "error" in result:
+        logger.error("Failed to list background tasks: %s", result["error"])
+        return result
+
+    tasks = result.get("tasks", [])
+    status_filter = args.get("status_filter")
+
+    counts: Dict[str, int] = {"running": 0, "queued": 0, "done": 0, "failed": 0}
+    for t in tasks:
+        s = t.get("status", "unknown")
+        if s in counts:
+            counts[s] += 1
+
+    summary = [
+        {
+            "task_id": t.get("task_id"),
+            "agent": t.get("agent"),
+            "status": t.get("status"),
+            "prompt": (t.get("prompt") or "")[:80],
+        }
+        for t in tasks
+        if not status_filter or t.get("status") == status_filter
+    ]
+
+    return {
+        "total": len(tasks),
+        "running": counts["running"],
+        "queued": counts["queued"],
+        "done": counts["done"],
+        "failed": counts["failed"],
+        "tasks": summary,
+    }
+
+
 # ── Capability: get_secret ─────────────────────────────────────────────
 
 
-def cap_get_secret(
-    args: Dict, session_id: Optional[str], mode: str
-) -> Dict:
+def cap_get_secret(args: Dict, session_id: Optional[str], mode: str) -> Dict:
     """Retrieve a secret from the secret store via secret_tool.
 
     Requires WEE_ELEVATED=true env var for defense-in-depth security.
@@ -622,12 +677,24 @@ register_capability(
 )
 
 register_capability(
+    name="list_background_tasks",
+    handler=cap_list_background_tasks,
+    allowed_modes=[MODE_INTERACTIVE, MODE_SYNC, MODE_BACKGROUND, MODE_API],
+    description=(
+        "List background tasks and counts --"
+        " lightweight HTTP call, no LLM session needed"
+    ),
+    required_args=[],
+    optional_args=["status_filter"],
+    example={"status_filter": "running"},
+)
+
+register_capability(
     name="get_secret",
     handler=cap_get_secret,
     allowed_modes=[MODE_INTERACTIVE, MODE_SYNC],
     description=(
-        "Retrieve a secret from the secure store "
-        "(requires WEE_ELEVATED=true)"
+        "Retrieve a secret from the secure store " "(requires WEE_ELEVATED=true)"
     ),
     required_args=["name"],
     optional_args=["backend"],
@@ -724,10 +791,7 @@ def main() -> None:
     cap = CAPABILITIES[cap_name]
 
     if mode not in cap["modes"]:
-        avail = [
-            c["name"]
-            for c in list_capabilities(mode)
-        ]
+        avail = [c["name"] for c in list_capabilities(mode)]
         print(
             json.dumps(
                 {

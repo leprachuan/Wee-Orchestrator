@@ -9965,6 +9965,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             ("Model not found:", 422, "model_not_found"),
             ("NotFoundError:", 422, "resource_not_found"),
             ("Resource not found", 422, "resource_not_found"),
+            ("weekly rate limit", 429, "weekly_rate_limit_exceeded"),
             ("rate limit", 429, "rate_limited"),
             ("RateLimitError", 429, "rate_limited"),
             ("PermissionDeniedError", 403, "permission_denied"),
@@ -11987,6 +11988,9 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             x_user_identity=request.headers.get("x-user-identity"),
             x_auth_channel=request.headers.get("x-auth-channel"),
         )
+        client_ip = request.client.host if request.client else "unknown"
+        if not rate_limiter.check(client_ip, "bg_tasks_list", max_requests=120, window=60):
+            raise HTTPException(status_code=429, detail="Rate limit exceeded")
         tasks = bg_task_mgr.list_all_tasks()
         # Check if running tasks are still alive
         for t in tasks:
