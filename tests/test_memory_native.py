@@ -270,9 +270,9 @@ class TestNoPromptPrefix:
         """prepend_memory is not exposed by memory.inject."""
         import memory.inject as mi
 
-        assert not hasattr(mi, "prepend_memory"), (
-            "prepend_memory should be removed — memory is injected at session start"
-        )
+        assert not hasattr(
+            mi, "prepend_memory"
+        ), "prepend_memory should be removed — memory is injected at session start"
 
     def test_memory_injected_flag_prevents_double_injection(self, tmp_path):
         """Simulates the flag check in build_agent_context_prompt."""
@@ -306,12 +306,12 @@ class TestNoPromptPrefix:
         from agent_manager import SessionManager
 
         source = inspect.getsource(SessionManager.build_agent_context_prompt)
-        assert "memory_injected" in source, (
-            "build_agent_context_prompt must check memory_injected flag"
-        )
-        assert "get_memory_context" in source, (
-            "build_agent_context_prompt must call get_memory_context"
-        )
+        assert (
+            "memory_injected" in source
+        ), "build_agent_context_prompt must check memory_injected flag"
+        assert (
+            "get_memory_context" in source
+        ), "build_agent_context_prompt must call get_memory_context"
 
 
 # ── detect_compaction ─────────────────────────────────────────────────────
@@ -404,9 +404,9 @@ class TestMemoryDailyAPI:
     @pytest.fixture
     def client(self):
         """Create test client for the API."""
-        from agent_manager import create_api_app
-
         from fastapi.testclient import TestClient
+
+        from agent_manager import create_api_app
 
         app = create_api_app()
         return TestClient(app)
@@ -438,9 +438,7 @@ class TestMemoryDailyAPI:
 
     def test_daily_note_success(self, client, auth_headers, tmp_path):
         """Creates daily note for default (orchestrator) agent."""
-        with patch.dict(
-            os.environ, {"WEE_MEMORY_DIR": str(tmp_path)}, clear=False
-        ):
+        with patch.dict(os.environ, {"WEE_MEMORY_DIR": str(tmp_path)}, clear=False):
             resp = client.post(
                 "/api/v1/memory/daily",
                 json={"content": "API test note"},
@@ -454,9 +452,7 @@ class TestMemoryDailyAPI:
 
     def test_daily_note_with_agent(self, client, auth_headers, tmp_path):
         """Creates daily note for a specific agent."""
-        with patch.dict(
-            os.environ, {"WEE_MEMORY_DIR": str(tmp_path)}, clear=False
-        ):
+        with patch.dict(os.environ, {"WEE_MEMORY_DIR": str(tmp_path)}, clear=False):
             resp = client.post(
                 "/api/v1/memory/daily",
                 json={"content": "Agent note", "agent": "wee-dev"},

@@ -18,7 +18,7 @@ import sys
 import threading
 import time
 import unittest
-from unittest.mock import MagicMock, patch, PropertyMock
+from unittest.mock import MagicMock, PropertyMock, patch
 
 # Ensure the dev codebase is importable
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -33,6 +33,7 @@ class TestWeeModelDiscoveryInit(unittest.TestCase):
     def test_import(self):
         """wee_model_discovery module is importable."""
         import wee_model_discovery
+
         self.assertTrue(hasattr(wee_model_discovery, "WeeModelDiscovery"))
         self.assertTrue(hasattr(wee_model_discovery, "discover_wee_models"))
         self.assertTrue(hasattr(wee_model_discovery, "get_discovery"))
@@ -40,6 +41,7 @@ class TestWeeModelDiscoveryInit(unittest.TestCase):
     def test_default_hosts(self):
         """Default hosts include Ollama on kubuntu."""
         from wee_model_discovery import _DEFAULT_HOSTS
+
         self.assertTrue(len(_DEFAULT_HOSTS) >= 1)
         self.assertEqual(_DEFAULT_HOSTS[0]["type"], "ollama")
         self.assertIn("192.168.1.101", _DEFAULT_HOSTS[0]["url"])
@@ -47,6 +49,7 @@ class TestWeeModelDiscoveryInit(unittest.TestCase):
     def test_custom_ttl(self):
         """Custom TTL and timeout are respected."""
         from wee_model_discovery import WeeModelDiscovery
+
         d = WeeModelDiscovery(ttl=120, timeout=10)
         self.assertEqual(d.ttl, 120)
         self.assertEqual(d.timeout, 10)
@@ -54,7 +57,15 @@ class TestWeeModelDiscoveryInit(unittest.TestCase):
     def test_env_hosts_override(self):
         """WEE_DISCOVERY_HOSTS env var overrides default hosts."""
         from wee_model_discovery import _load_hosts
-        custom = [{"name": "test", "type": "ollama", "url": "http://localhost:11434", "prefix": "test"}]
+
+        custom = [
+            {
+                "name": "test",
+                "type": "ollama",
+                "url": "http://localhost:11434",
+                "prefix": "test",
+            }
+        ]
         with patch.dict(os.environ, {"WEE_DISCOVERY_HOSTS": json.dumps(custom)}):
             hosts = _load_hosts()
             self.assertEqual(len(hosts), 1)
@@ -62,7 +73,8 @@ class TestWeeModelDiscoveryInit(unittest.TestCase):
 
     def test_env_hosts_invalid_json_falls_back(self):
         """Invalid JSON in WEE_DISCOVERY_HOSTS falls back to defaults."""
-        from wee_model_discovery import _load_hosts, _DEFAULT_HOSTS
+        from wee_model_discovery import _DEFAULT_HOSTS, _load_hosts
+
         with patch.dict(os.environ, {"WEE_DISCOVERY_HOSTS": "not-json"}):
             hosts = _load_hosts()
             self.assertEqual(hosts, _DEFAULT_HOSTS)
@@ -70,6 +82,7 @@ class TestWeeModelDiscoveryInit(unittest.TestCase):
     def test_singleton_pattern(self):
         """get_discovery() returns the same instance on repeated calls."""
         import wee_model_discovery
+
         # Reset singleton for clean test
         wee_model_discovery._discovery_instance = None
         d1 = wee_model_discovery.get_discovery()
@@ -84,16 +97,27 @@ class TestOllamaDiscovery(unittest.TestCase):
 
     def setUp(self):
         from wee_model_discovery import WeeModelDiscovery
+
         self.discovery = WeeModelDiscovery(ttl=60, timeout=5)
 
     def test_discover_ollama_success(self):
         """Ollama /api/tags discovery parses model names correctly."""
-        mock_response = json.dumps({
-            "models": [
-                {"name": "gemma4:latest", "size": 5000000000, "modified_at": "2026-01-01T00:00:00Z"},
-                {"name": "qwen3:8b", "size": 4000000000, "modified_at": "2026-01-02T00:00:00Z"},
-            ]
-        }).encode()
+        mock_response = json.dumps(
+            {
+                "models": [
+                    {
+                        "name": "gemma4:latest",
+                        "size": 5000000000,
+                        "modified_at": "2026-01-01T00:00:00Z",
+                    },
+                    {
+                        "name": "qwen3:8b",
+                        "size": 4000000000,
+                        "modified_at": "2026-01-02T00:00:00Z",
+                    },
+                ]
+            }
+        ).encode()
         with patch("wee_model_discovery.urlopen") as mock_urlopen:
             mock_resp = MagicMock()
             mock_resp.read.return_value = mock_response
@@ -120,7 +144,10 @@ class TestOllamaDiscovery(unittest.TestCase):
     def test_discover_ollama_unreachable(self):
         """Unreachable Ollama host returns empty list (no crash)."""
         from urllib.error import URLError
-        with patch("wee_model_discovery.urlopen", side_effect=URLError("Connection refused")):
+
+        with patch(
+            "wee_model_discovery.urlopen", side_effect=URLError("Connection refused")
+        ):
             models = self.discovery.discover_ollama("http://unreachable:11434")
             self.assertEqual(models, [])
 
@@ -130,16 +157,19 @@ class TestOpenAICompatDiscovery(unittest.TestCase):
 
     def setUp(self):
         from wee_model_discovery import WeeModelDiscovery
+
         self.discovery = WeeModelDiscovery(ttl=60, timeout=5)
 
     def test_discover_openai_compat_success(self):
         """OpenAI-compat /v1/models returns model IDs."""
-        mock_response = json.dumps({
-            "data": [
-                {"id": "gpt-4", "object": "model"},
-                {"id": "gpt-3.5-turbo", "object": "model"},
-            ]
-        }).encode()
+        mock_response = json.dumps(
+            {
+                "data": [
+                    {"id": "gpt-4", "object": "model"},
+                    {"id": "gpt-3.5-turbo", "object": "model"},
+                ]
+            }
+        ).encode()
         with patch("wee_model_discovery.urlopen") as mock_urlopen:
             mock_resp = MagicMock()
             mock_resp.read.return_value = mock_response
@@ -153,7 +183,10 @@ class TestOpenAICompatDiscovery(unittest.TestCase):
     def test_discover_openai_compat_unreachable(self):
         """Unreachable OpenAI-compat host returns empty list."""
         from urllib.error import URLError
-        with patch("wee_model_discovery.urlopen", side_effect=URLError("Connection refused")):
+
+        with patch(
+            "wee_model_discovery.urlopen", side_effect=URLError("Connection refused")
+        ):
             models = self.discovery.discover_openai_compat("http://unreachable:1234")
             self.assertEqual(models, [])
 
@@ -164,16 +197,26 @@ class TestDiscoverAll(unittest.TestCase):
     def test_discover_all_with_prefix(self):
         """Models are prefixed with provider name."""
         from wee_model_discovery import WeeModelDiscovery
+
         d = WeeModelDiscovery(ttl=60, timeout=5)
 
-        mock_response = json.dumps({
-            "models": [
-                {"name": "gemma4:latest"},
-                {"name": "qwen3:8b"},
-            ]
-        }).encode()
+        mock_response = json.dumps(
+            {
+                "models": [
+                    {"name": "gemma4:latest"},
+                    {"name": "qwen3:8b"},
+                ]
+            }
+        ).encode()
 
-        hosts = [{"name": "kubuntu", "type": "ollama", "url": "http://test:11434", "prefix": "ollama"}]
+        hosts = [
+            {
+                "name": "kubuntu",
+                "type": "ollama",
+                "url": "http://test:11434",
+                "prefix": "ollama",
+            }
+        ]
         with patch("wee_model_discovery._load_hosts", return_value=hosts):
             with patch("wee_model_discovery.urlopen") as mock_urlopen:
                 mock_resp = MagicMock()
@@ -189,11 +232,20 @@ class TestDiscoverAll(unittest.TestCase):
 
     def test_discover_all_offline_host(self):
         """Offline host shows offline indicator."""
-        from wee_model_discovery import WeeModelDiscovery
         from urllib.error import URLError
+
+        from wee_model_discovery import WeeModelDiscovery
+
         d = WeeModelDiscovery(ttl=60, timeout=5)
 
-        hosts = [{"name": "down-host", "type": "ollama", "url": "http://down:11434", "prefix": "ollama"}]
+        hosts = [
+            {
+                "name": "down-host",
+                "type": "ollama",
+                "url": "http://down:11434",
+                "prefix": "ollama",
+            }
+        ]
         with patch("wee_model_discovery._load_hosts", return_value=hosts):
             with patch("wee_model_discovery.urlopen", side_effect=URLError("refused")):
                 result = d.discover_all()
@@ -203,11 +255,22 @@ class TestDiscoverAll(unittest.TestCase):
     def test_discover_all_multiple_hosts(self):
         """Multiple hosts are all queried and grouped."""
         from wee_model_discovery import WeeModelDiscovery
+
         d = WeeModelDiscovery(ttl=60, timeout=5)
 
         hosts = [
-            {"name": "host1", "type": "ollama", "url": "http://h1:11434", "prefix": "ollama"},
-            {"name": "host2", "type": "openai-compat", "url": "http://h2:1234", "prefix": "lmstudio"},
+            {
+                "name": "host1",
+                "type": "ollama",
+                "url": "http://h1:11434",
+                "prefix": "ollama",
+            },
+            {
+                "name": "host2",
+                "type": "openai-compat",
+                "url": "http://h2:1234",
+                "prefix": "lmstudio",
+            },
         ]
 
         def mock_fetch(url):
@@ -223,7 +286,9 @@ class TestDiscoverAll(unittest.TestCase):
                 self.assertIn("host1 (ollama)", result)
                 self.assertIn("host2 (openai-compat)", result)
                 self.assertEqual(result["host1 (ollama)"], ["ollama/gemma4:latest"])
-                self.assertEqual(result["host2 (openai-compat)"], ["lmstudio/local-model"])
+                self.assertEqual(
+                    result["host2 (openai-compat)"], ["lmstudio/local-model"]
+                )
 
 
 class TestCaching(unittest.TestCase):
@@ -232,12 +297,21 @@ class TestCaching(unittest.TestCase):
     def test_cache_hit_within_ttl(self):
         """Second call within TTL uses cached results (no network call)."""
         from wee_model_discovery import WeeModelDiscovery
+
         d = WeeModelDiscovery(ttl=60, timeout=5)
 
-        hosts = [{"name": "h1", "type": "ollama", "url": "http://h1:11434", "prefix": "ollama"}]
+        hosts = [
+            {
+                "name": "h1",
+                "type": "ollama",
+                "url": "http://h1:11434",
+                "prefix": "ollama",
+            }
+        ]
         mock_response = {"models": [{"name": "model1"}]}
 
         call_count = 0
+
         def counting_fetch(url):
             nonlocal call_count
             call_count += 1
@@ -253,12 +327,21 @@ class TestCaching(unittest.TestCase):
     def test_cache_miss_after_ttl(self):
         """Cache expires after TTL, triggers fresh discovery."""
         from wee_model_discovery import WeeModelDiscovery
+
         d = WeeModelDiscovery(ttl=1, timeout=5)  # 1-second TTL
 
-        hosts = [{"name": "h1", "type": "ollama", "url": "http://h1:11434", "prefix": "ollama"}]
+        hosts = [
+            {
+                "name": "h1",
+                "type": "ollama",
+                "url": "http://h1:11434",
+                "prefix": "ollama",
+            }
+        ]
         mock_response = {"models": [{"name": "model1"}]}
 
         call_count = 0
+
         def counting_fetch(url):
             nonlocal call_count
             call_count += 1
@@ -274,12 +357,21 @@ class TestCaching(unittest.TestCase):
     def test_force_bypasses_cache(self):
         """force=True always makes a network call."""
         from wee_model_discovery import WeeModelDiscovery
+
         d = WeeModelDiscovery(ttl=600, timeout=5)
 
-        hosts = [{"name": "h1", "type": "ollama", "url": "http://h1:11434", "prefix": "ollama"}]
+        hosts = [
+            {
+                "name": "h1",
+                "type": "ollama",
+                "url": "http://h1:11434",
+                "prefix": "ollama",
+            }
+        ]
         mock_response = {"models": [{"name": "model1"}]}
 
         call_count = 0
+
         def counting_fetch(url):
             nonlocal call_count
             call_count += 1
@@ -294,6 +386,7 @@ class TestCaching(unittest.TestCase):
     def test_invalidate_cache(self):
         """invalidate_cache clears all cached data."""
         from wee_model_discovery import WeeModelDiscovery
+
         d = WeeModelDiscovery(ttl=600, timeout=5)
         d._cache["test"] = (time.time(), ["model1"])
         d._cache_status["test"] = "online"
@@ -309,9 +402,12 @@ class TestCaching(unittest.TestCase):
         the old value was read, so fallback always returned [].
         """
         from wee_model_discovery import WeeModelDiscovery
+
         d = WeeModelDiscovery(ttl=1, timeout=5)  # 1-second TTL
 
-        hosts = [{"name": "h", "type": "ollama", "url": "http://h:11434", "prefix": "ollama"}]
+        hosts = [
+            {"name": "h", "type": "ollama", "url": "http://h:11434", "prefix": "ollama"}
+        ]
         online_response = {"models": [{"name": "gemma4:latest"}]}
 
         with patch("wee_model_discovery._load_hosts", return_value=hosts):
@@ -336,7 +432,8 @@ class TestCaching(unittest.TestCase):
         # Must show the cached group with the previously-discovered models
         cached_key = "h (ollama) (cached)"
         self.assertIn(
-            cached_key, result2,
+            cached_key,
+            result2,
             f"Expected '{cached_key}' in result. Got: {list(result2.keys())}",
         )
         self.assertIn("ollama/gemma4:latest", result2[cached_key])
@@ -348,9 +445,17 @@ class TestHostStatus(unittest.TestCase):
     def test_host_status_online(self):
         """Online host is tracked as 'online'."""
         from wee_model_discovery import WeeModelDiscovery
+
         d = WeeModelDiscovery(ttl=60, timeout=5)
 
-        hosts = [{"name": "h1", "type": "ollama", "url": "http://h1:11434", "prefix": "ollama"}]
+        hosts = [
+            {
+                "name": "h1",
+                "type": "ollama",
+                "url": "http://h1:11434",
+                "prefix": "ollama",
+            }
+        ]
         mock_response = {"models": [{"name": "model1"}]}
 
         with patch("wee_model_discovery._load_hosts", return_value=hosts):
@@ -362,9 +467,17 @@ class TestHostStatus(unittest.TestCase):
     def test_host_status_offline(self):
         """Offline host is tracked as 'offline'."""
         from wee_model_discovery import WeeModelDiscovery
+
         d = WeeModelDiscovery(ttl=60, timeout=5)
 
-        hosts = [{"name": "h1", "type": "ollama", "url": "http://h1:11434", "prefix": "ollama"}]
+        hosts = [
+            {
+                "name": "h1",
+                "type": "ollama",
+                "url": "http://h1:11434",
+                "prefix": "ollama",
+            }
+        ]
 
         with patch("wee_model_discovery._load_hosts", return_value=hosts):
             with patch.object(d, "_fetch_json", return_value=None):
@@ -382,6 +495,7 @@ class TestFetchWeeModels(unittest.TestCase):
     def _get_session_mgr(self):
         """Get a SessionManager instance for testing."""
         from agent_manager import SessionManager
+
         return SessionManager.__new__(SessionManager)
 
     def test_fetch_wee_models_calls_discovery(self):
@@ -389,14 +503,18 @@ class TestFetchWeeModels(unittest.TestCase):
         mgr = self._get_session_mgr()
         mock_result = {"kubuntu (ollama)": ["ollama/gemma4:latest", "ollama/qwen3:8b"]}
         with patch("agent_manager.discover_wee_models", mock_result, create=True):
-            with patch("wee_model_discovery.discover_wee_models", return_value=mock_result):
+            with patch(
+                "wee_model_discovery.discover_wee_models", return_value=mock_result
+            ):
                 result = mgr._fetch_wee_models()
                 self.assertIn("kubuntu (ollama)", result)
 
     def test_fetch_wee_models_fallback_on_error(self):
         """_fetch_wee_models falls back to static list on exception."""
         mgr = self._get_session_mgr()
-        with patch("wee_model_discovery.discover_wee_models", side_effect=RuntimeError("boom")):
+        with patch(
+            "wee_model_discovery.discover_wee_models", side_effect=RuntimeError("boom")
+        ):
             result = mgr._fetch_wee_models()
             self.assertIn("Wee Native (static)", result)
             models = result["Wee Native (static)"]
@@ -411,7 +529,9 @@ class TestFetchWeeModels(unittest.TestCase):
             result = mgr._fetch_wee_models()
             for group, models in result.items():
                 for m in models:
-                    self.assertIsInstance(m, str, f"Model {m!r} in group {group!r} is not a string")
+                    self.assertIsInstance(
+                        m, str, f"Model {m!r} in group {group!r} is not a string"
+                    )
 
 
 class TestGetModelsForRuntimeWee(unittest.TestCase):
@@ -419,6 +539,7 @@ class TestGetModelsForRuntimeWee(unittest.TestCase):
 
     def _get_session_mgr(self):
         from agent_manager import SessionManager
+
         return SessionManager.__new__(SessionManager)
 
     def test_wee_in_dispatch(self):
@@ -437,10 +558,12 @@ class TestApiModelsEndpointWee(unittest.TestCase):
         """'wee' is in the known_runtimes set in the API endpoint."""
         # Read the source to verify (static analysis)
         import agent_manager
+
         source = open(agent_manager.__file__).read()
         # Find the known_runtimes block in the endpoint
         import re
-        match = re.search(r'known_runtimes\s*=\s*\{([^}]+)\}', source)
+
+        match = re.search(r"known_runtimes\s*=\s*\{([^}]+)\}", source)
         self.assertIsNotNone(match, "Could not find known_runtimes set")
         runtimes_block = match.group(1)
         self.assertIn('"wee"', runtimes_block)
@@ -491,9 +614,17 @@ class TestThreadSafety(unittest.TestCase):
     def test_concurrent_discover_all(self):
         """Multiple threads calling discover_all don't crash."""
         from wee_model_discovery import WeeModelDiscovery
+
         d = WeeModelDiscovery(ttl=60, timeout=5)
 
-        hosts = [{"name": "h1", "type": "ollama", "url": "http://h1:11434", "prefix": "ollama"}]
+        hosts = [
+            {
+                "name": "h1",
+                "type": "ollama",
+                "url": "http://h1:11434",
+                "prefix": "ollama",
+            }
+        ]
         mock_response = {"models": [{"name": "model1"}, {"name": "model2"}]}
 
         errors = []
@@ -522,15 +653,25 @@ class TestDiscoverAllEnriched(unittest.TestCase):
     def test_enriched_includes_size_and_timestamp(self):
         """Enriched Ollama discovery includes size and modified_at."""
         from wee_model_discovery import WeeModelDiscovery
+
         d = WeeModelDiscovery(ttl=60, timeout=5)
 
-        hosts = [{"name": "kubuntu", "type": "ollama", "url": "http://h1:11434", "prefix": "ollama"}]
+        hosts = [
+            {
+                "name": "kubuntu",
+                "type": "ollama",
+                "url": "http://h1:11434",
+                "prefix": "ollama",
+            }
+        ]
         mock_response = {
-            "models": [{
-                "name": "gemma4:latest",
-                "size": 5000000000,
-                "modified_at": "2026-01-01T00:00:00Z",
-            }]
+            "models": [
+                {
+                    "name": "gemma4:latest",
+                    "size": 5000000000,
+                    "modified_at": "2026-01-01T00:00:00Z",
+                }
+            ]
         }
 
         with patch("wee_model_discovery._load_hosts", return_value=hosts):

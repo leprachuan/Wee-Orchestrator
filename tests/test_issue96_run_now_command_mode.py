@@ -6,10 +6,8 @@ correctly routes command-mode jobs to direct shell execution instead of
 dispatching them through the LLM pipeline.
 """
 
-
 import os
 import sys
-
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -182,9 +180,7 @@ class TestRunCommandTaskExecution(unittest.TestCase):
         self.assertNotIn("shell=True", func_body, "Should not use shell=True")
 
         # Should use capture_output=True
-        self.assertIn(
-            "capture_output=True", func_body, "Should capture output"
-        )
+        self.assertIn("capture_output=True", func_body, "Should capture output")
 
         # Should use text=True
         self.assertIn("text=True", func_body, "Should use text mode")
@@ -251,8 +247,9 @@ class TestRunNowAPIIntegration(unittest.TestCase):
     def _get_test_client(self):
         """Get a test client for the API."""
         try:
-            from agent_manager import create_api_app
             from httpx import ASGITransport, AsyncClient
+
+            from agent_manager import create_api_app
 
             app = create_api_app()
             transport = ASGITransport(app=app)
@@ -267,7 +264,9 @@ class TestRunNowAPIIntegration(unittest.TestCase):
         except ImportError:
             self.skipTest("httpx not available")
 
-        agent_manager = _load_module("issue96_agent_manager_api", REPO / "agent_manager.py")
+        agent_manager = _load_module(
+            "issue96_agent_manager_api", REPO / "agent_manager.py"
+        )
         create_api_app = agent_manager.create_api_app
         app = create_api_app()
 

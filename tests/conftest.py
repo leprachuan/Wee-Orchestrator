@@ -1,6 +1,6 @@
-
 # Fixture for issue #249 tests
 import pytest
+
 
 @pytest.fixture
 def mock_agents_config():

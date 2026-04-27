@@ -8,7 +8,6 @@ closes GitHub Issues.
 import json
 from unittest.mock import MagicMock, patch
 
-
 # ── Test helper: import the inner functions from agent_manager ──────
 
 # agent_manager defines these functions inside setup_routes(),

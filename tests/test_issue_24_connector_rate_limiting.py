@@ -159,8 +159,9 @@ def test_issue_24_webex_command_messages_are_rate_limited(webex_connector):
     }
 
     with (
-        patch.object(webex_connector, "_execute_command", return_value="command ok")
-        as execute_mock,
+        patch.object(
+            webex_connector, "_execute_command", return_value="command ok"
+        ) as execute_mock,
         patch.object(webex_connector, "send_message") as send_message_mock,
     ):
         webex_connector.handle_message(message)

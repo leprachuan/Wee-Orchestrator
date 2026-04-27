@@ -729,9 +729,7 @@ class TaskScheduler:
             return {"success": False, "message": workdir_error}
 
         jobs = self._load_jobs()
-        job_id, job_id_error = self._build_job_id(
-            name, {j["id"] for j in jobs["jobs"]}
-        )
+        job_id, job_id_error = self._build_job_id(name, {j["id"] for j in jobs["jobs"]})
         if not job_id:
             return {"success": False, "message": job_id_error}
 
@@ -1083,7 +1081,9 @@ class TaskScheduler:
         try:
             log_file = self._log_file_for_job(job_id)
         except ValueError:
-            logger.warning("Refused to write scheduler log for invalid job_id=%r", job_id)
+            logger.warning(
+                "Refused to write scheduler log for invalid job_id=%r", job_id
+            )
             return
         timestamp = datetime.utcnow().isoformat() + "Z"
         with open(log_file, "a") as f:

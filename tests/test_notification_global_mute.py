@@ -295,9 +295,7 @@ def test_api_notifications_off_sets_global_mute():
             if isinstance(global_entry, dict)
             else "all"
         )
-        assert (
-            global_pref == "off"
-        ), (
+        assert global_pref == "off", (
             f"Expected _global preference 'off', got '{global_pref}'."
             f" Full prefs: {json.dumps(prefs)}"
         )

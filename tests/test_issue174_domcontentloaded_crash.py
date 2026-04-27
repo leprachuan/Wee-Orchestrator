@@ -39,24 +39,36 @@ class TestButtonsInHTML(unittest.TestCase):
 
     def test_btn_toggle_queue_exists_in_html(self):
         """btn-toggle-queue button must exist in index.html."""
-        self.assertIn('id="btn-toggle-queue"', self.index_html,
-                      "btn-toggle-queue button missing from HTML. "
-                      "This causes DOMContentLoaded crash at app.js line 2354.")
+        self.assertIn(
+            'id="btn-toggle-queue"',
+            self.index_html,
+            "btn-toggle-queue button missing from HTML. "
+            "This causes DOMContentLoaded crash at app.js line 2354.",
+        )
 
     def test_btn_toggle_queue_has_click_handler_class(self):
         """btn-toggle-queue must have the queue-toggle-btn class."""
-        self.assertIn('id="btn-toggle-queue" class="queue-toggle-btn"', self.index_html,
-                      "btn-toggle-queue must have class='queue-toggle-btn'")
+        self.assertIn(
+            'id="btn-toggle-queue" class="queue-toggle-btn"',
+            self.index_html,
+            "btn-toggle-queue must have class='queue-toggle-btn'",
+        )
 
     def test_btn_pause_queue_exists_in_html(self):
         """btn-pause-queue button must exist in index.html."""
-        self.assertIn('id="btn-pause-queue"', self.index_html,
-                      "btn-pause-queue button missing from HTML")
+        self.assertIn(
+            'id="btn-pause-queue"',
+            self.index_html,
+            "btn-pause-queue button missing from HTML",
+        )
 
     def test_btn_toggle_queue_section_exists_in_html(self):
         """btn-toggle-queue-section button must exist in index.html."""
-        self.assertIn('id="btn-toggle-queue-section"', self.index_html,
-                      "btn-toggle-queue-section button missing from HTML")
+        self.assertIn(
+            'id="btn-toggle-queue-section"',
+            self.index_html,
+            "btn-toggle-queue-section button missing from HTML",
+        )
 
 
 class TestEventListenerSetup(unittest.TestCase):
@@ -69,10 +81,10 @@ class TestEventListenerSetup(unittest.TestCase):
 
     def test_btn_toggle_queue_listener_has_null_check(self):
         """Event listener for btn-toggle-queue must include a null check.
-        
+
         The vulnerable pattern is:
             $('btn-toggle-queue').addEventListener('click', toggleQueuePanel);
-        
+
         Safe pattern is:
             const btnToggleQueue = $('btn-toggle-queue');
             if (btnToggleQueue) {
@@ -84,7 +96,8 @@ class TestEventListenerSetup(unittest.TestCase):
             r"const\s+btnToggleQueue\s*=\s*\$\s*\(\s*['\"]btn-toggle-queue['\"]\s*\)"
         )
         self.assertRegex(
-            self.app_js, pattern_declare,
+            self.app_js,
+            pattern_declare,
             "btn-toggle-queue must be assigned to a const variable for null checking",
         )
 
@@ -95,13 +108,14 @@ class TestEventListenerSetup(unittest.TestCase):
             r"\s*toggleQueuePanel\s*\)"
         )
         self.assertRegex(
-            self.app_js, pattern_check,
+            self.app_js,
+            pattern_check,
             "btnToggleQueue listener setup must be guarded by if (btnToggleQueue)",
         )
 
     def test_btn_pause_queue_listener_has_null_check(self):
         """Event listener for btn-pause-queue must include a null check.
-        
+
         Similar pattern to btnToggleQueue:
             const btnPauseQueue = $('btn-pause-queue');
             if (btnPauseQueue) {
@@ -113,7 +127,8 @@ class TestEventListenerSetup(unittest.TestCase):
             r"const\s+btnPauseQueue\s*=\s*\$\s*\(\s*['\"]btn-pause-queue['\"]\s*\)"
         )
         self.assertRegex(
-            self.app_js, pattern_declare,
+            self.app_js,
+            pattern_declare,
             "btn-pause-queue must be assigned to a const variable for null checking",
         )
 
@@ -124,16 +139,17 @@ class TestEventListenerSetup(unittest.TestCase):
             r"\s*toggleQueuePause\s*\)"
         )
         self.assertRegex(
-            self.app_js, pattern_check,
+            self.app_js,
+            pattern_check,
             "btnPauseQueue listener setup must be guarded by if (btnPauseQueue)",
         )
 
     def test_no_unconditional_btn_toggle_queue_getelementbyid(self):
         """app.js must NOT call addEventListener on btn-toggle-queue without null check.
-        
+
         The vulnerable pattern must not appear anywhere in app.js:
             $('btn-toggle-queue').addEventListener(
-            
+
         This is the exact bug from issue #174.
         """
         # Ensure vulnerable pattern does not exist
@@ -151,27 +167,34 @@ class TestEventListenerSetup(unittest.TestCase):
                 if vulnerable_pattern in line:
                     # Check if this line is preceded by an if check
                     # (Simple heuristic: look back up to 3 lines)
-                    context = "\n".join(lines[max(0, i-3):i+1])
+                    context = "\n".join(lines[max(0, i - 3) : i + 1])
                     self.assertIn(
-                        "if (", context,
+                        "if (",
+                        context,
                         f"Found unconditional addEventListener on btn-toggle-queue"
                         f" at line {i+1}",
                     )
 
     def test_domcontentloaded_handler_completes(self):
         """The DOMContentLoaded handler must complete without errors.
-        
+
         With the null checks in place, even if the button is missing from HTML,
         the handler will skip the listener setup and continue gracefully.
         With the button restored to HTML, listeners will be attached normally.
         """
         # Verify DOMContentLoaded handler is present
-        self.assertIn("document.addEventListener('DOMContentLoaded'", self.app_js,
-                      "DOMContentLoaded handler must be registered")
+        self.assertIn(
+            "document.addEventListener('DOMContentLoaded'",
+            self.app_js,
+            "DOMContentLoaded handler must be registered",
+        )
 
         # Verify the handler includes the queue button setup
-        self.assertIn("Request Queue", self.app_js,
-                      "DOMContentLoaded handler must reference Request Queue section")
+        self.assertIn(
+            "Request Queue",
+            self.app_js,
+            "DOMContentLoaded handler must reference Request Queue section",
+        )
 
 
 class TestRegressionScenarios(unittest.TestCase):
@@ -186,7 +209,7 @@ class TestRegressionScenarios(unittest.TestCase):
 
     def test_button_exists_and_listener_is_safe(self):
         """Simulates: Button is in HTML AND listener is safely registered.
-        
+
         This is the correct state after the fix:
         - Button exists in HTML
         - Listener registration is guarded
@@ -204,10 +227,10 @@ class TestRegressionScenarios(unittest.TestCase):
 
     def test_vulnerable_pattern_not_present(self):
         """Verifies the exact vulnerable pattern from issue #174 is not present.
-        
+
         Vulnerable code from issue:
             $('btn-toggle-queue').addEventListener('click', toggleQueuePanel);
-        
+
         This pattern should NOT be in the current codebase (except in comments).
         """
         # The vulnerable pattern: direct call to addEventListener on result of $()

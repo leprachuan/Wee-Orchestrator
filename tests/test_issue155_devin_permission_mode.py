@@ -9,7 +9,6 @@ Tests verify:
 """
 
 import inspect
-
 import re
 import sys
 import unittest

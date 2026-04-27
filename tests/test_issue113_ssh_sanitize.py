@@ -7,10 +7,8 @@ Tests cover:
 """
 
 import os
-
 import sys
 import unittest
-
 
 # ---------------------------------------------------------------------------
 # Standalone wee_runtime tests
@@ -147,6 +145,7 @@ class TestSSHBinRegex(unittest.TestCase):
 # agent_manager.py SessionManager static method tests
 # ---------------------------------------------------------------------------
 
+
 class TestSessionManagerSanitize(unittest.TestCase):
     """Test SessionManager._wee_sanitize_bash_command (same logic, class method)."""
 
@@ -157,6 +156,7 @@ class TestSessionManagerSanitize(unittest.TestCase):
             # Try to import just the class without starting the server
             import importlib
             import importlib.util
+
             spec = importlib.util.spec_from_file_location(  # noqa: F841
                 "agent_manager_mod",
                 "/opt/n8n-copilot-shim-dev/agent_manager.py",
@@ -189,7 +189,7 @@ class TestSessionManagerSanitize(unittest.TestCase):
         idx = content.find("def run_wee_native(")
         self.assertGreater(idx, 0, "run_wee_native not found")
         # Check within the next ~200 lines
-        method_slice = content[idx:idx + 5000]
+        method_slice = content[idx : idx + 5000]
         self.assertIn("_wee_anti_hallucination_prompt()", method_slice)
 
     def test_ssh_regex_compiled_as_class_attribute(self):
@@ -204,28 +204,50 @@ class TestKnownHostsInfrastructure(unittest.TestCase):
     def test_known_hosts_has_dev_host_key(self):
         """Verify 192.168.1.100 is in root's known_hosts on the dev host."""
         import subprocess
+
         result = subprocess.run(
-            ["ssh", "-o", "StrictHostKeyChecking=no", "-o", "BatchMode=yes",
-             "root@192.168.1.100",
-             "grep -c '192.168.1.100' ~/.ssh/known_hosts"],
-            capture_output=True, text=True, timeout=10,
+            [
+                "ssh",
+                "-o",
+                "StrictHostKeyChecking=no",
+                "-o",
+                "BatchMode=yes",
+                "root@192.168.1.100",
+                "grep -c '192.168.1.100' ~/.ssh/known_hosts",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=10,
         )
         count = int(result.stdout.strip() or "0")
-        self.assertGreater(count, 0,
-                           "192.168.1.100 not in known_hosts on dev host — "
-                           "run: ssh-keyscan 192.168.1.100 >> ~/.ssh/known_hosts")
+        self.assertGreater(
+            count,
+            0,
+            "192.168.1.100 not in known_hosts on dev host — "
+            "run: ssh-keyscan 192.168.1.100 >> ~/.ssh/known_hosts",
+        )
 
     def test_loopback_ssh_works(self):
         """Verify SSH from dev host to itself works."""
         import subprocess
+
         result = subprocess.run(
-            ["ssh", "-o", "StrictHostKeyChecking=no", "-o", "BatchMode=yes",
-             "root@192.168.1.100",
-             "ssh -o StrictHostKeyChecking=accept-new -o BatchMode=yes root@192.168.1.100 echo SSH_LOOPBACK_OK"],  # noqa: E501
-            capture_output=True, text=True, timeout=15,
+            [
+                "ssh",
+                "-o",
+                "StrictHostKeyChecking=no",
+                "-o",
+                "BatchMode=yes",
+                "root@192.168.1.100",
+                "ssh -o StrictHostKeyChecking=accept-new -o BatchMode=yes root@192.168.1.100 echo SSH_LOOPBACK_OK",
+            ],  # noqa: E501
+            capture_output=True,
+            text=True,
+            timeout=15,
         )
-        self.assertIn("SSH_LOOPBACK_OK", result.stdout,
-                       f"Loopback SSH failed: {result.stderr}")  # noqa: E127
+        self.assertIn(
+            "SSH_LOOPBACK_OK", result.stdout, f"Loopback SSH failed: {result.stderr}"
+        )  # noqa: E127
 
 
 if __name__ == "__main__":

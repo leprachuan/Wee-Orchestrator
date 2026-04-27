@@ -275,7 +275,9 @@ class TestIssue219BackgroundTaskFallback(unittest.TestCase):
         primary_result = "Success response"
         primary_error = None
 
-        fallback_patterns = [re.compile(p, re.IGNORECASE) for p in [r"429", r"rate.?limit"]]
+        fallback_patterns = [
+            re.compile(p, re.IGNORECASE) for p in [r"429", r"rate.?limit"]
+        ]
 
         error_text = primary_error or ""
         is_eligible = any(p.search(error_text) for p in fallback_patterns)
@@ -291,7 +293,9 @@ class TestIssue219BackgroundTaskFallback(unittest.TestCase):
         fallback_result = "Fallback success response"
         fallback_error = None
 
-        fallback_patterns = [re.compile(p, re.IGNORECASE) for p in [r"429", r"rate.?limit"]]
+        fallback_patterns = [
+            re.compile(p, re.IGNORECASE) for p in [r"429", r"rate.?limit"]
+        ]
 
         error_text = primary_error or ""
         is_eligible = any(p.search(error_text) for p in fallback_patterns)
@@ -306,7 +310,9 @@ class TestIssue219BackgroundTaskFallback(unittest.TestCase):
         primary_error = "429: Rate limit exceeded"
         fallback_error = "503: Service unavailable"
 
-        fallback_patterns = [re.compile(p, re.IGNORECASE) for p in [r"429", r"rate.?limit"]]
+        fallback_patterns = [
+            re.compile(p, re.IGNORECASE) for p in [r"429", r"rate.?limit"]
+        ]
 
         error_text = primary_error or ""
         is_eligible = any(p.search(error_text) for p in fallback_patterns)

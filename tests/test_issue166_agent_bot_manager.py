@@ -14,8 +14,11 @@ from unittest.mock import MagicMock, patch
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from agent_bot_manager import TelegramAgentBot  # noqa: E402
-from agent_bot_manager import (AgentBotManager, WebExAgentBot,  # noqa: E402
-                               resolve_secret)
+from agent_bot_manager import WebExAgentBot  # noqa: E402
+from agent_bot_manager import (
+    AgentBotManager,
+    resolve_secret,
+)
 
 # ---------------------------------------------------------------------------
 # resolve_secret

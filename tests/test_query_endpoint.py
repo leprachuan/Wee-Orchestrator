@@ -3,7 +3,7 @@
 import os
 import sys
 import unittest
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -18,7 +18,9 @@ class TestQueryEndpoint(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         from unittest.mock import patch as _p
+
         from fastapi.testclient import TestClient
+
         import agent_manager
 
         cls._telegram_patch = _p.object(
@@ -202,7 +204,9 @@ class TestQueryEndpointErrorDetection(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         from unittest.mock import patch as _p
+
         from fastapi.testclient import TestClient
+
         import agent_manager
 
         cls._telegram_patch = _p.object(
@@ -406,7 +410,9 @@ class TestQueryEndpointCodeGen(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         from unittest.mock import patch as _p
+
         from fastapi.testclient import TestClient
+
         import agent_manager
 
         cls._telegram_patch = _p.object(
