@@ -96,7 +96,7 @@ class TestWeeRuntimeRegistration(unittest.TestCase):
         runtimes = get_available_runtimes()
         wee_entry = next((r for r in runtimes if r["id"] == "wee"), None)
         self.assertIsNotNone(wee_entry)
-        self.assertEqual(wee_entry["icon"], "\U0001f33f")  # leaf
+        self.assertEqual(wee_entry["icon"], "🍀")  # four leaf clover
 
     def test_wee_check_runtime_available(self):
         """check_runtime_available('wee') should return True (openai installed)."""
