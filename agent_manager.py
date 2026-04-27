@@ -2377,7 +2377,15 @@ You can mention an agent in your prompt and it will auto-delegate:
             )
 
     def _slash_notifications(self, argument, session_data, n8n_session_id):
-        """Handle /notifications slash command."""
+        """Handle /notifications slash command with per-agent preferences.
+        
+        Usage:
+        - /notifications                    Show all agents and their status
+        - /notifications <agent> on         Enable notifications for agent
+        - /notifications <agent> off        Disable notifications for agent
+        - /notifications all on             Enable all agents
+        - /notifications all off            Disable all agents
+        """
         if not argument:
             argument = "current"
 
@@ -2385,46 +2393,84 @@ You can mention an agent in your prompt and it will auto-delegate:
         _notif_identity = self._bg_identity or session_data.get("identity")
         _notif_channel = session_data.get("channel", "webui")
 
+        # Load list of known agents from agents.json
+        agents_list = []
+        try:
+            if hasattr(self, "_agents"):
+                agents_list = [a.get("name") for a in self._agents if a.get("name")]
+        except Exception:
+            pass
+
         if argument == "current":
-            # Check global preference first, then per-identity, then session
-            if self._notification_mgr:
-                if self._notification_mgr.is_muted("_global"):
-                    pref = "off"
-                elif _notif_identity:
-                    pref = self._notification_mgr.get_user_pref(_notif_identity)
+            # Show per-agent preferences
+            if not self._notification_mgr or not _notif_identity:
+                return "❓ Unable to retrieve notification preferences (not authenticated)."
+            
+            agent_prefs = self._notification_mgr.get_all_agent_prefs(_notif_identity)
+            if not agent_prefs:
+                # No per-agent prefs set yet, show all agents with default "on"
+                result = "🔔 **Per-Agent Notification Preferences:**\n\n"
+                result += "| Agent | Status |\n"
+                result += "|-------|--------|\n"
+                if agents_list:
+                    for agent in sorted(agents_list):
+                        pref = self._notification_mgr.get_agent_pref(_notif_identity, agent)
+                        status = "✅ ON" if pref == "on" else "❌ OFF"
+                        result += f"| {agent} | {status} |\n"
                 else:
-                    pref = session_data.get("notification_preference", "all")
+                    result += "| (No agents configured) | — |\n"
             else:
-                pref = session_data.get("notification_preference", "all")
-            status = "ON (All updates)" if pref == "all" else "OFF (WebUI only)"
-            return f"🔔 **Background Notifications:** `{status}`"
+                result = "🔔 **Per-Agent Notification Preferences:**\n\n"
+                result += "| Agent | Status |\n"
+                result += "|-------|--------|\n"
+                for agent in sorted(agent_prefs.keys()):
+                    pref = agent_prefs[agent]
+                    status = "✅ ON" if pref == "on" else "❌ OFF"
+                    result += f"| {agent} | {status} |\n"
+                # Add agents not in prefs with default status
+                if agents_list:
+                    for agent in sorted(agents_list):
+                        if agent not in agent_prefs:
+                            result += f"| {agent} | ✅ ON (default) |\n"
+            
+            return result
 
-        elif argument in ["on", "all"]:
-            self.update_session_field(n8n_session_id, "notification_preference", "all")
-            if self._notification_mgr:
-                # Store under specific identity if available
-                if _notif_identity:
-                    self._notification_mgr.set_user_pref(
-                        _notif_identity, _notif_channel, "all"
-                    )
-                # Always store global preference so it applies across all channels
-                self._notification_mgr.set_user_pref("_global", _notif_channel, "all")
-            return "✓ Background task notifications enabled for Telegram/WebEx."
+        elif " " in argument:
+            # Parse "agent on/off" format
+            parts = argument.strip().split()
+            if len(parts) != 2:
+                return "Usage: `/notifications <agent> [on|off]` or `/notifications all [on|off]` or `/notifications` to view all"
+            
+            agent_name = parts[0]
+            pref_value = parts[1].lower()
 
-        elif argument in ["off", "mute"]:
-            self.update_session_field(n8n_session_id, "notification_preference", "off")
-            if self._notification_mgr:
-                if _notif_identity:
-                    self._notification_mgr.set_user_pref(
-                        _notif_identity, _notif_channel, "off"
-                    )
-                # Always store global preference so it applies across all channels
-                self._notification_mgr.set_user_pref("_global", _notif_channel, "off")
-            return (
-                "✓ Background task notifications muted for Telegram/WebEx (WebUI only)."
-            )
+            if pref_value not in ["on", "off"]:
+                return f"Invalid preference: {pref_value}. Use `on` or `off`."
+
+            if not self._notification_mgr or not _notif_identity:
+                return "❓ Unable to set preferences (not authenticated)."
+
+            if agent_name == "all":
+                # Bulk set all agents
+                if agents_list:
+                    for agent in agents_list:
+                        self._notification_mgr.set_agent_pref(
+                            _notif_identity, agent, pref_value
+                        )
+                    verb = "enabled" if pref_value == "on" else "disabled"
+                    return f"✓ Notifications {verb} for all agents."
+                else:
+                    return "❓ No agents found to configure."
+            else:
+                # Set specific agent
+                self._notification_mgr.set_agent_pref(
+                    _notif_identity, agent_name, pref_value
+                )
+                status = "enabled" if pref_value == "on" else "disabled"
+                return f"✓ Notifications {status} for agent `{agent_name}`."
+
         else:
-            return "Usage: `/notifications [on|off]` to toggle background task notifications."
+            return "Usage: `/notifications` to view all, or `/notifications <agent> [on|off]` to set, or `/notifications all [on|off]` for bulk operations"
 
     def _slash_silent(self, argument, session_data, n8n_session_id):
         """Handle /silent slash command (F026)."""
@@ -5367,7 +5413,7 @@ These commands allow you to control the agent's behavior and are processed by th
 - /runtime <runtime> - Change execution runtime (e.g., /runtime claude, /runtime opencode)
 - /timeout <seconds> - Adjust execution timeout (e.g., /timeout 600)
 - /render <format> - Change output format (e.g., /render markdown, /render html, /render telegram_html)
-- /notifications <on|off> - Toggle background task notifications for Telegram/WebEx
+- /notifications [<agent> on|off] - Manage per-agent notification preferences (e.g., /notifications research off, /notifications all on)
 - /session <id> - Continue a specific session (e.g., /session abc123)
 - /status - Check running tasks status
 - /cancel - Cancel the current running task
@@ -11308,6 +11354,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         output_preview=None,
         error=None,
         notify: bool = True,
+        agent: Optional[str] = None,
     ):
         """Emit a background task completion notification via notification_mgr."""
         if notification_mgr is None:
@@ -11321,6 +11368,8 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                     user_identity
                 ) or notification_mgr.is_muted("_global"):
                     notify = False
+                elif agent and notification_mgr.is_agent_muted(user_identity, agent):
+                    notify = False
 
             user_key = bg_task_mgr._user_key(channel, user_identity)
             notification_mgr.create_notification(
@@ -11332,6 +11381,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 output_preview=output_preview,
                 error=error,
                 skip_external=not notify,
+                agent=agent,
             )
             # Push in-thread event to originating session
             task = bg_task_mgr.get_task(task_id)
@@ -12023,6 +12073,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                     output_preview=final_output,
                     error=None,
                     notify=notify,
+                    agent=agent,
                 )
             else:
                 primary_error_msg = (
@@ -12130,6 +12181,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                             output_preview=_fb_final,
                             error=None,
                             notify=notify,
+                            agent=agent,
                         )
                     else:
                         combined_error = (
@@ -12146,6 +12198,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                             output_preview=None,
                             error=combined_error,
                             notify=notify,
+                            agent=agent,
                         )
                 else:
                     error_msg = primary_error_msg
@@ -12174,6 +12227,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                         output_preview=None,
                         error=error_msg,
                         notify=notify,
+                        agent=agent,
                     )
 
         except subprocess.TimeoutExpired:
@@ -12188,6 +12242,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 output_preview=None,
                 error=error_msg,
                 notify=notify,
+                agent=agent,
             )
         except Exception as exc:
             error_msg = str(exc)
@@ -12201,6 +12256,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 output_preview=None,
                 error=error_msg,
                 notify=notify,
+                agent=agent,
             )
         finally:
             # Clean up steering file for completed task
