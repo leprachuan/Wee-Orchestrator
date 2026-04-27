@@ -1015,6 +1015,8 @@ class BackgroundTaskManager:
             r"429",
             r"rate.?limit",
             r"quota.?exceeded",
+            r"usage.?limit",
+            r"upgrade.*pro",
             r"401",
             r"unauthorized",
             r"missing.?authentication",
@@ -14265,15 +14267,45 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         )
         tasks = bg_task_mgr.list_all_tasks()
         # Check if running tasks are still alive
+        loop = asyncio.get_running_loop()
         for t in tasks:
             if t["status"] == "running" and t.get("pid"):
                 try:
                     os.kill(t["pid"], 0)
                 except ProcessLookupError:
-                    bg_task_mgr.fail_task(
-                        t["task_id"], "Process terminated unexpectedly"
-                    )
-                    t["status"] = "failed"
+                    _fb_rt = t.get("fallback_runtime")
+                    _fb_model = t.get("fallback_model")
+                    _already_fb = t.get("used_fallback", False)
+                    if _fb_rt and not _already_fb:
+                        # Primary died unexpectedly — retry on fallback runtime
+                        bg_task_mgr.mark_fallback_used(t["task_id"], _fb_rt, _fb_model or "")
+                        bg_task_mgr.append_output(
+                            t["task_id"],
+                            f"[Fallback] Process terminated unexpectedly, retrying with runtime={_fb_rt} model={_fb_model}",
+                        )
+                        loop.run_in_executor(
+                            bg_executor,
+                            _run_background_task,
+                            t["task_id"],
+                            t.get("session_id", ""),
+                            t.get("prompt", ""),
+                            t.get("agent", ""),
+                            _fb_rt,
+                            _fb_model or "",
+                            t.get("channel", ""),
+                            t.get("user_identity", ""),
+                            t.get("timeout", 900),
+                            t.get("notify", True),
+                            t.get("permission_mode", "default"),
+                            None,
+                            None,
+                        )
+                        t["status"] = "running"
+                    else:
+                        bg_task_mgr.fail_task(
+                            t["task_id"], "Process terminated unexpectedly"
+                        )
+                        t["status"] = "failed"
         # Filter by status if provided
         if status:
             tasks = [t for t in tasks if t["status"] == status]
