@@ -381,6 +381,7 @@ class BackgroundTaskManager:
         timeout: int = None,
         notify: bool = True,
         origin_session_id: str = None,
+        permission_mode: str = "restricted",
     ) -> dict:
         task = {
             "task_id": task_id,
@@ -408,6 +409,7 @@ class BackgroundTaskManager:
             "timeout": timeout,
             "notify": notify,
             "origin_session_id": origin_session_id,
+            "permission_mode": permission_mode,
         }
         with self._lock:
             tasks = self._load()
@@ -9436,6 +9438,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                             _qt["user_identity"],
                             _qt.get("timeout") or 900,
                             _qt.get("notify", True),
+                            _qt.get("permission_mode", "restricted"),
                         )
                 except Exception as _rec_exc:
                     print(
@@ -9515,6 +9518,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                     _qt["user_identity"],
                     _qt.get("timeout") or 900,
                     _qt.get("notify", True),
+                    _qt.get("permission_mode", "restricted"),
                 )
 
         cleanup_task = asyncio.ensure_future(_periodic_cleanup())
@@ -11524,8 +11528,10 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 cmd.extend(["--model", _cursor_model])
                 cmd.extend(["--workspace", agent_dir])
                 cmd.extend(["--", context_prompt])
-            elif runtime == "wee":
-                # Wee native runtime - uses standalone script with OpenAI SDK
+            elif runtime in ("wee", "openai"):
+                # Wee native runtime - uses standalone script with OpenAI SDK.
+                # "openai" is an accepted alias for "wee" since both target the
+                # wee_runtime.py OpenAI-compatible execution path.
                 _wee_script = os.path.join(
                     os.path.dirname(os.path.abspath(__file__)),
                     "wee_runtime.py",
@@ -11809,6 +11815,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                         next_q["user_identity"],
                         next_q.get("timeout") or 900,
                         next_q.get("notify", True),
+                        next_q.get("permission_mode", "restricted"),
                     )
             except Exception as promo_exc:
                 print(f"[BG] Error promoting queued task: {promo_exc}")
@@ -11917,6 +11924,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             timeout=bg_timeout,
             notify=notify_pref,
             origin_session_id=body.origin_session_id,
+            permission_mode=perm_mode,
         )
 
         # Resolve permission mode (default: restricted)
