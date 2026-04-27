@@ -584,6 +584,12 @@ All AI runtimes in this system are configured with **full tool access** to enabl
   - `WEE_API_BASE` — Override API base URL (e.g., `http://192.168.1.101:11434/v1`)
   - `WEE_API_KEY` — API key for authenticated endpoints (OpenRouter, etc.)
   - `WEE_DEFAULT_MODEL` — Default model when model not specified in config
+  - `WEE_SEARXNG_URL` — SearXNG base URL for the `search` tool (default: `http://192.168.1.100:8888`)
+- **Native Tools (available in agentic `--tools` mode):**
+  - `bash` — Execute shell commands and return output
+  - `python` — Execute Python 3 code and return output
+  - `call_agent` — Delegate to a Wee Orchestrator sub-agent (quick or background mode)
+  - `search` — Web search via self-hosted SearXNG (`q`, `count` up to 20, `format` json/text); requires `WEE_SEARXNG_URL` or defaults to `http://192.168.1.100:8888` (Issue #255)
 - **Features:**
   - In-process execution using OpenAI Python SDK
   - Real-time SSE streaming to WebUI
@@ -605,7 +611,7 @@ All AI runtimes in this system are configured with **full tool access** to enabl
   - Model resolution fixed: `get_models_for_runtime('wee')` returns flat strings; `get_model_from_name()` strips provider prefix (`ollama/`) and prefers exact/shortest match (Issue #105)
 - **Bug Fixes (continued):**
   - OpenRouter 401 auth fixed: `OPENROUTER_API_KEY` env var + keyring resolution replaces silent `'ollama'` fallback; raises clear error when no key found (Issue #153)
-- **Issues:** [#88](../../issues/88), [#105](../../issues/105), [#119](../../issues/119), [#146](../../issues/146), [#153](../../issues/153)
+- **Issues:** [#88](../../issues/88), [#105](../../issues/105), [#119](../../issues/119), [#146](../../issues/146), [#153](../../issues/153), [#255](../../issues/255)
 
 ### Security Considerations
 
@@ -1487,7 +1493,7 @@ python3 -m unittest discover -s tests -p "test_*.py" -v
 
 ### Test Coverage
 
-The test suite includes **209 tests** across multiple test files:
+The test suite includes **231 tests** across multiple test files:
 
 **Orchestrator Core Tests**
 
@@ -1513,7 +1519,7 @@ The test suite includes **209 tests** across multiple test files:
 
 **`tests/test_wee_runtime_agentic.py`** (68 tests) — wee_runtime.py agentic capabilities:
 - **Model Resolution** (12 tests) - Ollama/OpenRouter prefix stripping, preset resolution, cross-provider parametrization
-- **Tool Definitions** (6 tests) - Schema validation, tool registration, JSON schema correctness
+- **Tool Definitions** (7 tests) - Schema validation, tool registration, JSON schema correctness
 - **Tool Execution** (11 tests) - Bash/Python execution, error handling, output capture, timeouts
 - **SSH Sanitization** (5 tests) - Word-boundary validation, injection prevention (Issue #111)
 - **CLI Argument Parsing** (3 tests) - Flag handling, defaults, priority resolution
@@ -1525,14 +1531,20 @@ The test suite includes **209 tests** across multiple test files:
 - **Ollama Integration** (7 tests) - Live connection, single/multi-turn chat, tool calling
 - **OpenRouter Integration** (7 tests) - Live connection, API key verification, tool calling
 
+**`tests/test_issue_255_search.py`** (22 tests) — SearXNG search tool (Issue #255):
+- **Search Tool Definition** (7 tests) - Tool schema, parameter validation, registration
+- **Search Execution** (13 tests) - Text/JSON format, count limit, env var override, graceful error on unavailable SearXNG
+- **execute_tool dispatch** (1 test) - Routes `search` calls to `_execute_search`
+- **Capability prompt** (1 test) - Help text mentions `search`
+
 ### Test Results
 
 All tests pass with minimal external dependencies:
 
 ```
 Orchestrator: 141 tests, 0.185s
-Wee Runtime: 61 passed, 7 skipped (OpenRouter key), 0 failures
-Total: 202+ passed
+Wee Runtime: 83 passed, 7 skipped (OpenRouter key), 0 failures
+Total: 224+ passed
 ```
 
 Tests use mocking to isolate orchestrator functionality and avoid:
