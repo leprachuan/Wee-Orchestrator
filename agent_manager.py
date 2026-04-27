@@ -6779,7 +6779,9 @@ User Request:
         # Proactive session age check (issue #190): Copilot session tokens expire
         # ~30 min after creation. If the session is > 25 min old, start fresh to
         # avoid mid-task "Session token expired" crashes on long-running tasks.
-        _session_age = time.time() - getattr(self, "_copilot_session_start", {}).get(n8n_session_id, 0)
+        _session_age = time.time() - getattr(self, "_copilot_session_start", {}).get(
+            n8n_session_id, 0
+        )
         if resume and session_id and _session_age > _COPILOT_SESSION_MAX_AGE_SEC:
             print(
                 f"[Session] Copilot session age {_session_age:.0f}s exceeds "
@@ -6811,7 +6813,9 @@ User Request:
             print(f"[Session] Resuming Copilot session: {session_id}", file=sys.stderr)
         else:
             # Record session start time for proactive age tracking
-            getattr(self, "_copilot_session_start", {}).update({n8n_session_id: time.time()})
+            getattr(self, "_copilot_session_start", {}).update(
+                {n8n_session_id: time.time()}
+            )
             print(
                 f"[Session] Starting new Copilot session in {mode} permission mode",
                 file=sys.stderr,
@@ -6877,7 +6881,9 @@ User Request:
                 _recovery_cmd.append("--yolo")
 
             # Record new session start for age tracking
-            getattr(self, "_copilot_session_start", {}).update({n8n_session_id: time.time()})
+            getattr(self, "_copilot_session_start", {}).update(
+                {n8n_session_id: time.time()}
+            )
             _recovery_output = self._execute_subprocess_with_tracking(
                 _recovery_cmd,
                 agent_dir,
