@@ -20,7 +20,7 @@ from unittest.mock import MagicMock, patch
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from wee_runtime import (
+from wee_runtime import (  # noqa: E402
     _ANTI_HALLUCINATION_PROMPT,
     _WEE_TOOL_CAPABILITY_PROMPT,
     _WEE_TOOLS,
@@ -82,7 +82,6 @@ class TestExecuteSearch(unittest.TestCase):
 
     def _fake_urlopen(self, results):
         """Return a context manager mock that yields SearXNG-like JSON."""
-        import io
         payload = json.dumps({"results": results}).encode("utf-8")
         mock_resp = MagicMock()
         mock_resp.__enter__ = MagicMock(return_value=mock_resp)
@@ -102,7 +101,11 @@ class TestExecuteSearch(unittest.TestCase):
     @patch("urllib.request.urlopen")
     def test_text_format_returns_summary(self, mock_urlopen):
         mock_urlopen.return_value = self._fake_urlopen([
-            {"title": "Claude AI", "url": "https://example.com/claude", "content": "Claude is an AI."},
+            {
+                "title": "Claude AI",
+                "url": "https://example.com/claude",
+                "content": "Claude is an AI.",
+            },
         ])
         result = _execute_search({"q": "Claude AI", "format": "text"})
         self.assertIn("Claude AI", result)
@@ -111,7 +114,11 @@ class TestExecuteSearch(unittest.TestCase):
     @patch("urllib.request.urlopen")
     def test_json_format_returns_valid_json(self, mock_urlopen):
         mock_urlopen.return_value = self._fake_urlopen([
-            {"title": "Claude AI", "url": "https://example.com/claude", "content": "Claude is an AI."},
+            {
+                "title": "Claude AI",
+                "url": "https://example.com/claude",
+                "content": "Claude is an AI.",
+            },
         ])
         result = _execute_search({"q": "Claude AI", "format": "json"})
         parsed = json.loads(result)
@@ -122,7 +129,11 @@ class TestExecuteSearch(unittest.TestCase):
     @patch("urllib.request.urlopen")
     def test_count_limits_results(self, mock_urlopen):
         many_results = [
-            {"title": f"Result {i}", "url": f"https://example.com/{i}", "content": f"Content {i}"}
+            {
+                "title": f"Result {i}",
+                "url": f"https://example.com/{i}",
+                "content": f"Content {i}",
+            }
             for i in range(10)
         ]
         mock_urlopen.return_value = self._fake_urlopen(many_results)
