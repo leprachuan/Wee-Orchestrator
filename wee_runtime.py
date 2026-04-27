@@ -70,8 +70,7 @@ _WEE_TOOLS = [
         "function": {
             "name": "search",
             "description": (
-                "Search the web using SearXNG meta-search engine"
-                " and return results."
+                "Search the web using SearXNG meta-search engine" " and return results."
             ),
             "parameters": {
                 "type": "object",
@@ -177,12 +176,14 @@ def _execute_search(func_args: dict) -> str:
     searxng_url = os.environ.get("WEE_SEARXNG_URL", "http://192.168.1.100:8888")
     searxng_url = searxng_url.rstrip("/")
 
-    params = urllib.parse.urlencode({
-        "q": query,
-        "format": "json",
-        "categories": "general",
-        "language": "en",
-    })
+    params = urllib.parse.urlencode(
+        {
+            "q": query,
+            "format": "json",
+            "categories": "general",
+            "language": "en",
+        }
+    )
     url = f"{searxng_url}/search?{params}"
 
     try:

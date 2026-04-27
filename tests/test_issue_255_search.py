@@ -100,26 +100,30 @@ class TestExecuteSearch(unittest.TestCase):
 
     @patch("urllib.request.urlopen")
     def test_text_format_returns_summary(self, mock_urlopen):
-        mock_urlopen.return_value = self._fake_urlopen([
-            {
-                "title": "Claude AI",
-                "url": "https://example.com/claude",
-                "content": "Claude is an AI.",
-            },
-        ])
+        mock_urlopen.return_value = self._fake_urlopen(
+            [
+                {
+                    "title": "Claude AI",
+                    "url": "https://example.com/claude",
+                    "content": "Claude is an AI.",
+                },
+            ]
+        )
         result = _execute_search({"q": "Claude AI", "format": "text"})
         self.assertIn("Claude AI", result)
         self.assertIn("example.com", result)
 
     @patch("urllib.request.urlopen")
     def test_json_format_returns_valid_json(self, mock_urlopen):
-        mock_urlopen.return_value = self._fake_urlopen([
-            {
-                "title": "Claude AI",
-                "url": "https://example.com/claude",
-                "content": "Claude is an AI.",
-            },
-        ])
+        mock_urlopen.return_value = self._fake_urlopen(
+            [
+                {
+                    "title": "Claude AI",
+                    "url": "https://example.com/claude",
+                    "content": "Claude is an AI.",
+                },
+            ]
+        )
         result = _execute_search({"q": "Claude AI", "format": "json"})
         parsed = json.loads(result)
         self.assertIsInstance(parsed, list)
@@ -162,6 +166,7 @@ class TestExecuteSearch(unittest.TestCase):
     @patch("urllib.request.urlopen")
     def test_unavailable_searxng_returns_error_not_exception(self, mock_urlopen):
         import urllib.error
+
         mock_urlopen.side_effect = urllib.error.URLError("Connection refused")
         result = _execute_search({"q": "test"})
         self.assertIn("Search unavailable", result)
@@ -183,6 +188,7 @@ class TestExecuteSearch(unittest.TestCase):
     def test_env_var_overrides_searxng_url(self):
         """WEE_SEARXNG_URL env var should be used if set."""
         import urllib.error
+
         with patch.dict(os.environ, {"WEE_SEARXNG_URL": "http://custom-host:9999"}):
             with patch("urllib.request.urlopen") as mock_urlopen:
                 mock_urlopen.side_effect = urllib.error.URLError("refused")
