@@ -1332,6 +1332,36 @@ html, body {
 .bg-status-killed    { background: rgba(245,197,66,0.15);  color: #f5c542; border: 1px solid rgba(245,197,66,0.3);  }
 .bg-status-queued    { background: rgba(139,120,255,0.15); color: #b8a9ff; border: 1px solid rgba(139,120,255,0.3); }
 
+/* Fallback indicator badge — shown when a task retried on a secondary runtime */
+.bg-fallback-badge {
+  display: inline-block;
+  font-size: 10px;
+  font-weight: 600;
+  padding: 1px 6px;
+  border-radius: 8px;
+  margin-left: 6px;
+  background: rgba(245,197,66,0.15);
+  color: #f5c542;
+  border: 1px solid rgba(245,197,66,0.35);
+  vertical-align: middle;
+  cursor: default;
+}
+.bg-fallback-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.bg-fallback-route {
+  font-size: 12px;
+  font-family: var(--font-mono);
+  color: var(--text-secondary);
+}
+.bg-fallback-tip {
+  font-size: 11px;
+  color: var(--text-muted);
+  font-style: italic;
+}
+
 .bg-card-agent {
   font-size: 11px;
   color: var(--text-muted);
