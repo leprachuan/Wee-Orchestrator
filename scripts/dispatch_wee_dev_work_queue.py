@@ -363,7 +363,9 @@ def get_agent_dispatch_config(agent_name: str) -> dict:
     # 2. Flat primary_runtime/primary_model fields (canonical schema)
     if agent.get("primary_runtime"):
         # permission_mode: explicit field > permissions.mode block > sensible default
-        default_perm = "elevated" if agent_name in ("wee-dev", "wee-qa") else "restricted"
+        default_perm = (
+            "elevated" if agent_name in ("wee-dev", "wee-qa") else "restricted"
+        )
         permission_mode = (
             agent.get("permission_mode")
             or agent.get("permissions", {}).get("mode")
@@ -378,7 +380,9 @@ def get_agent_dispatch_config(agent_name: str) -> dict:
             "model": agent.get("primary_model", "auto"),
             "fallback_runtime": agent.get("fallback_runtime"),
             "fallback_model": agent.get("fallback_model"),
-            "vendor": f"{agent['primary_runtime']} ({agent.get('primary_model', 'auto')})",
+            "vendor": (
+                f"{agent['primary_runtime']} ({agent.get('primary_model', 'auto')})"
+            ),
             "permission_mode": permission_mode,
             "yolo": bool(yolo_val),
             "timeout": 3600,
@@ -388,6 +392,8 @@ def get_agent_dispatch_config(agent_name: str) -> dict:
         f"No dispatch_config found for agent {agent_name!r}. "
         f"Add primary_runtime/primary_model fields to agents.json."
     )
+
+
 def load_api_key() -> str:
     for line in ENV_PATH.read_text().splitlines():
         if line.startswith("API_SHARED_KEY="):
@@ -432,7 +438,7 @@ def dispatch_via_api(
 
     Uses the orchestrator's background-tasks API instead of direct subprocess spawning
     so tasks are properly registered, visible in the Tasks menu, and fully audited.
-    
+
     Returns the task_id.
     """
     import hashlib
@@ -507,7 +513,8 @@ def dispatch_via_api(
             task_id = result.get("task_id", "")
             if task_id:
                 log(
-                    f"Dispatched {agent} via API: task_id={task_id} status={result.get('status')}"
+                    f"Dispatched {agent} via API: task_id={task_id}"
+                    f" status={result.get('status')}"
                 )
                 return task_id
             else:
@@ -526,23 +533,23 @@ def dispatch_via_subprocess(
     """DEPRECATED: Spawn agent_manager.py as a detached subprocess.
 
     ⚠️ This method is deprecated. Use dispatch_via_api() instead.
-    
+
     Old design: bypassed API due to session leakage concerns (issue #74).
     New design: use API with proper session isolation to keep tasks visible.
-    
+
     Kept for backward compatibility only.
     Returns the PID of the spawned process.
     """
     sid = session_id or str(uuid.uuid4())
     DISPATCH_LOG_DIR.mkdir(exist_ok=True)
     log_file = DISPATCH_LOG_DIR / f"{agent}-{sid[:8]}.log"
-    
+
     # Use claude runtime (copilot runtime hangs in background mode)
     # Map models appropriately: for claude runtime, use claude models
     runtime = "claude"
     # For claude runtime, use claude-opus-4.6 as default (works with claude runtime)
     effective_model = "claude-opus-4.6" if model and "gpt" in model.lower() else model
-    
+
     cmd = [
         sys.executable,
         str(AGENT_MANAGER_PATH),
