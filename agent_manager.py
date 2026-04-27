@@ -9418,6 +9418,9 @@ User Request:
         messages = []        # Conversation history
 
         for _chain_idx, _attempt_model in enumerate(_chain):
+            # Initialize collected_output at the start of each fallback iteration
+            collected_output = []
+            
             if _chain_idx > 0:
                 # B02: surface fallback model switch to user
                 _fb_short = _attempt_model.split("/")[-1]
@@ -9619,7 +9622,6 @@ User Request:
                 messages.append({"role": "system", "content": context_prompt})
             messages.append({"role": "user", "content": prompt})
 
-            collected_output = []
             _got_429 = False
             _wee_start = _time.time()
             _last_usage = [None]
