@@ -25,17 +25,20 @@ class TestAutoRuntimeRemoved(unittest.TestCase):
         """get_available_runtimes() must not include auto."""
         runtimes = get_available_runtimes()
         runtime_ids = [r["id"] for r in runtimes]
-        self.assertNotIn("auto", runtime_ids,
-                         "'auto' should not appear in available runtimes list")
+        self.assertNotIn(
+            "auto", runtime_ids, "'auto' should not appear in available runtimes list"
+        )
 
     def test_check_runtime_available_rejects_auto(self):
         """check_runtime_available('auto') must return False."""
-        self.assertFalse(check_runtime_available("auto"),
-                         "'auto' runtime should not be available")
+        self.assertFalse(
+            check_runtime_available("auto"), "'auto' runtime should not be available"
+        )
 
     def test_slash_runtime_set_rejects_auto(self):
         """The /runtime set handler must reject 'auto' as invalid."""
         from agent_manager import SessionManager
+
         mgr = SessionManager.__new__(SessionManager)
         mgr._slash_commands = {}
         mgr._agents_config = {"agents": []}
@@ -44,8 +47,11 @@ class TestAutoRuntimeRemoved(unittest.TestCase):
 
         session_data = {"runtime": "copilot", "agent": "orchestrator"}
         result = mgr._slash_runtime("set auto", session_data, "test-session")
-        self.assertIn("Unknown runtime", result,
-                      "/runtime set auto should return 'Unknown runtime' error")
+        self.assertIn(
+            "Unknown runtime",
+            result,
+            "/runtime set auto should return 'Unknown runtime' error",
+        )
 
     def test_valid_runtimes_all_have_handlers(self):
         """Every runtime in get_available_runtimes() must have a check_runtime_available entry."""
@@ -54,7 +60,7 @@ class TestAutoRuntimeRemoved(unittest.TestCase):
             rid = rt["id"]
             self.assertTrue(
                 check_runtime_available(rid),
-                f"Runtime {rid} is listed but check_runtime_available returns False"
+                f"Runtime {rid} is listed but check_runtime_available returns False",
             )
 
 

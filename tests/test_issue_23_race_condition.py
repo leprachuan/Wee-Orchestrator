@@ -98,8 +98,9 @@ def test_per_session_locking():
 
 def test_atomic_write():
     """Test that save_session_map_atomic writes atomically."""
-    from agent_manager import SessionManager
     from pathlib import Path
+
+    from agent_manager import SessionManager
 
     with tempfile.TemporaryDirectory() as tmpdir:
         session_map_file = Path(tmpdir) / "test-session-map.json"

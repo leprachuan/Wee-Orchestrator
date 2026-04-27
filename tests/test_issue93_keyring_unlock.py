@@ -2,7 +2,6 @@
 """Tests for Issue #93: Keyring unlock via WebUI."""
 
 import json
-
 import sys
 import unittest
 from unittest.mock import MagicMock, patch

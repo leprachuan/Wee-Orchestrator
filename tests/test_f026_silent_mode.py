@@ -150,13 +150,17 @@ class TestSlashSilentCommand(unittest.TestCase):
             result = self.sm._slash_silent(alias, data, sid)
             self.assertIn("enabled", result.lower(), f"alias '{alias}' failed")
             updated = self.sm.load_session_data(sid)
-            self.assertTrue(updated.get("silent_mode"), f"alias '{alias}' didn't set True")
+            self.assertTrue(
+                updated.get("silent_mode"), f"alias '{alias}' didn't set True"
+            )
 
         for alias in ("false", "0", "disable"):
             result = self.sm._slash_silent(alias, data, sid)
             self.assertIn("disabled", result.lower(), f"alias '{alias}' failed")
             updated = self.sm.load_session_data(sid)
-            self.assertFalse(updated.get("silent_mode"), f"alias '{alias}' didn't set False")
+            self.assertFalse(
+                updated.get("silent_mode"), f"alias '{alias}' didn't set False"
+            )
 
     def test_silent_persists_to_session(self):
         """Silent mode preference persists in session data."""

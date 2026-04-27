@@ -136,6 +136,7 @@ class TestIssue223StrUpperRuntimeFailure(unittest.TestCase):
     def test_issue_223_channel_upper_call_syntax_absent_from_source(self):
         """{channel.upper()} must not appear in the file_handling template source."""
         import ast
+
         src_path = Path(__file__).parent.parent / "agent_manager.py"
         src = src_path.read_text()
         self.assertNotIn(

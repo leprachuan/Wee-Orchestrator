@@ -67,8 +67,11 @@ class TestIssue94ArgsSwapBug(unittest.TestCase):
         result = mgr._resolve_permission_mode(mode_str, session_data)
         # With swapped args, session_data (a dict) lands in prompt_mode.
         # dict != "restricted" is True, so it returns the dict — a dict, not a string.
-        self.assertIsInstance(result, dict,
-            "Bug scenario: swapped args should return dict (demonstrating the bug)")
+        self.assertIsInstance(
+            result,
+            dict,
+            "Bug scenario: swapped args should return dict (demonstrating the bug)",
+        )
 
     def test_correct_args_returns_string(self):
         """With correct arg order, mode is always a string."""
@@ -78,10 +81,14 @@ class TestIssue94ArgsSwapBug(unittest.TestCase):
 
         # CORRECT call order
         result = mgr._resolve_permission_mode(session_data, mode_str)
-        self.assertIsInstance(result, str,
-            "Correct arg order must always return a string mode")
-        self.assertEqual(result, "elevated",
-            "Elevated session permissions must resolve to 'elevated'")
+        self.assertIsInstance(
+            result, str, "Correct arg order must always return a string mode"
+        )
+        self.assertEqual(
+            result,
+            "elevated",
+            "Elevated session permissions must resolve to 'elevated'",
+        )
 
     def test_elevated_mode_never_dict(self):
         """mode == 'elevated' comparison must succeed (not dict == str)."""
@@ -93,12 +100,15 @@ class TestIssue94ArgsSwapBug(unittest.TestCase):
         self.assertEqual(result, "elevated")
         # And the downstream mapping must work
         sdk_permission_mode = (
-            "bypassPermissions" if result == "elevated"
-            else "plan" if result == "sandboxed"
-            else "default"
+            "bypassPermissions"
+            if result == "elevated"
+            else "plan" if result == "sandboxed" else "default"
         )
-        self.assertEqual(sdk_permission_mode, "bypassPermissions",
-            "Elevated mode must map to bypassPermissions for claude-sdk")
+        self.assertEqual(
+            sdk_permission_mode,
+            "bypassPermissions",
+            "Elevated mode must map to bypassPermissions for claude-sdk",
+        )
 
     def test_background_task_elevated_resolves_correctly(self):
         """Background task with elevated permissions resolves to bypassPermissions."""
@@ -140,8 +150,11 @@ class TestIssue94ArgsSwapBug(unittest.TestCase):
         session_data = {"permissions": {"mode": "restricted"}}
 
         result = mgr._resolve_permission_mode(session_data, "elevated")
-        self.assertEqual(result, "elevated",
-            "prompt_mode 'elevated' must override session permissions")
+        self.assertEqual(
+            result,
+            "elevated",
+            "prompt_mode 'elevated' must override session permissions",
+        )
 
     def test_return_type_is_always_string(self):
         """_resolve_permission_mode must ALWAYS return a string, never a dict."""
@@ -157,9 +170,12 @@ class TestIssue94ArgsSwapBug(unittest.TestCase):
         ]
         for session_data, prompt_mode in test_cases:
             result = mgr._resolve_permission_mode(session_data, prompt_mode)
-            self.assertIsInstance(result, str,
+            self.assertIsInstance(
+                result,
+                str,
                 f"Must return str, got {type(result).__name__} for "
-                f"session_data={session_data}, prompt_mode={prompt_mode}")
+                f"session_data={session_data}, prompt_mode={prompt_mode}",
+            )
 
 
 if __name__ == "__main__":

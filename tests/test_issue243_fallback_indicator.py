@@ -79,7 +79,9 @@ class TestFallbackFieldsInTaskRecord(unittest.TestCase):
 
     def test_mark_fallback_used_sets_fields(self):
         """mark_fallback_used() sets used_fallback=True and actual_runtime/model."""
-        self._create("bg_fallback001", fallback_runtime="copilot", fallback_model="auto")
+        self._create(
+            "bg_fallback001", fallback_runtime="copilot", fallback_model="auto"
+        )
         self.mgr.mark_fallback_used("bg_fallback001", "copilot", "auto")
         task = self.mgr.get_task("bg_fallback001")
         self.assertTrue(task["used_fallback"])
@@ -88,7 +90,9 @@ class TestFallbackFieldsInTaskRecord(unittest.TestCase):
 
     def test_mark_fallback_used_persisted(self):
         """mark_fallback_used() changes persist to disk (task survives reload)."""
-        self._create("bg_persist001", fallback_runtime="copilot", fallback_model="gpt-5-mini")
+        self._create(
+            "bg_persist001", fallback_runtime="copilot", fallback_model="gpt-5-mini"
+        )
         self.mgr.mark_fallback_used("bg_persist001", "copilot", "gpt-5-mini")
         # Create new manager pointing to same file — simulates service restart read
         mgr2 = _make_mgr(self.tmp.name)
@@ -120,15 +124,26 @@ class TestFallbackRateLimitPatterns(unittest.TestCase):
     """Verify the rate-limit/infra error detection patterns."""
 
     PATTERNS = [
-        r"429", r"rate.?limit", r"quota.?exceeded",
-        r"401", r"unauthorized", r"missing.?authentication",
+        r"429",
+        r"rate.?limit",
+        r"quota.?exceeded",
+        r"401",
+        r"unauthorized",
+        r"missing.?authentication",
         r"api[_\-]?key.?(invalid|expired|missing)",
-        r"503", r"service.?unavailable", r"502", r"bad.?gateway",
-        r"connection.?refused", r"timed?.?out", r"etimedout", r"overloaded",
+        r"503",
+        r"service.?unavailable",
+        r"502",
+        r"bad.?gateway",
+        r"connection.?refused",
+        r"timed?.?out",
+        r"etimedout",
+        r"overloaded",
     ]
 
     def _is_infra_error(self, text):
         import re
+
         return any(re.search(p, text, re.IGNORECASE) for p in self.PATTERNS)
 
     def test_429_triggers_fallback(self):
@@ -185,7 +200,10 @@ class TestFallbackNotAppliedWhenAlreadyUsed(unittest.TestCase):
         task = self.mgr.get_task("bg_double001")
         # Simulate the guard check used in _run_background_task
         already_fb = task.get("used_fallback", False)
-        self.assertTrue(already_fb, "Second fallback attempt should be blocked by used_fallback flag")
+        self.assertTrue(
+            already_fb,
+            "Second fallback attempt should be blocked by used_fallback flag",
+        )
 
 
 if __name__ == "__main__":

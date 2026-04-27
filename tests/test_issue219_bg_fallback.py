@@ -9,9 +9,10 @@ runtime fails due to infrastructure issues (429, rate_limit, quota exceeded, 503
 import json
 import os
 import sys
-import pytest
-from unittest.mock import Mock, patch, MagicMock
 from pathlib import Path
+from unittest.mock import MagicMock, Mock, patch
+
+import pytest
 
 # Add parent directory to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -123,14 +124,14 @@ class TestBGTaskFallback:
             fallback_runtime="claude-sdk",
             fallback_model="gpt-4",
         )
-        
+
         assert status == "queued"
         assert task["fallback_runtime"] == "claude-sdk"
-        
+
         # Promote the task
         new_sid = "sess_promoted001"
         self.bg_mgr.promote_queued_task(task_id, new_sid)
-        
+
         # Verify fallback params persisted
         promoted = self.bg_mgr.get_task(task_id)
         assert promoted["status"] == "running"
@@ -162,7 +163,7 @@ class TestBGTaskFallback:
 
 class TestBGTaskFallbackIntegration:
     """Integration tests for fallback retry logic.
-    
+
     These tests mock the subprocess calls to simulate infrastructure failures
     and verify that fallback retries are attempted.
     """
@@ -235,6 +236,7 @@ class TestBGTaskDispatchConfigFallback:
 # Placeholder tests for future implementation
 # These are marked as placeholder to allow the test file to pass
 # They should be replaced with actual subprocess mocking tests
+
 
 def test_issue219_placeholder():
     """Placeholder test to ensure test file has at least one passing test."""

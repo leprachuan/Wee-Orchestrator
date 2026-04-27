@@ -36,12 +36,10 @@ class TestWeeIconSvgAsset(unittest.TestCase):
         root = tree.getroot()
         # Check with and without namespace prefix
         attribs = {
-            k.split("}")[-1] if "}" in k else k: v
-            for k, v in root.attrib.items()
+            k.split("}")[-1] if "}" in k else k: v for k, v in root.attrib.items()
         }
         self.assertIn(
-            "viewBox", attribs,
-            "SVG must have viewBox for correct 14x14px rendering"
+            "viewBox", attribs, "SVG must have viewBox for correct 14x14px rendering"
         )
 
     def test_wee_svg_file_size(self):
@@ -55,8 +53,10 @@ class TestWeeIconSvgAsset(unittest.TestCase):
         with open(SVG_PATH) as f:
             content = f.read().lower()
         for bad_fill in [
-            'fill="white"', "fill='white'",
-            'fill="#fff"', 'fill="#ffffff"',
+            'fill="white"',
+            "fill='white'",
+            'fill="#fff"',
+            'fill="#ffffff"',
         ]:
             self.assertNotIn(bad_fill, content, f"SVG hardcodes white fill: {bad_fill}")
 
@@ -65,8 +65,10 @@ class TestWeeIconSvgAsset(unittest.TestCase):
         with open(SVG_PATH) as f:
             content = f.read().lower()
         for bad_fill in [
-            'fill="black"', "fill='black'",
-            'fill="#000"', 'fill="#000000"',
+            'fill="black"',
+            "fill='black'",
+            'fill="#000"',
+            'fill="#000000"',
         ]:
             self.assertNotIn(bad_fill, content, f"SVG hardcodes black fill: {bad_fill}")
 
@@ -89,7 +91,7 @@ class TestRuntimeIconsMap(unittest.TestCase):
         self.assertRegex(
             self.app_js,
             pattern,
-            "RUNTIME_ICONS must have: wee: '/ui/assets/runtime-icons/wee.svg'"
+            "RUNTIME_ICONS must have: wee: '/ui/assets/runtime-icons/wee.svg'",
         )
 
     def test_runtime_icons_wee_uses_ui_path(self):
@@ -100,8 +102,7 @@ class TestRuntimeIconsMap(unittest.TestCase):
         """Existing runtime icon mappings must not be broken by wee addition."""
         for runtime in ("claude", "copilot", "gemini", "opencode", "devin", "cursor"):
             self.assertIn(
-                f"'{runtime}'", self.app_js,
-                f"Runtime '{runtime}' missing from app.js"
+                f"'{runtime}'", self.app_js, f"Runtime '{runtime}' missing from app.js"
             )
 
     def test_runtime_icon_html_function_renders_img(self):
@@ -131,7 +132,7 @@ class TestRuntimeSlashCommands(unittest.TestCase):
         self.assertRegex(
             self.app_js,
             pattern,
-            "Wee slash command entry must render icon with runtimeIconHTML('wee')"
+            "Wee slash command entry must render icon with runtimeIconHTML('wee')",
         )
 
     def test_all_runtimes_have_slash_commands(self):
@@ -146,6 +147,7 @@ class TestBackendWeeRuntime(unittest.TestCase):
     def test_get_available_runtimes_includes_wee(self):
         """get_available_runtimes() must return wee as an available runtime."""
         import sys
+
         sys.path.insert(0, BASE_DIR)
         from agent_manager import get_available_runtimes
 
@@ -156,6 +158,7 @@ class TestBackendWeeRuntime(unittest.TestCase):
     def test_wee_runtime_has_icon_field(self):
         """Wee runtime entry must have an icon field for badge rendering."""
         import sys
+
         sys.path.insert(0, BASE_DIR)
         from agent_manager import get_available_runtimes
 
@@ -168,6 +171,7 @@ class TestBackendWeeRuntime(unittest.TestCase):
     def test_wee_runtime_has_label(self):
         """Wee runtime entry must have a label field."""
         import sys
+
         sys.path.insert(0, BASE_DIR)
         from agent_manager import get_available_runtimes
 
@@ -190,16 +194,21 @@ class TestIconConsistency(unittest.TestCase):
         # Find all wee.svg references
         refs = re.findall(r"['\"][^'\"]*wee\.svg['\"]", self.app_js)
         for ref in refs:
-            self.assertIn("/ui/assets/runtime-icons/wee.svg", ref,
-                          f"Non-canonical wee.svg path: {ref}")
+            self.assertIn(
+                "/ui/assets/runtime-icons/wee.svg",
+                ref,
+                f"Non-canonical wee.svg path: {ref}",
+            )
 
     def test_icon_file_matches_registry(self):
         """wee.svg file on disk must match the path registered in RUNTIME_ICONS."""
         # Verify the file at the path implied by the registry
         # Registry uses '/ui/assets/runtime-icons/wee.svg' served from webui/dist
         actual_path = os.path.join(WEBUI_DIST, "assets", "runtime-icons", "wee.svg")
-        self.assertTrue(os.path.isfile(actual_path),
-                        f"wee.svg not found at expected path: {actual_path}")
+        self.assertTrue(
+            os.path.isfile(actual_path),
+            f"wee.svg not found at expected path: {actual_path}",
+        )
 
 
 if __name__ == "__main__":

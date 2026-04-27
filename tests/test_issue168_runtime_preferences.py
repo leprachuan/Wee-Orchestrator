@@ -833,6 +833,7 @@ class TestBackupRuntimeFallback(unittest.TestCase):
                 "_compute_bg_task_defaults",
                 return_value={},
             ):
+
                 async def fake_bg(
                     self_sm,
                     task_id,
@@ -876,6 +877,7 @@ class TestBackupRuntimeFallback(unittest.TestCase):
                 )
         finally:
             import os
+
             if os.path.exists(tmp):
                 os.unlink(tmp)
 

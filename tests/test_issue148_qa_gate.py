@@ -190,11 +190,15 @@ class TestIsWeeDevGated:
         from scheduler.qa_gate import is_wee_dev_gated
 
         lock_file = tmp_path / "lock.json"
-        lock_file.write_text(json.dumps({
-            "state": "qa-review",
-            "work_item_id": "WQ-100",
-            "reason": "Waiting for QA",
-        }))
+        lock_file.write_text(
+            json.dumps(
+                {
+                    "state": "qa-review",
+                    "work_item_id": "WQ-100",
+                    "reason": "Waiting for QA",
+                }
+            )
+        )
         gated, reason, details = is_wee_dev_gated(
             lock_path=lock_file, check_github=False, check_prs=False
         )
@@ -206,10 +210,14 @@ class TestIsWeeDevGated:
         from scheduler.qa_gate import is_wee_dev_gated
 
         lock_file = tmp_path / "lock.json"
-        lock_file.write_text(json.dumps({
-            "state": "wee-dev-running",
-            "work_item_id": "WQ-100",
-        }))
+        lock_file.write_text(
+            json.dumps(
+                {
+                    "state": "wee-dev-running",
+                    "work_item_id": "WQ-100",
+                }
+            )
+        )
         gated, reason, details = is_wee_dev_gated(
             lock_path=lock_file, check_github=False, check_prs=False
         )
@@ -221,10 +229,14 @@ class TestIsWeeDevGated:
         from scheduler.qa_gate import is_wee_dev_gated
 
         lock_file = tmp_path / "lock.json"
-        lock_file.write_text(json.dumps({
-            "state": "qa-gate-blocked",
-            "reason": "QA gate blocked",
-        }))
+        lock_file.write_text(
+            json.dumps(
+                {
+                    "state": "qa-gate-blocked",
+                    "reason": "QA gate blocked",
+                }
+            )
+        )
         gated, reason, details = is_wee_dev_gated(
             lock_path=lock_file, check_github=False, check_prs=False
         )
@@ -258,8 +270,12 @@ class TestIsWeeDevGated:
         """Gated when GitHub issues have blocking labels."""
         from scheduler.qa_gate import is_wee_dev_gated
 
-        blocking = [{"number": 100, "title": "Test", "blocking_labels": ["wee-dev:qa-review"]}]
-        with mock.patch("scheduler.qa_gate.check_blocking_issues", return_value=blocking):
+        blocking = [
+            {"number": 100, "title": "Test", "blocking_labels": ["wee-dev:qa-review"]}
+        ]
+        with mock.patch(
+            "scheduler.qa_gate.check_blocking_issues", return_value=blocking
+        ):
             gated, reason, details = is_wee_dev_gated(
                 lock_path=tmp_path / "none.json",
                 check_github=True,
@@ -323,7 +339,10 @@ class TestExecutorGateCheck:
     def test_unknown_gate_allows_execution(self):
         """Unknown gate_check names allow execution (fail-open)."""
         executor = self._make_executor()
-        assert executor._check_gate({"id": "test-job", "gate_check": "nonexistent_gate"}) is True
+        assert (
+            executor._check_gate({"id": "test-job", "gate_check": "nonexistent_gate"})
+            is True
+        )
 
     def test_wee_dev_qa_gate_blocks_when_gated(self):
         """wee_dev_qa gate blocks execution when is_wee_dev_gated returns True."""
@@ -336,7 +355,9 @@ class TestExecutorGateCheck:
             "scheduler.executor.is_wee_dev_gated",
             return_value=(True, "test reason", {}),
         ):
-            result = executor._check_gate({"id": "wee-dev-runner", "gate_check": "wee_dev_qa"})
+            result = executor._check_gate(
+                {"id": "wee-dev-runner", "gate_check": "wee_dev_qa"}
+            )
         assert result is False
 
     def test_wee_dev_qa_gate_allows_when_clear(self):
@@ -347,7 +368,9 @@ class TestExecutorGateCheck:
             "scheduler.executor.is_wee_dev_gated",
             return_value=(False, "", {}),
         ):
-            result = executor._check_gate({"id": "wee-dev-runner", "gate_check": "wee_dev_qa"})
+            result = executor._check_gate(
+                {"id": "wee-dev-runner", "gate_check": "wee_dev_qa"}
+            )
         assert result is True
 
     def test_gate_exception_allows_execution(self):
@@ -358,7 +381,9 @@ class TestExecutorGateCheck:
             "scheduler.executor.is_wee_dev_gated",
             side_effect=RuntimeError("API down"),
         ):
-            result = executor._check_gate({"id": "wee-dev-runner", "gate_check": "wee_dev_qa"})
+            result = executor._check_gate(
+                {"id": "wee-dev-runner", "gate_check": "wee_dev_qa"}
+            )
         assert result is True
 
 
@@ -379,8 +404,15 @@ class TestDispatchQAGateFixes:
         re-dispatch THAT item, not pick up a new queued issue.
         """
         # Simulate the fixed logic
-        active_item = {"id": "WQ-100", "number": 100, "status": "in-progress", "title": "Active"}
-        actionable = [{"id": "WQ-200", "number": 200, "status": "queued", "title": "Queued"}]
+        active_item = {
+            "id": "WQ-100",
+            "number": 100,
+            "status": "in-progress",
+            "title": "Active",
+        }
+        actionable = [
+            {"id": "WQ-200", "number": 200, "status": "queued", "title": "Queued"}
+        ]
 
         ACTIVE_STATUSES = {"in-progress", "qa-review", "qa-failed"}
         ACTIONABLE_STATUSES = {"queued", "qa-failed"}
@@ -391,19 +423,32 @@ class TestDispatchQAGateFixes:
             next_item = active_item  # Fix: re-dispatch the stalled item
 
         # The catch-all gate should NOT apply here since we already have next_item
-        if next_item is None and active_item and active_item["status"] in ACTIVE_STATUSES:
+        if (
+            next_item is None
+            and active_item
+            and active_item["status"] in ACTIVE_STATUSES
+        ):
             # This would block — but next_item is already set
             pass
 
         assert next_item is not None
-        assert next_item["id"] == "WQ-100", "Must re-dispatch stalled item, not new queued item"
+        assert (
+            next_item["id"] == "WQ-100"
+        ), "Must re-dispatch stalled item, not new queued item"
 
     def test_qa_review_blocks_new_dispatch(self):
         """Bug 3: When active_item is 'qa-review', the catch-all gate must
         prevent picking up a new queued issue.
         """
-        active_item = {"id": "WQ-100", "number": 100, "status": "qa-review", "title": "In QA"}
-        actionable = [{"id": "WQ-200", "number": 200, "status": "queued", "title": "Queued"}]
+        active_item = {
+            "id": "WQ-100",
+            "number": 100,
+            "status": "qa-review",
+            "title": "In QA",
+        }
+        actionable = [
+            {"id": "WQ-200", "number": 200, "status": "queued", "title": "Queued"}
+        ]
 
         ACTIVE_STATUSES = {"in-progress", "qa-review", "qa-failed"}
 
@@ -411,16 +456,30 @@ class TestDispatchQAGateFixes:
         next_item = None
         # qa-review is not in-progress or qa-failed, so next_item stays None
         blocked = False
-        if next_item is None and active_item and active_item["status"] in ACTIVE_STATUSES:
+        if (
+            next_item is None
+            and active_item
+            and active_item["status"] in ACTIVE_STATUSES
+        ):
             blocked = True
 
         assert blocked is True, "qa-review must block dispatch of new issues"
 
     def test_qa_failed_redispatches_same_issue(self):
         """When active_item is 'qa-failed', must re-dispatch same issue."""
-        active_item = {"id": "WQ-100", "number": 100, "status": "qa-failed", "title": "Failed QA"}
+        active_item = {
+            "id": "WQ-100",
+            "number": 100,
+            "status": "qa-failed",
+            "title": "Failed QA",
+        }
         actionable = [
-            {"id": "WQ-100", "number": 100, "status": "qa-failed", "title": "Failed QA"},
+            {
+                "id": "WQ-100",
+                "number": 100,
+                "status": "qa-failed",
+                "title": "Failed QA",
+            },
             {"id": "WQ-200", "number": 200, "status": "queued", "title": "New item"},
         ]
 
@@ -434,7 +493,9 @@ class TestDispatchQAGateFixes:
     def test_no_active_item_picks_from_queue(self):
         """When no active item exists, pick from actionable queue."""
         active_item = None
-        actionable = [{"id": "WQ-200", "number": 200, "status": "queued", "title": "Queued"}]
+        actionable = [
+            {"id": "WQ-200", "number": 200, "status": "queued", "title": "Queued"}
+        ]
 
         ACTIVE_STATUSES = {"in-progress", "qa-review", "qa-failed"}
         ACTIONABLE_STATUSES = {"queued", "qa-failed"}
@@ -545,7 +606,12 @@ class TestQAGateIntegrationScenarios:
         After rejection, the issue has wee-dev:qa-failed label. The dispatch
         script should re-dispatch wee-dev for the SAME issue.
         """
-        active_item = {"id": "WQ-100", "number": 100, "status": "qa-failed", "title": "Fix bug"}
+        active_item = {
+            "id": "WQ-100",
+            "number": 100,
+            "status": "qa-failed",
+            "title": "Fix bug",
+        }
 
         next_item = None
         if active_item and active_item["status"] == "qa-failed":
@@ -559,10 +625,14 @@ class TestQAGateIntegrationScenarios:
         from scheduler.qa_gate import is_wee_dev_gated
 
         lock_file = tmp_path / "lock.json"
-        lock_file.write_text(json.dumps({
-            "state": "wee-dev-running",
-            "work_item_id": "WQ-100",
-        }))
+        lock_file.write_text(
+            json.dumps(
+                {
+                    "state": "wee-dev-running",
+                    "work_item_id": "WQ-100",
+                }
+            )
+        )
 
         gated, reason, details = is_wee_dev_gated(
             lock_path=lock_file,
@@ -576,10 +646,14 @@ class TestQAGateIntegrationScenarios:
         from scheduler.qa_gate import is_wee_dev_gated
 
         lock_file = tmp_path / "lock.json"
-        lock_file.write_text(json.dumps({
-            "state": "qa-review",
-            "work_item_id": "WQ-100",
-        }))
+        lock_file.write_text(
+            json.dumps(
+                {
+                    "state": "qa-review",
+                    "work_item_id": "WQ-100",
+                }
+            )
+        )
 
         gated, reason, details = is_wee_dev_gated(
             lock_path=lock_file,

@@ -122,13 +122,17 @@ class TestIssue238SingleSourceOfTruth(unittest.TestCase):
 
     def test_explicit_permission_mode_overrides_default(self):
         """Explicit permission_mode field overrides the agent-name-based default."""
-        agents = self._make_agents(extra_agents=[{
-            "name": "custom-agent",
-            "path": "/opt/custom",
-            "primary_runtime": "claude",
-            "primary_model": "haiku",
-            "permission_mode": "elevated",
-        }])
+        agents = self._make_agents(
+            extra_agents=[
+                {
+                    "name": "custom-agent",
+                    "path": "/opt/custom",
+                    "primary_runtime": "claude",
+                    "primary_model": "haiku",
+                    "permission_mode": "elevated",
+                }
+            ]
+        )
         get_cfg, tmp = _make_dispatch_func(agents)
         try:
             cfg = get_cfg("custom-agent")
@@ -139,13 +143,15 @@ class TestIssue238SingleSourceOfTruth(unittest.TestCase):
     def test_explicit_yolo_false_overrides_default_for_wee_dev(self):
         """Explicit yolo=False in agents.json overrides the wee-dev default of True."""
         agents = {
-            "agents": [{
-                "name": "wee-dev",
-                "path": "/opt/wee-dev",
-                "primary_runtime": "claude",
-                "primary_model": "sonnet",
-                "yolo": False,
-            }]
+            "agents": [
+                {
+                    "name": "wee-dev",
+                    "path": "/opt/wee-dev",
+                    "primary_runtime": "claude",
+                    "primary_model": "sonnet",
+                    "yolo": False,
+                }
+            ]
         }
         get_cfg, tmp = _make_dispatch_func(agents)
         try:
@@ -157,19 +163,21 @@ class TestIssue238SingleSourceOfTruth(unittest.TestCase):
     def test_legacy_dispatch_config_block_still_works(self):
         """Legacy dispatch_config block in agents.json is still respected."""
         agents = {
-            "agents": [{
-                "name": "wee-dev",
-                "path": "/opt/wee-dev",
-                "dispatch_config": {
-                    "runtime": "copilot",
-                    "model": "claude-opus-4.6",
-                    "permission_mode": "elevated",
-                    "yolo": True,
-                    "timeout": 1800,
-                },
-                "fallback_runtime": "codex",
-                "fallback_model": "gpt-5.4-mini",
-            }]
+            "agents": [
+                {
+                    "name": "wee-dev",
+                    "path": "/opt/wee-dev",
+                    "dispatch_config": {
+                        "runtime": "copilot",
+                        "model": "claude-opus-4.6",
+                        "permission_mode": "elevated",
+                        "yolo": True,
+                        "timeout": 1800,
+                    },
+                    "fallback_runtime": "codex",
+                    "fallback_model": "gpt-5.4-mini",
+                }
+            ]
         }
         get_cfg, tmp = _make_dispatch_func(agents)
         try:
@@ -198,7 +206,9 @@ class TestIssue238SingleSourceOfTruth(unittest.TestCase):
         This is the core of issue #238: the old overlay path was removed so
         config/agents.json can never be silently consulted.
         """
-        script_path = Path("/opt/n8n-copilot-shim-dev/scripts/dispatch_wee_dev_work_queue.py")
+        script_path = Path(
+            "/opt/n8n-copilot-shim-dev/scripts/dispatch_wee_dev_work_queue.py"
+        )
         self.assertTrue(script_path.exists(), "dispatch script missing")
         content = script_path.read_text()
         self.assertNotIn(
@@ -213,7 +223,9 @@ class TestIssue238SingleSourceOfTruth(unittest.TestCase):
 
         Checks actual AST to distinguish docstring mentions from live code.
         """
-        script_path = Path("/opt/n8n-copilot-shim-dev/scripts/dispatch_wee_dev_work_queue.py")
+        script_path = Path(
+            "/opt/n8n-copilot-shim-dev/scripts/dispatch_wee_dev_work_queue.py"
+        )
         content = script_path.read_text()
         try:
             tree = ast.parse(content)
@@ -249,7 +261,9 @@ class TestIssue238SingleSourceOfTruth(unittest.TestCase):
             "wee-dev missing permission_mode in agents.json (issue #238)",
         )
         self.assertEqual(wee_dev["permission_mode"], "elevated")
-        self.assertIn("yolo", wee_dev, "wee-dev missing yolo in agents.json (issue #238)")
+        self.assertIn(
+            "yolo", wee_dev, "wee-dev missing yolo in agents.json (issue #238)"
+        )
         self.assertTrue(wee_dev["yolo"])
 
     def test_no_duplicate_agents_in_agents_json(self):
@@ -270,11 +284,14 @@ class TestIssue238SingleSourceOfTruth(unittest.TestCase):
         self.assertTrue(jobs_path.exists(), "scheduler jobs file missing")
         jobs = json.loads(jobs_path.read_text())
         wee_dev_jobs = [
-            j for j in jobs.get("jobs", [])
+            j
+            for j in jobs.get("jobs", [])
             if "dispatch_wee_dev" in j.get("task", "")
-               or "work-queue" in j.get("id", "")
+            or "work-queue" in j.get("id", "")
         ]
-        self.assertTrue(len(wee_dev_jobs) > 0, "No wee-dev work queue scheduler job found")
+        self.assertTrue(
+            len(wee_dev_jobs) > 0, "No wee-dev work queue scheduler job found"
+        )
         for job in wee_dev_jobs:
             self.assertIn(
                 "scripts/dispatch_wee_dev",

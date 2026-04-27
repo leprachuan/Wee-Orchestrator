@@ -19,7 +19,6 @@ import subprocess
 import sys
 import time
 
-
 # Provider presets: prefix → (api_base, default_api_key)
 PROVIDER_PRESETS = {
     "ollama": ("http://192.168.1.101:11434/v1", "ollama"),
@@ -85,7 +84,7 @@ def resolve_model_and_endpoint(model: str, api_base: str = None, api_key: str = 
     # Check for provider prefix
     for prefix, (preset_base, preset_key) in PROVIDER_PRESETS.items():
         if model.lower().startswith(f"{prefix}/"):
-            resolved_model = model[len(prefix) + 1:]
+            resolved_model = model[len(prefix) + 1 :]
             if not resolved_base:
                 resolved_base = preset_base
             if not resolved_key and preset_key:
@@ -94,9 +93,7 @@ def resolve_model_and_endpoint(model: str, api_base: str = None, api_key: str = 
 
     # Defaults
     if not resolved_base:
-        resolved_base = os.environ.get(
-            "WEE_API_BASE", "http://192.168.1.101:11434/v1"
-        )
+        resolved_base = os.environ.get("WEE_API_BASE", "http://192.168.1.101:11434/v1")
     if not resolved_key:
         resolved_key = os.environ.get("WEE_API_KEY") or os.environ.get(
             "OPENROUTER_API_KEY"
@@ -105,6 +102,7 @@ def resolve_model_and_endpoint(model: str, api_base: str = None, api_key: str = 
             if "openrouter" in (resolved_base or "").lower():
                 try:
                     import keyring
+
                     resolved_key = keyring.get_password("openrouter", "api_key")
                 except Exception:
                     pass
@@ -157,14 +155,24 @@ def main():
     parser = argparse.ArgumentParser(
         description="Wee Native Runtime — OpenAI-compatible chat completions"
     )
-    parser.add_argument("--model", required=True, help="Model name (e.g., ollama/gemma4:e4b)")
+    parser.add_argument(
+        "--model", required=True, help="Model name (e.g., ollama/gemma4:e4b)"
+    )
     parser.add_argument("--api-base", default=None, help="API base URL")
     parser.add_argument("--api-key", default=None, help="API key")
     parser.add_argument("--system-prompt", default="", help="System prompt")
-    parser.add_argument("--timeout", type=int, default=300, help="Request timeout in seconds")
-    parser.add_argument("--temperature", type=float, default=None, help="Sampling temperature")
-    parser.add_argument("--tools", action="store_true", default=False,
-                        help="Enable tool calling (bash, python)")
+    parser.add_argument(
+        "--timeout", type=int, default=300, help="Request timeout in seconds"
+    )
+    parser.add_argument(
+        "--temperature", type=float, default=None, help="Sampling temperature"
+    )
+    parser.add_argument(
+        "--tools",
+        action="store_true",
+        default=False,
+        help="Enable tool calling (bash, python)",
+    )
     parser.add_argument("prompt", help="User prompt")
     args = parser.parse_args()
 
@@ -175,7 +183,10 @@ def main():
     try:
         from openai import OpenAI
     except ImportError:
-        print("Error: openai package not installed. Run: pip install openai", file=sys.stderr)
+        print(
+            "Error: openai package not installed. Run: pip install openai",
+            file=sys.stderr,
+        )
         sys.exit(1)
 
     client = OpenAI(
@@ -263,7 +274,8 @@ def main():
                         if idx not in tool_calls_acc:
                             tool_call_counter += 1
                             tool_calls_acc[idx] = {
-                                "id": getattr(tc_delta, "id", None) or f"tc_wee_{tool_call_counter}",
+                                "id": getattr(tc_delta, "id", None)
+                                or f"tc_wee_{tool_call_counter}",
                                 "name": "",
                                 "arguments": "",
                             }
@@ -273,7 +285,9 @@ def main():
                             if tc_delta.function.name:
                                 tool_calls_acc[idx]["name"] = tc_delta.function.name
                             if tc_delta.function.arguments:
-                                tool_calls_acc[idx]["arguments"] += tc_delta.function.arguments
+                                tool_calls_acc[idx][
+                                    "arguments"
+                                ] += tc_delta.function.arguments
 
             content_text = "".join(round_content)
 
@@ -290,17 +304,21 @@ def main():
             assistant_tool_calls = []
             for idx in sorted(tool_calls_acc.keys()):
                 tc = tool_calls_acc[idx]
-                assistant_tool_calls.append({
-                    "id": tc["id"],
-                    "type": "function",
-                    "function": {"name": tc["name"], "arguments": tc["arguments"]},
-                })
+                assistant_tool_calls.append(
+                    {
+                        "id": tc["id"],
+                        "type": "function",
+                        "function": {"name": tc["name"], "arguments": tc["arguments"]},
+                    }
+                )
 
-            messages.append({
-                "role": "assistant",
-                "content": content_text or None,
-                "tool_calls": assistant_tool_calls,
-            })
+            messages.append(
+                {
+                    "role": "assistant",
+                    "content": content_text or None,
+                    "tool_calls": assistant_tool_calls,
+                }
+            )
 
             for tc_entry in assistant_tool_calls:
                 tc_id = tc_entry["id"]
@@ -312,20 +330,27 @@ def main():
                 except (ValueError, json.JSONDecodeError):
                     func_args = {"raw": func_args_str}
 
-                print(f"[Wee] Tool: {func_name}({json.dumps(func_args)[:200]})", file=sys.stderr)
+                print(
+                    f"[Wee] Tool: {func_name}({json.dumps(func_args)[:200]})",
+                    file=sys.stderr,
+                )
 
                 tool_result = execute_tool(func_name, func_args)
 
-                messages.append({
-                    "role": "tool",
-                    "tool_call_id": tc_id,
-                    "content": tool_result or "No output",
-                })
+                messages.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": tc_id,
+                        "content": tool_result or "No output",
+                    }
+                )
         else:
             # All rounds had tool calls with no final text
             last_results = [m["content"] for m in messages if m.get("role") == "tool"]
             if last_results:
-                fallback = "Tool execution completed. Last result:\n" + last_results[-1][:2000]
+                fallback = (
+                    "Tool execution completed. Last result:\n" + last_results[-1][:2000]
+                )
             else:
                 fallback = "Max tool rounds reached without final response."
             collected_output.append(fallback)

@@ -33,6 +33,7 @@ UTC_TZ = ZoneInfo("UTC")
 class TestGetLocalTzName(unittest.TestCase):
     def _strip_tz_env(self):
         import os
+
         return {k: v for k, v in os.environ.items() if k != "TZ"}
 
     def test_tz_env_var_takes_priority(self):

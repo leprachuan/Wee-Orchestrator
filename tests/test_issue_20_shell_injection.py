@@ -56,9 +56,9 @@ class TestIssue20ShellInjection(unittest.TestCase):
                 "name": "Issue 20 Scheduler",
                 "task": (
                     'python3 -c "from pathlib import Path; '
-                    'Path(\'safe.txt\').write_text(\'ok\')" ; '
+                    "Path('safe.txt').write_text('ok')\" ; "
                     'python3 -c "from pathlib import Path; '
-                    'Path(\'pwned.txt\').write_text(\'bad\')"'
+                    "Path('pwned.txt').write_text('bad')\""
                 ),
                 "working_dir": str(tmp_path),
                 "notify": False,
@@ -78,9 +78,9 @@ class TestIssue20ShellInjection(unittest.TestCase):
             mgr = _build_manager(tmp_path)
             command = (
                 'python3 -c "from pathlib import Path; '
-                'Path(\'safe.txt\').write_text(\'ok\')" ; '
+                "Path('safe.txt').write_text('ok')\" ; "
                 'python3 -c "from pathlib import Path; '
-                'Path(\'pwned.txt\').write_text(\'bad\')"'
+                "Path('pwned.txt').write_text('bad')\""
             )
 
             result = mgr._execute_bash_command(command, "orchestrator")

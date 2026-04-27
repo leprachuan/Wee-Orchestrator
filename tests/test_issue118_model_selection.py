@@ -69,7 +69,8 @@ class TestFetchWeeModels(unittest.TestCase):
             self.assertIsInstance(models, list, f"Section {section!r} must be a list")
             for m in models:
                 self.assertIsInstance(
-                    m, str,
+                    m,
+                    str,
                     f"Model {m!r} in section {section!r} must be a str, not {type(m)}",
                 )
 
@@ -198,8 +199,9 @@ class TestOllamaPort(unittest.TestCase):
         source = am_path.read_text()
         # Find occurrences of 11436 — there should be none
         import re
+
         # Specifically check that 11436 doesn't appear near ollama
-        ollama_section = re.findall(r'.{100}11436.{100}', source)
+        ollama_section = re.findall(r".{100}11436.{100}", source)
         for ctx in ollama_section:
             if "ollama" in ctx.lower():
                 self.fail(f"Found 11436 near 'ollama' in agent_manager.py: ...{ctx}...")
@@ -226,14 +228,22 @@ class TestRunWeeNativeModelPassthrough(unittest.TestCase):
             captured["base_url"] = kwargs.get("base_url", "")
             captured["model"] = kwargs.get("model", "")
             client = MagicMock()
-            client.chat.completions.create.return_value = iter([
-                MagicMock(choices=[
-                    MagicMock(delta=MagicMock(content="hi"), finish_reason=None)
-                ]),
-                MagicMock(choices=[
-                    MagicMock(delta=MagicMock(content=None), finish_reason="stop")
-                ]),
-            ])
+            client.chat.completions.create.return_value = iter(
+                [
+                    MagicMock(
+                        choices=[
+                            MagicMock(delta=MagicMock(content="hi"), finish_reason=None)
+                        ]
+                    ),
+                    MagicMock(
+                        choices=[
+                            MagicMock(
+                                delta=MagicMock(content=None), finish_reason="stop"
+                            )
+                        ]
+                    ),
+                ]
+            )
             return client
 
         session_data = {
@@ -304,6 +314,7 @@ class TestWeeInKnownRuntimes(unittest.TestCase):
 class TestSessionValidationWee(unittest.TestCase):
     def setUp(self):
         self.mgr = _make_mgr()
+
     """Verify session validation properly handles wee model switching."""
 
     def test_empty_model_gets_default(self):
@@ -313,9 +324,7 @@ class TestSessionValidationWee(unittest.TestCase):
         # Simulate the validation logic
         runtime = "wee"  # noqa: F841
         current_model = session_data.get("model", "")
-        if not current_model or not self.mgr.get_model_from_name(
-            current_model, "wee"
-        ):
+        if not current_model or not self.mgr.get_model_from_name(current_model, "wee"):
             session_data["model"] = os.getenv("WEE_DEFAULT_MODEL", "ollama/gemma4:e4b")
         assert session_data["model"] == "ollama/gemma4:e4b"
 
@@ -324,9 +333,7 @@ class TestSessionValidationWee(unittest.TestCase):
         session_data = {"runtime": "wee", "model": "ollama/gemma4:e4b"}
         runtime = "wee"  # noqa: F841
         current_model = session_data.get("model", "")
-        if not current_model or not self.mgr.get_model_from_name(
-            current_model, "wee"
-        ):
+        if not current_model or not self.mgr.get_model_from_name(current_model, "wee"):
             session_data["model"] = "ollama/gemma4:e4b"
         assert session_data["model"] == "ollama/gemma4:e4b"
 

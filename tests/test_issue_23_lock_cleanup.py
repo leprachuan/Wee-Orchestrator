@@ -73,23 +73,23 @@ def test_lock_cleanup_on_ttl_eviction():
         print(f"  After TTL pruning: {len(pruned_map)} sessions remain")
 
         # Verify locks for evicted sessions were cleaned up
-        assert "old_session_1" not in sm._per_session_locks, (
-            "Lock for old_session_1 should be cleaned up"
-        )
-        assert "old_session_2" not in sm._per_session_locks, (
-            "Lock for old_session_2 should be cleaned up"
-        )
-        assert "recent_session" in sm._per_session_locks, (
-            "Lock for recent_session should remain"
-        )
+        assert (
+            "old_session_1" not in sm._per_session_locks
+        ), "Lock for old_session_1 should be cleaned up"
+        assert (
+            "old_session_2" not in sm._per_session_locks
+        ), "Lock for old_session_2 should be cleaned up"
+        assert (
+            "recent_session" in sm._per_session_locks
+        ), "Lock for recent_session should remain"
 
         final_lock_count = len(sm._per_session_locks)
         print(f"  Final lock count: {final_lock_count} locks")
         print(f"  ✓ Cleaned up {initial_lock_count - final_lock_count} orphaned locks")
 
-        assert final_lock_count == 1, (
-            f"Expected 1 lock remaining, got {final_lock_count}"
-        )
+        assert (
+            final_lock_count == 1
+        ), f"Expected 1 lock remaining, got {final_lock_count}"
 
 
 if __name__ == "__main__":

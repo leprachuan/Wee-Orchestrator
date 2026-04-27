@@ -95,8 +95,14 @@ class TestServiceStatusEndpoint(unittest.TestCase):
         data = resp.json()
         telegram_svc = data["services"]["telegram"]["service"]
         webex_svc = data["services"]["webex"]["service"]
-        self.assertIn("-dev", telegram_svc, "telegram service name must have -dev suffix in DEV env")
-        self.assertIn("-dev", webex_svc, "webex service name must have -dev suffix in DEV env")
+        self.assertIn(
+            "-dev",
+            telegram_svc,
+            "telegram service name must have -dev suffix in DEV env",
+        )
+        self.assertIn(
+            "-dev", webex_svc, "webex service name must have -dev suffix in DEV env"
+        )
 
     def test_service_status_active_field_valid_type(self):
         """active field must always be boolean, never string."""
@@ -104,8 +110,9 @@ class TestServiceStatusEndpoint(unittest.TestCase):
         data = resp.json()
         for name, svc in data["services"].items():
             self.assertIsInstance(
-                svc["active"], bool,
-                f"{name}.active must be bool, got {type(svc['active'])}"
+                svc["active"],
+                bool,
+                f"{name}.active must be bool, got {type(svc['active'])}",
             )
 
 

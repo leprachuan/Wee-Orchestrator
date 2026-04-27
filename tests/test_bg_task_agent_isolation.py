@@ -3,6 +3,7 @@
 Tests _compute_bg_task_defaults by extracting it directly from agent_manager.py
 without importing the full module (which requires a running server environment).
 """
+
 import ast
 import os
 import re
@@ -11,6 +12,7 @@ import sys
 import pytest
 
 _AM_PATH = os.path.join(os.path.dirname(__file__), "..", "agent_manager.py")
+
 
 def _load_fn():
     with open(_AM_PATH, "r") as f:
@@ -38,32 +40,56 @@ def _sm(sessions):
 # Core: agent field must NEVER appear in defaults
 # ---------------------------------------------------------------------------
 
+
 def test_agent_not_inherited_same_channel():
     d = _compute_bg_task_defaults(
-        _sm([{"identity": "foster", "channel": "tg", "agent": "wee-dev",
-              "runtime": "copilot", "model": "claude-sonnet-4.6"}]),
-        "foster", "tg",
+        _sm(
+            [
+                {
+                    "identity": "foster",
+                    "channel": "tg",
+                    "agent": "wee-dev",
+                    "runtime": "copilot",
+                    "model": "claude-sonnet-4.6",
+                }
+            ]
+        ),
+        "foster",
+        "tg",
     )
     assert "agent" not in d, f"'agent' leaked into defaults: {d}"
 
 
 def test_agent_not_inherited_cross_channel():
     d = _compute_bg_task_defaults(
-        _sm([{"identity": "foster", "channel": "webex", "agent": "email_triage",
-              "runtime": "copilot", "model": "claude-haiku-4.5"}]),
-        "foster", "tg",
+        _sm(
+            [
+                {
+                    "identity": "foster",
+                    "channel": "webex",
+                    "agent": "email_triage",
+                    "runtime": "copilot",
+                    "model": "claude-haiku-4.5",
+                }
+            ]
+        ),
+        "foster",
+        "tg",
     )
     assert "agent" not in d, f"'agent' leaked cross-channel: {d}"
 
 
 def test_agent_not_inherited_multiple_sessions():
     d = _compute_bg_task_defaults(
-        _sm([
-            {"identity": "foster", "channel": "tg",    "agent": "wee-dev"},
-            {"identity": "foster", "channel": "tg",    "agent": "research"},
-            {"identity": "foster", "channel": "webex", "agent": "devops"},
-        ]),
-        "foster", "tg",
+        _sm(
+            [
+                {"identity": "foster", "channel": "tg", "agent": "wee-dev"},
+                {"identity": "foster", "channel": "tg", "agent": "research"},
+                {"identity": "foster", "channel": "webex", "agent": "devops"},
+            ]
+        ),
+        "foster",
+        "tg",
     )
     assert "agent" not in d, f"agent leaked from multi-session map: {d}"
 
@@ -72,11 +98,22 @@ def test_agent_not_inherited_multiple_sessions():
 # Safe fields ARE inherited
 # ---------------------------------------------------------------------------
 
+
 def test_runtime_and_model_inherited():
     d = _compute_bg_task_defaults(
-        _sm([{"identity": "foster", "channel": "tg", "agent": "wee-dev",
-              "runtime": "copilot", "model": "claude-opus-4.6"}]),
-        "foster", "tg",
+        _sm(
+            [
+                {
+                    "identity": "foster",
+                    "channel": "tg",
+                    "agent": "wee-dev",
+                    "runtime": "copilot",
+                    "model": "claude-opus-4.6",
+                }
+            ]
+        ),
+        "foster",
+        "tg",
     )
     assert d.get("runtime") == "copilot"
     assert d.get("model") == "claude-opus-4.6"
@@ -85,9 +122,18 @@ def test_runtime_and_model_inherited():
 
 def test_notification_preference_inherited():
     d = _compute_bg_task_defaults(
-        _sm([{"identity": "foster", "channel": "tg", "agent": "orchestrator",
-              "notification_preference": "telegram"}]),
-        "foster", "tg",
+        _sm(
+            [
+                {
+                    "identity": "foster",
+                    "channel": "tg",
+                    "agent": "orchestrator",
+                    "notification_preference": "telegram",
+                }
+            ]
+        ),
+        "foster",
+        "tg",
     )
     assert d.get("notification_preference") == "telegram"
     assert "agent" not in d
@@ -97,13 +143,27 @@ def test_notification_preference_inherited():
 # Same-channel priority
 # ---------------------------------------------------------------------------
 
+
 def test_same_channel_preferred_over_cross_channel():
     d = _compute_bg_task_defaults(
-        _sm([
-            {"identity": "foster", "channel": "webex", "runtime": "claude",   "model": "haiku"},
-            {"identity": "foster", "channel": "tg",    "runtime": "copilot",  "model": "claude-opus-4.6"},
-        ]),
-        "foster", "tg",
+        _sm(
+            [
+                {
+                    "identity": "foster",
+                    "channel": "webex",
+                    "runtime": "claude",
+                    "model": "haiku",
+                },
+                {
+                    "identity": "foster",
+                    "channel": "tg",
+                    "runtime": "copilot",
+                    "model": "claude-opus-4.6",
+                },
+            ]
+        ),
+        "foster",
+        "tg",
     )
     assert d.get("runtime") == "copilot"
     assert d.get("model") == "claude-opus-4.6"
@@ -113,11 +173,22 @@ def test_same_channel_preferred_over_cross_channel():
 # Identity isolation
 # ---------------------------------------------------------------------------
 
+
 def test_different_identity_not_matched():
     d = _compute_bg_task_defaults(
-        _sm([{"identity": "leslie", "channel": "tg",
-              "agent": "family_knowledge", "runtime": "claude", "model": "haiku"}]),
-        "foster", "tg",
+        _sm(
+            [
+                {
+                    "identity": "leslie",
+                    "channel": "tg",
+                    "agent": "family_knowledge",
+                    "runtime": "claude",
+                    "model": "haiku",
+                }
+            ]
+        ),
+        "foster",
+        "tg",
     )
     assert d == {}, f"Leaked other user's session: {d}"
 
@@ -125,6 +196,7 @@ def test_different_identity_not_matched():
 # ---------------------------------------------------------------------------
 # Edge cases
 # ---------------------------------------------------------------------------
+
 
 def test_empty_session_map():
     assert _compute_bg_task_defaults({}, "foster", "tg") == {}
@@ -138,6 +210,7 @@ def test_legacy_string_session_no_crash():
 def test_session_without_identity_not_matched():
     d = _compute_bg_task_defaults(
         _sm([{"channel": "tg", "agent": "wee-dev", "runtime": "copilot"}]),
-        "foster", "tg",
+        "foster",
+        "tg",
     )
     assert d == {}
