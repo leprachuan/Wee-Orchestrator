@@ -56,6 +56,17 @@ class TestIssue251ListBgTasksCapability(unittest.TestCase):
             "list_background_tasks must be available in background mode",
         )
 
+
+    def test_capability_available_in_api_mode(self):
+        """Capability must be available in api mode (wee_executor runs without WEE_TASK_ID)."""
+        we = self._import_executor()
+        caps = {c["name"] for c in we.list_capabilities(we.MODE_API)}
+        self.assertIn(
+            "list_background_tasks",
+            caps,
+            "list_background_tasks must be available in api mode",
+        )
+
     def test_capability_no_required_args(self):
         """list_background_tasks must work with no arguments."""
         we = self._import_executor()
