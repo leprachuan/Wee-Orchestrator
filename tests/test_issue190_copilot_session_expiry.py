@@ -331,5 +331,55 @@ class TestIssue190SourceInspection(unittest.TestCase):
         )
 
 
+class TestIssue190DoubleExpiryRecovery(unittest.TestCase):
+    """B07: Double-expiry scenario — recovery session also expires."""
+
+    def setUp(self):
+        self.mgr = _make_mgr()
+
+    def test_issue_190_double_expiry_recovery_also_expires(self):
+        """B07: If recovery session also receives token expiry, return best-effort output."""
+        call_count = [0]
+        session_expiry_output = (
+            "Initial work done.\n"
+            "Session token expired. Please resend your message. "
+            "(Request ID: 1111:aaaa:AAAAAAAA:BBBBBBBB:CCCCCCCC)\n"
+        )
+        double_expiry_output = (
+            "Partial recovery work completed.\n"
+            "Session token expired. Please resend your message. "
+            "(Request ID: 2222:bbbb:DDDDDDDD:EEEEEEEE:FFFFFFFF)\n"
+        )
+
+        def fake_execute(cmd, cwd, timeout, runtime, agent, prompt, session_id):
+            call_count[0] += 1
+            if call_count[0] == 1:
+                return session_expiry_output
+            return double_expiry_output
+
+        self.mgr._execute_subprocess_with_tracking = fake_execute
+
+        with patch("sys.stderr"):
+            result = self.mgr.run_copilot(
+                prompt="do a very long task",
+                model="gpt-4o",
+                agent="wee-dev",
+                session_id=None,
+                resume=False,
+                n8n_session_id="n8n-double-expiry",
+            )
+
+        self.assertEqual(
+            call_count[0], 2,
+            "B07: must attempt recovery exactly once on double expiry"
+        )
+        # Must return the recovery output (best-effort) rather than crashing or looping
+        self.assertIn(
+            "Partial recovery work",
+            result,
+            "B07: double expiry must return best-effort output from recovery session",
+        )
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

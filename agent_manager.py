@@ -359,6 +359,26 @@ _FALLBACK_PATTERNS = [
     r"overloaded",
 ]
 
+# Copilot permission-mode instruction blocks (issue #190).
+# Defined as module-level constants to avoid duplication across original,
+# proactive-restart, and reactive-recovery paths in run_copilot().
+_COPILOT_ELEVATED_MODE_INSTRUCTIONS = (
+    "\n\n[ELEVATED MODE ENABLED]\n"
+    "Full permissions granted. ALL commands requiring elevated privileges MUST automatically "
+    "prefix with 'sudo' \u2014 no exceptions. This includes:\n"
+    "\u2022 Service management: sudo systemctl restart/start/stop/reload/enable/disable <service>\n"
+    "\u2022 Network commands: sudo ping, sudo ssh, sudo iptables, sudo ip, etc.\n"
+    "\u2022 System administration: sudo journalctl, sudo systemd-*, sudo chmod/chown on system paths\n"
+    "\u2022 Any command that would fail due to insufficient permissions\n"
+    "Sudo is configured without password prompt (NOPASSWD:ALL). "
+    "Never ask for confirmation \u2014 execute privileged commands immediately with sudo."
+)
+_COPILOT_SANDBOXED_MODE_INSTRUCTIONS = (
+    "\n\n[SANDBOXED MODE ENABLED]\n"
+    "Read-only access only. Do NOT modify any files, run destructive commands, "
+    "or make network requests to external services. Analysis and reporting only."
+)
+
 
 class BackgroundTaskManager:
     """Manages background task lifecycle: creation, tracking, output capture, cleanup."""
@@ -5814,6 +5834,7 @@ User Request:
     def _cleanup_stream_buffer(self, session_id: str) -> None:
         """Remove the stream buffer entirely (called after query completes)."""
         self._stream_buffers.pop(session_id, None)
+        self._copilot_session_start.pop(session_id, None)
 
     def _cleanup_stale_stream_buffers(self, max_age: float = 600.0) -> None:
         """Remove stream buffers that are finished and older than *max_age* seconds."""
@@ -6727,25 +6748,9 @@ User Request:
 
         # Add elevated mode instructions for unrestricted privileged access
         if mode == "elevated":
-            elevated_instruction = (
-                "\n\n[ELEVATED MODE ENABLED]\n"
-                "Full permissions granted. ALL commands requiring elevated privileges MUST automatically "
-                "prefix with 'sudo' \u2014 no exceptions. This includes:\n"
-                "\u2022 Service management: sudo systemctl restart/start/stop/reload/enable/disable <service>\n"
-                "\u2022 Network commands: sudo ping, sudo ssh, sudo iptables, sudo ip, etc.\n"
-                "\u2022 System administration: sudo journalctl, sudo systemd-*, sudo chmod/chown on system paths\n"
-                "\u2022 Any command that would fail due to insufficient permissions\n"
-                "Sudo is configured without password prompt (NOPASSWD:ALL). "
-                "Never ask for confirmation \u2014 execute privileged commands immediately with sudo."
-            )
-            context_prompt = context_prompt + elevated_instruction
+            context_prompt = context_prompt + _COPILOT_ELEVATED_MODE_INSTRUCTIONS
         elif mode == "sandboxed":
-            sandboxed_instruction = (
-                "\n\n[SANDBOXED MODE ENABLED]\n"
-                "Read-only access only. Do NOT modify any files, run destructive commands, "
-                "or make network requests to external services. Analysis and reporting only."
-            )
-            context_prompt = context_prompt + sandboxed_instruction
+            context_prompt = context_prompt + _COPILOT_SANDBOXED_MODE_INSTRUCTIONS
 
         # Expand home path for MCP config file
         mcp_config_path = os.path.expanduser("~/.copilot/mcp-config.json")
@@ -6792,24 +6797,9 @@ User Request:
                 channel,
             )
             if mode == "elevated":
-                context_prompt = context_prompt + (
-                    "\n\n[ELEVATED MODE ENABLED]\n"
-                    "Full permissions granted. ALL commands requiring elevated privileges MUST automatically "
-                    "prefix with 'sudo' — no exceptions. This includes:\n"
-                    "• Service management: sudo systemctl restart/start/stop/reload/enable/disable <service>\n"
-                    "• Network commands: sudo ping, sudo ssh, sudo iptables, sudo ip, etc.\n"
-                    "• System administration: sudo journalctl, sudo systemd-*, sudo chmod/chown on system paths\n"
-                    "• Any command that would fail due to insufficient permissions\n"
-                    "Sudo is configured without password prompt (NOPASSWD:ALL). "
-                    "Never ask for confirmation — execute privileged commands immediately with sudo."
-                )
+                context_prompt = context_prompt + _COPILOT_ELEVATED_MODE_INSTRUCTIONS
             elif mode == "sandboxed":
-                context_prompt = context_prompt + (
-                    "\n\n[SANDBOXED MODE ENABLED]\n"
-                    "Read-only access only. Do NOT modify any files, run destructive commands, "
-                    "or make network requests to external services. Analysis and reporting only."
-                )
-            cmd[2] = context_prompt
+                context_prompt = context_prompt + _COPILOT_SANDBOXED_MODE_INSTRUCTIONS
 
         if resume and session_id:
             cmd.extend(["--resume", session_id])
@@ -6864,24 +6854,9 @@ User Request:
                 channel,
             )
             if mode == "elevated":
-                _recovery_context += (
-                    "\n\n[ELEVATED MODE ENABLED]\n"
-                    "Full permissions granted. ALL commands requiring elevated privileges MUST automatically "
-                    "prefix with 'sudo' — no exceptions. This includes:\n"
-                    "• Service management: sudo systemctl restart/start/stop/reload/enable/disable <service>\n"
-                    "• Network commands: sudo ping, sudo ssh, sudo iptables, sudo ip, etc.\n"
-                    "• System administration: sudo journalctl, sudo systemd-*, sudo chmod/chown on system paths\n"
-                    "• Any command that would fail due to insufficient permissions\n"
-                    "Sudo is configured without password prompt (NOPASSWD:ALL). "
-                    "Never ask for confirmation — execute privileged commands immediately with sudo."
-                )
+                _recovery_context += _COPILOT_ELEVATED_MODE_INSTRUCTIONS
             elif mode == "sandboxed":
-                _recovery_context += (
-                    "\n\n[SANDBOXED MODE ENABLED]\n"
-                    "Read-only access only. Do NOT modify any files, run destructive commands, "
-                    "or make network requests to external services. Analysis and reporting only."
-                )
-
+                _recovery_context += _COPILOT_SANDBOXED_MODE_INSTRUCTIONS
             _recovery_cmd = [
                 self.copilot_bin,
                 "-p",
@@ -6908,7 +6883,14 @@ User Request:
                 _recovery_preamble,
                 n8n_session_id,
             )
-            return self.strip_metadata(_recovery_output, "copilot")
+            _stripped_recovery = self.strip_metadata(_recovery_output, "copilot")
+            if _TOKEN_EXPIRED_MARKER in _stripped_recovery:
+                print(
+                    "[Session] Recovery session also expired (double expiry >50 min) — "
+                    "returning best-effort partial output",
+                    file=sys.stderr,
+                )
+            return _stripped_recovery
 
         return result
 
