@@ -15,9 +15,12 @@ Usage:
 import argparse
 import json
 import os
+import re
 import subprocess
 import sys
-import time
+import urllib.error
+import urllib.parse
+import urllib.request
 
 # Provider presets: prefix → (api_base, default_api_key)
 PROVIDER_PRESETS = {
@@ -62,7 +65,41 @@ _WEE_TOOLS = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "search",
+            "description": (
+                "Search the web using SearXNG meta-search engine" " and return results."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "q": {
+                        "type": "string",
+                        "description": "Search query",
+                    },
+                    "count": {
+                        "type": "integer",
+                        "description": (
+                            "Number of results to return (default: 5, max: 20)"
+                        ),
+                    },
+                    "format": {
+                        "type": "string",
+                        "enum": ["json", "text"],
+                        "description": (
+                            "Output format: 'json' returns structured results,"
+                            " 'text' returns a plain summary"
+                        ),
+                    },
+                },
+                "required": ["q"],
+            },
+        },
+    },
 ]
+
 
 MAX_TOOL_ROUNDS = 10
 TOOL_TIMEOUT = 120  # seconds per tool execution
@@ -74,7 +111,8 @@ def resolve_model_and_endpoint(model: str, api_base: str = None, api_key: str = 
     Model format: [provider/]model_name
     Examples:
         ollama/gemma4:e4b  → api_base=ollama preset, model=gemma4:e4b
-        openrouter/meta-llama/llama-4-scout → api_base=openrouter, model=meta-llama/llama-4-scout
+        openrouter/meta-llama/llama-4-scout → api_base=openrouter,
+            model=meta-llama/llama-4-scout
         gemma4:e4b         → use explicit api_base or default to ollama
     """
     resolved_model = model
@@ -112,6 +150,79 @@ def resolve_model_and_endpoint(model: str, api_base: str = None, api_key: str = 
     return resolved_model, resolved_base, resolved_key
 
 
+SEARCH_TIMEOUT = 10  # seconds for SearXNG queries
+SEARCH_MAX_CHARS = 2000  # max result chars to avoid context bloat
+
+
+def _execute_search(func_args: dict) -> str:
+    """Handle search tool calls via SearXNG (Issue #255).
+
+    Queries the self-hosted SearXNG instance and returns results in the
+    requested format. Returns an empty result gracefully on failure rather
+    than raising an exception, to avoid breaking the agentic loop.
+
+    Args:
+        func_args: Dict with 'q' (required), 'count' (optional, default 5),
+                   'format' (optional: 'json'|'text', default 'text').
+    """
+    query = (func_args.get("q") or "").strip()
+    if not query:
+        return "Error: search query ('q') is required"
+
+    count_raw = func_args.get("count")
+    count = min(int(count_raw if count_raw is not None else 5), 20)
+    output_format = (func_args.get("format") or "text").lower()
+
+    searxng_url = os.environ.get("WEE_SEARXNG_URL", "http://192.168.1.100:8888")
+    searxng_url = searxng_url.rstrip("/")
+
+    params = urllib.parse.urlencode(
+        {
+            "q": query,
+            "format": "json",
+            "categories": "general",
+            "language": "en",
+        }
+    )
+    url = f"{searxng_url}/search?{params}"
+
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": "Wee-Runtime/1.0"})
+        with urllib.request.urlopen(req, timeout=SEARCH_TIMEOUT) as resp:
+            data = json.loads(resp.read().decode("utf-8", errors="replace"))
+    except urllib.error.URLError as e:
+        return f"Search unavailable ({searxng_url}): {e.reason}"
+    except Exception as e:
+        return f"Search error: {e}"
+
+    results = data.get("results", [])[:count]
+    if not results:
+        return "No results found."
+
+    if output_format == "json":
+        slim = [
+            {
+                "title": r.get("title", ""),
+                "url": r.get("url", ""),
+                "snippet": (r.get("content", "") or "")[:300],
+            }
+            for r in results
+        ]
+        raw = json.dumps(slim, ensure_ascii=False)
+        return raw[:SEARCH_MAX_CHARS]
+
+    # Plain text summary
+    lines = [f"Search results for: {query}"]
+    for i, r in enumerate(results, 1):
+        title = r.get("title", "(no title)")
+        url_r = r.get("url", "")
+        snippet = (r.get("content", "") or "").strip()[:200]
+        lines.append(f"\n{i}. {title}\n   {url_r}\n   {snippet}")
+
+    summary = "\n".join(lines)
+    return summary[:SEARCH_MAX_CHARS]
+
+
 def execute_tool(func_name: str, func_args: dict) -> str:
     """Execute a tool call and return its output (Issue #107)."""
     try:
@@ -143,12 +254,67 @@ def execute_tool(func_name: str, func_args: dict) -> str:
             if result.returncode != 0 and result.stderr:
                 output += f"\nSTDERR: {result.stderr}"
             return output.strip() or "(no output)"
+        elif func_name == "search":
+            return _execute_search(func_args)
         else:
             return f"Error: Unknown tool {func_name}"
     except subprocess.TimeoutExpired:
         return f"Error: Tool {func_name} timed out after {TOOL_TIMEOUT}s"
     except Exception as e:
         return f"Error executing tool {func_name}: {e}"
+
+
+# SSH command sanitisation (Issue #113)
+_SSH_BIN_RE = re.compile(r"\b(ssh|scp|sftp)\b")
+
+
+def sanitize_bash_command(command: str) -> str:
+    """Auto-inject SSH flags to prevent host key verification failures.
+
+    Injects -o StrictHostKeyChecking=accept-new after ssh/scp/sftp
+    when the flag is not already present.
+    """
+    if not command or not _SSH_BIN_RE.search(command):
+        return command
+    if "StrictHostKeyChecking" in command:
+        return command
+
+    def _inject(m):
+        return m.group(0) + " -o StrictHostKeyChecking=accept-new"
+
+    return _SSH_BIN_RE.sub(_inject, command, count=0)
+
+
+# Anti-hallucination system prompt addendum (Issue #113)
+_ANTI_HALLUCINATION_PROMPT = (
+    "\n\n[CRITICAL — Output Integrity Rules]\n"
+    "1. NEVER fabricate, invent, or hallucinate command output. If a command "
+    "fails or you cannot execute it, report the EXACT error message.\n"
+    "2. NEVER provide example or placeholder output and present it as real. "
+    'If you show an example, clearly label it as "EXAMPLE (not real output)".\n'
+    "3. When a tool call returns an error, relay the error verbatim to the user. "
+    "Do NOT attempt to guess what the successful output would have looked like.\n"
+    "4. For SSH commands: ALWAYS use -o StrictHostKeyChecking=accept-new to "
+    "avoid host-key verification failures on first connect.\n"
+)
+
+# Explicit tool capability prompt for models that ignore JSON tool schemas (Issue #111)
+_WEE_TOOL_CAPABILITY_PROMPT = (
+    "\n\n[Tool Capabilities]\n"
+    "You have the following tools available. Use them to fulfil user requests.\n\n"
+    '1. **bash** — Execute shell commands. Parameters: {"command": "<shell command>"}\n'
+    "   Use this for: file operations, system commands, SSH, curl, git, etc.\n"
+    '2. **python** — Execute Python code. Parameters: {"code": "<python code>"}\n'
+    "   Use this for: data processing, calculations, scripting, etc.\n"
+    "3. **search** — Web search via SearXNG."
+    ' Parameters: {"q": "<query>", "count": 5, "format": "text|json"}\n'
+    "   Use this for: current events, web lookups, product info,"
+    " general knowledge queries.\n\n"
+    "IMPORTANT: You are NOT sandboxed. You CAN and SHOULD use these tools to execute\n"
+    "commands, SSH into remote hosts, read/write files, and interact with the system.\n"
+    "NEVER claim you cannot execute commands or are in a sandbox"
+    " — use the tools above.\n"
+)
 
 
 def main():
@@ -171,7 +337,7 @@ def main():
         "--tools",
         action="store_true",
         default=False,
-        help="Enable tool calling (bash, python)",
+        help="Enable tool calling (bash, python, search)",
     )
     parser.add_argument("prompt", help="User prompt")
     args = parser.parse_args()

@@ -373,6 +373,11 @@ Wee CLI Interactive Mode — Commands:
   /version        Show version
   /help           Show this help
   exit, quit      Exit interactive mode
+
+Available tools (use --tools / -t to enable):
+  bash    Execute shell commands
+  python  Execute Python 3 code
+  search  Web search via SearXNG (WEE_SEARXNG_URL, default: http://192.168.1.100:8888)
 """
 
 
@@ -607,7 +612,7 @@ def build_parser() -> argparse.ArgumentParser:
         "-t",
         action="store_true",
         default=False,
-        help="Enable tool calling (bash, python)",
+        help="Enable tool calling (bash, python, search)",
     )
     parser.add_argument(
         "--permission",
