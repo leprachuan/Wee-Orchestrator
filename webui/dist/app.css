@@ -428,6 +428,33 @@ html, body {
 }
 .session-item:hover .session-rename-btn { visibility: visible; }
 .session-rename-btn:hover { background: rgba(62,207,142,0.3); }
+/* Agent badge in session list */
+.session-agent-badge {
+  display: inline-block;
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  padding: 1px 5px;
+  border-radius: 3px;
+  margin-right: 4px;
+  vertical-align: middle;
+  line-height: 1.5;
+  opacity: 0.9;
+  color: #fff;
+  background: rgba(99,102,241,0.5);
+  border: 1px solid rgba(99,102,241,0.4);
+}
+/* Per-agent color coding */
+.session-agent-badge[data-agent="orchestrator"] { background: rgba(62,207,142,0.4); border-color: rgba(62,207,142,0.5); }
+.session-agent-badge[data-agent="wee-dev"]      { background: rgba(96,165,250,0.4); border-color: rgba(96,165,250,0.5); }
+.session-agent-badge[data-agent="wee-qa"]       { background: rgba(251,146,60,0.4); border-color: rgba(251,146,60,0.5); }
+.session-agent-badge[data-agent="email-triage"] { background: rgba(167,139,250,0.4); border-color: rgba(167,139,250,0.5); }
+.session-agent-badge[data-agent="research"]     { background: rgba(34,211,238,0.4); border-color: rgba(34,211,238,0.5); }
+.session-agent-badge[data-agent="devops"]       { background: rgba(251,191,36,0.4); border-color: rgba(251,191,36,0.5); color: #1a1a1a; }
+.session-agent-badge[data-agent="family-knowledge"] { background: rgba(244,114,182,0.4); border-color: rgba(244,114,182,0.5); }
+.session-agent-badge[data-agent="smarthome"]    { background: rgba(52,211,153,0.4); border-color: rgba(52,211,153,0.5); }
+.session-agent-badge[data-agent="wee-doc"]      { background: rgba(156,163,175,0.4); border-color: rgba(156,163,175,0.5); }
 
 /* Inline rename input */
 .session-rename-input {

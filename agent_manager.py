@@ -1023,7 +1023,9 @@ class HistoryManager:
                     return s.get("messages", [])
         return None
 
-    def create_session(self, channel: str, identity: str, session_id: str) -> dict:
+    def create_session(
+        self, channel: str, identity: str, session_id: str, agent: str = ""
+    ) -> dict:
         """Create a new session entry, pruning oldest if over cap."""
         with self._lock:
             data = self._load()
@@ -1040,6 +1042,7 @@ class HistoryManager:
                 "session_id": session_id,
                 "title": "",
                 "preview": "",
+                "agent": agent or "",
                 "created_at": now,
                 "updated_at": now,
                 "messages": [],
@@ -1160,6 +1163,22 @@ class HistoryManager:
             data[key]["sessions"] = new_sessions
             self._save(data)
             return True
+
+    def update_session_agent(
+        self, channel: str, identity: str, session_id: str, agent: str
+    ) -> bool:
+        """Update the agent associated with a session."""
+        with self._lock:
+            data = self._load()
+            key = self._user_key(channel, identity)
+            for s in data.get(key, {}).get("sessions", []):
+                if s["session_id"] == session_id:
+                    s["agent"] = agent or ""
+                    s["updated_at"] = time.time()
+                    self._save(data)
+                    return True
+        return False
+
 
 class RuntimeUsageTracker:
     """Queries GitHub Copilot premium request usage from the billing API."""
@@ -9813,7 +9832,9 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         # Use provided session_id or generate a new one
         session_id = body.session_id if body.session_id else str(uuid4())[:8]
         session_mgr.get_or_create_session_data(session_id, identity=user["identity"])
-        history_mgr.create_session(user["channel"], user["identity"], session_id)
+        history_mgr.create_session(
+            user["channel"], user["identity"], session_id, agent=body.agent or ""
+        )
 
         # Store channel in session so file instructions are channel-aware
         session_mgr.update_session_field(session_id, "channel", user["channel"])
@@ -9936,6 +9957,12 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         session_data = session_mgr.get_or_create_session_data(
             session_id, identity=user["identity"]
         )
+        # Sync agent to history so session list always shows current agent
+        current_agent = session_data.get("agent") or ""
+        if current_agent:
+            history_mgr.update_session_agent(
+                user["channel"], user["identity"], session_id, current_agent
+            )
         runtime = session_data.get("runtime", "copilot")
         return {
             "session_id": session_id,
@@ -10246,6 +10273,12 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 )
 
                 session_data = session_mgr.get_or_create_session_data(session_id)
+                # Sync agent to history so session list always shows current agent
+                current_agent = session_data.get("agent") or ""
+                if current_agent:
+                    history_mgr.update_session_agent(
+                        user["channel"], user["identity"], session_id, current_agent
+                    )
                 runtime = session_data.get("runtime", "copilot")
                 done_payload = _json.dumps(
                     {
@@ -10253,6 +10286,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                         "response": result,
                         "runtime": runtime,
                         "model": session_data.get("model"),
+                        "agent": current_agent,
                     }
                 )
                 yield f"data: {done_payload}\n\n"

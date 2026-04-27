@@ -823,9 +823,13 @@ function renderSessionList() {
 
     const title   = s.title   || s.session_id;
     const preview = s.preview || '';
+    const agentName = s.agent || '';
+    const agentBadge = agentName
+      ? `<span class="session-agent-badge" data-agent="${escHtml(agentName)}" title="${escHtml(agentName)}">${escHtml(agentName)}</span>`
+      : '';
 
     item.innerHTML =
-      `<div class="session-title" title="Double-click to rename">${escHtml(title)}</div>` +
+      `<div class="session-title" title="Double-click to rename">${agentBadge}${escHtml(title)}</div>` +
       `<div class="session-preview">${escHtml(preview)}</div>` +
       `<button class="session-rename-btn" data-id="${escHtml(s.session_id)}" title="Rename">✏️</button>` +
       `<button class="session-delete-btn" data-id="${escHtml(s.session_id)}" title="Delete">✕</button>`;
@@ -865,15 +869,22 @@ function startInlineRename(item, sessionId, currentTitle) {
   input.value = currentTitle;
   input.maxLength = 120;
 
+  // Preserve the agent badge element before clearing title
+  const existingBadge = titleEl.querySelector('.session-agent-badge');
+  const badgeHtml = existingBadge ? existingBadge.outerHTML : '';
   titleEl.textContent = '';
   titleEl.appendChild(input);
   input.focus();
   input.select();
 
+  const _rebuildTitle = (text) => {
+    titleEl.innerHTML = badgeHtml + escHtml(text);
+  };
+
   const commitRename = async () => {
     const newTitle = input.value.trim();
     if (!newTitle || newTitle === currentTitle) {
-      titleEl.textContent = currentTitle;
+      _rebuildTitle(currentTitle);
       return;
     }
     try {
@@ -881,9 +892,9 @@ function startInlineRename(item, sessionId, currentTitle) {
       // Update local state
       const sess = STATE.sessions.find(s => s.session_id === sessionId);
       if (sess) sess.title = newTitle;
-      titleEl.textContent = newTitle;
+      _rebuildTitle(newTitle);
     } catch (err) {
-      titleEl.textContent = currentTitle;
+      _rebuildTitle(currentTitle);
       console.error('Rename failed:', err);
     }
   };
