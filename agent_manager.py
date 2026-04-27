@@ -329,6 +329,14 @@ class AuthManager:
                     del self.session_tokens[token]
         self._save_sessions()
 
+_FALLBACK_PATTERNS = [
+    r"429", r"rate.?limit", r"quota.?exceeded",
+    r"401", r"unauthorized", r"missing.?authentication",
+    r"api[_\-]?key.?(invalid|expired|missing)",
+    r"503", r"service.?unavailable", r"502", r"bad.?gateway",
+    r"connection.?refused", r"timed?.?out", r"etimedout", r"overloaded",
+]
+
 class BackgroundTaskManager:
     """Manages background task lifecycle: creation, tracking, output capture, cleanup."""
 
@@ -11791,7 +11799,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                             sched.save_result(
                                 job_id, job.get("name", job_id), True, final_output
                             )
-                    except:
+                    except Exception:
                         pass
                 _emit_bg_notification(
                     task_id,
@@ -11807,16 +11815,8 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 primary_error_msg = f"Task failed with code {process.returncode}: {output}"
 
                 # --- Fallback retry logic (Issue #243) ---
-                import re as _re_fb
-                _FALLBACK_PATTERNS = [
-                    r"429", r"rate.?limit", r"quota.?exceeded",
-                    r"401", r"unauthorized", r"missing.?authentication",
-                    r"api[_\-]?key.?(invalid|expired|missing)",
-                    r"503", r"service.?unavailable", r"502", r"bad.?gateway",
-                    r"connection.?refused", r"timed?.?out", r"etimedout", r"overloaded",
-                ]
                 _is_infra_error = any(
-                    _re_fb.search(p, output, _re_fb.IGNORECASE) for p in _FALLBACK_PATTERNS
+                    re.search(p, output, re.IGNORECASE) for p in _FALLBACK_PATTERNS
                 )
                 _task_rec = bg_task_mgr.get_task(task_id)
                 _fb_runtime = (_task_rec or {}).get("fallback_runtime") if _task_rec else None
@@ -11929,7 +11929,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                                 sched.save_result(
                                     job_id, job.get("name", job_id), False, "", error_msg
                                 )
-                        except:
+                        except Exception:
                             pass
                     _emit_bg_notification(
                         task_id,

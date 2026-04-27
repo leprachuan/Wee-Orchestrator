@@ -3770,7 +3770,7 @@ function renderBgTasksSidebar() {
       : '';
     return `
       <div class="session-item bg-sidebar-item ${active}" onclick="selectBgTask('${t.task_id}')">
-        <div class="session-title">${icon} ${prompt || '(no prompt)'}${fallbackBadge}</div>
+        <div class="session-title"><span class="bg-task-title-text">${icon} ${prompt || '(no prompt)'}</span>${fallbackBadge}</div>
         <div class="session-preview">${agentLabel} · ${statusLabel}${elapsed} · ${dateStr}</div>
       </div>`;
   }).join('');

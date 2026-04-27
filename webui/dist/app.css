@@ -1284,6 +1284,13 @@ html, body {
   align-items: center;
   gap: 6px;
 }
+.bg-sidebar-item .session-title .bg-task-title-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .bg-sidebar-item .session-preview {
   font-size: 11px;
 }
