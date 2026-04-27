@@ -1665,7 +1665,6 @@ class SessionManager:
         # Maps n8n_session_id -> float (epoch seconds when session was started).
         # Copilot session tokens expire ~30 min after creation; we restart at 25 min.
         self._copilot_session_start: Dict[str, float] = {}
-        _COPILOT_SESSION_MAX_AGE_SEC = 25 * 60  # restart at 25 min, before 30-min TTL
 
         # Per-session live status for mobile channel progress updates (F004).
         # Maps n8n_session_id -> {"text": str, "updated_at": float}
