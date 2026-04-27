@@ -13,11 +13,10 @@ Root causes addressed:
      it susceptible to polling storms from misbehaving agents.
 """
 
-import json
 import sys
 import unittest
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 # ── Path setup ─────────────────────────────────────────────────────────
 REPO = Path(__file__).resolve().parent.parent
@@ -30,7 +29,9 @@ class TestIssue251ListBgTasksCapability(unittest.TestCase):
 
     def _import_executor(self):
         import importlib
+
         import wee_executor as we
+
         importlib.reload(we)
         return we
 
@@ -45,7 +46,8 @@ class TestIssue251ListBgTasksCapability(unittest.TestCase):
         )
 
     def test_capability_available_in_background_mode(self):
-        """Capability must be available in background mode (agents run in background)."""
+        """Capability must be available in background mode
+        (agents run in background)."""
         we = self._import_executor()
         caps = {c["name"] for c in we.list_capabilities(we.MODE_BACKGROUND)}
         self.assertIn(
@@ -67,17 +69,44 @@ class TestIssue251ListBgTasksCapability(unittest.TestCase):
 
         fake_tasks = {
             "tasks": [
-                {"task_id": "bg_aaa", "agent": "devops", "status": "running", "prompt": "check cluster"},
-                {"task_id": "bg_bbb", "agent": "research", "status": "running", "prompt": "search news"},
-                {"task_id": "bg_ccc", "agent": "wee-dev", "status": "queued", "prompt": "implement feature"},
-                {"task_id": "bg_ddd", "agent": "email-triage", "status": "done", "prompt": "triage inbox"},
-                {"task_id": "bg_eee", "agent": "devops", "status": "failed", "prompt": "deploy service"},
+                {
+                    "task_id": "bg_aaa",
+                    "agent": "devops",
+                    "status": "running",
+                    "prompt": "check cluster",
+                },
+                {
+                    "task_id": "bg_bbb",
+                    "agent": "research",
+                    "status": "running",
+                    "prompt": "search news",
+                },
+                {
+                    "task_id": "bg_ccc",
+                    "agent": "wee-dev",
+                    "status": "queued",
+                    "prompt": "implement feature",
+                },
+                {
+                    "task_id": "bg_ddd",
+                    "agent": "email-triage",
+                    "status": "done",
+                    "prompt": "triage inbox",
+                },
+                {
+                    "task_id": "bg_eee",
+                    "agent": "devops",
+                    "status": "failed",
+                    "prompt": "deploy service",
+                },
             ]
         }
 
         with patch.object(we, "_api_request", return_value=fake_tasks):
             with patch.object(we, "_check_rate_limit", return_value=True):
-                result = we.cap_list_background_tasks({}, "test_session", we.MODE_INTERACTIVE)
+                result = we.cap_list_background_tasks(
+                    {}, "test_session", we.MODE_INTERACTIVE
+                )
 
         self.assertEqual(result["total"], 5)
         self.assertEqual(result["running"], 2)
@@ -92,8 +121,18 @@ class TestIssue251ListBgTasksCapability(unittest.TestCase):
 
         fake_tasks = {
             "tasks": [
-                {"task_id": "bg_aaa", "agent": "devops", "status": "running", "prompt": "check cluster"},
-                {"task_id": "bg_bbb", "agent": "research", "status": "done", "prompt": "search news"},
+                {
+                    "task_id": "bg_aaa",
+                    "agent": "devops",
+                    "status": "running",
+                    "prompt": "check cluster",
+                },
+                {
+                    "task_id": "bg_bbb",
+                    "agent": "research",
+                    "status": "done",
+                    "prompt": "search news",
+                },
             ]
         }
 
@@ -112,9 +151,15 @@ class TestIssue251ListBgTasksCapability(unittest.TestCase):
         """API error should be returned as dict with 'error' key."""
         we = self._import_executor()
 
-        with patch.object(we, "_api_request", return_value={"error": "HTTP 503: Service unavailable", "code": "HTTP_503"}):
+        with patch.object(
+            we,
+            "_api_request",
+            return_value={"error": "HTTP 503: Service unavailable", "code": "HTTP_503"},
+        ):
             with patch.object(we, "_check_rate_limit", return_value=True):
-                result = we.cap_list_background_tasks({}, "test_session", we.MODE_INTERACTIVE)
+                result = we.cap_list_background_tasks(
+                    {}, "test_session", we.MODE_INTERACTIVE
+                )
 
         self.assertIn("error", result)
 
@@ -130,7 +175,9 @@ class TestIssue251ListBgTasksCapability(unittest.TestCase):
         with patch.object(we, "_api_request", side_effect=fake_api):
             with patch.object(we, "_check_rate_limit", return_value=True):
                 with patch("subprocess.run") as mock_subproc:
-                    we.cap_list_background_tasks({}, "test_session", we.MODE_INTERACTIVE)
+                    we.cap_list_background_tasks(
+                        {}, "test_session", we.MODE_INTERACTIVE
+                    )
                     mock_subproc.assert_not_called()
 
         self.assertEqual(len(api_call_count), 1)
@@ -138,18 +185,24 @@ class TestIssue251ListBgTasksCapability(unittest.TestCase):
 
 
 class TestIssue251WeeklyRateLimitDetection(unittest.TestCase):
-    """Test that 'weekly rate limit' from Copilot is detected with its own error code."""
+    """Test that 'weekly rate limit' from Copilot is detected
+    with its own error code."""
 
     def _get_runtime_error_patterns(self):
-        """Extract _RUNTIME_ERROR_PATTERNS from agent_manager source without full import."""
+        """Extract _RUNTIME_ERROR_PATTERNS from agent_manager source
+        without full import."""
         am_path = REPO / "agent_manager.py"
         source = am_path.read_text()
         # Find the _RUNTIME_ERROR_PATTERNS list in source
         import ast
+
         # Parse just enough to extract the list
         start = source.index("_RUNTIME_ERROR_PATTERNS = [")
         end = source.index("]", start) + 1
-        snippet = "_RUNTIME_ERROR_PATTERNS = " + source[start + len("_RUNTIME_ERROR_PATTERNS = "):end]
+        snippet = (
+            "_RUNTIME_ERROR_PATTERNS = "
+            + source[start + len("_RUNTIME_ERROR_PATTERNS = ") : end]
+        )
         tree = ast.parse(snippet)
         # The list value
         assign = tree.body[0]
@@ -160,10 +213,13 @@ class TestIssue251WeeklyRateLimitDetection(unittest.TestCase):
         return patterns
 
     def test_weekly_rate_limit_has_distinct_error_code(self):
-        """'weekly rate limit' must map to weekly_rate_limit_exceeded, not rate_limited."""
+        """'weekly rate limit' must map to weekly_rate_limit_exceeded,
+        not rate_limited."""
         patterns = self._get_runtime_error_patterns()
         weekly_patterns = [(p, s, c) for p, s, c in patterns if "weekly" in p.lower()]
-        self.assertTrue(len(weekly_patterns) > 0, "No pattern for 'weekly rate limit' found")
+        self.assertTrue(
+            len(weekly_patterns) > 0, "No pattern for 'weekly rate limit' found"
+        )
         for _, status, code in weekly_patterns:
             self.assertEqual(status, 429)
             self.assertEqual(
@@ -173,23 +229,31 @@ class TestIssue251WeeklyRateLimitDetection(unittest.TestCase):
             )
 
     def test_weekly_rate_limit_pattern_before_generic_rate_limit(self):
-        """'weekly rate limit' pattern must appear before generic 'rate limit' to take priority."""
+        """'weekly rate limit' pattern must appear before generic
+        'rate limit' to take priority."""
         patterns = self._get_runtime_error_patterns()
         pattern_names = [p for p, _, _ in patterns]
-        self.assertIn("weekly rate limit", pattern_names, "weekly rate limit pattern missing")
+        self.assertIn(
+            "weekly rate limit", pattern_names, "weekly rate limit pattern missing"
+        )
         self.assertIn("rate limit", pattern_names, "rate limit pattern missing")
         weekly_idx = pattern_names.index("weekly rate limit")
         generic_idx = pattern_names.index("rate limit")
         self.assertLess(
             weekly_idx,
             generic_idx,
-            "weekly rate limit pattern must come before generic rate limit for proper matching priority",
+            "weekly rate limit pattern must come before generic rate limit"
+            " for proper matching priority",
         )
 
     def test_copilot_weekly_limit_message_triggers_429(self):
-        """Simulated Copilot weekly-limit message must produce a 429 with the right error code."""
+        """Simulated Copilot weekly-limit message must produce a 429
+        with the right error code."""
         patterns = self._get_runtime_error_patterns()
-        copilot_msg = "You've reached your weekly rate limit. Please wait for your limit to reset in 3 hours 42 minutes"
+        copilot_msg = (
+            "You've reached your weekly rate limit. Please wait for"
+            " your limit to reset in 3 hours 42 minutes"
+        )
 
         matched_code = None
         matched_status = None
@@ -203,7 +267,8 @@ class TestIssue251WeeklyRateLimitDetection(unittest.TestCase):
         self.assertEqual(
             matched_code,
             "weekly_rate_limit_exceeded",
-            f"Copilot weekly-limit message should produce weekly_rate_limit_exceeded, got {matched_code!r}",
+            f"Copilot weekly-limit message should produce weekly_rate_limit_exceeded,"
+            f" got {matched_code!r}",
         )
 
 
@@ -216,9 +281,13 @@ class TestIssue251BgTasksListEndpointRateLimit(unittest.TestCase):
         source = am_path.read_text()
 
         # Find the list_background_tasks handler
-        handler_start = source.index('@app.get("/api/v1/background-tasks")\n    async def list_background_tasks')
+        handler_start = source.index(
+            '@app.get("/api/v1/background-tasks")\n    async def list_background_tasks'
+        )
         # Find the next route definition after it
-        next_route_start = source.index('@app.get("/api/v1/background-tasks/{task_id}")')
+        next_route_start = source.index(
+            '@app.get("/api/v1/background-tasks/{task_id}")'
+        )
         handler_body = source[handler_start:next_route_start]
 
         self.assertIn(
@@ -228,21 +297,31 @@ class TestIssue251BgTasksListEndpointRateLimit(unittest.TestCase):
         )
 
     def test_rate_limit_is_generous_for_status_checks(self):
-        """Rate limit for bg_tasks_list must be >= 60 req/min (status checks must not false-trigger)."""
+        """Rate limit for bg_tasks_list must be >= 60 req/min
+        (status checks must not false-trigger)."""
         am_path = REPO / "agent_manager.py"
         source = am_path.read_text()
 
-        handler_start = source.index('@app.get("/api/v1/background-tasks")\n    async def list_background_tasks')
-        next_route_start = source.index('@app.get("/api/v1/background-tasks/{task_id}")')
+        handler_start = source.index(
+            '@app.get("/api/v1/background-tasks")\n    async def list_background_tasks'
+        )
+        next_route_start = source.index(
+            '@app.get("/api/v1/background-tasks/{task_id}")'
+        )
         handler_body = source[handler_start:next_route_start]
 
         import re
-        m = re.search(r'bg_tasks_list.*?max_requests=(\d+)', handler_body)
+
+        m = re.search(r"bg_tasks_list.*?max_requests=(\d+)", handler_body)
         self.assertIsNotNone(m, "Could not find bg_tasks_list rate limit configuration")
         limit = int(m.group(1))
         self.assertGreaterEqual(
-            limit, 60,
-            f"bg_tasks_list rate limit ({limit}/min) is too low — must be >= 60 to avoid false positives on routine status checks",
+            limit,
+            60,
+            (
+                f"bg_tasks_list rate limit ({limit}/min) is too low -- must be >= 60"
+                " to avoid false positives on routine status checks"
+            ),
         )
 
 
