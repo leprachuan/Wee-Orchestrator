@@ -9413,6 +9413,10 @@ User Request:
 
         stream_buffer = getattr(self, "_stream_buffers", {}).get(n8n_session_id)
 
+        tool_calls_acc = {}  # Accumulate tool calls across retries
+        content_text = ""    # Track assistant content for fallback retry
+        messages = []        # Conversation history
+
         for _chain_idx, _attempt_model in enumerate(_chain):
             if _chain_idx > 0:
                 # B02: surface fallback model switch to user
