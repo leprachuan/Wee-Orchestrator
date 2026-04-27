@@ -628,6 +628,9 @@ def main():
     )
 
     messages = []
+    collected_output = []
+    tool_call_counter = 0
+    
     # Issue #113: Augment system prompt with anti-hallucination rules
     effective_system_prompt = (args.system_prompt or "") + _ANTI_HALLUCINATION_PROMPT
     # Issue #111: Include tool capability prompt when tools are enabled
@@ -663,9 +666,6 @@ def main():
         return
 
     # -- Tool-calling agentic loop (Issue #107) --
-    collected_output = []
-    tool_call_counter = 0
-
     try:
         for round_num in range(MAX_TOOL_ROUNDS + 1):
             create_kwargs = {
