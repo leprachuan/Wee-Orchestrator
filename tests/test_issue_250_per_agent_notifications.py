@@ -5,17 +5,15 @@ Tests the new per-agent notification preference system that replaces
 the global all-or-nothing toggle.
 """
 
-import json
 import os
 import tempfile
 import unittest
-from pathlib import Path
 
 import sys
 
 sys.path.insert(0, "/opt/n8n-copilot-shim-dev")
 
-from notification_manager import NotificationManager
+from notification_manager import NotificationManager  # noqa: E402
 
 
 class TestPerAgentNotifications(unittest.TestCase):

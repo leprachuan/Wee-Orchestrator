@@ -2405,7 +2405,10 @@ You can mention an agent in your prompt and it will auto-delegate:
         if argument == "current":
             # Show per-agent preferences
             if not self._notification_mgr or not _notif_identity:
-                return "\u2753 Unable to retrieve notification preferences (not authenticated)."
+                return (
+                    "\u2753 Unable to retrieve notification preferences"
+                    " (not authenticated)."
+                )
 
             agent_prefs = self._notification_mgr.get_all_agent_prefs(_notif_identity)
             if not agent_prefs:
