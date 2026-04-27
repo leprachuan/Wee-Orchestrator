@@ -9601,6 +9601,47 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             "active_sessions": len(session_mgr.load_session_map()),
         }
 
+    @app.get("/api/v1/service-status")
+    async def get_service_status():
+        """Query systemctl status for connector services."""
+        import asyncio
+        import socket as _socket
+
+        env_suffix = "-dev" if APP_ENV == "DEV" else ""
+        services = {
+            "telegram": f"telegram-bot-listener{env_suffix}.service",
+            "webex": f"webex-connector{env_suffix}.service",
+        }
+
+        results = {}
+        for name, svc in services.items():
+            try:
+                proc = await asyncio.create_subprocess_exec(
+                    "systemctl", "is-active", svc,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                )
+                stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=5.0)
+                status = stdout.decode().strip()
+                results[name] = {
+                    "service": svc,
+                    "status": status,
+                    "active": status == "active",
+                }
+            except Exception as e:
+                results[name] = {
+                    "service": svc,
+                    "status": "unknown",
+                    "active": False,
+                    "error": str(e),
+                }
+
+        return {
+            "services": results,
+            "node": _socket.gethostname(),
+            "checked_at": time.time(),
+        }
+
     @app.get("/api/v1/config")
     async def get_config():
         """Public endpoint — returns feature flags for the WebUI."""

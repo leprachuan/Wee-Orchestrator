@@ -7052,3 +7052,111 @@ html, body {
   color: #6cb4ff;
   border: 1px solid rgba(80, 160, 255, 0.2);
 }
+
+/* ── Service Status Section ──────────────────────────────────────────── */
+.service-status-section {
+  display: flex;
+  flex-direction: column;
+  padding: 10px 12px 8px;
+  border-bottom: 1px solid var(--glass-border);
+  flex-shrink: 0;
+  gap: 6px;
+}
+
+.request-queue-panel.queue-minimized .service-status-section {
+  display: none;
+}
+
+.service-status-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.service-status-icon {
+  font-size: 13px;
+}
+
+.service-status-label {
+  color: var(--text-primary);
+  flex: 1;
+}
+
+.btn-refresh-status {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 14px;
+  padding: 0 2px;
+  line-height: 1;
+  transition: color 0.2s, transform 0.3s;
+  border-radius: 4px;
+}
+
+.btn-refresh-status:hover {
+  color: var(--accent);
+  background: rgba(255,255,255,0.06);
+}
+
+.btn-refresh-status.spinning {
+  transform: rotate(360deg);
+  transition: transform 0.5s linear;
+}
+
+.service-status-items {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.service-status-item {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 12px;
+}
+
+.service-name {
+  flex: 1;
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+
+.service-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.dot-loading { background: var(--text-muted); opacity: 0.5; }
+.dot-active  { background: #4ade80; box-shadow: 0 0 6px rgba(74,222,128,0.6); }
+.dot-inactive{ background: #f87171; box-shadow: 0 0 6px rgba(248,113,113,0.6); }
+.dot-failed  { background: #fb923c; box-shadow: 0 0 6px rgba(251,146,60,0.6); }
+.dot-unknown { background: var(--text-muted); }
+
+.service-badge {
+  font-size: 10px;
+  font-weight: 600;
+  padding: 1px 6px;
+  border-radius: 4px;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.badge-loading  { background: rgba(255,255,255,0.08); color: var(--text-muted); }
+.badge-active   { background: rgba(74,222,128,0.15);  color: #4ade80; }
+.badge-inactive { background: rgba(248,113,113,0.15); color: #f87171; }
+.badge-failed   { background: rgba(251,146,60,0.15);  color: #fb923c; }
+.badge-unknown  { background: rgba(255,255,255,0.08); color: var(--text-muted); }
+
+.service-status-footer {
+  display: flex;
+  justify-content: space-between;
+  font-size: 10px;
+  color: var(--text-muted);
+  margin-top: 2px;
+}

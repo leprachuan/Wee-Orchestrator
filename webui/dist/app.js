@@ -7219,3 +7219,66 @@ function closeAgentsPanel() {
   clearInterval(_agentsRefreshTimer);
   _agentsRefreshTimer = null;
 }
+
+// ── Service Status Panel ──────────────────────────────────────────────────────
+let _svcStatusPollInterval = null;
+const SVC_POLL_MS = 30000;
+
+function _formatSvcTimestamp(ts) {
+  const d = new Date(ts * 1000);
+  return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+}
+
+function _applySvcStatus(name, info) {
+  const dot   = document.getElementById('svc-dot-' + name);
+  const badge = document.getElementById('svc-badge-' + name);
+  if (!dot || !badge) return;
+
+  const status = info.status || 'unknown';
+  const dotClass   = status === 'active'   ? 'dot-active'
+                   : status === 'inactive' ? 'dot-inactive'
+                   : status === 'failed'   ? 'dot-failed'
+                   : 'dot-unknown';
+  const badgeClass = status === 'active'   ? 'badge-active'
+                   : status === 'inactive' ? 'badge-inactive'
+                   : status === 'failed'   ? 'badge-failed'
+                   : 'badge-unknown';
+
+  dot.className   = 'service-dot ' + dotClass;
+  badge.className = 'service-badge ' + badgeClass;
+  badge.textContent = status;
+}
+
+async function fetchServiceStatus() {
+  const refreshBtn = document.getElementById('btn-refresh-service-status');
+  if (refreshBtn) {
+    refreshBtn.classList.add('spinning');
+    setTimeout(function() { refreshBtn.classList.remove('spinning'); }, 600);
+  }
+
+  try {
+    const data = await apiRequest('GET', '/service-status');
+    const services = data.services || {};
+    for (const name of Object.keys(services)) {
+      _applySvcStatus(name, services[name]);
+    }
+    const tsEl   = document.getElementById('service-status-timestamp');
+    const nodeEl = document.getElementById('service-status-node');
+    if (tsEl)   tsEl.textContent = 'Updated ' + _formatSvcTimestamp(data.checked_at);
+    if (nodeEl) nodeEl.textContent = data.node ? 'node: ' + data.node : '';
+  } catch (err) {
+    const tsEl = document.getElementById('service-status-timestamp');
+    if (tsEl) tsEl.textContent = 'Status unavailable';
+  }
+}
+
+function _initServiceStatus() {
+  const refreshBtn = document.getElementById('btn-refresh-service-status');
+  if (refreshBtn) {
+    refreshBtn.addEventListener('click', function() { fetchServiceStatus(); });
+  }
+  fetchServiceStatus();
+  _svcStatusPollInterval = setInterval(fetchServiceStatus, SVC_POLL_MS);
+}
+
+document.addEventListener('DOMContentLoaded', _initServiceStatus);
