@@ -20,12 +20,14 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 def _make_history_manager():
     """Create a HistoryManager with a temp file."""
     import agent_manager as am
+
     mgr = am.HistoryManager.__new__(am.HistoryManager)
     # Point to a temp file
     tmp = tempfile.NamedTemporaryFile(suffix=".json", delete=False, mode="w")
     json.dump({}, tmp)
     tmp.close()
     import threading
+
     mgr._path = tmp.name
     mgr._lock = threading.Lock()
     return mgr, tmp.name
@@ -63,9 +65,7 @@ def test_get_sessions_returns_agent_field():
     """get_sessions() must include agent in returned data."""
     mgr, path = _make_history_manager()
     try:
-        mgr.create_session(
-            "telegram", "testuser", "sess003", agent="orchestrator"
-        )
+        mgr.create_session("telegram", "testuser", "sess003", agent="orchestrator")
         sessions = mgr.get_sessions("telegram", "testuser")
         assert "agent" in sessions[0], "agent field missing from get_sessions()"
         assert sessions[0]["agent"] == "orchestrator"
@@ -77,9 +77,7 @@ def test_update_session_agent():
     """update_session_agent() should update the agent on an existing session."""
     mgr, path = _make_history_manager()
     try:
-        mgr.create_session(
-            "telegram", "testuser", "sess004", agent="orchestrator"
-        )
+        mgr.create_session("telegram", "testuser", "sess004", agent="orchestrator")
         result = mgr.update_session_agent("telegram", "testuser", "sess004", "wee-qa")
         assert result is True, "update_session_agent should return True on success"
         sessions = mgr.get_sessions("telegram", "testuser")
