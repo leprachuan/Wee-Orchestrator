@@ -18,7 +18,6 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 def _make_history_manager():
     """Create a HistoryManager with a temp file."""
-    import importlib
     import agent_manager as am
     mgr = am.HistoryManager.__new__(am.HistoryManager)
     # Point to a temp file
@@ -38,7 +37,9 @@ def test_create_session_stores_agent():
         mgr.create_session("telegram", "testuser", "sess001", agent="wee-dev")
         sessions = mgr.get_sessions("telegram", "testuser")
         assert len(sessions) == 1
-        assert sessions[0]["agent"] == "wee-dev", f"Expected 'wee-dev', got {sessions[0].get('agent')}"
+        assert (
+            sessions[0]["agent"] == "wee-dev"
+        ), f"Expected 'wee-dev', got {sessions[0].get('agent')}"
     finally:
         os.unlink(path)
 
@@ -50,7 +51,9 @@ def test_create_session_no_agent_defaults_empty():
         mgr.create_session("telegram", "testuser", "sess002")
         sessions = mgr.get_sessions("telegram", "testuser")
         assert len(sessions) == 1
-        assert sessions[0]["agent"] == "", f"Expected empty string, got {sessions[0].get('agent')}"
+        assert (
+            sessions[0]["agent"] == ""
+        ), f"Expected empty string, got {sessions[0].get('agent')}"
     finally:
         os.unlink(path)
 
@@ -59,9 +62,11 @@ def test_get_sessions_returns_agent_field():
     """get_sessions() must include agent in returned data."""
     mgr, path = _make_history_manager()
     try:
-        mgr.create_session("telegram", "testuser", "sess003", agent="orchestrator")
+        mgr.create_session(
+            "telegram", "testuser", "sess003", agent="orchestrator"
+        )
         sessions = mgr.get_sessions("telegram", "testuser")
-        assert "agent" in sessions[0], "agent field missing from get_sessions() output"
+        assert "agent" in sessions[0], "agent field missing from get_sessions()"
         assert sessions[0]["agent"] == "orchestrator"
     finally:
         os.unlink(path)
@@ -71,11 +76,15 @@ def test_update_session_agent():
     """update_session_agent() should update the agent on an existing session."""
     mgr, path = _make_history_manager()
     try:
-        mgr.create_session("telegram", "testuser", "sess004", agent="orchestrator")
+        mgr.create_session(
+            "telegram", "testuser", "sess004", agent="orchestrator"
+        )
         result = mgr.update_session_agent("telegram", "testuser", "sess004", "wee-qa")
         assert result is True, "update_session_agent should return True on success"
         sessions = mgr.get_sessions("telegram", "testuser")
-        assert sessions[0]["agent"] == "wee-qa", f"Expected 'wee-qa', got {sessions[0].get('agent')}"
+        assert (
+            sessions[0]["agent"] == "wee-qa"
+        ), f"Expected 'wee-qa', got {sessions[0].get('agent')}"
     finally:
         os.unlink(path)
 
@@ -84,8 +93,12 @@ def test_update_session_agent_returns_false_for_unknown_session():
     """update_session_agent() should return False if session not found."""
     mgr, path = _make_history_manager()
     try:
-        result = mgr.update_session_agent("telegram", "testuser", "nonexistent", "wee-dev")
-        assert result is False, "update_session_agent should return False for unknown session"
+        result = mgr.update_session_agent(
+            "telegram", "testuser", "nonexistent", "wee-dev"
+        )
+        assert (
+            result is False
+        ), "update_session_agent should return False for unknown session"
     finally:
         os.unlink(path)
 
