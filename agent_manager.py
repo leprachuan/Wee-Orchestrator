@@ -3640,6 +3640,8 @@ You can mention an agent in your prompt and it will auto-delegate:
                         "primary_model": agent.get("primary_model") or agent.get("model", ""),
                         "fallback_runtime": agent.get("fallback_runtime"),
                         "fallback_model": agent.get("fallback_model"),
+                        "permission_mode": agent.get("permission_mode"),
+                        "yolo": agent.get("yolo"),
                         "dispatch_config": agent.get("dispatch_config", {}),
                     }
                 return agents
@@ -3694,6 +3696,8 @@ You can mention an agent in your prompt and it will auto-delegate:
                 "primary_model": agent.get("primary_model") or agent.get("model", ""),
                 "fallback_runtime": agent.get("fallback_runtime"),
                 "fallback_model": agent.get("fallback_model"),
+                "permission_mode": agent.get("permission_mode"),
+                "yolo": agent.get("yolo"),
                 "dispatch_config": agent.get("dispatch_config", {}),
             }
 
@@ -13472,6 +13476,8 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                             "--dangerously-bypass-approvals-and-sandbox",
                             "-c",
                             "shell_environment_policy.inherit=all",
+                            "--sandbox",
+                            "danger-full-access",
                         ]
                     )
                 if model:
@@ -14022,6 +14028,8 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 "fallback_runtime": agent_cfg.get("fallback_runtime"),
                 "fallback_model": agent_cfg.get("fallback_model"),
                 "timeout": agent_cfg.get("timeout", 3600),
+                "permission_mode": agent_cfg.get("permission_mode"),
+                "yolo": agent_cfg.get("yolo"),
             }
             print(f"[DispatchConfig] Built from new schema for agent={agent}: {_dispatch_config}", file=sys.stderr)
         if body.runtime:
