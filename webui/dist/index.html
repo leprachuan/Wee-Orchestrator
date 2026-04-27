@@ -234,6 +234,31 @@
     <!-- REQUEST QUEUE PANEL (right side) -->
     <aside id="request-queue-panel" class="request-queue-panel queue-minimized">
 
+      <!-- Service Status Section -->
+      <div id="service-status-section" class="service-status-section">
+        <div class="service-status-header">
+          <span class="service-status-icon">🔌</span>
+          <span class="service-status-label">Services</span>
+          <button id="btn-refresh-service-status" class="btn-refresh-status" title="Refresh status">↻</button>
+        </div>
+        <div id="service-status-items" class="service-status-items">
+          <div class="service-status-item" id="svc-item-telegram">
+            <span class="service-dot dot-loading" id="svc-dot-telegram"></span>
+            <span class="service-name">Telegram</span>
+            <span class="service-badge badge-loading" id="svc-badge-telegram">…</span>
+          </div>
+          <div class="service-status-item" id="svc-item-webex">
+            <span class="service-dot dot-loading" id="svc-dot-webex"></span>
+            <span class="service-name">WebEx</span>
+            <span class="service-badge badge-loading" id="svc-badge-webex">…</span>
+          </div>
+        </div>
+        <div class="service-status-footer">
+          <small id="service-status-node"></small>
+          <small id="service-status-timestamp">Checking…</small>
+        </div>
+      </div>
+
       <!-- Queue Section (Collapsible) -->
       <div id="queue-section" class="queue-section queue-section-collapsed">
         <!-- Queue Header -->
