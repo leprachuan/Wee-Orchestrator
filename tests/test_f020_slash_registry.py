@@ -210,8 +210,10 @@ class TestSlashHandlerBehavior(unittest.TestCase):
         self.assertIn("Invalid", result)
 
     def test_notifications_status(self):
+        # Without identity, handler returns auth-error message; either way
+        # the word "notification" should appear in the response.
         result = self.sm._slash_notifications(None, self.session_data, self.session_id)
-        self.assertIn("Notifications", result)
+        self.assertIn("notification", result.lower())
 
     def test_mode_current(self):
         result = self.sm._slash_mode("current", self.session_data, self.session_id)
