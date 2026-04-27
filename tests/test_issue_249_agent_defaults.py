@@ -12,7 +12,6 @@ import sys
 import tempfile
 import threading
 
-import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -82,13 +81,14 @@ class TestSetAgentAppliesDefaults:
             ), f"Expected 'opencode', got {sm['sess-001'].get('runtime')}"
             assert (
                 sm["sess-001"]["model"] == "nvidia/llama-3.1-nemotron"
-            ), f"Expected 'nvidia/llama-3.1-nemotron', got {sm['sess-001'].get('model')}"
+            ), f"Expected 'nvidia/llama-3.1-nemotron', got " \
+                f"{sm['sess-001'].get('model')}"
             assert sm["sess-001"]["agent"] == "research"
         finally:
             os.unlink(path)
 
     def test_existing_session_runtime_updated_on_agent_switch(self):
-        """Existing session's runtime is overwritten with new agent's primary_runtime."""
+        """Existing session runtime is overwritten with new agent's primary_runtime."""
         mgr, path = _make_manager()
         try:
             # Pre-populate with orchestrator settings
@@ -218,7 +218,7 @@ class TestAgentsAPIEndpoint:
     """GET /api/v1/agents must include primary_runtime and primary_model per agent."""
 
     def test_agents_endpoint_returns_primary_runtime_and_model(self):
-        """API response for each agent must include primary_runtime and primary_model."""
+        """Each agent in API response must include primary_runtime and primary_model."""
         api_response = [
             {
                 "name": a["name"],
