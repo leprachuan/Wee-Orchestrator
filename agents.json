@@ -189,10 +189,6 @@
       "fallback_runtime": "copilot",
       "fallback_model": "auto",
       "max_concurrent": 1,
-      "dispatch_config": {
-        "runtime": "claude",
-        "model": "sonnet"
-      },
       "permissions": {
         "mode": "elevated",
         "directories": {
@@ -265,10 +261,6 @@
       "fallback_runtime": "copilot",
       "fallback_model": "claude-sonnet-4.6",
       "max_concurrent": 1,
-      "dispatch_config": {
-        "runtime": "codex",
-        "model": "gpt-5.4"
-      },
       "permissions": {
         "mode": "elevated",
         "directories": {
