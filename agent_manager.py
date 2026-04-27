@@ -2936,6 +2936,10 @@ You can mention an agent in your prompt and it will auto-delegate:
                         "max_concurrent": agent.get("max_concurrent", 1),
                         "runtime": agent.get("runtime", "copilot"),
                         "model": agent.get("model", ""),
+                        "primary_runtime": agent.get("primary_runtime"),
+                        "primary_model": agent.get("primary_model"),
+                        "fallback_runtime": agent.get("fallback_runtime"),
+                        "fallback_model": agent.get("fallback_model"),
                     }
                 return agents
         except json.JSONDecodeError as e:
@@ -4114,6 +4118,12 @@ You can mention an agent in your prompt and it will auto-delegate:
             available = ", ".join(self.AGENTS.keys())
             return f"Unknown agent: '{agent}'. Available agents: {available}"
 
+
+        # Get agent's primary runtime/model defaults (issue #249)
+        agent_config = self.AGENTS[agent]
+        primary_runtime = agent_config.get("primary_runtime") or "copilot"
+        primary_model = agent_config.get("primary_model") or "gpt-5-mini"
+
         with self._session_map_lock:
             session_map = self.load_session_map()
 
@@ -4123,21 +4133,23 @@ You can mention an agent in your prompt and it will auto-delegate:
             if n8n_session_id not in session_map:
                 session_map[n8n_session_id] = {
                     "session_id": new_backend_session_id,
-                    "model": "gpt-5-mini",
+                    "model": primary_model,
                     "agent": agent,
-                    "runtime": "copilot",
+                    "runtime": primary_runtime,
                 }
             else:
                 if isinstance(session_map[n8n_session_id], dict):
                     session_map[n8n_session_id]["agent"] = agent
                     session_map[n8n_session_id]["session_id"] = new_backend_session_id
+                    session_map[n8n_session_id]["runtime"] = primary_runtime
+                    session_map[n8n_session_id]["model"] = primary_model
                 else:
                     # Convert old format
                     session_map[n8n_session_id] = {
                         "session_id": new_backend_session_id,
-                        "model": "gpt-5-mini",
+                        "model": primary_model,
                         "agent": agent,
-                        "runtime": "copilot",
+                        "runtime": primary_runtime,
                     }
 
             self.save_session_map(session_map)
@@ -9626,6 +9638,8 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                         "name": name,
                         "description": info.get("description", ""),
                         "path": info.get("path", ""),
+                        "primary_runtime": info.get("primary_runtime"),
+                        "primary_model": info.get("primary_model"),
                     }
                 )
             return {"agents": agents}
