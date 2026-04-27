@@ -329,6 +329,14 @@ class AuthManager:
                     del self.session_tokens[token]
         self._save_sessions()
 
+_FALLBACK_PATTERNS = [
+    r"429", r"rate.?limit", r"quota.?exceeded",
+    r"401", r"unauthorized", r"missing.?authentication",
+    r"api[_\-]?key.?(invalid|expired|missing)",
+    r"503", r"service.?unavailable", r"502", r"bad.?gateway",
+    r"connection.?refused", r"timed?.?out", r"etimedout", r"overloaded",
+]
+
 class BackgroundTaskManager:
     """Manages background task lifecycle: creation, tracking, output capture, cleanup."""
 
@@ -382,6 +390,8 @@ class BackgroundTaskManager:
         notify: bool = True,
         origin_session_id: str = None,
         permission_mode: str = "restricted",
+        fallback_runtime: str = None,
+        fallback_model: str = None,
     ) -> dict:
         task = {
             "task_id": task_id,
@@ -410,6 +420,11 @@ class BackgroundTaskManager:
             "notify": notify,
             "origin_session_id": origin_session_id,
             "permission_mode": permission_mode,
+            "fallback_runtime": fallback_runtime,
+            "fallback_model": fallback_model,
+            "used_fallback": False,
+            "actual_runtime": None,
+            "actual_model": None,
         }
         with self._lock:
             tasks = self._load()
@@ -542,6 +557,15 @@ class BackgroundTaskManager:
                             break
                     break
             self._save(tasks)
+
+    def mark_fallback_used(self, task_id: str, fallback_runtime: str, fallback_model: str):
+        """Record that a task retried on a fallback runtime."""
+        self.update_task(
+            task_id,
+            used_fallback=True,
+            actual_runtime=fallback_runtime,
+            actual_model=fallback_model,
+        )
 
     def complete_task(self, task_id: str, final_response: str):
         self.update_task(
@@ -11043,6 +11067,12 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         origin_session_id: Optional[str] = (
             None  # chat session that initiated this task
         )
+        fallback_runtime: Optional[str] = (
+            None  # runtime to retry with if primary fails
+        )
+        fallback_model: Optional[str] = (
+            None  # model to use with fallback runtime
+        )
 
         @field_validator("prompt")
         @classmethod
@@ -11493,128 +11523,126 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             # to the correct binary so the chosen runtime actually executes.
             from shutil import which as _which_bin
 
-            if runtime == "gemini":
-                _gemini_bin = _which_bin("gemini") or "gemini"
-                cmd = [_gemini_bin]
-                if permission_mode == "elevated":
-                    cmd.append("--yolo")
-                cmd.extend(["-o", "stream-json", "-p", context_prompt])
-                if model:
-                    cmd.extend(["--model", model])
-            elif runtime == "opencode":
-                _oc_bin = (
-                    str(session_mgr.opencode_bin)
-                    if session_mgr.opencode_bin
-                    else (_which_bin("opencode") or "opencode")
-                )
-                cmd = [_oc_bin, "run", "--model", model, context_prompt]
-            elif runtime == "codex":
-                _codex_bin = _which_bin("codex") or "codex"
-                cmd = [_codex_bin, "exec"]
-                if permission_mode == "elevated":
-                    cmd.extend(
-                        [
-                            "--dangerously-bypass-approvals-and-sandbox",
-                            "-c",
-                            "shell_environment_policy.inherit=all",
-                        ]
-                    )
-                if model:
-                    cmd.extend(["-m", model])
-                cmd.append(context_prompt)
-            elif runtime == "claude":
-                _claude_bin = session_mgr.claude_bin or _which_bin("claude") or "claude"
-                _claude_perm = {
-                    "elevated": "bypassPermissions",
-                    "sandboxed": "plan",
-                }.get(permission_mode, "default")
-                cmd = [
-                    _claude_bin,
-                    "-p",
-                    context_prompt,
-                    "--output-format",
-                    "stream-json",
-                    "--model",
-                    model,
-                    "--permission-mode",
-                    _claude_perm,
-                ]
-            elif runtime == "devin":
-                _devin_bin = (
-                    session_mgr.devin_bin
-                    if hasattr(session_mgr, "devin_bin") and session_mgr.devin_bin
-                    else (_which_bin("devin") or "devin")
-                )
-                _devin_perm = "dangerous" if permission_mode == "elevated" else "auto"
-                cmd = [_devin_bin, "-p", "--permission-mode", _devin_perm]
-                if model:
-                    cmd.extend(["--model", model])
-                cmd.extend(["--", context_prompt])
-            elif runtime == "cursor":
-                _cursor_bin = (
-                    session_mgr.cursor_bin
-                    if hasattr(session_mgr, "cursor_bin") and session_mgr.cursor_bin
-                    else (_which_bin("agent") or "agent")
-                )
-                # Validate cursor model - free plans require "auto"
-                _cursor_model = model
-                if not _cursor_model or not session_mgr.get_model_from_name(
-                    _cursor_model, "cursor"
-                ):
-                    _cursor_model = os.environ.get(
-                        "CURSOR_DEFAULT_MODEL", "auto"
-                    )
-                cmd = [_cursor_bin, "-p", "--trust"]
-                if permission_mode == "elevated":
-                    cmd.append("--yolo")
-                cmd.extend(["--model", _cursor_model])
-                cmd.extend(["--workspace", agent_dir])
-                cmd.extend(["--", context_prompt])
-            elif runtime in ("wee", "openai"):
-                # Wee native runtime - uses standalone script with OpenAI SDK.
-                # "openai" is an accepted alias for "wee" since both target the
-                # wee_runtime.py OpenAI-compatible execution path.
-                _wee_script = os.path.join(
-                    os.path.dirname(os.path.abspath(__file__)),
-                    "wee_runtime.py",
-                )
-                cmd = [
-                    sys.executable, _wee_script,
-                    "--model", model,
-                    "--timeout", str(timeout or 300),
-                ]
-                # Resolve api_base and api_key from session/env
-                _wee_api_base = os.environ.get("WEE_API_BASE", "")
-                _wee_api_key = os.environ.get("WEE_API_KEY", "")
-                if _wee_api_base:
-                    cmd.extend(["--api-base", _wee_api_base])
-                if _wee_api_key:
-                    cmd.extend(["--api-key", _wee_api_key])
-                cmd.extend(["--system-prompt", context_prompt])
-                cmd.append(prompt)
-            else:
-                # Default: copilot runtime
-                copilot_bin = (
-                    session_mgr.copilot_bin
-                    or _which_bin("copilot")
-                    or "/home/flipkey/.local/bin/copilot"
-                )
-                cmd = [
-                    copilot_bin,
-                    "-p",
-                    context_prompt,
-                    "--no-color",
-                    "--model",
-                    model,
-                    "--allow-all-tools",
-                ]
-                if permission_mode == "elevated":
-                    cmd.extend(["--allow-all-paths", "--yolo"])
-
-            # Set agent working directory for all runtimes
+            # Set agent working directory for all runtimes (needed by _build_bg_cmd)
             agent_dir = session_mgr.AGENTS.get(
                 agent, session_mgr.AGENTS.get("orchestrator", {})
             ).get("path", os.getcwd())
+
+            def _build_bg_cmd(eff_runtime, eff_model):
+                """Build the CLI command list for the given runtime and model."""
+                if eff_runtime == "gemini":
+                    _gemini_bin = _which_bin("gemini") or "gemini"
+                    _cmd = [_gemini_bin]
+                    if permission_mode == "elevated":
+                        _cmd.append("--yolo")
+                    _cmd.extend(["-o", "stream-json", "-p", context_prompt])
+                    if eff_model:
+                        _cmd.extend(["--model", eff_model])
+                elif eff_runtime == "opencode":
+                    _oc_bin = (
+                        str(session_mgr.opencode_bin)
+                        if session_mgr.opencode_bin
+                        else (_which_bin("opencode") or "opencode")
+                    )
+                    _cmd = [_oc_bin, "run", "--model", eff_model, context_prompt]
+                elif eff_runtime == "codex":
+                    _codex_bin = _which_bin("codex") or "codex"
+                    _cmd = [_codex_bin, "exec"]
+                    if permission_mode == "elevated":
+                        _cmd.extend(
+                            [
+                                "--dangerously-bypass-approvals-and-sandbox",
+                                "-c",
+                                "shell_environment_policy.inherit=all",
+                            ]
+                        )
+                    if eff_model:
+                        _cmd.extend(["-m", eff_model])
+                    _cmd.append(context_prompt)
+                elif eff_runtime == "claude":
+                    _claude_bin = session_mgr.claude_bin or _which_bin("claude") or "claude"
+                    _claude_perm = {
+                        "elevated": "bypassPermissions",
+                        "sandboxed": "plan",
+                    }.get(permission_mode, "default")
+                    _cmd = [
+                        _claude_bin,
+                        "-p",
+                        context_prompt,
+                        "--output-format",
+                        "stream-json",
+                        "--model",
+                        eff_model,
+                        "--permission-mode",
+                        _claude_perm,
+                    ]
+                elif eff_runtime == "devin":
+                    _devin_bin = (
+                        session_mgr.devin_bin
+                        if hasattr(session_mgr, "devin_bin") and session_mgr.devin_bin
+                        else (_which_bin("devin") or "devin")
+                    )
+                    _devin_perm = "dangerous" if permission_mode == "elevated" else "auto"
+                    _cmd = [_devin_bin, "-p", "--permission-mode", _devin_perm]
+                    if eff_model:
+                        _cmd.extend(["--model", eff_model])
+                    _cmd.extend(["--", context_prompt])
+                elif eff_runtime == "cursor":
+                    _cursor_bin = (
+                        session_mgr.cursor_bin
+                        if hasattr(session_mgr, "cursor_bin") and session_mgr.cursor_bin
+                        else (_which_bin("agent") or "agent")
+                    )
+                    _cursor_model = eff_model
+                    if not _cursor_model or not session_mgr.get_model_from_name(
+                        _cursor_model, "cursor"
+                    ):
+                        _cursor_model = os.environ.get("CURSOR_DEFAULT_MODEL", "auto")
+                    _cmd = [_cursor_bin, "-p", "--trust"]
+                    if permission_mode == "elevated":
+                        _cmd.append("--yolo")
+                    _cmd.extend(["--model", _cursor_model])
+                    _cmd.extend(["--workspace", agent_dir])
+                    _cmd.extend(["--", context_prompt])
+                elif eff_runtime in ("wee", "openai"):
+                    _wee_script = os.path.join(
+                        os.path.dirname(os.path.abspath(__file__)),
+                        "wee_runtime.py",
+                    )
+                    _cmd = [
+                        sys.executable, _wee_script,
+                        "--model", eff_model,
+                        "--timeout", str(timeout or 300),
+                    ]
+                    _wee_api_base = os.environ.get("WEE_API_BASE", "")
+                    _wee_api_key = os.environ.get("WEE_API_KEY", "")
+                    if _wee_api_base:
+                        _cmd.extend(["--api-base", _wee_api_base])
+                    if _wee_api_key:
+                        _cmd.extend(["--api-key", _wee_api_key])
+                    _cmd.extend(["--system-prompt", context_prompt])
+                    _cmd.append(prompt)
+                else:
+                    # Default: copilot runtime
+                    copilot_bin = (
+                        session_mgr.copilot_bin
+                        or _which_bin("copilot")
+                        or "/home/flipkey/.local/bin/copilot"
+                    )
+                    _cmd = [
+                        copilot_bin,
+                        "-p",
+                        context_prompt,
+                        "--no-color",
+                        "--model",
+                        eff_model,
+                        "--allow-all-tools",
+                    ]
+                    if permission_mode == "elevated":
+                        _cmd.extend(["--allow-all-paths", "--yolo"])
+                return _cmd
+
+            cmd = _build_bg_cmd(runtime, model)
 
             proc_timeout = (timeout or 900) + 30
             env = {
@@ -11771,7 +11799,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                             sched.save_result(
                                 job_id, job.get("name", job_id), True, final_output
                             )
-                    except:
+                    except Exception:
                         pass
                 _emit_bg_notification(
                     task_id,
@@ -11784,29 +11812,135 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                     notify=notify,
                 )
             else:
-                error_msg = f"Task failed with code {process.returncode}: {output}"
-                bg_task_mgr.fail_task(task_id, error_msg)
-                if task_id.startswith("sched_"):
-                    try:
-                        job_id = task_id.split("_")[1]
-                        sched = _get_scheduler()
-                        job = sched.get_job(job_id).get("result")
-                        if job:
-                            sched.save_result(
-                                job_id, job.get("name", job_id), False, "", error_msg
-                            )
-                    except:
-                        pass
-                _emit_bg_notification(
-                    task_id,
-                    prompt,
-                    "failed",
-                    channel,
-                    user_identity,
-                    output_preview=None,
-                    error=error_msg,
-                    notify=notify,
+                primary_error_msg = f"Task failed with code {process.returncode}: {output}"
+
+                # --- Fallback retry logic (Issue #243) ---
+                _is_infra_error = any(
+                    re.search(p, output, re.IGNORECASE) for p in _FALLBACK_PATTERNS
                 )
+                _task_rec = bg_task_mgr.get_task(task_id)
+                _fb_runtime = (_task_rec or {}).get("fallback_runtime") if _task_rec else None
+                _fb_model = (_task_rec or {}).get("fallback_model") if _task_rec else None
+                _already_fb = (_task_rec or {}).get("used_fallback", False) if _task_rec else False
+
+                if _is_infra_error and (_fb_runtime or _fb_model) and not _already_fb:
+                    _eff_fb_runtime = _fb_runtime or runtime
+                    _eff_fb_model = _fb_model or model
+                    bg_task_mgr.append_output(
+                        task_id,
+                        f"[Fallback] Primary failed ({primary_error_msg[:120]}), retrying with runtime={_eff_fb_runtime}, model={_eff_fb_model}",
+                    )
+                    bg_task_mgr.mark_fallback_used(task_id, _eff_fb_runtime, _eff_fb_model)
+
+                    _fb_cmd = _build_bg_cmd(_eff_fb_runtime, _eff_fb_model)
+                    _fb_env = {**env, "COPILOT_RUNTIME": _eff_fb_runtime}
+                    _fb_stdout_lines = []
+                    _fb_stderr_lines = []
+
+                    _fb_proc = subprocess.Popen(
+                        _fb_cmd,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                        text=True,
+                        env=_fb_env,
+                        cwd=agent_dir,
+                        bufsize=1,
+                    )
+                    bg_task_mgr.update_task(task_id, pid=_fb_proc.pid)
+
+                    def _drain_fb_stderr():
+                        try:
+                            for _el in _fb_proc.stderr:
+                                _fb_stderr_lines.append(_el)
+                        except Exception:
+                            pass
+
+                    import threading as _fb_threading
+                    _fb_stderr_thread = _fb_threading.Thread(target=_drain_fb_stderr, daemon=True)
+                    _fb_stderr_thread.start()
+                    _fb_start = time.time()
+
+                    for _fl in _fb_proc.stdout:
+                        _fb_stdout_lines.append(_fl)
+                        _lt = _fl.rstrip("\n\r")
+                        if _lt:
+                            bg_task_mgr.append_output(task_id, _lt)
+                        _fb_tc = _parse_tool_call_from_line(_lt, _eff_fb_runtime)
+                        if _fb_tc:
+                            _fb_tc["runtime"] = _eff_fb_runtime
+                            bg_task_mgr.append_tool_call(task_id, _fb_tc)
+                        if time.time() - _fb_start > proc_timeout:
+                            _fb_proc.kill()
+                            break
+
+                    _fb_proc.stdout.close()
+                    _fb_stderr_thread.join(timeout=5)
+                    _fb_proc.wait()
+
+                    _fb_output = "".join(_fb_stdout_lines).strip()
+                    if _fb_stderr_lines:
+                        _fb_output += "\n[stderr]\n" + "".join(_fb_stderr_lines)
+
+                    if _fb_proc.returncode == 0:
+                        _fb_final = (
+                            session_mgr.strip_metadata(_fb_output, _eff_fb_runtime)
+                            if _fb_output
+                            else "Task completed via fallback runtime"
+                        )
+                        if not _fb_final.strip():
+                            _fb_final = _fb_output or "Task completed via fallback runtime"
+                        session_mgr.clear_live_status(session_id)
+                        bg_task_mgr.complete_task(task_id, _fb_final)
+                        _emit_bg_notification(
+                            task_id,
+                            prompt,
+                            "completed",
+                            channel,
+                            user_identity,
+                            output_preview=_fb_final,
+                            error=None,
+                            notify=notify,
+                        )
+                    else:
+                        combined_error = (
+                            f"Primary ({runtime}): {primary_error_msg[:200]}; "
+                            f"Fallback ({_eff_fb_runtime}): exit {_fb_proc.returncode}: {_fb_output[:200]}"
+                        )
+                        bg_task_mgr.fail_task(task_id, combined_error)
+                        _emit_bg_notification(
+                            task_id,
+                            prompt,
+                            "failed",
+                            channel,
+                            user_identity,
+                            output_preview=None,
+                            error=combined_error,
+                            notify=notify,
+                        )
+                else:
+                    error_msg = primary_error_msg
+                    bg_task_mgr.fail_task(task_id, error_msg)
+                    if task_id.startswith("sched_"):
+                        try:
+                            job_id = task_id.split("_")[1]
+                            sched = _get_scheduler()
+                            job = sched.get_job(job_id).get("result")
+                            if job:
+                                sched.save_result(
+                                    job_id, job.get("name", job_id), False, "", error_msg
+                                )
+                        except Exception:
+                            pass
+                    _emit_bg_notification(
+                        task_id,
+                        prompt,
+                        "failed",
+                        channel,
+                        user_identity,
+                        output_preview=None,
+                        error=error_msg,
+                        notify=notify,
+                    )
 
         except subprocess.TimeoutExpired:
             error_msg = f"Task exceeded timeout of {timeout} seconds"
@@ -11935,6 +12069,8 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 timeout=bg_timeout,
                 notify=notify_pref,
                 origin_session_id=body.origin_session_id,
+                fallback_runtime=body.fallback_runtime,
+                fallback_model=body.fallback_model,
             )
             queue_pos = bg_task_mgr.count_queued(channel, identity)
             print(
@@ -11952,6 +12088,11 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 "timeout": bg_timeout,
             }
 
+        # Resolve permission mode (default: restricted)
+        perm_mode = body.permission_mode or "restricted"
+        if perm_mode not in ("elevated", "restricted", "sandboxed"):
+            perm_mode = "restricted"
+
         # Create task record (running immediately)
         task = bg_task_mgr.create_task(
             task_id=task_id,
@@ -11967,12 +12108,9 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             notify=notify_pref,
             origin_session_id=body.origin_session_id,
             permission_mode=perm_mode,
+            fallback_runtime=body.fallback_runtime,
+            fallback_model=body.fallback_model,
         )
-
-        # Resolve permission mode (default: restricted)
-        perm_mode = body.permission_mode or "restricted"
-        if perm_mode not in ("elevated", "restricted", "sandboxed"):
-            perm_mode = "restricted"
 
         # Run in background thread using shared executor
         loop = asyncio.get_running_loop()
@@ -12057,6 +12195,11 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                     "created_at": t["created_at"],
                     "completed_at": t.get("completed_at"),
                     "error": t.get("error"),
+                    "used_fallback": t.get("used_fallback", False),
+                    "actual_runtime": t.get("actual_runtime"),
+                    "actual_model": t.get("actual_model"),
+                    "fallback_runtime": t.get("fallback_runtime"),
+                    "fallback_model": t.get("fallback_model"),
                 }
             )
         return {"tasks": result}
@@ -12089,6 +12232,11 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             "error": task.get("error"),
             "tool_call_count": len(tool_calls),
             "recent_tool_calls": tool_calls[-20:],
+            "used_fallback": task.get("used_fallback", False),
+            "actual_runtime": task.get("actual_runtime"),
+            "actual_model": task.get("actual_model"),
+            "fallback_runtime": task.get("fallback_runtime"),
+            "fallback_model": task.get("fallback_model"),
         }
 
     @app.get("/api/v1/background-tasks/{task_id}/transcript")

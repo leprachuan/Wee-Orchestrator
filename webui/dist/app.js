@@ -3765,9 +3765,12 @@ function renderBgTasksSidebar() {
     const prompt = escHtml((t.prompt || '').slice(0, 80));
     const agentLabel = escHtml(t.agent || '?');
     const dateStr = fmtDate(t.created_at);
+    const fallbackBadge = t.used_fallback
+      ? `<span class="bg-fallback-badge" title="Primary runtime failed; retried with ${escHtml(t.actual_runtime || '')}/${escHtml(t.actual_model || '')}">↩ Retried</span>`
+      : '';
     return `
       <div class="session-item bg-sidebar-item ${active}" onclick="selectBgTask('${t.task_id}')">
-        <div class="session-title">${icon} ${prompt || '(no prompt)'}</div>
+        <div class="session-title"><span class="bg-task-title-text">${icon} ${prompt || '(no prompt)'}</span>${fallbackBadge}</div>
         <div class="session-preview">${agentLabel} · ${statusLabel}${elapsed} · ${dateStr}</div>
       </div>`;
   }).join('');
@@ -3894,6 +3897,14 @@ async function loadBgTaskDetail(taskId) {
                 <span class="bg-detail-meta-label">Runtime</span>
                 <span class="bg-detail-meta-value">${runtimeIconHTML(t.runtime)}${escHtml(t.runtime || '?')} / ${escHtml(t.model || '?')}</span>
               </div>
+              ${t.used_fallback ? `<div class="bg-detail-meta-row">
+                <span class="bg-detail-meta-label">Fallback</span>
+                <span class="bg-detail-meta-value bg-fallback-detail" title="Primary runtime failed; task completed on fallback runtime">
+                  <span class="bg-fallback-badge">↩ Retried</span>
+                  <span class="bg-fallback-route">${runtimeIconHTML(t.runtime)}${escHtml(t.runtime || '?')} / ${escHtml(t.model || '?')} → ${runtimeIconHTML(t.actual_runtime || '')}${escHtml(t.actual_runtime || '?')} / ${escHtml(t.actual_model || '?')}</span>
+                  <span class="bg-fallback-tip">Primary failed; completed on fallback runtime</span>
+                </span>
+              </div>` : ''}
               <div class="bg-detail-meta-row">
                 <span class="bg-detail-meta-label">Started</span>
                 <span class="bg-detail-meta-value">${fmtDate(t.created_at)}</span>
