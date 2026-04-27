@@ -7,11 +7,12 @@ Tests verify that:
 3. update_session_agent() updates the agent field in history
 4. Sessions created without agent default to empty string
 """
-import sys
-import os
-import time
+
 import json
+import os
+import sys
 import tempfile
+import time
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 

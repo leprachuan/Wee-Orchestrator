@@ -1023,7 +1023,9 @@ class HistoryManager:
                     return s.get("messages", [])
         return None
 
-    def create_session(self, channel: str, identity: str, session_id: str, agent: str = "") -> dict:
+    def create_session(
+        self, channel: str, identity: str, session_id: str, agent: str = ""
+    ) -> dict:
         """Create a new session entry, pruning oldest if over cap."""
         with self._lock:
             data = self._load()
@@ -9830,7 +9832,9 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         # Use provided session_id or generate a new one
         session_id = body.session_id if body.session_id else str(uuid4())[:8]
         session_mgr.get_or_create_session_data(session_id, identity=user["identity"])
-        history_mgr.create_session(user["channel"], user["identity"], session_id, agent=body.agent or "")
+        history_mgr.create_session(
+            user["channel"], user["identity"], session_id, agent=body.agent or ""
+        )
 
         # Store channel in session so file instructions are channel-aware
         session_mgr.update_session_field(session_id, "channel", user["channel"])
