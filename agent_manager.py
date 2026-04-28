@@ -12541,8 +12541,8 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 timeout=bg_timeout,
                 notify=notify_pref,
                 origin_session_id=body.origin_session_id,
-                fallback_runtime=body.fallback_runtime,
-                fallback_model=body.fallback_model,
+                fallback_runtime=body.fallback_runtime or agent_config.get("fallback_runtime"),
+                fallback_model=body.fallback_model or agent_config.get("fallback_model"),
             )
             queue_pos = bg_task_mgr.count_queued(channel, identity)
             print(
@@ -12580,8 +12580,8 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             notify=notify_pref,
             origin_session_id=body.origin_session_id,
             permission_mode=perm_mode,
-            fallback_runtime=body.fallback_runtime,
-            fallback_model=body.fallback_model,
+            fallback_runtime=body.fallback_runtime or agent_config.get("fallback_runtime"),
+            fallback_model=body.fallback_model or agent_config.get("fallback_model"),
         )
 
         # Run in background thread using shared executor
