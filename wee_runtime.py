@@ -194,6 +194,20 @@ def compact_messages(
     to_summarize = non_system[:-keep_recent]
     to_keep = non_system[-keep_recent:]
 
+    # If the first kept message is a tool result, the paired assistant message
+    # (which carries tool_calls) sits just before the keep boundary. Without it
+    # the compacted history is invalid — OpenAI APIs reject a tool message that
+    # has no preceding assistant message with a matching tool_calls entry.
+    if to_keep and to_keep[0].get("role") == "tool":
+        idx = len(non_system) - keep_recent - 1
+        while idx >= 0:
+            msg = non_system[idx]
+            if msg.get("role") == "assistant" and msg.get("tool_calls"):
+                to_summarize = non_system[:idx]
+                to_keep = non_system[idx:]
+                break
+            idx -= 1
+
     transcript_lines = []
     for m in to_summarize:
         role = m.get("role", "")

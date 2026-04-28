@@ -370,6 +370,92 @@ class TestCompactMessages(unittest.TestCase):
         assert len(compacted) > 0
         assert "error" in summary.lower() or "Compaction error" in summary
 
+    def test_issue_273_compact_orphaned_tool_message(self):
+        # Regression: compaction must not produce an orphaned role=tool message.
+        # If to_keep[0].role == "tool", compact_messages must walk back to include
+        # the paired assistant message (with tool_calls). Without it the history
+        # is invalid and OpenAI APIs reject the request.
+
+        # --- Case 1: orphaned tool message with no paired assistant-with-tool_calls ---
+        # compact_messages should fall through gracefully (no crash, no tool first).
+        messages2 = [{"role": "system", "content": "You are helpful."}]
+        for i in range(10):
+            messages2.append({"role": "user", "content": "Q{}".format(i)})
+            messages2.append({"role": "assistant", "content": "A{}".format(i)})
+        # Place tool message at index -6 (exactly 5 messages follow it)
+        messages2.append(
+            {"role": "tool", "tool_call_id": "call_orphan", "content": "orphan"}
+        )
+        messages2.append({"role": "user", "content": "F0"})
+        messages2.append({"role": "assistant", "content": "R0"})
+        messages2.append({"role": "user", "content": "F1"})
+        messages2.append({"role": "assistant", "content": "R1"})
+        messages2.append({"role": "user", "content": "F2"})
+
+        client = self._make_client("summary")
+        compacted, _ = compact_messages(
+            messages2, target_tokens=500, model="qwen3:8b", client=client
+        )
+        non_system = [m for m in compacted if m.get("role") != "system"]
+        assert (
+            non_system[0].get("role") != "tool"
+        ), "First non-system message must not be role=tool; got: {}".format(
+            non_system[0]
+        )
+
+        # --- Case 2: paired assistant-with-tool_calls just before keep boundary ---
+        # The assistant message must be pulled into to_keep so the tool message
+        # is preceded by its assistant-with-tool_calls partner.
+        messages3 = [{"role": "system", "content": "You are helpful."}]
+        for i in range(10):
+            messages3.append({"role": "user", "content": "Q{}".format(i)})
+            messages3.append({"role": "assistant", "content": "A{}".format(i)})
+        messages3.append({"role": "user", "content": "Run a command"})
+        # This assistant message sits just before the keep boundary (index -7)
+        messages3.append(
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": "call_2",
+                        "type": "function",
+                        "function": {"name": "bash", "arguments": "{}"},
+                    }
+                ],
+            }
+        )
+        # to_keep[0] will be this tool message (index -6)
+        messages3.append(
+            {"role": "tool", "tool_call_id": "call_2", "content": "output"}
+        )
+        # Exactly 5 more messages so the tool lands at position -6
+        messages3.append({"role": "user", "content": "Follow0"})
+        messages3.append({"role": "assistant", "content": "Resp0"})
+        messages3.append({"role": "user", "content": "Follow1"})
+        messages3.append({"role": "assistant", "content": "Resp1"})
+        messages3.append({"role": "user", "content": "Follow2"})
+
+        client = self._make_client("summary")
+        compacted3, _ = compact_messages(
+            messages3, target_tokens=2000, model="qwen3:8b", client=client
+        )
+        non_system3 = [m for m in compacted3 if m.get("role") != "system"]
+        tool_idx = next(
+            (i for i, m in enumerate(non_system3) if m.get("role") == "tool"), None
+        )
+        assert (
+            tool_idx is not None
+        ), "tool message should be present in compacted output"
+        assert tool_idx > 0, "tool message must not be the first non-system message"
+        preceding = non_system3[tool_idx - 1]
+        assert (
+            preceding.get("role") == "assistant"
+        ), "Message before tool must be assistant, got {}".format(preceding.get("role"))
+        assert preceding.get(
+            "tool_calls"
+        ), "Message before tool must have tool_calls array"
+
     def test_compact_trigger_fraction(self):
         assert COMPACT_TRIGGER_FRACTION == 0.75
 

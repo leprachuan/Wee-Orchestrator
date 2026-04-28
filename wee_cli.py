@@ -534,6 +534,7 @@ def run_interactive(
                     after_n = len(compacted)
                     after_toks = count_message_tokens(compacted, model)
                     messages = compacted
+                    token_tracker.last_prompt_tokens = after_toks
                     _print_info(
                         f"Done: {before_n} → {after_n} messages,"
                         f" ~{before_toks:,} → ~{after_toks:,} tokens"
