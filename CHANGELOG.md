@@ -1,3 +1,54 @@
+## [Issue #190] Bug Fix: Copilot Session Auto-Recovery on Token Expiry
+**Status:** ✅ QA Approved (Commit: 2e7f1941, PR #201)
+
+### Summary
+Fixed unconditional crash of background tasks when the Copilot runtime's session-level bearer token expires after ~30 minutes. Implemented both **proactive** (age-based pre-emptive restart before expiry) and **reactive** (error-detected mid-session restart with context injection) recovery strategies so long-running tasks continue seamlessly rather than failing.
+
+### Root Cause
+The GitHub Copilot API issues a short-lived session-level bearer token (~30 min TTL) separate from the user's OAuth token. The Copilot CLI does not auto-refresh this token mid-conversation. Tasks running longer than ~30 minutes (common for `wee-dev` and `wee-qa` workflows involving SSH latency) were hitting `Session token expired` and the entire background task crashed with exit code 1, requiring manual redispatch.
+
+### Solution
+
+#### Proactive Restart (Age-Based)
+- `_copilot_session_start` dict tracks session start epoch per `n8n_session_id` in `SessionManager.__init__`
+- `_COPILOT_SESSION_MAX_AGE_SEC = 1500` (25 min) — restarts before the 30-min TTL
+- Before `--resume`, checks session age; if expired, starts a fresh session with reconstructed context prompt injected as the first message
+
+#### Reactive Recovery (Error-Detected)
+- Monitors subprocess stdout for `_TOKEN_EXPIRED_MARKER = "Session token expired"`
+- On detection: extracts accumulated prior-work context from the partial output
+- Relaunches with a fresh `--new` session with context injected — background task continues transparently
+
+#### Double-Expiry Guard
+- If the recovery session also hits `Session token expired`, returns best-effort partial output with a warning instead of corrupted or empty content
+
+#### Module-Level Constants
+- `_TOKEN_EXPIRED_MARKER`, `_COPILOT_SESSION_MAX_AGE_SEC` moved to module scope
+- `_COPILOT_ELEVATED_MODE_INSTRUCTIONS`, `_COPILOT_SANDBOXED_MODE_INSTRUCTIONS` extracted to eliminate 3x duplication
+- `# noqa: E501` applied to unavoidably long constant strings; Black formatting applied throughout
+
+#### Session Cleanup
+- `_copilot_session_start` entries cleaned up in `_cleanup_stream_buffer` to prevent memory leak in long-running orchestrator processes
+
+### Files Changed
+- `agent_manager.py` — Proactive + reactive recovery in `run_copilot()`, session tracking in `SessionManager.__init__`, cleanup in `_cleanup_stream_buffer`, module-level constants (+562 lines, -21 lines)
+- `tests/test_issue190_copilot_session_expiry.py` — 12 regression tests covering both recovery paths
+
+### Tests
+- 12 regression tests in `test_issue190_copilot_session_expiry.py`:
+  - A-series (4): Proactive restart — session age checks, threshold boundary, context injection into `cmd[2]`
+  - B-series (8): Reactive recovery — expiry detection, context extraction, fresh session launch, double-expiry guard, `test_203` regression (3 previously-broken tests restored)
+- Net new tests across full QA lifecycle: +22
+- QA Rounds: 5 total (Rounds 1–4 rejected; Round 5 APPROVED after formatting pass)
+
+### Usage
+No configuration required. Recovery is automatic and transparent to callers. Log output will show:
+```
+[copilot] Session age NNs exceeds 1500s threshold — proactive restart
+[copilot] Session token expired detected — reactive recovery initiated
+[copilot] Reactive recovery succeeded — continuing task
+```
+
 ## [Issue #146] Feature: Global Toggle to Suppress Background Task Notifications
 **Status:** ✅ QA Approved (Commit: 69f29db, PR #150)
 
