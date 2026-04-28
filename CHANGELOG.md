@@ -1,3 +1,40 @@
+## [Issue #268] Fix: Nested Payload Unwrap for WebEX Gateways
+**Status:** ✅ QA Approved (Commit: fc580ce8, PR #271)
+
+### Summary
+Added `_unwrap_payload()` support for WebEX gateway messages that wrap the actual payload in a nested structure. Configures a `rabbitmq_payload_key` in `webex_config.json` to extract the inner message before processing.
+
+### Problem
+Some WebEX gateways (e.g., Cisco CX-HOSTED-BOTS-PROD) publish messages with double-wrapped payloads — the actual message content is nested inside an outer envelope key. Without unwrapping, the handler received the full envelope dict instead of the message fields, causing routing failures.
+
+### Solution
+
+#### `_unwrap_payload()` Static Method
+- Added to `WebEXConnector` in `webex_connector.py`
+- Supports **single-level unwrap** via `rabbitmq_payload_key` config key
+- Supports **dotted path notation** (e.g., `"data.message_data"`) for nested keys
+- Includes **auto-unwrap** of nested `message_data` dicts (up to `max_depth=4`) as fallback
+- Guard: only unwraps when `payload_key` is explicitly configured AND the key is present — existing deployments with no `payload_key` are unaffected
+
+#### Configuration
+Add to `webex_config.json`:
+```json
+{
+  "rabbitmq_payload_key": "data"
+}
+```
+Leave empty (default `""`) for standard single-level payloads (backward compatible).
+
+#### Backward Compatibility
+- No changes to behavior when `rabbitmq_payload_key` is absent or empty
+- Auto-unwrap (Step 2) only fires after the primary key unwrap succeeds
+- All existing deployments work without config changes
+
+### Files Changed
+- `webex_connector.py` — `_unwrap_payload()` method + callback integration
+- `tests/test_issue_268_nested_payload_unwrap.py` — 11 regression tests
+- `webex_config.example.json` — added `rabbitmq_payload_key` field (empty default)
+
 ## [Issue #190] Bug Fix: Copilot Session Auto-Recovery on Token Expiry
 **Status:** ✅ QA Approved (Commit: 2e7f1941, PR #201)
 
