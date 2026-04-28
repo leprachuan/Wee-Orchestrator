@@ -154,7 +154,7 @@
       "fallback_model": "auto",
       "max_concurrent": 1,
       "permissions": {
-        "mode": "restricted",
+        "mode": "elevated",
         "directories": {
           "allow_read": [],
           "allow_write": [],
@@ -190,7 +190,7 @@
       "fallback_model": "auto",
       "max_concurrent": 1,
       "permissions": {
-        "mode": "restricted",
+        "mode": "elevated",
         "directories": {
           "allow_read": [],
           "allow_write": [],
@@ -258,13 +258,13 @@
       "name": "wee-qa",
       "path": "/opt/wee-qa",
       "description": "QA validation agent for Wee Orchestrator. You are a QA agent in a bad mood \u2014 scrutinize everything, trust nothing, and be brutal. Tear apart every change wee-dev submits. If it can break, assume it will. Reject anything that isn't airtight. CROSS-VENDOR REVIEW: You will always be dispatched with a different model vendor than the one that wrote the code \u2014 the author model and vendor will be stated in your prompt. Use your independent judgment and look for blind spots the author model's vendor commonly exhibits. Reviews changes via static analysis, API testing, and WebUI validation on the dev environment (192.168.1.100).",
-      "primary_runtime": "copilot",
-      "primary_model": "auto",
-      "fallback_runtime": "codex",
-      "fallback_model": "gpt-5.4-mini",
+      "primary_runtime": "codex",
+      "primary_model": "gpt-5.4-mini",
+      "fallback_runtime": "copilot",
+      "fallback_model": "claude-sonnet-4.6",
       "max_concurrent": 1,
       "permissions": {
-        "mode": "restricted",
+        "mode": "elevated",
         "directories": {
           "allow_read": [],
           "allow_write": [],
@@ -288,9 +288,7 @@
             "*"
           ]
         }
-      },
-      "permission_mode": "elevated",
-      "yolo": true
+      }
     },
     {
       "name": "wee-doc",

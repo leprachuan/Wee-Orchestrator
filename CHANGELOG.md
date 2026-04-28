@@ -176,6 +176,65 @@ No configuration required. Recovery is automatic and transparent to callers. Log
 [copilot] Session token expired detected — reactive recovery initiated
 [copilot] Reactive recovery succeeded — continuing task
 ```
+## [Issue #267] Bug Fix: WebEx Connector Passive Queue Declaration for CONSUME-Only AMQP Brokers
+**Status:** ✅ QA Approved (Commit: 6683c01, PR #270)
+
+### Summary
+Added `rabbitmq_queue_passive` configuration flag to WebEx connector for compatibility with managed AMQP brokers (e.g., Cisco CX-HOSTED-BOTS-PROD) where bot users have only CONSUME permission and cannot declare or modify queues. When enabled, the connector performs a passive assertion instead of attempting queue creation, avoiding `ACCESS_REFUSED (403)` errors.
+
+### Root Cause
+`webex_connector.py` unconditionally called `channel.queue_declare(queue=..., durable=True)`, which attempts to create or modify the queue. On managed AMQP gateways where the bot user has only CONSUME permission (no CONFIGURE rights), the broker rejects this with `ACCESS_REFUSED (403)` and kills the connection, preventing the connector from starting.
+
+### Solution
+
+#### New Configuration Option
+- Added `rabbitmq_queue_passive` boolean flag (default: `false`) to `WebEXConfigSchema`
+- Located in `webex_config.json` under the WebEx connector configuration block
+- When `true`: calls `channel.queue_declare(queue=..., passive=True)` — read-only assertion, no queue creation attempt
+- When `false` (default): existing behavior preserved — calls `channel.queue_declare(queue=..., durable=True)`
+
+#### Backward Compatibility
+- Default is `false` — all existing deployments continue unchanged
+- Flag is optional — existing configs without this key work normally
+- No breaking changes to API or behavior
+
+#### Usage Example
+```json
+{
+  "webex": {
+    "token": "your-webex-bot-token",
+    "rabbitmq_host": "ascension-amqp-aas.cisco.com",
+    "rabbitmq_port": 5671,
+    "rabbitmq_user": "bot_service_account",
+    "rabbitmq_password": "...",
+    "rabbitmq_queue": "webex_queue",
+    "rabbitmq_queue_passive": true,
+    "rabbitmq_ssl": true
+  }
+}
+```
+
+Set `rabbitmq_queue_passive: true` when connecting to hosted AMQP brokers where the bot user lacks queue management permissions.
+
+### Files Changed
+- `config_schemas.py` — Added `rabbitmq_queue_passive: bool = False` field to `WebEXConfigSchema` (line 247)
+- `webex_connector.py` — Modified `connect_rabbitmq()` to conditionally use passive flag; updated `_default_config()` (lines 48, 289-299)
+- `tests/test_issue_267_webex_passive_queue.py` — 7 regression tests covering default/explicit passive modes, ACCESS_REFUSED simulation, config schema validation
+
+### Tests
+- 7 regression tests in `test_issue_267_webex_passive_queue.py`:
+  - Default behavior (active declare, `durable=True`)
+  - Explicit `passive=false` (active declare)
+  - Explicit `passive=true` (passive declare only)
+  - `ACCESS_REFUSED` on active declare (pre-fix failure path)
+  - Passive declare succeeds on CONSUME-only broker
+  - Config schema defaults and persistence
+- All 7 tests pass; backward compatibility confirmed
+
+### Deployment Notes
+- No code changes required for existing deployments
+- To enable: Add `"rabbitmq_queue_passive": true` to `webex_config.json` when deploying to managed AMQP brokers
+- Log output will show normal connection flow; no new log entries unless debugging is enabled
 
 ## [Issue #146] Feature: Global Toggle to Suppress Background Task Notifications
 **Status:** ✅ QA Approved (Commit: 69f29db, PR #150)
