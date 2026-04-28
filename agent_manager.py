@@ -24,6 +24,7 @@ from uuid import uuid4
 
 # Dynamically determine the repo base directory (works regardless of where repo is cloned)
 SCRIPT_BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+MODEL_MANIFEST_PATH = Path(SCRIPT_BASE_DIR) / "model-manifest.json"
 
 # ── Theme constants (F025) ──────────────────────────────────────────────
 _BUILTIN_THEMES = [
@@ -1420,6 +1421,13 @@ class SessionManager:
     }
 
     OPENCODE_MODELS = {
+        "openai-compatible": [
+            (
+                "openai-compatible/mistral-7b-instruct-v0.1",
+                "Mistral 7B Instruct v0.1",
+                ["mistral-7b"],
+            ),
+        ],
         "Meta (US Models)": [
             ("llama-3.3-70b-versatile", "Llama 3.3 70B", ["llama-3.3", "llama-3-70b"]),
             ("llama-3.1-405b", "Llama 3.1 405B", ["llama-405b"]),
@@ -1479,7 +1487,9 @@ class SessionManager:
     # CODEX models configuration (from copilot CLI --model choices)
     CODEX_MODELS = {
         "OpenAI Models": [
+            ("gpt-5.5", "GPT-5.5", ["gpt-5.5"]),
             ("gpt-5.4", "GPT-5.4", ["gpt-5.4", "gpt-5.4-pro"]),
+            ("gpt-5.4-mini", "GPT-5.4 Mini", ["gpt-5.4-mini"]),
             ("gpt-5.3-codex", "GPT-5.3 Codex", ["gpt-5.3", "codex-latest"]),
             ("gpt-5.2-codex", "GPT-5.2 Codex", ["gpt-5.2-codex"]),
             ("gpt-5.2", "GPT-5.2", ["gpt-5.2"]),
@@ -15746,15 +15756,17 @@ Examples:
         args.config_file, app_env=os.environ.get("APP_ENV", "PROD").upper()
     )
 
-    # Apply runtime setting first if provided (so list commands use the correct runtime)
-    if args.runtime:
-        result = manager.execute(f"/runtime set {args.runtime}", args.session_id)
-        _check_command_result(result, ["Unknown runtime", "Error"])
-
-    # Apply agent setting if provided (so list commands use the correct agent context)
+    # Apply agent setting first (so list commands use the correct agent context).
+    # Runtime is applied AFTER agent so an explicit --runtime overrides the
+    # agent's primary_runtime default (issue: agent set resets session runtime).
     if args.agent:
         result = manager.execute(f'/agent set "{args.agent}"', args.session_id)
         _check_command_result(result, ["Unknown agent", "Error"])
+
+    # Apply runtime setting after agent (overrides agent primary_runtime if both given)
+    if args.runtime:
+        result = manager.execute(f"/runtime set {args.runtime}", args.session_id)
+        _check_command_result(result, ["Unknown runtime", "Error"])
 
     # Handle list commands (these don't require a prompt but may use runtime/agent settings)
     if args.list_agents:
