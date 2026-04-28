@@ -424,6 +424,9 @@ def dispatch_via_api(
     prompt: str,
     model: str,
     timeout: int,
+    runtime: str = None,
+    permission_mode: str = None,
+    yolo: bool = None,
 ) -> str:
     """Dispatch work via the background-tasks API (visible, tracked, notifiable).
 
@@ -449,11 +452,15 @@ def dispatch_via_api(
     if not api_key:
         raise RuntimeError("API_SHARED_KEY not found in /opt/n8n-copilot-shim/.env")
 
-    # Get dispatch config for the agent
-    dispatch_config = get_agent_dispatch_config(agent)
-    runtime = dispatch_config.get("runtime", "claude")
-    permission_mode = dispatch_config.get("permission_mode")
-    yolo = dispatch_config.get("yolo", False)
+    # Use provided parameters or get from dispatch config
+    if runtime is None or permission_mode is None or yolo is None:
+        dispatch_config = get_agent_dispatch_config(agent)
+        if runtime is None:
+            runtime = dispatch_config.get("runtime", "claude")
+        if permission_mode is None:
+            permission_mode = dispatch_config.get("permission_mode")
+        if yolo is None:
+            yolo = dispatch_config.get("yolo", False)
 
     # Prepare request
     body = {
