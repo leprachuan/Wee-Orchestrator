@@ -632,6 +632,8 @@ def has_running_wee_qa_task() -> bool:
 
 def dispatch_wee_dev(item: dict) -> dict:
     """Dispatch wee-dev via background-tasks API (visible, tracked, audited)."""
+    dev_cfg = get_agent_dispatch_config("wee-dev")
+    
     prompt = (
         f"Work on GitHub issue #{item['number']} in {REPO}: {item['title']}.\n\n"
         f"Issue body:\n{item['body'][:2000]}\n\n"
@@ -642,10 +644,18 @@ def dispatch_wee_dev(item: dict) -> dict:
         "comments as you progress. Do not work on more than this one issue."
     )
     if DRY_RUN:
-        log(f"[dry-run] Would dispatch wee-dev for {item['id']}: {item['title']}")
+        log(f"[dry-run] Would dispatch wee-dev for {item['id']}: {item['title']} (runtime={dev_cfg['runtime']})")
         return {"task_id": "dry-run"}
     try:
-        task_id = dispatch_via_api("wee-dev", prompt, "gpt-5.4", 3600)
+        task_id = dispatch_via_api(
+            "wee-dev",
+            prompt,
+            dev_cfg["model"],
+            dev_cfg["timeout"],
+            runtime=dev_cfg["runtime"],
+            permission_mode=dev_cfg.get("permission_mode"),
+            yolo=dev_cfg.get("yolo"),
+        )
         return {"task_id": task_id}
     except Exception as e:
         log(f"ERROR: Failed to dispatch wee-dev: {e}")
@@ -654,6 +664,8 @@ def dispatch_wee_dev(item: dict) -> dict:
 
 def dispatch_wee_qa(item: dict) -> dict:
     """Dispatch wee-qa via background-tasks API (visible, tracked, audited)."""
+    qa_cfg = get_agent_dispatch_config("wee-qa")
+    
     prompt = (
         f"QA review for GitHub issue #{item['number']} in {REPO}: "
         f"{item['title']}. "
@@ -664,10 +676,18 @@ def dispatch_wee_qa(item: dict) -> dict:
         "and comment with the failures."
     )
     if DRY_RUN:
-        log(f"[dry-run] Would dispatch wee-qa for {item['id']}: {item['title']}")
+        log(f"[dry-run] Would dispatch wee-qa for {item['id']}: {item['title']} (runtime={qa_cfg['runtime']})")
         return {"task_id": "dry-run"}
     try:
-        task_id = dispatch_via_api("wee-qa", prompt, "gpt-5.4", 1800)
+        task_id = dispatch_via_api(
+            "wee-qa",
+            prompt,
+            qa_cfg["model"],
+            qa_cfg["timeout"],
+            runtime=qa_cfg["runtime"],
+            permission_mode=qa_cfg.get("permission_mode"),
+            yolo=qa_cfg.get("yolo"),
+        )
         return {"task_id": task_id}
     except Exception as e:
         log(f"ERROR: Failed to dispatch wee-qa: {e}")
