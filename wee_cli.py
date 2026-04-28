@@ -35,8 +35,12 @@ sys.path.insert(0, _HERE)
 from wee_runtime import _WEE_TOOLS  # noqa: E402
 from wee_runtime import (  # noqa: E402
     _ANTI_HALLUCINATION_PROMPT,
+    _COMPACT_WARN_PCT,
     MAX_TOOL_ROUNDS,
+    compact_messages,
+    count_message_tokens,
     execute_tool,
+    get_context_window,
     resolve_model_and_endpoint,
 )
 
@@ -81,12 +85,13 @@ def _init_readline():
     # Tab completion for slash commands
     _COMMANDS = [
         "/clear",
+        "/compact",
+        "/config",
+        "/help",
         "/history",
         "/model",
-        "/tokens",
         "/system",
-        "/help",
-        "/config",
+        "/tokens",
         "/version",
     ]
 
@@ -160,27 +165,56 @@ def _print_info(msg: str):
 class TokenTracker:
     """Track token usage across turns."""
 
-    def __init__(self):
+    def __init__(self, context_window: int = 0):
         self.prompt_tokens = 0
         self.completion_tokens = 0
         self.total_tokens = 0
         self.turns = 0
+        self.session_total = 0  # cumulative across all API turns
+        self.last_prompt_tokens = (
+            0  # prompt tokens from the most recent turn (actual current context)
+        )
+        self.context_window = context_window  # 0 means unknown
 
     def update(self, usage):
         """Update from an OpenAI usage object."""
         if usage:
-            self.prompt_tokens += getattr(usage, "prompt_tokens", 0) or 0
-            self.completion_tokens += getattr(usage, "completion_tokens", 0) or 0
-            self.total_tokens += getattr(usage, "total_tokens", 0) or 0
+            pt = getattr(usage, "prompt_tokens", 0) or 0
+            ct = getattr(usage, "completion_tokens", 0) or 0
+            tt = getattr(usage, "total_tokens", 0) or 0
+            self.prompt_tokens += pt
+            self.completion_tokens += ct
+            self.total_tokens += tt
+            self.session_total += tt if tt else (pt + ct)
+            self.last_prompt_tokens = pt  # tracks actual current context size
         self.turns += 1
 
+    def percent_used(self) -> float:
+        """Return percentage of context window consumed (0 if window unknown).
+
+        Uses last_prompt_tokens (the prompt token count from the most recent API
+        call) rather than session_total to avoid quadratic over-counting: each
+        turn re-sends the full message history, so session_total grows without
+        bound even when the actual context usage is stable.
+        """
+        if not self.context_window:
+            return 0.0
+        return min(100.0, self.last_prompt_tokens / self.context_window * 100)
+
     def summary(self) -> str:
-        return (
+        lines = [
             f"Tokens — prompt: {self.prompt_tokens}, "
             f"completion: {self.completion_tokens}, "
             f"total: {self.total_tokens}, "
             f"turns: {self.turns}"
-        )
+        ]
+        if self.context_window:
+            pct = self.percent_used()
+            lines.append(
+                f"Context window: {self.last_prompt_tokens:,}"
+                f"/{self.context_window:,} tokens ({pct:.1f}% used)"
+            )
+        return "\n".join(lines)
 
 
 # ---------------------------------------------------------------------------
@@ -365,9 +399,10 @@ def _make_client(api_base: str, api_key: str, timeout: float):
 REPL_HELP = """\
 Wee CLI Interactive Mode — Commands:
   /clear          Clear conversation history
+  /compact [N]    Compact context to N% of window (default 50%)
   /history        Show conversation history
   /model MODEL    Switch model
-  /tokens         Show token usage
+  /tokens         Show token usage and context window percentage
   /system PROMPT  Set system prompt
   /config         Show current configuration
   /version        Show version
@@ -396,7 +431,8 @@ def run_interactive(
     _init_readline()
 
     client = _make_client(api_base, api_key, timeout)
-    token_tracker = TokenTracker()
+    ctx_window = get_context_window(model)
+    token_tracker = TokenTracker(context_window=ctx_window)
     messages = []
 
     if system_prompt:
@@ -451,11 +487,64 @@ def run_interactive(
                     old_model = model
                     model, api_base, api_key = resolve_model_and_endpoint(arg)
                     client = _make_client(api_base, api_key, timeout)
-                    _print_info(f"Model switched: {old_model} → {model}")
+                    token_tracker.context_window = get_context_window(model)
+                    _print_info(
+                        f"Model switched: {old_model} → {model} "
+                        f"(context: {token_tracker.context_window:,} tokens)"
+                    )
                 continue
 
             elif cmd == "/tokens":
                 _print_info(token_tracker.summary())
+                continue
+
+            elif cmd == "/compact":
+                target_pct = 50
+                if arg:
+                    try:
+                        target_pct = int(arg)
+                        if not 10 <= target_pct <= 90:
+                            _print_info("Target percentage must be 10-90.")
+                            continue
+                    except ValueError:
+                        _print_info("Usage: /compact [percentage]  (default: 50)")
+                        continue
+                ctx_win = token_tracker.context_window or get_context_window(model)
+                target_toks = int(ctx_win * target_pct / 100)
+                non_sys_count = sum(1 for m in messages if m.get("role") != "system")
+                if non_sys_count <= 6:
+                    _print_info("Nothing to compact — history is already short.")
+                    continue
+                before_n = len(messages)
+                before_toks = count_message_tokens(messages, model)
+                _print_info(
+                    f"Compacting: {before_n} messages, ~{before_toks:,} tokens"
+                    f" → target {target_pct}% ({target_toks:,} tokens)..."
+                )
+                try:
+                    import warnings
+
+                    with warnings.catch_warnings(record=True) as w:
+                        warnings.simplefilter("always")
+                        compacted, summary = compact_messages(
+                            messages, target_toks, model, client
+                        )
+                        for warning in w:
+                            _print_info(f"[Wee] Warning: {warning.message}")
+                    after_n = len(compacted)
+                    after_toks = count_message_tokens(compacted, model)
+                    messages = compacted
+                    _print_info(
+                        f"Done: {before_n} → {after_n} messages,"
+                        f" ~{before_toks:,} → ~{after_toks:,} tokens"
+                    )
+                    if summary:
+                        _print_info(
+                            f"Summary: {summary[:200]}"
+                            f"{'...' if len(summary) > 200 else ''}"
+                        )
+                except Exception as exc:
+                    _print_info(f"Compaction failed: {exc}")
                 continue
 
             elif cmd == "/system":
@@ -504,6 +593,13 @@ def run_interactive(
                 permission=permission,
             )
             messages.append({"role": "assistant", "content": response})
+            if token_tracker.context_window:
+                pct = token_tracker.percent_used()
+                if pct >= _COMPACT_WARN_PCT:
+                    _print_info(
+                        f"[Wee] Context window {pct:.0f}% full —"
+                        " consider /compact to free space."
+                    )
         except KeyboardInterrupt:
             print("\n[interrupted]")
             messages.append({"role": "assistant", "content": "[interrupted]"})

@@ -29,6 +29,234 @@ PROVIDER_PRESETS = {
     "lmstudio": ("http://localhost:1234/v1", "lm-studio"),
 }
 
+# Model context window sizes (tokens) — Issue #273
+# Keys are model name substrings; longest match wins.
+MODEL_CONTEXT_WINDOWS: dict = {
+    # OpenAI
+    "gpt-5": 1_047_576,
+    "gpt-4.1-mini": 1_047_576,
+    "gpt-4.1-nano": 1_047_576,
+    "gpt-4.1": 1_047_576,
+    "gpt-4o-mini": 128_000,
+    "gpt-4o": 128_000,
+    "gpt-4-turbo": 128_000,
+    "gpt-4-32k": 32_768,
+    "gpt-4": 8_192,
+    "gpt-3.5-turbo-16k": 16_385,
+    "gpt-3.5-turbo": 16_385,
+    # Anthropic Claude (via OpenRouter or direct)
+    "claude-3": 200000,
+    "claude-2": 100000,
+    # Meta Llama
+    "llama-3": 131072,
+    "llama-2": 4096,
+    # Google Gemma
+    "gemma4": 131072,
+    "gemma3": 131072,
+    "gemma2": 8192,
+    "gemma": 8192,
+    # Alibaba Qwen
+    "qwen3": 32768,
+    "qwen2": 32768,
+    "qwen": 32768,
+    # Mistral AI
+    "mixtral": 32768,
+    "mistral": 32768,
+    # Microsoft Phi
+    "phi-3": 128000,
+    "phi3": 128000,
+    # DeepSeek
+    "deepseek": 65536,
+    # Code models
+    "codellama": 16384,
+}
+
+_DEFAULT_CONTEXT_WINDOW = 4096
+
+
+def get_context_window(model: str) -> int:
+    """Return the context window size for a model.
+
+    Matches by longest substring key in MODEL_CONTEXT_WINDOWS.
+    Falls back to _DEFAULT_CONTEXT_WINDOW when no match is found.
+    """
+    model_lower = model.lower()
+    matches = [
+        (key, size) for key, size in MODEL_CONTEXT_WINDOWS.items() if key in model_lower
+    ]
+    if matches:
+        return max(matches, key=lambda x: len(x[0]))[1]
+    return _DEFAULT_CONTEXT_WINDOW
+
+
+def estimate_tokens(text: str, model: str = "") -> int:
+    """Estimate token count for a text string.
+
+    Uses tiktoken for OpenAI models when available, falls back to ~4 chars/token.
+    """
+    if not text:
+        return 0
+    _openai_prefixes = ("gpt-", "text-embedding", "davinci", "curie", "babbage")
+    if any(p in model.lower() for p in _openai_prefixes):
+        try:
+            import tiktoken
+
+            try:
+                enc = tiktoken.encoding_for_model(model)
+            except KeyError:
+                enc = tiktoken.get_encoding("cl100k_base")
+            return len(enc.encode(text))
+        except ImportError:
+            pass
+    # Heuristic: ~4 chars per token
+    return max(1, len(text) // 4)
+
+
+def count_message_tokens(messages: list, model: str = "") -> int:
+    """Estimate the total token count for a list of chat messages.
+
+    Handles the following message shapes:
+
+    * Standard ``role: user/assistant/system`` with string or list content.
+    * Anthropic content-list parts: ``type: text``, ``type: tool_use``,
+      ``type: tool_result``.
+    * OpenAI tool-result messages: ``role: tool`` with a string ``content``
+      and an optional ``tool_call_id`` field.
+    * OpenAI assistant tool-call messages: ``role: assistant`` with a
+      ``tool_calls`` array.
+    """
+    total = 0
+    for msg in messages:
+        role = msg.get("role", "")
+        content = msg.get("content") or ""
+        if isinstance(content, list):
+            for part in content:
+                if isinstance(part, dict):
+                    if part.get("type") == "text":
+                        total += estimate_tokens(part["text"], model)
+                    elif part.get("type") in ("tool_use", "tool_result"):
+                        # Anthropic: count tool name + input/output payload
+                        total += estimate_tokens(part.get("name", ""), model)
+                        inner = part.get("input") or part.get("content") or ""
+                        if isinstance(inner, str):
+                            total += estimate_tokens(inner, model)
+                        elif isinstance(inner, dict):
+                            total += estimate_tokens(str(inner), model)
+        else:
+            # String content -- covers standard messages and OpenAI role="tool"
+            # tool-result messages (content is always a plain string there).
+            total += estimate_tokens(str(content), model)
+        if role in ("tool", "tool_result", "tool_call"):
+            # OpenAI tool-result messages carry a tool_call_id; count it.
+            tc_id = msg.get("tool_call_id", "")
+            if tc_id:
+                total += estimate_tokens(tc_id, model)
+        # Count tool_calls array for assistant messages (OpenAI format)
+        for tc in msg.get("tool_calls") or []:
+            fn = tc.get("function") or {}
+            total += estimate_tokens(fn.get("name", ""), model)
+            total += estimate_tokens(fn.get("arguments", ""), model)
+        total += 4  # per-message overhead (role, delimiters)
+    return total
+
+
+COMPACT_TRIGGER_FRACTION = 0.75
+_COMPACT_WARN_PCT = COMPACT_TRIGGER_FRACTION * 100
+
+
+def compact_messages(
+    messages: list,
+    target_tokens: int,
+    model: str,
+    client,
+    keep_recent: int = 6,
+) -> tuple:
+    """Compact message history to fit within target_tokens.
+
+    Preserves the system prompt and the most recent ``keep_recent`` messages.
+    Older messages are summarised into a single context-summary exchange using
+    the LLM, keeping the conversation coherent without blowing the context window.
+
+    Note: Does not guarantee the result fits within *target_tokens*. If the
+    ``keep_recent`` messages alone exceed the target, a :mod:`warnings` warning
+    is emitted but the result is still returned — callers should check the
+    returned token count independently.
+
+    Returns:
+        (compacted_messages, summary_text) tuple.
+    """
+    system_msgs = [m for m in messages if m.get("role") == "system"]
+    non_system = [m for m in messages if m.get("role") != "system"]
+
+    if len(non_system) <= keep_recent:
+        return messages, ""
+
+    to_summarize = non_system[:-keep_recent]
+    to_keep = non_system[-keep_recent:]
+
+    transcript_lines = []
+    for m in to_summarize:
+        role = m.get("role", "")
+        content = m.get("content") or ""
+        if isinstance(content, list):
+            content = " ".join(
+                p.get("text", "") for p in content if isinstance(p, dict)
+            )
+        if role in ("user", "assistant") and content:
+            prefix = "User" if role == "user" else "Assistant"
+            transcript_lines.append(f"{prefix}: {str(content)[:500]}")
+
+    if not transcript_lines:
+        return messages, ""
+
+    transcript = "\n".join(transcript_lines)
+    summary_prompt = (
+        "Summarize the following conversation history concisely. Preserve all key "
+        "facts, decisions, file paths, and context needed to continue the conversation "
+        "coherently. Keep the summary under 400 words.\n\n"
+        f"Conversation:\n{transcript}"
+    )
+
+    try:
+        resp = client.chat.completions.create(
+            model=model,
+            messages=[{"role": "user", "content": summary_prompt}],
+            stream=False,
+        )
+        summary_text = resp.choices[0].message.content or ""
+    except Exception as exc:
+        summary_text = f"[Compaction error: {exc}]"
+
+    compacted = (
+        system_msgs
+        + [
+            {
+                "role": "user",
+                "content": f"[Earlier conversation summary]\n{summary_text}",
+            },
+            {
+                "role": "assistant",
+                "content": (
+                    "Understood. I have the context from the earlier conversation."
+                ),
+            },
+        ]
+        + to_keep
+    )
+
+    actual_tokens = count_message_tokens(compacted, model)
+    if actual_tokens > target_tokens:
+        import warnings
+
+        warnings.warn(
+            f"compact_messages: result ({actual_tokens} tokens) exceeds "
+            f"target ({target_tokens} tokens) — recent messages alone are too large.",
+            stacklevel=2,
+        )
+
+    return compacted, summary_text
+
+
 # Tool definitions (Issue #107)
 _WEE_TOOLS = [
     {
@@ -223,8 +451,18 @@ def _execute_search(func_args: dict) -> str:
     return summary[:SEARCH_MAX_CHARS]
 
 
-def execute_tool(func_name: str, func_args: dict) -> str:
-    """Execute a tool call and return its output (Issue #107)."""
+def execute_tool(func_name: str, func_args: dict, permission: str = "auto") -> str:
+    """Execute a tool call and return its output (Issue #107).
+
+    Args:
+        permission: "restricted" blocks all execution. "auto" and "elevated"
+            execute tools as requested.
+    """
+    if permission == "restricted":
+        return (
+            "Error: tool execution is disabled (permission=restricted). "
+            "Pass --permission auto to enable tools."
+        )
     try:
         if func_name == "bash":
             command = func_args.get("command", "")
