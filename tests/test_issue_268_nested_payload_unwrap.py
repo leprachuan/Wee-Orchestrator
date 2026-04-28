@@ -1,5 +1,6 @@
-import pytest
 import sys
+
+import pytest
 
 sys.path.insert(0, "/opt/n8n-copilot-shim-dev")
 
