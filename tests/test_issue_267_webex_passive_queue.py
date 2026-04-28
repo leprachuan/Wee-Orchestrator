@@ -1,4 +1,5 @@
-"""Regression test for Issue #267: webex_connector.py queue_declare() without passive flag.
+"""Regression test for Issue #267: webex_connector.py queue_declare()
+without passive flag.
 
 On hosted AMQP brokers where the bot user only has CONSUME permission, calling
 queue_declare() without passive=True raises ACCESS_REFUSED and kills the connection.
@@ -12,16 +13,14 @@ import json
 import os
 import sys
 import tempfile
-import threading
 from unittest.mock import MagicMock, patch
-
-import pytest
 
 sys.path.insert(0, "/opt/n8n-copilot-shim-dev")
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _stub_modules():
     """Inject lightweight stubs for heavy imports so webex_connector can load."""
@@ -63,7 +62,7 @@ def _make_config(queue_passive=None, tmp_path=None):
 
 def _make_connector(queue_passive=None):
     """Return a WebEXConnector with mocked config for queue_declare tests."""
-    from webex_connector import WebEXConnector, WebEXConfig
+    from webex_connector import WebEXConfig, WebEXConnector
 
     connector = WebEXConnector.__new__(WebEXConnector)
     connector.config = MagicMock(spec=WebEXConfig)
@@ -101,10 +100,13 @@ def _run_connect(connector, mock_channel):
     mock_connection.is_closed = False
     mock_connection.channel.return_value = mock_channel
 
-    with patch("webex_connector.pika.BlockingConnection", return_value=mock_connection), \
-         patch("webex_connector.pika.ConnectionParameters"), \
-         patch("webex_connector.pika.PlainCredentials"), \
-         patch("webex_connector.pika.SSLOptions"):
+    with patch(
+        "webex_connector.pika.BlockingConnection", return_value=mock_connection
+    ), patch("webex_connector.pika.ConnectionParameters"), patch(
+        "webex_connector.pika.PlainCredentials"
+    ), patch(
+        "webex_connector.pika.SSLOptions"
+    ):
         connector.shutdown_event.wait.return_value = False
         result = connector.connect_rabbitmq()
 
@@ -172,16 +174,17 @@ class TestIssue267PassiveQueueDeclare:
         mock_channel = MagicMock()
         mock_channel.queue_declare.side_effect = pika.exceptions.ChannelClosedByBroker(
             403,
-            "ACCESS_REFUSED - access to queue 'webex' in vhost '/' refused for user 'bot'",
+            "ACCESS_REFUSED - access to queue 'webex' in vhost '/' refused for user 'bot'",  # noqa: E501
         )
 
         result, _ = _run_connect(connector, mock_channel)
-        assert result is False, (
-            "Connection must fail when queue_declare raises ACCESS_REFUSED"
-        )
+        assert (
+            result is False
+        ), "Connection must fail when queue_declare raises ACCESS_REFUSED"
 
     def test_passive_declare_succeeds_on_consume_only_broker(self):
-        """passive=True + no ACCESS_REFUSED → connect succeeds on CONSUME-only broker."""
+        """passive=True + no ACCESS_REFUSED → connect succeeds on CONSUME-only
+        broker."""
         connector = _make_connector(queue_passive=True)
         mock_channel = MagicMock()
         mock_channel.queue_declare.return_value = MagicMock()  # passive declare OK
@@ -208,12 +211,12 @@ class TestIssue267DefaultConfigKey:
 
         cfg = WebEXConfig(str(config_file))
 
-        assert "rabbitmq_queue_passive" in cfg.config, (
-            "rabbitmq_queue_passive must be present in default config"
-        )
-        assert cfg.config["rabbitmq_queue_passive"] is False, (
-            "Default must be False to preserve existing (non-passive) behavior"
-        )
+        assert (
+            "rabbitmq_queue_passive" in cfg.config
+        ), "rabbitmq_queue_passive must be present in default config"
+        assert (
+            cfg.config["rabbitmq_queue_passive"] is False
+        ), "Default must be False to preserve existing (non-passive) behavior"
 
     def test_passive_key_persisted_from_file(self, tmp_path):
         """rabbitmq_queue_passive=true in config file is read and respected."""

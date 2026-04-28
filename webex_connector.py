@@ -45,7 +45,7 @@ class WebEXConfig(BaseConfig):
             "rabbitmq_password": os.environ.get("RABBITMQ_PASSWORD", ""),
             "rabbitmq_queue": os.environ.get("RABBITMQ_QUEUE", "webex"),
             "rabbitmq_vhost": "/",
-            "rabbitmq_queue_passive": False,  # Set True for brokers where bot only has CONSUME permission
+            "rabbitmq_queue_passive": False,  # Set True for brokers where bot only has CONSUME permission  # noqa: E501
             "allowed_users": [],  # List of WebEX person IDs allowed to chat
             "user_pairings": {},  # Maps WebEX person ID to session info
             "enable_auto_pair": False,  # Auto-pair new users
