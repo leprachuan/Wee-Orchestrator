@@ -239,12 +239,54 @@ class WeeTUI(App):
         self.run_worker(self._send_prompt_async(prompt))
 
     async def _send_prompt_async(self, prompt: str) -> None:
-        """Dispatch prompt as a background task"""
+        """Dispatch prompt as a background task or handle commands"""
         try:
             if not self.api_client:
                 self.notify("❌ API client not initialized", severity="error")
                 return
 
+            # Check if this is a command (starts with /)
+            if prompt.startswith("/"):
+                parts = prompt.split(None, 1)
+                command = parts[0].lower()
+                arg = parts[1] if len(parts) > 1 else ""
+
+                chat_panel = self.query_one("#chat", ChatPanel)
+                
+                if command == "/agent":
+                    if arg:
+                        self.current_agent = arg
+                        await chat_panel.add_message("system", f"✅ Agent set to: {arg}")
+                        await self.refresh_display()
+                    else:
+                        await chat_panel.add_message("system", f"❌ Usage: /agent <name>")
+                elif command == "/model":
+                    if arg:
+                        self.current_model = arg
+                        await chat_panel.add_message("system", f"✅ Model set to: {arg}")
+                    else:
+                        await chat_panel.add_message("system", f"❌ Usage: /model <name>")
+                elif command == "/runtime":
+                    if arg:
+                        self.current_runtime = arg
+                        await chat_panel.add_message("system", f"✅ Runtime set to: {arg}")
+                    else:
+                        await chat_panel.add_message("system", f"❌ Usage: /runtime <name>")
+                elif command == "/timeout":
+                    if arg:
+                        try:
+                            timeout_sec = int(arg)
+                            self.current_timeout = timeout_sec
+                            await chat_panel.add_message("system", f"✅ Timeout set to: {timeout_sec}s")
+                        except ValueError:
+                            await chat_panel.add_message("system", f"❌ Timeout must be a number")
+                    else:
+                        await chat_panel.add_message("system", f"❌ Usage: /timeout <seconds>")
+                else:
+                    await chat_panel.add_message("system", f"❌ Unknown command: {command}")
+                return
+
+            # Not a command, dispatch as background task
             logging.info(f"Sending prompt (len={len(prompt)})")
             task_id = await self.api_client.create_background_task(
                 prompt=prompt,
@@ -258,14 +300,6 @@ class WeeTUI(App):
         except Exception as e:
             logging.error(f"Prompt send error: {e}")
             self.notify(f"❌ Error sending prompt: {e}", severity="error")
-
-    def action_focus_next(self) -> None:
-        """Focus next widget"""
-        self.screen.focus_next()
-
-    def action_focus_previous(self) -> None:
-        """Focus previous widget"""
-        self.screen.focus_previous()
 
 
 def main():

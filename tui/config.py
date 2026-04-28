@@ -15,7 +15,7 @@ class TUIConfig:
     auth_channel: str = os.getenv("WEE_CHANNEL", "tui")
 
     # TUI-specific settings
-    update_interval: float = 1.0  # Update rate in seconds
+    update_interval: float = 5.0  # Update rate in seconds
     ws_reconnect_delay: float = 2.0  # WebSocket reconnect delay
     max_history_lines: int = 10000  # Max lines in chat history
     theme: str = os.getenv("WEE_TUI_THEME", "default")

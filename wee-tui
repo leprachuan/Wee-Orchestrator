@@ -78,7 +78,7 @@ def main():
         )
         sys.exit(1)
 
-    effective_user_id = args.user_id or os.environ.get("WEE_USER_ID", "")
+    effective_user_id = args.user_id
     if not effective_user_id:
         print(
             "Error: WEE_USER_ID is required. Set via env var or --user-id flag.",

@@ -1,5 +1,6 @@
 """Tests for wee-tui components - Issue #272"""
 
+import os
 from datetime import datetime
 
 import pytest
@@ -7,6 +8,7 @@ import pytest
 from tui.api.client import WeeAPIClient
 from tui.config import config
 from tui.theme import AGENT_COLORS, STATUS_COLORS, get_agent_color, get_status_color
+import unittest.mock
 
 
 def test_api_client_initialization():
@@ -31,12 +33,13 @@ def test_api_client_headers():
     assert "Content-Type" in client.headers
 
 
+@unittest.mock.patch.dict(os.environ, {'WEE_AUTH_TOKEN':'','WEE_API_URL':'','WEE_USER_ID':''})
 def test_config_defaults():
     """Test configuration defaults"""
     assert config.api_url == "https://127.0.0.1:8001"
     assert config.verify_ssl == False
     assert config.user_identity == ""  # Must be set via env var
-    assert config.update_interval == 1.0
+    assert config.update_interval == 5.0
     assert config.max_history_lines == 10000
 
 
