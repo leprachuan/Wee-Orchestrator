@@ -29,9 +29,9 @@ class SessionListPanel(Static):
                 agent = session.get("agent", "—")
                 status = session.get("status", "unknown")
                 status_icon = (
-                    "[green]●[/green]" if status in ("active", "running")
-                    else "[yellow]○[/yellow]" if status == "idle"
-                    else "[red]✗[/red]"
+                    "[green]●[/green]"
+                    if status in ("active", "running")
+                    else "[yellow]○[/yellow]" if status == "idle" else "[red]✗[/red]"
                 )
                 table.add_row(short_id, agent, f"{status_icon} {status}")
 

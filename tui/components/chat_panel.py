@@ -1,11 +1,7 @@
 """Chat panel component"""
 
-from typing import List, Tuple
-
-from rich.panel import Panel
+from textual.widgets import RichLog
 from rich.text import Text
-from textual.reactive import reactive
-from textual.widgets import RichLog, Static
 
 
 class ChatPanel(RichLog):
