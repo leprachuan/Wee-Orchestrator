@@ -1067,7 +1067,7 @@ class WebEXConnector(BaseConnector):
         Supports:
         1. Single-level unwrap: payload_key="data"
         2. Dotted path unwrap: payload_key="data.message_data"
-        3. Auto-unwrap: looks for nested message_data dict and unwraps if present
+        3. Auto-unwrap: after payload_key match, unwraps nested message_data if present
 
         Args:
             payload: The raw message dict from RabbitMQ
@@ -1104,7 +1104,7 @@ class WebEXConnector(BaseConnector):
                     break
 
         # Step 2: Auto-unwrap nested message_data if present after primary unwrap.
-        if payload_key:
+        if payload_key and current is not payload:
             while (
                 isinstance(current, dict)
                 and "message_data" in current

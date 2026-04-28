@@ -115,5 +115,22 @@ class TestNestedPayloadUnwrap:
         assert result == payload
 
 
+
+    def test_issue_268_no_auto_unwrap_when_primary_key_absent(self):
+        """Test MAJOR bug fix: no auto-unwrap when payload_key configured but absent.
+        
+        When payload_key="data" configured but key not found, and payload has
+        top-level message_data, auto-unwrap (Step 2) must NOT fire.
+        """
+        payload = {
+            "personId": "ABC",
+            "text": "real message",
+            "message_data": {"meta": "x"},
+        }
+        result = WebEXConnector._unwrap_payload(payload, payload_key="data")
+        assert result == payload
+        assert result["personId"] == "ABC"
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
