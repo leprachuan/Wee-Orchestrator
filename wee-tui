@@ -1,0 +1,103 @@
+#!/usr/bin/env python3
+"""
+Wee TUI - Terminal User Interface for Wee Orchestrator
+
+Usage:
+  wee-tui                          # Start TUI with default settings
+  wee-tui --api-url http://...     # Custom API URL
+  wee-tui --token <token>          # Custom auth token
+  wee-tui --help                   # Show help
+"""
+
+import sys
+import argparse
+import os
+import logging
+
+def main():
+    """Main entry point"""
+    parser = argparse.ArgumentParser(
+        description="Wee TUI - Terminal UI for Wee Orchestrator",
+        prog="wee-tui"
+    )
+    
+    parser.add_argument(
+        "--api-url",
+        default=os.getenv("WEE_API_URL", "https://127.0.0.1:8001"),
+        help="Wee Orchestrator API URL (default: $WEE_API_URL or https://127.0.0.1:8001)"
+    )
+    
+    parser.add_argument(
+        "--token",
+        default=os.getenv("WEE_AUTH_TOKEN", ""),
+        help="Authentication token (default: $WEE_AUTH_TOKEN)"
+    )
+    
+    parser.add_argument(
+        "--user-id",
+        default=os.getenv("WEE_USER_ID", "8193231291"),
+        help="User identity (default: $WEE_USER_ID or 8193231291)"
+    )
+    
+    parser.add_argument(
+        "--theme",
+        default=os.getenv("WEE_TUI_THEME", "default"),
+        choices=["default", "dark", "light"],
+        help="Color theme (default: $WEE_TUI_THEME or 'default')"
+    )
+    
+    parser.add_argument(
+        "--log-level",
+        default="INFO",
+        choices=["DEBUG", "INFO", "WARNING", "ERROR"],
+        help="Logging level"
+    )
+    
+    parser.add_argument(
+        "--log-file",
+        default="/tmp/wee_tui.log",
+        help="Log file path (default: /tmp/wee_tui.log)"
+    )
+    
+    parser.add_argument(
+        "--verify-ssl",
+        action="store_true",
+        default=os.getenv("WEE_VERIFY_SSL", "false").lower() == "true",
+        help="Verify SSL certificates"
+    )
+    
+    args = parser.parse_args()
+    
+    # Set environment variables
+    os.environ["WEE_API_URL"] = args.api_url
+    if args.token:
+        os.environ["WEE_AUTH_TOKEN"] = args.token
+    os.environ["WEE_USER_ID"] = args.user_id
+    os.environ["WEE_TUI_THEME"] = args.theme
+    os.environ["WEE_VERIFY_SSL"] = "true" if args.verify_ssl else "false"
+    
+    # Setup logging
+    logging.basicConfig(
+        level=getattr(logging, args.log_level),
+        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+        handlers=[
+            logging.FileHandler(args.log_file),
+            logging.StreamHandler(sys.stderr),
+        ]
+    )
+    
+    logger = logging.getLogger(__name__)
+    logger.info(f"Starting Wee TUI - API: {args.api_url}")
+    
+    try:
+        from tui.app import WeeTUI
+        app = WeeTUI()
+        app.run()
+    except Exception as e:
+        logger.error(f"Failed to start TUI: {e}", exc_info=True)
+        print(f"Error: {e}", file=sys.stderr)
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()
