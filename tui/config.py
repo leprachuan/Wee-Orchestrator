@@ -23,9 +23,7 @@ class TUIConfig:
     def validate(self) -> None:
         """Validate required config"""
         if not self.auth_token:
-            raise ValueError(
-                "WEE_AUTH_TOKEN env var required for API authentication"
-            )
+            raise ValueError("WEE_AUTH_TOKEN env var required for API authentication")
         if not self.user_identity:
             raise ValueError("WEE_USER_ID env var required for user identification")
 

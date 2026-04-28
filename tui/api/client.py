@@ -32,25 +32,32 @@ class WeeAPIClient:
         }
         self.client: Optional[httpx.AsyncClient] = None
 
-    async def __aenter__(self):
+    async def connect(self) -> None:
+        """Initialize the HTTP client for persistent connections"""
         self.client = httpx.AsyncClient(
             base_url=self.base_url,
             headers=self.headers,
             verify=self.verify_ssl,
             timeout=30.0,
         )
+
+    async def close(self) -> None:
+        """Close the HTTP client"""
+        if self.client:
+            await self.client.aclose()
+            self.client = None
+
+    async def __aenter__(self):
+        await self.connect()
         return self
 
     async def __aexit__(self, *args):
-        if self.client:
-            await self.client.aclose()
+        await self.close()
 
     async def _request(self, method: str, path: str, **kwargs) -> Dict[str, Any]:
         """Make an API request"""
         if not self.client:
-            raise RuntimeError(
-                "Client not initialized. Use 'async with' context manager."
-            )
+            raise RuntimeError("API client not connected. Call connect() first.")
         try:
             response = await self.client.request(method, path, **kwargs)
             response.raise_for_status()
@@ -92,9 +99,7 @@ class WeeAPIClient:
         data = await self._request(
             "POST",
             f"/api/v1/sessions/{session_id}/stream",
-            json={
-                "prompt": prompt,
-            },
+            json={"prompt": prompt},
         )
         return data.get("result", "")
 

@@ -100,6 +100,9 @@ class WeeTUI(App):
         super().__init__(**kwargs)
         self.api_client: Optional[WeeAPIClient] = None
         self.current_session_id: Optional[str] = None
+        self.current_agent = "orchestrator"
+        self.current_runtime = "copilot"
+        self.current_model = "claude-haiku-4.5"
         self.setup_logging()
 
     @staticmethod
@@ -138,17 +141,30 @@ class WeeTUI(App):
             config.validate()
         except ValueError as e:
             self.exit(f"Config error: {e}")
+            return
 
+        self.api_client = WeeAPIClient(
+            base_url=config.api_url,
+            auth_token=config.auth_token,
+            user_id=config.user_identity,
+            channel=config.auth_channel,
+            verify_ssl=config.verify_ssl,
+        )
         self.run_worker(self.initialize_api())
         self.run_worker(self.refresh_data_loop())
 
+    async def on_unmount(self) -> None:
+        """Cleanup on unmount"""
+        if self.api_client:
+            await self.api_client.close()
+
     async def initialize_api(self) -> None:
-        """Initialize API client"""
+        """Establish persistent API connection"""
         try:
-            self.api_client = WeeAPIClient(config)
-            logging.info("API client initialized")
+            await self.api_client.connect()
+            logging.info("API client connected")
         except Exception as e:
-            logging.error(f"Failed to initialize API client: {e}")
+            logging.error(f"Failed to connect API client: {e}")
             self.notify(f"❌ API Error: {e}", severity="error", timeout=10)
 
     async def refresh_data_loop(self) -> None:
@@ -156,7 +172,7 @@ class WeeTUI(App):
         while True:
             try:
                 await asyncio.sleep(config.update_interval)
-                if self.api_client:
+                if self.api_client and self.api_client.client:
                     await self.refresh_sessions()
                     await self.refresh_tasks()
                     await self.refresh_service_status()
@@ -166,13 +182,7 @@ class WeeTUI(App):
     async def refresh_sessions(self) -> None:
         """Refresh session list from API"""
         try:
-            if not self.api_client:
-                return
-
-            async with self.api_client as client:
-                sessions = await client.get_sessions()
-
-            # Update session panel
+            sessions = await self.api_client.get_sessions()
             panel = self.query_one("#sessions", SessionListPanel)
             await panel.update_sessions(sessions)
         except Exception as e:
@@ -181,13 +191,7 @@ class WeeTUI(App):
     async def refresh_tasks(self) -> None:
         """Refresh task queue from API"""
         try:
-            if not self.api_client:
-                return
-
-            async with self.api_client as client:
-                tasks = await client.get_background_tasks()
-
-            # Update task panel
+            tasks = await self.api_client.get_background_tasks()
             panel = self.query_one("#tasks", TaskQueuePanel)
             await panel.update_tasks(tasks)
         except Exception as e:
@@ -196,13 +200,7 @@ class WeeTUI(App):
     async def refresh_service_status(self) -> None:
         """Refresh service status from API"""
         try:
-            if not self.api_client:
-                return
-
-            async with self.api_client as client:
-                status = await client.get_service_status()
-
-            # Update status panel
+            status = await self.api_client.get_service_status()
             panel = self.query_one("#status_panel", ServiceStatusPanel)
             await panel.update_status(status)
         except Exception as e:
@@ -210,10 +208,7 @@ class WeeTUI(App):
 
     def action_new_session(self) -> None:
         """Create a new session"""
-        try:
-            asyncio.create_task(self._new_session_async())
-        except Exception as e:
-            self.notify(f"❌ Error creating session: {e}", severity="error")
+        self.run_worker(self._new_session_async())
 
     async def _new_session_async(self) -> None:
         """Async session creation"""
@@ -222,18 +217,20 @@ class WeeTUI(App):
                 self.notify("❌ API client not initialized", severity="error")
                 return
 
-            async with self.api_client as client:
-                session = await client.create_session()
-
-            self.current_session_id = session.get("id")
-            self.notify(f"✅ New session: {self.current_session_id}")
+            session_id = await self.api_client.create_session(
+                runtime=self.current_runtime,
+                model=self.current_model,
+                agent=self.current_agent,
+            )
+            self.current_session_id = session_id
+            self.notify(f"✅ New session: {session_id[:8]}...")
             await self.refresh_sessions()
         except Exception as e:
             logging.error(f"Session creation error: {e}")
             self.notify(f"❌ Failed to create session: {e}", severity="error")
 
     def action_send_prompt(self) -> None:
-        """Send prompt to current session"""
+        """Send prompt as a background task"""
         input_widget = self.query_one("#input", InputField)
         prompt = input_widget.value.strip()
 
@@ -241,28 +238,25 @@ class WeeTUI(App):
             return
 
         input_widget.value = ""
-
-        if not self.current_session_id:
-            self.notify("❌ No active session", severity="error")
-            return
-
-        asyncio.create_task(self._send_prompt_async(prompt))
+        self.run_worker(self._send_prompt_async(prompt))
 
     async def _send_prompt_async(self, prompt: str) -> None:
-        """Async prompt sending"""
+        """Dispatch prompt as a background task"""
         try:
             if not self.api_client:
                 self.notify("❌ API client not initialized", severity="error")
                 return
 
-            async with self.api_client as client:
-                response = await client.send_prompt(self.current_session_id, prompt)
-
-            # Update chat panel
+            logging.info(f"Sending prompt (len={len(prompt)})")
+            task_id = await self.api_client.create_background_task(
+                prompt=prompt,
+                agent=self.current_agent,
+                runtime=self.current_runtime,
+                model=self.current_model,
+            )
             chat_panel = self.query_one("#chat", ChatPanel)
             await chat_panel.add_message("user", prompt)
-            await chat_panel.add_message("assistant", response.get("response", ""))
-
+            await chat_panel.add_message("assistant", f"✅ Task dispatched: {task_id}")
         except Exception as e:
             logging.error(f"Prompt send error: {e}")
             self.notify(f"❌ Error sending prompt: {e}", severity="error")

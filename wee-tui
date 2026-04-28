@@ -18,7 +18,8 @@ import sys
 def main():
     """Main entry point"""
     parser = argparse.ArgumentParser(
-        description="Wee TUI - Terminal UI for Wee Orchestrator", prog="wee-tui"
+        description="Wee TUI - Terminal UI for Wee Orchestrator",
+        prog="wee-tui",
     )
 
     parser.add_argument(
@@ -35,8 +36,8 @@ def main():
 
     parser.add_argument(
         "--user-id",
-        default=os.getenv("WEE_USER_ID", "8193231291"),
-        help="User identity (default: $WEE_USER_ID or 8193231291)",
+        default=os.getenv("WEE_USER_ID", ""),
+        help="User identity (default: $WEE_USER_ID)",
     )
 
     parser.add_argument(
@@ -67,6 +68,15 @@ def main():
     )
 
     args = parser.parse_args()
+
+    # Validate required settings before starting TUI
+    effective_token = args.token or os.environ.get("WEE_AUTH_TOKEN", "")
+    if not effective_token:
+        print(
+            "Error: WEE_AUTH_TOKEN is required. " "Set via env var or --token flag.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
 
     # Set environment variables
     os.environ["WEE_API_URL"] = args.api_url
