@@ -286,6 +286,16 @@ class TestSessionPersistence(unittest.TestCase):
         )
 
 
+    def test_unavailable_primary_no_backup(self):
+        """When default runtime is unavailable and no backup is specified, execution should return an error."""
+        # Temporarily set an unknown default runtime
+        with patch.dict(os.environ, {"COPILOT_DEFAULT_RUNTIME": "definitely-not-installed"}):
+            manager = SessionManager(str(self.config_file))
+            # Execute a simple prompt; since the runtime is unknown, the dispatcher should return an error
+            result = manager.execute("Hello world", "test_unavailable_runtime_session")
+            self.assertIn("Unknown runtime", result)
+
+
 class TestSlashCommands(unittest.TestCase):
     """Test slash command parsing and execution"""
 

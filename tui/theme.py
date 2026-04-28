@@ -1,4 +1,5 @@
 """TUI Theme and styling"""
+
 from rich.style import Style
 from rich.table import Table
 
@@ -36,9 +37,11 @@ STYLES = {
     "success": Style(color="green", bold=True),
 }
 
+
 def get_agent_color(agent_name: str) -> str:
     """Get color for an agent"""
     return AGENT_COLORS.get(agent_name, "white")
+
 
 def get_status_color(status: str) -> str:
     """Get color for a status"""
