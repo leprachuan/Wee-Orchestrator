@@ -24,13 +24,21 @@ class ControlPanel(Static):
     """Right-side control panel"""
 
     def render(self):
-        """Render control info"""
-        info = """
+        """Render control info, reading live state from WeeTUI app"""
+        try:
+            app = self.app
+            agent = getattr(app, "current_agent", "orchestrator")
+            runtime = getattr(app, "current_runtime", "copilot")
+            model = getattr(app, "current_model", "claude-haiku-4.5")
+        except Exception:
+            agent, runtime, model = "orchestrator", "copilot", "claude-haiku-4.5"
+
+        info = f"""
 [bold]Current Settings[/bold]
 
-Agent: [cyan]orchestrator[/cyan]
-Runtime: [magenta]copilot[/magenta]
-Model: [green]haiku[/green]
+Agent: [cyan]{agent}[/cyan]
+Runtime: [magenta]{runtime}[/magenta]
+Model: [green]{model}[/green]
 Timeout: [yellow]60s[/yellow]
 
 [bold]Keyboard Shortcuts[/bold]
@@ -103,19 +111,6 @@ class WeeTUI(App):
         self.current_agent = "orchestrator"
         self.current_runtime = "copilot"
         self.current_model = "claude-haiku-4.5"
-        self.setup_logging()
-
-    @staticmethod
-    def setup_logging():
-        """Setup logging"""
-        logging.basicConfig(
-            level=logging.INFO,
-            format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-            handlers=[
-                logging.FileHandler("/tmp/wee_tui.log"),
-            ],
-            force=True,
-        )
 
     def compose(self) -> ComposeResult:
         """Compose the UI layout"""
@@ -222,6 +217,9 @@ class WeeTUI(App):
                 model=self.current_model,
                 agent=self.current_agent,
             )
+            if not session_id:
+                self.notify("❌ Session creation returned no ID", severity="error")
+                return
             self.current_session_id = session_id
             self.notify(f"✅ New session: {session_id[:8]}...")
             await self.refresh_sessions()

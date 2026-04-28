@@ -149,7 +149,7 @@ class WeeAPIClient:
         data = await self._request("GET", "/api/v1/models")
         return data.get("models", [])
 
-    async def get_service_status(self) -> Dict[str, Any]:
+    async def get_service_status(self) -> List[Dict[str, Any]]:
         """Get service status"""
         data = await self._request("GET", "/api/v1/service-status")
         return data.get("services", [])
