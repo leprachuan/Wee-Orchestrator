@@ -147,3 +147,18 @@ def test_api_client_verify_ssl_setting():
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
+
+
+def test_app_imports():
+    """Verify WeeTUI and all component imports resolve - catches missing component files."""
+    from tui.app import WeeTUI
+    assert WeeTUI is not None
+
+    from tui.components.chat_panel import ChatPanel
+    from tui.components.service_status import ServiceStatusPanel
+    from tui.components.session_list import SessionListPanel
+    from tui.components.task_queue import TaskQueuePanel
+    assert ChatPanel is not None
+    assert ServiceStatusPanel is not None
+    assert SessionListPanel is not None
+    assert TaskQueuePanel is not None

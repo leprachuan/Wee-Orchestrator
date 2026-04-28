@@ -43,3 +43,10 @@ class ServiceStatusPanel(Static):
             return f"{int(seconds // 3600)}h"
         else:
             return f"{int(seconds // 86400)}d"
+
+    async def update_status(self, services) -> None:
+        """Update the displayed service statuses."""
+        if isinstance(services, list):
+            self.services = {s.get('name', str(i)): s for i, s in enumerate(services)}
+        elif isinstance(services, dict):
+            self.services = services

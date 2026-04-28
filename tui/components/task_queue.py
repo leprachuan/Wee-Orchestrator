@@ -34,3 +34,7 @@ class TaskQueuePanel(Static):
                 )
 
         return Panel(table, title="[bold]Tasks[/bold]", expand=False, height=10)
+
+    async def update_tasks(self, tasks: list) -> None:
+        """Update the displayed task list."""
+        self.tasks = tasks
