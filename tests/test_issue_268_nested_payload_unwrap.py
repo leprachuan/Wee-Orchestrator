@@ -114,11 +114,9 @@ class TestNestedPayloadUnwrap:
         # Should return payload as-is since key not found
         assert result == payload
 
-
-
     def test_issue_268_no_auto_unwrap_when_primary_key_absent(self):
         """Test MAJOR bug fix: no auto-unwrap when payload_key configured but absent.
-        
+
         When payload_key="data" configured but key not found, and payload has
         top-level message_data, auto-unwrap (Step 2) must NOT fire.
         """
