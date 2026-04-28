@@ -16,7 +16,7 @@ import threading
 import time
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 from urllib.parse import unquote
 
 import pika
@@ -1057,6 +1057,65 @@ class WebEXConnector(BaseConnector):
             )
             self.send_file(room_id, file_path, caption)
 
+    @staticmethod
+    def _unwrap_payload(
+        payload: Dict, payload_key: Optional[str] = None, max_depth: int = 4
+    ) -> Any:
+        """
+        Unwrap nested payload structures from RabbitMQ messages.
+
+        Supports:
+        1. Single-level unwrap: payload_key="data"
+        2. Dotted path unwrap: payload_key="data.message_data"
+        3. Auto-unwrap: after payload_key match, unwraps nested message_data if present
+
+        Args:
+            payload: The raw message dict from RabbitMQ
+            payload_key: Optional key path to unwrap (supports dot notation)
+            max_depth: Maximum nesting depth to unwrap (safety limit)
+
+        Returns:
+            The unwrapped payload dict
+
+        Note:
+            max_depth limits only the Step 2 auto-unwrap loop; dotted-path
+            traversal in Step 1 is not depth-limited.
+        """
+        if not isinstance(payload, dict):
+            return payload
+
+        current = payload
+        depth = 0
+
+        # Step 1: Unwrap via payload_key if provided
+        if payload_key:
+            # Support dotted paths: "data.message_data" -> ["data", "message_data"]
+            keys = payload_key.split(".")
+            for key in keys:
+                if (
+                    isinstance(current, dict)
+                    and key in current
+                    and isinstance(current[key], dict)
+                ):
+                    current = current[key]
+                    depth += 1
+                else:
+                    # Key not found or not a dict, stop unwrapping
+                    break
+
+        # Step 2: Auto-unwrap nested message_data if present after primary unwrap.
+        if payload_key and current is not payload:
+            while (
+                isinstance(current, dict)
+                and "message_data" in current
+                and isinstance(current["message_data"], dict)
+                and depth < max_depth
+            ):
+                current = current["message_data"]
+                depth += 1
+
+        return current
+
     def handle_message(self, message_data: Dict) -> bool:
         """Process incoming WebEX message from RabbitMQ."""
         if not self._begin_active_request():
@@ -1343,15 +1402,13 @@ class WebEXConnector(BaseConnector):
                     )
 
                     # Support configurable payload unwrapping for gateway wrappers
+                    # Supports dotted paths (e.g., "data.message_data") and auto-unwraps nested message_data
                     payload_key = self.config.config.get("rabbitmq_payload_key")
-                    if (
-                        payload_key
-                        and payload_key in message_data
-                        and isinstance(message_data[payload_key], dict)
-                    ):
-                        message_data = message_data[payload_key]
+                    original_payload = message_data
+                    message_data = self._unwrap_payload(message_data, payload_key)
+                    if payload_key and message_data is not original_payload:
                         print(
-                            f"[DEBUG] Unwrapped payload from key '{payload_key}'",
+                            f"[DEBUG] Unwrapped payload using key '{payload_key}'",
                             file=sys.stderr,
                         )
 
