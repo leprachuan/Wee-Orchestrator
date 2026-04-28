@@ -64,7 +64,7 @@ Wee-Orchestrator is a unified AI agent platform that lets you chat with **any AI
 - **🔔 In-Thread Notifications** — Real-time task lifecycle updates (queued → running → complete) in your conversation
 - **📋 Dual-Source TODOs** — Sync TODOs between GitHub Issues (primary) and flat files (fallback) with auto-deduplication
 - **🔧 Expandable Tool Calls** — View tool invocations with collapsible output panels in WebUI; markdown rendering, error highlighting, silent mode support
-- **💰 Token Usage Tracking** — Real-time tracking of prompt/completion tokens and cost estimation across all runtimes; live stats displayed in WebUI footer
+- **💰 Token Usage Tracking & Context Window Management** — Real-time tracking of prompt/completion tokens, context window usage percentage, and cost estimation across all runtimes; live stats displayed in WebUI footer. Automatic warning at 75% usage; `/compact` command trims history when approaching limits
 - **🔌 Extensible Skills** — Plugin architecture for adding capabilities (Cisco Meraki, Home Assistant, etc.)
 - **⚙️ Slash Command Registry — Pure-server commands that bypass the LLM for reduced latency; auto-registers with Telegram BotFather for autocomplete; built-in `/secret` command for secure credential management
 
@@ -144,6 +144,7 @@ Then open `http://localhost:8000/ui` in your browser and pair via Telegram or We
 | `/timeout <seconds>` | Adjust execution timeout |
 | `/status` | Check running task status |
 | `/cancel` | Cancel the current running task |
+| `/compact [N]` | Compact conversation history to N% of context window (default 50%) |
 | `/schedule list` | List all scheduled jobs |
 | `/schedule add <name> \| <schedule> \| <task>` | Create a scheduled job |
 | `/help` | Show all available commands |
@@ -613,6 +614,68 @@ All AI runtimes in this system are configured with **full tool access** to enabl
   - OpenRouter 401 auth fixed: `OPENROUTER_API_KEY` env var + keyring resolution replaces silent `'ollama'` fallback; raises clear error when no key found (Issue #153)
 - **Issues:** [#88](../../issues/88), [#105](../../issues/105), [#119](../../issues/119), [#146](../../issues/146), [#153](../../issues/153), [#255](../../issues/255)
 
+### Context Window Management (Wee CLI)
+
+The `wee` runtime includes automatic context window tracking and LLM-powered compaction via `wee_cli.py`.
+
+#### TokenTracker
+
+`TokenTracker` monitors token usage per session and computes context window utilisation:
+
+| Field | Description |
+|-------|-------------|
+| `last_prompt_tokens` | Token count from the most recent API request |
+| `last_completion_tokens` | Token count from the most recent response |
+| `context_window` | Model's maximum context size (from registry) |
+| `percent_used()` | `last_prompt_tokens / context_window × 100` |
+
+```
+/status → Token usage: 12,400 / 128,000 tokens (9.7% used)
+```
+
+#### Model Context Window Registry
+
+Context sizes are resolved automatically from `MODEL_CONTEXT_WINDOWS` in `wee_runtime.py` (longest-match substring lookup, falls back to 4,096 tokens):
+
+| Model Family | Context Window |
+|-------------|----------------|
+| GPT-5, GPT-4.1, GPT-4.1-mini/nano | 1,047,576 |
+| GPT-4o, GPT-4-turbo, GPT-4o-mini | 128,000 |
+| Claude 3 | 200,000 |
+| Claude 2 | 100,000 |
+| Llama 3 | 131,072 |
+| Gemma 4, Gemma 3 | 131,072 |
+| Phi-3 | 128,000 |
+| DeepSeek | 65,536 |
+| Mistral, Mixtral, Qwen | 32,768 |
+| Default (unrecognised) | 4,096 |
+
+#### /compact Command
+
+Manually trigger context compaction when approaching the window limit:
+
+```
+/compact       # Compact to 50% of context window (default)
+/compact 40    # Compact to 40% of context window
+```
+
+**How it works:**
+1. Preserves the system prompt and the 6 most recent messages.
+2. Summarises older messages into a concise context-summary block using the LLM.
+3. Replaces old history with the summary + recent turns.
+4. Prints before/after message count and token estimates.
+
+```
+Compacted: 42 messages → 8 messages (8,250 → 3,100 tokens)
+```
+
+**Automatic warning** at ≥ 75% usage:
+```
+⚠️  Context window at 78.3% — consider /compact to free space.
+```
+
+**Issues:** [#273](../../issues/273)
+
 ### Security Considerations
 
 ⚠️ **Warning:** These configurations grant AI agents extensive system access:
@@ -892,6 +955,17 @@ Interact with the agent manager using slash commands:
 ```
 /status                    # Check status of running query for this session
 /cancel                    # Cancel running query for this session
+```
+
+#### Context Window Management
+```
+/compact           # Compact conversation history to 50% of context window (default)
+/compact 40        # Compact to 40% of context window
+```
+
+**Automatic Warnings**: When the `wee` runtime is used, context usage is tracked after each turn. A warning is printed when usage reaches ≥ 75% of the model's context window:
+```
+⚠️  Context window at 78.3% — consider /compact to free space.
 ```
 
 **Query Tracking**: When a query is executing, the agent manager tracks its process ID (PID), runtime, agent, and output. Use `/status` to check if a query is running and see recent output, or `/cancel` to terminate a long-running query.
