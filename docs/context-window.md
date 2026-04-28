@@ -22,7 +22,7 @@ Wee-Orchestrator solves this with:
 
 | Model Family | Context Window |
 |---|---|
-| GPT-5, GPT-4.1, GPT-4.1-mini, GPT-4.1-nano | 1,047,576 tokens |
+| GPT-5.5, GPT-5.4-mini, GPT-5, GPT-4.1, GPT-4.1-mini, GPT-4.1-nano | 1,047,576 tokens |
 | GPT-4o, GPT-4-turbo | 128,000 tokens |
 | GPT-4 | 8,192 tokens |
 | GPT-3.5-turbo | 16,385 tokens |
@@ -223,7 +223,7 @@ Without tiktoken, token counts use the `len(text) / 4` fallback — accurate eno
 
 ## Testing
 
-Regression tests: `tests/test_issue_273.py` (46 tests)
+Regression tests: `tests/test_issue_273.py` (47 tests)
 
 Key test cases:
 - `test_percent_used_uses_last_prompt_not_session_total` — validates the `last_prompt_tokens` fix

@@ -1,3 +1,41 @@
+## [Issue #273] Fix: Model Registry Entries and CLI Startup Ordering (PR #276, Round 4)
+**Status:** ✅ QA Approved (Commit: bb51c7c, PR #276)
+
+### Summary
+Restored missing `CODEX_MODELS` entries (`gpt-5.5`, `gpt-5.4-mini`), added `openai-compatible/mistral-7b-instruct-v0.1` to `OPENCODE_MODELS`, added `MODEL_MANIFEST_PATH` module constant, and fixed CLI startup argument ordering in `agent_manager.py`. All 167 tests pass.
+
+### Problem
+Four regressions caused test failures after a dev branch force-push during the F273 QA cycle:
+1. `gpt-5.5` and `gpt-5.4-mini` absent from `CODEX_MODELS["OpenAI Models"]` — broke `test_get_codex_model_alias` and `test_get_model_description_known_codex`
+2. `MODEL_MANIFEST_PATH` constant missing at module level — tests patching it at import time raised `AttributeError`
+3. `openai-compatible/mistral-7b-instruct-v0.1` absent from `OPENCODE_MODELS` — broke manifest fallback test
+4. CLI `main()` applied `--runtime` before `--agent`, causing the agent's `primary_runtime` to overwrite an explicitly-provided `--runtime` flag — broke `TestCLIArguments::test_combined_arguments`
+
+### Solution
+
+#### CODEX_MODELS additions
+Added two entries to `CODEX_MODELS["OpenAI Models"]` in `agent_manager.py`:
+- `("gpt-5.5", "GPT-5.5", ["gpt-5.5"])`
+- `("gpt-5.4-mini", "GPT-5.4 Mini", ["gpt-5.4-mini"])`
+
+#### MODEL_MANIFEST_PATH constant
+Added at module level: `MODEL_MANIFEST_PATH = Path(SCRIPT_BASE_DIR) / "model-manifest.json"`
+
+#### OPENCODE_MODELS update
+Added `"openai-compatible"` provider group with `mistral-7b-instruct-v0.1` entry.
+
+#### CLI startup ordering fix
+Swapped `--agent` and `--runtime` application order in `main()`:
+- **Before:** `[runtime → agent]` — agent reset the session runtime, silently discarding `--runtime`
+- **After:** `[agent → runtime]` — agent default applies first; explicit `--runtime` always wins
+
+### Files Changed
+- `agent_manager.py` — CODEX_MODELS entries, MODEL_MANIFEST_PATH constant, OPENCODE_MODELS entry, `main()` startup ordering
+
+### Tests
+167 tests pass (120 `test_agent_manager` + 47 `test_issue_273`) — all existing failures resolved, no new tests required (covered by pre-existing regression suite)
+
+
 ## [Issue #273] Feature: Context Window Management and Compaction
 **Status:** ✅ QA Approved (Commit: 3073357, PR #275)
 
