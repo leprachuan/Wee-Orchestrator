@@ -252,38 +252,58 @@ class WeeTUI(App):
                 arg = parts[1] if len(parts) > 1 else ""
 
                 chat_panel = self.query_one("#chat", ChatPanel)
-                
+
                 if command == "/agent":
                     if arg:
                         self.current_agent = arg
-                        await chat_panel.add_message("system", f"✅ Agent set to: {arg}")
+                        await chat_panel.add_message(
+                            "system", f"✅ Agent set to: {arg}"
+                        )
                         await self.refresh_display()
                     else:
-                        await chat_panel.add_message("system", f"❌ Usage: /agent <name>")
+                        await chat_panel.add_message(
+                            "system", "❌ Usage: /agent <name>"
+                        )
                 elif command == "/model":
                     if arg:
                         self.current_model = arg
-                        await chat_panel.add_message("system", f"✅ Model set to: {arg}")
+                        await chat_panel.add_message(
+                            "system", f"✅ Model set to: {arg}"
+                        )
                     else:
-                        await chat_panel.add_message("system", f"❌ Usage: /model <name>")
+                        await chat_panel.add_message(
+                            "system", "❌ Usage: /model <name>"
+                        )
                 elif command == "/runtime":
                     if arg:
                         self.current_runtime = arg
-                        await chat_panel.add_message("system", f"✅ Runtime set to: {arg}")
+                        await chat_panel.add_message(
+                            "system", f"✅ Runtime set to: {arg}"
+                        )
                     else:
-                        await chat_panel.add_message("system", f"❌ Usage: /runtime <name>")
+                        await chat_panel.add_message(
+                            "system", "❌ Usage: /runtime <name>"
+                        )
                 elif command == "/timeout":
                     if arg:
                         try:
                             timeout_sec = int(arg)
                             self.current_timeout = timeout_sec
-                            await chat_panel.add_message("system", f"✅ Timeout set to: {timeout_sec}s")
+                            await chat_panel.add_message(
+                                "system", f"✅ Timeout set to: {timeout_sec}s"
+                            )
                         except ValueError:
-                            await chat_panel.add_message("system", f"❌ Timeout must be a number")
+                            await chat_panel.add_message(
+                                "system", "❌ Timeout must be a number"
+                            )
                     else:
-                        await chat_panel.add_message("system", f"❌ Usage: /timeout <seconds>")
+                        await chat_panel.add_message(
+                            "system", "❌ Usage: /timeout <seconds>"
+                        )
                 else:
-                    await chat_panel.add_message("system", f"❌ Unknown command: {command}")
+                    await chat_panel.add_message(
+                        "system", f"❌ Unknown command: {command}"
+                    )
                 return
 
             # Not a command, dispatch as background task

@@ -27,7 +27,7 @@ class TaskQueuePanel(Static):
                     10 - int(task.get("progress", 0) // 10)
                 )
                 table.add_row(
-                    task.get("id", "")[:12],
+                    task.get("task_id", "")[:12],
                     task.get("agent", ""),
                     task.get("status", "queued"),
                     f"{progress_bar} {int(task.get('progress', 0))}%",

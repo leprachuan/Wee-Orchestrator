@@ -24,7 +24,9 @@ class ServiceStatusPanel(Static):
             for name, status_info in self.services.items():
                 status = status_info.get("status", "unknown")
                 status_color = (
-                    "[green]✓[/green]" if status == "running" else "[red]✗[/red]"
+                    "[green]✓[/green]"
+                    if status in ("running", "active")
+                    else "[red]✗[/red]"
                 )
                 uptime = status_info.get("uptime_seconds", 0)
                 uptime_str = self._format_uptime(uptime) if uptime else "N/A"
