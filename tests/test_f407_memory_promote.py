@@ -60,8 +60,9 @@ class TestMemoryPromoteEndpoint:
         mock_result.stderr = ""
         mock_result.returncode = 0
 
-        with patch("subprocess.run", return_value=mock_result) as mock_run, \
-             patch("pathlib.Path.exists", return_value=True):
+        with patch("subprocess.run", return_value=mock_result) as mock_run, patch(
+            "pathlib.Path.exists", return_value=True
+        ):
             resp = client.post(
                 "/api/v1/memory/promote",
                 json={},
@@ -86,8 +87,9 @@ class TestMemoryPromoteEndpoint:
         mock_result.stderr = ""
         mock_result.returncode = 0
 
-        with patch("subprocess.run", return_value=mock_result) as mock_run, \
-             patch("pathlib.Path.exists", return_value=True):
+        with patch("subprocess.run", return_value=mock_result) as mock_run, patch(
+            "pathlib.Path.exists", return_value=True
+        ):
             resp = client.post(
                 "/api/v1/memory/promote",
                 json={"agent": "wee-dev"},
@@ -109,8 +111,9 @@ class TestMemoryPromoteEndpoint:
         mock_result.stderr = ""
         mock_result.returncode = 0
 
-        with patch("subprocess.run", return_value=mock_result) as mock_run, \
-             patch("pathlib.Path.exists", return_value=True):
+        with patch("subprocess.run", return_value=mock_result) as mock_run, patch(
+            "pathlib.Path.exists", return_value=True
+        ):
             resp = client.post(
                 "/api/v1/memory/promote",
                 json={"agent": "wee-dev"},
@@ -141,8 +144,9 @@ class TestMemoryPromoteEndpoint:
         """Returns 504 when the subprocess times out."""
         import subprocess
 
-        with patch("subprocess.run", side_effect=subprocess.TimeoutExpired("cmd", 120)), \
-             patch("pathlib.Path.exists", return_value=True):
+        with patch(
+            "subprocess.run", side_effect=subprocess.TimeoutExpired("cmd", 120)
+        ), patch("pathlib.Path.exists", return_value=True):
             resp = client.post(
                 "/api/v1/memory/promote",
                 json={},
@@ -180,8 +184,9 @@ class TestMemoryPromoteAllEndpoint:
         mock_result.stderr = ""
         mock_result.returncode = 0
 
-        with patch("subprocess.run", return_value=mock_result) as mock_run, \
-             patch("pathlib.Path.exists", return_value=True):
+        with patch("subprocess.run", return_value=mock_result) as mock_run, patch(
+            "pathlib.Path.exists", return_value=True
+        ):
             resp = client.post(
                 "/api/v1/memory/promote-all",
                 headers=auth_headers,
@@ -203,8 +208,9 @@ class TestMemoryPromoteAllEndpoint:
         mock_result.stderr = ""
         mock_result.returncode = 0
 
-        with patch("subprocess.run", return_value=mock_result) as mock_run, \
-             patch("pathlib.Path.exists", return_value=True):
+        with patch("subprocess.run", return_value=mock_result) as mock_run, patch(
+            "pathlib.Path.exists", return_value=True
+        ):
             resp = client.post(
                 "/api/v1/memory/promote-all",
                 headers=auth_headers,
@@ -230,8 +236,9 @@ class TestMemoryPromoteAllEndpoint:
             result.returncode = 0
             return result
 
-        with patch("subprocess.run", side_effect=mock_run), \
-             patch("pathlib.Path.exists", return_value=True):
+        with patch("subprocess.run", side_effect=mock_run), patch(
+            "pathlib.Path.exists", return_value=True
+        ):
             resp = client.post(
                 "/api/v1/memory/promote-all",
                 headers=auth_headers,
@@ -266,8 +273,9 @@ class TestMemoryPromoteAllEndpoint:
             result.returncode = 0
             return result
 
-        with patch("subprocess.run", side_effect=capture_run), \
-             patch("pathlib.Path.exists", return_value=True):
+        with patch("subprocess.run", side_effect=capture_run), patch(
+            "pathlib.Path.exists", return_value=True
+        ):
             resp = client.post(
                 "/api/v1/memory/promote-all",
                 headers=auth_headers,

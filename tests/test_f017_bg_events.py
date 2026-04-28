@@ -1,4 +1,5 @@
 """Tests for F017: In-thread notification when a background task completes."""
+
 import json
 import os
 import sys
@@ -19,6 +20,7 @@ os.environ.setdefault("API_PORT", "8099")
 # ---------------------------------------------------------------------------
 # BackgroundTaskManager unit tests
 # ---------------------------------------------------------------------------
+
 
 class TestBgEventsStorage:
     """Test push_bg_event / pop_bg_events on BackgroundTaskManager."""
@@ -72,9 +74,7 @@ class TestBgEventsStorage:
         def push_many(session, count):
             try:
                 for i in range(count):
-                    self.mgr.push_bg_event(
-                        session, {"task_id": f"t{i}"}
-                    )
+                    self.mgr.push_bg_event(session, {"task_id": f"t{i}"})
             except Exception as e:
                 errors.append(e)
 
@@ -138,6 +138,7 @@ class TestCreateTaskOriginSession:
 # ---------------------------------------------------------------------------
 # API endpoint tests
 # ---------------------------------------------------------------------------
+
 
 class TestBgEventsEndpoint:
     """Test GET /api/v1/sessions/{session_id}/bg-events."""
@@ -210,7 +211,5 @@ class TestBgEventsEndpoint:
         assert resp2.json()["events"] == []
 
     def test_bg_events_requires_auth(self):
-        resp = self.client.get(
-            "/api/v1/sessions/any-session/bg-events"
-        )
+        resp = self.client.get("/api/v1/sessions/any-session/bg-events")
         assert resp.status_code in (401, 403)

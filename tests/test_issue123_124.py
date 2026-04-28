@@ -8,19 +8,21 @@ import json
 import sys
 import time
 import unittest
-from unittest.mock import MagicMock, patch, PropertyMock
+from unittest.mock import MagicMock, PropertyMock, patch
 
 sys.path.insert(0, "/opt/n8n-copilot-shim-dev")
 
 
 def make_manager():
     from agent_manager import SessionManager
+
     return SessionManager("/opt/n8n-copilot-shim-dev/agents.json")
 
 
 # ---------------------------------------------------------------------------
 # Issue #124 — Live Ollama model discovery
 # ---------------------------------------------------------------------------
+
 
 class TestLiveOllamaDiscovery(unittest.TestCase):
 
@@ -45,7 +47,9 @@ class TestLiveOllamaDiscovery(unittest.TestCase):
         mgr._ollama_models_cache = ["old_model"]
         mgr._ollama_cache_ts = time.time() - 61  # expired
 
-        fake_tags = json.dumps({"models": [{"name": "gemma4:e4b"}, {"name": "qwen3:8b"}]}).encode()
+        fake_tags = json.dumps(
+            {"models": [{"name": "gemma4:e4b"}, {"name": "qwen3:8b"}]}
+        ).encode()
         mock_resp = MagicMock()
         mock_resp.read.return_value = fake_tags
 
@@ -62,7 +66,9 @@ class TestLiveOllamaDiscovery(unittest.TestCase):
         mgr._ollama_models_cache = ["gemma4:e4b"]
         mgr._ollama_cache_ts = time.time() - 120  # expired
 
-        with patch("urllib.request.urlopen", side_effect=Exception("connection refused")):
+        with patch(
+            "urllib.request.urlopen", side_effect=Exception("connection refused")
+        ):
             result = mgr._fetch_ollama_models_live()
 
         self.assertEqual(result, ["gemma4:e4b"])
@@ -103,7 +109,9 @@ class TestLiveOllamaDiscovery(unittest.TestCase):
 
         ollama_group = result.get("Wee Native (Ollama)", [])
         for mid in ollama_group:
-            self.assertTrue(mid.startswith("ollama/"), f"{mid!r} should start with 'ollama/'")
+            self.assertTrue(
+                mid.startswith("ollama/"), f"{mid!r} should start with 'ollama/'"
+            )
 
     def test_fetch_wee_models_fallback_on_ollama_failure(self):
         """Falls back to static WEE_MODELS Ollama entries when live discovery fails."""
@@ -147,7 +155,9 @@ class TestLiveOllamaDiscovery(unittest.TestCase):
         mgr._ollama_cache_ts = time.time() - 70  # Ollama TTL expired
         mgr._ollama_models_cache = []
 
-        fake_tags = json.dumps({"models": [{"name": "gemma4:e4b"}, {"name": "qwen3:8b"}]}).encode()
+        fake_tags = json.dumps(
+            {"models": [{"name": "gemma4:e4b"}, {"name": "qwen3:8b"}]}
+        ).encode()
         mock_resp = MagicMock()
         mock_resp.read.return_value = fake_tags
 
@@ -173,7 +183,9 @@ class TestLiveOllamaDiscovery(unittest.TestCase):
         # Inject known models
         mgr._ollama_models_cache = ["gemma4:e4b"]
         mgr._ollama_cache_ts = time.time()
-        with patch.object(mgr, "_fetch_ollama_models_live", return_value=["gemma4:e4b"]):
+        with patch.object(
+            mgr, "_fetch_ollama_models_live", return_value=["gemma4:e4b"]
+        ):
             with patch("urllib.request.urlopen", side_effect=Exception("no or")):
                 models = mgr.get_models_for_runtime("wee")
 
@@ -187,6 +199,7 @@ class TestLiveOllamaDiscovery(unittest.TestCase):
 # Issue #123 — Tool call agentic loop
 # ---------------------------------------------------------------------------
 
+
 class TestWeeRuntimeToolLoop(unittest.TestCase):
 
     def test_run_wee_native_exists(self):
@@ -198,7 +211,9 @@ class TestWeeRuntimeToolLoop(unittest.TestCase):
     def test_wee_execute_tool_bash(self):
         """_wee_execute_tool('bash', ...) executes a shell command and returns output."""
         mgr = make_manager()
-        result = mgr._wee_execute_tool("bash", {"command": "echo 'test123'"}, "orchestrator")
+        result = mgr._wee_execute_tool(
+            "bash", {"command": "echo 'test123'"}, "orchestrator"
+        )
         self.assertIn("test123", result)
 
     def test_wee_execute_tool_unknown(self):
@@ -211,7 +226,9 @@ class TestWeeRuntimeToolLoop(unittest.TestCase):
     def test_wee_execute_tool_python(self):
         """_wee_execute_tool('python', ...) executes python code and returns output."""
         mgr = make_manager()
-        result = mgr._wee_execute_tool("python", {"code": "print('hello_py')"}, "orchestrator")
+        result = mgr._wee_execute_tool(
+            "python", {"code": "print('hello_py')"}, "orchestrator"
+        )
         self.assertIn("hello_py", result)
 
     def _make_streaming_mock(self, tool_calls_chunks=None, content_chunks=None):
@@ -228,7 +245,9 @@ class TestWeeRuntimeToolLoop(unittest.TestCase):
                 tc_delta.id = tc.get("id", f"tc_{i}")
                 tc_delta.function = MagicMock()
                 tc_delta.function.name = tc.get("name", "bash")
-                tc_delta.function.arguments = tc.get("arguments", '{"command":"echo hi"}')
+                tc_delta.function.arguments = tc.get(
+                    "arguments", '{"command":"echo hi"}'
+                )
                 delta.tool_calls = [tc_delta]
                 choice = MagicMock()
                 choice.delta = delta
@@ -261,7 +280,9 @@ class TestWeeRuntimeToolLoop(unittest.TestCase):
 
         # Round 1: model calls bash
         round1_chunks = self._make_streaming_mock(
-            tool_calls_chunks=[{"id": "tc_1", "name": "bash", "arguments": '{"command":"echo hello"}'}]
+            tool_calls_chunks=[
+                {"id": "tc_1", "name": "bash", "arguments": '{"command":"echo hello"}'}
+            ]
         )
         # Round 2: model returns final text
         round2_chunks = self._make_streaming_mock(
@@ -269,6 +290,7 @@ class TestWeeRuntimeToolLoop(unittest.TestCase):
         )
 
         call_count = [0]
+
         def mock_create(**kwargs):
             call_count[0] += 1
             if call_count[0] == 1:
@@ -290,7 +312,9 @@ class TestWeeRuntimeToolLoop(unittest.TestCase):
             )
 
         self.assertIn("Disk usage is fine.", result)
-        self.assertEqual(call_count[0], 2, "Expected exactly 2 LLM calls (1 tool round + 1 final)")
+        self.assertEqual(
+            call_count[0], 2, "Expected exactly 2 LLM calls (1 tool round + 1 final)"
+        )
 
     def test_tools_passed_to_llm(self):
         """run_wee_native passes 'tools' parameter to the LLM on first call."""

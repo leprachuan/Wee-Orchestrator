@@ -2,13 +2,14 @@
 
 Tests _execute_task routing logic and the misconfiguration warning.
 """
+
 import logging
 import os
 import sys
 import unittest
-from unittest.mock import MagicMock, patch, call
+from unittest.mock import MagicMock, call, patch
 
-sys.path.insert(0, '/opt/n8n-copilot-shim-dev')
+sys.path.insert(0, "/opt/n8n-copilot-shim-dev")
 os.environ.setdefault("API_SHARED_KEY", "test_key_123")
 
 from scheduler.executor import TaskSchedulerExecutor
@@ -29,8 +30,9 @@ class TestCommandModeRouting(unittest.TestCase):
         executor = self._make_executor()
         job = {"id": "cmd-job", "mode": "command", "task": "echo hello"}
 
-        with patch.object(executor, '_execute_command_mode', return_value="ok") as mock_cmd, \
-             patch.object(executor, '_execute_ai_mode') as mock_ai:
+        with patch.object(
+            executor, "_execute_command_mode", return_value="ok"
+        ) as mock_cmd, patch.object(executor, "_execute_ai_mode") as mock_ai:
             result = executor._execute_task(job)
 
         mock_cmd.assert_called_once_with(job)
@@ -42,8 +44,9 @@ class TestCommandModeRouting(unittest.TestCase):
         executor = self._make_executor()
         job = {"id": "ai-job", "mode": "ai", "task": "do something"}
 
-        with patch.object(executor, '_execute_command_mode') as mock_cmd, \
-             patch.object(executor, '_execute_ai_mode', return_value="ai_result") as mock_ai:
+        with patch.object(executor, "_execute_command_mode") as mock_cmd, patch.object(
+            executor, "_execute_ai_mode", return_value="ai_result"
+        ) as mock_ai:
             result = executor._execute_task(job)
 
         mock_cmd.assert_not_called()
@@ -55,8 +58,9 @@ class TestCommandModeRouting(unittest.TestCase):
         executor = self._make_executor()
         job = {"id": "no-mode-job", "task": "do something"}
 
-        with patch.object(executor, '_execute_command_mode') as mock_cmd, \
-             patch.object(executor, '_execute_ai_mode', return_value="result") as mock_ai:
+        with patch.object(executor, "_execute_command_mode") as mock_cmd, patch.object(
+            executor, "_execute_ai_mode", return_value="result"
+        ) as mock_ai:
             executor._execute_task(job)
 
         mock_cmd.assert_not_called()
@@ -73,9 +77,11 @@ class TestCommandModeRouting(unittest.TestCase):
             "task": "python3 /opt/bin/dispatch.py",
         }
 
-        with patch.object(executor, '_execute_command_mode', return_value="ok"), \
-             patch.object(executor, '_execute_ai_mode') as mock_ai, \
-             self.assertLogs(level="WARNING") as log_ctx:
+        with patch.object(
+            executor, "_execute_command_mode", return_value="ok"
+        ), patch.object(executor, "_execute_ai_mode") as mock_ai, self.assertLogs(
+            level="WARNING"
+        ) as log_ctx:
             executor._execute_task(job)
 
         mock_ai.assert_not_called()
@@ -89,8 +95,9 @@ class TestCommandModeRouting(unittest.TestCase):
         executor = self._make_executor()
         job = {"id": "j2", "mode": "command", "runtime": "copilot", "task": "ls"}
 
-        with patch.object(executor, '_execute_command_mode', return_value="ok"), \
-             self.assertLogs(level="WARNING"):
+        with patch.object(
+            executor, "_execute_command_mode", return_value="ok"
+        ), self.assertLogs(level="WARNING"):
             executor._execute_task(job)
 
     def test_command_mode_without_runtime_no_warning(self):
@@ -98,7 +105,7 @@ class TestCommandModeRouting(unittest.TestCase):
         executor = self._make_executor()
         job = {"id": "clean-job", "mode": "command", "task": "echo hi"}
 
-        with patch.object(executor, '_execute_command_mode', return_value="ok"):
+        with patch.object(executor, "_execute_command_mode", return_value="ok"):
             with self.assertNoLogs("test", level="WARNING"):
                 executor._execute_task(job)
 
@@ -112,8 +119,9 @@ class TestCommandModeRouting(unittest.TestCase):
             "task": "echo test",
         }
 
-        with patch.object(executor, '_execute_command_mode', return_value="cmd_output"), \
-             self.assertLogs(level="WARNING"):
+        with patch.object(
+            executor, "_execute_command_mode", return_value="cmd_output"
+        ), self.assertLogs(level="WARNING"):
             result = executor._execute_task(job)
 
         self.assertEqual(result, "cmd_output")

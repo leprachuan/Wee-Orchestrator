@@ -80,7 +80,9 @@ class TestRunCursorModelValidation:
         assert cmd[cmd.index("--model") + 1] == "auto"
 
     def test_invalid_model_defaults_to_auto(self, session_mgr):
-        cmd = _run_cursor_capture_cmd(session_mgr, "opencode/gpt-5-nano", "test-invalid")
+        cmd = _run_cursor_capture_cmd(
+            session_mgr, "opencode/gpt-5-nano", "test-invalid"
+        )
         assert "--model" in cmd
         assert cmd[cmd.index("--model") + 1] == "auto"
 
@@ -90,16 +92,12 @@ class TestRunCursorModelValidation:
         assert cmd[cmd.index("--model") + 1] == "auto"
 
     def test_named_cursor_model_preserved(self, session_mgr):
-        cmd = _run_cursor_capture_cmd(
-            session_mgr, "claude-4-sonnet", "test-named"
-        )
+        cmd = _run_cursor_capture_cmd(session_mgr, "claude-4-sonnet", "test-named")
         assert "--model" in cmd
         assert cmd[cmd.index("--model") + 1] == "claude-4-sonnet"
 
     def test_composer_model_preserved(self, session_mgr):
-        cmd = _run_cursor_capture_cmd(
-            session_mgr, "composer-2", "test-composer"
-        )
+        cmd = _run_cursor_capture_cmd(session_mgr, "composer-2", "test-composer")
         assert "--model" in cmd
         assert cmd[cmd.index("--model") + 1] == "composer-2"
 
@@ -108,9 +106,7 @@ class TestRunCursorModelValidation:
             cmd = _run_cursor_capture_cmd(
                 session_mgr, model_val, f"test-always-{model_val}"
             )
-            assert "--model" in cmd, (
-                f"--model missing for model={model_val!r}"
-            )
+            assert "--model" in cmd, f"--model missing for model={model_val!r}"
 
     def test_env_override_cursor_default_model(self, session_mgr):
         cmd = _run_cursor_capture_cmd(
@@ -123,9 +119,7 @@ class TestRunCursorModelValidation:
 
     def test_copilot_model_rejected(self, session_mgr):
         """A copilot-only model should not reach the cursor CLI."""
-        cmd = _run_cursor_capture_cmd(
-            session_mgr, "gpt-5-nano", "test-copilot-model"
-        )
+        cmd = _run_cursor_capture_cmd(session_mgr, "gpt-5-nano", "test-copilot-model")
         assert cmd[cmd.index("--model") + 1] == "auto"
 
     def test_print_mode_flag_present(self, session_mgr):

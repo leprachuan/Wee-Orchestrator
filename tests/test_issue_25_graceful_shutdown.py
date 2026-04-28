@@ -109,9 +109,7 @@ def test_issue_25_telegram_sigterm_waits_for_active_request(telegram_connector):
         assert telegram_connector.shutdown_event.is_set()
         assert telegram_connector.running is False
         assert (
-            telegram_connector._wait_for_active_requests(
-                "telegram test", timeout=0.01
-            )
+            telegram_connector._wait_for_active_requests("telegram test", timeout=0.01)
             is False
         )
 
@@ -122,9 +120,7 @@ def test_issue_25_telegram_sigterm_waits_for_active_request(telegram_connector):
         worker.join(timeout=1)
 
         assert (
-            telegram_connector._wait_for_active_requests(
-                "telegram test", timeout=0.1
-            )
+            telegram_connector._wait_for_active_requests("telegram test", timeout=0.1)
             is True
         )
         send_response_mock.assert_called_once_with(1001, "done", None)
@@ -191,8 +187,7 @@ def test_issue_25_webex_sigterm_stops_consuming_and_waits_for_active_request(
         worker.join(timeout=1)
 
         assert (
-            webex_connector._wait_for_active_requests("webex test", timeout=0.1)
-            is True
+            webex_connector._wait_for_active_requests("webex test", timeout=0.1) is True
         )
         send_response_mock.assert_called_once_with("room-1", "done", None)
         send_message_mock.assert_not_called()
@@ -335,9 +330,7 @@ def test_issue_25_webex_ack_happens_after_processing(webex_connector):
         callback_holder["callback"] = on_message_callback
 
     def fake_start_consuming():
-        callback_holder["callback"](
-            channel, method, None, json.dumps(message).encode()
-        )
+        callback_holder["callback"](channel, method, None, json.dumps(message).encode())
         webex_connector.running = False
 
     channel.basic_consume.side_effect = fake_basic_consume
@@ -347,7 +340,9 @@ def test_issue_25_webex_ack_happens_after_processing(webex_connector):
         patch.object(webex_connector, "connect_rabbitmq", return_value=True),
         patch.object(webex_connector, "start_cleanup_background_task"),
         patch.object(webex_connector, "disconnect_rabbitmq"),
-        patch.object(webex_connector, "handle_message", return_value=True) as handle_mock,
+        patch.object(
+            webex_connector, "handle_message", return_value=True
+        ) as handle_mock,
     ):
         webex_connector.listen_to_queue()
 
@@ -375,9 +370,7 @@ def test_issue_25_webex_shutdown_requeues_undispatched_message(webex_connector):
         callback_holder["callback"] = on_message_callback
 
     def fake_start_consuming():
-        callback_holder["callback"](
-            channel, method, None, json.dumps(message).encode()
-        )
+        callback_holder["callback"](channel, method, None, json.dumps(message).encode())
         webex_connector.running = False
 
     channel.basic_consume.side_effect = fake_basic_consume
@@ -530,9 +523,7 @@ def test_issue_25_webex_audio_transcription_failure_is_acked(webex_connector):
         callback_holder["callback"] = on_message_callback
 
     def fake_start_consuming():
-        callback_holder["callback"](
-            channel, method, None, json.dumps(message).encode()
-        )
+        callback_holder["callback"](channel, method, None, json.dumps(message).encode())
         webex_connector.running = False
 
     channel.basic_consume.side_effect = fake_basic_consume

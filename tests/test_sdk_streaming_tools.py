@@ -22,6 +22,7 @@ os.environ.setdefault("API_SHARED_KEY", "test_key_123")
 
 # ─── Shared helpers ───
 
+
 def _make_stream_buffer():
     """Create a mock stream buffer that records pushes."""
     pushes = []
@@ -33,6 +34,7 @@ def _make_stream_buffer():
 def _get_session_mgr():
     """Create a minimal SessionManager for testing (same as existing test pattern)."""
     from agent_manager import SessionManager
+
     mgr = SessionManager.__new__(SessionManager)
     mgr.mode = None
     mgr.command_timeout = 300
@@ -58,6 +60,7 @@ def _get_session_mgr():
 # ═══════════════════════════════════════════════════════
 #  COPILOT-SDK Streaming + Tool Call Tests
 # ═══════════════════════════════════════════════════════
+
 
 class TestCopilotSdkStreaming(unittest.TestCase):
     """Test copilot-sdk streaming chunks are pushed to stream buffer."""
@@ -111,7 +114,9 @@ class TestCopilotSdkStreaming(unittest.TestCase):
 
         mock_session.send_and_wait = AsyncMock(side_effect=send_and_wait_with_events)
 
-        with patch.object(mgr, "build_agent_context_prompt", return_value="test prompt"):
+        with patch.object(
+            mgr, "build_agent_context_prompt", return_value="test prompt"
+        ):
             result = mgr.run_copilot_sdk(
                 "test prompt", "gpt-5", "orchestrator", None, False, "sess1"
             )
@@ -399,28 +404,56 @@ class TestCopilotSdkToolCalls(unittest.TestCase):
 
 # --- Fake claude_agent_sdk types ---
 
-_TextBlock = type("TextBlock", (), {
-    "__init__": lambda self, text="": setattr(self, "text", text),
-})
-_AssistantMessage = type("AssistantMessage", (), {
-    "__init__": lambda self, content=None: setattr(self, "content", content or []),
-})
-_ResultMessage = type("ResultMessage", (), {
-    "__init__": lambda self, session_id="": setattr(self, "session_id", session_id),
-})
-_ToolUseBlock = type("ToolUseBlock", (), {
-    "__init__": lambda self, id="", name="", input=None: (
-        setattr(self, "id", id) or setattr(self, "name", name) or setattr(self, "input", input)
-    ),
-})
-_ToolResultBlock = type("ToolResultBlock", (), {
-    "__init__": lambda self, tool_use_id="", content=None, is_error=False: (
-        setattr(self, "tool_use_id", tool_use_id) or setattr(self, "content", content) or setattr(self, "is_error", is_error)
-    ),
-})
-_ClaudeAgentOptions = type("ClaudeAgentOptions", (), {
-    "__init__": lambda self, **kw: self.__dict__.update(kw),
-})
+_TextBlock = type(
+    "TextBlock",
+    (),
+    {
+        "__init__": lambda self, text="": setattr(self, "text", text),
+    },
+)
+_AssistantMessage = type(
+    "AssistantMessage",
+    (),
+    {
+        "__init__": lambda self, content=None: setattr(self, "content", content or []),
+    },
+)
+_ResultMessage = type(
+    "ResultMessage",
+    (),
+    {
+        "__init__": lambda self, session_id="": setattr(self, "session_id", session_id),
+    },
+)
+_ToolUseBlock = type(
+    "ToolUseBlock",
+    (),
+    {
+        "__init__": lambda self, id="", name="", input=None: (
+            setattr(self, "id", id)
+            or setattr(self, "name", name)
+            or setattr(self, "input", input)
+        ),
+    },
+)
+_ToolResultBlock = type(
+    "ToolResultBlock",
+    (),
+    {
+        "__init__": lambda self, tool_use_id="", content=None, is_error=False: (
+            setattr(self, "tool_use_id", tool_use_id)
+            or setattr(self, "content", content)
+            or setattr(self, "is_error", is_error)
+        ),
+    },
+)
+_ClaudeAgentOptions = type(
+    "ClaudeAgentOptions",
+    (),
+    {
+        "__init__": lambda self, **kw: self.__dict__.update(kw),
+    },
+)
 
 
 def _build_fake_claude_module(query_fn=None):
@@ -444,6 +477,7 @@ def _build_fake_claude_module(query_fn=None):
 def _make_claude_manager():
     """Create a minimal SessionManager for claude-sdk testing."""
     from agent_manager import SessionManager
+
     mgr = SessionManager.__new__(SessionManager)
     mgr.session_state_dir = MagicMock()
     mgr.session_map_file = MagicMock()
@@ -455,13 +489,15 @@ def _make_claude_manager():
     mgr.AGENTS = {
         "orchestrator": {"path": "/opt/n8n-copilot-shim-dev", "name": "orchestrator"},
     }
-    mgr.get_or_create_session_data = MagicMock(return_value={
-        "channel": "api",
-        "runtime": "claude-sdk",
-        "model": "haiku",
-        "session_id": None,
-        "mode": None,
-    })
+    mgr.get_or_create_session_data = MagicMock(
+        return_value={
+            "channel": "api",
+            "runtime": "claude-sdk",
+            "model": "haiku",
+            "session_id": None,
+            "mode": None,
+        }
+    )
     mgr.build_agent_context_prompt = MagicMock(return_value="[context] test prompt")
     mgr._parse_mode_command = MagicMock(return_value=("test prompt", None))
     mgr._resolve_permission_mode = MagicMock(side_effect=lambda m, s: m)
@@ -567,7 +603,9 @@ class TestClaudeSdkToolCalls(unittest.TestCase):
         stream_buf, pushes = _make_stream_buffer()
         mgr._stream_buffers = {"sess1": stream_buf}
 
-        tool_block = _ToolUseBlock(id="tu_123", name="read_file", input={"path": "/tmp/x"})
+        tool_block = _ToolUseBlock(
+            id="tu_123", name="read_file", input={"path": "/tmp/x"}
+        )
         text_block = _TextBlock("I'll read that file")
         msg = _AssistantMessage([text_block, tool_block])
 
@@ -683,16 +721,17 @@ class TestClaudeSdkToolCalls(unittest.TestCase):
 
         fake_mod = _build_fake_claude_module(mock_query)
         with patch.dict("sys.modules", {"claude_agent_sdk": fake_mod}):
-            mgr.run_claude_sdk(
-                "test", "haiku", "orchestrator", None, False, "sess1"
-            )
+            mgr.run_claude_sdk("test", "haiku", "orchestrator", None, False, "sess1")
 
-        mgr.update_session_field.assert_any_call("sess1", "session_id", "new-session-abc")
+        mgr.update_session_field.assert_any_call(
+            "sess1", "session_id", "new-session-abc"
+        )
 
 
 # ═══════════════════════════════════════════════════════
 #  Tool Event Structure Validation
 # ═══════════════════════════════════════════════════════
+
 
 class TestToolEventStructure(unittest.TestCase):
     """Validate required fields in tool call events for both runtimes."""

@@ -13,8 +13,8 @@ import sys
 import threading
 import time
 from typing import Any, Dict, List, Optional, Tuple
-from urllib.request import urlopen, Request
 from urllib.error import URLError
+from urllib.request import Request, urlopen
 
 # Default discovery hosts (override via WEE_DISCOVERY_HOSTS env var as JSON)
 _DEFAULT_HOSTS = [
@@ -54,7 +54,9 @@ class WeeModelDiscovery:
         """
         self.ttl = ttl
         self.timeout = timeout
-        self._cache: Dict[str, Tuple[float, List[str]]] = {}  # host_url -> (timestamp, models)
+        self._cache: Dict[str, Tuple[float, List[str]]] = (
+            {}
+        )  # host_url -> (timestamp, models)
         self._cache_status: Dict[str, str] = {}  # host_url -> "online" | "offline"
         self._lock = threading.Lock()
 
@@ -196,15 +198,19 @@ class WeeModelDiscovery:
                         models = []
                         for m in data.get("models", []):
                             if isinstance(m, dict) and "name" in m:
-                                model_id = f"{prefix}/{m['name']}" if prefix else m["name"]
-                                models.append({
-                                    "id": model_id,
-                                    "name": m["name"],
-                                    "size": m.get("size"),
-                                    "modified_at": m.get("modified_at"),
-                                    "provider": prefix or host_type,
-                                    "status": "available",
-                                })
+                                model_id = (
+                                    f"{prefix}/{m['name']}" if prefix else m["name"]
+                                )
+                                models.append(
+                                    {
+                                        "id": model_id,
+                                        "name": m["name"],
+                                        "size": m.get("size"),
+                                        "modified_at": m.get("modified_at"),
+                                        "provider": prefix or host_type,
+                                        "status": "available",
+                                    }
+                                )
                         result[label] = models
                     else:
                         result[f"{label} ⚠️ offline"] = []
@@ -216,12 +222,14 @@ class WeeModelDiscovery:
                         for m in data.get("data", []):
                             if isinstance(m, dict) and "id" in m:
                                 model_id = f"{prefix}/{m['id']}" if prefix else m["id"]
-                                models.append({
-                                    "id": model_id,
-                                    "name": m["id"],
-                                    "provider": prefix or host_type,
-                                    "status": "available",
-                                })
+                                models.append(
+                                    {
+                                        "id": model_id,
+                                        "name": m["id"],
+                                        "provider": prefix or host_type,
+                                        "status": "available",
+                                    }
+                                )
                         result[label] = models
                     else:
                         result[f"{label} ⚠️ offline"] = []

@@ -9,9 +9,7 @@ import os
 import sys
 import unittest
 
-sys.path.insert(
-    0, os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-)
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 os.environ.setdefault("API_SHARED_KEY", "test_key_123")
 os.environ.setdefault("APP_ENV", "DEV")
@@ -28,9 +26,7 @@ class TestSessionStatusIncludesSilentMode(unittest.TestCase):
         cls.am = agent_manager
         cls.sm = agent_manager.SessionManager(
             config_file=os.path.join(
-                os.path.dirname(
-                    os.path.dirname(os.path.abspath(__file__))
-                ),
+                os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                 "agents.json",
             ),
             app_env="DEV",
@@ -235,9 +231,7 @@ class TestWebUIVerboseToggle(unittest.TestCase):
 
     def _read_file(self, *parts):
         path = os.path.join(
-            os.path.dirname(
-                os.path.dirname(os.path.abspath(__file__))
-            ),
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
             *parts,
         )
         with open(path) as f:

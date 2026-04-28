@@ -17,7 +17,7 @@ import tempfile
 import threading
 import time
 import unittest
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
 
 # Add parent directory to path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -43,7 +43,9 @@ class TestIssue170BackgroundTaskDeadlock(unittest.TestCase):
         mgr._cleanup_thread_started = True  # skip thread startup in tests
         return mgr
 
-    def _make_task(self, task_id, status="completed", completed_at=None, created_at=None):
+    def _make_task(
+        self, task_id, status="completed", completed_at=None, created_at=None
+    ):
         """Create a minimal task dict."""
         now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
         return {
@@ -106,7 +108,9 @@ class TestIssue170BackgroundTaskDeadlock(unittest.TestCase):
 
         # Verify total tasks <= MAX_TOTAL_TASKS
         loaded = mgr._load()
-        self.assertLessEqual(len(loaded), mgr.MAX_TOTAL_TASKS + 1)  # +1 for the new task
+        self.assertLessEqual(
+            len(loaded), mgr.MAX_TOTAL_TASKS + 1
+        )  # +1 for the new task
 
         # Verify the new task exists
         task_ids = [t["task_id"] for t in loaded]
@@ -197,7 +201,9 @@ class TestIssue170BackgroundTaskDeadlock(unittest.TestCase):
         elapsed = time.time() - start
 
         self.assertEqual(len(result), 300)
-        self.assertLess(elapsed, 1.0, f"list_all_tasks took {elapsed:.3f}s (should be <1s)")
+        self.assertLess(
+            elapsed, 1.0, f"list_all_tasks took {elapsed:.3f}s (should be <1s)"
+        )
 
     # --- Test 3: Cleanup old tasks ---
 
@@ -213,7 +219,9 @@ class TestIssue170BackgroundTaskDeadlock(unittest.TestCase):
             t = self._make_task(
                 f"old-{i}",
                 status="completed",
-                completed_at=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now - 7200)),
+                completed_at=time.strftime(
+                    "%Y-%m-%dT%H:%M:%SZ", time.gmtime(now - 7200)
+                ),
             )
             tasks.append(t)
 
@@ -222,7 +230,9 @@ class TestIssue170BackgroundTaskDeadlock(unittest.TestCase):
             t = self._make_task(
                 f"recent-{i}",
                 status="completed",
-                completed_at=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now - 1800)),
+                completed_at=time.strftime(
+                    "%Y-%m-%dT%H:%M:%SZ", time.gmtime(now - 1800)
+                ),
             )
             tasks.append(t)
 
@@ -322,7 +332,9 @@ class TestIssue170BackgroundTaskDeadlock(unittest.TestCase):
             t = self._make_task(
                 f"old-{i}",
                 status="completed",
-                completed_at=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now - 7200)),
+                completed_at=time.strftime(
+                    "%Y-%m-%dT%H:%M:%SZ", time.gmtime(now - 7200)
+                ),
             )
             tasks.append(t)
 
@@ -331,7 +343,9 @@ class TestIssue170BackgroundTaskDeadlock(unittest.TestCase):
             t = self._make_task(
                 f"recent-{i}",
                 status="completed",
-                completed_at=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now - 1800)),
+                completed_at=time.strftime(
+                    "%Y-%m-%dT%H:%M:%SZ", time.gmtime(now - 1800)
+                ),
             )
             tasks.append(t)
 
@@ -421,7 +435,6 @@ class TestIssue170AsyncIO(unittest.TestCase):
 
         self.assertEqual(len(errors), 0, f"Errors during concurrent reads: {errors}")
         self.assertEqual(len(results), 50)  # 5 threads × 10 reads
-
 
 
 class TestIssue170InMemoryCache(unittest.TestCase):
@@ -529,7 +542,11 @@ class TestIssue170InMemoryCache(unittest.TestCase):
             mgr.list_all_tasks()
         elapsed = (time.time() - start) / 100  # avg per call
 
-        self.assertLess(elapsed, 0.01, f"list_all_tasks avg {elapsed*1000:.1f}ms (should be <10ms with cache)")
+        self.assertLess(
+            elapsed,
+            0.01,
+            f"list_all_tasks avg {elapsed*1000:.1f}ms (should be <10ms with cache)",
+        )
 
 
 class TestIssue170HealthEndpoint(unittest.TestCase):
@@ -538,31 +555,33 @@ class TestIssue170HealthEndpoint(unittest.TestCase):
     def test_health_response_has_no_active_sessions(self):
         """Health endpoint must not call load_session_map (blocking disk I/O)."""
         import agent_manager as am
+
         src_path = am.__file__
-        with open(src_path, 'r') as f:
+        with open(src_path, "r") as f:
             src = f.read()
 
         # Extract the health handler body
-        health_start = src.find('async def health():')
-        health_end = src.find('\n    @app.', health_start + 1)
+        health_start = src.find("async def health():")
+        health_end = src.find("\n    @app.", health_start + 1)
         health_src = src[health_start:health_end]
 
         # Strip comment lines before checking for prohibited calls
         code_lines = [
-            line for line in health_src.splitlines()
-            if line.strip() and not line.strip().startswith('#')
+            line
+            for line in health_src.splitlines()
+            if line.strip() and not line.strip().startswith("#")
         ]
-        code_only = '\n'.join(code_lines)
+        code_only = "\n".join(code_lines)
 
         self.assertNotIn(
-            'load_session_map()',
+            "load_session_map()",
             code_only,
-            "Health endpoint must not call load_session_map() — blocking disk I/O"
+            "Health endpoint must not call load_session_map() — blocking disk I/O",
         )
         self.assertNotIn(
-            'active_sessions',
+            "active_sessions",
             code_only,
-            "Health endpoint must not include active_sessions (requires blocking disk read)"
+            "Health endpoint must not include active_sessions (requires blocking disk read)",
         )
 
 

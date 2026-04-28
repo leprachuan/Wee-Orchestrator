@@ -143,11 +143,20 @@ class TestCreateNotificationGlobalToggle:
 
 
 class TestSlashNotifications:
+    """Tests updated for issue #250 per-agent notification preference system.
+
+    The global toggle (is_global_enabled) was replaced by per-agent prefs.
+    on/off/mute/all now set per-agent preferences for all known agents.
+    """
+
+    _TEST_AGENTS = [{"name": "orchestrator"}, {"name": "wee-dev"}]
 
     def _make_session_mgr(self, nm):
         mgr = MagicMock()
         mgr._notification_mgr = nm
-        mgr._bg_identity = None
+        # Provide identity so auth check passes in the new per-agent system
+        mgr._bg_identity = "test_user"
+        mgr._agents = self._TEST_AGENTS
         mgr.update_session_field = MagicMock()
         from agent_manager import SessionManager
 
@@ -155,38 +164,50 @@ class TestSlashNotifications:
         return mgr
 
     def test_off_command_sets_global_disabled(self, nm):
+        # New behavior: "off" sets per-agent pref to "off" for all known agents
         mgr = self._make_session_mgr(nm)
-        mgr._slash_notifications("off", {"channel": "telegram"}, "sess1")
-        assert nm.is_global_enabled() is False
+        result = mgr._slash_notifications("off", {"channel": "telegram"}, "sess1")
+        assert nm.get_agent_pref("test_user", "orchestrator") == "off"
+        assert nm.get_agent_pref("test_user", "wee-dev") == "off"
+        assert "disabled" in result.lower()
 
     def test_on_command_sets_global_enabled(self, nm):
-        nm.set_global_enabled(False)
+        # Pre-set agents to "off", then verify "on" restores them
+        nm.set_agent_pref("test_user", "orchestrator", "off")
+        nm.set_agent_pref("test_user", "wee-dev", "off")
         mgr = self._make_session_mgr(nm)
-        mgr._slash_notifications("on", {"channel": "telegram"}, "sess1")
-        assert nm.is_global_enabled() is True
+        result = mgr._slash_notifications("on", {"channel": "telegram"}, "sess1")
+        assert nm.get_agent_pref("test_user", "orchestrator") == "on"
+        assert nm.get_agent_pref("test_user", "wee-dev") == "on"
+        assert "enabled" in result.lower()
 
     def test_current_shows_on(self, nm):
-        nm.set_global_enabled(True)
+        nm.set_agent_pref("test_user", "orchestrator", "on")
         mgr = self._make_session_mgr(nm)
         result = mgr._slash_notifications("current", {"channel": "webui"}, "sess1")
         assert "ON" in result
 
     def test_current_shows_off(self, nm):
-        nm.set_global_enabled(False)
+        nm.set_agent_pref("test_user", "orchestrator", "off")
         mgr = self._make_session_mgr(nm)
         result = mgr._slash_notifications("current", {"channel": "webui"}, "sess1")
         assert "OFF" in result
 
     def test_mute_alias(self, nm):
+        # "mute" is an alias for "off" — sets per-agent prefs
         mgr = self._make_session_mgr(nm)
-        mgr._slash_notifications("mute", {"channel": "webui"}, "sess1")
-        assert nm.is_global_enabled() is False
+        result = mgr._slash_notifications("mute", {"channel": "webui"}, "sess1")
+        assert nm.get_agent_pref("test_user", "orchestrator") == "off"
+        assert nm.get_agent_pref("test_user", "wee-dev") == "off"
 
     def test_all_alias(self, nm):
-        nm.set_global_enabled(False)
+        # "all" is an alias for "on" — sets per-agent prefs
+        nm.set_agent_pref("test_user", "orchestrator", "off")
+        nm.set_agent_pref("test_user", "wee-dev", "off")
         mgr = self._make_session_mgr(nm)
-        mgr._slash_notifications("all", {"channel": "webui"}, "sess1")
-        assert nm.is_global_enabled() is True
+        result = mgr._slash_notifications("all", {"channel": "webui"}, "sess1")
+        assert nm.get_agent_pref("test_user", "orchestrator") == "on"
+        assert nm.get_agent_pref("test_user", "wee-dev") == "on"
 
     def test_invalid_argument(self, nm):
         mgr = self._make_session_mgr(nm)

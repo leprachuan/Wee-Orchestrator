@@ -70,9 +70,7 @@ class TestFormatNotificationMessage:
         assert "very long output" not in msg
 
     def test_no_error_in_message(self):
-        msg = self._fmt(
-            status="failed", error="Traceback (most recent call last)..."
-        )
+        msg = self._fmt(status="failed", error="Traceback (most recent call last)...")
         assert "Traceback" not in msg
 
     def test_no_timestamp_in_message(self):
@@ -96,9 +94,7 @@ class TestFormatNotificationMessage:
     def test_default_description_when_missing(self):
         from notification_manager import _format_notification_message
 
-        msg = _format_notification_message(
-            {"task_id": "bg_1", "status": "completed"}
-        )
+        msg = _format_notification_message({"task_id": "bg_1", "status": "completed"})
         assert "Background task" in msg
 
 
@@ -129,9 +125,10 @@ class TestSchedulerBriefNotification:
     """Test the _brief_notification helper in scheduler/executor.py."""
 
     def _brief(self, icon, name, verb):
-        sys.path.insert(0, os.path.join(
-            os.path.dirname(os.path.abspath(__file__)), "..", "scheduler"
-        ))
+        sys.path.insert(
+            0,
+            os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "scheduler"),
+        )
         from executor import _brief_notification
 
         return _brief_notification(icon, name, verb)

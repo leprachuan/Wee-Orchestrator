@@ -9,6 +9,7 @@ Tests:
 5. _wee_augment_system_prompt_with_tools appends tool section
 6. Skills/AGENTS.md context injected for wee runtime via build_agent_context_prompt
 """
+
 import json
 import os
 import sys
@@ -80,8 +81,15 @@ def _make_tool_call_chunks(tool_id, func_name, arguments_json):
     return chunks
 
 
-def _run_wee_with_openai(mgr, session_id, mock_client, prompt="test",
-                          model="ollama/qwen3:8b", resume=False, **kwargs):
+def _run_wee_with_openai(
+    mgr,
+    session_id,
+    mock_client,
+    prompt="test",
+    model="ollama/qwen3:8b",
+    resume=False,
+    **kwargs,
+):
     """Run wee native with a pre-configured mock OpenAI client."""
     session_data = {
         "runtime": "wee",
@@ -103,9 +111,14 @@ def _run_wee_with_openai(mgr, session_id, mock_client, prompt="test",
     defaults.update(kwargs)
 
     with patch.object(mgr, "get_or_create_session_data", return_value=session_data):
-        with patch.object(mgr, "build_agent_context_prompt",
-                          return_value="[sys] You are a helpful assistant."):
-            with patch.object(mgr, "load_session_map", return_value={session_id: session_data}):
+        with patch.object(
+            mgr,
+            "build_agent_context_prompt",
+            return_value="[sys] You are a helpful assistant.",
+        ):
+            with patch.object(
+                mgr, "load_session_map", return_value={session_id: session_data}
+            ):
                 with patch.object(mgr, "save_session_map"):
                     return mgr.run_wee_native(**defaults)
 
@@ -116,7 +129,7 @@ class TestIssue111ToolAudit(unittest.TestCase):
     @patch("openai.OpenAI")
     def test_build_agent_context_prompt_correct_arg_order(self, mock_openai_cls):
         """Issue #111: build_agent_context_prompt must be called with (agent, prompt, session_id, ...)
-        
+
         The old buggy call was build_agent_context_prompt(prompt, agent, channel, session_id)
         which passed user text as agent name and vice versa.
         """
@@ -125,23 +138,31 @@ class TestIssue111ToolAudit(unittest.TestCase):
         session_data = {"runtime": "wee", "model": "ollama/qwen3:8b", "channel": "api"}
 
         mock_client = MagicMock()
-        mock_client.chat.completions.create.return_value = iter([_make_text_chunk("done")])
+        mock_client.chat.completions.create.return_value = iter(
+            [_make_text_chunk("done")]
+        )
         mock_openai_cls.return_value = mock_client
 
         captured_calls = []
 
         def capture_context_prompt(agent, prompt, n8n_session_id, **kw):
-            captured_calls.append({
-                "agent": agent,
-                "prompt": prompt,
-                "n8n_session_id": n8n_session_id,
-                "kwargs": kw,
-            })
+            captured_calls.append(
+                {
+                    "agent": agent,
+                    "prompt": prompt,
+                    "n8n_session_id": n8n_session_id,
+                    "kwargs": kw,
+                }
+            )
             return "system prompt for testing"
 
         with patch.object(mgr, "get_or_create_session_data", return_value=session_data):
-            with patch.object(mgr, "build_agent_context_prompt", side_effect=capture_context_prompt):
-                with patch.object(mgr, "load_session_map", return_value={sid: session_data}):
+            with patch.object(
+                mgr, "build_agent_context_prompt", side_effect=capture_context_prompt
+            ):
+                with patch.object(
+                    mgr, "load_session_map", return_value={sid: session_data}
+                ):
                     with patch.object(mgr, "save_session_map"):
                         mgr.run_wee_native(
                             prompt="run ls /opt",
@@ -153,7 +174,9 @@ class TestIssue111ToolAudit(unittest.TestCase):
                             timeout=30,
                         )
 
-        self.assertEqual(len(captured_calls), 1, "build_agent_context_prompt must be called once")
+        self.assertEqual(
+            len(captured_calls), 1, "build_agent_context_prompt must be called once"
+        )
         call_args = captured_calls[0]
 
         # The first positional arg must be the AGENT name, not the user prompt
@@ -182,7 +205,9 @@ class TestIssue111ToolAudit(unittest.TestCase):
         sid = "test_111_tool_schemas"
 
         mock_client = MagicMock()
-        mock_client.chat.completions.create.return_value = iter([_make_text_chunk("Hello!")])
+        mock_client.chat.completions.create.return_value = iter(
+            [_make_text_chunk("Hello!")]
+        )
         mock_openai_cls.return_value = mock_client
 
         _run_wee_with_openai(mgr, sid, mock_client, prompt="Hello")
@@ -205,7 +230,7 @@ class TestIssue111ToolAudit(unittest.TestCase):
 
     def test_system_prompt_contains_tool_declaration(self):
         """Issue #111: System prompt must explicitly declare available tools.
-        
+
         Many Ollama models ignore JSON tool schemas without a text declaration.
         """
         mgr = _make_mgr()
@@ -230,7 +255,9 @@ class TestIssue111ToolAudit(unittest.TestCase):
             f"System prompt must include tool usage guidance (one of: {tool_keywords})",
         )
         # Original content must be preserved
-        self.assertIn(base_prompt, augmented, "Original prompt content must be preserved")
+        self.assertIn(
+            base_prompt, augmented, "Original prompt content must be preserved"
+        )
         # New content must be appended (not prepended)
         self.assertTrue(
             augmented.startswith(base_prompt),
@@ -260,6 +287,7 @@ class TestIssue111ToolAudit(unittest.TestCase):
         final_chunk = _make_text_chunk("Here are the contents of /opt: ...")
 
         call_count = [0]
+
         def mock_create(**kwargs):
             call_count[0] += 1
             if call_count[0] == 1:
@@ -277,11 +305,18 @@ class TestIssue111ToolAudit(unittest.TestCase):
             return "bin  etc  opt  usr"
 
         with patch.object(mgr, "get_or_create_session_data", return_value=session_data):
-            with patch.object(mgr, "build_agent_context_prompt",
-                              return_value="[sys] bash python tools available"):
-                with patch.object(mgr, "load_session_map", return_value={sid: session_data}):
+            with patch.object(
+                mgr,
+                "build_agent_context_prompt",
+                return_value="[sys] bash python tools available",
+            ):
+                with patch.object(
+                    mgr, "load_session_map", return_value={sid: session_data}
+                ):
                     with patch.object(mgr, "save_session_map"):
-                        with patch.object(mgr, "_wee_execute_tool", side_effect=mock_execute_tool):
+                        with patch.object(
+                            mgr, "_wee_execute_tool", side_effect=mock_execute_tool
+                        ):
                             mgr.run_wee_native(
                                 prompt="run ls /opt and tell me what you see",
                                 model="ollama/qwen3:8b",
@@ -329,7 +364,9 @@ class TestIssue111ToolAudit(unittest.TestCase):
 
         with patch.object(mgr, "get_or_create_session_data", return_value=session_data):
             with patch.object(mgr, "build_agent_context_prompt", return_value="sys"):
-                with patch.object(mgr, "load_session_map", return_value={sid: session_data}):
+                with patch.object(
+                    mgr, "load_session_map", return_value={sid: session_data}
+                ):
                     with patch.object(mgr, "save_session_map"):
                         mgr.run_wee_native(
                             prompt="test",
@@ -341,17 +378,23 @@ class TestIssue111ToolAudit(unittest.TestCase):
                             timeout=30,
                         )
 
-        self.assertGreater(len(captured_tools), 0, "Tools must be captured from API calls")
+        self.assertGreater(
+            len(captured_tools), 0, "Tools must be captured from API calls"
+        )
 
         for tool in captured_tools:
-            self.assertEqual(tool.get("type"), "function", "Tool type must be 'function'")
+            self.assertEqual(
+                tool.get("type"), "function", "Tool type must be 'function'"
+            )
             self.assertIn("function", tool, "Tool must have 'function' key")
             func = tool["function"]
             self.assertIn("name", func, "Tool function must have 'name'")
             self.assertIn("description", func, "Tool function must have 'description'")
             self.assertIn("parameters", func, "Tool function must have 'parameters'")
             params = func["parameters"]
-            self.assertEqual(params.get("type"), "object", "Parameters type must be 'object'")
+            self.assertEqual(
+                params.get("type"), "object", "Parameters type must be 'object'"
+            )
             self.assertIn("properties", params, "Parameters must have 'properties'")
             self.assertIn("required", params, "Parameters must have 'required'")
 
@@ -362,7 +405,9 @@ class TestIssue111ToolAudit(unittest.TestCase):
         sid = "test_111_sys_msg"
         session_data = {"runtime": "wee", "model": "ollama/qwen3:8b", "channel": "api"}
 
-        expected_sys_content = "[sys] You are a helpful assistant with bash/python tools."
+        expected_sys_content = (
+            "[sys] You are a helpful assistant with bash/python tools."
+        )
 
         captured_messages = []
 
@@ -375,8 +420,12 @@ class TestIssue111ToolAudit(unittest.TestCase):
         mock_openai_cls.return_value = mock_client
 
         with patch.object(mgr, "get_or_create_session_data", return_value=session_data):
-            with patch.object(mgr, "build_agent_context_prompt", return_value=expected_sys_content):
-                with patch.object(mgr, "load_session_map", return_value={sid: session_data}):
+            with patch.object(
+                mgr, "build_agent_context_prompt", return_value=expected_sys_content
+            ):
+                with patch.object(
+                    mgr, "load_session_map", return_value={sid: session_data}
+                ):
                     with patch.object(mgr, "save_session_map"):
                         mgr.run_wee_native(
                             prompt="test user message",
@@ -389,7 +438,9 @@ class TestIssue111ToolAudit(unittest.TestCase):
                         )
 
         system_msgs = [m for m in captured_messages if m.get("role") == "system"]
-        self.assertGreater(len(system_msgs), 0, "At least one system message must be in API call")
+        self.assertGreater(
+            len(system_msgs), 0, "At least one system message must be in API call"
+        )
         sys_content = system_msgs[0]["content"]
         # The augmented prompt must contain the base content
         self.assertIn(

@@ -119,6 +119,63 @@ class NotificationManager:
         """Convenience: True when external notifications should be suppressed."""
         return self.get_user_pref(identity) == "off"
 
+    def set_agent_pref(self, identity: str, agent: str, preference: str):
+        """Store notification preference for a specific agent.
+
+        ``identity`` is the normalized user identity.
+        ``agent`` is the agent name (e.g. "research", "wee-qa", "smarthome").
+        ``preference`` is "on" or "off".
+
+        Per-agent preferences override the global user preference.
+        """
+        bare = self._normalize_identity(identity)
+        key = f"{bare}:{agent}"
+        with self._prefs_lock:
+            prefs = self._load_prefs()
+            prefs[key] = {
+                "type": "agent",
+                "preference": preference,
+                "agent": agent,
+                "updated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            }
+            self._save_prefs(prefs)
+
+    def get_agent_pref(self, identity: str, agent: str) -> str:
+        """Return notification preference for a specific agent ("on" or "off").
+
+        If no agent-specific preference is set, returns "on" (default).
+        """
+        bare = self._normalize_identity(identity)
+        key = f"{bare}:{agent}"
+        with self._prefs_lock:
+            prefs = self._load_prefs()
+        entry = prefs.get(key)
+        if isinstance(entry, dict) and entry.get("type") == "agent":
+            return entry.get("preference", "on")
+        return "on"
+
+    def is_agent_muted(self, identity: str, agent: str) -> bool:
+        """Return True if notifications for this agent should be suppressed."""
+        return self.get_agent_pref(identity, agent) == "off"
+
+    def get_all_agent_prefs(self, identity: str) -> dict:
+        """Return all per-agent preferences for this identity.
+
+        Returns a dict: {agent_name: "on"|"off", ...}
+        """
+        bare = self._normalize_identity(identity)
+        with self._prefs_lock:
+            prefs = self._load_prefs()
+
+        result = {}
+        prefix = f"{bare}:"
+        for key, entry in prefs.items():
+            if isinstance(entry, dict) and entry.get("type") == "agent":
+                if key.startswith(prefix):
+                    agent = key[len(prefix) :]
+                    result[agent] = entry.get("preference", "on")
+        return result
+
     # ---- Global notification toggle ----
 
     def _load_global_settings(self) -> dict:
@@ -209,6 +266,7 @@ class NotificationManager:
         error: Optional[str] = None,
         skip_external: bool = False,
         is_critical: bool = False,
+        agent: Optional[str] = None,
     ) -> Optional[dict]:
         """Create a notification and route it appropriately.
 
@@ -216,6 +274,10 @@ class NotificationManager:
         False, the notification is completely suppressed — no WebUI storage,
         no Telegram/WebEx delivery.  Critical notifications (heartbeat
         alerts, system crashes) always go through regardless of the toggle.
+
+        If ``agent`` is provided and the user has a per-agent notification
+        preference for that agent set to "off", external notifications are
+        skipped (but WebUI storage still happens).
         """
         # Global suppression: skip everything for non-critical notifications
         if not is_critical and not self.is_global_enabled():
@@ -237,6 +299,7 @@ class NotificationManager:
             "error": (error or "")[:500] if error else None,
             "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
             "read": False,
+            "agent": agent,
         }
 
         # Always store for WebUI polling (regardless of originating channel)
@@ -249,13 +312,15 @@ class NotificationManager:
             self._save(notifications)
 
         # Route to external channels if the task was created from telegram/webex
-        # Defense-in-depth: check global mute AND per-identity mute even if
-        # skip_external was not explicitly set (covers identity mismatch and
-        # late-mute edge cases).
+        # Defense-in-depth: check global mute AND per-identity mute AND per-agent
+        # mute even if skip_external was not explicitly set (covers identity mismatch
+        # and late-mute edge cases).
         if not skip_external:
             if not is_critical and self.is_muted("_global"):
                 skip_external = True
             elif self.is_muted(user_key):
+                skip_external = True
+            elif agent and self.is_agent_muted(user_key, agent):
                 skip_external = True
 
         if not skip_external:
