@@ -64,7 +64,8 @@ Wee-Orchestrator is a unified AI agent platform that lets you chat with **any AI
 - **🔔 In-Thread Notifications** — Real-time task lifecycle updates (queued → running → complete) in your conversation
 - **📋 Dual-Source TODOs** — Sync TODOs between GitHub Issues (primary) and flat files (fallback) with auto-deduplication
 - **🔧 Expandable Tool Calls** — View tool invocations with collapsible output panels in WebUI; markdown rendering, error highlighting, silent mode support
-- **💰 Token Usage Tracking** — Real-time tracking of prompt/completion tokens and cost estimation across all runtimes; live stats displayed in WebUI footer
+- **💰 Token Usage Tracking** — Real-time tracking of prompt/completion tokens per turn; context window usage percentage with 75% threshold warnings; live stats via `/tokens` in the CLI REPL
+- **📐 Context Window Management** — Automatic per-model context window registry (20+ models); LLM-powered `/compact` command to summarize old history and free context space; see [Context Window Management](docs/context-window.md)
 - **🔌 Extensible Skills** — Plugin architecture for adding capabilities (Cisco Meraki, Home Assistant, etc.)
 - **⚙️ Slash Command Registry — Pure-server commands that bypass the LLM for reduced latency; auto-registers with Telegram BotFather for autocomplete; built-in `/secret` command for secure credential management
 
@@ -146,6 +147,8 @@ Then open `http://localhost:8000/ui` in your browser and pair via Telegram or We
 | `/cancel` | Cancel the current running task |
 | `/schedule list` | List all scheduled jobs |
 | `/schedule add <name> \| <schedule> \| <task>` | Create a scheduled job |
+| `/tokens` | Show token usage stats and context window percentage |
+| `/compact [N]` | Compact message history to N% of context window (default 50%) |
 | `/help` | Show all available commands |
 
 ---
