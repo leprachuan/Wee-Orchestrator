@@ -1,7 +1,7 @@
 """Chat panel component"""
 
-from textual.widgets import RichLog
 from rich.text import Text
+from textual.widgets import RichLog
 
 
 class ChatPanel(RichLog):
