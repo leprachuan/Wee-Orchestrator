@@ -123,21 +123,18 @@ def _sanitize_command_for_display(text: str) -> str:
 
 def _sanitize_tool_call_for_display(data: dict) -> dict:
     """Return a shallow copy of a tool_call event dict with sensitive
-    credentials redacted from the ``input`` field.  Other fields are
-    passed through unchanged."""
+    credentials redacted from the ``input`` and ``output`` fields.
+    Other fields are passed through unchanged."""
     if not isinstance(data, dict):
         return data
+    sanitized = dict(data)
     inp = data.get("input")
     if inp is None:
         # Also check partial_json for streaming deltas
         pj = data.get("partial_json")
         if pj and isinstance(pj, str):
-            sanitized = dict(data)
             sanitized["partial_json"] = _sanitize_command_for_display(pj)
-            return sanitized
-        return data
-    sanitized = dict(data)
-    if isinstance(inp, str):
+    elif isinstance(inp, str):
         sanitized["input"] = _sanitize_command_for_display(inp)
     elif isinstance(inp, dict):
         # Claude-style structured input — sanitize known fields
@@ -146,6 +143,10 @@ def _sanitize_tool_call_for_display(data: dict) -> dict:
             if field in new_inp and isinstance(new_inp[field], str):
                 new_inp[field] = _sanitize_command_for_display(new_inp[field])
         sanitized["input"] = new_inp
+    # Sanitize output field (tool result content may contain credentials)
+    out = data.get("output")
+    if out and isinstance(out, str):
+        sanitized["output"] = _sanitize_command_for_display(out)
     return sanitized
 
 

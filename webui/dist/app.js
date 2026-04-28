@@ -1808,7 +1808,8 @@ async function reconnectToStream(sessionId) {
       STATE.currentAbortController = null;
     }
 
-    // Stream ended without done event — clean up
+    // Stream ended without done event — clean up any stuck tool spinners
+    cleanupAllToolSpinners();
     STATE.isProcessing = false;
     hideTyping();
     delete STATE.sessionStreams[sessionId];
