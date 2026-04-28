@@ -33,12 +33,17 @@ PROVIDER_PRESETS = {
 # Keys are model name substrings; longest match wins.
 MODEL_CONTEXT_WINDOWS: dict = {
     # OpenAI
-    "gpt-4o": 128000,
-    "gpt-4-turbo": 128000,
-    "gpt-4-32k": 32768,
-    "gpt-4": 8192,
-    "gpt-3.5-turbo-16k": 16385,
-    "gpt-3.5-turbo": 16385,
+    "gpt-5": 1_047_576,
+    "gpt-4.1-mini": 1_047_576,
+    "gpt-4.1-nano": 1_047_576,
+    "gpt-4.1": 1_047_576,
+    "gpt-4o-mini": 128_000,
+    "gpt-4o": 128_000,
+    "gpt-4-turbo": 128_000,
+    "gpt-4-32k": 32_768,
+    "gpt-4": 8_192,
+    "gpt-3.5-turbo-16k": 16_385,
+    "gpt-3.5-turbo": 16_385,
     # Anthropic Claude (via OpenRouter or direct)
     "claude-3": 200000,
     "claude-2": 100000,
@@ -114,15 +119,30 @@ def count_message_tokens(messages: list, model: str = "") -> int:
         content = msg.get("content") or ""
         if isinstance(content, list):
             for part in content:
-                if isinstance(part, dict) and part.get("type") == "text":
-                    total += estimate_tokens(part["text"], model)
+                if isinstance(part, dict):
+                    if part.get("type") == "text":
+                        total += estimate_tokens(part["text"], model)
+                    elif part.get("type") in ("tool_use", "tool_result"):
+                        # Count tool name + input/output text
+                        total += estimate_tokens(part.get("name", ""), model)
+                        inner = part.get("input") or part.get("content") or ""
+                        if isinstance(inner, str):
+                            total += estimate_tokens(inner, model)
+                        elif isinstance(inner, dict):
+                            total += estimate_tokens(str(inner), model)
         else:
             total += estimate_tokens(str(content), model)
+        # Count tool_calls array for assistant messages (OpenAI format)
+        for tc in msg.get("tool_calls") or []:
+            fn = tc.get("function") or {}
+            total += estimate_tokens(fn.get("name", ""), model)
+            total += estimate_tokens(fn.get("arguments", ""), model)
         total += 4  # per-message overhead (role, delimiters)
     return total
 
 
 COMPACT_TRIGGER_FRACTION = 0.75
+_COMPACT_WARN_PCT = COMPACT_TRIGGER_FRACTION * 100
 
 
 def compact_messages(
@@ -199,6 +219,17 @@ def compact_messages(
         ]
         + to_keep
     )
+
+    actual_tokens = count_message_tokens(compacted, model)
+    if actual_tokens > target_tokens:
+        import warnings
+
+        warnings.warn(
+            f"compact_messages: result ({actual_tokens} tokens) exceeds "
+            f"target ({target_tokens} tokens) — recent messages alone are too large.",
+            stacklevel=2,
+        )
+
     return compacted, summary_text
 
 

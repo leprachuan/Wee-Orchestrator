@@ -35,6 +35,7 @@ sys.path.insert(0, _HERE)
 from wee_runtime import _WEE_TOOLS  # noqa: E402
 from wee_runtime import (  # noqa: E402
     _ANTI_HALLUCINATION_PROMPT,
+    _COMPACT_WARN_PCT,
     COMPACT_TRIGGER_FRACTION,
     MAX_TOOL_ROUNDS,
     compact_messages,
@@ -171,6 +172,9 @@ class TokenTracker:
         self.total_tokens = 0
         self.turns = 0
         self.session_total = 0  # cumulative across all API turns
+        self.last_prompt_tokens = (
+            0  # prompt tokens from the most recent turn (actual current context)
+        )
         self.context_window = context_window  # 0 means unknown
 
     def update(self, usage):
@@ -183,13 +187,20 @@ class TokenTracker:
             self.completion_tokens += ct
             self.total_tokens += tt
             self.session_total += tt if tt else (pt + ct)
+            self.last_prompt_tokens = pt  # tracks actual current context size
         self.turns += 1
 
     def percent_used(self) -> float:
-        """Return percentage of context window consumed (0 if window unknown)."""
+        """Return percentage of context window consumed (0 if window unknown).
+
+        Uses last_prompt_tokens (the prompt token count from the most recent API
+        call) rather than session_total to avoid quadratic over-counting: each
+        turn re-sends the full message history, so session_total grows without
+        bound even when the actual context usage is stable.
+        """
         if not self.context_window:
             return 0.0
-        return min(100.0, self.session_total / self.context_window * 100)
+        return min(100.0, self.last_prompt_tokens / self.context_window * 100)
 
     def summary(self) -> str:
         lines = [
@@ -201,7 +212,7 @@ class TokenTracker:
         if self.context_window:
             pct = self.percent_used()
             lines.append(
-                f"Context window: {self.session_total:,}"
+                f"Context window: {self.last_prompt_tokens:,}"
                 f"/{self.context_window:,} tokens ({pct:.1f}% used)"
             )
         return "\n".join(lines)
@@ -501,6 +512,10 @@ def run_interactive(
                         continue
                 ctx_win = token_tracker.context_window or get_context_window(model)
                 target_toks = int(ctx_win * target_pct / 100)
+                non_sys_count = sum(1 for m in messages if m.get("role") != "system")
+                if non_sys_count <= 6:
+                    _print_info("Nothing to compact — history is already short.")
+                    continue
                 before_n = len(messages)
                 before_toks = count_message_tokens(messages, model)
                 _print_info(
@@ -508,9 +523,15 @@ def run_interactive(
                     f" → target {target_pct}% ({target_toks:,} tokens)..."
                 )
                 try:
-                    compacted, summary = compact_messages(
-                        messages, target_toks, model, client
-                    )
+                    import warnings
+
+                    with warnings.catch_warnings(record=True) as w:
+                        warnings.simplefilter("always")
+                        compacted, summary = compact_messages(
+                            messages, target_toks, model, client
+                        )
+                        for warning in w:
+                            _print_info(f"[Wee] Warning: {warning.message}")
                     after_n = len(compacted)
                     after_toks = count_message_tokens(compacted, model)
                     messages = compacted
@@ -575,7 +596,7 @@ def run_interactive(
             messages.append({"role": "assistant", "content": response})
             if token_tracker.context_window:
                 pct = token_tracker.percent_used()
-                if pct >= COMPACT_TRIGGER_FRACTION * 100:
+                if pct >= _COMPACT_WARN_PCT:
                     _print_info(
                         f"[Wee] Context window {pct:.0f}% full —"
                         " consider /compact to free space."

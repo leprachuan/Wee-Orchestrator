@@ -8,6 +8,7 @@ sys.path.insert(0, "/opt/n8n-copilot-shim-dev")
 
 from wee_cli import TokenTracker  # noqa: E402
 from wee_runtime import (  # noqa: E402
+    _COMPACT_WARN_PCT,
     COMPACT_TRIGGER_FRACTION,
     MODEL_CONTEXT_WINDOWS,
     compact_messages,
@@ -27,6 +28,25 @@ class TestModelContextWindows(unittest.TestCase):
 
     def test_openai_gpt4_base(self):
         assert get_context_window("gpt-4") == 8192
+
+    def test_openai_gpt41(self):
+        assert get_context_window("gpt-4.1") == 1_047_576
+
+    def test_openai_gpt41_mini(self):
+        assert get_context_window("gpt-4.1-mini") == 1_047_576
+
+    def test_openai_gpt41_nano(self):
+        assert get_context_window("gpt-4.1-nano") == 1_047_576
+
+    def test_openai_gpt5(self):
+        assert get_context_window("gpt-5") == 1_047_576
+
+    def test_openai_gpt4o_mini_explicit(self):
+        assert get_context_window("gpt-4o-mini") == 128_000
+
+    def test_gpt41_does_not_fall_through_to_gpt4(self):
+        # gpt-4.1 must NOT resolve to gpt-4's 8192 context window
+        assert get_context_window("gpt-4.1") != 8192
 
     def test_qwen3(self):
         assert get_context_window("qwen3:8b") == 32768
@@ -88,6 +108,48 @@ class TestCountMessageTokens(unittest.TestCase):
         result = count_message_tokens(msgs)
         assert result >= 4  # at least the per-message overhead
 
+    def test_tool_call_messages_counted(self):
+        # tool_calls in assistant message should be counted
+        msgs = [
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "function": {
+                            "name": "bash",
+                            "arguments": '{"command": "echo hello world"}',
+                        }
+                    }
+                ],
+            }
+        ]
+        result = count_message_tokens(msgs)
+        # Should count function name + arguments, not just overhead
+        base = count_message_tokens([{"role": "assistant", "content": None}])
+        assert result > base
+
+    def test_tool_result_content_counted(self):
+        # Anthropic-style tool_result parts in content list
+        msgs = [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "tool_result",
+                        "name": "bash",
+                        "content": "hello world output from the tool",
+                    }
+                ],
+            }
+        ]
+        result = count_message_tokens(msgs)
+        plain = count_message_tokens(
+            [{"role": "user", "content": "hello world output from the tool"}]
+        )
+        # Tool result should contribute roughly same tokens as plain content
+        assert result >= plain - 4  # within per-message overhead margin
+
 
 class TestTokenTracker(unittest.TestCase):
     def test_init_with_context_window(self):
@@ -101,19 +163,38 @@ class TestTokenTracker(unittest.TestCase):
         assert tracker.percent_used() == 0.0
 
     def test_percent_used_calculation(self):
+        # percent_used() uses last_prompt_tokens (actual current context size),
+        # NOT session_total (which grows quadratically across turns).
         tracker = TokenTracker(context_window=10000)
         usage = MagicMock()
         usage.prompt_tokens = 1000
         usage.completion_tokens = 500
         usage.total_tokens = 1500
         tracker.update(usage)
-        assert tracker.session_total == 1500
-        assert abs(tracker.percent_used() - 15.0) < 0.01
+        assert tracker.session_total == 1500  # cumulative still tracked
+        assert tracker.last_prompt_tokens == 1000
+        assert abs(tracker.percent_used() - 10.0) < 0.01  # 1000/10000 * 100
+
+    def test_percent_used_does_not_grow_quadratically(self):
+        # Simulate multiple turns: session_total grows, but percent_used stays
+        # bounded by the actual prompt_tokens of the most recent turn.
+        tracker = TokenTracker(context_window=10000)
+        for i in range(20):
+            usage = MagicMock()
+            usage.prompt_tokens = 500  # same context size each turn
+            usage.completion_tokens = 100
+            usage.total_tokens = 600
+            tracker.update(usage)
+        # session_total = 20 * 600 = 12000 → would give 120% under old logic
+        # but percent_used() should reflect last_prompt_tokens = 500 = 5%
+        assert tracker.session_total == 12000
+        assert tracker.last_prompt_tokens == 500
+        assert abs(tracker.percent_used() - 5.0) < 0.01
 
     def test_percent_used_capped_at_100(self):
         tracker = TokenTracker(context_window=100)
         usage = MagicMock()
-        usage.prompt_tokens = 0
+        usage.prompt_tokens = 9999  # prompt_tokens drives percent_used
         usage.completion_tokens = 0
         usage.total_tokens = 9999
         tracker.update(usage)
@@ -199,6 +280,25 @@ class TestCompactMessages(unittest.TestCase):
         assert compacted == messages
         assert summary == ""
 
+    def test_compact_warns_when_result_exceeds_target(self):
+        import warnings
+
+        # Build a history with 20 very large messages so even keep_recent=6
+        # will exceed a tiny target_tokens.
+        messages = [{"role": "system", "content": "You are helpful."}]
+        for i in range(20):
+            messages.append({"role": "user", "content": "x" * 500})
+            messages.append({"role": "assistant", "content": "x" * 500})
+
+        client = self._make_client("Summary " + "x" * 200)
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            compact_messages(
+                messages, target_tokens=10, model="qwen3:8b", client=client
+            )
+        # Should have emitted at least one warning about exceeding target
+        assert any("exceeds" in str(warning.message) for warning in w)
+
     def test_system_prompt_preserved(self):
         sys_content = "You are a specialized assistant."
         messages = [{"role": "system", "content": sys_content}]
@@ -232,6 +332,9 @@ class TestCompactMessages(unittest.TestCase):
 
     def test_compact_trigger_fraction(self):
         assert COMPACT_TRIGGER_FRACTION == 0.75
+
+    def test_compact_warn_pct(self):
+        assert _COMPACT_WARN_PCT == 75.0
 
 
 if __name__ == "__main__":
