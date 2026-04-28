@@ -359,9 +359,33 @@ _FALLBACK_PATTERNS = [
     r"overloaded",
 ]
 
+# Copilot permission-mode instruction blocks (issue #190).
+# Defined as module-level constants to avoid duplication across original,
+# proactive-restart, and reactive-recovery paths in run_copilot().
+_COPILOT_ELEVATED_MODE_INSTRUCTIONS = (
+    "\n\n[ELEVATED MODE ENABLED]\n"
+    "Full permissions granted. ALL commands requiring elevated privileges MUST automatically "  # noqa: E501
+    "prefix with 'sudo' \u2014 no exceptions. This includes:\n"
+    "\u2022 Service management: sudo systemctl restart/start/stop/reload/enable/disable <service>\n"  # noqa: E501
+    "\u2022 Network commands: sudo ping, sudo ssh, sudo iptables, sudo ip, etc.\n"
+    "\u2022 System administration: sudo journalctl, sudo systemd-*, sudo chmod/chown on system paths\n"  # noqa: E501
+    "\u2022 Any command that would fail due to insufficient permissions\n"
+    "Sudo is configured without password prompt (NOPASSWD:ALL). "
+    "Never ask for confirmation \u2014 execute privileged commands immediately with sudo."  # noqa: E501
+)
+_COPILOT_SANDBOXED_MODE_INSTRUCTIONS = (
+    "\n\n[SANDBOXED MODE ENABLED]\n"
+    "Read-only access only. Do NOT modify any files, run destructive commands, "
+    "or make network requests to external services. Analysis and reporting only."
+)
+# Session expiry constants (issue #190).
+# Used in both proactive age check and reactive token expiry recovery.
+_COPILOT_SESSION_MAX_AGE_SEC = 25 * 60  # 25 minutes
+_TOKEN_EXPIRED_MARKER = "Session token expired"
+
 
 class BackgroundTaskManager:
-    """Manages background task lifecycle: creation, tracking, output capture, cleanup."""
+    """Manages background task lifecycle: creation, tracking, output capture, cleanup."""  # noqa: E501
 
     MAX_TASKS_PER_USER = int(os.environ.get("BG_MAX_TASKS_PER_USER", "5"))
     MAX_OUTPUT_LINES = 500
@@ -1486,6 +1510,7 @@ class SessionManager:
                 ["sonnet-thinking"],
             ),
             ("claude-sonnet-4.6", "Claude Sonnet 4.6", ["sonnet-4.6"]),
+            ("claude-opus-4.7", "Claude Opus 4.7", ["opus-4.7"]),
             ("claude-opus-4.5", "Claude Opus 4.5", ["opus-4.5"]),
             ("claude-opus-4.6", "Claude Opus 4.6", ["opus-4.6", "opus"]),
             ("claude-haiku-4.5", "Claude Haiku 4.5", ["haiku-4.5", "haiku"]),
@@ -1659,6 +1684,11 @@ class SessionManager:
 
         # Last subprocess exit code per n8n_session_id (for debugging/monitoring)
         self._last_exit_codes: Dict[str, int] = {}
+
+        # Copilot session start times for proactive token refresh (issue #190).
+        # Maps n8n_session_id -> float (epoch seconds when session was started).
+        # Copilot session tokens expire ~30 min after creation; we restart at 25 min.
+        self._copilot_session_start: Dict[str, float] = {}
 
         # Per-session live status for mobile channel progress updates (F004).
         # Maps n8n_session_id -> {"text": str, "updated_at": float}
@@ -3272,7 +3302,11 @@ You can mention an agent in your prompt and it will auto-delegate:
     def _copilot_static_fallback(self) -> dict:
         # Static model list used when copilot CLI is unavailable
         return {
+            "Auto": [
+                "auto",
+            ],
             "Claude Models": [
+                "claude-opus-4.7",
                 "claude-sonnet-4.6",
                 "claude-opus-4.6",
                 "claude-haiku-4.5",
@@ -3330,7 +3364,7 @@ You can mention an agent in your prompt and it will auto-delegate:
                     for m in models
                     if any(
                         kw in m.lower()
-                        for kw in ["gpt", "claude", "gemini", "o1", "o3", "o4"]
+                        for kw in ["gpt", "claude", "gemini", "o1", "o3", "o4", "auto"]
                     )
                 ]
 
@@ -3338,6 +3372,8 @@ You can mention an agent in your prompt and it will auto-delegate:
             if not models:
                 # Look for known models as a sanity check/fallback
                 fallback_models = [
+                    "auto",
+                    "claude-opus-4.7",
                     "claude-sonnet-4.6",
                     "claude-sonnet-4.5",
                     "claude-haiku-4.5",
@@ -3373,7 +3409,11 @@ You can mention an agent in your prompt and it will auto-delegate:
                 # copilot CLI no longer lists models in --help (choices removed in newer versions).
                 # Return the static fallback list so /model list and /model set still work.
                 return {
+                    "Auto": [
+                        "auto",
+                    ],
                     "Claude Models": [
+                        "claude-opus-4.7",
                         "claude-sonnet-4.6",
                         "claude-opus-4.6",
                         "claude-haiku-4.5",
@@ -5798,6 +5838,7 @@ User Request:
     def _cleanup_stream_buffer(self, session_id: str) -> None:
         """Remove the stream buffer entirely (called after query completes)."""
         self._stream_buffers.pop(session_id, None)
+        self._copilot_session_start.pop(session_id, None)
 
     def _cleanup_stale_stream_buffers(self, max_age: float = 600.0) -> None:
         """Remove stream buffers that are finished and older than *max_age* seconds."""
@@ -6711,25 +6752,9 @@ User Request:
 
         # Add elevated mode instructions for unrestricted privileged access
         if mode == "elevated":
-            elevated_instruction = (
-                "\n\n[ELEVATED MODE ENABLED]\n"
-                "Full permissions granted. ALL commands requiring elevated privileges MUST automatically "
-                "prefix with 'sudo' \u2014 no exceptions. This includes:\n"
-                "\u2022 Service management: sudo systemctl restart/start/stop/reload/enable/disable <service>\n"
-                "\u2022 Network commands: sudo ping, sudo ssh, sudo iptables, sudo ip, etc.\n"
-                "\u2022 System administration: sudo journalctl, sudo systemd-*, sudo chmod/chown on system paths\n"
-                "\u2022 Any command that would fail due to insufficient permissions\n"
-                "Sudo is configured without password prompt (NOPASSWD:ALL). "
-                "Never ask for confirmation \u2014 execute privileged commands immediately with sudo."
-            )
-            context_prompt = context_prompt + elevated_instruction
+            context_prompt = context_prompt + _COPILOT_ELEVATED_MODE_INSTRUCTIONS
         elif mode == "sandboxed":
-            sandboxed_instruction = (
-                "\n\n[SANDBOXED MODE ENABLED]\n"
-                "Read-only access only. Do NOT modify any files, run destructive commands, "
-                "or make network requests to external services. Analysis and reporting only."
-            )
-            context_prompt = context_prompt + sandboxed_instruction
+            context_prompt = context_prompt + _COPILOT_SANDBOXED_MODE_INSTRUCTIONS
 
         # Expand home path for MCP config file
         mcp_config_path = os.path.expanduser("~/.copilot/mcp-config.json")
@@ -6751,10 +6776,46 @@ User Request:
             cmd.insert(4, "--allow-all-paths")
             cmd.append("--yolo")
 
+        # Proactive session age check (issue #190): Copilot session tokens expire
+        # ~30 min after creation. If the session is > 25 min old, start fresh to
+        # avoid mid-task "Session token expired" crashes on long-running tasks.
+        _session_age = time.time() - getattr(self, "_copilot_session_start", {}).get(
+            n8n_session_id, 0
+        )
+        if resume and session_id and _session_age > _COPILOT_SESSION_MAX_AGE_SEC:
+            print(
+                f"[Session] Copilot session age {_session_age:.0f}s exceeds "
+                f"{_COPILOT_SESSION_MAX_AGE_SEC}s — starting fresh to avoid token expiry",
+                file=sys.stderr,
+            )
+            resume = False
+            session_id = None
+            # Rebuild context prompt as if starting fresh
+            context_prompt = self.build_agent_context_prompt(
+                agent,
+                prompt,
+                n8n_session_id,
+                render_type,
+                effective_timeout,
+                "copilot",
+                model,
+                channel,
+            )
+            if mode == "elevated":
+                context_prompt = context_prompt + _COPILOT_ELEVATED_MODE_INSTRUCTIONS
+            elif mode == "sandboxed":
+                context_prompt = context_prompt + _COPILOT_SANDBOXED_MODE_INSTRUCTIONS
+            # Update cmd[2] so the rebuilt context_prompt is actually used
+            cmd[2] = context_prompt
+
         if resume and session_id:
             cmd.extend(["--resume", session_id])
             print(f"[Session] Resuming Copilot session: {session_id}", file=sys.stderr)
         else:
+            # Record session start time for proactive age tracking
+            getattr(self, "_copilot_session_start", {}).update(
+                {n8n_session_id: time.time()}
+            )
             print(
                 f"[Session] Starting new Copilot session in {mode} permission mode",
                 file=sys.stderr,
@@ -6763,7 +6824,85 @@ User Request:
         output = self._execute_subprocess_with_tracking(
             cmd, agent_dir, effective_timeout, "copilot", agent, prompt, n8n_session_id
         )
-        return self.strip_metadata(output, "copilot")
+        result = self.strip_metadata(output, "copilot")
+
+        # Reactive recovery (issue #190): if the session token expired mid-task,
+        # restart with a fresh session and inject accumulated context so the agent
+        # can continue rather than crashing the background task.
+        if _TOKEN_EXPIRED_MARKER in result:
+            print(
+                "[Session] Copilot session token expired — auto-restarting with fresh session",
+                file=sys.stderr,
+            )
+            # Extract work done before expiry to feed as context to the new session
+            _expiry_idx = result.index(_TOKEN_EXPIRED_MARKER)
+            _prior_work = result[:_expiry_idx].strip()
+
+            _recovery_preamble = (
+                "[SESSION RECOVERY] Your previous Copilot session token expired mid-task. "
+                "Below is the context of the original task and any work completed before the "
+                "session was interrupted. Please continue and complete all remaining work.\n\n"
+                f"ORIGINAL TASK:\n{prompt}\n\n"
+            )
+            if _prior_work:
+                _recovery_preamble += (
+                    f"PROGRESS MADE BEFORE SESSION EXPIRED (first 4000 chars):\n"
+                    f"{_prior_work[:4000]}\n\n"
+                )
+            _recovery_preamble += "Please continue from where the task was interrupted."
+
+            _recovery_context = self.build_agent_context_prompt(
+                agent,
+                _recovery_preamble,
+                n8n_session_id,
+                render_type,
+                effective_timeout,
+                "copilot",
+                model,
+                channel,
+            )
+            if mode == "elevated":
+                _recovery_context += _COPILOT_ELEVATED_MODE_INSTRUCTIONS
+            elif mode == "sandboxed":
+                _recovery_context += _COPILOT_SANDBOXED_MODE_INSTRUCTIONS
+            _recovery_cmd = [
+                self.copilot_bin,
+                "-p",
+                _recovery_context,
+                "--allow-all-tools",
+                "--no-color",
+                "--model",
+                model,
+                "--additional-mcp-config",
+                f"@{mcp_config_path}",
+            ]
+            if mode == "elevated":
+                _recovery_cmd.insert(4, "--allow-all-paths")
+                _recovery_cmd.append("--yolo")
+
+            # Record new session start for age tracking
+            getattr(self, "_copilot_session_start", {}).update(
+                {n8n_session_id: time.time()}
+            )
+            _recovery_output = self._execute_subprocess_with_tracking(
+                _recovery_cmd,
+                agent_dir,
+                effective_timeout,
+                "copilot",
+                agent,
+                _recovery_preamble,
+                n8n_session_id,
+            )
+            _stripped_recovery = self.strip_metadata(_recovery_output, "copilot")
+            if _TOKEN_EXPIRED_MARKER in _stripped_recovery:
+                print(
+                    "[Session] Recovery session also expired (double expiry >50 min) — "
+                    "returning best-effort partial output",
+                    file=sys.stderr,
+                )
+            return _stripped_recovery
+
+        return result
 
     def run_copilot_sdk(
         self,
