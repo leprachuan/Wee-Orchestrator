@@ -6785,7 +6785,7 @@ User Request:
         if resume and session_id and _session_age > _COPILOT_SESSION_MAX_AGE_SEC:
             print(
                 f"[Session] Copilot session age {_session_age:.0f}s exceeds "
-                f"{_COPILOT_SESSION_MAX_AGE_SEC}s — starting fresh to avoid token expiry",
+                f"{_COPILOT_SESSION_MAX_AGE_SEC}s — starting fresh to avoid token expiry",  # noqa: E501
                 file=sys.stderr,
             )
             resume = False
@@ -6831,7 +6831,7 @@ User Request:
         # can continue rather than crashing the background task.
         if _TOKEN_EXPIRED_MARKER in result:
             print(
-                "[Session] Copilot session token expired — auto-restarting with fresh session",
+                "[Session] Copilot session token expired — auto-restarting with fresh session",  # noqa: E501
                 file=sys.stderr,
             )
             # Extract work done before expiry to feed as context to the new session
@@ -6839,9 +6839,9 @@ User Request:
             _prior_work = result[:_expiry_idx].strip()
 
             _recovery_preamble = (
-                "[SESSION RECOVERY] Your previous Copilot session token expired mid-task. "
-                "Below is the context of the original task and any work completed before the "
-                "session was interrupted. Please continue and complete all remaining work.\n\n"
+                "[SESSION RECOVERY] Your previous Copilot session token expired mid-task. "  # noqa: E501
+                "Below is the context of the original task and any work completed before the "  # noqa: E501
+                "session was interrupted. Please continue and complete all remaining work.\n\n"  # noqa: E501
                 f"ORIGINAL TASK:\n{prompt}\n\n"
             )
             if _prior_work:
