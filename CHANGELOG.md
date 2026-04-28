@@ -1,3 +1,56 @@
+## [Issue #273] Feature: Context Window Management and Compaction
+**Status:** ✅ QA Approved (Commit: 3073357, PR #275)
+
+### Summary
+Added automatic context window tracking and LLM-powered compaction to keep long conversations within model limits. Introduces `TokenTracker` for per-session usage monitoring, `/tokens` for live usage display, `/compact` for on-demand context reduction, and a `MODEL_CONTEXT_WINDOWS` registry covering 20+ models.
+
+### Problem
+Long Wee CLI sessions accumulate conversation history that eventually exceeds model token limits, causing API errors. There was no visibility into context usage and no way to reduce it without starting a fresh session.
+
+### Solution
+
+#### TokenTracker
+- Instantiated once per REPL session in `wee_cli.py`
+- Tracks `session_total` (tokens used this turn) and `context_percent` (% of model limit)
+- `percent_used()` returns current context size as percentage of model limit (not cumulative)
+- Emits a warning when usage reaches 75%
+
+#### `/tokens` Command
+- Displays current token usage, model limit, and percentage consumed
+- Color-coded output: green <50%, yellow 50-75%, red >75%
+
+#### `/compact` Command
+- Calls `compact_messages()` to trim oldest messages from context
+- Generates an LLM summary of removed history and re-injects it as context
+- Resets token tracker after compaction
+- Guards against orphaned `tool` role messages at the head of the retained window
+
+#### MODEL_CONTEXT_WINDOWS Registry
+- 20+ models indexed by substring match (longest match wins)
+- Covers GPT-4/4.1/5, Claude 2/3, Llama 2/3, Gemma, Qwen, Mistral, Phi, DeepSeek, CodeLlama
+- Default fallback: 4,096 tokens for unknown models
+
+#### compact_messages() API
+- Returns `(compacted_list, was_compacted: bool)` — callers can detect no-op
+- Enforces tool-role message pairing: never leaves a `tool` message at the head without its `tool_use` assistant predecessor
+
+### Files Changed
+- `wee_runtime.py` — `TokenTracker`, `MODEL_CONTEXT_WINDOWS`, `estimate_tokens`, `count_message_tokens`, `compact_messages`, `get_context_window`
+- `wee_cli.py` — `/compact` and `/tokens` slash commands, `TokenTracker` integration
+- `tests/test_issue_273_context_window.py` — 47 regression tests
+- `docs/context-window.md` — full feature reference document
+
+### Tests
+- 47 regression tests covering: token estimation, context window registry lookup, `percent_used()` formula (non-cumulative), compaction logic, tool-role pairing guard, `/compact` reset behavior
+- Notable: `test_openai_tool_role_message_counted`, `test_openai_tool_role_distinct_from_user_role`
+- QA Rounds: Final pass APPROVED (47/47 pass, lint clean)
+
+### Usage
+```
+/tokens              # Show current context usage
+/compact             # Summarize and trim old context
+```
+
 ## [Issue #268] Fix: Nested Payload Unwrap for WebEX Gateways
 **Status:** ✅ QA Approved (Commit: fc580ce8, PR #271)
 
