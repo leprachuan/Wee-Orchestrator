@@ -58,7 +58,7 @@ class BaseConfig:
                     validator = CONNECTOR_VALIDATORS.get(config_file_name)
                     if validator:
                         validated = validator(cfg)
-                        return validated.model_dump()
+                        return validated.model_dump(exclude_none=True)
                 except ImportError:
                     # config_schemas not available, use raw config
                     pass
