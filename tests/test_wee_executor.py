@@ -31,7 +31,6 @@ sys.path.insert(0, str(SCRIPTS_DIR))
 
 import wee_executor
 
-
 # ── Fixtures ──────────────────────────────────────────────────────────
 
 
@@ -54,9 +53,7 @@ def _clean_env(monkeypatch, tmp_path):
     # Redirect log/rate-limit files to tmp
     monkeypatch.setattr(wee_executor, "LOG_DIR", tmp_path)
     monkeypatch.setattr(wee_executor, "LOG_FILE", tmp_path / "wee_executor.log")
-    monkeypatch.setattr(
-        wee_executor, "RATE_LIMIT_FILE", tmp_path / ".rate_limits.json"
-    )
+    monkeypatch.setattr(wee_executor, "RATE_LIMIT_FILE", tmp_path / ".rate_limits.json")
 
 
 @pytest.fixture
@@ -126,7 +123,9 @@ class TestSessionDetection:
 
     def test_session_not_found_api_mode(self, monkeypatch, tmp_path):
         """No session → api mode."""
-        monkeypatch.setattr(wee_executor, "SESSIONS_JSON", tmp_path / "nonexistent.json")
+        monkeypatch.setattr(
+            wee_executor, "SESSIONS_JSON", tmp_path / "nonexistent.json"
+        )
         sid, mode, rt = wee_executor.detect_session()
         assert sid is None
         assert mode == wee_executor.MODE_API
@@ -140,7 +139,9 @@ class TestModeDetection:
 
     def test_interactive_mode(self):
         """Default mode with a session is interactive."""
-        assert wee_executor._detect_mode("some-session") == wee_executor.MODE_INTERACTIVE
+        assert (
+            wee_executor._detect_mode("some-session") == wee_executor.MODE_INTERACTIVE
+        )
 
     def test_background_mode(self, monkeypatch):
         """WEE_TASK_ID → background mode."""
@@ -221,6 +222,7 @@ class TestRegisterCapability:
 
     def test_register_new_capability(self):
         """Register and verify a new capability appears in the registry."""
+
         def dummy_handler(args, sid, mode):
             return {"ok": True}
 
@@ -259,9 +261,7 @@ class TestCreateBackgroundTask:
 
     def test_invalid_agent(self, monkeypatch, mock_agents_json):
         """Unknown agent returns INVALID_AGENT."""
-        monkeypatch.setattr(
-            wee_executor, "DEFAULT_AGENTS_JSON", mock_agents_json
-        )
+        monkeypatch.setattr(wee_executor, "DEFAULT_AGENTS_JSON", mock_agents_json)
         result = wee_executor.cap_create_background_task(
             {"agent": "nonexistent", "prompt": "hello"},
             "session-1",
@@ -273,9 +273,7 @@ class TestCreateBackgroundTask:
     @patch.object(wee_executor, "_api_request")
     def test_success_creates_task(self, mock_api, monkeypatch, mock_agents_json):
         """Successful task creation returns task_id and status."""
-        monkeypatch.setattr(
-            wee_executor, "DEFAULT_AGENTS_JSON", mock_agents_json
-        )
+        monkeypatch.setattr(wee_executor, "DEFAULT_AGENTS_JSON", mock_agents_json)
         monkeypatch.setattr(wee_executor, "_get_api_key", lambda: "test_key")
 
         # First call = POST, second = GET verify
@@ -298,9 +296,7 @@ class TestCreateBackgroundTask:
     @patch.object(wee_executor, "_api_request")
     def test_api_error(self, mock_api, monkeypatch, mock_agents_json):
         """API errors are propagated."""
-        monkeypatch.setattr(
-            wee_executor, "DEFAULT_AGENTS_JSON", mock_agents_json
-        )
+        monkeypatch.setattr(wee_executor, "DEFAULT_AGENTS_JSON", mock_agents_json)
         monkeypatch.setattr(wee_executor, "_get_api_key", lambda: "test_key")
 
         mock_api.return_value = {
@@ -318,14 +314,14 @@ class TestCreateBackgroundTask:
 
     def test_rate_limit(self, monkeypatch, mock_agents_json, tmp_path):
         """Rate limiter blocks after MAX_RATE_PER_MINUTE calls."""
-        monkeypatch.setattr(
-            wee_executor, "DEFAULT_AGENTS_JSON", mock_agents_json
-        )
+        monkeypatch.setattr(wee_executor, "DEFAULT_AGENTS_JSON", mock_agents_json)
         # Pre-fill rate limit file with max calls
         import time
 
         now = time.time()
-        limits = {"session-1": [now - i for i in range(wee_executor.MAX_RATE_PER_MINUTE)]}
+        limits = {
+            "session-1": [now - i for i in range(wee_executor.MAX_RATE_PER_MINUTE)]
+        }
         rate_file = tmp_path / ".rate_limits.json"
         rate_file.write_text(json.dumps(limits))
         monkeypatch.setattr(wee_executor, "RATE_LIMIT_FILE", rate_file)
@@ -407,9 +403,7 @@ class TestCLI:
     def test_api_error_exit_3(self, mock_api, monkeypatch, capsys, mock_agents_json):
         """API error exits with code 3."""
         monkeypatch.setenv("WEE_SESSION_ID", "test-session")
-        monkeypatch.setattr(
-            wee_executor, "DEFAULT_AGENTS_JSON", mock_agents_json
-        )
+        monkeypatch.setattr(wee_executor, "DEFAULT_AGENTS_JSON", mock_agents_json)
         monkeypatch.setattr(wee_executor, "_get_api_key", lambda: "test_key")
         mock_api.return_value = {
             "error": "Connection failed: Connection refused",
@@ -451,16 +445,12 @@ class TestSecurity:
 
     def test_validate_agent_valid(self, monkeypatch, mock_agents_json):
         """Valid agent passes validation."""
-        monkeypatch.setattr(
-            wee_executor, "DEFAULT_AGENTS_JSON", mock_agents_json
-        )
+        monkeypatch.setattr(wee_executor, "DEFAULT_AGENTS_JSON", mock_agents_json)
         assert wee_executor._validate_agent("research") is True
 
     def test_validate_agent_invalid(self, monkeypatch, mock_agents_json):
         """Invalid agent fails validation."""
-        monkeypatch.setattr(
-            wee_executor, "DEFAULT_AGENTS_JSON", mock_agents_json
-        )
+        monkeypatch.setattr(wee_executor, "DEFAULT_AGENTS_JSON", mock_agents_json)
         assert wee_executor._validate_agent("nonexistent") is False
 
 
@@ -593,9 +583,7 @@ class TestGetSecret:
     def test_subprocess_calls_secret_tool(self, mock_run, monkeypatch):
         """Verify subprocess calls secret_tool.py with correct args."""
         monkeypatch.setenv("WEE_ELEVATED", "true")
-        mock_run.return_value = MagicMock(
-            returncode=0, stdout="val", stderr=""
-        )
+        mock_run.return_value = MagicMock(returncode=0, stdout="val", stderr="")
         wee_executor.cap_get_secret(
             {"name": "my_key", "backend": "file"},
             "session-1",
@@ -676,9 +664,7 @@ class TestGetSecret:
     def test_elevation_with_1(self, mock_run, monkeypatch):
         """WEE_ELEVATED=1 also grants elevation."""
         monkeypatch.setenv("WEE_ELEVATED", "1")
-        mock_run.return_value = MagicMock(
-            returncode=0, stdout="secret_val", stderr=""
-        )
+        mock_run.return_value = MagicMock(returncode=0, stdout="secret_val", stderr="")
         result = wee_executor.cap_get_secret(
             {"name": "key_1"},
             "session-1",
@@ -721,9 +707,7 @@ class TestGetSecret:
         """CLI get_secret with elevation succeeds."""
         monkeypatch.setenv("WEE_SESSION_ID", "test-session")
         monkeypatch.setenv("WEE_ELEVATED", "true")
-        mock_run.return_value = MagicMock(
-            returncode=0, stdout="the_secret", stderr=""
-        )
+        mock_run.return_value = MagicMock(returncode=0, stdout="the_secret", stderr="")
         monkeypatch.setattr(
             "sys.argv",
             [
@@ -740,9 +724,7 @@ class TestGetSecret:
         assert output["status"] == "success"
         assert output["value"] == "the_secret"
 
-    def test_cli_get_secret_mode_restricted_background(
-        self, monkeypatch, capsys
-    ):
+    def test_cli_get_secret_mode_restricted_background(self, monkeypatch, capsys):
         """get_secret is mode-restricted in background mode."""
         monkeypatch.setenv("WEE_SESSION_ID", "test-session")
         monkeypatch.setenv("WEE_TASK_ID", "bg_123")

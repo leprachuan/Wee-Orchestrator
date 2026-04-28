@@ -23,9 +23,9 @@ REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
 
 from agent_manager import (
+    SessionManager,
     check_runtime_available,
     get_available_runtimes,
-    SessionManager,
 )
 
 
@@ -61,14 +61,23 @@ def _run_wee_native_test(mgr, test_session, model="ollama/gemma4:e4b", **kwargs)
     )
     defaults.update(kwargs)
     # Patch get_or_create_session_data to avoid file system dependencies
-    session_data = mgr.session_map.get(test_session, {
-        "runtime": "wee",
-        "model": model,
-        "channel": "api",
-    })
+    session_data = mgr.session_map.get(
+        test_session,
+        {
+            "runtime": "wee",
+            "model": model,
+            "channel": "api",
+        },
+    )
     with patch.object(mgr, "get_or_create_session_data", return_value=session_data):
-        with patch.object(mgr, "build_agent_context_prompt", return_value="You are a helpful assistant."):
-            with patch.object(mgr, "load_session_map", return_value=dict(mgr.session_map)):
+        with patch.object(
+            mgr,
+            "build_agent_context_prompt",
+            return_value="You are a helpful assistant.",
+        ):
+            with patch.object(
+                mgr, "load_session_map", return_value=dict(mgr.session_map)
+            ):
                 with patch.object(mgr, "save_session_map"):
                     return mgr.run_wee_native(**defaults)
 
@@ -87,7 +96,7 @@ class TestWeeRuntimeRegistration(unittest.TestCase):
         runtimes = get_available_runtimes()
         wee_entry = next((r for r in runtimes if r["id"] == "wee"), None)
         self.assertIsNotNone(wee_entry)
-        self.assertEqual(wee_entry["icon"], "\U0001f33f")  # leaf
+        self.assertEqual(wee_entry["icon"], "🍀")  # four leaf clover
 
     def test_wee_check_runtime_available(self):
         """check_runtime_available('wee') should return True (openai installed)."""
@@ -333,6 +342,7 @@ class TestWeeBackgroundTask(unittest.TestCase):
         """wee_runtime.py should be valid Python."""
         script_path = REPO / "wee_runtime.py"
         import py_compile
+
         py_compile.compile(str(script_path), doraise=True)
 
 
@@ -342,12 +352,14 @@ class TestWeeRuntimeValidation(unittest.TestCase):
     def test_wee_in_valid_runtimes_source(self):
         """wee should appear in the /runtime error message."""
         import inspect
+
         source = inspect.getsource(SessionManager)
         self.assertIn("cursor, or wee", source)
 
     def test_wee_in_session_id_validation(self):
         """Session ID validation should include wee."""
         import inspect
+
         source = inspect.getsource(SessionManager)
         self.assertIn('"wee"', source)
 

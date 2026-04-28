@@ -37,6 +37,7 @@ Run live Ollama:
 Run live OpenRouter:
     pytest tests/test_wee_agentic_full_coverage.py -v -k openrouter
 """
+
 import io
 import json
 import os
@@ -70,9 +71,18 @@ WEE_RUNTIME = os.path.join(
 def _has_ollama() -> bool:
     try:
         r = subprocess.run(
-            ["curl", "-s", "-o", "/dev/null", "-w", "%{http_code}",
-             f"{OLLAMA_HOST}/api/tags"],
-            capture_output=True, text=True, timeout=5,
+            [
+                "curl",
+                "-s",
+                "-o",
+                "/dev/null",
+                "-w",
+                "%{http_code}",
+                f"{OLLAMA_HOST}/api/tags",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=5,
         )
         return r.stdout.strip() == "200"
     except Exception:
@@ -84,6 +94,7 @@ def _has_openrouter_key() -> bool:
         return True
     try:
         import keyring
+
         return bool(keyring.get_password("wee-orchestrator", "OPENROUTER_API_KEY"))
     except Exception:
         return False
@@ -100,6 +111,7 @@ skip_openrouter = unittest.skipUnless(HAS_OPENROUTER, "No OPENROUTER_API_KEY")
 # Shared helpers
 # ---------------------------------------------------------------------------
 
+
 def _make_chunk(content=None, tool_calls=None, finish_reason=None, choices=True):
     """Build a fake SSE chunk."""
     if not choices:
@@ -115,8 +127,9 @@ def _make_tc_delta(idx, tc_id=None, name=None, arguments=None):
     return SimpleNamespace(index=idx, id=tc_id, function=fn)
 
 
-def _run_main(model, prompt, tools=False, system_prompt="", temperature=None,
-              extra_args=None):
+def _run_main(
+    model, prompt, tools=False, system_prompt="", temperature=None, extra_args=None
+):
     """Run wee_runtime.main() in-process with captured I/O."""
     argv = ["wee_runtime.py", "--model", model]
     if tools:
@@ -147,15 +160,17 @@ def _run_main(model, prompt, tools=False, system_prompt="", temperature=None,
 
 def _run_cli(model, prompt, tools=False, extra_args=None, timeout=LIVE_TIMEOUT):
     """Run wee_runtime.py as a subprocess."""
-    cmd = [sys.executable, WEE_RUNTIME, "--model", model,
-           "--timeout", str(timeout)]
+    cmd = [sys.executable, WEE_RUNTIME, "--model", model, "--timeout", str(timeout)]
     if tools:
         cmd.append("--tools")
     if extra_args:
         cmd.extend(extra_args)
     cmd.append(prompt)
     return subprocess.run(
-        cmd, capture_output=True, text=True, timeout=timeout + 30,
+        cmd,
+        capture_output=True,
+        text=True,
+        timeout=timeout + 30,
         env={**os.environ, "PYTHONUNBUFFERED": "1"},
     )
 
@@ -163,6 +178,7 @@ def _run_cli(model, prompt, tools=False, extra_args=None, timeout=LIVE_TIMEOUT):
 # ===========================================================================
 # 1. PROMPT CONSTANTS VALIDATION
 # ===========================================================================
+
 
 class TestPromptConstants(unittest.TestCase):
     """Anti-hallucination and tool capability prompt constants are well-formed."""
@@ -199,6 +215,7 @@ class TestPromptConstants(unittest.TestCase):
 # 2. SYSTEM PROMPT CONSTRUCTION (mocked client)
 # ===========================================================================
 
+
 class TestSystemPromptConstruction(unittest.TestCase):
     """Verify the effective system prompt injected into the API call."""
 
@@ -207,9 +224,12 @@ class TestSystemPromptConstruction(unittest.TestCase):
         """Without --tools, system prompt has anti-hallucination but not tool capability."""
         mock_client = MagicMock()
         mock_cls.return_value = mock_client
-        mock_client.chat.completions.create.return_value = iter([
-            _make_chunk(content="ok"), _make_chunk(finish_reason="stop"),
-        ])
+        mock_client.chat.completions.create.return_value = iter(
+            [
+                _make_chunk(content="ok"),
+                _make_chunk(finish_reason="stop"),
+            ]
+        )
 
         _run_main("ollama/test", "hello")
 
@@ -225,9 +245,12 @@ class TestSystemPromptConstruction(unittest.TestCase):
         """With --tools, system prompt includes both anti-hallucination and tool capability."""
         mock_client = MagicMock()
         mock_cls.return_value = mock_client
-        mock_client.chat.completions.create.return_value = iter([
-            _make_chunk(content="ok"), _make_chunk(finish_reason="stop"),
-        ])
+        mock_client.chat.completions.create.return_value = iter(
+            [
+                _make_chunk(content="ok"),
+                _make_chunk(finish_reason="stop"),
+            ]
+        )
 
         _run_main("ollama/test", "hello", tools=True)
 
@@ -242,9 +265,12 @@ class TestSystemPromptConstruction(unittest.TestCase):
         """Custom --system-prompt text is included in the system message."""
         mock_client = MagicMock()
         mock_cls.return_value = mock_client
-        mock_client.chat.completions.create.return_value = iter([
-            _make_chunk(content="ok"), _make_chunk(finish_reason="stop"),
-        ])
+        mock_client.chat.completions.create.return_value = iter(
+            [
+                _make_chunk(content="ok"),
+                _make_chunk(finish_reason="stop"),
+            ]
+        )
 
         _run_main("ollama/test", "hello", system_prompt="MY_CUSTOM_SYSTEM_TEXT")
 
@@ -258,6 +284,7 @@ class TestSystemPromptConstruction(unittest.TestCase):
 # 3. OPENAI CLIENT CONFIGURATION
 # ===========================================================================
 
+
 class TestOpenAIClientConfig(unittest.TestCase):
     """Verify httpx timeout and max_retries are set correctly."""
 
@@ -267,9 +294,12 @@ class TestOpenAIClientConfig(unittest.TestCase):
         """OpenAI client is created with max_retries=0."""
         mock_client = MagicMock()
         mock_cls.return_value = mock_client
-        mock_client.chat.completions.create.return_value = iter([
-            _make_chunk(content="ok"), _make_chunk(finish_reason="stop"),
-        ])
+        mock_client.chat.completions.create.return_value = iter(
+            [
+                _make_chunk(content="ok"),
+                _make_chunk(finish_reason="stop"),
+            ]
+        )
         mock_timeout.return_value = MagicMock()
 
         _run_main("ollama/test", "client config")
@@ -283,9 +313,12 @@ class TestOpenAIClientConfig(unittest.TestCase):
         """httpx.Timeout is called with connect=15.0."""
         mock_client = MagicMock()
         mock_cls.return_value = mock_client
-        mock_client.chat.completions.create.return_value = iter([
-            _make_chunk(content="ok"), _make_chunk(finish_reason="stop"),
-        ])
+        mock_client.chat.completions.create.return_value = iter(
+            [
+                _make_chunk(content="ok"),
+                _make_chunk(finish_reason="stop"),
+            ]
+        )
         mock_timeout.return_value = MagicMock()
 
         _run_main("ollama/test", "timeout config")
@@ -299,9 +332,12 @@ class TestOpenAIClientConfig(unittest.TestCase):
         """OpenAI client receives resolved base_url."""
         mock_client = MagicMock()
         mock_cls.return_value = mock_client
-        mock_client.chat.completions.create.return_value = iter([
-            _make_chunk(content="ok"), _make_chunk(finish_reason="stop"),
-        ])
+        mock_client.chat.completions.create.return_value = iter(
+            [
+                _make_chunk(content="ok"),
+                _make_chunk(finish_reason="stop"),
+            ]
+        )
 
         _run_main("ollama/my-model", "base url check")
 
@@ -314,6 +350,7 @@ class TestOpenAIClientConfig(unittest.TestCase):
 # 4. TEMPERATURE FLAG EDGE CASES
 # ===========================================================================
 
+
 class TestTemperatureEdgeCases(unittest.TestCase):
     """Temperature=0, None, and non-integer values."""
 
@@ -322,9 +359,12 @@ class TestTemperatureEdgeCases(unittest.TestCase):
         """Temperature=0.0 is included in create kwargs (not omitted as falsy)."""
         mock_client = MagicMock()
         mock_cls.return_value = mock_client
-        mock_client.chat.completions.create.return_value = iter([
-            _make_chunk(content="ok"), _make_chunk(finish_reason="stop"),
-        ])
+        mock_client.chat.completions.create.return_value = iter(
+            [
+                _make_chunk(content="ok"),
+                _make_chunk(finish_reason="stop"),
+            ]
+        )
 
         _run_main("ollama/test", "temp zero", temperature=0.0)
 
@@ -337,9 +377,12 @@ class TestTemperatureEdgeCases(unittest.TestCase):
         """Without --temperature, 'temperature' is NOT in create kwargs."""
         mock_client = MagicMock()
         mock_cls.return_value = mock_client
-        mock_client.chat.completions.create.return_value = iter([
-            _make_chunk(content="ok"), _make_chunk(finish_reason="stop"),
-        ])
+        mock_client.chat.completions.create.return_value = iter(
+            [
+                _make_chunk(content="ok"),
+                _make_chunk(finish_reason="stop"),
+            ]
+        )
 
         _run_main("ollama/test", "no temp")
 
@@ -351,9 +394,12 @@ class TestTemperatureEdgeCases(unittest.TestCase):
         """Temperature=0.7 is passed as a float."""
         mock_client = MagicMock()
         mock_cls.return_value = mock_client
-        mock_client.chat.completions.create.return_value = iter([
-            _make_chunk(content="ok"), _make_chunk(finish_reason="stop"),
-        ])
+        mock_client.chat.completions.create.return_value = iter(
+            [
+                _make_chunk(content="ok"),
+                _make_chunk(finish_reason="stop"),
+            ]
+        )
 
         _run_main("ollama/test", "temp 0.7", temperature=0.7)
 
@@ -364,6 +410,7 @@ class TestTemperatureEdgeCases(unittest.TestCase):
 # ===========================================================================
 # 5. EXECUTE_TOOL EDGE CASES
 # ===========================================================================
+
 
 class TestExecuteToolEdgeCases(unittest.TestCase):
     """Edge cases in execute_tool not covered by other suites."""
@@ -468,6 +515,7 @@ class TestExecuteToolEdgeCases(unittest.TestCase):
 # 6. SSH SANITIZATION — SANITIZE_BASH_COMMAND
 # ===========================================================================
 
+
 class TestSanitizeBashCommandFull(unittest.TestCase):
     """Extended sanitization tests."""
 
@@ -520,6 +568,7 @@ class TestSanitizeBashCommandFull(unittest.TestCase):
 # 7. MOCKED LOOP — FULL MESSAGE CHAIN VERIFICATION
 # ===========================================================================
 
+
 class TestFullMessageChain(unittest.TestCase):
     """Verify the exact message sequence after multi-round tool calling."""
 
@@ -530,24 +579,27 @@ class TestFullMessageChain(unittest.TestCase):
         mock_cls.return_value = mock_client
 
         # Round 1: bash call
-        td1 = _make_tc_delta(0, tc_id="tc_r1", name="bash",
-                              arguments='{"command": "echo round1"}')
-        r1 = [_make_chunk(content="", tool_calls=[td1]),
-              _make_chunk(finish_reason="tool_calls")]
+        td1 = _make_tc_delta(
+            0, tc_id="tc_r1", name="bash", arguments='{"command": "echo round1"}'
+        )
+        r1 = [
+            _make_chunk(content="", tool_calls=[td1]),
+            _make_chunk(finish_reason="tool_calls"),
+        ]
 
         # Round 2: python call
-        td2 = _make_tc_delta(0, tc_id="tc_r2", name="python",
-                              arguments='{"code": "print(2)"}')
-        r2 = [_make_chunk(content="", tool_calls=[td2]),
-              _make_chunk(finish_reason="tool_calls")]
+        td2 = _make_tc_delta(
+            0, tc_id="tc_r2", name="python", arguments='{"code": "print(2)"}'
+        )
+        r2 = [
+            _make_chunk(content="", tool_calls=[td2]),
+            _make_chunk(finish_reason="tool_calls"),
+        ]
 
         # Round 3: final answer
-        r3 = [_make_chunk(content="Final answer"),
-              _make_chunk(finish_reason="stop")]
+        r3 = [_make_chunk(content="Final answer"), _make_chunk(finish_reason="stop")]
 
-        mock_client.chat.completions.create.side_effect = [
-            iter(r1), iter(r2), iter(r3)
-        ]
+        mock_client.chat.completions.create.side_effect = [iter(r1), iter(r2), iter(r3)]
 
         _run_main("ollama/test", "multi-round", tools=True)
 
@@ -572,10 +624,16 @@ class TestFullMessageChain(unittest.TestCase):
         mock_cls.return_value = mock_client
 
         # Use echo with a distinctive string
-        td = _make_tc_delta(0, tc_id="tc_echo", name="bash",
-                            arguments='{"command": "echo UNIQUE_OUTPUT_12345"}')
-        r1 = [_make_chunk(content="", tool_calls=[td]),
-              _make_chunk(finish_reason="tool_calls")]
+        td = _make_tc_delta(
+            0,
+            tc_id="tc_echo",
+            name="bash",
+            arguments='{"command": "echo UNIQUE_OUTPUT_12345"}',
+        )
+        r1 = [
+            _make_chunk(content="", tool_calls=[td]),
+            _make_chunk(finish_reason="tool_calls"),
+        ]
         r2 = [_make_chunk(content="Done"), _make_chunk(finish_reason="stop")]
 
         mock_client.chat.completions.create.side_effect = [iter(r1), iter(r2)]
@@ -593,10 +651,16 @@ class TestFullMessageChain(unittest.TestCase):
         mock_client = MagicMock()
         mock_cls.return_value = mock_client
 
-        td = _make_tc_delta(0, tc_id="tc_asst_check", name="bash",
-                            arguments='{"command": "echo asst_check"}')
-        r1 = [_make_chunk(content="thinking", tool_calls=[td]),
-              _make_chunk(finish_reason="tool_calls")]
+        td = _make_tc_delta(
+            0,
+            tc_id="tc_asst_check",
+            name="bash",
+            arguments='{"command": "echo asst_check"}',
+        )
+        r1 = [
+            _make_chunk(content="thinking", tool_calls=[td]),
+            _make_chunk(finish_reason="tool_calls"),
+        ]
         r2 = [_make_chunk(content="Done"), _make_chunk(finish_reason="stop")]
 
         mock_client.chat.completions.create.side_effect = [iter(r1), iter(r2)]
@@ -617,6 +681,7 @@ class TestFullMessageChain(unittest.TestCase):
 # ===========================================================================
 # 8. STREAMING EDGE CASES
 # ===========================================================================
+
 
 class TestStreamingEdgeCasesFull(unittest.TestCase):
     """Edge cases in streaming: empty choices, null content, mixed deltas."""
@@ -667,8 +732,9 @@ class TestStreamingEdgeCasesFull(unittest.TestCase):
         mock_cls.return_value = mock_client
 
         # Single chunk has both content and a tool call
-        td = _make_tc_delta(0, tc_id="tc_mixed", name="bash",
-                            arguments='{"command": "echo mixed"}')
+        td = _make_tc_delta(
+            0, tc_id="tc_mixed", name="bash", arguments='{"command": "echo mixed"}'
+        )
         r1 = [
             _make_chunk(content="Let me check that:", tool_calls=[td]),
             _make_chunk(finish_reason="tool_calls"),
@@ -687,7 +753,9 @@ class TestStreamingEdgeCasesFull(unittest.TestCase):
         mock_cls.return_value = mock_client
 
         # Arguments delivered in 3 pieces
-        td_part1 = _make_tc_delta(0, tc_id="tc_split", name="bash", arguments='{"command": ')
+        td_part1 = _make_tc_delta(
+            0, tc_id="tc_split", name="bash", arguments='{"command": '
+        )
         td_part2 = _make_tc_delta(0, tc_id=None, name=None, arguments='"echo ')
         td_part3 = _make_tc_delta(0, tc_id=None, name=None, arguments='split_args"}')
 
@@ -734,6 +802,7 @@ class TestStreamingEdgeCasesFull(unittest.TestCase):
 # 9. MOCKED LOOP — API CALL COUNT ASSERTIONS
 # ===========================================================================
 
+
 class TestAPICallCounts(unittest.TestCase):
     """Assert exact number of API calls for N-round agentic loops."""
 
@@ -742,9 +811,12 @@ class TestAPICallCounts(unittest.TestCase):
         """Simple text response: exactly 1 API call."""
         mock_client = MagicMock()
         mock_cls.return_value = mock_client
-        mock_client.chat.completions.create.return_value = iter([
-            _make_chunk(content="ok"), _make_chunk(finish_reason="stop"),
-        ])
+        mock_client.chat.completions.create.return_value = iter(
+            [
+                _make_chunk(content="ok"),
+                _make_chunk(finish_reason="stop"),
+            ]
+        )
 
         _run_main("ollama/test", "simple")
         self.assertEqual(mock_client.chat.completions.create.call_count, 1)
@@ -755,10 +827,13 @@ class TestAPICallCounts(unittest.TestCase):
         mock_client = MagicMock()
         mock_cls.return_value = mock_client
 
-        td = _make_tc_delta(0, tc_id="tc_1", name="bash",
-                            arguments='{"command": "echo hi"}')
-        r1 = [_make_chunk(content="", tool_calls=[td]),
-              _make_chunk(finish_reason="tool_calls")]
+        td = _make_tc_delta(
+            0, tc_id="tc_1", name="bash", arguments='{"command": "echo hi"}'
+        )
+        r1 = [
+            _make_chunk(content="", tool_calls=[td]),
+            _make_chunk(finish_reason="tool_calls"),
+        ]
         r2 = [_make_chunk(content="Done"), _make_chunk(finish_reason="stop")]
 
         mock_client.chat.completions.create.side_effect = [iter(r1), iter(r2)]
@@ -773,14 +848,23 @@ class TestAPICallCounts(unittest.TestCase):
         mock_cls.return_value = mock_client
 
         def make_tool_round(n):
-            td = _make_tc_delta(0, tc_id=f"tc_{n}", name="bash",
-                                arguments=f'{{"command": "echo round{n}"}}')
-            return iter([_make_chunk(content="", tool_calls=[td]),
-                         _make_chunk(finish_reason="tool_calls")])
+            td = _make_tc_delta(
+                0,
+                tc_id=f"tc_{n}",
+                name="bash",
+                arguments=f'{{"command": "echo round{n}"}}',
+            )
+            return iter(
+                [
+                    _make_chunk(content="", tool_calls=[td]),
+                    _make_chunk(finish_reason="tool_calls"),
+                ]
+            )
 
         rounds = [make_tool_round(i) for i in range(5)]
-        final = iter([_make_chunk(content="All done"),
-                      _make_chunk(finish_reason="stop")])
+        final = iter(
+            [_make_chunk(content="All done"), _make_chunk(finish_reason="stop")]
+        )
         mock_client.chat.completions.create.side_effect = rounds + [final]
 
         _run_main("ollama/test", "five rounds", tools=True)
@@ -794,15 +878,19 @@ class TestAPICallCounts(unittest.TestCase):
         max_rounds = wee_runtime.MAX_TOOL_ROUNDS
 
         def make_tool_round(n):
-            td = _make_tc_delta(0, tc_id=f"tc_{n}", name="bash",
-                                arguments=f'{{"command": "echo {n}"}}')
-            return iter([_make_chunk(content="", tool_calls=[td]),
-                         _make_chunk(finish_reason="tool_calls")])
+            td = _make_tc_delta(
+                0, tc_id=f"tc_{n}", name="bash", arguments=f'{{"command": "echo {n}"}}'
+            )
+            return iter(
+                [
+                    _make_chunk(content="", tool_calls=[td]),
+                    _make_chunk(finish_reason="tool_calls"),
+                ]
+            )
 
         # Exactly MAX_TOOL_ROUNDS tool calls, then a final text response
         rounds = [make_tool_round(i) for i in range(max_rounds)]
-        final = iter([_make_chunk(content="Final"),
-                      _make_chunk(finish_reason="stop")])
+        final = iter([_make_chunk(content="Final"), _make_chunk(finish_reason="stop")])
         mock_client.chat.completions.create.side_effect = rounds + [final]
 
         _run_main("ollama/test", "max rounds exact", tools=True)
@@ -810,14 +898,16 @@ class TestAPICallCounts(unittest.TestCase):
         # Final call at index max_rounds should have no 'tools' key
         final_kwargs = mock_client.chat.completions.create.call_args_list[max_rounds][1]
         self.assertNotIn(
-            "tools", final_kwargs,
-            f"Round {max_rounds+1} (final) should not include 'tools'"
+            "tools",
+            final_kwargs,
+            f"Round {max_rounds+1} (final) should not include 'tools'",
         )
 
 
 # ===========================================================================
 # 10. UNKNOWN TOOL HANDLING IN LOOP
 # ===========================================================================
+
 
 class TestUnknownToolInLoop(unittest.TestCase):
     """Model returns an unknown tool name — loop should not crash."""
@@ -828,12 +918,17 @@ class TestUnknownToolInLoop(unittest.TestCase):
         mock_client = MagicMock()
         mock_cls.return_value = mock_client
 
-        td = _make_tc_delta(0, tc_id="tc_unk", name="unknown_tool_xyz",
-                            arguments='{"arg": "val"}')
-        r1 = [_make_chunk(content="", tool_calls=[td]),
-              _make_chunk(finish_reason="tool_calls")]
-        r2 = [_make_chunk(content="I see the error."),
-              _make_chunk(finish_reason="stop")]
+        td = _make_tc_delta(
+            0, tc_id="tc_unk", name="unknown_tool_xyz", arguments='{"arg": "val"}'
+        )
+        r1 = [
+            _make_chunk(content="", tool_calls=[td]),
+            _make_chunk(finish_reason="tool_calls"),
+        ]
+        r2 = [
+            _make_chunk(content="I see the error."),
+            _make_chunk(finish_reason="stop"),
+        ]
 
         mock_client.chat.completions.create.side_effect = [iter(r1), iter(r2)]
 
@@ -850,6 +945,7 @@ class TestUnknownToolInLoop(unittest.TestCase):
 # 11. MALFORMED JSON TOOL ARGUMENTS
 # ===========================================================================
 
+
 class TestMalformedToolArguments(unittest.TestCase):
     """Model streams broken JSON for tool arguments."""
 
@@ -859,10 +955,13 @@ class TestMalformedToolArguments(unittest.TestCase):
         mock_client = MagicMock()
         mock_cls.return_value = mock_client
 
-        td = _make_tc_delta(0, tc_id="tc_bad_json", name="bash",
-                            arguments="{not valid json{{{{")
-        r1 = [_make_chunk(content="", tool_calls=[td]),
-              _make_chunk(finish_reason="tool_calls")]
+        td = _make_tc_delta(
+            0, tc_id="tc_bad_json", name="bash", arguments="{not valid json{{{{"
+        )
+        r1 = [
+            _make_chunk(content="", tool_calls=[td]),
+            _make_chunk(finish_reason="tool_calls"),
+        ]
         r2 = [_make_chunk(content="Handled"), _make_chunk(finish_reason="stop")]
 
         mock_client.chat.completions.create.side_effect = [iter(r1), iter(r2)]
@@ -876,10 +975,11 @@ class TestMalformedToolArguments(unittest.TestCase):
         mock_client = MagicMock()
         mock_cls.return_value = mock_client
 
-        td = _make_tc_delta(0, tc_id="tc_empty_args", name="bash",
-                            arguments="{}")
-        r1 = [_make_chunk(content="", tool_calls=[td]),
-              _make_chunk(finish_reason="tool_calls")]
+        td = _make_tc_delta(0, tc_id="tc_empty_args", name="bash", arguments="{}")
+        r1 = [
+            _make_chunk(content="", tool_calls=[td]),
+            _make_chunk(finish_reason="tool_calls"),
+        ]
         r2 = [_make_chunk(content="I see"), _make_chunk(finish_reason="stop")]
 
         mock_client.chat.completions.create.side_effect = [iter(r1), iter(r2)]
@@ -897,6 +997,7 @@ class TestMalformedToolArguments(unittest.TestCase):
 # 12. MAX TOOL ROUNDS — FALLBACK CONTENT
 # ===========================================================================
 
+
 class TestMaxRoundsFallback(unittest.TestCase):
     """When MAX_TOOL_ROUNDS is exhausted, fallback text appears in output."""
 
@@ -907,19 +1008,27 @@ class TestMaxRoundsFallback(unittest.TestCase):
         mock_cls.return_value = mock_client
 
         def make_loop():
-            td = _make_tc_delta(0, tc_id=f"tc_{time.time_ns()}", name="bash",
-                                arguments='{"command": "echo loop"}')
-            return iter([_make_chunk(content="", tool_calls=[td]),
-                         _make_chunk(finish_reason="tool_calls")])
+            td = _make_tc_delta(
+                0,
+                tc_id=f"tc_{time.time_ns()}",
+                name="bash",
+                arguments='{"command": "echo loop"}',
+            )
+            return iter(
+                [
+                    _make_chunk(content="", tool_calls=[td]),
+                    _make_chunk(finish_reason="tool_calls"),
+                ]
+            )
 
-        side_effects = [make_loop()
-                        for _ in range(wee_runtime.MAX_TOOL_ROUNDS + 2)]
+        side_effects = [make_loop() for _ in range(wee_runtime.MAX_TOOL_ROUNDS + 2)]
         mock_client.chat.completions.create.side_effect = side_effects
 
         result = _run_main("ollama/test", "infinite loop", tools=True)
         self.assertEqual(result.returncode, 0)
-        self.assertTrue(result.stdout.strip(),
-                        "Stdout must not be empty after max rounds")
+        self.assertTrue(
+            result.stdout.strip(), "Stdout must not be empty after max rounds"
+        )
 
     @patch("openai.OpenAI")
     def test_fallback_mentions_tool_execution(self, mock_cls):
@@ -928,13 +1037,20 @@ class TestMaxRoundsFallback(unittest.TestCase):
         mock_cls.return_value = mock_client
 
         def make_loop():
-            td = _make_tc_delta(0, tc_id=f"tc_{time.time_ns()}", name="bash",
-                                arguments='{"command": "echo x"}')
-            return iter([_make_chunk(content="", tool_calls=[td]),
-                         _make_chunk(finish_reason="tool_calls")])
+            td = _make_tc_delta(
+                0,
+                tc_id=f"tc_{time.time_ns()}",
+                name="bash",
+                arguments='{"command": "echo x"}',
+            )
+            return iter(
+                [
+                    _make_chunk(content="", tool_calls=[td]),
+                    _make_chunk(finish_reason="tool_calls"),
+                ]
+            )
 
-        side_effects = [make_loop()
-                        for _ in range(wee_runtime.MAX_TOOL_ROUNDS + 2)]
+        side_effects = [make_loop() for _ in range(wee_runtime.MAX_TOOL_ROUNDS + 2)]
         mock_client.chat.completions.create.side_effect = side_effects
 
         result = _run_main("ollama/test", "max rounds fallback", tools=True)
@@ -951,6 +1067,7 @@ class TestMaxRoundsFallback(unittest.TestCase):
 # 13. API EXCEPTION HANDLING
 # ===========================================================================
 
+
 class TestAPIExceptionHandling(unittest.TestCase):
     """Runtime handles API errors gracefully."""
 
@@ -959,7 +1076,9 @@ class TestAPIExceptionHandling(unittest.TestCase):
         """OpenAI API exception causes exit code != 0."""
         mock_client = MagicMock()
         mock_cls.return_value = mock_client
-        mock_client.chat.completions.create.side_effect = Exception("connection refused")
+        mock_client.chat.completions.create.side_effect = Exception(
+            "connection refused"
+        )
 
         result = _run_main("ollama/test", "api failure")
         self.assertNotEqual(result.returncode, 0)
@@ -988,6 +1107,7 @@ class TestAPIExceptionHandling(unittest.TestCase):
 # ===========================================================================
 # 14. LIVE TESTS — OLLAMA
 # ===========================================================================
+
 
 @skip_ollama
 class TestOllamaLiveMath(unittest.TestCase):
@@ -1018,6 +1138,7 @@ class TestOllamaLiveMath(unittest.TestCase):
     def test_bash_tool_date_year(self):
         """Ollama uses bash tool to get current year (4-digit)."""
         import datetime
+
         current_year = str(datetime.datetime.now().year)
         result = _run_cli(
             OLLAMA_MODEL,
@@ -1076,6 +1197,7 @@ class TestOllamaLiveMultiStep(unittest.TestCase):
 # 15. LIVE TESTS — OPENROUTER
 # ===========================================================================
 
+
 @skip_openrouter
 class TestOpenRouterLiveFree(unittest.TestCase):
     """Live OpenRouter tests using free tier models."""
@@ -1124,8 +1246,7 @@ class TestOpenRouterKeyRequired(unittest.TestCase):
 
     def test_missing_key_exits_nonzero(self):
         """openrouter/ model without API key causes sys.exit(1)."""
-        env = {k: v for k, v in os.environ.items()
-               if k not in ("OPENROUTER_API_KEY",)}
+        env = {k: v for k, v in os.environ.items() if k not in ("OPENROUTER_API_KEY",)}
         # Patch keyring to return nothing
         with patch("keyring.get_password", return_value=None):
             with patch.dict(os.environ, {"OPENROUTER_API_KEY": ""}, clear=False):
@@ -1143,6 +1264,7 @@ class TestOpenRouterKeyRequired(unittest.TestCase):
 # ===========================================================================
 # 16. WEE_TOOLS CONSTANT INTEGRITY
 # ===========================================================================
+
 
 class TestWeeTooDefinitions(unittest.TestCase):
     """_WEE_TOOLS constant is well-formed OpenAI tool spec."""
@@ -1166,15 +1288,17 @@ class TestWeeTooDefinitions(unittest.TestCase):
             self.assertEqual(tool.get("type"), "function")
 
     def test_bash_requires_command_parameter(self):
-        bash = next(t for t in wee_runtime._WEE_TOOLS
-                    if t["function"]["name"] == "bash")
+        bash = next(
+            t for t in wee_runtime._WEE_TOOLS if t["function"]["name"] == "bash"
+        )
         params = bash["function"]["parameters"]
         self.assertIn("command", params["properties"])
         self.assertIn("command", params["required"])
 
     def test_python_requires_code_parameter(self):
-        python = next(t for t in wee_runtime._WEE_TOOLS
-                      if t["function"]["name"] == "python")
+        python = next(
+            t for t in wee_runtime._WEE_TOOLS if t["function"]["name"] == "python"
+        )
         params = python["function"]["parameters"]
         self.assertIn("code", params["properties"])
         self.assertIn("code", params["required"])
@@ -1189,6 +1313,7 @@ class TestWeeTooDefinitions(unittest.TestCase):
 # ===========================================================================
 # 17. RUNTIME CONSTANTS SANITY
 # ===========================================================================
+
 
 class TestRuntimeConstants(unittest.TestCase):
     """MAX_TOOL_ROUNDS and TOOL_TIMEOUT are within safe operating ranges."""
@@ -1212,6 +1337,7 @@ class TestRuntimeConstants(unittest.TestCase):
     def test_ssh_bin_re_is_compiled_regex(self):
         """_SSH_BIN_RE is a compiled regex object."""
         import re
+
         self.assertIsInstance(wee_runtime._SSH_BIN_RE, type(re.compile("")))
 
 

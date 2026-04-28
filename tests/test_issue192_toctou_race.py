@@ -614,9 +614,7 @@ class TestIssue192SlashCommandPerAgentLimit(unittest.TestCase):
         self.temp_dir = tempfile.mkdtemp()
         sm = SessionManager.__new__(SessionManager)
         sm._bg_task_mgr = BackgroundTaskManager()
-        sm._bg_task_mgr._path = os.path.join(
-            self.temp_dir, "bg-tasks-slash-test.json"
-        )
+        sm._bg_task_mgr._path = os.path.join(self.temp_dir, "bg-tasks-slash-test.json")
         sm._bg_task_mgr._tasks_cache = None
         sm._bg_identity = "test-user-slash"
         sm.AGENTS = {
@@ -628,9 +626,7 @@ class TestIssue192SlashCommandPerAgentLimit(unittest.TestCase):
 
     def _call_slash(self, argument):
         session_data = {"channel": "telegram"}
-        return self.sm._slash_background(
-            argument, session_data, "n8n-test-session"
-        )
+        return self.sm._slash_background(argument, session_data, "n8n-test-session")
 
     def test_slash_queues_when_agent_limit_reached(self):
         """Second /background for agent at max_concurrent=1 must be queued."""

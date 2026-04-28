@@ -1,3 +1,181 @@
+## [Issue #273] Fix: Model Registry Entries and CLI Startup Ordering (PR #276, Round 4)
+**Status:** ✅ QA Approved (Commit: bb51c7c, PR #276)
+
+### Summary
+Restored missing `CODEX_MODELS` entries (`gpt-5.5`, `gpt-5.4-mini`), added `openai-compatible/mistral-7b-instruct-v0.1` to `OPENCODE_MODELS`, added `MODEL_MANIFEST_PATH` module constant, and fixed CLI startup argument ordering in `agent_manager.py`. All 167 tests pass.
+
+### Problem
+Four regressions caused test failures after a dev branch force-push during the F273 QA cycle:
+1. `gpt-5.5` and `gpt-5.4-mini` absent from `CODEX_MODELS["OpenAI Models"]` — broke `test_get_codex_model_alias` and `test_get_model_description_known_codex`
+2. `MODEL_MANIFEST_PATH` constant missing at module level — tests patching it at import time raised `AttributeError`
+3. `openai-compatible/mistral-7b-instruct-v0.1` absent from `OPENCODE_MODELS` — broke manifest fallback test
+4. CLI `main()` applied `--runtime` before `--agent`, causing the agent's `primary_runtime` to overwrite an explicitly-provided `--runtime` flag — broke `TestCLIArguments::test_combined_arguments`
+
+### Solution
+
+#### CODEX_MODELS additions
+Added two entries to `CODEX_MODELS["OpenAI Models"]` in `agent_manager.py`:
+- `("gpt-5.5", "GPT-5.5", ["gpt-5.5"])`
+- `("gpt-5.4-mini", "GPT-5.4 Mini", ["gpt-5.4-mini"])`
+
+#### MODEL_MANIFEST_PATH constant
+Added at module level: `MODEL_MANIFEST_PATH = Path(SCRIPT_BASE_DIR) / "model-manifest.json"`
+
+#### OPENCODE_MODELS update
+Added `"openai-compatible"` provider group with `mistral-7b-instruct-v0.1` entry.
+
+#### CLI startup ordering fix
+Swapped `--agent` and `--runtime` application order in `main()`:
+- **Before:** `[runtime → agent]` — agent reset the session runtime, silently discarding `--runtime`
+- **After:** `[agent → runtime]` — agent default applies first; explicit `--runtime` always wins
+
+### Files Changed
+- `agent_manager.py` — CODEX_MODELS entries, MODEL_MANIFEST_PATH constant, OPENCODE_MODELS entry, `main()` startup ordering
+
+### Tests
+167 tests pass (120 `test_agent_manager` + 47 `test_issue_273`) — all existing failures resolved, no new tests required (covered by pre-existing regression suite)
+
+
+## [Issue #273] Feature: Context Window Management and Compaction
+**Status:** ✅ QA Approved (Commit: 3073357, PR #275)
+
+### Summary
+Added automatic context window tracking and LLM-powered compaction to keep long conversations within model limits. Introduces `TokenTracker` for per-session usage monitoring, `/tokens` for live usage display, `/compact` for on-demand context reduction, and a `MODEL_CONTEXT_WINDOWS` registry covering 20+ models.
+
+### Problem
+Long Wee CLI sessions accumulate conversation history that eventually exceeds model token limits, causing API errors. There was no visibility into context usage and no way to reduce it without starting a fresh session.
+
+### Solution
+
+#### TokenTracker
+- Instantiated once per REPL session in `wee_cli.py`
+- Tracks `session_total` (tokens used this turn) and `context_percent` (% of model limit)
+- `percent_used()` returns current context size as percentage of model limit (not cumulative)
+- Emits a warning when usage reaches 75%
+
+#### `/tokens` Command
+- Displays current token usage, model limit, and percentage consumed
+- Color-coded output: green <50%, yellow 50-75%, red >75%
+
+#### `/compact` Command
+- Calls `compact_messages()` to trim oldest messages from context
+- Generates an LLM summary of removed history and re-injects it as context
+- Resets token tracker after compaction
+- Guards against orphaned `tool` role messages at the head of the retained window
+
+#### MODEL_CONTEXT_WINDOWS Registry
+- 20+ models indexed by substring match (longest match wins)
+- Covers GPT-4/4.1/5, Claude 2/3, Llama 2/3, Gemma, Qwen, Mistral, Phi, DeepSeek, CodeLlama
+- Default fallback: 4,096 tokens for unknown models
+
+#### compact_messages() API
+- Returns `(compacted_list, was_compacted: bool)` — callers can detect no-op
+- Enforces tool-role message pairing: never leaves a `tool` message at the head without its `tool_use` assistant predecessor
+
+### Files Changed
+- `wee_runtime.py` — `TokenTracker`, `MODEL_CONTEXT_WINDOWS`, `estimate_tokens`, `count_message_tokens`, `compact_messages`, `get_context_window`
+- `wee_cli.py` — `/compact` and `/tokens` slash commands, `TokenTracker` integration
+- `tests/test_issue_273_context_window.py` — 47 regression tests
+- `docs/context-window.md` — full feature reference document
+
+### Tests
+- 47 regression tests covering: token estimation, context window registry lookup, `percent_used()` formula (non-cumulative), compaction logic, tool-role pairing guard, `/compact` reset behavior
+- Notable: `test_openai_tool_role_message_counted`, `test_openai_tool_role_distinct_from_user_role`
+- QA Rounds: Final pass APPROVED (47/47 pass, lint clean)
+
+### Usage
+```
+/tokens              # Show current context usage
+/compact             # Summarize and trim old context
+```
+
+## [Issue #268] Fix: Nested Payload Unwrap for WebEX Gateways
+**Status:** ✅ QA Approved (Commit: fc580ce8, PR #271)
+
+### Summary
+Added `_unwrap_payload()` support for WebEX gateway messages that wrap the actual payload in a nested structure. Configures a `rabbitmq_payload_key` in `webex_config.json` to extract the inner message before processing.
+
+### Problem
+Some WebEX gateways (e.g., Cisco CX-HOSTED-BOTS-PROD) publish messages with double-wrapped payloads — the actual message content is nested inside an outer envelope key. Without unwrapping, the handler received the full envelope dict instead of the message fields, causing routing failures.
+
+### Solution
+
+#### `_unwrap_payload()` Static Method
+- Added to `WebEXConnector` in `webex_connector.py`
+- Supports **single-level unwrap** via `rabbitmq_payload_key` config key
+- Supports **dotted path notation** (e.g., `"data.message_data"`) for nested keys
+- Includes **auto-unwrap** of nested `message_data` dicts (up to `max_depth=4`) as fallback
+- Guard: only unwraps when `payload_key` is explicitly configured AND the key is present — existing deployments with no `payload_key` are unaffected
+
+#### Configuration
+Add to `webex_config.json`:
+```json
+{
+  "rabbitmq_payload_key": "data"
+}
+```
+Leave empty (default `""`) for standard single-level payloads (backward compatible).
+
+#### Backward Compatibility
+- No changes to behavior when `rabbitmq_payload_key` is absent or empty
+- Auto-unwrap (Step 2) only fires after the primary key unwrap succeeds
+- All existing deployments work without config changes
+
+### Files Changed
+- `webex_connector.py` — `_unwrap_payload()` method + callback integration
+- `tests/test_issue_268_nested_payload_unwrap.py` — 11 regression tests
+- `webex_config.example.json` — added `rabbitmq_payload_key` field (empty default)
+
+## [Issue #190] Bug Fix: Copilot Session Auto-Recovery on Token Expiry
+**Status:** ✅ QA Approved (Commit: 2e7f1941, PR #201)
+
+### Summary
+Fixed unconditional crash of background tasks when the Copilot runtime's session-level bearer token expires after ~30 minutes. Implemented both **proactive** (age-based pre-emptive restart before expiry) and **reactive** (error-detected mid-session restart with context injection) recovery strategies so long-running tasks continue seamlessly rather than failing.
+
+### Root Cause
+The GitHub Copilot API issues a short-lived session-level bearer token (~30 min TTL) separate from the user's OAuth token. The Copilot CLI does not auto-refresh this token mid-conversation. Tasks running longer than ~30 minutes (common for `wee-dev` and `wee-qa` workflows involving SSH latency) were hitting `Session token expired` and the entire background task crashed with exit code 1, requiring manual redispatch.
+
+### Solution
+
+#### Proactive Restart (Age-Based)
+- `_copilot_session_start` dict tracks session start epoch per `n8n_session_id` in `SessionManager.__init__`
+- `_COPILOT_SESSION_MAX_AGE_SEC = 1500` (25 min) — restarts before the 30-min TTL
+- Before `--resume`, checks session age; if expired, starts a fresh session with reconstructed context prompt injected as the first message
+
+#### Reactive Recovery (Error-Detected)
+- Monitors subprocess stdout for `_TOKEN_EXPIRED_MARKER = "Session token expired"`
+- On detection: extracts accumulated prior-work context from the partial output
+- Relaunches with a fresh `--new` session with context injected — background task continues transparently
+
+#### Double-Expiry Guard
+- If the recovery session also hits `Session token expired`, returns best-effort partial output with a warning instead of corrupted or empty content
+
+#### Module-Level Constants
+- `_TOKEN_EXPIRED_MARKER`, `_COPILOT_SESSION_MAX_AGE_SEC` moved to module scope
+- `_COPILOT_ELEVATED_MODE_INSTRUCTIONS`, `_COPILOT_SANDBOXED_MODE_INSTRUCTIONS` extracted to eliminate 3x duplication
+- `# noqa: E501` applied to unavoidably long constant strings; Black formatting applied throughout
+
+#### Session Cleanup
+- `_copilot_session_start` entries cleaned up in `_cleanup_stream_buffer` to prevent memory leak in long-running orchestrator processes
+
+### Files Changed
+- `agent_manager.py` — Proactive + reactive recovery in `run_copilot()`, session tracking in `SessionManager.__init__`, cleanup in `_cleanup_stream_buffer`, module-level constants (+562 lines, -21 lines)
+- `tests/test_issue190_copilot_session_expiry.py` — 12 regression tests covering both recovery paths
+
+### Tests
+- 12 regression tests in `test_issue190_copilot_session_expiry.py`:
+  - A-series (4): Proactive restart — session age checks, threshold boundary, context injection into `cmd[2]`
+  - B-series (8): Reactive recovery — expiry detection, context extraction, fresh session launch, double-expiry guard, `test_203` regression (3 previously-broken tests restored)
+- Net new tests across full QA lifecycle: +22
+- QA Rounds: 5 total (Rounds 1–4 rejected; Round 5 APPROVED after formatting pass)
+
+### Usage
+No configuration required. Recovery is automatic and transparent to callers. Log output will show:
+```
+[copilot] Session age NNs exceeds 1500s threshold — proactive restart
+[copilot] Session token expired detected — reactive recovery initiated
+[copilot] Reactive recovery succeeded — continuing task
+```
 ## [Issue #267] Bug Fix: WebEx Connector Passive Queue Declaration for CONSUME-Only AMQP Brokers
 **Status:** ✅ QA Approved (Commit: 6683c01, PR #270)
 

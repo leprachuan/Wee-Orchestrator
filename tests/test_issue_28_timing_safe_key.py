@@ -3,10 +3,11 @@
 Verifies that validate_shared_key() uses hmac.compare_digest() instead of ==,
 which prevents timing side-channel attacks on the Bearer token comparison.
 """
+
 import hmac
 import inspect
-import sys
 import os
+import sys
 
 sys.path.insert(0, "/opt/n8n-copilot-shim-dev")
 
@@ -16,12 +17,12 @@ from agent_manager import AuthManager
 def test_issue_28_validate_shared_key_uses_compare_digest():
     """validate_shared_key must use hmac.compare_digest, not ==."""
     source = inspect.getsource(AuthManager.validate_shared_key)
-    assert "hmac.compare_digest" in source, (
-        "validate_shared_key must use hmac.compare_digest() for timing-safe comparison"
-    )
-    assert "==" not in source, (
-        "validate_shared_key must NOT use == for key comparison (timing side-channel)"
-    )
+    assert (
+        "hmac.compare_digest" in source
+    ), "validate_shared_key must use hmac.compare_digest() for timing-safe comparison"
+    assert (
+        "==" not in source
+    ), "validate_shared_key must NOT use == for key comparison (timing side-channel)"
 
 
 def test_issue_28_valid_key_accepted():

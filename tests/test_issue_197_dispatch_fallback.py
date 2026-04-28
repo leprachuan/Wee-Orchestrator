@@ -42,6 +42,7 @@ class TestCheckRuntimeBlocked(unittest.TestCase):
             "|----|-----------------|-------|---------------|------------|----------------|\n"
         )
         import tempfile
+
         with tempfile.TemporaryDirectory() as d:
             path = self._write_state(d, content)
             self.assertFalse(agent_manager.check_runtime_blocked("copilot", path))
@@ -55,6 +56,7 @@ class TestCheckRuntimeBlocked(unittest.TestCase):
             "| RS-001 | `copilot` | Rate limited | 2099-12-31 23:59 UTC | wee-dev | use claude-sdk |\n"  # noqa: E501
         )
         import tempfile
+
         with tempfile.TemporaryDirectory() as d:
             path = self._write_state(d, content)
             self.assertTrue(agent_manager.check_runtime_blocked("copilot", path))
@@ -68,6 +70,7 @@ class TestCheckRuntimeBlocked(unittest.TestCase):
             "| RS-002 | `copilot` | Old issue | 2000-01-01 00:00 UTC | wee-dev | use claude-sdk |\n"  # noqa: E501
         )
         import tempfile
+
         with tempfile.TemporaryDirectory() as d:
             path = self._write_state(d, content)
             self.assertFalse(agent_manager.check_runtime_blocked("copilot", path))
@@ -81,6 +84,7 @@ class TestCheckRuntimeBlocked(unittest.TestCase):
             "| RS-003 | `claude-sdk` | Auth failure |  | wee-dev | use copilot |\n"
         )
         import tempfile
+
         with tempfile.TemporaryDirectory() as d:
             path = self._write_state(d, content)
             self.assertTrue(agent_manager.check_runtime_blocked("claude-sdk", path))
@@ -94,6 +98,7 @@ class TestCheckRuntimeBlocked(unittest.TestCase):
             "| RS-004 | `claude-sdk` | Auth failure | 2099-01-01 00:00 UTC | wee-dev | use copilot |\n"  # noqa: E501
         )
         import tempfile
+
         with tempfile.TemporaryDirectory() as d:
             path = self._write_state(d, content)
             self.assertFalse(agent_manager.check_runtime_blocked("copilot", path))
@@ -107,6 +112,7 @@ class TestCheckRuntimeBlocked(unittest.TestCase):
             "| RS-005 | `openrouter/:free` | Quota | 2099-01-01 00:00 UTC | wee-dev | use copilot |\n"  # noqa: E501
         )
         import tempfile
+
         with tempfile.TemporaryDirectory() as d:
             path = self._write_state(d, content)
             # "openrouter" alone should match "openrouter/:free"
@@ -121,6 +127,7 @@ class TestCheckRuntimeBlocked(unittest.TestCase):
             "| RS-006 | copilot | Rate limit | 2099-01-01 00:00 UTC | wee-dev | - |\n"
         )
         import tempfile
+
         with tempfile.TemporaryDirectory() as d:
             path = self._write_state(d, content)
             self.assertTrue(agent_manager.check_runtime_blocked("copilot", path))
@@ -157,8 +164,9 @@ class TestResolveDispatchRuntimeModel(unittest.TestCase):
         self.assertFalse(used)
 
     def test_primary_healthy_no_fallback(self):
-        with patch.object(agent_manager, "check_runtime_blocked", return_value=False), \
-             patch.object(agent_manager, "check_runtime_available", return_value=True):
+        with patch.object(
+            agent_manager, "check_runtime_blocked", return_value=False
+        ), patch.object(agent_manager, "check_runtime_available", return_value=True):
             rt, model, used, reason = agent_manager.resolve_dispatch_runtime_model(
                 "wee-dev", "claude-sdk", "claude-sonnet-4.6", self.AGENTS_WITH_FALLBACK
             )
@@ -176,8 +184,9 @@ class TestResolveDispatchRuntimeModel(unittest.TestCase):
         self.assertIn("blocked in RUNTIME_STATE.md", reason)
 
     def test_unavailable_runtime_triggers_fallback(self):
-        with patch.object(agent_manager, "check_runtime_blocked", return_value=False), \
-             patch.object(agent_manager, "check_runtime_available", return_value=False):
+        with patch.object(
+            agent_manager, "check_runtime_blocked", return_value=False
+        ), patch.object(agent_manager, "check_runtime_available", return_value=False):
             rt, model, used, reason = agent_manager.resolve_dispatch_runtime_model(
                 "wee-dev", "claude-sdk", "claude-sonnet-4.6", self.AGENTS_WITH_FALLBACK
             )
@@ -186,8 +195,9 @@ class TestResolveDispatchRuntimeModel(unittest.TestCase):
         self.assertIn("not available on this host", reason)
 
     def test_unknown_agent_returns_original(self):
-        with patch.object(agent_manager, "check_runtime_blocked", return_value=False), \
-             patch.object(agent_manager, "check_runtime_available", return_value=True):
+        with patch.object(
+            agent_manager, "check_runtime_blocked", return_value=False
+        ), patch.object(agent_manager, "check_runtime_available", return_value=True):
             rt, model, used, reason = agent_manager.resolve_dispatch_runtime_model(
                 "nonexistent-agent", "copilot", "gpt-5-mini", {}
             )

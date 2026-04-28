@@ -12,7 +12,7 @@ import tempfile
 import time
 import unittest
 from pathlib import Path
-from unittest.mock import MagicMock, patch, call
+from unittest.mock import MagicMock, call, patch
 from uuid import uuid4
 
 # Ensure the repo root is importable
@@ -27,12 +27,11 @@ class TestDelegationSessionIsolation(unittest.TestCase):
 
     def setUp(self):
         """Set up a minimal SessionManager with a temp session map."""
-        from agent_manager import SessionManager
         import threading
 
-        self.tmp = tempfile.NamedTemporaryFile(
-            mode="w", suffix=".json", delete=False
-        )
+        from agent_manager import SessionManager
+
+        self.tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False)
         self.tmp.write("{}")
         self.tmp.flush()
         self.tmp_path = self.tmp.name
@@ -225,7 +224,9 @@ class TestDelegationSessionIsolation(unittest.TestCase):
                 captured_sessions[effective_sid] = json.load(f).get(effective_sid, {})
             return "Result"
 
-        with patch.object(self.mgr, "_dispatch_single_runtime", side_effect=capture_dispatch):
+        with patch.object(
+            self.mgr, "_dispatch_single_runtime", side_effect=capture_dispatch
+        ):
             self.mgr._execute_with_context("check infra", delegation_data, caller_sid)
 
         ephemeral_key = f"delegation_{delegation_sid}"
@@ -337,12 +338,11 @@ class TestDetectAgentDelegation(unittest.TestCase):
     """Verify detect_agent_delegation patterns match correctly."""
 
     def setUp(self):
-        from agent_manager import SessionManager
         import threading
 
-        self.tmp = tempfile.NamedTemporaryFile(
-            mode="w", suffix=".json", delete=False
-        )
+        from agent_manager import SessionManager
+
+        self.tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False)
         self.tmp.write("{}")
         self.tmp.flush()
 
@@ -362,7 +362,9 @@ class TestDetectAgentDelegation(unittest.TestCase):
             pass
 
     def test_detects_ask_the_pattern(self):
-        agent, prompt = self.mgr.detect_agent_delegation("ask the devops agent to check disk")
+        agent, prompt = self.mgr.detect_agent_delegation(
+            "ask the devops agent to check disk"
+        )
         self.assertEqual(agent, "devops")
 
     def test_detects_have_the_pattern(self):

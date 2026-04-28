@@ -6,11 +6,12 @@ in the retry path without closing it.
 
 The fix: reuse the already-open file handle via f.seek(0).
 """
+
+import builtins
 import io
-import tempfile
 import os
 import sys
-import builtins
+import tempfile
 import unittest
 from unittest.mock import MagicMock, patch
 

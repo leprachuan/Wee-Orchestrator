@@ -1,7 +1,6 @@
 """Regression tests for Issue #126: Wee runtime icon in runtime switcher."""
 
 import os
-
 import unittest
 import xml.etree.ElementTree as ET
 

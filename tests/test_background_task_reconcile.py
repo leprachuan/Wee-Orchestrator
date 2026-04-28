@@ -50,17 +50,20 @@ class TestReconcileOnStartup(unittest.TestCase):
 
     def test_stale_running_marked_failed(self):
         """Running tasks with dead PIDs should be marked failed."""
-        _seed_tasks(self.mgr, [
-            {
-                "task_id": "bg_test1",
-                "status": "running",
-                "pid": 999999999,  # PID that doesn't exist
-                "agent": "orchestrator",
-                "channel": "webui",
-                "user_identity": "test_user",
-                "created_at": "2026-01-01T00:00:00Z",
-            },
-        ])
+        _seed_tasks(
+            self.mgr,
+            [
+                {
+                    "task_id": "bg_test1",
+                    "status": "running",
+                    "pid": 999999999,  # PID that doesn't exist
+                    "agent": "orchestrator",
+                    "channel": "webui",
+                    "user_identity": "test_user",
+                    "created_at": "2026-01-01T00:00:00Z",
+                },
+            ],
+        )
         result = self.mgr.reconcile_stale_tasks()
         self.assertEqual(result["stale_running"], 1)
 
@@ -71,17 +74,20 @@ class TestReconcileOnStartup(unittest.TestCase):
     def test_alive_running_not_touched(self):
         """Running tasks with a live PID should not be touched."""
         my_pid = os.getpid()
-        _seed_tasks(self.mgr, [
-            {
-                "task_id": "bg_alive",
-                "status": "running",
-                "pid": my_pid,
-                "agent": "orchestrator",
-                "channel": "webui",
-                "user_identity": "test_user",
-                "created_at": "2026-01-01T00:00:00Z",
-            },
-        ])
+        _seed_tasks(
+            self.mgr,
+            [
+                {
+                    "task_id": "bg_alive",
+                    "status": "running",
+                    "pid": my_pid,
+                    "agent": "orchestrator",
+                    "channel": "webui",
+                    "user_identity": "test_user",
+                    "created_at": "2026-01-01T00:00:00Z",
+                },
+            ],
+        )
         result = self.mgr.reconcile_stale_tasks()
         self.assertEqual(result["stale_running"], 0)
 
@@ -90,72 +96,81 @@ class TestReconcileOnStartup(unittest.TestCase):
 
     def test_running_no_pid_marked_failed(self):
         """Running tasks with no PID (pid=0) should be marked failed."""
-        _seed_tasks(self.mgr, [
-            {
-                "task_id": "bg_nopid",
-                "status": "running",
-                "pid": 0,
-                "agent": "orchestrator",
-                "channel": "webui",
-                "user_identity": "test_user",
-                "created_at": "2026-01-01T00:00:00Z",
-            },
-        ])
+        _seed_tasks(
+            self.mgr,
+            [
+                {
+                    "task_id": "bg_nopid",
+                    "status": "running",
+                    "pid": 0,
+                    "agent": "orchestrator",
+                    "channel": "webui",
+                    "user_identity": "test_user",
+                    "created_at": "2026-01-01T00:00:00Z",
+                },
+            ],
+        )
         result = self.mgr.reconcile_stale_tasks()
         self.assertEqual(result["stale_running"], 1)
 
     def test_queued_count_returned(self):
         """Queued tasks should be counted in the reconcile result."""
-        _seed_tasks(self.mgr, [
-            {
-                "task_id": "bg_q1",
-                "status": "queued",
-                "agent": "orchestrator",
-                "channel": "webui",
-                "user_identity": "test_user",
-                "created_at": "2026-01-01T00:00:01Z",
-            },
-            {
-                "task_id": "bg_q2",
-                "status": "queued",
-                "agent": "orchestrator",
-                "channel": "webui",
-                "user_identity": "test_user",
-                "created_at": "2026-01-01T00:00:02Z",
-            },
-        ])
+        _seed_tasks(
+            self.mgr,
+            [
+                {
+                    "task_id": "bg_q1",
+                    "status": "queued",
+                    "agent": "orchestrator",
+                    "channel": "webui",
+                    "user_identity": "test_user",
+                    "created_at": "2026-01-01T00:00:01Z",
+                },
+                {
+                    "task_id": "bg_q2",
+                    "status": "queued",
+                    "agent": "orchestrator",
+                    "channel": "webui",
+                    "user_identity": "test_user",
+                    "created_at": "2026-01-01T00:00:02Z",
+                },
+            ],
+        )
         result = self.mgr.reconcile_stale_tasks()
         self.assertEqual(result["queued_ready"], 2)
 
     def test_mixed_scenario(self):
         """Stale running + queued + completed tasks together."""
-        _seed_tasks(self.mgr, [
-            {
-                "task_id": "bg_stale",
-                "status": "running",
-                "pid": 999999999,
-                "agent": "orchestrator",
-                "channel": "webui",
-                "user_identity": "test_user",
-                "created_at": "2026-01-01T00:00:00Z",
-            },
-            {
-                "task_id": "bg_done",
-                "status": "completed",
-                "agent": "orchestrator",
-                "channel": "webui",
-                "user_identity": "test_user",
-                "created_at": "2026-01-01T00:00:00Z",
-            },
-            {
-                "task_id": "bg_queued",
-                "status": "queued",
-                "agent": "orchestrator",
-                "channel": "webui",
-                "user_identity": "test_user",
-                "created_at": "2026-01-01T00:00:01Z",
-            },
-        ])
+        _seed_tasks(
+            self.mgr,
+            [
+                {
+                    "task_id": "bg_stale",
+                    "status": "running",
+                    "pid": 999999999,
+                    "agent": "orchestrator",
+                    "channel": "webui",
+                    "user_identity": "test_user",
+                    "created_at": "2026-01-01T00:00:00Z",
+                },
+                {
+                    "task_id": "bg_done",
+                    "status": "completed",
+                    "agent": "orchestrator",
+                    "channel": "webui",
+                    "user_identity": "test_user",
+                    "created_at": "2026-01-01T00:00:00Z",
+                },
+                {
+                    "task_id": "bg_queued",
+                    "status": "queued",
+                    "agent": "orchestrator",
+                    "channel": "webui",
+                    "user_identity": "test_user",
+                    "created_at": "2026-01-01T00:00:01Z",
+                },
+            ],
+        )
         result = self.mgr.reconcile_stale_tasks()
         self.assertEqual(result["stale_running"], 1)
         self.assertEqual(result["queued_ready"], 1)

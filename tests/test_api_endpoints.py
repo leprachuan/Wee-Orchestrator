@@ -30,7 +30,7 @@ class TestAPIEndpoints(unittest.TestCase):
         cls._telegram_patch.start()
         cls._send_pairing_patch = patch.object(
             agent_manager,
-            '_send_pairing_code',
+            "_send_pairing_code",
             return_value=True,
         )
         cls._send_pairing_patch.start()

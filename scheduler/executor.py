@@ -82,6 +82,7 @@ def _split_command_args(command: str) -> list[str]:
     try:
         # Explicit check that shlex is available
         import shlex as shlex_module
+
         argv = shlex_module.split(command, posix=True)
     except ValueError as exc:
         raise ValueError(f"Invalid command syntax: {exc}") from exc
@@ -515,8 +516,12 @@ class TaskSchedulerExecutor:
 
         Returns (fallback_runtime, fallback_model) or (None, None).
         """
-        fb_rt = job.get("fallback_runtime") or os.environ.get("SCHEDULER_FALLBACK_RUNTIME")
-        fb_model = job.get("fallback_model") or os.environ.get("SCHEDULER_FALLBACK_MODEL")
+        fb_rt = job.get("fallback_runtime") or os.environ.get(
+            "SCHEDULER_FALLBACK_RUNTIME"
+        )
+        fb_model = job.get("fallback_model") or os.environ.get(
+            "SCHEDULER_FALLBACK_MODEL"
+        )
         if fb_rt == job.get("runtime") and fb_model == job.get("model"):
             return None, None
         if not fb_rt and not fb_model:
@@ -562,7 +567,9 @@ class TaskSchedulerExecutor:
                     if notify:
                         self._notify_creator(
                             job,
-                            _brief_notification("\u2705", job["name"], "done (fallback)"),
+                            _brief_notification(
+                                "\u2705", job["name"], "done (fallback)"
+                            ),
                         )
                     return fb_result
 
@@ -572,11 +579,15 @@ class TaskSchedulerExecutor:
                 if notify:
                     self._notify_creator(
                         job,
-                        _brief_notification("\u274c", job["name"], "failed (primary + fallback)"),
+                        _brief_notification(
+                            "\u274c", job["name"], "failed (primary + fallback)"
+                        ),
                     )
                 return None
             else:
-                logger.info(f"[Fallback] Job {job_id}: eligible error but no fallback configured")
+                logger.info(
+                    f"[Fallback] Job {job_id}: eligible error but no fallback configured"
+                )
 
         # No fallback or not eligible
         self._save_result(job_id, job["name"], success=False, error=error_text)
@@ -588,7 +599,10 @@ class TaskSchedulerExecutor:
         return None
 
     def _run_ai_attempt(
-        self, job: Dict, runtime_override: Optional[str] = None, model_override: Optional[str] = None
+        self,
+        job: Dict,
+        runtime_override: Optional[str] = None,
+        model_override: Optional[str] = None,
     ) -> tuple:
         """Run a single AI execution attempt.
 
@@ -596,7 +610,9 @@ class TaskSchedulerExecutor:
         """
         job_id = job["id"]
         agent = job.get("agent", os.getenv("SCHEDULER_DEFAULT_AGENT", "orchestrator"))
-        runtime = runtime_override or job.get("runtime", os.getenv("SCHEDULER_DEFAULT_RUNTIME", "claude"))
+        runtime = runtime_override or job.get(
+            "runtime", os.getenv("SCHEDULER_DEFAULT_RUNTIME", "claude")
+        )
         task = job.get("task", "")
         timeout = int(
             job.get("timeout") or os.getenv("SCHEDULER_DEFAULT_TIMEOUT", "300")
@@ -610,7 +626,9 @@ class TaskSchedulerExecutor:
             "gemini": "gemini-1.5-pro",
             "opencode": "gpt-4o",
         }
-        model = model_override or job.get("model") or _default_models.get(runtime, "sonnet")
+        model = (
+            model_override or job.get("model") or _default_models.get(runtime, "sonnet")
+        )
 
         agent_manager_path = self.repo_root / "agent_manager.py"
         perm_mode = job.get("permission_mode", "restricted")
@@ -657,7 +675,9 @@ class TaskSchedulerExecutor:
                 logger.info(f"Job {job_id} completed successfully")
                 return output, None
             else:
-                error_msg = result.stderr or result.stdout or f"exit code {result.returncode}"
+                error_msg = (
+                    result.stderr or result.stdout or f"exit code {result.returncode}"
+                )
                 self._log_job(job_id, f"Execution failed: {error_msg[:200]}")
                 logger.error(f"Job {job_id} failed with code {result.returncode}")
                 return None, error_msg
@@ -676,7 +696,6 @@ class TaskSchedulerExecutor:
             return None, error_str
         finally:
             self._clear_checkpoint(job_id)
-
 
     def _execute_command_mode(self, job: Dict) -> Optional[str]:
         """Execute job as direct shell/python command (no LLM)."""

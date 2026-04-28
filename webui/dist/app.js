@@ -823,9 +823,13 @@ function renderSessionList() {
 
     const title   = s.title   || s.session_id;
     const preview = s.preview || '';
+    const agentName = s.agent || '';
+    const agentBadge = agentName
+      ? `<span class="session-agent-badge" data-agent="${escHtml(agentName)}" title="${escHtml(agentName)}">${escHtml(agentName)}</span>`
+      : '';
 
     item.innerHTML =
-      `<div class="session-title" title="Double-click to rename">${escHtml(title)}</div>` +
+      `<div class="session-title" title="Double-click to rename">${agentBadge}${escHtml(title)}</div>` +
       `<div class="session-preview">${escHtml(preview)}</div>` +
       `<button class="session-rename-btn" data-id="${escHtml(s.session_id)}" title="Rename">✏️</button>` +
       `<button class="session-delete-btn" data-id="${escHtml(s.session_id)}" title="Delete">✕</button>`;
@@ -865,15 +869,22 @@ function startInlineRename(item, sessionId, currentTitle) {
   input.value = currentTitle;
   input.maxLength = 120;
 
+  // Preserve the agent badge element before clearing title
+  const existingBadge = titleEl.querySelector('.session-agent-badge');
+  const badgeHtml = existingBadge ? existingBadge.outerHTML : '';
   titleEl.textContent = '';
   titleEl.appendChild(input);
   input.focus();
   input.select();
 
+  const _rebuildTitle = (text) => {
+    titleEl.innerHTML = badgeHtml + escHtml(text);
+  };
+
   const commitRename = async () => {
     const newTitle = input.value.trim();
     if (!newTitle || newTitle === currentTitle) {
-      titleEl.textContent = currentTitle;
+      _rebuildTitle(currentTitle);
       return;
     }
     try {
@@ -881,9 +892,9 @@ function startInlineRename(item, sessionId, currentTitle) {
       // Update local state
       const sess = STATE.sessions.find(s => s.session_id === sessionId);
       if (sess) sess.title = newTitle;
-      titleEl.textContent = newTitle;
+      _rebuildTitle(newTitle);
     } catch (err) {
-      titleEl.textContent = currentTitle;
+      _rebuildTitle(currentTitle);
       console.error('Rename failed:', err);
     }
   };
@@ -3765,9 +3776,12 @@ function renderBgTasksSidebar() {
     const prompt = escHtml((t.prompt || '').slice(0, 80));
     const agentLabel = escHtml(t.agent || '?');
     const dateStr = fmtDate(t.created_at);
+    const fallbackBadge = t.used_fallback
+      ? `<span class="bg-fallback-badge" title="Primary runtime failed; retried with ${escHtml(t.actual_runtime || '')}/${escHtml(t.actual_model || '')}">↩ Retried</span>`
+      : '';
     return `
       <div class="session-item bg-sidebar-item ${active}" onclick="selectBgTask('${t.task_id}')">
-        <div class="session-title">${icon} ${prompt || '(no prompt)'}</div>
+        <div class="session-title"><span class="bg-task-title-text">${icon} ${prompt || '(no prompt)'}</span>${fallbackBadge}</div>
         <div class="session-preview">${agentLabel} · ${statusLabel}${elapsed} · ${dateStr}</div>
       </div>`;
   }).join('');
@@ -3894,6 +3908,14 @@ async function loadBgTaskDetail(taskId) {
                 <span class="bg-detail-meta-label">Runtime</span>
                 <span class="bg-detail-meta-value">${runtimeIconHTML(t.runtime)}${escHtml(t.runtime || '?')} / ${escHtml(t.model || '?')}</span>
               </div>
+              ${t.used_fallback ? `<div class="bg-detail-meta-row">
+                <span class="bg-detail-meta-label">Fallback</span>
+                <span class="bg-detail-meta-value bg-fallback-detail" title="Primary runtime failed; task completed on fallback runtime">
+                  <span class="bg-fallback-badge">↩ Retried</span>
+                  <span class="bg-fallback-route">${runtimeIconHTML(t.runtime)}${escHtml(t.runtime || '?')} / ${escHtml(t.model || '?')} → ${runtimeIconHTML(t.actual_runtime || '')}${escHtml(t.actual_runtime || '?')} / ${escHtml(t.actual_model || '?')}</span>
+                  <span class="bg-fallback-tip">Primary failed; completed on fallback runtime</span>
+                </span>
+              </div>` : ''}
               <div class="bg-detail-meta-row">
                 <span class="bg-detail-meta-label">Started</span>
                 <span class="bg-detail-meta-value">${fmtDate(t.created_at)}</span>
@@ -7219,3 +7241,66 @@ function closeAgentsPanel() {
   clearInterval(_agentsRefreshTimer);
   _agentsRefreshTimer = null;
 }
+
+// ── Service Status Panel ──────────────────────────────────────────────────────
+let _svcStatusPollInterval = null;
+const SVC_POLL_MS = 30000;
+
+function _formatSvcTimestamp(ts) {
+  const d = new Date(ts * 1000);
+  return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+}
+
+function _applySvcStatus(name, info) {
+  const dot   = document.getElementById('svc-dot-' + name);
+  const badge = document.getElementById('svc-badge-' + name);
+  if (!dot || !badge) return;
+
+  const status = info.status || 'unknown';
+  const dotClass   = status === 'active'   ? 'dot-active'
+                   : status === 'inactive' ? 'dot-inactive'
+                   : status === 'failed'   ? 'dot-failed'
+                   : 'dot-unknown';
+  const badgeClass = status === 'active'   ? 'badge-active'
+                   : status === 'inactive' ? 'badge-inactive'
+                   : status === 'failed'   ? 'badge-failed'
+                   : 'badge-unknown';
+
+  dot.className   = 'service-dot ' + dotClass;
+  badge.className = 'service-badge ' + badgeClass;
+  badge.textContent = status;
+}
+
+async function fetchServiceStatus() {
+  const refreshBtn = document.getElementById('btn-refresh-service-status');
+  if (refreshBtn) {
+    refreshBtn.classList.add('spinning');
+    setTimeout(function() { refreshBtn.classList.remove('spinning'); }, 600);
+  }
+
+  try {
+    const data = await apiRequest('GET', '/service-status');
+    const services = data.services || {};
+    for (const name of Object.keys(services)) {
+      _applySvcStatus(name, services[name]);
+    }
+    const tsEl   = document.getElementById('service-status-timestamp');
+    const nodeEl = document.getElementById('service-status-node');
+    if (tsEl)   tsEl.textContent = 'Updated ' + _formatSvcTimestamp(data.checked_at);
+    if (nodeEl) nodeEl.textContent = data.node ? 'node: ' + data.node : '';
+  } catch (err) {
+    const tsEl = document.getElementById('service-status-timestamp');
+    if (tsEl) tsEl.textContent = 'Status unavailable';
+  }
+}
+
+function _initServiceStatus() {
+  const refreshBtn = document.getElementById('btn-refresh-service-status');
+  if (refreshBtn) {
+    refreshBtn.addEventListener('click', function() { fetchServiceStatus(); });
+  }
+  fetchServiceStatus();
+  _svcStatusPollInterval = setInterval(fetchServiceStatus, SVC_POLL_MS);
+}
+
+document.addEventListener('DOMContentLoaded', _initServiceStatus);

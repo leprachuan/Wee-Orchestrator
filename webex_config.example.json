@@ -6,6 +6,8 @@
   "rabbitmq_password": "",
   "rabbitmq_queue": "webex",
   "rabbitmq_vhost": "/",
+  "rabbitmq_queue_passive": false,
+  "rabbitmq_payload_key": "",
   "allowed_users": [],
   "user_pairings": {},
   "enable_auto_pair": false,
