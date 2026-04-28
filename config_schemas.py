@@ -214,6 +214,7 @@ _WEBEX_KNOWN = {
     "rabbitmq_ssl_verify",
     "rabbitmq_host_ip",
     "rabbitmq_payload_key",
+    "rabbitmq_queue_passive",
     "allowed_users",
     "user_pairings",
     "enable_auto_pair",
@@ -243,6 +244,7 @@ class WebEXConfigSchema(BaseModel):
     rabbitmq_ssl_verify: Optional[bool] = True
     rabbitmq_host_ip: Optional[str] = None
     rabbitmq_payload_key: Optional[str] = None
+    rabbitmq_queue_passive: bool = False
     allowed_users: List[str] = Field(default_factory=list)
     user_pairings: Dict[str, Any] = Field(default_factory=dict)
     enable_auto_pair: bool = False

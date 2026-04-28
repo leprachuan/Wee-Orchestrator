@@ -45,6 +45,7 @@ class WebEXConfig(BaseConfig):
             "rabbitmq_password": os.environ.get("RABBITMQ_PASSWORD", ""),
             "rabbitmq_queue": os.environ.get("RABBITMQ_QUEUE", "webex"),
             "rabbitmq_vhost": "/",
+            "rabbitmq_queue_passive": False,  # Set True for brokers where bot only has CONSUME permission  # noqa: E501
             "allowed_users": [],  # List of WebEX person IDs allowed to chat
             "user_pairings": {},  # Maps WebEX person ID to session info
             "enable_auto_pair": False,  # Auto-pair new users
@@ -285,9 +286,15 @@ class WebEXConnector(BaseConnector):
                         result["connected"] = False
                         return
 
-                    channel.queue_declare(
-                        queue=self.config.config["rabbitmq_queue"], durable=True
-                    )
+                    passive = self.config.config.get("rabbitmq_queue_passive", False)
+                    if passive:
+                        channel.queue_declare(
+                            queue=self.config.config["rabbitmq_queue"], passive=True
+                        )
+                    else:
+                        channel.queue_declare(
+                            queue=self.config.config["rabbitmq_queue"], durable=True
+                        )
                     channel.basic_qos(prefetch_count=1)
 
                     if self.shutdown_event.is_set():
