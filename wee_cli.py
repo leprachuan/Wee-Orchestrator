@@ -9,7 +9,7 @@ Usage:
     wee --model openrouter/meta-llama/llama-2-70b "Explain quantum computing"
     wee --model ollama/gemma4:e4b --tools "List Python files in /opt"
     wee --interactive
-    echo "summarize this" | wee --model ollama/qwen3:8b
+    echo "summarize this" | wee --model ollama/qwen3.5:4b
     wee  # enters interactive mode by default
 
 Issue #158: https://github.com/leprachuan/Wee-Orchestrator/issues/158
@@ -35,13 +35,10 @@ sys.path.insert(0, _HERE)
 from wee_runtime import _WEE_TOOLS  # noqa: E402
 from wee_runtime import (  # noqa: E402
     _ANTI_HALLUCINATION_PROMPT,
-    _COMPACT_WARN_PCT,
     MAX_TOOL_ROUNDS,
-    compact_messages,
-    count_message_tokens,
     execute_tool,
-    get_context_window,
     resolve_model_and_endpoint,
+    list_available_models,
 )
 
 # ---------------------------------------------------------------------------
@@ -71,6 +68,119 @@ def save_config(cfg: dict) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Agent & Skill Discovery
+# ---------------------------------------------------------------------------
+def load_agents_json(search_cwd: bool = True) -> dict:
+    """Load agents.json from CWD first, then fallback to script folder.
+    
+    Args:
+        search_cwd: If True, search CWD first. If False, only use script folder.
+    
+    Returns:
+        Parsed agents.json content or empty dict if not found
+    """
+    # Try CWD first if requested
+    if search_cwd:
+        cwd_agents = os.path.join(os.getcwd(), "agents.json")
+        try:
+            with open(cwd_agents) as f:
+                return json.load(f)
+        except (FileNotFoundError, json.JSONDecodeError):
+            pass
+    
+    # Fall back to script folder
+    agents_file = os.path.join(_HERE, "agents.json")
+    try:
+        with open(agents_file) as f:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return {"agents": []}
+
+
+def discover_skills(search_cwd: bool = True) -> dict:
+    """Discover available skills from skill repositories and CWD.
+    
+    Args:
+        search_cwd: If True, search CWD first. If False, only use default dirs.
+    
+    Returns:
+        Dict mapping skill_name -> {description, path, loaded}
+    """
+    skills = {}
+    skill_dirs = []
+    
+    # Add CWD first if requested
+    if search_cwd:
+        cwd_skills_dir = os.path.join(os.getcwd(), "skills")
+        if os.path.isdir(cwd_skills_dir):
+            skill_dirs.append(cwd_skills_dir)
+    
+    # Always add default directories
+    skill_dirs.extend([
+        "/opt/foster-skills",
+        "/opt/skills",
+    ])
+    
+    for skill_dir in skill_dirs:
+        if not os.path.isdir(skill_dir):
+            continue
+        try:
+            for entry in os.listdir(skill_dir):
+                skill_path = os.path.join(skill_dir, entry)
+                
+                # Check for skill_metadata.json (standard format)
+                metadata_file = os.path.join(skill_path, "skill_metadata.json")
+                if os.path.isfile(metadata_file):
+                    try:
+                        with open(metadata_file) as f:
+                            metadata = json.load(f)
+                        skills[entry] = {
+                            "description": metadata.get("description", "No description"),
+                            "path": skill_path,
+                            "loaded": False,
+                        }
+                    except (json.JSONDecodeError, OSError):
+                        pass
+                
+                # Check for .skill file (alternate format)
+                skill_file = os.path.join(skill_dir, f"{entry}.skill")
+                if os.path.isfile(skill_file) and entry not in skills:
+                    try:
+                        with open(skill_file, encoding='utf-8', errors='ignore') as f:
+                            content = f.read()
+                            # Extract description from first lines
+                            desc_line = next((line for line in content.split("\n") if "description" in line.lower()), "")
+                            skills[entry] = {
+                                "description": desc_line.strip() if desc_line else "Custom skill",
+                                "path": skill_file,
+                                "loaded": False,
+                            }
+                    except OSError:
+                        pass
+        except OSError:
+            pass
+    
+    return skills
+
+
+def get_agent_info() -> list:
+    """Get list of agents from agents.json.
+    
+    Returns:
+        List of agent dicts with name and description
+    """
+    agents_data = load_agents_json()
+    agents = []
+    for agent in agents_data.get("agents", []):
+        agents.append({
+            "name": agent.get("name", "unknown"),
+            "description": agent.get("description", "No description"),
+            "path": agent.get("path", ""),
+        })
+    return agents
+
+
+# ---------------------------------------------------------------------------
 # Readline history
 # ---------------------------------------------------------------------------
 def _init_readline():
@@ -85,13 +195,12 @@ def _init_readline():
     # Tab completion for slash commands
     _COMMANDS = [
         "/clear",
-        "/compact",
-        "/config",
-        "/help",
         "/history",
         "/model",
-        "/system",
         "/tokens",
+        "/system",
+        "/help",
+        "/config",
         "/version",
     ]
 
@@ -165,56 +274,27 @@ def _print_info(msg: str):
 class TokenTracker:
     """Track token usage across turns."""
 
-    def __init__(self, context_window: int = 0):
+    def __init__(self):
         self.prompt_tokens = 0
         self.completion_tokens = 0
         self.total_tokens = 0
         self.turns = 0
-        self.session_total = 0  # cumulative across all API turns
-        self.last_prompt_tokens = (
-            0  # prompt tokens from the most recent turn (actual current context)
-        )
-        self.context_window = context_window  # 0 means unknown
 
     def update(self, usage):
         """Update from an OpenAI usage object."""
         if usage:
-            pt = getattr(usage, "prompt_tokens", 0) or 0
-            ct = getattr(usage, "completion_tokens", 0) or 0
-            tt = getattr(usage, "total_tokens", 0) or 0
-            self.prompt_tokens += pt
-            self.completion_tokens += ct
-            self.total_tokens += tt
-            self.session_total += tt if tt else (pt + ct)
-            self.last_prompt_tokens = pt  # tracks actual current context size
+            self.prompt_tokens += getattr(usage, "prompt_tokens", 0) or 0
+            self.completion_tokens += getattr(usage, "completion_tokens", 0) or 0
+            self.total_tokens += getattr(usage, "total_tokens", 0) or 0
         self.turns += 1
 
-    def percent_used(self) -> float:
-        """Return percentage of context window consumed (0 if window unknown).
-
-        Uses last_prompt_tokens (the prompt token count from the most recent API
-        call) rather than session_total to avoid quadratic over-counting: each
-        turn re-sends the full message history, so session_total grows without
-        bound even when the actual context usage is stable.
-        """
-        if not self.context_window:
-            return 0.0
-        return min(100.0, self.last_prompt_tokens / self.context_window * 100)
-
     def summary(self) -> str:
-        lines = [
+        return (
             f"Tokens — prompt: {self.prompt_tokens}, "
             f"completion: {self.completion_tokens}, "
             f"total: {self.total_tokens}, "
             f"turns: {self.turns}"
-        ]
-        if self.context_window:
-            pct = self.percent_used()
-            lines.append(
-                f"Context window: {self.last_prompt_tokens:,}"
-                f"/{self.context_window:,} tokens ({pct:.1f}% used)"
-            )
-        return "\n".join(lines)
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -229,6 +309,7 @@ def chat_stream(
     token_tracker: TokenTracker = None,
     permission: str = "auto",
     stream_output: bool = True,
+    tool_results_buffer: dict = None,
 ) -> str:
     """Send a chat completion request and stream the response.
 
@@ -238,10 +319,14 @@ def chat_stream(
         permission: Tool execution permission level. "restricted" blocks all tool
             execution. "auto" (default) executes tools as requested. "elevated" is
             treated the same as "auto" (no additional privilege escalation in CLI).
+        tool_results_buffer: Optional dict to collect tool results. Will be populated
+            with {tool_name: result} entries during tool execution.
     Returns the full response text. Handles tool-calling loops.
     """
     tool_call_counter = 0
     collected_output = []
+    if tool_results_buffer is None:
+        tool_results_buffer = {}
 
     for round_num in range(MAX_TOOL_ROUNDS + 1):
         create_kwargs = {
@@ -340,8 +425,23 @@ def chat_stream(
             except json.JSONDecodeError:
                 func_args = {"command": tc_info["function"]["arguments"]}
 
-            _print_info(f"[Wee] Executing: {func_name}({json.dumps(func_args)[:100]})")
+            _print_info(f"[Wee] Executing: {func_name}({json.dumps(func_args)[:300]})" + ("..." if len(json.dumps(func_args)) > 300 else ""))
             tool_result = execute_tool(func_name, func_args, permission=permission)
+
+            # Display tool result to user
+            if tool_result:
+                result_preview = tool_result[:500] if len(str(tool_result)) > 500 else tool_result
+                _print_info(f"[Wee] Result: {result_preview}")
+
+            # Store tool result for later viewing
+            if func_name not in tool_results_buffer:
+                tool_results_buffer[func_name] = []
+            tool_results_buffer[func_name].append({
+                "args": func_args,
+                "result": tool_result or "No output",
+                "tool_id": tc_id,
+            })
+            
             messages.append(
                 {
                     "role": "tool",
@@ -398,21 +498,26 @@ def _make_client(api_base: str, api_key: str, timeout: float):
 # ---------------------------------------------------------------------------
 REPL_HELP = """\
 Wee CLI Interactive Mode — Commands:
-  /clear          Clear conversation history
-  /compact [N]    Compact context to N% of window (default 50%)
-  /history        Show conversation history
-  /model MODEL    Switch model
-  /tokens         Show token usage and context window percentage
-  /system PROMPT  Set system prompt
-  /config         Show current configuration
-  /version        Show version
-  /help           Show this help
-  exit, quit      Exit interactive mode
+  /clear              Clear conversation history
+  /history            Show conversation history
+  /model MODEL        Switch model
+  /model list         List all available models
+  /model list PROVIDER List models from specific provider (ollama, openrouter, lmstudio)
+  /tokens             Show token usage
+  /system PROMPT      Set system prompt
+  /config             Show current configuration
+  /tools              Show tool status
+  /tools on|off       Enable/disable tool calling
+  /tools-output       Show last tool call outputs
+  /permission MODE    Set permission level (restricted, auto, elevated)
+  /agents             List agents. Use call_agent tool to dispatch work
+  /skills             List available skills (alias: /discover-skills)
+  /version            Show version
+  /help               Show this help
+  /exit, /quit        Exit interactive mode
 
-Available tools (use --tools / -t to enable):
-  bash    Execute shell commands
-  python  Execute Python 3 code
-  search  Web search via SearXNG (WEE_SEARXNG_URL, default: http://192.168.1.100:8888)
+Keyboard Shortcuts:
+  Ctrl+O              Show last tool call outputs (same as /tools-output)
 """
 
 
@@ -426,13 +531,21 @@ def run_interactive(
     system_prompt: str,
     output_format: str,
     permission: str,
-):
-    """Run the interactive REPL."""
+    model_str: str = None,
+) -> str:
+    """Run the interactive REPL.
+    
+    Args:
+        model: Resolved model name (without provider prefix)
+        model_str: Original model string from CLI (with provider prefix if used)
+    
+    Returns:
+        Updated model string (to persist across sessions, in original form)
+    """
     _init_readline()
 
     client = _make_client(api_base, api_key, timeout)
-    ctx_window = get_context_window(model)
-    token_tracker = TokenTracker(context_window=ctx_window)
+    token_tracker = TokenTracker()
     messages = []
 
     if system_prompt:
@@ -442,7 +555,15 @@ def run_interactive(
     messages.append({"role": "system", "content": effective_system})
 
     _print_info(f"Wee CLI v{__version__} — model: {model}")
-    _print_info("Type /help for commands, exit to quit.\n")
+    _print_info("Type /help for commands, /exit to quit.\n")
+    
+    # Track if this is the first message (for CWD context injection)
+    first_message = True
+    # Buffer to store tool results from the last interaction
+    tool_results_buffer = {}
+    # Track original user input for model persistence (with provider prefix if used)
+    # If model_str wasn't passed, default to the resolved model name
+    model_for_persistence = model_str if model_str else model
 
     while True:
         try:
@@ -455,15 +576,15 @@ def run_interactive(
             continue
 
         # Handle slash commands
-        if user_input.lower() in ("exit", "quit"):
-            break
-
         if user_input.startswith("/"):
             parts = user_input.split(None, 1)
             cmd = parts[0].lower()
             arg = parts[1] if len(parts) > 1 else ""
 
-            if cmd == "/clear":
+            if cmd == "/exit" or cmd == "/quit":
+                break
+
+            elif cmd == "/clear":
                 messages = [{"role": "system", "content": effective_system}]
                 token_tracker = TokenTracker()
                 _print_info("Conversation cleared.")
@@ -483,69 +604,23 @@ def run_interactive(
             elif cmd == "/model":
                 if not arg:
                     _print_info(f"Current model: {model}")
+                elif arg.lower() == "list":
+                    list_available_models()
+                elif arg.lower().startswith("list "):
+                    # /model list <provider>
+                    provider = arg[5:].strip()
+                    list_available_models(provider)
                 else:
                     old_model = model
-                    model, api_base, api_key = resolve_model_and_endpoint(arg)
+                    model_for_persistence = arg  # Keep original user input for persistence
+                    resolved_model, api_base, api_key = resolve_model_and_endpoint(arg)
                     client = _make_client(api_base, api_key, timeout)
-                    token_tracker.context_window = get_context_window(model)
-                    _print_info(
-                        f"Model switched: {old_model} → {model} "
-                        f"(context: {token_tracker.context_window:,} tokens)"
-                    )
+                    model = resolved_model  # Use resolved model for API calls
+                    _print_info(f"Model switched: {old_model} → {model}")
                 continue
 
             elif cmd == "/tokens":
                 _print_info(token_tracker.summary())
-                continue
-
-            elif cmd == "/compact":
-                target_pct = 50
-                if arg:
-                    try:
-                        target_pct = int(arg)
-                        if not 10 <= target_pct <= 90:
-                            _print_info("Target percentage must be 10-90.")
-                            continue
-                    except ValueError:
-                        _print_info("Usage: /compact [percentage]  (default: 50)")
-                        continue
-                ctx_win = token_tracker.context_window or get_context_window(model)
-                target_toks = int(ctx_win * target_pct / 100)
-                non_sys_count = sum(1 for m in messages if m.get("role") != "system")
-                if non_sys_count <= 6:
-                    _print_info("Nothing to compact — history is already short.")
-                    continue
-                before_n = len(messages)
-                before_toks = count_message_tokens(messages, model)
-                _print_info(
-                    f"Compacting: {before_n} messages, ~{before_toks:,} tokens"
-                    f" → target {target_pct}% ({target_toks:,} tokens)..."
-                )
-                try:
-                    import warnings
-
-                    with warnings.catch_warnings(record=True) as w:
-                        warnings.simplefilter("always")
-                        compacted, summary = compact_messages(
-                            messages, target_toks, model, client
-                        )
-                        for warning in w:
-                            _print_info(f"[Wee] Warning: {warning.message}")
-                    after_n = len(compacted)
-                    after_toks = count_message_tokens(compacted, model)
-                    messages = compacted
-                    token_tracker.last_prompt_tokens = after_toks
-                    _print_info(
-                        f"Done: {before_n} → {after_n} messages,"
-                        f" ~{before_toks:,} → ~{after_toks:,} tokens"
-                    )
-                    if summary:
-                        _print_info(
-                            f"Summary: {summary[:200]}"
-                            f"{'...' if len(summary) > 200 else ''}"
-                        )
-                except Exception as exc:
-                    _print_info(f"Compaction failed: {exc}")
                 continue
 
             elif cmd == "/system":
@@ -568,8 +643,71 @@ def run_interactive(
                 _print_info(f"Output:      {output_format}")
                 continue
 
+            elif cmd == "/tools":
+                if not arg:
+                    status = "enabled" if tools_enabled else "disabled"
+                    _print_info(f"Tool calling is {status}.")
+                elif arg.lower() in ("on", "enable", "yes", "true"):
+                    tools_enabled = True
+                    _print_info("Tool calling enabled.")
+                elif arg.lower() in ("off", "disable", "no", "false"):
+                    tools_enabled = False
+                    _print_info("Tool calling disabled.")
+                else:
+                    _print_error(f"Invalid argument: {arg}. Use 'on' or 'off'.")
+                continue
+
+            elif cmd == "/tools-output":
+                if not tool_results_buffer:
+                    _print_info("No tool results from recent calls.")
+                else:
+                    _print_info("Tool Execution Results:")
+                    for tool_name, results in tool_results_buffer.items():
+                        for i, entry in enumerate(results, 1):
+                            _print_info(f"\n  [{tool_name}#{i}]")
+                            _print_info(f"    Args: {json.dumps(entry['args'])[:150]}")
+                            if len(json.dumps(entry['args'])) > 150:
+                                _print_info("           ...")
+                            result_lines = str(entry['result']).split('\n')
+                            for line in result_lines[:20]:
+                                _print_info(f"    {line}")
+                            if len(result_lines) > 20:
+                                _print_info(f"    ... ({len(result_lines) - 20} more lines)")
+                continue
+                if not arg:
+                    _print_info(f"Permission level: {permission}")
+                elif arg.lower() in ("restricted", "auto", "elevated"):
+                    old_perm = permission
+                    permission = arg.lower()
+                    _print_info(f"Permission: {old_perm} → {permission}")
+                else:
+                    _print_error(f"Invalid permission: {arg}. Use 'restricted', 'auto', or 'elevated'.")
+                continue
+
             elif cmd == "/version":
                 _print_info(f"Wee CLI v{__version__}")
+                continue
+
+            elif cmd == "/agents":
+                agents = get_agent_info()
+                if agents:
+                    _print_info("Available Agents (from agents.json):")
+                    for agent in agents:
+                        print(f"  {agent['name']:20} — {agent['description'][:70]}")
+                else:
+                    _print_info("No agents configured")
+                continue
+
+            elif cmd == "/skills" or (cmd == "/discover-skills"):
+                skills = discover_skills(search_cwd=True)
+                if skills:
+                    _print_info(f"Available Skills ({len(skills)} found):")
+                    for skill_name, skill_info in sorted(skills.items()):
+                        status = "✓ loaded" if skill_info["loaded"] else ""
+                        print(f"  {skill_name:30} {status}")
+                        print(f"    {skill_info['description'][:70]}")
+                else:
+                    _print_info("No skills discovered")
                 continue
 
             elif cmd == "/help":
@@ -580,10 +718,83 @@ def run_interactive(
                 _print_info(f"Unknown command: {cmd}. Type /help for commands.")
                 continue
 
+        # On first message, inject context about CWD agents/skills
+        if first_message:
+            first_message = False
+            cwd_agents = load_agents_json(search_cwd=True)
+            cwd_skills = discover_skills(search_cwd=True)
+            
+            # Check if CWD has its own agents.json
+            cwd_agents_file = os.path.join(os.getcwd(), "agents.json")
+            cwd_has_agents = os.path.isfile(cwd_agents_file)
+            
+            # Check if CWD has AGENTS.md
+            cwd_agents_md = os.path.join(os.getcwd(), "AGENTS.md")
+            cwd_has_agents_md = os.path.isfile(cwd_agents_md)
+            
+            # Check if CWD/skills exists
+            cwd_skills_dir = os.path.join(os.getcwd(), "skills")
+            cwd_has_skills_dir = os.path.isdir(cwd_skills_dir)
+            
+            # If CWD has local agents/skills, add system context
+            if cwd_has_agents or cwd_has_agents_md or cwd_has_skills_dir:
+                context = "\nContext from current working directory:"
+                
+                # Read AGENTS.md if it exists
+                if cwd_has_agents_md:
+                    try:
+                        with open(cwd_agents_md, 'r', encoding='utf-8', errors='ignore') as f:
+                            agents_md_content = f.read()
+                        # Extract first 500 chars to avoid bloating the context
+                        context += f"\n\nAGENTS.md (available in CWD):\n"
+                        context += agents_md_content[:500]
+                        if len(agents_md_content) > 500:
+                            context += "\n... (see full AGENTS.md in CWD)"
+                    except (OSError, IOError):
+                        pass
+                
+                if cwd_has_agents:
+                    agents = cwd_agents.get("agents", [])
+                    if agents:
+                        context += f"\n\nAvailable agents ({len(agents)}):"
+                        for agent in agents[:5]:
+                            context += f"\n  - {agent.get('name', 'unknown')}: {agent.get('description', '')[:60]}"
+                        if len(agents) > 5:
+                            context += f"\n  ... and {len(agents) - 5} more"
+                
+                if cwd_has_skills_dir:
+                    # Re-discover to get only CWD skills
+                    cwd_only_skills = {}
+                    if os.path.isdir(cwd_skills_dir):
+                        try:
+                            for entry in os.listdir(cwd_skills_dir):
+                                skill_path = os.path.join(cwd_skills_dir, entry)
+                                metadata_file = os.path.join(skill_path, "skill_metadata.json")
+                                if os.path.isfile(metadata_file):
+                                    try:
+                                        with open(metadata_file) as f:
+                                            metadata = json.load(f)
+                                        cwd_only_skills[entry] = metadata.get("description", "")
+                                    except (json.JSONDecodeError, OSError):
+                                        pass
+                        except OSError:
+                            pass
+                    
+                    if cwd_only_skills:
+                        context += f"\n\nAvailable skills in ./skills ({len(cwd_only_skills)}):"
+                        for skill_name in list(cwd_only_skills.keys())[:5]:
+                            context += f"\n  - {skill_name}: {cwd_only_skills[skill_name][:50]}"
+                        if len(cwd_only_skills) > 5:
+                            context += f"\n  ... and {len(cwd_only_skills) - 5} more"
+                
+                # Prepend context to first user message
+                user_input = context + "\n\n" + user_input
+
         # Regular prompt
         messages.append({"role": "user", "content": user_input})
 
         try:
+            tool_results_buffer = {}  # Clear buffer for new interaction
             response = chat_stream(
                 client=client,
                 model=model,
@@ -592,15 +803,9 @@ def run_interactive(
                 temperature=temperature,
                 token_tracker=token_tracker,
                 permission=permission,
+                tool_results_buffer=tool_results_buffer,
             )
             messages.append({"role": "assistant", "content": response})
-            if token_tracker.context_window:
-                pct = token_tracker.percent_used()
-                if pct >= _COMPACT_WARN_PCT:
-                    _print_info(
-                        f"[Wee] Context window {pct:.0f}% full —"
-                        " consider /compact to free space."
-                    )
         except KeyboardInterrupt:
             print("\n[interrupted]")
             messages.append({"role": "assistant", "content": "[interrupted]"})
@@ -611,6 +816,7 @@ def run_interactive(
     _save_readline()
     _print_info(f"\n{token_tracker.summary()}")
     _print_info("Goodbye!")
+    return model_for_persistence
 
 
 # ---------------------------------------------------------------------------
@@ -671,7 +877,7 @@ def build_parser() -> argparse.ArgumentParser:
         description="Wee CLI — Standalone command-line AI assistant",
         epilog=(
             "Examples:\n"
-            '  wee --model ollama/qwen3:8b "What is 2+2?"\n'
+            '  wee --model ollama/qwen3.5:4b "What is 2+2?"\n'
             '  wee --model openrouter/meta-llama/llama-2-70b --tools "List files"\n'
             "  wee --interactive\n"
             '  echo "summarize" | wee --model ollama/gemma4:e4b\n'
@@ -685,8 +891,8 @@ def build_parser() -> argparse.ArgumentParser:
         "--model",
         "-m",
         default=None,
-        help="Model ID (e.g. ollama/qwen3:8b, openrouter/meta-llama/llama-2-70b). "
-        "Default: $WEE_MODEL or ollama/qwen3:8b",
+        help="Model ID (e.g. ollama/qwen3.5:4b, openrouter/meta-llama/llama-2-70b). "
+        "Default: $WEE_MODEL or ollama/qwen3.5:4b",
     )
     parser.add_argument(
         "--api-key",
@@ -709,14 +915,14 @@ def build_parser() -> argparse.ArgumentParser:
         "-t",
         action="store_true",
         default=False,
-        help="Enable tool calling (bash, python, search)",
+        help="Enable tool calling (bash, python)",
     )
     parser.add_argument(
         "--permission",
         "-p",
         choices=["restricted", "auto", "elevated"],
-        default="restricted",
-        help="Permission level for tool execution (default: restricted)",
+        default="auto",
+        help="Permission level for tool execution (default: auto)",
     )
     parser.add_argument(
         "--system",
@@ -757,6 +963,13 @@ def build_parser() -> argparse.ArgumentParser:
         help=f"Config file path (default: {DEFAULT_CONFIG_FILE})",
     )
     parser.add_argument(
+        "--list-models",
+        nargs="?",
+        const=True,
+        metavar="PROVIDER",
+        help="List available models (optional: ollama, openrouter, lmstudio)",
+    )
+    parser.add_argument(
         "prompt",
         nargs="*",
         help="Prompt text (omit for interactive mode or pipe from stdin)",
@@ -771,6 +984,13 @@ def main(argv=None):
     """Main entry point for wee CLI."""
     parser = build_parser()
     args = parser.parse_args(argv)
+
+    # Handle --list-models
+    if args.list_models is not None:
+        from wee_runtime import list_available_models
+        provider = None if args.list_models is True else args.list_models
+        list_available_models(provider)
+        sys.exit(0)
 
     # Load config file defaults
     config_path = args.config or DEFAULT_CONFIG_FILE
@@ -787,13 +1007,13 @@ def main(argv=None):
         args.model
         or os.environ.get("WEE_MODEL")
         or cfg.get("model")
-        or "ollama/qwen3:8b"
+        or "ollama/qwen3.5:4b"
     )
 
     # Resolve other settings from config
     system_prompt = args.system or cfg.get("system_prompt", "")
     tools_enabled = args.tools or cfg.get("tools", False)
-    permission = args.permission or cfg.get("permission", "restricted")
+    permission = args.permission or cfg.get("permission", "auto")
     temperature = (
         args.temperature if args.temperature is not None else cfg.get("temperature")
     )
@@ -812,7 +1032,10 @@ def main(argv=None):
 
     # If --interactive explicitly set, go straight to REPL
     if args.interactive:
-        run_interactive(
+        # Enable tools by default in interactive mode (unless explicitly disabled)
+        if not args.tools and not cfg.get("tools"):
+            tools_enabled = True
+        updated_model = run_interactive(
             model=model,
             api_base=api_base,
             api_key=api_key,
@@ -822,7 +1045,11 @@ def main(argv=None):
             system_prompt=system_prompt,
             output_format=output_format,
             permission=permission,
+            model_str=model_str,
         )
+        # Persist model choice for next session
+        cfg["model"] = updated_model
+        save_config(cfg)
         return
 
     # Check for piped stdin
@@ -837,7 +1064,10 @@ def main(argv=None):
 
     if not prompt_text and not stdin_is_pipe:
         # Interactive REPL (no args, tty)
-        run_interactive(
+        # Enable tools by default in interactive mode (unless explicitly disabled)
+        if not args.tools and not cfg.get("tools"):
+            tools_enabled = True
+        updated_model = run_interactive(
             model=model,
             api_base=api_base,
             api_key=api_key,
@@ -847,7 +1077,11 @@ def main(argv=None):
             system_prompt=system_prompt,
             output_format=output_format,
             permission=permission,
+            model_str=model_str,
         )
+        # Persist model choice for next session
+        cfg["model"] = updated_model
+        save_config(cfg)
     elif prompt_text:
         # Single-shot mode
         run_single_shot(
