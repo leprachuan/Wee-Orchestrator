@@ -113,9 +113,21 @@ def estimate_tokens(text: str, model: str = "") -> int:
 
 
 def count_message_tokens(messages: list, model: str = "") -> int:
-    """Estimate the total token count for a list of chat messages."""
+    """Estimate the total token count for a list of chat messages.
+
+    Handles the following message shapes:
+
+    * Standard ``role: user/assistant/system`` with string or list content.
+    * Anthropic content-list parts: ``type: text``, ``type: tool_use``,
+      ``type: tool_result``.
+    * OpenAI tool-result messages: ``role: tool`` with a string ``content``
+      and an optional ``tool_call_id`` field.
+    * OpenAI assistant tool-call messages: ``role: assistant`` with a
+      ``tool_calls`` array.
+    """
     total = 0
     for msg in messages:
+        role = msg.get("role", "")
         content = msg.get("content") or ""
         if isinstance(content, list):
             for part in content:
@@ -123,7 +135,7 @@ def count_message_tokens(messages: list, model: str = "") -> int:
                     if part.get("type") == "text":
                         total += estimate_tokens(part["text"], model)
                     elif part.get("type") in ("tool_use", "tool_result"):
-                        # Count tool name + input/output text
+                        # Anthropic: count tool name + input/output payload
                         total += estimate_tokens(part.get("name", ""), model)
                         inner = part.get("input") or part.get("content") or ""
                         if isinstance(inner, str):
@@ -131,7 +143,14 @@ def count_message_tokens(messages: list, model: str = "") -> int:
                         elif isinstance(inner, dict):
                             total += estimate_tokens(str(inner), model)
         else:
+            # String content -- covers standard messages and OpenAI role="tool"
+            # tool-result messages (content is always a plain string there).
             total += estimate_tokens(str(content), model)
+        if role in ("tool", "tool_result", "tool_call"):
+            # OpenAI tool-result messages carry a tool_call_id; count it.
+            tc_id = msg.get("tool_call_id", "")
+            if tc_id:
+                total += estimate_tokens(tc_id, model)
         # Count tool_calls array for assistant messages (OpenAI format)
         for tc in msg.get("tool_calls") or []:
             fn = tc.get("function") or {}
@@ -157,6 +176,11 @@ def compact_messages(
     Preserves the system prompt and the most recent ``keep_recent`` messages.
     Older messages are summarised into a single context-summary exchange using
     the LLM, keeping the conversation coherent without blowing the context window.
+
+    Note: Does not guarantee the result fits within *target_tokens*. If the
+    ``keep_recent`` messages alone exceed the target, a :mod:`warnings` warning
+    is emitted but the result is still returned — callers should check the
+    returned token count independently.
 
     Returns:
         (compacted_messages, summary_text) tuple.

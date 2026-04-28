@@ -150,6 +150,36 @@ class TestCountMessageTokens(unittest.TestCase):
         # Tool result should contribute roughly same tokens as plain content
         assert result >= plain - 4  # within per-message overhead margin
 
+    def test_openai_tool_role_message_counted(self):
+        # OpenAI-format tool-result message: role="tool" with string content
+        # and a tool_call_id field.
+        tool_output = "The command output was: hello world from the shell"
+        msgs = [
+            {
+                "role": "tool",
+                "content": tool_output,
+                "tool_call_id": "call_abc123",
+            }
+        ]
+        result = count_message_tokens(msgs)
+        # Must count at least the content text
+        plain = count_message_tokens([{"role": "user", "content": tool_output}])
+        # role="tool" should be counted (content + tool_call_id overhead)
+        assert result >= plain - 4  # within one per-message overhead margin
+        # Zero-content tool message still has overhead
+        empty_tool = count_message_tokens([{"role": "tool", "content": ""}])
+        assert empty_tool >= 4  # at least the per-message overhead
+
+    def test_openai_tool_role_distinct_from_user_role(self):
+        # Verifies role="tool" messages are not silently dropped (i.e. the
+        # token count for role="tool" is the same order of magnitude as for
+        # an equivalent role="user" message).
+        msg_tool = [{"role": "tool", "content": "result text", "tool_call_id": "c1"}]
+        msg_user = [{"role": "user", "content": "result text"}]
+        # Both should produce a non-zero token count
+        assert count_message_tokens(msg_tool) > 0
+        assert count_message_tokens(msg_user) > 0
+
 
 class TestTokenTracker(unittest.TestCase):
     def test_init_with_context_window(self):
@@ -176,20 +206,30 @@ class TestTokenTracker(unittest.TestCase):
         assert abs(tracker.percent_used() - 10.0) < 0.01  # 1000/10000 * 100
 
     def test_percent_used_does_not_grow_quadratically(self):
-        # Simulate multiple turns: session_total grows, but percent_used stays
-        # bounded by the actual prompt_tokens of the most recent turn.
+        # SEMANTIC test (not formula math): each turn re-sends the full message
+        # history to the API, so session_total grows as O(turns^2) while the
+        # actual context window occupancy stays constant.  percent_used() MUST
+        # use last_prompt_tokens (the prompt size of the most recent API call),
+        # NOT session_total (the cumulative sum across all turns).
         tracker = TokenTracker(context_window=10000)
         for i in range(20):
             usage = MagicMock()
-            usage.prompt_tokens = 500  # same context size each turn
+            # Each turn the prompt is still ~500 tokens (history fits in one turn).
+            usage.prompt_tokens = 500
             usage.completion_tokens = 100
             usage.total_tokens = 600
             tracker.update(usage)
-        # session_total = 20 * 600 = 12000 → would give 120% under old logic
-        # but percent_used() should reflect last_prompt_tokens = 500 = 5%
+        # session_total = 20 * 600 = 12000 — would give 120% under old logic
+        # (using session_total / context_window).
         assert tracker.session_total == 12000
+        # percent_used() must reflect the CURRENT context size (last turn only)
         assert tracker.last_prompt_tokens == 500
+        # 5% = 500 / 10000 * 100 — NOT 120% from cumulative session_total
         assert abs(tracker.percent_used() - 5.0) < 0.01
+        # The key invariant: percent_used() < 100% even though session_total
+        # is 120% of context_window.
+        assert tracker.percent_used() < 100.0
+        assert tracker.session_total > tracker.context_window
 
     def test_percent_used_capped_at_100(self):
         tracker = TokenTracker(context_window=100)

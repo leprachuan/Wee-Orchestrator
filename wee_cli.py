@@ -36,7 +36,6 @@ from wee_runtime import _WEE_TOOLS  # noqa: E402
 from wee_runtime import (  # noqa: E402
     _ANTI_HALLUCINATION_PROMPT,
     _COMPACT_WARN_PCT,
-    COMPACT_TRIGGER_FRACTION,
     MAX_TOOL_ROUNDS,
     compact_messages,
     count_message_tokens,
