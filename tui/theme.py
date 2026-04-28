@@ -1,7 +1,6 @@
 """TUI Theme and styling"""
 
 from rich.style import Style
-from rich.table import Table
 
 # Agent color mapping (matching WebUI)
 AGENT_COLORS = {

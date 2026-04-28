@@ -1,116 +1,44 @@
-"""Main Wee TUI Application using Textual"""
-
-from __future__ import annotations
+"""Main TUI Application"""
 
 import asyncio
 import logging
-import os
-from datetime import datetime
 from typing import Optional
 
 from rich.panel import Panel
-from rich.table import Table
 from rich.text import Text
 from textual.app import App, ComposeResult
 from textual.binding import Binding
-from textual.containers import Container, Horizontal, Vertical
+from textual.containers import Horizontal, Vertical
 from textual.reactive import reactive
-from textual.widgets import (
-    Button,
-    DataTable,
-    Footer,
-    Header,
-    Input,
-    Label,
-    ListItem,
-    ListView,
-    RichLog,
-    ScrollableContainer,
-    Static,
-)
+from textual.widgets import Footer, Header, Input, Static
 
 from tui.api.client import WeeAPIClient
-from tui.theme import STYLES, get_agent_color, get_status_color
-
-logger = logging.getLogger(__name__)
-
-
-class SessionListPanel(Static):
-    """Left panel showing available sessions"""
-
-    sessions: reactive[list] = reactive([])
-    selected_session: reactive[Optional[str]] = reactive(None)
-
-    def render(self):
-        """Render the session list"""
-        table = Table(title="Sessions", show_header=True, header_style="bold")
-        table.add_column("ID", style="cyan")
-        table.add_column("Runtime", style="magenta")
-        table.add_column("Agent", style="green")
-        table.add_column("Status", style="yellow")
-        table.add_column("Msgs", style="white")
-
-        if not self.sessions:
-            table.add_row("No sessions", "", "", "", "")
-        else:
-            for session in self.sessions:
-                status_color = get_status_color(session.get("status", "idle"))
-                agent_color = get_agent_color(session.get("agent", "orchestrator"))
-                table.add_row(
-                    session.get("id", "")[:12],
-                    session.get("runtime", ""),
-                    session.get("agent", ""),
-                    f"[{status_color}]{session.get('status', 'idle')}[/{status_color}]",
-                    str(session.get("message_count", 0)),
-                )
-
-        return Panel(table, title="[bold]Sessions[/bold]", expand=False, height=15)
-
-
-class ChatPanel(Static):
-    """Center panel for chat history and streaming"""
-
-    messages: reactive[list] = reactive([])
-
-    def render(self):
-        """Render chat messages"""
-        if not self.messages:
-            return Panel("No messages yet. Select a session or start a new one.", title="Chat")
-
-        log_content = ""
-        for msg in self.messages[-30:]:  # Show last 30 messages
-            role = msg.get("role", "user").upper()
-            content = msg.get("content", "")[:500]  # Truncate long messages
-            timestamp = msg.get("timestamp", "")
-            log_content += f"\n[bold]{role}[/bold] ({timestamp})\n{content}\n"
-
-        return Panel(log_content, title="Chat History", expand=True, overflow="auto")
+from tui.components.chat_panel import ChatPanel
+from tui.components.service_status import ServiceStatusPanel
+from tui.components.session_list import SessionListPanel
+from tui.components.task_queue import TaskQueuePanel
+from tui.config import config
 
 
 class ControlPanel(Static):
-    """Right panel for controls (agent, model, runtime, timeout)"""
-
-    current_agent: reactive[str] = reactive("orchestrator")
-    current_runtime: reactive[str] = reactive("copilot")
-    current_model: reactive[str] = reactive("claude-haiku-4.5")
-    timeout_sec: reactive[int] = reactive(300)
+    """Right-side control panel"""
 
     def render(self):
-        """Render control panel"""
-        info = f"""
-[bold]Settings[/bold]
+        """Render control info"""
+        info = """
+[bold]Current Settings[/bold]
 
-Agent: [cyan]{self.current_agent}[/cyan]
-Runtime: [magenta]{self.current_runtime}[/magenta]
-Model: [green]{self.current_model}[/green]
-Timeout: [yellow]{self.timeout_sec}s[/yellow]
+Agent: [cyan]orchestrator[/cyan]
+Runtime: [magenta]copilot[/magenta]
+Model: [green]haiku[/green]
+Timeout: [yellow]60s[/yellow]
 
-[bold]Shortcuts[/bold]
-Tab     - Focus next
+[bold]Keyboard Shortcuts[/bold]
+Tab - Focus next
 Shift+Tab - Focus prev
-Ctrl+N  - New session
-Ctrl+S  - Send prompt
-Ctrl+Q  - Quit
+Ctrl+N - New session
+Ctrl+S - Send prompt
+Ctrl+Q - Quit
 
 [bold]Commands[/bold]
 /agent <name>
@@ -129,7 +57,11 @@ class StatusBar(Static):
 
     def render(self):
         """Render status bar"""
-        status = f"[green]{self.api_status}[/green] | Tasks: {self.task_count}"
+        status = (
+            f"[green]{self.api_status}[/green] | "
+            f"Tasks: {self.task_count} | "
+            f"Wee TUI Ready"
+        )
         return Text(status, style="white")
 
 
@@ -145,6 +77,17 @@ class WeeTUI(App):
     """Main Wee TUI Application"""
 
     TITLE = "Wee TUI - Terminal UI for Wee Orchestrator"
+    CSS = """
+    Screen {
+        layout: vertical;
+    }
+
+    #status_bar {
+        height: 1;
+        background: $surface;
+    }
+    """
+
     BINDINGS = [
         Binding("ctrl+q", "quit", "Quit", show=True),
         Binding("ctrl+n", "new_session", "New Session", show=False),
@@ -156,9 +99,11 @@ class WeeTUI(App):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self.api_client: Optional[WeeAPIClient] = None
+        self.current_session_id: Optional[str] = None
         self.setup_logging()
 
-    def setup_logging(self):
+    @staticmethod
+    def setup_logging():
         """Setup logging"""
         logging.basicConfig(
             level=logging.INFO,
@@ -166,103 +111,173 @@ class WeeTUI(App):
             handlers=[
                 logging.FileHandler("/tmp/wee_tui.log"),
             ],
+            force=True,
         )
 
     def compose(self) -> ComposeResult:
         """Compose the UI layout"""
         yield Header()
 
-        with Horizontal():
+        with Horizontal(id="main"):
             yield SessionListPanel(id="sessions", expand=False, width=30)
 
-            with Vertical(expand=True):
+            with Vertical(expand=True, id="center"):
+                yield ServiceStatusPanel(id="status_panel", expand=False)
                 yield ChatPanel(id="chat", expand=True)
+                yield TaskQueuePanel(id="tasks", expand=False)
                 yield InputField(id="input", name="prompt")
 
             yield ControlPanel(id="controls", expand=False)
 
-        yield StatusBar(id="status")
+        yield StatusBar(id="status_bar")
         yield Footer()
 
     def on_mount(self) -> None:
         """Initialize on mount"""
-        asyncio.create_task(self.initialize_api())
-        asyncio.create_task(self.refresh_data_loop())
+        try:
+            config.validate()
+        except ValueError as e:
+            self.exit(f"Config error: {e}")
+
+        self.run_worker(self.initialize_api())
+        self.run_worker(self.refresh_data_loop())
 
     async def initialize_api(self) -> None:
         """Initialize API client"""
         try:
-            api_url = os.getenv("WEE_API_URL", "https://127.0.0.1:8001")
-            auth_token = os.getenv(
-                "WEE_AUTH_TOKEN", "shared_R6R6wReORUV6bouLntScMTowbsh30Rzqa3hzjs3bWgU"
-            )
-            user_id = os.getenv("WEE_USER_ID", "8193231291")
-
-            self.api_client = WeeAPIClient(api_url, auth_token, user_id)
-
-            # Test connection
-            async with self.api_client:
-                health = await self.api_client.get_health()
-                logger.info(f"API connected: {health}")
-                self.query_one("#status", StatusBar).api_status = "✓ Connected"
+            self.api_client = WeeAPIClient(config)
+            logging.info("API client initialized")
         except Exception as e:
-            logger.error(f"API initialization failed: {e}")
-            self.query_one("#status", StatusBar).api_status = "✗ Offline"
+            logging.error(f"Failed to initialize API client: {e}")
+            self.notify(f"❌ API Error: {e}", severity="error", timeout=10)
 
     async def refresh_data_loop(self) -> None:
         """Refresh data periodically"""
         while True:
             try:
-                await self.refresh_sessions()
-                await self.refresh_tasks()
+                await asyncio.sleep(config.update_interval)
+                if self.api_client:
+                    await self.refresh_sessions()
+                    await self.refresh_tasks()
+                    await self.refresh_service_status()
             except Exception as e:
-                logger.error(f"Refresh error: {e}")
-
-            await asyncio.sleep(2.0)  # Refresh every 2 seconds
+                logging.error(f"Refresh error: {e}")
 
     async def refresh_sessions(self) -> None:
-        """Refresh session list"""
-        if not self.api_client:
-            return
-
+        """Refresh session list from API"""
         try:
-            async with self.api_client:
-                sessions = await self.api_client.get_sessions()
-                panel = self.query_one("#sessions", SessionListPanel)
-                panel.sessions = sessions
+            if not self.api_client:
+                return
+
+            async with self.api_client as client:
+                sessions = await client.get_sessions()
+
+            # Update session panel
+            panel = self.query_one("#sessions", SessionListPanel)
+            await panel.update_sessions(sessions)
         except Exception as e:
-            logger.error(f"Failed to refresh sessions: {e}")
+            logging.error(f"Session refresh error: {e}")
 
     async def refresh_tasks(self) -> None:
-        """Refresh background tasks"""
-        if not self.api_client:
-            return
-
+        """Refresh task queue from API"""
         try:
-            async with self.api_client:
-                tasks = await self.api_client.get_background_tasks()
-                self.query_one("#status", StatusBar).task_count = len(tasks)
+            if not self.api_client:
+                return
+
+            async with self.api_client as client:
+                tasks = await client.get_background_tasks()
+
+            # Update task panel
+            panel = self.query_one("#tasks", TaskQueuePanel)
+            await panel.update_tasks(tasks)
         except Exception as e:
-            logger.error(f"Failed to refresh tasks: {e}")
+            logging.error(f"Task refresh error: {e}")
+
+    async def refresh_service_status(self) -> None:
+        """Refresh service status from API"""
+        try:
+            if not self.api_client:
+                return
+
+            async with self.api_client as client:
+                status = await client.get_service_status()
+
+            # Update status panel
+            panel = self.query_one("#status_panel", ServiceStatusPanel)
+            await panel.update_status(status)
+        except Exception as e:
+            logging.error(f"Service status error: {e}")
 
     def action_new_session(self) -> None:
         """Create a new session"""
-        logger.info("New session action")
+        try:
+            asyncio.create_task(self._new_session_async())
+        except Exception as e:
+            self.notify(f"❌ Error creating session: {e}", severity="error")
+
+    async def _new_session_async(self) -> None:
+        """Async session creation"""
+        try:
+            if not self.api_client:
+                self.notify("❌ API client not initialized", severity="error")
+                return
+
+            async with self.api_client as client:
+                session = await client.create_session()
+
+            self.current_session_id = session.get("id")
+            self.notify(f"✅ New session: {self.current_session_id}")
+            await self.refresh_sessions()
+        except Exception as e:
+            logging.error(f"Session creation error: {e}")
+            self.notify(f"❌ Failed to create session: {e}", severity="error")
 
     def action_send_prompt(self) -> None:
-        """Send a prompt"""
-        input_field = self.query_one("#input", InputField)
-        prompt = input_field.value
-        logger.info(f"Sending prompt: {prompt}")
-        input_field.value = ""
+        """Send prompt to current session"""
+        input_widget = self.query_one("#input", InputField)
+        prompt = input_widget.value.strip()
 
-    def on_input_submitted(self, event: Input.Submitted) -> None:
-        """Handle input submission"""
-        self.action_send_prompt()
+        if not prompt:
+            return
+
+        input_widget.value = ""
+
+        if not self.current_session_id:
+            self.notify("❌ No active session", severity="error")
+            return
+
+        asyncio.create_task(self._send_prompt_async(prompt))
+
+    async def _send_prompt_async(self, prompt: str) -> None:
+        """Async prompt sending"""
+        try:
+            if not self.api_client:
+                self.notify("❌ API client not initialized", severity="error")
+                return
+
+            async with self.api_client as client:
+                response = await client.send_prompt(self.current_session_id, prompt)
+
+            # Update chat panel
+            chat_panel = self.query_one("#chat", ChatPanel)
+            await chat_panel.add_message("user", prompt)
+            await chat_panel.add_message("assistant", response.get("response", ""))
+
+        except Exception as e:
+            logging.error(f"Prompt send error: {e}")
+            self.notify(f"❌ Error sending prompt: {e}", severity="error")
+
+    def action_focus_next(self) -> None:
+        """Focus next widget"""
+        self.screen.focus_next()
+
+    def action_focus_previous(self) -> None:
+        """Focus previous widget"""
+        self.screen.focus_previous()
 
 
 def main():
-    """Run the TUI"""
+    """Main entry point"""
     app = WeeTUI()
     app.run()
 

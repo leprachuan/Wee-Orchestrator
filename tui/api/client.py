@@ -1,8 +1,6 @@
 """Async API client for Wee Orchestrator"""
 
-import json
 import logging
-from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 import httpx
@@ -50,7 +48,9 @@ class WeeAPIClient:
     async def _request(self, method: str, path: str, **kwargs) -> Dict[str, Any]:
         """Make an API request"""
         if not self.client:
-            raise RuntimeError("Client not initialized. Use 'async with' context manager.")
+            raise RuntimeError(
+                "Client not initialized. Use 'async with' context manager."
+            )
         try:
             response = await self.client.request(method, path, **kwargs)
             response.raise_for_status()
@@ -67,10 +67,14 @@ class WeeAPIClient:
 
     async def get_session_messages(self, session_id: str) -> List[Dict[str, Any]]:
         """Get messages for a session"""
-        data = await self._request("GET", f"/api/v1/history/sessions/{session_id}/messages")
+        data = await self._request(
+            "GET", f"/api/v1/history/sessions/{session_id}/messages"
+        )
         return data.get("messages", [])
 
-    async def create_session(self, runtime: str, model: str, agent: str = "orchestrator") -> str:
+    async def create_session(
+        self, runtime: str, model: str, agent: str = "orchestrator"
+    ) -> str:
         """Create a new session"""
         data = await self._request(
             "POST",

@@ -35,7 +35,7 @@ def test_config_defaults():
     """Test configuration defaults"""
     assert config.api_url == "https://127.0.0.1:8001"
     assert config.verify_ssl == False
-    assert config.user_identity == "8193231291"
+    assert config.user_identity == ""  # Must be set via env var
     assert config.update_interval == 1.0
     assert config.max_history_lines == 10000
 

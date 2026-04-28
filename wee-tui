@@ -24,7 +24,7 @@ def main():
     parser.add_argument(
         "--api-url",
         default=os.getenv("WEE_API_URL", "https://127.0.0.1:8001"),
-        help="Wee Orchestrator API URL (default: $WEE_API_URL or https://127.0.0.1:8001)",
+        help="Wee Orchestrator API URL",
     )
 
     parser.add_argument(
@@ -54,7 +54,9 @@ def main():
     )
 
     parser.add_argument(
-        "--log-file", default="/tmp/wee_tui.log", help="Log file path (default: /tmp/wee_tui.log)"
+        "--log-file",
+        default="/tmp/wee_tui.log",
+        help="Log file path (default: /tmp/wee_tui.log)",
     )
 
     parser.add_argument(
