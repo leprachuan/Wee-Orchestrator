@@ -7843,7 +7843,7 @@ User Request:
         if resume and session_id:
             # Resume existing session - flags must come before session_id positional arg
             # codex exec resume supports --dangerously-bypass-approvals-and-sandbox
-            cmd = ["codex", "exec", "-p", "resume"]
+            cmd = ["codex", "exec", "-p", "--verbose", "resume"]
             if mode == "elevated":
                 # Apply sandbox bypass and environment inheritance for elevated sessions
                 cmd.append("--dangerously-bypass-approvals-and-sandbox")
@@ -7857,7 +7857,7 @@ User Request:
             )
         else:
             # Start new session - flags must come BEFORE the prompt positional arg
-            cmd = ["codex", "exec", "-p"]
+            cmd = ["codex", "exec", "-p", "--verbose"]
             if mode == "elevated":
                 # Bypass all sandbox restrictions (sudo, DNS, network, filesystem)
                 cmd.append("--dangerously-bypass-approvals-and-sandbox")
