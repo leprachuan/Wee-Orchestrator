@@ -130,6 +130,20 @@ class TestNestedPayloadUnwrap:
         assert result == payload
         assert result["personId"] == "ABC"
 
+    def test_issue_268_partial_path_auto_unwrap_at_intermediate(self):
+        """Document auto-unwrap when partial dotted path hits intermediate node
+        with message_data child."""
+        payload = {
+            "data": {
+                "personId": "ABC",
+                "text": "real",
+                "message_data": {"meta": "x"},
+            }
+        }
+        # data.nonexistent: only data matched, Step 2 fires from intermediate data node
+        result = WebEXConnector._unwrap_payload(payload, "data.nonexistent")
+        assert result == {"meta": "x"}  # documents current behavior
+
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
