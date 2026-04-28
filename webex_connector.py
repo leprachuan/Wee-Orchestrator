@@ -1078,8 +1078,9 @@ class WebEXConnector(BaseConnector):
             The unwrapped payload dict
 
         Note:
-            max_depth limits only the Step 2 auto-unwrap loop; dotted-path
-            traversal in Step 1 is not depth-limited.
+            The ``depth`` counter is shared between Step 1 (dotted-path traversal) and
+            Step 2 (auto-unwrap loop). Step 1 depth increments count against the shared
+            budget, limiting Step 2 iterations. max_depth applies to total combined depth.
         """
         if not isinstance(payload, dict):
             return payload
@@ -1402,7 +1403,8 @@ class WebEXConnector(BaseConnector):
                     )
 
                     # Support configurable payload unwrapping for gateway wrappers
-                    # Supports dotted paths (e.g., "data.message_data") and auto-unwraps nested message_data
+                    # Supports dotted paths (e.g., "data.message_data") and
+                    # auto-unwraps nested message_data after primary key match
                     payload_key = self.config.config.get("rabbitmq_payload_key")
                     original_payload = message_data
                     message_data = self._unwrap_payload(message_data, payload_key)
