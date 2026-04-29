@@ -3100,6 +3100,9 @@ You can mention an agent in your prompt and it will auto-delegate:
                         "primary_model": agent.get("primary_model"),
                         "fallback_runtime": agent.get("fallback_runtime"),
                         "fallback_model": agent.get("fallback_model"),
+                        "permission_mode": agent.get("permission_mode"),
+                        "yolo": agent.get("yolo", False),
+                        "permissions": agent.get("permissions"),
                     }
                 return agents
         except json.JSONDecodeError as e:
@@ -11526,6 +11529,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         permission_mode: Optional[str] = (
             None  # elevated, restricted (default), sandboxed
         )
+        yolo: Optional[bool] = None  # True => elevated; False => restricted (overrides agent config)
         description: Optional[str] = (
             None  # human-readable task name shown in Agents panel
         )
@@ -12568,15 +12572,28 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 "agent": agent,
                 "runtime": runtime,
                 "model": model,
-                "permission_mode": body.permission_mode or (agent_config.get("permissions") or {}).get("mode", "restricted"),
+                "permission_mode": body.permission_mode or (agent_config.get("permissions") or {}).get("mode") or agent_config.get("permission_mode") or ("elevated" if agent_config.get("yolo") else "restricted"),
                 "status": "queued",
                 "queue_position": queue_pos,
                 "timeout": bg_timeout,
             }
 
         # Resolve permission mode: request body > agent config default > restricted
-        _agent_perm_mode = (agent_config.get("permissions") or {}).get("mode", "restricted")
-        perm_mode = body.permission_mode or _agent_perm_mode
+        # Support all config formats:
+        #   1. nested {"permissions": {"mode": "elevated"}}  (wee-qa actual)
+        #   2. top-level {"permission_mode": "elevated"}  (simplified)
+        #   3. top-level {"yolo": true}  => elevated  (legacy)
+        _nested_perm = (agent_config.get("permissions") or {}).get("mode")
+        _top_perm = agent_config.get("permission_mode")
+        _yolo = agent_config.get("yolo")
+        _agent_perm_mode = _nested_perm or _top_perm or ("elevated" if _yolo else "restricted")
+        # Priority: body.permission_mode > body.yolo > agent config > restricted
+        if body.permission_mode:
+            perm_mode = body.permission_mode
+        elif body.yolo is not None:
+            perm_mode = "elevated" if body.yolo else "restricted"
+        else:
+            perm_mode = _agent_perm_mode
         if perm_mode not in ("elevated", "restricted", "sandboxed"):
             perm_mode = "restricted"
 
