@@ -21,6 +21,7 @@ Run:
 import os
 import subprocess
 import sys
+import tempfile
 import time
 import unittest
 from types import SimpleNamespace
@@ -195,6 +196,10 @@ class TestToolDefinitions(unittest.TestCase):
         names = [t["function"]["name"] for t in self.tools]
         self.assertIn("python", names)
 
+    def test_edit_file_tool_exists(self):
+        names = [t["function"]["name"] for t in self.tools]
+        self.assertIn("edit_file", names)
+
     def test_tool_schema_structure(self):
         """Each tool has type=function and a valid function schema."""
         for tool in self.tools:
@@ -264,6 +269,53 @@ class TestExecuteTool(unittest.TestCase):
     def test_python_syntax_error(self):
         result = self.execute("python", {"code": "def ("})
         self.assertIn("STDERR", result)
+
+    def test_edit_file_create(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = os.path.join(tmpdir, "note.txt")
+            result = self.execute(
+                "edit_file",
+                {
+                    "path": path,
+                    "new_text": "hello edit tool\n",
+                    "create_if_missing": True,
+                },
+            )
+            self.assertIn("OK: created", result)
+            with open(path, encoding="utf-8") as f:
+                self.assertEqual(f.read(), "hello edit tool\n")
+
+    def test_edit_file_exact_replace(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = os.path.join(tmpdir, "note.txt")
+            with open(path, "w", encoding="utf-8") as f:
+                f.write("alpha\nbeta\ngamma\n")
+            result = self.execute(
+                "edit_file",
+                {
+                    "path": path,
+                    "old_text": "beta",
+                    "new_text": "delta",
+                },
+            )
+            self.assertIn("OK: edited", result)
+            with open(path, encoding="utf-8") as f:
+                self.assertEqual(f.read(), "alpha\ndelta\ngamma\n")
+
+    def test_edit_file_missing_old_text_errors(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = os.path.join(tmpdir, "note.txt")
+            with open(path, "w", encoding="utf-8") as f:
+                f.write("alpha\nbeta\ngamma\n")
+            result = self.execute(
+                "edit_file",
+                {
+                    "path": path,
+                    "old_text": "missing",
+                    "new_text": "delta",
+                },
+            )
+            self.assertIn("old_text not found", result)
 
     def test_unknown_tool(self):
         result = self.execute("web_search", {"query": "test"})
@@ -1034,6 +1086,29 @@ class TestExecuteToolDirect(unittest.TestCase):
         result = self.execute("python", {"code": "print('python_ok')"})
         self.assertIn("python_ok", result)
 
+    def test_edit_file_requires_create_flag_for_new_files(self):
+        """edit_file should not create new files unless explicitly requested."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = os.path.join(tmpdir, "new.txt")
+            result = self.execute("edit_file", {"path": path, "new_text": "hello"})
+            self.assertIn("create_if_missing=true", result)
+
+    def test_edit_file_rejects_ambiguous_replace(self):
+        """edit_file should require exact single-match replacements."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = os.path.join(tmpdir, "dup.txt")
+            with open(path, "w", encoding="utf-8") as f:
+                f.write("repeat\nrepeat\n")
+            result = self.execute(
+                "edit_file",
+                {
+                    "path": path,
+                    "old_text": "repeat",
+                    "new_text": "once",
+                },
+            )
+            self.assertIn("matched 2 locations", result)
+
     def test_bash_empty_command_returns_error(self):
         """bash with empty command returns Error string."""
         result = self.execute("bash", {"command": ""})
@@ -1138,6 +1213,11 @@ class TestRuntimeConstants(unittest.TestCase):
         import wee_runtime
 
         self.assertIn("python", wee_runtime._WEE_TOOL_CAPABILITY_PROMPT)
+
+    def test_tool_capability_prompt_mentions_edit_file(self):
+        import wee_runtime
+
+        self.assertIn("edit_file", wee_runtime._WEE_TOOL_CAPABILITY_PROMPT)
 
     def test_max_tool_rounds_lower_bound(self):
         import wee_runtime

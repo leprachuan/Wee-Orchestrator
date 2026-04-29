@@ -987,7 +987,7 @@ def build_parser() -> argparse.ArgumentParser:
         "-t",
         action="store_true",
         default=False,
-        help="Enable tool calling (bash, python)",
+        help="Enable tool calling (bash, python, edit_file, search, call_agent)",
     )
     parser.add_argument(
         "--permission",

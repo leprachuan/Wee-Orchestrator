@@ -21,6 +21,7 @@ import os
 import re
 import subprocess
 import sys
+import tempfile
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -396,6 +397,45 @@ _WEE_TOOLS = [
     {
         "type": "function",
         "function": {
+            "name": "edit_file",
+            "description": (
+                "Create or edit a UTF-8 text file. Use old_text for exact-match "
+                "replacement, or omit old_text to overwrite the file."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "Path to the file to create or edit",
+                    },
+                    "new_text": {
+                        "type": "string",
+                        "description": (
+                            "Replacement text, or the full new file contents when "
+                            "old_text is omitted"
+                        ),
+                    },
+                    "old_text": {
+                        "type": "string",
+                        "description": (
+                            "Exact text to replace. Omit to overwrite the whole file."
+                        ),
+                    },
+                    "create_if_missing": {
+                        "type": "boolean",
+                        "description": (
+                            "When true, create the file if it does not already exist"
+                        ),
+                    },
+                },
+                "required": ["path", "new_text"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "call_agent",
             "description": (
                 "Call a Wee Orchestrator agent to execute a task. Use for delegating"
@@ -466,6 +506,86 @@ _WEE_TOOLS = [
 
 MAX_TOOL_ROUNDS = 10
 TOOL_TIMEOUT = 120  # seconds per tool execution
+
+
+def _execute_edit_file(func_args: dict) -> str:
+    """Create or edit a UTF-8 text file."""
+    path = func_args.get("path", "")
+    if not path:
+        return "Error: edit_file requires a non-empty 'path'"
+
+    if "new_text" not in func_args:
+        return "Error: edit_file requires 'new_text'"
+
+    new_text = func_args.get("new_text")
+    if not isinstance(new_text, str):
+        return "Error: edit_file 'new_text' must be a string"
+
+    old_text = func_args.get("old_text")
+    if old_text is not None and not isinstance(old_text, str):
+        return "Error: edit_file 'old_text' must be a string when provided"
+
+    create_if_missing = bool(func_args.get("create_if_missing", False))
+    file_path = os.path.abspath(os.path.expanduser(path))
+    parent_dir = os.path.dirname(file_path) or "."
+
+    if not os.path.isdir(parent_dir):
+        return f"Error: Parent directory does not exist: {parent_dir}"
+
+    file_exists = os.path.exists(file_path)
+    if not file_exists and not create_if_missing:
+        return (
+            f"Error: File does not exist: {file_path}. "
+            "Set create_if_missing=true to create it."
+        )
+
+    try:
+        if file_exists:
+            with open(file_path, "r", encoding="utf-8") as f:
+                original = f.read()
+        else:
+            original = ""
+    except UnicodeDecodeError:
+        return f"Error: File is not valid UTF-8 text: {file_path}"
+    except OSError as e:
+        return f"Error reading file {file_path}: {e}"
+
+    if old_text is None:
+        updated = new_text
+        action = "created" if not file_exists else "overwritten"
+    else:
+        occurrences = original.count(old_text)
+        if occurrences == 0:
+            return (
+                f"Error: old_text not found in file: {file_path}. "
+                "Read the file first and retry with an exact match."
+            )
+        if occurrences > 1:
+            return (
+                f"Error: old_text matched {occurrences} locations in {file_path}. "
+                "Provide more specific context."
+            )
+        updated = original.replace(old_text, new_text, 1)
+        action = "edited"
+
+    try:
+        fd, tmp_path = tempfile.mkstemp(
+            prefix=".wee-edit-", dir=parent_dir, text=True
+        )
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                f.write(updated)
+            os.replace(tmp_path, file_path)
+        except Exception:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+            raise
+    except OSError as e:
+        return f"Error writing file {file_path}: {e}"
+
+    return f"OK: {action} {file_path}"
 
 
 def resolve_model_and_endpoint(model: str, api_base: str = None, api_key: str = None):
@@ -573,6 +693,8 @@ def execute_tool(func_name: str, func_args: dict, permission: str = "auto") -> s
             if result.returncode != 0 and result.stderr:
                 output += f"\nSTDERR: {result.stderr}"
             return output.strip() or "(no output)"
+        elif func_name == "edit_file":
+            return _execute_edit_file(func_args)
         elif func_name == "search":
             return _execute_search(func_args)
         elif func_name == "call_agent":
@@ -877,7 +999,9 @@ _WEE_TOOL_CAPABILITY_PROMPT = (
     "   Use this for: file operations, system commands, SSH, curl, git, etc.\n"
     '2. **python** — Execute Python code. Parameters: {"code": "<python code>"}\n'
     "   Use this for: data processing, calculations, scripting, etc.\n"
-    "3. **search** — Web search via SearXNG."
+    '3. **edit_file** — Create or edit text files. Parameters: {"path": "...", "new_text": "...", "old_text": "...", "create_if_missing": true}\n'
+    "   Use this for: precise file creation or exact text replacement in text files.\n"
+    "4. **search** — Web search via SearXNG."
     ' Parameters: {"q": "<query>", "count": 5, "format": "text|json"}\n'
     "   Use this for: current events, web lookups, product info,"
     " general knowledge queries.\n\n"
@@ -1007,7 +1131,7 @@ def main():
         "--tools",
         action="store_true",
         default=False,
-        help="Enable tool calling (bash, python)",
+        help="Enable tool calling (bash, python, edit_file, search, call_agent)",
     )
     parser.add_argument("prompt", nargs="?", help="User prompt")
     args = parser.parse_args()
