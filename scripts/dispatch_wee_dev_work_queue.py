@@ -462,14 +462,17 @@ def dispatch_via_api(
         raise RuntimeError("API_SHARED_KEY not found in /opt/n8n-copilot-shim/.env")
 
     # Use provided parameters or get from dispatch config
-    if runtime is None or permission_mode is None or yolo is None:
-        dispatch_config = get_agent_dispatch_config(agent)
-        if runtime is None:
-            runtime = dispatch_config.get("runtime", "claude")
-        if permission_mode is None:
-            permission_mode = dispatch_config.get("permission_mode")
-        if yolo is None:
-            yolo = dispatch_config.get("yolo", False)
+    dispatch_config = get_agent_dispatch_config(agent)
+    if runtime is None:
+        runtime = dispatch_config.get("runtime", "claude")
+    if permission_mode is None:
+        permission_mode = dispatch_config.get("permission_mode")
+    if yolo is None:
+        yolo = dispatch_config.get("yolo", False)
+
+    # Get fallback config
+    fallback_runtime = dispatch_config.get("fallback_runtime")
+    fallback_model = dispatch_config.get("fallback_model")
 
     # Prepare request
     body = {
@@ -484,6 +487,10 @@ def dispatch_via_api(
         body["permission_mode"] = permission_mode
     if yolo:
         body["yolo"] = yolo
+    if fallback_runtime is not None:
+        body["fallback_runtime"] = fallback_runtime
+    if fallback_model is not None:
+        body["fallback_model"] = fallback_model
 
     # Sign request for authentication
     import json as _json
