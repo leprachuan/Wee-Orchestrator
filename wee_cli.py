@@ -6,6 +6,7 @@ Supports single-shot prompts, interactive REPL, piping, and tool calling.
 
 Usage:
     wee "What is the capital of France?"
+    wee exec "What is the capital of France?"
     wee --model openrouter/meta-llama/llama-2-70b "Explain quantum computing"
     wee --model ollama/gemma4:e4b --tools "List Python files in /opt"
     wee --interactive
@@ -950,6 +951,7 @@ def build_parser() -> argparse.ArgumentParser:
         epilog=(
             "Examples:\n"
             '  wee --model ollama/qwen3.5:4b "What is 2+2?"\n'
+            '  wee exec "Summarize this repository"\n'
             '  wee --model openrouter/meta-llama/llama-2-70b --tools "List files"\n'
             "  wee --interactive\n"
             '  echo "summarize" | wee --model ollama/gemma4:e4b\n'
@@ -1049,13 +1051,32 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _normalize_argv(argv=None):
+    """Normalize convenience CLI forms before argparse processing.
+
+    Supports:
+    - `wee exec "prompt"` as a codex-style one-shot alias
+    """
+    if argv is None:
+        argv = sys.argv[1:]
+    normalized = list(argv)
+    exec_mode = False
+
+    if normalized and normalized[0] == "exec":
+        exec_mode = True
+        normalized = normalized[1:]
+
+    return normalized, exec_mode
+
+
 # ---------------------------------------------------------------------------
 # Main entry point
 # ---------------------------------------------------------------------------
 def main(argv=None):
     """Main entry point for wee CLI."""
     parser = build_parser()
-    args = parser.parse_args(argv)
+    normalized_argv, exec_mode = _normalize_argv(argv)
+    args = parser.parse_args(normalized_argv)
 
     # Handle --list-models
     if args.list_models is not None:
@@ -1134,6 +1155,9 @@ def main(argv=None):
             prompt_text = sys.stdin.read().strip()
         except KeyboardInterrupt:
             sys.exit(130)
+
+    if exec_mode and not prompt_text and not stdin_is_pipe:
+        parser.error("exec requires a prompt or piped stdin")
 
     if not prompt_text and not stdin_is_pipe:
         # Interactive REPL (no args, tty)

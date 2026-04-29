@@ -29,6 +29,7 @@ from wee_cli import (  # noqa: E402
     REPL_HELP,
     TokenTracker,
     _make_client,
+    _normalize_argv,
     _print_error,
     _print_info,
     _print_markdown,
@@ -142,12 +143,26 @@ class TestBuildParser(unittest.TestCase):
         self.assertIsNone(args.api_key)
         self.assertIsNone(args.api_base)
         self.assertFalse(args.tools)
-        self.assertEqual(args.permission, "restricted")
+        self.assertEqual(args.permission, "auto")
         self.assertIsNone(args.system)
         self.assertIsNone(args.temperature)
         self.assertAlmostEqual(args.timeout, 120.0)
         self.assertEqual(args.output, "text")
         self.assertFalse(args.interactive)
+
+
+class TestArgvNormalization(unittest.TestCase):
+    """Test convenience argv normalization."""
+
+    def test_exec_prefix_is_removed(self):
+        argv, exec_mode = _normalize_argv(["exec", "--model", "ollama/test", "hello"])
+        self.assertEqual(argv, ["--model", "ollama/test", "hello"])
+        self.assertTrue(exec_mode)
+
+    def test_plain_argv_unchanged(self):
+        argv, exec_mode = _normalize_argv(["--model", "ollama/test", "hello"])
+        self.assertEqual(argv, ["--model", "ollama/test", "hello"])
+        self.assertFalse(exec_mode)
 
 
 class TestConfigFile(unittest.TestCase):
@@ -618,8 +633,17 @@ class TestMainEntryPoint(unittest.TestCase):
             main(["--model", "ollama/test", "Hello"])
         mock_chat.assert_called_once()
 
+    @patch("wee_cli._make_client")
+    @patch("wee_cli.chat_stream", return_value="response")
+    def test_exec_subcommand_single_shot(self, mock_chat, mock_client):
+        with patch("sys.stdin") as mock_stdin:
+            mock_stdin.isatty.return_value = True
+            main(["exec", "--model", "ollama/test", "Hello"])
+        mock_chat.assert_called_once()
+
     @patch("wee_cli.run_interactive")
     def test_interactive_flag(self, mock_interactive):
+        mock_interactive.return_value = "ollama/test"
         with patch("sys.stdin") as mock_stdin:
             mock_stdin.isatty.return_value = True
             main(["--interactive", "--model", "ollama/test"])
@@ -627,10 +651,18 @@ class TestMainEntryPoint(unittest.TestCase):
 
     @patch("wee_cli.run_interactive")
     def test_no_args_enters_interactive(self, mock_interactive):
+        mock_interactive.return_value = "ollama/qwen3.5:4b"
         with patch("sys.stdin") as mock_stdin:
             mock_stdin.isatty.return_value = True
             main([])
         mock_interactive.assert_called_once()
+
+    def test_exec_without_prompt_errors(self):
+        with patch("sys.stdin") as mock_stdin:
+            mock_stdin.isatty.return_value = True
+            with self.assertRaises(SystemExit) as cm:
+                main(["exec"])
+        self.assertEqual(cm.exception.code, 2)
 
 
 class TestPipingSupport(unittest.TestCase):
