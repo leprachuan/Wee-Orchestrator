@@ -165,6 +165,143 @@ def _resolve_silent_default(channel: str) -> bool:
     return channel in ("telegram", "webex")
 
 
+def _parse_claude_stream_json_line(
+    line: str, active_tool_calls: dict
+) -> list:
+    """Parse one stream-json line from the Claude CLI.
+
+    Returns a list of ``(channel, event_dict)`` tuples.  The caller is
+    responsible for dispatching each tuple to the appropriate queue or
+    stream buffer.
+
+    Special channel ``"text_block_start"`` signals that a new text block
+    has begun; the caller should emit a newline separator if needed.
+
+    *active_tool_calls* is mutated in place to track in-flight tool calls.
+    """
+    import json as _json
+    import time as _time
+
+    results: list = []
+    try:
+        obj = _json.loads(line.strip())
+        evt_type = obj.get("type")
+
+        if evt_type == "stream_event":
+            event = obj.get("event") or {}
+            inner_type = event.get("type", "")
+
+            if inner_type == "content_block_start":
+                cb = event.get("content_block") or {}
+                cb_type = cb.get("type")
+                cb_index = event.get("index", 0)
+                if cb_type == "text":
+                    results.append(("text_block_start", {}))
+                elif cb_type == "tool_use":
+                    tool_id = cb.get("id", f"tool_{cb_index}")
+                    tool_name = cb.get("name", "unknown")
+                    active_tool_calls[cb_index] = {
+                        "id": tool_id,
+                        "name": tool_name,
+                        "input_parts": [],
+                        "started_at": _time.strftime(
+                            "%Y-%m-%dT%H:%M:%SZ", _time.gmtime()
+                        ),
+                    }
+                    results.append(
+                        (
+                            "tool_call",
+                            {
+                                "event": "start",
+                                "id": tool_id,
+                                "name": tool_name,
+                                "index": cb_index,
+                            },
+                        )
+                    )
+
+            elif inner_type == "content_block_delta":
+                delta = event.get("delta") or {}
+                delta_type = delta.get("type")
+                cb_index = event.get("index", 0)
+                if delta_type == "text_delta":
+                    text = delta.get("text", "")
+                    if text:
+                        results.append(("chunk", {"text": text}))
+                elif delta_type == "input_json_delta":
+                    partial = delta.get("partial_json", "")
+                    if cb_index in active_tool_calls:
+                        active_tool_calls[cb_index]["input_parts"].append(partial)
+                        results.append(
+                            (
+                                "tool_call",
+                                {
+                                    "event": "input_delta",
+                                    "id": active_tool_calls[cb_index]["id"],
+                                    "partial_json": partial,
+                                },
+                            )
+                        )
+
+            elif inner_type == "content_block_stop":
+                cb_index = event.get("index", 0)
+                if cb_index in active_tool_calls:
+                    tc_info = active_tool_calls.pop(cb_index)
+                    full_input = "".join(tc_info["input_parts"])
+                    try:
+                        parsed_input = (
+                            _json.loads(full_input) if full_input else {}
+                        )
+                    except (ValueError, KeyError):
+                        parsed_input = full_input
+                    results.append(
+                        (
+                            "tool_call",
+                            {
+                                "event": "input_complete",
+                                "id": tc_info["id"],
+                                "name": tc_info["name"],
+                                "input": parsed_input,
+                                "started_at": tc_info["started_at"],
+                            },
+                        )
+                    )
+
+        elif evt_type == "user":
+            # Claude CLI emits tool_result blocks in user-role messages,
+            # not assistant messages.
+            msg = obj.get("message") or {}
+            for block in msg.get("content") or []:
+                if block.get("type") == "tool_result":
+                    raw = block.get("content", "")
+                    if isinstance(raw, list):
+                        output = " ".join(
+                            p.get("text", "")
+                            for p in raw
+                            if isinstance(p, dict)
+                            and p.get("type") == "text"
+                        )
+                    else:
+                        output = str(raw) if raw else ""
+                    is_err = block.get("is_error", False)
+                    results.append(
+                        (
+                            "tool_call",
+                            {
+                                "event": "result",
+                                "id": block.get("tool_use_id", ""),
+                                "status": "error" if is_err else "completed",
+                                "output": output[:500],
+                                "is_error": is_err,
+                            },
+                        )
+                    )
+
+    except (ValueError, KeyError, AttributeError):
+        pass
+    return results
+
+
 class RateLimiter:
     """In-memory per-IP rate limiter with sliding window."""
 
@@ -6057,166 +6194,29 @@ User Request:
                         for line in process.stdout:
                             stdout_chunks.append(line)
                             if runtime == "claude":
-                                # Parse stream-json output and push text deltas + tool calls
-                                try:
-                                    obj = _json.loads(line.strip())
-                                    evt_type = obj.get("type")
-                                    if evt_type == "stream_event":
-                                        event = obj.get("event") or {}
-                                        inner_type = event.get("type", "")
-                                        if inner_type == "content_block_start":
-                                            cb = event.get("content_block") or {}
-                                            cb_type = cb.get("type")
-                                            cb_index = event.get("index", 0)
-                                            if cb_type == "text":
-                                                # Push newline separator between text blocks
-                                                if _claude_text_block_count > 0:
-                                                    if stream_buffer:
-                                                        stream_buffer.push(
-                                                            "chunk", {"text": "\n\n"}
-                                                        )
-                                                    else:
-                                                        loop.call_soon_threadsafe(
-                                                            queue.put_nowait,
-                                                            ("chunk", {"text": "\n\n"}),
-                                                        )
-                                                _claude_text_block_count += 1
-                                            elif cb_type == "tool_use":
-                                                tool_id = cb.get(
-                                                    "id", f"tool_{cb_index}"
+                                # Delegate stream-json parsing to module-level helper.
+                                for _ch, _ev in _parse_claude_stream_json_line(
+                                    line, _active_tool_calls
+                                ):
+                                    if _ch == "text_block_start":
+                                        if _claude_text_block_count > 0:
+                                            if stream_buffer:
+                                                stream_buffer.push(
+                                                    "chunk", {"text": "\n\n"}
                                                 )
-                                                tool_name = cb.get("name", "unknown")
-                                                _active_tool_calls[cb_index] = {
-                                                    "id": tool_id,
-                                                    "name": tool_name,
-                                                    "input_parts": [],
-                                                    "started_at": time.strftime(
-                                                        "%Y-%m-%dT%H:%M:%SZ",
-                                                        time.gmtime(),
-                                                    ),
-                                                }
-                                                tc_event = {
-                                                    "event": "start",
-                                                    "id": tool_id,
-                                                    "name": tool_name,
-                                                    "index": cb_index,
-                                                }
-                                                if stream_buffer:
-                                                    stream_buffer.push(
-                                                        "tool_call", tc_event
-                                                    )
-                                                else:
-                                                    loop.call_soon_threadsafe(
-                                                        queue.put_nowait,
-                                                        ("tool_call", tc_event),
-                                                    )
-                                        elif inner_type == "content_block_delta":
-                                            delta = event.get("delta") or {}
-                                            delta_type = delta.get("type")
-                                            cb_index = event.get("index", 0)
-                                            if delta_type == "text_delta":
-                                                text = delta.get("text", "")
-                                                if text:
-                                                    if stream_buffer:
-                                                        stream_buffer.push(
-                                                            "chunk", {"text": text}
-                                                        )
-                                                    else:
-                                                        loop.call_soon_threadsafe(
-                                                            queue.put_nowait,
-                                                            ("chunk", {"text": text}),
-                                                        )
-                                            elif delta_type == "input_json_delta":
-                                                partial = delta.get("partial_json", "")
-                                                if cb_index in _active_tool_calls:
-                                                    _active_tool_calls[cb_index][
-                                                        "input_parts"
-                                                    ].append(partial)
-                                                    tc_event = {
-                                                        "event": "input_delta",
-                                                        "id": _active_tool_calls[
-                                                            cb_index
-                                                        ]["id"],
-                                                        "partial_json": partial,
-                                                    }
-                                                    if stream_buffer:
-                                                        stream_buffer.push(
-                                                            "tool_call", tc_event
-                                                        )
-                                                    else:
-                                                        loop.call_soon_threadsafe(
-                                                            queue.put_nowait,
-                                                            ("tool_call", tc_event),
-                                                        )
-                                        elif inner_type == "content_block_stop":
-                                            cb_index = event.get("index", 0)
-                                            if cb_index in _active_tool_calls:
-                                                tc_info = _active_tool_calls.pop(
-                                                    cb_index
+                                            else:
+                                                loop.call_soon_threadsafe(
+                                                    queue.put_nowait,
+                                                    ("chunk", {"text": "\n\n"}),
                                                 )
-                                                full_input = "".join(
-                                                    tc_info["input_parts"]
-                                                )
-                                                try:
-                                                    parsed_input = (
-                                                        _json.loads(full_input)
-                                                        if full_input
-                                                        else {}
-                                                    )
-                                                except (ValueError, KeyError):
-                                                    parsed_input = full_input
-                                                tc_event = {
-                                                    "event": "input_complete",
-                                                    "id": tc_info["id"],
-                                                    "name": tc_info["name"],
-                                                    "input": parsed_input,
-                                                    "started_at": tc_info["started_at"],
-                                                }
-                                                if stream_buffer:
-                                                    stream_buffer.push(
-                                                        "tool_call", tc_event
-                                                    )
-                                                else:
-                                                    loop.call_soon_threadsafe(
-                                                        queue.put_nowait,
-                                                        ("tool_call", tc_event),
-                                                    )
-                                    elif evt_type == "user":
-                                        # Parse tool results from user messages.
-                                        # Claude CLI emits tool_result blocks in
-                                        # user-role messages, not assistant messages.
-                                        msg = obj.get("message") or {}
-                                        for block in msg.get("content") or []:
-                                            if block.get("type") == "tool_result":
-                                                raw = block.get("content", "")
-                                                if isinstance(raw, list):
-                                                    output = " ".join(
-                                                        p.get("text", "")
-                                                        for p in raw
-                                                        if isinstance(p, dict)
-                                                        and p.get("type") == "text"
-                                                    )
-                                                else:
-                                                    output = str(raw) if raw else ""
-                                                is_err = block.get("is_error", False)
-                                                tc_event = {
-                                                    "event": "result",
-                                                    "id": block.get("tool_use_id", ""),
-                                                    "status": "error" if is_err else "completed",
-                                                    "output": output[:500],
-                                                    "is_error": is_err,
-                                                }
-                                                if stream_buffer:
-                                                    stream_buffer.push(
-                                                        "tool_call", tc_event
-                                                    )
-                                                else:
-                                                    loop.call_soon_threadsafe(
-                                                        queue.put_nowait,
-                                                        ("tool_call", tc_event),
-                                                    )
-                                except (ValueError, KeyError, AttributeError):
-                                    pass
+                                        _claude_text_block_count += 1
+                                    else:
+                                        if stream_buffer:
+                                            stream_buffer.push(_ch, _ev)
+                                        else:
+                                            loop.call_soon_threadsafe(
+                                                queue.put_nowait, (_ch, _ev)
+                                            )
                             else:
                                 # Non-Claude runtimes: detect tool call patterns from text
                                 _line_str = (
