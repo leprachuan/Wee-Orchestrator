@@ -123,29 +123,27 @@ def _sanitize_command_for_display(text: str) -> str:
 
 def _sanitize_tool_call_for_display(data: dict) -> dict:
     """Return a shallow copy of a tool_call event dict with sensitive
-    credentials redacted from the ``input`` field.  Other fields are
-    passed through unchanged."""
+    credentials redacted from the ``input`` and ``output`` fields.
+    Other fields are passed through unchanged."""
     if not isinstance(data, dict):
         return data
-    inp = data.get("input")
-    if inp is None:
-        # Also check partial_json for streaming deltas
-        pj = data.get("partial_json")
-        if pj and isinstance(pj, str):
-            sanitized = dict(data)
-            sanitized["partial_json"] = _sanitize_command_for_display(pj)
-            return sanitized
-        return data
     sanitized = dict(data)
-    if isinstance(inp, str):
-        sanitized["input"] = _sanitize_command_for_display(inp)
-    elif isinstance(inp, dict):
-        # Claude-style structured input — sanitize known fields
-        new_inp = dict(inp)
-        for field in ("command", "input", "code", "content", "url", "body"):
-            if field in new_inp and isinstance(new_inp[field], str):
-                new_inp[field] = _sanitize_command_for_display(new_inp[field])
-        sanitized["input"] = new_inp
+    inp = data.get("input")
+    if inp is not None:
+        if isinstance(inp, str):
+            sanitized["input"] = _sanitize_command_for_display(inp)
+        elif isinstance(inp, dict):
+            new_inp = dict(inp)
+            for field in ("command", "input", "code", "content", "url", "body"):
+                if field in new_inp and isinstance(new_inp[field], str):
+                    new_inp[field] = _sanitize_command_for_display(new_inp[field])
+            sanitized["input"] = new_inp
+    out = data.get("output")
+    if out is not None and isinstance(out, str):
+        sanitized["output"] = _sanitize_command_for_display(out)
+    pj = data.get("partial_json")
+    if pj and isinstance(pj, str):
+        sanitized["partial_json"] = _sanitize_command_for_display(pj)
     return sanitized
 
 
@@ -7404,10 +7402,15 @@ User Request:
                                     "id": block.tool_use_id
                                     or f"tc_claude-sdk_{_tool_call_counter[0]}",
                                     "name": "tool",
-                                    "input": (
-                                        str(block.content)[:200]
+                                    "output": (
+                                        str(block.content)[:500]
                                         if block.content
                                         else ""
+                                    ),
+                                    "status": (
+                                        "error"
+                                        if getattr(block, "is_error", False)
+                                        else "completed"
                                     ),
                                     "is_error": getattr(block, "is_error", False),
                                     "runtime": "claude-sdk",
