@@ -6181,17 +6181,30 @@ User Request:
                                                         queue.put_nowait,
                                                         ("tool_call", tc_event),
                                                     )
-                                    elif evt_type == "assistant":
-                                        # Parse tool results from assistant messages
+                                    elif evt_type == "user":
+                                        # Parse tool results from user messages.
+                                        # Claude CLI emits tool_result blocks in
+                                        # user-role messages, not assistant messages.
                                         msg = obj.get("message") or {}
                                         for block in msg.get("content") or []:
                                             if block.get("type") == "tool_result":
+                                                raw = block.get("content", "")
+                                                if isinstance(raw, list):
+                                                    output = " ".join(
+                                                        p.get("text", "")
+                                                        for p in raw
+                                                        if isinstance(p, dict)
+                                                        and p.get("type") == "text"
+                                                    )
+                                                else:
+                                                    output = str(raw) if raw else ""
+                                                is_err = block.get("is_error", False)
                                                 tc_event = {
                                                     "event": "result",
                                                     "id": block.get("tool_use_id", ""),
-                                                    "is_error": block.get(
-                                                        "is_error", False
-                                                    ),
+                                                    "status": "error" if is_err else "completed",
+                                                    "output": output[:500],
+                                                    "is_error": is_err,
                                                 }
                                                 if stream_buffer:
                                                     stream_buffer.push(
