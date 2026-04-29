@@ -7,6 +7,9 @@ Supports Ollama, OpenRouter, LM Studio, and any OpenAI-compatible API.
 Issue #107: Tool-calling agentic loop — detects tool calls, executes bash/python,
 re-sends results to model, and streams the final response.
 
+Issue #112: Empty synthesis fallback — if LLM returns no text after tool execution,
+surfaces last tool result instead of empty response.
+
 Usage:
     python3 wee_runtime.py --model MODEL --api-base URL [--api-key KEY] "PROMPT"
     python3 wee_runtime.py --model ollama/qwen3:8b --tools "ask what day it is"
@@ -23,14 +26,22 @@ import urllib.parse
 import urllib.request
 
 # Provider presets: prefix → (api_base, default_api_key)
+# Use env vars for Ollama and LM Studio to allow customization
+_OLLAMA_HOST = os.environ.get("OLLAMA_HOST", "192.168.1.101")
+_OLLAMA_PORT = os.environ.get("OLLAMA_PORT", "11434")
+_LMSTUDIO_HOST = os.environ.get("LMSTUDIO_HOST", "localhost")
+_LMSTUDIO_PORT = os.environ.get("LMSTUDIO_PORT", "1234")
+
 PROVIDER_PRESETS = {
-    "ollama": ("http://192.168.1.101:11434/v1", "ollama"),
+    "ollama": (f"http://{_OLLAMA_HOST}:{_OLLAMA_PORT}/v1", "ollama"),
     "openrouter": ("https://openrouter.ai/api/v1", None),
-    "lmstudio": ("http://localhost:1234/v1", "lm-studio"),
+    "lmstudio": (f"http://{_LMSTUDIO_HOST}:{_LMSTUDIO_PORT}/v1", "lm-studio"),
 }
 
-# Model context window sizes (tokens) — Issue #273
-# Keys are model name substrings; longest match wins.
+
+# ---------------------------------------------------------------------------
+# Model context window registry (Issue #273)
+# ---------------------------------------------------------------------------
 MODEL_CONTEXT_WINDOWS: dict = {
     # OpenAI
     "gpt-5": 1_047_576,
@@ -271,6 +282,81 @@ def compact_messages(
     return compacted, summary_text
 
 
+# ---------------------------------------------------------------------------
+# SearXNG search support (Issue #255)
+# ---------------------------------------------------------------------------
+SEARCH_TIMEOUT = 10  # seconds for SearXNG queries
+SEARCH_MAX_CHARS = 2000  # max result chars to avoid context bloat
+
+
+def _execute_search(func_args: dict) -> str:
+    """Handle search tool calls via SearXNG (Issue #255).
+
+    Queries the self-hosted SearXNG instance and returns results in the
+    requested format. Returns an empty result gracefully on failure rather
+    than raising an exception, to avoid breaking the agentic loop.
+
+    Args:
+        func_args: Dict with 'q' (required), 'count' (optional, default 5),
+                   'format' (optional: 'json'|'text', default 'text').
+    """
+    query = (func_args.get("q") or "").strip()
+    if not query:
+        return "Error: search query ('q') is required"
+
+    count_raw = func_args.get("count")
+    count = min(int(count_raw if count_raw is not None else 5), 20)
+    output_format = (func_args.get("format") or "text").lower()
+
+    searxng_url = os.environ.get("WEE_SEARXNG_URL", "http://192.168.1.100:8888")
+    searxng_url = searxng_url.rstrip("/")
+
+    params = urllib.parse.urlencode(
+        {
+            "q": query,
+            "format": "json",
+            "categories": "general",
+            "language": "en",
+        }
+    )
+    url = f"{searxng_url}/search?{params}"
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": "Wee-Runtime/1.0"})
+        with urllib.request.urlopen(req, timeout=SEARCH_TIMEOUT) as resp:
+            data = json.loads(resp.read().decode("utf-8", errors="replace"))
+    except urllib.error.URLError as e:
+        return f"Search unavailable ({searxng_url}): {e.reason}"
+    except Exception as e:
+        return f"Search error: {e}"
+
+    results = data.get("results", [])[:count]
+    if not results:
+        return "No results found."
+
+    if output_format == "json":
+        slim = [
+            {
+                "title": r.get("title", ""),
+                "url": r.get("url", ""),
+                "snippet": (r.get("content", "") or "")[:300],
+            }
+            for r in results
+        ]
+        raw = json.dumps(slim, ensure_ascii=False)
+        return raw[:SEARCH_MAX_CHARS]
+
+    # Plain text summary
+    lines = [f"Search results for: {query}"]
+    for i, r in enumerate(results, 1):
+        title = r.get("title", "(no title)")
+        url_r = r.get("url", "")
+        snippet = (r.get("content", "") or "").strip()[:200]
+        lines.append(f"\n{i}. {title}\n   {url_r}\n   {snippet}")
+
+    summary = "\n".join(lines)
+    return summary[:SEARCH_MAX_CHARS]
+
+
 # Tool definitions (Issue #107)
 _WEE_TOOLS = [
     {
@@ -310,9 +396,45 @@ _WEE_TOOLS = [
     {
         "type": "function",
         "function": {
+            "name": "call_agent",
+            "description": (
+                "Call a Wee Orchestrator agent to execute a task. Use for delegating"
+                " work to specialized agents (devops, email-triage, family-knowledge,"
+                " research, smarthome, wee-dev, wee-qa, wee-doc)."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "agent": {
+                        "type": "string",
+                        "description": (
+                            "Agent name to call"
+                            " (e.g., 'devops', 'email-triage', 'research')"
+                        ),
+                    },
+                    "prompt": {
+                        "type": "string",
+                        "description": "Task prompt or instruction for the agent",
+                    },
+                    "mode": {
+                        "type": "string",
+                        "enum": ["quick", "background"],
+                        "description": (
+                            "Execution mode: 'quick' waits for result (sync),"
+                            " 'background' returns task_id immediately (async)"
+                        ),
+                    },
+                },
+                "required": ["agent", "prompt"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "search",
             "description": (
-                "Search the web using SearXNG meta-search engine" " and return results."
+                "Search the web using SearXNG meta-search engine and return results."
             ),
             "parameters": {
                 "type": "object",
@@ -342,7 +464,6 @@ _WEE_TOOLS = [
     },
 ]
 
-
 MAX_TOOL_ROUNDS = 10
 TOOL_TIMEOUT = 120  # seconds per tool execution
 
@@ -353,8 +474,8 @@ def resolve_model_and_endpoint(model: str, api_base: str = None, api_key: str = 
     Model format: [provider/]model_name
     Examples:
         ollama/gemma4:e4b  → api_base=ollama preset, model=gemma4:e4b
-        openrouter/meta-llama/llama-4-scout → api_base=openrouter,
-            model=meta-llama/llama-4-scout
+        openrouter/meta-llama/llama-4-scout
+            → api_base=openrouter, model=meta-llama/llama-4-scout
         gemma4:e4b         → use explicit api_base or default to ollama
     """
     resolved_model = model
@@ -373,115 +494,61 @@ def resolve_model_and_endpoint(model: str, api_base: str = None, api_key: str = 
 
     # Defaults
     if not resolved_base:
-        resolved_base = os.environ.get("WEE_API_BASE", "http://192.168.1.101:11434/v1")
-    if not resolved_key:
-        resolved_key = os.environ.get("WEE_API_KEY") or os.environ.get(
-            "OPENROUTER_API_KEY"
+        _ollama_host = os.environ.get("OLLAMA_HOST", "192.168.1.101")
+        _ollama_port = os.environ.get("OLLAMA_PORT", "11434")
+        resolved_base = os.environ.get(
+            "WEE_API_BASE", f"http://{_ollama_host}:{_ollama_port}/v1"
         )
+    if not resolved_key:
+        # Issue #153: Check OPENROUTER_API_KEY env var for OpenRouter first
+        if "openrouter" in (resolved_base or "").lower():
+            resolved_key = os.environ.get("OPENROUTER_API_KEY")
+        if not resolved_key:
+            resolved_key = os.environ.get("WEE_API_KEY")
+        # Try keyring for OpenRouter
+        if not resolved_key and "openrouter" in (resolved_base or "").lower():
+            try:
+                import keyring
+
+                resolved_key = keyring.get_password("openrouter", "api_key")
+            except Exception:
+                pass
+        # Issue #153: Raise clear error instead of defaulting to "ollama"
         if not resolved_key:
             if "openrouter" in (resolved_base or "").lower():
-                try:
-                    import keyring
-
-                    resolved_key = keyring.get_password("openrouter", "api_key")
-                except Exception:
-                    pass
-            if not resolved_key:
-                resolved_key = "ollama"
+                print(
+                    "Error: OpenRouter API key not found. Set "
+                    "OPENROUTER_API_KEY env var or store via keyring.",
+                    file=sys.stderr,
+                )
+                sys.exit(1)
+            resolved_key = "ollama"
 
     return resolved_model, resolved_base, resolved_key
 
 
-SEARCH_TIMEOUT = 10  # seconds for SearXNG queries
-SEARCH_MAX_CHARS = 2000  # max result chars to avoid context bloat
-
-
-def _execute_search(func_args: dict) -> str:
-    """Handle search tool calls via SearXNG (Issue #255).
-
-    Queries the self-hosted SearXNG instance and returns results in the
-    requested format. Returns an empty result gracefully on failure rather
-    than raising an exception, to avoid breaking the agentic loop.
-
-    Args:
-        func_args: Dict with 'q' (required), 'count' (optional, default 5),
-                   'format' (optional: 'json'|'text', default 'text').
-    """
-    query = (func_args.get("q") or "").strip()
-    if not query:
-        return "Error: search query ('q') is required"
-
-    count_raw = func_args.get("count")
-    count = min(int(count_raw if count_raw is not None else 5), 20)
-    output_format = (func_args.get("format") or "text").lower()
-
-    searxng_url = os.environ.get("WEE_SEARXNG_URL", "http://192.168.1.100:8888")
-    searxng_url = searxng_url.rstrip("/")
-
-    params = urllib.parse.urlencode(
-        {
-            "q": query,
-            "format": "json",
-            "categories": "general",
-            "language": "en",
-        }
-    )
-    url = f"{searxng_url}/search?{params}"
-
-    try:
-        req = urllib.request.Request(url, headers={"User-Agent": "Wee-Runtime/1.0"})
-        with urllib.request.urlopen(req, timeout=SEARCH_TIMEOUT) as resp:
-            data = json.loads(resp.read().decode("utf-8", errors="replace"))
-    except urllib.error.URLError as e:
-        return f"Search unavailable ({searxng_url}): {e.reason}"
-    except Exception as e:
-        return f"Search error: {e}"
-
-    results = data.get("results", [])[:count]
-    if not results:
-        return "No results found."
-
-    if output_format == "json":
-        slim = [
-            {
-                "title": r.get("title", ""),
-                "url": r.get("url", ""),
-                "snippet": (r.get("content", "") or "")[:300],
-            }
-            for r in results
-        ]
-        raw = json.dumps(slim, ensure_ascii=False)
-        return raw[:SEARCH_MAX_CHARS]
-
-    # Plain text summary
-    lines = [f"Search results for: {query}"]
-    for i, r in enumerate(results, 1):
-        title = r.get("title", "(no title)")
-        url_r = r.get("url", "")
-        snippet = (r.get("content", "") or "").strip()[:200]
-        lines.append(f"\n{i}. {title}\n   {url_r}\n   {snippet}")
-
-    summary = "\n".join(lines)
-    return summary[:SEARCH_MAX_CHARS]
-
-
 def execute_tool(func_name: str, func_args: dict, permission: str = "auto") -> str:
-    """Execute a tool call and return its output (Issue #107).
+    """Execute a tool call and return its output (Issues #107, #111, #158).
 
     Args:
-        permission: "restricted" blocks all execution. "auto" and "elevated"
-            execute tools as requested.
+        permission: Controls execution gating.
+            "restricted" — blocks all tool execution and returns an error.
+            "auto" (default) — executes tools as requested by the model.
+            "elevated" — treated identically to "auto" (no privilege escalation
+            in CLI contexts).
     """
     if permission == "restricted":
         return (
-            "Error: tool execution is disabled (permission=restricted). "
-            "Pass --permission auto to enable tools."
+            "Error: Tool execution blocked by permission level 'restricted'. "
+            "Run with --permission auto to enable tool calls."
         )
     try:
         if func_name == "bash":
             command = func_args.get("command", "")
             if not command:
                 return "Error: No command provided"
+            # Issue #111: Sanitize SSH commands
+            command = sanitize_bash_command(command)
             result = subprocess.run(
                 ["bash", "-c", command],
                 capture_output=True,
@@ -508,6 +575,8 @@ def execute_tool(func_name: str, func_args: dict, permission: str = "auto") -> s
             return output.strip() or "(no output)"
         elif func_name == "search":
             return _execute_search(func_args)
+        elif func_name == "call_agent":
+            return _call_agent_handler(func_args)
         else:
             return f"Error: Unknown tool {func_name}"
     except subprocess.TimeoutExpired:
@@ -516,15 +585,263 @@ def execute_tool(func_name: str, func_args: dict, permission: str = "auto") -> s
         return f"Error executing tool {func_name}: {e}"
 
 
-# SSH command sanitisation (Issue #113)
+def _load_agents_config() -> dict:
+    """Load agents.json from common locations.
+
+    Priority (in order):
+    1. Wee Orchestrator's agents.json (source of truth with new format)
+    2. CWD agents.json (project-specific overrides)
+    3. ~/.wee/agents.json (user config)
+    """
+    import json
+
+    locations = [
+        "/opt/n8n-copilot-shim/agents.json",  # Wee Orchestrator config (primary)
+        os.path.join(os.getcwd(), "agents.json"),  # CWD project config
+        os.path.expanduser("~/.wee/agents.json"),  # User config
+    ]
+
+    for path in locations:
+        if os.path.isfile(path):
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    return json.load(f)
+            except (json.JSONDecodeError, OSError):
+                pass
+
+    return {"agents": []}
+
+
+def _get_agent_config(agent_name: str) -> dict:
+    """Get config for a specific agent from agents.json.
+
+    Supports both old format (runtime/model) and new format
+    (primary_runtime/primary_model).
+    """
+    config = _load_agents_config()
+    for agent in config.get("agents", []):
+        if agent.get("name") == agent_name:
+            # Handle both old and new config formats
+            agent_config = agent.copy()
+
+            # If new format (primary_runtime), use it as-is
+            if "primary_runtime" in agent_config:
+                return agent_config
+
+            # Convert old format (runtime/model) to new format for consistency
+            if "runtime" in agent_config:
+                agent_config["primary_runtime"] = agent_config.pop("runtime")
+            if "model" in agent_config:
+                agent_config["primary_model"] = agent_config.pop("model")
+
+            # Provide sensible fallbacks if not specified
+            if "fallback_runtime" not in agent_config:
+                agent_config["fallback_runtime"] = (
+                    "copilot"
+                    if agent_config.get("primary_runtime") == "claude"
+                    else "claude"
+                )
+            if "fallback_model" not in agent_config:
+                agent_config["fallback_model"] = "auto"
+
+            return agent_config
+    return {}
+
+
+def _call_agent_handler(func_args: dict) -> str:
+    """Handle call_agent tool calls to invoke Wee Orchestrator agents.
+
+    Args:
+        func_args: Dict with 'agent', 'prompt', and optional
+            'mode' ('quick'|'background')
+
+    Returns:
+        Result string or task ID
+
+    On infrastructure errors (429, 503, 502, 401, timeout), automatically retries
+    with agent's fallback_runtime and fallback_model from agents.json.
+    """
+    import json
+    import urllib.error
+    import urllib.request
+
+    agent = func_args.get("agent", "").strip()
+    prompt = func_args.get("prompt", "").strip()
+    mode = func_args.get("mode", "quick").strip().lower()
+    timeout = func_args.get("timeout")  # Optional: override default timeout
+
+    if not agent:
+        return "Error: agent parameter required"
+    if not prompt:
+        return "Error: prompt parameter required"
+    if mode not in ("quick", "background"):
+        return "Error: mode must be 'quick' or 'background'"
+
+    # Parse timeout if provided (as seconds)
+    if timeout is not None:
+        try:
+            timeout = int(timeout)
+            if timeout < 5 or timeout > 3600:
+                return (
+                    f"Error: timeout must be between 5 and 3600 seconds, got {timeout}"
+                )
+        except (ValueError, TypeError):
+            return (
+                f"Error: invalid timeout value '{timeout}', expected integer (seconds)"
+            )
+
+    # Get agent config for fallback info
+    agent_config = _get_agent_config(agent)
+
+    api_url = os.environ.get("WEE_ORCHESTRATOR_API", "https://127.0.0.1:8000")
+    token = os.environ.get(
+        "WEE_ORCHESTRATOR_TOKEN", "shared_R6R6wReORUV6bouLntScMTowbsh30Rzqa3hzjs3bWgU"
+    )
+
+    # Try with primary runtime first, then fallback
+    runtimes_to_try = [
+        {
+            "runtime": agent_config.get("primary_runtime", "copilot"),
+            "model": agent_config.get("primary_model", "claude-haiku-4.5"),
+            "is_fallback": False,
+        }
+    ]
+
+    # Add fallback if different from primary
+    fallback_runtime = agent_config.get("fallback_runtime")
+    fallback_model = agent_config.get("fallback_model")
+    if fallback_runtime and fallback_runtime != runtimes_to_try[0]["runtime"]:
+        runtimes_to_try.append(
+            {
+                "runtime": fallback_runtime,
+                "model": fallback_model or "auto",
+                "is_fallback": True,
+            }
+        )
+
+    last_error = None
+
+    for runtime_config in runtimes_to_try:
+        try:
+            runtime = runtime_config["runtime"]
+            model = runtime_config["model"]
+            is_fallback = runtime_config["is_fallback"]
+
+            if mode == "quick":
+                endpoint = "/api/v1/query"
+                agent_timeout = 90
+                http_timeout = (
+                    120  # Must exceed agent timeout to avoid spurious timeouts
+                )
+                task_data = {
+                    "prompt": prompt,
+                    "agent": agent,
+                    "runtime": runtime,
+                    "model": model,
+                    "timeout": agent_timeout,
+                }
+            else:
+                endpoint = "/api/v1/background-tasks"
+                http_timeout = 10  # Background tasks return immediately
+                task_data = {
+                    "prompt": prompt,
+                    "agent": agent,
+                    "runtime": runtime,
+                    "model": model,
+                    "timeout": 1800,
+                }
+
+            url = f"{api_url}{endpoint}"
+            req = urllib.request.Request(url, method="POST")
+            req.add_header("Content-Type", "application/json")
+            req.add_header("Authorization", f"Bearer {token}")
+
+            import ssl
+
+            ctx = ssl.create_default_context()
+            ctx.check_hostname = False
+            ctx.verify_mode = ssl.CERT_NONE
+
+            with urllib.request.urlopen(
+                req,
+                data=json.dumps(task_data).encode(),
+                context=ctx,
+                timeout=http_timeout,
+            ) as response:
+                result = json.loads(response.read().decode())
+                if mode == "background":
+                    task_id = result.get("id", result.get("task_id"))
+                    prefix = "[Fallback] " if is_fallback else ""
+                    return (
+                        f"[Wee] {prefix}Task started: {agent}\n"
+                        f"Task ID: {task_id}\n"
+                        f"Check status with: /background status {task_id}"
+                    )
+                else:
+                    response_text = result.get(
+                        "response", result.get("result", str(result))
+                    )
+                    prefix = "[Fallback] " if is_fallback else "[Wee] "
+                    return f"{prefix}Response from {agent}:\n{response_text}"
+
+        except urllib.error.HTTPError as e:
+            error_code = e.code
+
+            # Check if this is a retryable error
+            retryable_codes = {429, 503, 502, 401, 408}
+            if error_code in retryable_codes and not runtime_config["is_fallback"]:
+                # Will retry with fallback on next iteration
+                last_error = f"HTTP {error_code}"
+                continue
+
+            # Not retryable or already on fallback
+            return f"[Wee] ERROR: {agent} failed — HTTP {error_code}"
+
+        except urllib.error.URLError as e:
+            if "timed out" in str(e).lower() and not runtime_config["is_fallback"]:
+                last_error = "timeout"
+                continue
+            return f"[Wee] ERROR: {agent} network error — {str(e)[:80]}"
+
+        except TimeoutError:
+            if not runtime_config["is_fallback"]:
+                last_error = "timeout"
+                continue
+            return f"[Wee] ERROR: {agent} timed out."
+
+        except OSError as e:
+            if "timeout" in str(e).lower() and not runtime_config["is_fallback"]:
+                last_error = "timeout"
+                continue
+            return f"[Wee] ERROR: {agent} system error — {str(e)[:80]}"
+
+        except Exception as e:
+            return f"[Wee] ERROR: {agent} — {str(e)[:100]}"
+
+    # All retries exhausted
+    if last_error == "timeout":
+        return f"[Wee] ERROR: {agent} timed out."
+    elif last_error:
+        return f"[Wee] ERROR: {agent} failed — {last_error}"
+    return f"[Wee] ERROR: No valid runtime for {agent}"
+
+
+# Issue #113: SSH command sanitisation
 _SSH_BIN_RE = re.compile(r"\b(ssh|scp|sftp)\b")
 
 
+# Issue #111: SSH sanitization now wired into execute_tool() (resolves #113 TODO).
 def sanitize_bash_command(command: str) -> str:
     """Auto-inject SSH flags to prevent host key verification failures.
 
-    Injects -o StrictHostKeyChecking=accept-new after ssh/scp/sftp
-    when the flag is not already present.
+    Injects ``-o StrictHostKeyChecking=accept-new`` after ssh/scp/sftp
+    when the flag is not already present.  ``accept-new`` is preferred
+    over ``no`` because it still rejects CHANGED keys (potential MITM).
+
+    Wired into execute_tool() by Issue #111. Called on every bash
+    tool input before execution once wee_runtime.py gains a tool
+    execution loop.
+    once wee_runtime.py gains a tool execution loop.
     """
     if not command or not _SSH_BIN_RE.search(command):
         return command
@@ -537,7 +854,7 @@ def sanitize_bash_command(command: str) -> str:
     return _SSH_BIN_RE.sub(_inject, command, count=0)
 
 
-# Anti-hallucination system prompt addendum (Issue #113)
+# Issue #113: Anti-hallucination system prompt addendum
 _ANTI_HALLUCINATION_PROMPT = (
     "\n\n[CRITICAL — Output Integrity Rules]\n"
     "1. NEVER fabricate, invent, or hallucinate command output. If a command "
@@ -546,11 +863,13 @@ _ANTI_HALLUCINATION_PROMPT = (
     'If you show an example, clearly label it as "EXAMPLE (not real output)".\n'
     "3. When a tool call returns an error, relay the error verbatim to the user. "
     "Do NOT attempt to guess what the successful output would have looked like.\n"
-    "4. For SSH commands: ALWAYS use -o StrictHostKeyChecking=accept-new to "
+    "4. For SSH commands: ALWAYS use ``-o StrictHostKeyChecking=accept-new`` to "
     "avoid host-key verification failures on first connect.\n"
 )
 
-# Explicit tool capability prompt for models that ignore JSON tool schemas (Issue #111)
+# Issue #111: Explicit tool capability prompt for Ollama models.
+# Many Ollama models ignore JSON tool schemas unless the system prompt
+# explicitly tells them about tool availability and usage instructions.
 _WEE_TOOL_CAPABILITY_PROMPT = (
     "\n\n[Tool Capabilities]\n"
     "You have the following tools available. Use them to fulfil user requests.\n\n"
@@ -569,13 +888,112 @@ _WEE_TOOL_CAPABILITY_PROMPT = (
 )
 
 
+def list_available_models(provider: str = None):
+    """List available models from all configured providers.
+
+    Args:
+        provider: Optional filter ('ollama', 'openrouter', 'lmstudio').
+                 If None, shows all. Case-insensitive.
+    """
+    import httpx
+
+    _ollama_host = os.environ.get("OLLAMA_HOST", "192.168.1.101")
+    _ollama_port = os.environ.get("OLLAMA_PORT", "11434")
+
+    if provider:
+        provider = provider.lower()
+
+    print("Available Models by Provider:")
+    print("=" * 60)
+
+    # Ollama models
+    if not provider or provider == "ollama":
+        print("\nOllama (http://%s:%s):" % (_ollama_host, _ollama_port))
+        try:
+            resp = httpx.get(
+                f"http://{_ollama_host}:{_ollama_port}/api/tags",
+                timeout=httpx.Timeout(connect=5.0, read=10.0, write=10.0, pool=10.0),
+            )
+            if resp.status_code == 200:
+                models = resp.json().get("models", [])
+                for m in models:
+                    name = m.get("name", "")
+                    size_bytes = m.get("size", 0)
+                    size_gb = size_bytes / (1024**3)
+                    print(f"  ollama/{name:<40} ({size_gb:.1f} GB)")
+                if not models:
+                    print("  (no models available)")
+            else:
+                print("  (unreachable)")
+        except Exception as e:
+            print(f"  (error: {e})")
+
+    # OpenRouter models
+    if not provider or provider == "openrouter":
+        print("\nOpenRouter (https://openrouter.ai):")
+        try:
+            resp = httpx.get("https://openrouter.ai/api/v1/models", timeout=10.0)
+            if resp.status_code == 200:
+                data = resp.json()
+                models = data.get("data", [])
+                if models:
+                    print(f"  Found {len(models)} models. Use 'openrouter/<model-id>'")
+                    providers_dict = {}
+                    for m in models:
+                        model_id = m.get("id", "")
+                        if "/" in model_id:
+                            prov = model_id.split("/")[0]
+                            if prov not in providers_dict:
+                                providers_dict[prov] = []
+                            providers_dict[prov].append(model_id)
+                    for prov in sorted(providers_dict.keys()):
+                        print(f"    {prov}:")
+                        for model_id in sorted(providers_dict[prov]):
+                            print(f"      openrouter/{model_id}")
+                else:
+                    print("  (no models available)")
+            else:
+                print(f"  (error: HTTP {resp.status_code})")
+        except Exception as e:
+            print(f"  (error: {e})")
+
+    # LM Studio
+    if not provider or provider == "lmstudio":
+        print("\nLM Studio (http://localhost:1234):")
+        _lmstudio_host = os.environ.get("LMSTUDIO_HOST", "localhost")
+        _lmstudio_port = os.environ.get("LMSTUDIO_PORT", "1234")
+        try:
+            resp = httpx.get(
+                f"http://{_lmstudio_host}:{_lmstudio_port}/v1/models",
+                timeout=httpx.Timeout(connect=5.0, read=10.0, write=10.0, pool=10.0),
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                models = data.get("data", [])
+                if models:
+                    for m in models:
+                        model_id = m.get("id", "")
+                        print(f"  lmstudio/{model_id}")
+                else:
+                    print("  (no models available)")
+            else:
+                print("  (unreachable or no models loaded)")
+        except Exception as e:
+            print(f"  (unreachable: {e})")
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Wee Native Runtime — OpenAI-compatible chat completions"
     )
     parser.add_argument(
-        "--model", required=True, help="Model name (e.g., ollama/gemma4:e4b)"
+        "--list-models",
+        nargs="?",
+        const=True,
+        metavar="PROVIDER",
+        help="List available models (optional: ollama, openrouter, lmstudio)",
     )
+    parser.add_argument("--model", help="Model name (e.g., ollama/gemma4:e4b)")
     parser.add_argument("--api-base", default=None, help="API base URL")
     parser.add_argument("--api-key", default=None, help="API key")
     parser.add_argument("--system-prompt", default="", help="System prompt")
@@ -589,10 +1007,22 @@ def main():
         "--tools",
         action="store_true",
         default=False,
-        help="Enable tool calling (bash, python, search)",
+        help="Enable tool calling (bash, python)",
     )
-    parser.add_argument("prompt", help="User prompt")
+    parser.add_argument("prompt", nargs="?", help="User prompt")
     args = parser.parse_args()
+
+    # Handle --list-models
+    if args.list_models is not None:
+        provider = None if args.list_models is True else args.list_models
+        list_available_models(provider)
+        sys.exit(0)
+
+    # Validate required arguments for normal operation
+    if not args.model:
+        parser.error("--model is required (unless using --list-models)")
+    if not args.prompt:
+        parser.error("prompt is required (unless using --list-models)")
 
     model, api_base, api_key = resolve_model_and_endpoint(
         args.model, args.api_base, args.api_key
@@ -607,15 +1037,29 @@ def main():
         )
         sys.exit(1)
 
+    import httpx
+
     client = OpenAI(
         base_url=api_base,
         api_key=api_key,
-        timeout=args.timeout,
+        timeout=httpx.Timeout(
+            timeout=float(args.timeout),
+            connect=15.0,
+        ),
+        max_retries=0,
     )
 
     messages = []
-    if args.system_prompt:
-        messages.append({"role": "system", "content": args.system_prompt})
+    collected_output = []
+    tool_call_counter = 0
+
+    # Issue #113: Augment system prompt with anti-hallucination rules
+    effective_system_prompt = (args.system_prompt or "") + _ANTI_HALLUCINATION_PROMPT
+    # Issue #111: Include tool capability prompt when tools are enabled
+    if args.tools:
+        effective_system_prompt += _WEE_TOOL_CAPABILITY_PROMPT
+    if effective_system_prompt.strip():
+        messages.append({"role": "system", "content": effective_system_prompt})
     messages.append({"role": "user", "content": args.prompt})
 
     if not args.tools:
@@ -644,9 +1088,6 @@ def main():
         return
 
     # -- Tool-calling agentic loop (Issue #107) --
-    collected_output = []
-    tool_call_counter = 0
-
     try:
         for round_num in range(MAX_TOOL_ROUNDS + 1):
             create_kwargs = {
@@ -692,8 +1133,10 @@ def main():
                         if idx not in tool_calls_acc:
                             tool_call_counter += 1
                             tool_calls_acc[idx] = {
-                                "id": getattr(tc_delta, "id", None)
-                                or f"tc_wee_{tool_call_counter}",
+                                "id": (
+                                    getattr(tc_delta, "id", None)
+                                    or f"tc_wee_{tool_call_counter}"
+                                ),
                                 "name": "",
                                 "arguments": "",
                             }
