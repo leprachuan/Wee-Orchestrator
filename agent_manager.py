@@ -12011,6 +12011,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                         context_prompt,
                         "--output-format",
                         "stream-json",
+                        "--verbose",
                         "--model",
                         eff_model,
                         "--permission-mode",
