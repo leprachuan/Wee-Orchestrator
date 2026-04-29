@@ -628,20 +628,7 @@ def has_running_wee_dev_task() -> bool:
     return False
 
 
-def has_running_wee_qa_task() -> bool:
-    """Return True if a wee-qa task from the lock file is still active."""
-    lock = read_lock()
-    if lock is None:
-        return False
-    # Check task_id first (API dispatch - new default)
-    task_id = lock.get("wee_qa_task_id")
-    if task_id is not None:
-        return _is_bg_task_running(task_id)
-    # Fall back to PID check (subprocess dispatch - deprecated)
-    pid = lock.get("wee_qa_pid")
-    return pid is not None and _is_pid_alive(int(pid))
-
-
+# 
 # ---------------------------------------------------------------------------
 # Dispatch helpers
 # ---------------------------------------------------------------------------
@@ -657,7 +644,8 @@ def dispatch_wee_dev(item: dict) -> dict:
         "Read the full issue on GitHub for details. Implement the fix/feature "
         "on the dev host (192.168.1.100) in /opt/n8n-copilot-shim-dev/. "
         "Follow /opt/wee-dev/AGENTS.md. When implementation is complete, "
-        "dispatch wee-qa for review. Update the GitHub issue labels and add "
+        "add the label 'wee-dev:qa-review' to the issue — the dispatcher will "
+        "pick it up and dispatch wee-qa. Update the GitHub issue labels and add "
         "comments as you progress. Do not work on more than this one issue."
     )
     if DRY_RUN:
@@ -678,37 +666,6 @@ def dispatch_wee_dev(item: dict) -> dict:
         log(f"ERROR: Failed to dispatch wee-dev: {e}")
         raise
 
-
-def dispatch_wee_qa(item: dict) -> dict:
-    """Dispatch wee-qa via background-tasks API (visible, tracked, audited)."""
-    qa_cfg = get_agent_dispatch_config("wee-qa")
-    
-    prompt = (
-        f"QA review for GitHub issue #{item['number']} in {REPO}: "
-        f"{item['title']}. "
-        "Changes are on dev host 192.168.1.100 in /opt/n8n-copilot-shim-dev/. "
-        "Run tests, check code quality, verify the implementation matches the "
-        "issue requirements. If QA passes, add label wee-dev:qa-review → close "
-        "the issue with the commit SHA. If QA fails, add label wee-dev:qa-failed "
-        "and comment with the failures."
-    )
-    if DRY_RUN:
-        log(f"[dry-run] Would dispatch wee-qa for {item['id']}: {item['title']} (runtime={qa_cfg['runtime']})")
-        return {"task_id": "dry-run"}
-    try:
-        task_id = dispatch_via_api(
-            "wee-qa",
-            prompt,
-            qa_cfg["model"],
-            qa_cfg["timeout"],
-            runtime=qa_cfg["runtime"],
-            permission_mode=qa_cfg.get("permission_mode"),
-            yolo=qa_cfg.get("yolo"),
-        )
-        return {"task_id": task_id}
-    except Exception as e:
-        log(f"ERROR: Failed to dispatch wee-qa: {e}")
-        raise
 
 
 # ---------------------------------------------------------------------------
@@ -766,47 +723,7 @@ def main() -> int:
     # 3. Categorise
     active_item = first_with_status(items, ACTIVE_STATUSES)
     actionable = [i for i in items if i["status"] in ACTIONABLE_STATUSES]
-    # --- Stalled qa-review detection ---
-    if active_item and active_item["status"] == "qa-review":
-        if has_running_wee_qa_task():
-            write_lock(
-                {
-                    "state": "qa-review",
-                    "reason": "Waiting for wee-qa to finish review.",
-                    "work_item_id": active_item["id"],
-                    "work_item_title": active_item["title"],
-                    "github_issue": active_item["number"],
-                }
-            )
-            log(f"wee-qa is actively reviewing {active_item['id']} — no action.")
-            return 0
-
-        # No wee-qa running — stalled; re-dispatch
-        log(
-            f"Stalled qa-review detected for {active_item['id']} "
-            f"— re-dispatching wee-qa"
-        )
-        try:
-            result = dispatch_wee_qa(active_item)
-        except Exception as exc:
-            log(f"Failed to re-dispatch wee-qa: {exc}")
-            return 1
-        write_lock(
-            {
-                "state": "qa-review",
-                "reason": "wee-qa re-dispatched by stall detector.",
-                "work_item_id": active_item["id"],
-                "work_item_title": active_item["title"],
-                "github_issue": active_item["number"],
-                "wee_qa_task_id": result.get("task_id"),
-            }
-        )
-        log(
-            f"Re-dispatched wee-qa task_id={result.get('task_id')} "
-            f"for {active_item['id']}."
-        )
-        return 0
-
+    
     # --- Check if wee-dev is already running ---
     wee_dev_running = has_running_wee_dev_task()
     if wee_dev_running:
