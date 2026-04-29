@@ -37,8 +37,8 @@ from wee_runtime import (  # noqa: E402
     _ANTI_HALLUCINATION_PROMPT,
     MAX_TOOL_ROUNDS,
     execute_tool,
-    resolve_model_and_endpoint,
     list_available_models,
+    resolve_model_and_endpoint,
 )
 
 # ---------------------------------------------------------------------------
@@ -72,10 +72,10 @@ def save_config(cfg: dict) -> None:
 # ---------------------------------------------------------------------------
 def load_agents_json(search_cwd: bool = True) -> dict:
     """Load agents.json from CWD first, then fallback to script folder.
-    
+
     Args:
         search_cwd: If True, search CWD first. If False, only use script folder.
-    
+
     Returns:
         Parsed agents.json content or empty dict if not found
     """
@@ -87,7 +87,7 @@ def load_agents_json(search_cwd: bool = True) -> dict:
                 return json.load(f)
         except (FileNotFoundError, json.JSONDecodeError):
             pass
-    
+
     # Fall back to script folder
     agents_file = os.path.join(_HERE, "agents.json")
     try:
@@ -99,35 +99,37 @@ def load_agents_json(search_cwd: bool = True) -> dict:
 
 def discover_skills(search_cwd: bool = True) -> dict:
     """Discover available skills from skill repositories and CWD.
-    
+
     Args:
         search_cwd: If True, search CWD first. If False, only use default dirs.
-    
+
     Returns:
         Dict mapping skill_name -> {description, path, loaded}
     """
     skills = {}
     skill_dirs = []
-    
+
     # Add CWD first if requested
     if search_cwd:
         cwd_skills_dir = os.path.join(os.getcwd(), "skills")
         if os.path.isdir(cwd_skills_dir):
             skill_dirs.append(cwd_skills_dir)
-    
+
     # Always add default directories
-    skill_dirs.extend([
-        "/opt/foster-skills",
-        "/opt/skills",
-    ])
-    
+    skill_dirs.extend(
+        [
+            "/opt/foster-skills",
+            "/opt/skills",
+        ]
+    )
+
     for skill_dir in skill_dirs:
         if not os.path.isdir(skill_dir):
             continue
         try:
             for entry in os.listdir(skill_dir):
                 skill_path = os.path.join(skill_dir, entry)
-                
+
                 # Check for skill_metadata.json (standard format)
                 metadata_file = os.path.join(skill_path, "skill_metadata.json")
                 if os.path.isfile(metadata_file):
@@ -135,23 +137,34 @@ def discover_skills(search_cwd: bool = True) -> dict:
                         with open(metadata_file) as f:
                             metadata = json.load(f)
                         skills[entry] = {
-                            "description": metadata.get("description", "No description"),
+                            "description": metadata.get(
+                                "description", "No description"
+                            ),
                             "path": skill_path,
                             "loaded": False,
                         }
                     except (json.JSONDecodeError, OSError):
                         pass
-                
+
                 # Check for .skill file (alternate format)
                 skill_file = os.path.join(skill_dir, f"{entry}.skill")
                 if os.path.isfile(skill_file) and entry not in skills:
                     try:
-                        with open(skill_file, encoding='utf-8', errors='ignore') as f:
+                        with open(skill_file, encoding="utf-8", errors="ignore") as f:
                             content = f.read()
                             # Extract description from first lines
-                            desc_line = next((line for line in content.split("\n") if "description" in line.lower()), "")
+                            desc_line = next(
+                                (
+                                    line
+                                    for line in content.split("\n")
+                                    if "description" in line.lower()
+                                ),
+                                "",
+                            )
                             skills[entry] = {
-                                "description": desc_line.strip() if desc_line else "Custom skill",
+                                "description": (
+                                    desc_line.strip() if desc_line else "Custom skill"
+                                ),
                                 "path": skill_file,
                                 "loaded": False,
                             }
@@ -159,24 +172,26 @@ def discover_skills(search_cwd: bool = True) -> dict:
                         pass
         except OSError:
             pass
-    
+
     return skills
 
 
 def get_agent_info() -> list:
     """Get list of agents from agents.json.
-    
+
     Returns:
         List of agent dicts with name and description
     """
     agents_data = load_agents_json()
     agents = []
     for agent in agents_data.get("agents", []):
-        agents.append({
-            "name": agent.get("name", "unknown"),
-            "description": agent.get("description", "No description"),
-            "path": agent.get("path", ""),
-        })
+        agents.append(
+            {
+                "name": agent.get("name", "unknown"),
+                "description": agent.get("description", "No description"),
+                "path": agent.get("path", ""),
+            }
+        )
     return agents
 
 
@@ -274,27 +289,56 @@ def _print_info(msg: str):
 class TokenTracker:
     """Track token usage across turns."""
 
-    def __init__(self):
+    def __init__(self, context_window: int = 0):
         self.prompt_tokens = 0
         self.completion_tokens = 0
         self.total_tokens = 0
         self.turns = 0
+        self.session_total = 0  # cumulative across all API turns
+        self.last_prompt_tokens = (
+            0  # prompt tokens from the most recent turn (actual current context)
+        )
+        self.context_window = context_window  # 0 means unknown
 
     def update(self, usage):
         """Update from an OpenAI usage object."""
         if usage:
-            self.prompt_tokens += getattr(usage, "prompt_tokens", 0) or 0
-            self.completion_tokens += getattr(usage, "completion_tokens", 0) or 0
-            self.total_tokens += getattr(usage, "total_tokens", 0) or 0
+            pt = getattr(usage, "prompt_tokens", 0) or 0
+            ct = getattr(usage, "completion_tokens", 0) or 0
+            tt = getattr(usage, "total_tokens", 0) or 0
+            self.prompt_tokens += pt
+            self.completion_tokens += ct
+            self.total_tokens += tt
+            self.session_total += tt if tt else (pt + ct)
+            self.last_prompt_tokens = pt  # tracks actual current context size
         self.turns += 1
 
+    def percent_used(self) -> float:
+        """Return percentage of context window consumed (0 if window unknown).
+
+        Uses last_prompt_tokens (the prompt token count from the most recent API
+        call) rather than session_total to avoid quadratic over-counting: each
+        turn re-sends the full message history, so session_total grows without
+        bound even when the actual context usage is stable.
+        """
+        if not self.context_window:
+            return 0.0
+        return min(100.0, self.last_prompt_tokens / self.context_window * 100)
+
     def summary(self) -> str:
-        return (
+        lines = [
             f"Tokens — prompt: {self.prompt_tokens}, "
             f"completion: {self.completion_tokens}, "
             f"total: {self.total_tokens}, "
             f"turns: {self.turns}"
-        )
+        ]
+        if self.context_window:
+            pct = self.percent_used()
+            lines.append(
+                f"Context window: {self.last_prompt_tokens:,}"
+                f"/{self.context_window:,} tokens ({pct:.1f}% used)"
+            )
+        return "\n".join(lines)
 
 
 # ---------------------------------------------------------------------------
@@ -425,23 +469,30 @@ def chat_stream(
             except json.JSONDecodeError:
                 func_args = {"command": tc_info["function"]["arguments"]}
 
-            _print_info(f"[Wee] Executing: {func_name}({json.dumps(func_args)[:300]})" + ("..." if len(json.dumps(func_args)) > 300 else ""))
+            _print_info(
+                f"[Wee] Executing: {func_name}({json.dumps(func_args)[:300]})"
+                + ("..." if len(json.dumps(func_args)) > 300 else "")
+            )
             tool_result = execute_tool(func_name, func_args, permission=permission)
 
             # Display tool result to user
             if tool_result:
-                result_preview = tool_result[:500] if len(str(tool_result)) > 500 else tool_result
+                result_preview = (
+                    tool_result[:500] if len(str(tool_result)) > 500 else tool_result
+                )
                 _print_info(f"[Wee] Result: {result_preview}")
 
             # Store tool result for later viewing
             if func_name not in tool_results_buffer:
                 tool_results_buffer[func_name] = []
-            tool_results_buffer[func_name].append({
-                "args": func_args,
-                "result": tool_result or "No output",
-                "tool_id": tc_id,
-            })
-            
+            tool_results_buffer[func_name].append(
+                {
+                    "args": func_args,
+                    "result": tool_result or "No output",
+                    "tool_id": tc_id,
+                }
+            )
+
             messages.append(
                 {
                     "role": "tool",
@@ -534,11 +585,11 @@ def run_interactive(
     model_str: str = None,
 ) -> str:
     """Run the interactive REPL.
-    
+
     Args:
         model: Resolved model name (without provider prefix)
         model_str: Original model string from CLI (with provider prefix if used)
-    
+
     Returns:
         Updated model string (to persist across sessions, in original form)
     """
@@ -556,7 +607,7 @@ def run_interactive(
 
     _print_info(f"Wee CLI v{__version__} — model: {model}")
     _print_info("Type /help for commands, /exit to quit.\n")
-    
+
     # Track if this is the first message (for CWD context injection)
     first_message = True
     # Buffer to store tool results from the last interaction
@@ -612,7 +663,9 @@ def run_interactive(
                     list_available_models(provider)
                 else:
                     old_model = model
-                    model_for_persistence = arg  # Keep original user input for persistence
+                    model_for_persistence = (
+                        arg  # Keep original user input for persistence
+                    )
                     resolved_model, api_base, api_key = resolve_model_and_endpoint(arg)
                     client = _make_client(api_base, api_key, timeout)
                     model = resolved_model  # Use resolved model for API calls
@@ -666,13 +719,15 @@ def run_interactive(
                         for i, entry in enumerate(results, 1):
                             _print_info(f"\n  [{tool_name}#{i}]")
                             _print_info(f"    Args: {json.dumps(entry['args'])[:150]}")
-                            if len(json.dumps(entry['args'])) > 150:
+                            if len(json.dumps(entry["args"])) > 150:
                                 _print_info("           ...")
-                            result_lines = str(entry['result']).split('\n')
+                            result_lines = str(entry["result"]).split("\n")
                             for line in result_lines[:20]:
                                 _print_info(f"    {line}")
                             if len(result_lines) > 20:
-                                _print_info(f"    ... ({len(result_lines) - 20} more lines)")
+                                _print_info(
+                                    f"    ... ({len(result_lines) - 20} more lines)"
+                                )
                 continue
                 if not arg:
                     _print_info(f"Permission level: {permission}")
@@ -681,7 +736,10 @@ def run_interactive(
                     permission = arg.lower()
                     _print_info(f"Permission: {old_perm} → {permission}")
                 else:
-                    _print_error(f"Invalid permission: {arg}. Use 'restricted', 'auto', or 'elevated'.")
+                    _print_error(
+                        f"Invalid permission: {arg}. "
+                        "Use 'restricted', 'auto', or 'elevated'."
+                    )
                 continue
 
             elif cmd == "/version":
@@ -722,46 +780,50 @@ def run_interactive(
         if first_message:
             first_message = False
             cwd_agents = load_agents_json(search_cwd=True)
-            cwd_skills = discover_skills(search_cwd=True)
-            
+
             # Check if CWD has its own agents.json
             cwd_agents_file = os.path.join(os.getcwd(), "agents.json")
             cwd_has_agents = os.path.isfile(cwd_agents_file)
-            
+
             # Check if CWD has AGENTS.md
             cwd_agents_md = os.path.join(os.getcwd(), "AGENTS.md")
             cwd_has_agents_md = os.path.isfile(cwd_agents_md)
-            
+
             # Check if CWD/skills exists
             cwd_skills_dir = os.path.join(os.getcwd(), "skills")
             cwd_has_skills_dir = os.path.isdir(cwd_skills_dir)
-            
+
             # If CWD has local agents/skills, add system context
             if cwd_has_agents or cwd_has_agents_md or cwd_has_skills_dir:
                 context = "\nContext from current working directory:"
-                
+
                 # Read AGENTS.md if it exists
                 if cwd_has_agents_md:
                     try:
-                        with open(cwd_agents_md, 'r', encoding='utf-8', errors='ignore') as f:
+                        with open(
+                            cwd_agents_md, "r", encoding="utf-8", errors="ignore"
+                        ) as f:
                             agents_md_content = f.read()
                         # Extract first 500 chars to avoid bloating the context
-                        context += f"\n\nAGENTS.md (available in CWD):\n"
+                        context += "\n\nAGENTS.md (available in CWD):\n"
                         context += agents_md_content[:500]
                         if len(agents_md_content) > 500:
                             context += "\n... (see full AGENTS.md in CWD)"
                     except (OSError, IOError):
                         pass
-                
+
                 if cwd_has_agents:
                     agents = cwd_agents.get("agents", [])
                     if agents:
                         context += f"\n\nAvailable agents ({len(agents)}):"
                         for agent in agents[:5]:
-                            context += f"\n  - {agent.get('name', 'unknown')}: {agent.get('description', '')[:60]}"
+                            context += (
+                                f"\n  - {agent.get('name', 'unknown')}: "
+                                f"{agent.get('description', '')[:60]}"
+                            )
                         if len(agents) > 5:
                             context += f"\n  ... and {len(agents) - 5} more"
-                
+
                 if cwd_has_skills_dir:
                     # Re-discover to get only CWD skills
                     cwd_only_skills = {}
@@ -769,24 +831,34 @@ def run_interactive(
                         try:
                             for entry in os.listdir(cwd_skills_dir):
                                 skill_path = os.path.join(cwd_skills_dir, entry)
-                                metadata_file = os.path.join(skill_path, "skill_metadata.json")
+                                metadata_file = os.path.join(
+                                    skill_path, "skill_metadata.json"
+                                )
                                 if os.path.isfile(metadata_file):
                                     try:
                                         with open(metadata_file) as f:
                                             metadata = json.load(f)
-                                        cwd_only_skills[entry] = metadata.get("description", "")
+                                        cwd_only_skills[entry] = metadata.get(
+                                            "description", ""
+                                        )
                                     except (json.JSONDecodeError, OSError):
                                         pass
                         except OSError:
                             pass
-                    
+
                     if cwd_only_skills:
-                        context += f"\n\nAvailable skills in ./skills ({len(cwd_only_skills)}):"
+                        context += (
+                            f"\n\nAvailable skills in ./skills"
+                            f" ({len(cwd_only_skills)}):"
+                        )
                         for skill_name in list(cwd_only_skills.keys())[:5]:
-                            context += f"\n  - {skill_name}: {cwd_only_skills[skill_name][:50]}"
+                            context += (
+                                f"\n  - {skill_name}: "
+                                f"{cwd_only_skills[skill_name][:50]}"
+                            )
                         if len(cwd_only_skills) > 5:
                             context += f"\n  ... and {len(cwd_only_skills) - 5} more"
-                
+
                 # Prepend context to first user message
                 user_input = context + "\n\n" + user_input
 
@@ -988,6 +1060,7 @@ def main(argv=None):
     # Handle --list-models
     if args.list_models is not None:
         from wee_runtime import list_available_models
+
         provider = None if args.list_models is True else args.list_models
         list_available_models(provider)
         sys.exit(0)

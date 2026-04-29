@@ -21,6 +21,9 @@ import os
 import re
 import subprocess
 import sys
+import urllib.error
+import urllib.parse
+import urllib.request
 
 # Provider presets: prefix → (api_base, default_api_key)
 # Use env vars for Ollama and LM Studio to allow customization
@@ -34,6 +37,325 @@ PROVIDER_PRESETS = {
     "openrouter": ("https://openrouter.ai/api/v1", None),
     "lmstudio": (f"http://{_LMSTUDIO_HOST}:{_LMSTUDIO_PORT}/v1", "lm-studio"),
 }
+
+
+# ---------------------------------------------------------------------------
+# Model context window registry (Issue #273)
+# ---------------------------------------------------------------------------
+MODEL_CONTEXT_WINDOWS: dict = {
+    # OpenAI
+    "gpt-5": 1_047_576,
+    "gpt-4.1-mini": 1_047_576,
+    "gpt-4.1-nano": 1_047_576,
+    "gpt-4.1": 1_047_576,
+    "gpt-4o-mini": 128_000,
+    "gpt-4o": 128_000,
+    "gpt-4-turbo": 128_000,
+    "gpt-4-32k": 32_768,
+    "gpt-4": 8_192,
+    "gpt-3.5-turbo-16k": 16_385,
+    "gpt-3.5-turbo": 16_385,
+    # Anthropic Claude (via OpenRouter or direct)
+    "claude-3": 200000,
+    "claude-2": 100000,
+    # Meta Llama
+    "llama-3": 131072,
+    "llama-2": 4096,
+    # Google Gemma
+    "gemma4": 131072,
+    "gemma3": 131072,
+    "gemma2": 8192,
+    "gemma": 8192,
+    # Alibaba Qwen
+    "qwen3": 32768,
+    "qwen2": 32768,
+    "qwen": 32768,
+    # Mistral AI
+    "mixtral": 32768,
+    "mistral": 32768,
+    # Microsoft Phi
+    "phi-3": 128000,
+    "phi3": 128000,
+    # DeepSeek
+    "deepseek": 65536,
+    # Code models
+    "codellama": 16384,
+}
+
+_DEFAULT_CONTEXT_WINDOW = 4096
+
+
+def get_context_window(model: str) -> int:
+    """Return the context window size for a model.
+
+    Matches by longest substring key in MODEL_CONTEXT_WINDOWS.
+    Falls back to _DEFAULT_CONTEXT_WINDOW when no match is found.
+    """
+    model_lower = model.lower()
+    matches = [
+        (key, size) for key, size in MODEL_CONTEXT_WINDOWS.items() if key in model_lower
+    ]
+    if matches:
+        return max(matches, key=lambda x: len(x[0]))[1]
+    return _DEFAULT_CONTEXT_WINDOW
+
+
+def estimate_tokens(text: str, model: str = "") -> int:
+    """Estimate token count for a text string.
+
+    Uses tiktoken for OpenAI models when available, falls back to ~4 chars/token.
+    """
+    if not text:
+        return 0
+    _openai_prefixes = ("gpt-", "text-embedding", "davinci", "curie", "babbage")
+    if any(p in model.lower() for p in _openai_prefixes):
+        try:
+            import tiktoken
+
+            try:
+                enc = tiktoken.encoding_for_model(model)
+            except KeyError:
+                enc = tiktoken.get_encoding("cl100k_base")
+            return len(enc.encode(text))
+        except ImportError:
+            pass
+    # Heuristic: ~4 chars per token
+    return max(1, len(text) // 4)
+
+
+def count_message_tokens(messages: list, model: str = "") -> int:
+    """Estimate the total token count for a list of chat messages.
+
+    Handles the following message shapes:
+
+    * Standard ``role: user/assistant/system`` with string or list content.
+    * Anthropic content-list parts: ``type: text``, ``type: tool_use``,
+      ``type: tool_result``.
+    * OpenAI tool-result messages: ``role: tool`` with a string ``content``
+      and an optional ``tool_call_id`` field.
+    * OpenAI assistant tool-call messages: ``role: assistant`` with a
+      ``tool_calls`` array.
+    """
+    total = 0
+    for msg in messages:
+        role = msg.get("role", "")
+        content = msg.get("content") or ""
+        if isinstance(content, list):
+            for part in content:
+                if isinstance(part, dict):
+                    if part.get("type") == "text":
+                        total += estimate_tokens(part["text"], model)
+                    elif part.get("type") in ("tool_use", "tool_result"):
+                        # Anthropic: count tool name + input/output payload
+                        total += estimate_tokens(part.get("name", ""), model)
+                        inner = part.get("input") or part.get("content") or ""
+                        if isinstance(inner, str):
+                            total += estimate_tokens(inner, model)
+                        elif isinstance(inner, dict):
+                            total += estimate_tokens(str(inner), model)
+        else:
+            # String content -- covers standard messages and OpenAI role="tool"
+            # tool-result messages (content is always a plain string there).
+            total += estimate_tokens(str(content), model)
+        if role in ("tool", "tool_result", "tool_call"):
+            # OpenAI tool-result messages carry a tool_call_id; count it.
+            tc_id = msg.get("tool_call_id", "")
+            if tc_id:
+                total += estimate_tokens(tc_id, model)
+        # Count tool_calls array for assistant messages (OpenAI format)
+        for tc in msg.get("tool_calls") or []:
+            fn = tc.get("function") or {}
+            total += estimate_tokens(fn.get("name", ""), model)
+            total += estimate_tokens(fn.get("arguments", ""), model)
+        total += 4  # per-message overhead (role, delimiters)
+    return total
+
+
+COMPACT_TRIGGER_FRACTION = 0.75
+_COMPACT_WARN_PCT = COMPACT_TRIGGER_FRACTION * 100
+
+
+def compact_messages(
+    messages: list,
+    target_tokens: int,
+    model: str,
+    client,
+    keep_recent: int = 6,
+) -> tuple:
+    """Compact message history to fit within target_tokens.
+
+    Preserves the system prompt and the most recent ``keep_recent`` messages.
+    Older messages are summarised into a single context-summary exchange using
+    the LLM, keeping the conversation coherent without blowing the context window.
+
+    Note: Does not guarantee the result fits within *target_tokens*. If the
+    ``keep_recent`` messages alone exceed the target, a :mod:`warnings` warning
+    is emitted but the result is still returned — callers should check the
+    returned token count independently.
+
+    Returns:
+        (compacted_messages, summary_text) tuple.
+    """
+    system_msgs = [m for m in messages if m.get("role") == "system"]
+    non_system = [m for m in messages if m.get("role") != "system"]
+
+    if len(non_system) <= keep_recent:
+        return messages, ""
+
+    to_summarize = non_system[:-keep_recent]
+    to_keep = non_system[-keep_recent:]
+
+    # If the first kept message is a tool result, the paired assistant message
+    # (which carries tool_calls) sits just before the keep boundary. Without it
+    # the compacted history is invalid — OpenAI APIs reject a tool message that
+    # has no preceding assistant message with a matching tool_calls entry.
+    if to_keep and to_keep[0].get("role") == "tool":
+        idx = len(non_system) - keep_recent - 1
+        while idx >= 0:
+            msg = non_system[idx]
+            if msg.get("role") == "assistant" and msg.get("tool_calls"):
+                to_summarize = non_system[:idx]
+                to_keep = non_system[idx:]
+                break
+            idx -= 1
+
+    transcript_lines = []
+    for m in to_summarize:
+        role = m.get("role", "")
+        content = m.get("content") or ""
+        if isinstance(content, list):
+            content = " ".join(
+                p.get("text", "") for p in content if isinstance(p, dict)
+            )
+        if role in ("user", "assistant") and content:
+            prefix = "User" if role == "user" else "Assistant"
+            transcript_lines.append(f"{prefix}: {str(content)[:500]}")
+
+    if not transcript_lines:
+        return messages, ""
+
+    transcript = "\n".join(transcript_lines)
+    summary_prompt = (
+        "Summarize the following conversation history concisely. Preserve all key "
+        "facts, decisions, file paths, and context needed to continue the conversation "
+        "coherently. Keep the summary under 400 words.\n\n"
+        f"Conversation:\n{transcript}"
+    )
+
+    try:
+        resp = client.chat.completions.create(
+            model=model,
+            messages=[{"role": "user", "content": summary_prompt}],
+            stream=False,
+        )
+        summary_text = resp.choices[0].message.content or ""
+    except Exception as exc:
+        summary_text = f"[Compaction error: {exc}]"
+
+    compacted = (
+        system_msgs
+        + [
+            {
+                "role": "user",
+                "content": f"[Earlier conversation summary]\n{summary_text}",
+            },
+            {
+                "role": "assistant",
+                "content": (
+                    "Understood. I have the context from the earlier conversation."
+                ),
+            },
+        ]
+        + to_keep
+    )
+
+    actual_tokens = count_message_tokens(compacted, model)
+    if actual_tokens > target_tokens:
+        import warnings
+
+        warnings.warn(
+            f"compact_messages: result ({actual_tokens} tokens) exceeds "
+            f"target ({target_tokens} tokens) — recent messages alone are too large.",
+            stacklevel=2,
+        )
+
+    return compacted, summary_text
+
+
+# ---------------------------------------------------------------------------
+# SearXNG search support (Issue #255)
+# ---------------------------------------------------------------------------
+SEARCH_TIMEOUT = 10  # seconds for SearXNG queries
+SEARCH_MAX_CHARS = 2000  # max result chars to avoid context bloat
+
+
+def _execute_search(func_args: dict) -> str:
+    """Handle search tool calls via SearXNG (Issue #255).
+
+    Queries the self-hosted SearXNG instance and returns results in the
+    requested format. Returns an empty result gracefully on failure rather
+    than raising an exception, to avoid breaking the agentic loop.
+
+    Args:
+        func_args: Dict with 'q' (required), 'count' (optional, default 5),
+                   'format' (optional: 'json'|'text', default 'text').
+    """
+    query = (func_args.get("q") or "").strip()
+    if not query:
+        return "Error: search query ('q') is required"
+
+    count_raw = func_args.get("count")
+    count = min(int(count_raw if count_raw is not None else 5), 20)
+    output_format = (func_args.get("format") or "text").lower()
+
+    searxng_url = os.environ.get("WEE_SEARXNG_URL", "http://192.168.1.100:8888")
+    searxng_url = searxng_url.rstrip("/")
+
+    params = urllib.parse.urlencode(
+        {
+            "q": query,
+            "format": "json",
+            "categories": "general",
+            "language": "en",
+        }
+    )
+    url = f"{searxng_url}/search?{params}"
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": "Wee-Runtime/1.0"})
+        with urllib.request.urlopen(req, timeout=SEARCH_TIMEOUT) as resp:
+            data = json.loads(resp.read().decode("utf-8", errors="replace"))
+    except urllib.error.URLError as e:
+        return f"Search unavailable ({searxng_url}): {e.reason}"
+    except Exception as e:
+        return f"Search error: {e}"
+
+    results = data.get("results", [])[:count]
+    if not results:
+        return "No results found."
+
+    if output_format == "json":
+        slim = [
+            {
+                "title": r.get("title", ""),
+                "url": r.get("url", ""),
+                "snippet": (r.get("content", "") or "")[:300],
+            }
+            for r in results
+        ]
+        raw = json.dumps(slim, ensure_ascii=False)
+        return raw[:SEARCH_MAX_CHARS]
+
+    # Plain text summary
+    lines = [f"Search results for: {query}"]
+    for i, r in enumerate(results, 1):
+        title = r.get("title", "(no title)")
+        url_r = r.get("url", "")
+        snippet = (r.get("content", "") or "").strip()[:200]
+        lines.append(f"\n{i}. {title}\n   {url_r}\n   {snippet}")
+
+    summary = "\n".join(lines)
+    return summary[:SEARCH_MAX_CHARS]
+
 
 # Tool definitions (Issue #107)
 _WEE_TOOLS = [
@@ -75,13 +397,20 @@ _WEE_TOOLS = [
         "type": "function",
         "function": {
             "name": "call_agent",
-            "description": "Call a Wee Orchestrator agent to execute a task. Use for delegating work to specialized agents (devops, email-triage, family-knowledge, research, smarthome, wee-dev, wee-qa, wee-doc).",
+            "description": (
+                "Call a Wee Orchestrator agent to execute a task. Use for delegating"
+                " work to specialized agents (devops, email-triage, family-knowledge,"
+                " research, smarthome, wee-dev, wee-qa, wee-doc)."
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {
                     "agent": {
                         "type": "string",
-                        "description": "Agent name to call (e.g., 'devops', 'email-triage', 'research')",
+                        "description": (
+                            "Agent name to call"
+                            " (e.g., 'devops', 'email-triage', 'research')"
+                        ),
                     },
                     "prompt": {
                         "type": "string",
@@ -90,10 +419,46 @@ _WEE_TOOLS = [
                     "mode": {
                         "type": "string",
                         "enum": ["quick", "background"],
-                        "description": "Execution mode: 'quick' waits for result (sync), 'background' returns task_id immediately (async)",
+                        "description": (
+                            "Execution mode: 'quick' waits for result (sync),"
+                            " 'background' returns task_id immediately (async)"
+                        ),
                     },
                 },
                 "required": ["agent", "prompt"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "search",
+            "description": (
+                "Search the web using SearXNG meta-search engine and return results."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "q": {
+                        "type": "string",
+                        "description": "Search query",
+                    },
+                    "count": {
+                        "type": "integer",
+                        "description": (
+                            "Number of results to return (default: 5, max: 20)"
+                        ),
+                    },
+                    "format": {
+                        "type": "string",
+                        "enum": ["json", "text"],
+                        "description": (
+                            "Output format: 'json' returns structured results,"
+                            " 'text' returns a plain summary"
+                        ),
+                    },
+                },
+                "required": ["q"],
             },
         },
     },
@@ -208,6 +573,8 @@ def execute_tool(func_name: str, func_args: dict, permission: str = "auto") -> s
             if result.returncode != 0 and result.stderr:
                 output += f"\nSTDERR: {result.stderr}"
             return output.strip() or "(no output)"
+        elif func_name == "search":
+            return _execute_search(func_args)
         elif func_name == "call_agent":
             return _call_agent_handler(func_args)
         else:
@@ -220,58 +587,63 @@ def execute_tool(func_name: str, func_args: dict, permission: str = "auto") -> s
 
 def _load_agents_config() -> dict:
     """Load agents.json from common locations.
-    
+
     Priority (in order):
     1. Wee Orchestrator's agents.json (source of truth with new format)
     2. CWD agents.json (project-specific overrides)
     3. ~/.wee/agents.json (user config)
     """
     import json
-    
+
     locations = [
         "/opt/n8n-copilot-shim/agents.json",  # Wee Orchestrator config (primary)
         os.path.join(os.getcwd(), "agents.json"),  # CWD project config
         os.path.expanduser("~/.wee/agents.json"),  # User config
     ]
-    
+
     for path in locations:
         if os.path.isfile(path):
             try:
-                with open(path, 'r', encoding='utf-8') as f:
+                with open(path, "r", encoding="utf-8") as f:
                     return json.load(f)
             except (json.JSONDecodeError, OSError):
                 pass
-    
+
     return {"agents": []}
 
 
 def _get_agent_config(agent_name: str) -> dict:
     """Get config for a specific agent from agents.json.
-    
-    Supports both old format (runtime/model) and new format (primary_runtime/primary_model).
+
+    Supports both old format (runtime/model) and new format
+    (primary_runtime/primary_model).
     """
     config = _load_agents_config()
     for agent in config.get("agents", []):
         if agent.get("name") == agent_name:
             # Handle both old and new config formats
             agent_config = agent.copy()
-            
+
             # If new format (primary_runtime), use it as-is
             if "primary_runtime" in agent_config:
                 return agent_config
-            
+
             # Convert old format (runtime/model) to new format for consistency
             if "runtime" in agent_config:
                 agent_config["primary_runtime"] = agent_config.pop("runtime")
             if "model" in agent_config:
                 agent_config["primary_model"] = agent_config.pop("model")
-            
+
             # Provide sensible fallbacks if not specified
             if "fallback_runtime" not in agent_config:
-                agent_config["fallback_runtime"] = "copilot" if agent_config.get("primary_runtime") == "claude" else "claude"
+                agent_config["fallback_runtime"] = (
+                    "copilot"
+                    if agent_config.get("primary_runtime") == "claude"
+                    else "claude"
+                )
             if "fallback_model" not in agent_config:
                 agent_config["fallback_model"] = "auto"
-            
+
             return agent_config
     return {}
 
@@ -280,7 +652,8 @@ def _call_agent_handler(func_args: dict) -> str:
     """Handle call_agent tool calls to invoke Wee Orchestrator agents.
 
     Args:
-        func_args: Dict with 'agent', 'prompt', and optional 'mode' ('quick'|'background')
+        func_args: Dict with 'agent', 'prompt', and optional
+            'mode' ('quick'|'background')
 
     Returns:
         Result string or task ID
@@ -289,8 +662,8 @@ def _call_agent_handler(func_args: dict) -> str:
     with agent's fallback_runtime and fallback_model from agents.json.
     """
     import json
-    import urllib.request
     import urllib.error
+    import urllib.request
 
     agent = func_args.get("agent", "").strip()
     prompt = func_args.get("prompt", "").strip()
@@ -309,15 +682,21 @@ def _call_agent_handler(func_args: dict) -> str:
         try:
             timeout = int(timeout)
             if timeout < 5 or timeout > 3600:
-                return f"Error: timeout must be between 5 and 3600 seconds, got {timeout}"
+                return (
+                    f"Error: timeout must be between 5 and 3600 seconds, got {timeout}"
+                )
         except (ValueError, TypeError):
-            return f"Error: invalid timeout value '{timeout}', expected integer (seconds)"
+            return (
+                f"Error: invalid timeout value '{timeout}', expected integer (seconds)"
+            )
 
     # Get agent config for fallback info
     agent_config = _get_agent_config(agent)
 
     api_url = os.environ.get("WEE_ORCHESTRATOR_API", "https://127.0.0.1:8000")
-    token = os.environ.get("WEE_ORCHESTRATOR_TOKEN", "shared_R6R6wReORUV6bouLntScMTowbsh30Rzqa3hzjs3bWgU")
+    token = os.environ.get(
+        "WEE_ORCHESTRATOR_TOKEN", "shared_R6R6wReORUV6bouLntScMTowbsh30Rzqa3hzjs3bWgU"
+    )
 
     # Try with primary runtime first, then fallback
     runtimes_to_try = [
@@ -332,11 +711,13 @@ def _call_agent_handler(func_args: dict) -> str:
     fallback_runtime = agent_config.get("fallback_runtime")
     fallback_model = agent_config.get("fallback_model")
     if fallback_runtime and fallback_runtime != runtimes_to_try[0]["runtime"]:
-        runtimes_to_try.append({
-            "runtime": fallback_runtime,
-            "model": fallback_model or "auto",
-            "is_fallback": True,
-        })
+        runtimes_to_try.append(
+            {
+                "runtime": fallback_runtime,
+                "model": fallback_model or "auto",
+                "is_fallback": True,
+            }
+        )
 
     last_error = None
 
@@ -349,7 +730,9 @@ def _call_agent_handler(func_args: dict) -> str:
             if mode == "quick":
                 endpoint = "/api/v1/query"
                 agent_timeout = 90
-                http_timeout = 120  # Must exceed agent timeout to avoid spurious timeouts
+                http_timeout = (
+                    120  # Must exceed agent timeout to avoid spurious timeouts
+                )
                 task_data = {
                     "prompt": prompt,
                     "agent": agent,
@@ -374,24 +757,35 @@ def _call_agent_handler(func_args: dict) -> str:
             req.add_header("Authorization", f"Bearer {token}")
 
             import ssl
+
             ctx = ssl.create_default_context()
             ctx.check_hostname = False
             ctx.verify_mode = ssl.CERT_NONE
 
-            with urllib.request.urlopen(req, data=json.dumps(task_data).encode(), context=ctx, timeout=http_timeout) as response:
+            with urllib.request.urlopen(
+                req,
+                data=json.dumps(task_data).encode(),
+                context=ctx,
+                timeout=http_timeout,
+            ) as response:
                 result = json.loads(response.read().decode())
                 if mode == "background":
                     task_id = result.get("id", result.get("task_id"))
                     prefix = "[Fallback] " if is_fallback else ""
-                    return f"✓ {prefix}Task started: {agent}\nTask ID: {task_id}\nCheck status with: /background status {task_id}"
+                    return (
+                        f"[Wee] {prefix}Task started: {agent}\n"
+                        f"Task ID: {task_id}\n"
+                        f"Check status with: /background status {task_id}"
+                    )
                 else:
-                    response_text = result.get('response', result.get('result', str(result)))
+                    response_text = result.get(
+                        "response", result.get("result", str(result))
+                    )
                     prefix = "[Fallback] " if is_fallback else "[Wee] "
                     return f"{prefix}Response from {agent}:\n{response_text}"
 
         except urllib.error.HTTPError as e:
             error_code = e.code
-            error_text = e.read().decode() if e.fp else str(e)
 
             # Check if this is a retryable error
             retryable_codes = {429, 503, 502, 401, 408}
@@ -479,35 +873,39 @@ _ANTI_HALLUCINATION_PROMPT = (
 _WEE_TOOL_CAPABILITY_PROMPT = (
     "\n\n[Tool Capabilities]\n"
     "You have the following tools available. Use them to fulfil user requests.\n\n"
-    '1. **bash** — Execute shell commands. Parameters: {"command": "<shell command>"}'  # noqa: E501
+    '1. **bash** — Execute shell commands. Parameters: {"command": "<shell command>"}\n'
     "   Use this for: file operations, system commands, SSH, curl, git, etc.\n"
     '2. **python** — Execute Python code. Parameters: {"code": "<python code>"}\n'
-    "   Use this for: data processing, calculations, scripting, etc.\n\n"
+    "   Use this for: data processing, calculations, scripting, etc.\n"
+    "3. **search** — Web search via SearXNG."
+    ' Parameters: {"q": "<query>", "count": 5, "format": "text|json"}\n'
+    "   Use this for: current events, web lookups, product info,"
+    " general knowledge queries.\n\n"
     "IMPORTANT: You are NOT sandboxed. You CAN and SHOULD use these tools to execute\n"
     "commands, SSH into remote hosts, read/write files, and interact with the system.\n"
-    "NEVER claim you cannot execute commands or are in a sandbox"  # noqa: E501
+    "NEVER claim you cannot execute commands or are in a sandbox"
     " — use the tools above.\n"
 )
 
 
 def list_available_models(provider: str = None):
     """List available models from all configured providers.
-    
+
     Args:
         provider: Optional filter ('ollama', 'openrouter', 'lmstudio').
                  If None, shows all. Case-insensitive.
     """
     import httpx
-    
+
     _ollama_host = os.environ.get("OLLAMA_HOST", "192.168.1.101")
     _ollama_port = os.environ.get("OLLAMA_PORT", "11434")
-    
+
     if provider:
         provider = provider.lower()
-    
+
     print("Available Models by Provider:")
     print("=" * 60)
-    
+
     # Ollama models
     if not provider or provider == "ollama":
         print("\nOllama (http://%s:%s):" % (_ollama_host, _ollama_port))
@@ -529,7 +927,7 @@ def list_available_models(provider: str = None):
                 print("  (unreachable)")
         except Exception as e:
             print(f"  (error: {e})")
-    
+
     # OpenRouter models
     if not provider or provider == "openrouter":
         print("\nOpenRouter (https://openrouter.ai):")
@@ -558,7 +956,7 @@ def list_available_models(provider: str = None):
                 print(f"  (error: HTTP {resp.status_code})")
         except Exception as e:
             print(f"  (error: {e})")
-    
+
     # LM Studio
     if not provider or provider == "lmstudio":
         print("\nLM Studio (http://localhost:1234):")
@@ -595,9 +993,7 @@ def main():
         metavar="PROVIDER",
         help="List available models (optional: ollama, openrouter, lmstudio)",
     )
-    parser.add_argument(
-        "--model", help="Model name (e.g., ollama/gemma4:e4b)"
-    )
+    parser.add_argument("--model", help="Model name (e.g., ollama/gemma4:e4b)")
     parser.add_argument("--api-base", default=None, help="API base URL")
     parser.add_argument("--api-key", default=None, help="API key")
     parser.add_argument("--system-prompt", default="", help="System prompt")
@@ -615,13 +1011,13 @@ def main():
     )
     parser.add_argument("prompt", nargs="?", help="User prompt")
     args = parser.parse_args()
-    
+
     # Handle --list-models
     if args.list_models is not None:
         provider = None if args.list_models is True else args.list_models
         list_available_models(provider)
         sys.exit(0)
-    
+
     # Validate required arguments for normal operation
     if not args.model:
         parser.error("--model is required (unless using --list-models)")
@@ -656,7 +1052,7 @@ def main():
     messages = []
     collected_output = []
     tool_call_counter = 0
-    
+
     # Issue #113: Augment system prompt with anti-hallucination rules
     effective_system_prompt = (args.system_prompt or "") + _ANTI_HALLUCINATION_PROMPT
     # Issue #111: Include tool capability prompt when tools are enabled
