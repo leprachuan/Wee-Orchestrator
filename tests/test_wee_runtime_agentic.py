@@ -277,15 +277,17 @@ class TestExecuteTool(unittest.TestCase):
                 "edit_file",
                 {
                     "path": path,
-                    "new_text": "hello edit tool\n",
+                    "operation": "write",
+                    "content": "hello edit tool\n",
                     "create_if_missing": True,
                 },
             )
             self.assertIn("OK: created", result)
+            self.assertIn("+hello edit tool", result)
             with open(path, encoding="utf-8") as f:
                 self.assertEqual(f.read(), "hello edit tool\n")
 
-    def test_edit_file_exact_replace(self):
+    def test_edit_file_replace_lines(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             path = os.path.join(tmpdir, "note.txt")
             with open(path, "w", encoding="utf-8") as f:
@@ -294,15 +296,37 @@ class TestExecuteTool(unittest.TestCase):
                 "edit_file",
                 {
                     "path": path,
-                    "old_text": "beta",
-                    "new_text": "delta",
+                    "operation": "replace_lines",
+                    "start_line": 2,
+                    "end_line": 2,
+                    "content": "delta\n",
                 },
             )
-            self.assertIn("OK: edited", result)
+            self.assertIn("OK: replaced", result)
+            self.assertIn("-beta", result)
+            self.assertIn("+delta", result)
             with open(path, encoding="utf-8") as f:
                 self.assertEqual(f.read(), "alpha\ndelta\ngamma\n")
 
-    def test_edit_file_missing_old_text_errors(self):
+    def test_edit_file_insert_after(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = os.path.join(tmpdir, "note.txt")
+            with open(path, "w", encoding="utf-8") as f:
+                f.write("alpha\nbeta\n")
+            result = self.execute(
+                "edit_file",
+                {
+                    "path": path,
+                    "operation": "insert_after",
+                    "start_line": 1,
+                    "content": "inserted\n",
+                },
+            )
+            self.assertIn("OK: inserted", result)
+            with open(path, encoding="utf-8") as f:
+                self.assertEqual(f.read(), "alpha\ninserted\nbeta\n")
+
+    def test_edit_file_delete_lines(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             path = os.path.join(tmpdir, "note.txt")
             with open(path, "w", encoding="utf-8") as f:
@@ -311,11 +335,32 @@ class TestExecuteTool(unittest.TestCase):
                 "edit_file",
                 {
                     "path": path,
-                    "old_text": "missing",
-                    "new_text": "delta",
+                    "operation": "delete_lines",
+                    "start_line": 2,
+                    "end_line": 2,
                 },
             )
-            self.assertIn("old_text not found", result)
+            self.assertIn("OK: deleted", result)
+            self.assertIn("-beta", result)
+            with open(path, encoding="utf-8") as f:
+                self.assertEqual(f.read(), "alpha\ngamma\n")
+
+    def test_edit_file_line_range_error(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = os.path.join(tmpdir, "note.txt")
+            with open(path, "w", encoding="utf-8") as f:
+                f.write("alpha\n")
+            result = self.execute(
+                "edit_file",
+                {
+                    "path": path,
+                    "operation": "replace_lines",
+                    "start_line": 3,
+                    "end_line": 3,
+                    "content": "delta\n",
+                },
+            )
+            self.assertIn("exceeds file length", result)
 
     def test_unknown_tool(self):
         result = self.execute("web_search", {"query": "test"})
@@ -1090,11 +1135,14 @@ class TestExecuteToolDirect(unittest.TestCase):
         """edit_file should not create new files unless explicitly requested."""
         with tempfile.TemporaryDirectory() as tmpdir:
             path = os.path.join(tmpdir, "new.txt")
-            result = self.execute("edit_file", {"path": path, "new_text": "hello"})
+            result = self.execute(
+                "edit_file",
+                {"path": path, "operation": "write", "content": "hello"},
+            )
             self.assertIn("create_if_missing=true", result)
 
-    def test_edit_file_rejects_ambiguous_replace(self):
-        """edit_file should require exact single-match replacements."""
+    def test_edit_file_legacy_replace_rejects_ambiguous_match(self):
+        """Legacy old_text mode should nudge callers toward line-based edits."""
         with tempfile.TemporaryDirectory() as tmpdir:
             path = os.path.join(tmpdir, "dup.txt")
             with open(path, "w", encoding="utf-8") as f:
@@ -1104,10 +1152,10 @@ class TestExecuteToolDirect(unittest.TestCase):
                 {
                     "path": path,
                     "old_text": "repeat",
-                    "new_text": "once",
+                    "content": "once",
                 },
             )
-            self.assertIn("matched 2 locations", result)
+            self.assertIn("Prefer replace_lines instead", result)
 
     def test_bash_empty_command_returns_error(self):
         """bash with empty command returns Error string."""

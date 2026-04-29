@@ -20,7 +20,9 @@ import argparse
 import json
 import os
 import readline
+import re
 import sys
+import tempfile
 
 # ---------------------------------------------------------------------------
 # Version
@@ -42,12 +44,20 @@ from wee_runtime import (  # noqa: E402
     resolve_model_and_endpoint,
 )
 
+_TOOL_PREAMBLE_PROMPT = (
+    "\n\n[Tool Use Style]\n"
+    "Immediately before each tool call, write exactly one brief sentence "
+    "explaining what you are about to do.\n"
+)
+
 # ---------------------------------------------------------------------------
 # Config file support (~/.wee/config.json)
 # ---------------------------------------------------------------------------
 DEFAULT_CONFIG_DIR = os.path.expanduser("~/.wee")
 DEFAULT_CONFIG_FILE = os.path.join(DEFAULT_CONFIG_DIR, "config.json")
 HISTORY_FILE = os.path.join(DEFAULT_CONFIG_DIR, "history")
+SESSION_DIR = os.path.join(DEFAULT_CONFIG_DIR, "sessions")
+_SESSION_NAME_RE = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
 
 
 def load_config() -> dict:
@@ -66,6 +76,105 @@ def save_config(cfg: dict) -> None:
     os.makedirs(DEFAULT_CONFIG_DIR, exist_ok=True)
     with open(DEFAULT_CONFIG_FILE, "w") as f:
         json.dump(cfg, f, indent=2)
+
+
+def _build_effective_system_prompt(system_prompt: str = "") -> str:
+    """Build the effective system prompt for wee-cli sessions."""
+    return (system_prompt or "") + _ANTI_HALLUCINATION_PROMPT + _TOOL_PREAMBLE_PROMPT
+
+
+def _validate_session_name(name: str) -> str:
+    """Validate and normalize a wee-cli local session name."""
+    if not name or not _SESSION_NAME_RE.match(name):
+        raise ValueError(
+            "Invalid session name. Use 1-64 chars: letters, numbers, '.', '_' or '-'."
+        )
+    return name
+
+
+def _session_path(name: str) -> str:
+    """Return the on-disk path for a local wee-cli session."""
+    safe_name = _validate_session_name(name)
+    return os.path.join(SESSION_DIR, f"{safe_name}.json")
+
+
+def load_session_data(name: str) -> dict:
+    """Load a persisted wee-cli session from disk."""
+    path = _session_path(name)
+    if not os.path.isfile(path):
+        return {}
+    try:
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+    except (json.JSONDecodeError, OSError):
+        return {}
+
+    messages = data.get("messages")
+    if not isinstance(messages, list):
+        return {}
+    return data
+
+
+def save_session_data(name: str, data: dict) -> None:
+    """Persist a wee-cli session atomically to disk."""
+    path = _session_path(name)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    fd, tmp_path = tempfile.mkstemp(prefix=".wee-session-", dir=os.path.dirname(path))
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2)
+        os.replace(tmp_path, path)
+    except Exception:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        raise
+
+
+def _clone_messages(messages: list) -> list:
+    """Return a JSON-safe deep copy of the message history."""
+    return json.loads(json.dumps(messages))
+
+
+def _prepare_session_messages(system_prompt: str, existing_messages: list = None) -> tuple:
+    """Build or resume a message list and return (messages, effective_system)."""
+    effective_system = _build_effective_system_prompt(system_prompt).lstrip()
+    if existing_messages:
+        messages = _clone_messages(existing_messages)
+        if messages and messages[0].get("role") == "system":
+            if system_prompt:
+                messages[0]["content"] = effective_system
+            else:
+                effective_system = messages[0].get("content", effective_system)
+        else:
+            messages.insert(0, {"role": "system", "content": effective_system})
+        return messages, effective_system
+    return [{"role": "system", "content": effective_system}], effective_system
+
+
+def _session_payload(
+    messages: list,
+    model: str,
+    system_prompt: str,
+    tools_enabled: bool,
+    temperature: float,
+    timeout: float,
+    output_format: str,
+    permission: str,
+) -> dict:
+    """Build the persisted wee-cli session payload."""
+    return {
+        "version": 1,
+        "model": model,
+        "system_prompt": system_prompt or "",
+        "tools_enabled": bool(tools_enabled),
+        "temperature": temperature,
+        "timeout": timeout,
+        "output_format": output_format,
+        "permission": permission,
+        "messages": _clone_messages(messages),
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -584,6 +693,8 @@ def run_interactive(
     output_format: str,
     permission: str,
     model_str: str = None,
+    session_name: str = None,
+    existing_messages: list = None,
 ) -> str:
     """Run the interactive REPL.
 
@@ -598,19 +709,15 @@ def run_interactive(
 
     client = _make_client(api_base, api_key, timeout)
     token_tracker = TokenTracker()
-    messages = []
-
-    if system_prompt:
-        effective_system = system_prompt + _ANTI_HALLUCINATION_PROMPT
-    else:
-        effective_system = _ANTI_HALLUCINATION_PROMPT.lstrip()
-    messages.append({"role": "system", "content": effective_system})
+    messages, effective_system = _prepare_session_messages(
+        system_prompt, existing_messages
+    )
 
     _print_info(f"Wee CLI v{__version__} — model: {model}")
     _print_info("Type /help for commands, /exit to quit.\n")
 
     # Track if this is the first message (for CWD context injection)
-    first_message = True
+    first_message = not any(m.get("role") == "user" for m in messages)
     # Buffer to store tool results from the last interaction
     tool_results_buffer = {}
     # Track original user input for model persistence (with provider prefix if used)
@@ -639,6 +746,20 @@ def run_interactive(
             elif cmd == "/clear":
                 messages = [{"role": "system", "content": effective_system}]
                 token_tracker = TokenTracker()
+                if session_name:
+                    save_session_data(
+                        session_name,
+                        _session_payload(
+                            messages,
+                            model_for_persistence,
+                            system_prompt,
+                            tools_enabled,
+                            temperature,
+                            timeout,
+                            output_format,
+                            permission,
+                        ),
+                    )
                 _print_info("Conversation cleared.")
                 continue
 
@@ -681,8 +802,23 @@ def run_interactive(
                 if not arg:
                     _print_info(f"System prompt: {effective_system[:200]}...")
                 else:
-                    effective_system = arg + _ANTI_HALLUCINATION_PROMPT
+                    system_prompt = arg
+                    effective_system = _build_effective_system_prompt(arg)
                     messages[0] = {"role": "system", "content": effective_system}
+                    if session_name:
+                        save_session_data(
+                            session_name,
+                            _session_payload(
+                                messages,
+                                model_for_persistence,
+                                system_prompt,
+                                tools_enabled,
+                                temperature,
+                                timeout,
+                                output_format,
+                                permission,
+                            ),
+                        )
                     _print_info("System prompt updated.")
                 continue
 
@@ -879,12 +1015,54 @@ def run_interactive(
                 tool_results_buffer=tool_results_buffer,
             )
             messages.append({"role": "assistant", "content": response})
+            if session_name:
+                save_session_data(
+                    session_name,
+                    _session_payload(
+                        messages,
+                        model_for_persistence,
+                        system_prompt,
+                        tools_enabled,
+                        temperature,
+                        timeout,
+                        output_format,
+                        permission,
+                    ),
+                )
         except KeyboardInterrupt:
             print("\n[interrupted]")
             messages.append({"role": "assistant", "content": "[interrupted]"})
+            if session_name:
+                save_session_data(
+                    session_name,
+                    _session_payload(
+                        messages,
+                        model_for_persistence,
+                        system_prompt,
+                        tools_enabled,
+                        temperature,
+                        timeout,
+                        output_format,
+                        permission,
+                    ),
+                )
         except Exception as e:
             _print_error(str(e))
             messages.append({"role": "assistant", "content": f"[error: {e}]"})
+            if session_name:
+                save_session_data(
+                    session_name,
+                    _session_payload(
+                        messages,
+                        model_for_persistence,
+                        system_prompt,
+                        tools_enabled,
+                        temperature,
+                        timeout,
+                        output_format,
+                        permission,
+                    ),
+                )
 
     _save_readline()
     _print_info(f"\n{token_tracker.summary()}")
@@ -906,15 +1084,12 @@ def run_single_shot(
     system_prompt: str,
     output_format: str,
     permission: str = "auto",
+    existing_messages: list = None,
 ):
     """Run a single prompt and exit."""
     client = _make_client(api_base, api_key, timeout)
     token_tracker = TokenTracker()
-    messages = []
-
-    effective_system = (system_prompt or "") + _ANTI_HALLUCINATION_PROMPT
-    if effective_system.strip():
-        messages.append({"role": "system", "content": effective_system})
+    messages, _ = _prepare_session_messages(system_prompt, existing_messages)
 
     messages.append({"role": "user", "content": prompt})
 
@@ -932,7 +1107,9 @@ def run_single_shot(
             permission=permission,
             stream_output=stream_output,
         )
+        messages.append({"role": "assistant", "content": response})
         _print_markdown(response, output_format)
+        return messages
     except KeyboardInterrupt:
         sys.exit(130)
     except Exception as e:
@@ -952,6 +1129,8 @@ def build_parser() -> argparse.ArgumentParser:
             "Examples:\n"
             '  wee --model ollama/qwen3.5:4b "What is 2+2?"\n'
             '  wee exec "Summarize this repository"\n'
+            '  wee exec --session demo "Start a local persisted session"\n'
+            '  wee exec --resume --session demo "Continue that session"\n'
             '  wee --model openrouter/meta-llama/llama-2-70b --tools "List files"\n'
             "  wee --interactive\n"
             '  echo "summarize" | wee --model ollama/gemma4:e4b\n'
@@ -1037,6 +1216,17 @@ def build_parser() -> argparse.ArgumentParser:
         help=f"Config file path (default: {DEFAULT_CONFIG_FILE})",
     )
     parser.add_argument(
+        "--session",
+        default=None,
+        help="Persist conversation state to a named local session under ~/.wee/sessions/",
+    )
+    parser.add_argument(
+        "--resume",
+        action="store_true",
+        default=False,
+        help="Resume an existing local session (defaults to 'default' if --session is omitted)",
+    )
+    parser.add_argument(
         "--list-models",
         nargs="?",
         const=True,
@@ -1096,11 +1286,29 @@ def main(argv=None):
         except (json.JSONDecodeError, OSError):
             pass
 
+    default_interactive = args.interactive or not args.prompt
+    session_name = None
+    if args.session:
+        try:
+            session_name = _validate_session_name(args.session)
+        except ValueError as e:
+            parser.error(str(e))
+    elif args.resume:
+        session_name = "default"
+    elif default_interactive and not exec_mode:
+        session_name = "default"
+
+    session_data = {}
+    should_resume_session = bool(args.resume or (session_name == "default" and default_interactive))
+    if session_name and should_resume_session:
+        session_data = load_session_data(session_name)
+
     # Resolve model: CLI arg > env var > config file > default
     model_str = (
         args.model
         or os.environ.get("WEE_MODEL")
         or cfg.get("model")
+        or session_data.get("model")
         or "ollama/qwen3.5:4b"
     )
 
@@ -1113,6 +1321,8 @@ def main(argv=None):
     )
     timeout = args.timeout or cfg.get("timeout", 120.0)
     output_format = args.output or cfg.get("output", "text")
+
+    existing_messages = session_data.get("messages") if should_resume_session else None
 
     # Resolve model + endpoint
     model, api_base, api_key = resolve_model_and_endpoint(
@@ -1140,6 +1350,8 @@ def main(argv=None):
             output_format=output_format,
             permission=permission,
             model_str=model_str,
+            session_name=session_name,
+            existing_messages=existing_messages,
         )
         # Persist model choice for next session
         cfg["model"] = updated_model
@@ -1156,7 +1368,7 @@ def main(argv=None):
         except KeyboardInterrupt:
             sys.exit(130)
 
-    if exec_mode and not prompt_text and not stdin_is_pipe:
+    if exec_mode and not prompt_text:
         parser.error("exec requires a prompt or piped stdin")
 
     if not prompt_text and not stdin_is_pipe:
@@ -1175,13 +1387,15 @@ def main(argv=None):
             output_format=output_format,
             permission=permission,
             model_str=model_str,
+            session_name=session_name,
+            existing_messages=existing_messages,
         )
         # Persist model choice for next session
         cfg["model"] = updated_model
         save_config(cfg)
     elif prompt_text:
         # Single-shot mode
-        run_single_shot(
+        messages = run_single_shot(
             prompt=prompt_text,
             model=model,
             api_base=api_base,
@@ -1192,7 +1406,22 @@ def main(argv=None):
             system_prompt=system_prompt,
             output_format=output_format,
             permission=permission,
+            existing_messages=existing_messages,
         )
+        if session_name:
+            save_session_data(
+                session_name,
+                _session_payload(
+                    messages,
+                    model_str,
+                    system_prompt,
+                    tools_enabled,
+                    temperature,
+                    timeout,
+                    output_format,
+                    permission,
+                ),
+            )
     else:
         parser.print_help()
         sys.exit(1)

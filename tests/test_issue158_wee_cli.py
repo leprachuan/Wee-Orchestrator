@@ -18,6 +18,7 @@ import os
 import sys
 import tempfile
 import unittest
+import subprocess
 from io import StringIO
 from unittest.mock import MagicMock, patch
 
@@ -28,15 +29,20 @@ from wee_cli import __version__  # noqa: E402
 from wee_cli import (  # noqa: E402
     REPL_HELP,
     TokenTracker,
+    _build_effective_system_prompt,
     _make_client,
     _normalize_argv,
     _print_error,
     _print_info,
     _print_markdown,
+    _session_path,
+    _validate_session_name,
     build_parser,
     chat_stream,
     load_config,
+    load_session_data,
     main,
+    save_session_data,
     save_config,
 )
 
@@ -145,10 +151,18 @@ class TestBuildParser(unittest.TestCase):
         self.assertFalse(args.tools)
         self.assertEqual(args.permission, "auto")
         self.assertIsNone(args.system)
+        self.assertIsNone(args.session)
+        self.assertFalse(args.resume)
         self.assertIsNone(args.temperature)
         self.assertAlmostEqual(args.timeout, 120.0)
         self.assertEqual(args.output, "text")
         self.assertFalse(args.interactive)
+
+    def test_session_arguments(self):
+        parser = build_parser()
+        args = parser.parse_args(["--session", "demo", "--resume", "test"])
+        self.assertEqual(args.session, "demo")
+        self.assertTrue(args.resume)
 
 
 class TestArgvNormalization(unittest.TestCase):
@@ -163,6 +177,19 @@ class TestArgvNormalization(unittest.TestCase):
         argv, exec_mode = _normalize_argv(["--model", "ollama/test", "hello"])
         self.assertEqual(argv, ["--model", "ollama/test", "hello"])
         self.assertFalse(exec_mode)
+
+
+class TestSystemPromptBuilder(unittest.TestCase):
+    """Test wee-cli system prompt construction."""
+
+    def test_tool_preamble_included_without_custom_prompt(self):
+        prompt = _build_effective_system_prompt("")
+        self.assertIn("Immediately before each tool call", prompt)
+
+    def test_tool_preamble_included_with_custom_prompt(self):
+        prompt = _build_effective_system_prompt("You are terse.")
+        self.assertIn("You are terse.", prompt)
+        self.assertIn("Immediately before each tool call", prompt)
 
 
 class TestConfigFile(unittest.TestCase):
@@ -191,6 +218,31 @@ class TestConfigFile(unittest.TestCase):
         with patch("wee_cli.DEFAULT_CONFIG_FILE", self.config_file):
             cfg = load_config()
         self.assertEqual(cfg, {})
+
+
+class TestSessionPersistenceHelpers(unittest.TestCase):
+    """Test local wee-cli session persistence helpers."""
+
+    def test_validate_session_name_accepts_safe_names(self):
+        self.assertEqual(_validate_session_name("demo-1.test"), "demo-1.test")
+
+    def test_validate_session_name_rejects_invalid_names(self):
+        with self.assertRaises(ValueError):
+            _validate_session_name("../bad")
+
+    def test_save_and_load_session_data(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            payload = {
+                "version": 1,
+                "model": "ollama/test",
+                "messages": [{"role": "system", "content": "hello"}],
+            }
+            with patch("wee_cli.SESSION_DIR", tmpdir):
+                save_session_data("demo", payload)
+                loaded = load_session_data("demo")
+                self.assertEqual(loaded["model"], "ollama/test")
+                self.assertEqual(loaded["messages"][0]["content"], "hello")
+                self.assertTrue(os.path.isfile(_session_path("demo")))
 
 
 class TestTokenTracker(unittest.TestCase):
@@ -632,6 +684,10 @@ class TestMainEntryPoint(unittest.TestCase):
             mock_stdin.isatty.return_value = True
             main(["--model", "ollama/test", "Hello"])
         mock_chat.assert_called_once()
+        messages = mock_chat.call_args[1]["messages"]
+        self.assertIn(
+            "Immediately before each tool call", messages[0]["content"]
+        )
 
     @patch("wee_cli._make_client")
     @patch("wee_cli.chat_stream", return_value="response")
@@ -664,6 +720,45 @@ class TestMainEntryPoint(unittest.TestCase):
                 main(["exec"])
         self.assertEqual(cm.exception.code, 2)
 
+    @patch("wee_cli._make_client")
+    @patch("wee_cli.chat_stream", return_value="response")
+    def test_single_shot_session_saved(self, mock_chat, mock_client):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with patch("wee_cli.SESSION_DIR", tmpdir):
+                with patch("sys.stdin") as mock_stdin:
+                    mock_stdin.isatty.return_value = True
+                    main(["--session", "demo", "--model", "ollama/test", "Hello"])
+                saved = load_session_data("demo")
+        self.assertEqual(saved["model"], "ollama/test")
+        self.assertEqual(saved["messages"][-2]["content"], "Hello")
+        self.assertEqual(saved["messages"][-1]["content"], "response")
+
+    @patch("wee_cli._make_client")
+    @patch("wee_cli.chat_stream", return_value="new response")
+    def test_resume_loads_existing_messages(self, mock_chat, mock_client):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with patch("wee_cli.SESSION_DIR", tmpdir):
+                save_session_data(
+                    "demo",
+                    {
+                        "version": 1,
+                        "model": "ollama/test",
+                        "messages": [
+                            {"role": "system", "content": "sys"},
+                            {"role": "user", "content": "old user"},
+                            {"role": "assistant", "content": "old assistant"},
+                        ],
+                    },
+                )
+                with patch("sys.stdin") as mock_stdin:
+                    mock_stdin.isatty.return_value = True
+                    main(["--resume", "--session", "demo", "new user"])
+                saved = load_session_data("demo")
+        sent_messages = mock_chat.call_args[1]["messages"]
+        self.assertGreaterEqual(len(sent_messages), 4)
+        self.assertEqual(sent_messages[-2]["content"], "new user")
+        self.assertEqual(saved["messages"][-1]["content"], "new response")
+
 
 class TestPipingSupport(unittest.TestCase):
     """Test stdin piping."""
@@ -678,6 +773,190 @@ class TestPipingSupport(unittest.TestCase):
         call_kwargs = mock_chat.call_args[1]
         user_msg = [m for m in call_kwargs["messages"] if m["role"] == "user"][0]
         self.assertEqual(user_msg["content"], "piped input")
+
+
+class TestSystemPromptInjection(unittest.TestCase):
+    """Test that wee-cli session startup injects the tool preamble instruction."""
+
+    @patch("wee_cli._make_client")
+    @patch("wee_cli._init_readline")
+    @patch("wee_cli._save_readline")
+    @patch("wee_cli.chat_stream", return_value="response text")
+    def test_interactive_session_includes_tool_preamble(
+        self, mock_chat, mock_save, mock_init, mock_client
+    ):
+        with patch("builtins.input", side_effect=["hello", "/exit"]):
+            from wee_cli import run_interactive
+
+            run_interactive(
+                model="test",
+                api_base="http://localhost/v1",
+                api_key="test",
+                tools_enabled=False,
+                temperature=None,
+                timeout=60,
+                system_prompt="",
+                output_format="text",
+                permission="restricted",
+            )
+        messages = mock_chat.call_args[1]["messages"]
+        self.assertIn("Immediately before each tool call", messages[0]["content"])
+
+
+class TestExecSubprocess(unittest.TestCase):
+    """Subprocess coverage for the user-facing `wee exec` path."""
+
+    def setUp(self):
+        self.repo_root = os.path.join(os.path.dirname(__file__), "..")
+        self.wee_cli_path = os.path.join(self.repo_root, "wee_cli.py")
+
+    def _fake_openai_module(self, directory):
+        path = os.path.join(directory, "openai.py")
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(
+                """
+import json
+import os
+
+
+class _Function:
+    def __init__(self, name=None, arguments=None):
+        self.name = name
+        self.arguments = arguments
+
+
+class _ToolCall:
+    def __init__(self, index, tc_id=None, name=None, arguments=None):
+        self.index = index
+        self.id = tc_id
+        self.function = _Function(name=name, arguments=arguments)
+
+
+class _Delta:
+    def __init__(self, content=None, tool_calls=None):
+        self.content = content
+        self.tool_calls = tool_calls
+
+
+class _Choice:
+    def __init__(self, delta):
+        self.delta = delta
+
+
+class _Chunk:
+    def __init__(self, content=None, tool_calls=None):
+        self.choices = [_Choice(_Delta(content=content, tool_calls=tool_calls))]
+        self.usage = None
+
+
+class _Completions:
+    def create(self, **kwargs):
+        mode = os.environ.get("WEE_FAKE_OPENAI_MODE", "echo")
+        messages = kwargs.get("messages", [])
+        if mode == "tool":
+            if messages and messages[-1].get("role") == "tool":
+                tool_result = messages[-1].get("content", "")
+                return iter([_Chunk(content=f"TOOL_RESULT:{tool_result}")])
+            tool_call = _ToolCall(
+                0,
+                tc_id="tc_1",
+                name="bash",
+                arguments=json.dumps({"command": "echo tool-ok"}),
+            )
+            return iter([_Chunk(content="", tool_calls=[tool_call])])
+
+        user_messages = [m.get("content", "") for m in messages if m.get("role") == "user"]
+        prompt = user_messages[-1] if user_messages else ""
+        return iter([_Chunk(content=f"ECHO:{prompt}")])
+
+
+class _Chat:
+    def __init__(self):
+        self.completions = _Completions()
+
+
+class OpenAI:
+    def __init__(self, *args, **kwargs):
+        self.chat = _Chat()
+"""
+            )
+
+    def _run_exec(self, args, stdin_text=None, mode="echo", home_dir=None):
+        home_dir = home_dir or tempfile.mkdtemp()
+        with tempfile.TemporaryDirectory() as module_dir:
+            self._fake_openai_module(module_dir)
+            env = dict(os.environ)
+            env["HOME"] = home_dir
+            env["PYTHONPATH"] = module_dir + os.pathsep + self.repo_root
+            env["PYTHONDONTWRITEBYTECODE"] = "1"
+            env["WEE_FAKE_OPENAI_MODE"] = mode
+            cmd = [sys.executable, self.wee_cli_path, "exec"] + list(args)
+            result = subprocess.run(
+                cmd,
+                input=stdin_text,
+                capture_output=True,
+                text=True,
+                env=env,
+                cwd=self.repo_root,
+                timeout=20,
+            )
+        return result, home_dir
+
+    def test_exec_prompt_subprocess(self):
+        result, _ = self._run_exec(["--model", "ollama/test", "hello subprocess"])
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("ECHO:hello subprocess", result.stdout)
+
+    def test_exec_pipe_subprocess(self):
+        result, _ = self._run_exec(["--model", "ollama/test"], stdin_text="piped exec")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("ECHO:piped exec", result.stdout)
+
+    def test_exec_json_output_subprocess(self):
+        result, _ = self._run_exec(
+            ["--model", "ollama/test", "--output", "json", "json prompt"]
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        payload = json.loads(result.stdout)
+        self.assertEqual(payload["response"], "ECHO:json prompt")
+
+    def test_exec_tools_subprocess(self):
+        result, _ = self._run_exec(
+            ["--model", "ollama/test", "--tools", "run tool"], mode="tool"
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("TOOL_RESULT:tool-ok", result.stdout)
+        self.assertIn("[Wee] Executing: bash", result.stderr)
+
+    def test_exec_without_prompt_subprocess(self):
+        result, _ = self._run_exec(["--model", "ollama/test"])
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("exec requires a prompt or piped stdin", result.stderr)
+
+    def test_exec_session_resume_subprocess(self):
+        home_dir = tempfile.mkdtemp()
+        first, _ = self._run_exec(
+            ["--session", "demo", "--model", "ollama/test", "first turn"],
+            home_dir=home_dir,
+        )
+        self.assertEqual(first.returncode, 0, first.stderr)
+        second, _ = self._run_exec(
+            [
+                "--resume",
+                "--session",
+                "demo",
+                "--model",
+                "ollama/test",
+                "second turn",
+            ],
+            home_dir=home_dir,
+        )
+        self.assertEqual(second.returncode, 0, second.stderr)
+        session_path = os.path.join(home_dir, ".wee", "sessions", "demo.json")
+        with open(session_path, encoding="utf-8") as f:
+            payload = json.load(f)
+        self.assertEqual(payload["messages"][-4]["content"], "first turn")
+        self.assertEqual(payload["messages"][-2]["content"], "second turn")
 
 
 class TestMakeClient(unittest.TestCase):

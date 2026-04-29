@@ -16,6 +16,7 @@ Usage:
 """
 
 import argparse
+import difflib
 import json
 import os
 import re
@@ -399,8 +400,8 @@ _WEE_TOOLS = [
         "function": {
             "name": "edit_file",
             "description": (
-                "Create or edit a UTF-8 text file. Use old_text for exact-match "
-                "replacement, or omit old_text to overwrite the file."
+                "Create or edit a UTF-8 text file using line-based operations. "
+                "Prefer replacing a line range instead of free-form string matching."
             ),
             "parameters": {
                 "type": "object",
@@ -409,17 +410,41 @@ _WEE_TOOLS = [
                         "type": "string",
                         "description": "Path to the file to create or edit",
                     },
-                    "new_text": {
+                    "operation": {
                         "type": "string",
+                        "enum": [
+                            "write",
+                            "replace_lines",
+                            "insert_after",
+                            "delete_lines",
+                        ],
                         "description": (
-                            "Replacement text, or the full new file contents when "
-                            "old_text is omitted"
+                            "Edit operation. "
+                            "'write' overwrites the whole file, "
+                            "'replace_lines' replaces an inclusive line range, "
+                            "'insert_after' inserts content after start_line "
+                            "(use start_line=0 to insert at top of file), "
+                            "'delete_lines' deletes an inclusive line range."
                         ),
                     },
-                    "old_text": {
+                    "start_line": {
+                        "type": "integer",
+                        "description": (
+                            "1-based start line for line edits. For insert_after, "
+                            "use 0 to insert at the beginning."
+                        ),
+                    },
+                    "end_line": {
+                        "type": "integer",
+                        "description": (
+                            "1-based inclusive end line for replace_lines/delete_lines. "
+                            "Defaults to start_line when omitted."
+                        ),
+                    },
+                    "content": {
                         "type": "string",
                         "description": (
-                            "Exact text to replace. Omit to overwrite the whole file."
+                            "New content to write, replace, or insert."
                         ),
                     },
                     "create_if_missing": {
@@ -428,8 +453,20 @@ _WEE_TOOLS = [
                             "When true, create the file if it does not already exist"
                         ),
                     },
+                    "new_text": {
+                        "type": "string",
+                        "description": (
+                            "Legacy alias for content. Prefer 'content'."
+                        ),
+                    },
+                    "old_text": {
+                        "type": "string",
+                        "description": (
+                            "Legacy exact-match replacement mode. Prefer line-based edits."
+                        ),
+                    },
                 },
-                "required": ["path", "new_text"],
+                "required": ["path"],
             },
         },
     },
@@ -508,20 +545,118 @@ MAX_TOOL_ROUNDS = 10
 TOOL_TIMEOUT = 120  # seconds per tool execution
 
 
+def _format_edit_diff(file_path: str, original: str, updated: str) -> str:
+    """Return a unified diff for an edit operation."""
+    diff_lines = list(
+        difflib.unified_diff(
+            original.splitlines(keepends=True),
+            updated.splitlines(keepends=True),
+            fromfile=f"{file_path} (before)",
+            tofile=f"{file_path} (after)",
+            lineterm="",
+        )
+    )
+    if not diff_lines:
+        return "(no diff)"
+    return "\n".join(diff_lines[:200])
+
+
+def _normalize_edit_content(func_args: dict) -> tuple[str | None, str | None]:
+    """Return content and legacy old_text values from edit_file args."""
+    content = func_args.get("content")
+    if content is None and "new_text" in func_args:
+        content = func_args.get("new_text")
+    old_text = func_args.get("old_text")
+    return content, old_text
+
+
+def _line_range_from_args(
+    func_args: dict, total_lines: int
+) -> tuple[int | None, int | None, str | None]:
+    """Resolve a 1-based inclusive line range from tool args."""
+    start_line = func_args.get("start_line")
+    end_line = func_args.get("end_line", start_line)
+
+    if start_line is None:
+        return None, None, "Error: edit_file requires start_line for this operation"
+    if not isinstance(start_line, int):
+        return None, None, "Error: edit_file 'start_line' must be an integer"
+    if end_line is None:
+        end_line = start_line
+    if not isinstance(end_line, int):
+        return None, None, "Error: edit_file 'end_line' must be an integer"
+    if start_line < 1:
+        return None, None, "Error: start_line must be >= 1 for this operation"
+    if end_line < start_line:
+        return None, None, "Error: end_line must be >= start_line"
+    if total_lines == 0:
+        return None, None, "Error: file has no lines to edit"
+    if end_line > total_lines:
+        return (
+            None,
+            None,
+            f"Error: line range {start_line}-{end_line} exceeds file length {total_lines}",
+        )
+    return start_line, end_line, None
+
+
+def _updated_text_from_line_operation(
+    original: str, operation: str, func_args: dict, content: str | None
+) -> tuple[str | None, str]:
+    """Apply a line-oriented edit operation."""
+    lines = original.splitlines(keepends=True)
+    total_lines = len(lines)
+
+    if operation == "write":
+        if not isinstance(content, str):
+            return None, "Error: edit_file requires string 'content' for write"
+        return content, "written"
+
+    if operation == "insert_after":
+        start_line = func_args.get("start_line")
+        if not isinstance(start_line, int):
+            return None, "Error: edit_file 'start_line' must be an integer"
+        if start_line < 0:
+            return None, "Error: start_line must be >= 0 for insert_after"
+        if start_line > total_lines:
+            return None, f"Error: start_line {start_line} exceeds file length {total_lines}"
+        if not isinstance(content, str):
+            return None, "Error: edit_file requires string 'content' for insert_after"
+        insert_at = start_line
+        updated_lines = lines[:insert_at] + [content] + lines[insert_at:]
+        return "".join(updated_lines), "inserted"
+
+    if operation in ("replace_lines", "delete_lines"):
+        start_line, end_line, error = _line_range_from_args(func_args, total_lines)
+        if error:
+            return None, error
+        replacement = []
+        action = "deleted"
+        if operation == "replace_lines":
+            if not isinstance(content, str):
+                return None, "Error: edit_file requires string 'content' for replace_lines"
+            replacement = [content]
+            action = "replaced"
+        updated_lines = lines[: start_line - 1] + replacement + lines[end_line:]
+        return "".join(updated_lines), action
+
+    return None, f"Error: Unknown edit_file operation {operation!r}"
+
+
 def _execute_edit_file(func_args: dict) -> str:
     """Create or edit a UTF-8 text file."""
     path = func_args.get("path", "")
     if not path:
         return "Error: edit_file requires a non-empty 'path'"
 
-    if "new_text" not in func_args:
-        return "Error: edit_file requires 'new_text'"
-
-    new_text = func_args.get("new_text")
-    if not isinstance(new_text, str):
-        return "Error: edit_file 'new_text' must be a string"
-
-    old_text = func_args.get("old_text")
+    content, old_text = _normalize_edit_content(func_args)
+    operation = func_args.get("operation")
+    if operation is None:
+        operation = "replace_legacy" if old_text is not None else "write"
+    if not isinstance(operation, str):
+        return "Error: edit_file 'operation' must be a string when provided"
+    if content is not None and not isinstance(content, str):
+        return "Error: edit_file 'content' must be a string"
     if old_text is not None and not isinstance(old_text, str):
         return "Error: edit_file 'old_text' must be a string when provided"
 
@@ -550,10 +685,11 @@ def _execute_edit_file(func_args: dict) -> str:
     except OSError as e:
         return f"Error reading file {file_path}: {e}"
 
-    if old_text is None:
-        updated = new_text
-        action = "created" if not file_exists else "overwritten"
-    else:
+    if operation == "replace_legacy":
+        if old_text is None:
+            return "Error: legacy replace mode requires old_text"
+        if content is None:
+            return "Error: legacy replace mode requires content or new_text"
         occurrences = original.count(old_text)
         if occurrences == 0:
             return (
@@ -563,10 +699,18 @@ def _execute_edit_file(func_args: dict) -> str:
         if occurrences > 1:
             return (
                 f"Error: old_text matched {occurrences} locations in {file_path}. "
-                "Provide more specific context."
+                "Prefer replace_lines instead."
             )
-        updated = original.replace(old_text, new_text, 1)
+        updated = original.replace(old_text, content, 1)
         action = "edited"
+    else:
+        updated, action = _updated_text_from_line_operation(
+            original, operation, func_args, content
+        )
+        if updated is None:
+            return action
+        if not file_exists and operation == "write":
+            action = "created"
 
     try:
         fd, tmp_path = tempfile.mkstemp(
@@ -585,7 +729,8 @@ def _execute_edit_file(func_args: dict) -> str:
     except OSError as e:
         return f"Error writing file {file_path}: {e}"
 
-    return f"OK: {action} {file_path}"
+    diff_text = _format_edit_diff(file_path, original, updated)
+    return f"OK: {action} {file_path}\n{diff_text}"
 
 
 def resolve_model_and_endpoint(model: str, api_base: str = None, api_key: str = None):
@@ -999,8 +1144,8 @@ _WEE_TOOL_CAPABILITY_PROMPT = (
     "   Use this for: file operations, system commands, SSH, curl, git, etc.\n"
     '2. **python** — Execute Python code. Parameters: {"code": "<python code>"}\n'
     "   Use this for: data processing, calculations, scripting, etc.\n"
-    '3. **edit_file** — Create or edit text files. Parameters: {"path": "...", "new_text": "...", "old_text": "...", "create_if_missing": true}\n'
-    "   Use this for: precise file creation or exact text replacement in text files.\n"
+    '3. **edit_file** — Create or edit text files. Parameters: {"path": "...", "operation": "replace_lines", "start_line": 12, "end_line": 14, "content": "..."}\n'
+    "   Use this for: line-based file edits. Prefer replace_lines/insert_after/delete_lines over free-form string matching.\n"
     "4. **search** — Web search via SearXNG."
     ' Parameters: {"q": "<query>", "count": 5, "format": "text|json"}\n'
     "   Use this for: current events, web lookups, product info,"
