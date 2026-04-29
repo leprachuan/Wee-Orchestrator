@@ -12568,14 +12568,15 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 "agent": agent,
                 "runtime": runtime,
                 "model": model,
-                "permission_mode": body.permission_mode or "restricted",
+                "permission_mode": body.permission_mode or (agent_config.get("permissions") or {}).get("mode", "restricted"),
                 "status": "queued",
                 "queue_position": queue_pos,
                 "timeout": bg_timeout,
             }
 
-        # Resolve permission mode (default: restricted)
-        perm_mode = body.permission_mode or "restricted"
+        # Resolve permission mode: request body > agent config default > restricted
+        _agent_perm_mode = (agent_config.get("permissions") or {}).get("mode", "restricted")
+        perm_mode = body.permission_mode or _agent_perm_mode
         if perm_mode not in ("elevated", "restricted", "sandboxed"):
             perm_mode = "restricted"
 
