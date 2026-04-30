@@ -8113,6 +8113,7 @@ User Request:
         try:
             from devin_acp_runtime import DevinACPAdapter
 
+            existing_devin_session_id = self._get_devin_session_id(n8n_session_id)
             adapter = DevinACPAdapter(
                 devin_bin=devin_bin,
                 cwd=agent_dir,
@@ -8121,8 +8122,19 @@ User Request:
                 timeout=effective_timeout,
                 stream_push=_push,
                 on_pid=_on_pid,
+                existing_session_id=existing_devin_session_id,
+                resume=bool(resume and existing_devin_session_id),
             )
             output = adapter.run(context_prompt)
+            if adapter.session_id:
+                self.devin_session_dir.mkdir(exist_ok=True)
+                mapping_file = self.devin_session_dir / f"{n8n_session_id}.json"
+                with open(mapping_file, "w") as f:
+                    json.dump({"devin_session_id": adapter.session_id}, f)
+                print(
+                    f"[Session] Stored devin-acp session mapping: {n8n_session_id[:8]}... → {adapter.session_id[:8]}...",
+                    file=sys.stderr,
+                )
         except Exception as exc:
             output = f"Error (Devin ACP): {type(exc).__name__}: {exc}"
         finally:
@@ -8909,8 +8921,10 @@ User Request:
                     _re_uuid.IGNORECASE,
                 )
             )
-        elif runtime == "devin":
-            # Devin session mappings are keyed by n8n_session_id, not backend session_id
+        elif runtime in ("devin", "devin-acp"):
+            # Devin session mappings are keyed by n8n_session_id, not backend session_id.
+            # devin-acp stores the ACP sessionId in the same mapping file so follow-up
+            # turns can call session/load and retain conversation context.
             key = n8n_session_id if n8n_session_id else session_id
             return (self.devin_session_dir / f"{key}.json").exists()
         elif runtime == "cursor":

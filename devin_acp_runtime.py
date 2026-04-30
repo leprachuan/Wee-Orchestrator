@@ -33,6 +33,8 @@ class DevinACPAdapter:
     stream_push: Optional[StreamPush] = None
     on_pid: Optional[PidCallback] = None
     client_name: str = "wee-orchestrator-devin-acp"
+    existing_session_id: Optional[str] = None
+    resume: bool = False
 
     proc: Optional[asyncio.subprocess.Process] = None
     next_id: int = 1
@@ -73,15 +75,43 @@ class DevinACPAdapter:
                 "timestamp": self._ts(),
             })
 
-            new_params: dict[str, Any] = {"cwd": self.cwd, "mcpServers": []}
+            session_params: dict[str, Any] = {"cwd": self.cwd, "mcpServers": []}
             if self.model:
                 # Some ACP servers ignore model here and require a mode/config API;
                 # passing it is harmless when unsupported by Devin's current schema.
-                new_params["model"] = self.model
-            session = await self._rpc("session/new", new_params)
-            self.session_id = session.get("sessionId") or session.get("id")
+                session_params["model"] = self.model
+
+            if self.resume and self.existing_session_id:
+                session_params["sessionId"] = self.existing_session_id
+                try:
+                    session = await self._rpc("session/load", session_params)
+                    self.session_id = self.existing_session_id
+                    self._push("tool_call", {
+                        "event": "status",
+                        "id": "devin-acp-session-load",
+                        "name": "session/load",
+                        "output": f"Loaded Devin ACP session {self.session_id}",
+                        "runtime": "devin-acp",
+                        "timestamp": self._ts(),
+                    })
+                except Exception as exc:
+                    self._push("tool_call", {
+                        "event": "status",
+                        "id": "devin-acp-session-load-fallback",
+                        "name": "session/load",
+                        "output": f"Could not load Devin ACP session {self.existing_session_id}: {exc}; starting a new session",
+                        "runtime": "devin-acp",
+                        "timestamp": self._ts(),
+                    })
+                    session_params.pop("sessionId", None)
+                    session = await self._rpc("session/new", session_params)
+                    self.session_id = session.get("sessionId") or session.get("id")
+            else:
+                session = await self._rpc("session/new", session_params)
+                self.session_id = session.get("sessionId") or session.get("id")
+
             if not self.session_id:
-                raise RuntimeError(f"Devin ACP session/new returned no sessionId: {session!r}")
+                raise RuntimeError(f"Devin ACP session setup returned no sessionId: {session!r}")
 
             mode_id = self._mode_to_acp(self.mode)
             try:

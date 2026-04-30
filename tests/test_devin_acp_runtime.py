@@ -72,6 +72,11 @@ class TestDevinACPAdapterMapping(unittest.TestCase):
         self.assertEqual(DevinACPAdapter._mode_to_acp("sandboxed"), "plan")
         self.assertEqual(DevinACPAdapter._mode_to_acp("elevated"), "bypass")
 
+    def test_resume_fields_are_recorded(self):
+        adapter = DevinACPAdapter(existing_session_id="devin-session-1", resume=True)
+        self.assertEqual(adapter.existing_session_id, "devin-session-1")
+        self.assertTrue(adapter.resume)
+
 
 if __name__ == "__main__":
     unittest.main()
