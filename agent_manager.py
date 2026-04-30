@@ -10319,6 +10319,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             "gemini",
             "codex",
             "devin",
+            "devin-acp",
             "cursor",
             "wee",
         }
