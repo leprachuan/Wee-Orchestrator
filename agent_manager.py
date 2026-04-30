@@ -968,6 +968,7 @@ def check_runtime_available(runtime: str) -> bool:
         "gemini": "gemini",
         "codex": "codex",
         "devin": "devin",
+        "devin-acp": "devin",
         "cursor": "agent",  # Cursor uses 'agent' binary
         "opencode": "opencode",
         "wee": "openai",  # OpenAI-compatible API (no binary needed),
@@ -1025,6 +1026,7 @@ def get_available_runtimes() -> List[Dict[str, str]]:
         {"id": "gemini", "label": "gemini"},
         {"id": "codex", "label": "codex"},
         {"id": "devin", "label": "devin"},
+        {"id": "devin-acp", "label": "devin-acp", "icon": "🤖"},
         {"id": "cursor", "label": "cursor", "icon": "🖱️"},
         {"id": "wee", "label": "wee", "icon": "🍀"},
     ]
@@ -2256,13 +2258,14 @@ You can mention an agent in your prompt and it will auto-delegate:
                 "gemini",
                 "codex",
                 "devin",
+                "devin-acp",
                 "cursor",
                 "wee",
             ]:
                 return (
                     f"Unknown runtime: '{new_runtime}'. Use "
                     "copilot, copilot-sdk, opencode, claude, claude-sdk, "
-                    "gemini, codex, devin, cursor, or wee."
+                    "gemini, codex, devin, devin-acp, cursor, or wee."
                 )
 
             # Capture previous session state before any updates
@@ -2337,7 +2340,7 @@ You can mention an agent in your prompt and it will auto-delegate:
                 default_model = "gemini-1.5-flash"
             elif new_runtime == "codex":
                 default_model = "gpt-5.4"
-            elif new_runtime == "devin":
+            elif new_runtime in ("devin", "devin-acp"):
                 default_model = os.getenv("DEVIN_DEFAULT_MODEL", "claude-sonnet-4")
             elif new_runtime == "cursor":
                 default_model = os.getenv("CURSOR_DEFAULT_MODEL", "auto")
@@ -3759,6 +3762,7 @@ You can mention an agent in your prompt and it will auto-delegate:
             "gemini": self._env_gemini_models,
             "codex": self._env_codex_models,
             "devin": self._env_devin_models,
+            "devin-acp": self._env_devin_models,
             "cursor": self._env_cursor_models,
             "wee": self._env_wee_models,
         }
@@ -3777,6 +3781,7 @@ You can mention an agent in your prompt and it will auto-delegate:
             "codex": self.CODEX_MODELS,
             "opencode": self.OPENCODE_MODELS,
             "devin": self.DEVIN_MODELS,
+            "devin-acp": self.DEVIN_MODELS,
             "cursor": self.CURSOR_MODELS,
             "wee": self.WEE_MODELS,
         }
@@ -4061,6 +4066,7 @@ You can mention an agent in your prompt and it will auto-delegate:
             "gemini": self.fetch_gemini_models,
             "codex": self.fetch_codex_models,
             "devin": self.fetch_devin_models,
+            "devin-acp": self.fetch_devin_models,
             "cursor": self.fetch_cursor_models,
             "wee": self.fetch_wee_models,
         }
@@ -4138,7 +4144,7 @@ You can mention an agent in your prompt and it will auto-delegate:
             default_model = "gemini-1.5-flash"
         elif default_runtime == "codex":
             default_model = "gpt-5.4"
-        elif default_runtime == "devin":
+        elif default_runtime in ("devin", "devin-acp"):
             default_model = os.getenv("DEVIN_DEFAULT_MODEL", "claude-sonnet-4")
         elif default_runtime == "cursor":
             default_model = os.getenv("CURSOR_DEFAULT_MODEL", "auto")
@@ -4217,7 +4223,7 @@ You can mention an agent in your prompt and it will auto-delegate:
                     current_model, "codex"
                 ):
                     merged["model"] = "gpt-5.4"
-            elif runtime == "devin":
+            elif runtime in ("devin", "devin-acp"):
                 current_model = merged.get("model", "")
                 if not current_model or not self.get_model_from_name(
                     current_model, "devin"
@@ -4247,6 +4253,7 @@ You can mention an agent in your prompt and it will auto-delegate:
                 "copilot",
                 "copilot-sdk",
                 "devin",
+                "devin-acp",
                 "cursor",
                 "wee",
             ]:
@@ -4598,7 +4605,7 @@ You can mention an agent in your prompt and it will auto-delegate:
         name_lower = name.lower().strip("\"'")
 
         # Ensure env models are loaded/cached by triggering fetch for this runtime
-        if runtime in ("claude", "gemini", "codex", "devin", "cursor"):
+        if runtime in ("claude", "gemini", "codex", "devin", "devin-acp", "cursor"):
             self.get_models_for_runtime(runtime)
 
         # Step 1: check env-loaded or static alias tables for all runtimes that have them.
@@ -4607,6 +4614,7 @@ You can mention an agent in your prompt and it will auto-delegate:
             "gemini": self._env_gemini_models,
             "codex": self._env_codex_models,
             "devin": self._env_devin_models,
+            "devin-acp": self._env_devin_models,
             "cursor": self._env_cursor_models,
             "wee": self._env_wee_models,
         }
@@ -4616,6 +4624,7 @@ You can mention an agent in your prompt and it will auto-delegate:
             "codex": self.CODEX_MODELS,
             "opencode": self.OPENCODE_MODELS,
             "devin": self.DEVIN_MODELS,
+            "devin-acp": self.DEVIN_MODELS,
             "cursor": self.CURSOR_MODELS,
             "wee": self.WEE_MODELS,
         }
@@ -8042,6 +8051,87 @@ User Request:
 
         return self.strip_metadata(output, "devin")
 
+    def run_devin_acp(
+        self,
+        prompt: str,
+        model: str,
+        agent: str,
+        session_id: Optional[str],
+        resume: bool,
+        n8n_session_id: str,
+        timeout: Optional[int] = None,
+        render_type: str = "text",
+        mode: str = "restricted",
+    ) -> str:
+        """Execute Devin via ACP JSON-RPC stdio and stream structured updates."""
+        prompt, parsed_mode = self._parse_mode_command(prompt)
+        session_data = self.get_or_create_session_data(n8n_session_id)
+        if mode != "restricted":
+            pass
+        elif parsed_mode != "restricted":
+            mode = parsed_mode
+        else:
+            mode = self._resolve_permission_mode(session_data, parsed_mode)
+
+        agent_dir = self.AGENTS.get(agent, self.AGENTS["orchestrator"])["path"]
+        effective_timeout = timeout if timeout is not None else self.command_timeout
+        channel = session_data.get("channel", "webui")
+        devin_bin = self.devin_bin or "devin"
+
+        context_prompt = self.build_agent_context_prompt(
+            agent,
+            prompt,
+            n8n_session_id,
+            render_type,
+            effective_timeout,
+            "devin-acp",
+            model,
+            channel,
+        )
+        if mode == "elevated":
+            context_prompt += (
+                "\n\n[ELEVATED MODE ENABLED]\n"
+                "Full permissions granted. Execute required work without asking for confirmation."
+            )
+        elif mode == "sandboxed":
+            context_prompt += (
+                "\n\n[SANDBOXED MODE ENABLED]\n"
+                "Read-only access only. Do NOT modify files or run destructive commands."
+            )
+
+        stream_buffer = getattr(self, "_stream_buffers", {}).get(n8n_session_id)
+        tracked_pid = {"pid": None}
+
+        def _push(kind, data):
+            if stream_buffer:
+                stream_buffer.push(kind, data)
+
+        def _on_pid(pid: int):
+            tracked_pid["pid"] = pid
+            self.track_running_query(n8n_session_id, pid, "devin-acp", agent, prompt)
+
+        try:
+            from devin_acp_runtime import DevinACPAdapter
+
+            adapter = DevinACPAdapter(
+                devin_bin=devin_bin,
+                cwd=agent_dir,
+                model=model,
+                mode=mode,
+                timeout=effective_timeout,
+                stream_push=_push,
+                on_pid=_on_pid,
+            )
+            output = adapter.run(context_prompt)
+        except Exception as exc:
+            output = f"Error (Devin ACP): {type(exc).__name__}: {exc}"
+        finally:
+            self.clear_running_query(n8n_session_id)
+
+        if stream_buffer:
+            stream_buffer.push("done", output)
+        return self.strip_metadata(output, "devin")
+
     def run_cursor(
         self,
         prompt: str,
@@ -9123,6 +9213,19 @@ User Request:
                 n8n_session_id,
                 effective_timeout,
                 render_type,
+                mode,
+            )
+        elif runtime == "devin-acp":
+            result = self.run_devin_acp(
+                prompt,
+                model,
+                agent,
+                session_id if can_resume else None,
+                can_resume,
+                n8n_session_id,
+                effective_timeout,
+                render_type,
+                mode,
             )
         elif runtime == "cursor":
             result = self.run_cursor(
@@ -9232,7 +9335,7 @@ User Request:
         # For Gemini, we always try to resume the latest session for context retention
         if current_runtime == "gemini":
             can_resume = True  # Always attempt to resume latest Gemini session
-        elif current_runtime == "devin":
+        elif current_runtime in ("devin", "devin-acp"):
             # Devin handles its own session resumption internally via
             # _get_devin_session_id(); pass n8n_session_id for correct lookup
             can_resume = (
