@@ -163,9 +163,7 @@ def _resolve_silent_default(channel: str) -> bool:
     return channel in ("telegram", "webex")
 
 
-def _parse_claude_stream_json_line(
-    line: str, active_tool_calls: dict
-) -> list:
+def _parse_claude_stream_json_line(line: str, active_tool_calls: dict) -> list:
     """Parse one stream-json line from the Claude CLI.
 
     Returns a list of ``(channel, event_dict)`` tuples.  The caller is
@@ -247,9 +245,7 @@ def _parse_claude_stream_json_line(
                     tc_info = active_tool_calls.pop(cb_index)
                     full_input = "".join(tc_info["input_parts"])
                     try:
-                        parsed_input = (
-                            _json.loads(full_input) if full_input else {}
-                        )
+                        parsed_input = _json.loads(full_input) if full_input else {}
                     except (ValueError, KeyError):
                         parsed_input = full_input
                     results.append(
@@ -276,8 +272,7 @@ def _parse_claude_stream_json_line(
                         output = " ".join(
                             p.get("text", "")
                             for p in raw
-                            if isinstance(p, dict)
-                            and p.get("type") == "text"
+                            if isinstance(p, dict) and p.get("type") == "text"
                         )
                     else:
                         output = str(raw) if raw else ""
@@ -4916,47 +4911,58 @@ You can mention an agent in your prompt and it will auto-delegate:
                 return "\n".join(_text_parts)
 
         elif runtime == "codex":
-            # CODEX output format (when stripped of headers):
-            # 1. First response line (often echoed/repeated)
-            # 2. Header section (OpenAI Codex...)
-            # 3. Metadata (workdir, model, etc.)
-            # 4. "user" marker + user input/context
-            # 5. File listings
-            # 6. "thinking" marker + reasoning
-            # 7. "codex" marker + actual response(s)
-            # 8. "tokens used" metadata
+            import json as _json
 
-            found_codex_marker = False
-            response_lines = []
-
-            for i, line in enumerate(lines):
-                line_lower = line.lower()
-
-                # Track if we've hit the "codex" marker - only keep content after this
-                if line_lower.strip() == "codex":
-                    found_codex_marker = True
+            # v0.125.0+: output is JSONL events from --json flag
+            # Extract text from item.completed events where item.type == "agent_message"
+            jsonl_texts = []
+            for _line in lines:
+                _line = _line.strip()
+                if not _line:
+                    continue
+                try:
+                    _event = _json.loads(_line)
+                    if (
+                        _event.get("type") == "item.completed"
+                        and isinstance(_event.get("item"), dict)
+                        and _event["item"].get("type") == "agent_message"
+                    ):
+                        _text = _event["item"].get("text", "")
+                        if _text:
+                            jsonl_texts.append(_text)
+                except (ValueError, KeyError):
                     continue
 
-                # Stop at tokens metadata
-                if "tokens" in line_lower and "used" in line_lower:
-                    break
+            if jsonl_texts:
+                # Use the last agent_message (most complete response)
+                result.extend(jsonl_texts[-1].splitlines())
+            else:
+                # Fallback: legacy marker-based parsing for pre-v0.125.0 output
+                found_codex_marker = False
+                response_lines = []
 
-                # Before codex marker, skip everything
-                if not found_codex_marker:
-                    continue
+                for i, line in enumerate(lines):
+                    line_lower = line.lower()
 
-                # After codex marker, skip empty lines at start
-                if not line.strip() and not response_lines:
-                    continue
+                    if line_lower.strip() == "codex":
+                        found_codex_marker = True
+                        continue
 
-                # Keep the actual response content
-                response_lines.append(line)
+                    if "tokens" in line_lower and "used" in line_lower:
+                        break
 
-            # Clean up trailing empty lines
-            while response_lines and not response_lines[-1].strip():
-                response_lines.pop()
+                    if not found_codex_marker:
+                        continue
 
-            result.extend(response_lines)
+                    if not line.strip() and not response_lines:
+                        continue
+
+                    response_lines.append(line)
+
+                while response_lines and not response_lines[-1].strip():
+                    response_lines.pop()
+
+                result.extend(response_lines)
 
         elif runtime == "devin":
             # Devin CLI outputs the response directly to stdout.
@@ -7857,9 +7863,8 @@ User Request:
             context_prompt = context_prompt + sandboxed_instruction
 
         if resume and session_id:
-            # Resume existing session - flags must come before session_id positional arg
-            # codex exec resume supports --dangerously-bypass-approvals-and-sandbox
-            cmd = ["codex", "exec", "resume"]
+            # Resume existing session — v0.125.0+ uses `codex exec resume` subcommand
+            cmd = ["codex", "exec", "--json", "--skip-git-repo-check", "resume"]
             if mode == "elevated":
                 # Apply sandbox bypass and environment inheritance for elevated sessions
                 cmd.append("--dangerously-bypass-approvals-and-sandbox")
@@ -7872,13 +7877,17 @@ User Request:
                 file=sys.stderr,
             )
         else:
-            # Start new session - flags must come BEFORE the prompt positional arg
-            cmd = ["codex", "exec"]
+            # Start new session — v0.125.0+: --full-auto for normal mode,
+            # --dangerously-bypass-approvals-and-sandbox for elevated (they are mutually exclusive)
+            cmd = ["codex", "exec", "--json", "--skip-git-repo-check"]
             if mode == "elevated":
                 # Bypass all sandbox restrictions (sudo, DNS, network, filesystem)
                 cmd.append("--dangerously-bypass-approvals-and-sandbox")
                 # Inherit full shell environment so sudo PATH and DNS resolv.conf are available
                 cmd += ["-c", "shell_environment_policy.inherit=all"]
+            else:
+                # Non-elevated: --full-auto enables auto-execution without sandbox bypass
+                cmd.append("--full-auto")
             if model:
                 cmd += ["-m", model]
             cmd.append(context_prompt)
@@ -7893,6 +7902,23 @@ User Request:
 
         if "Error: CODEX command failed" in output:
             return output
+
+        # v0.125.0+: extract thread_id from JSONL thread.started event
+        import json as _json
+
+        for _line in output.splitlines():
+            _line = _line.strip()
+            if not _line:
+                continue
+            try:
+                _event = _json.loads(_line)
+                if _event.get("type") == "thread.started":
+                    _tid = _event.get("thread_id")
+                    if _tid:
+                        self._last_codex_thread_id = _tid
+                    break
+            except (ValueError, KeyError):
+                continue
 
         return self.strip_metadata(output, "codex")
 
@@ -8768,14 +8794,11 @@ User Request:
         elif runtime == "gemini":
             return (self.gemini_session_dir / f"{session_id}.json").exists()
         elif runtime == "codex":
-            # CODEX stores sessions in nested date-based directories
-            # Format: ~/.codex/sessions/YYYY/MM/DD/rollout-YYYY-MM-DDTHH-MM-SS-SESSION_ID.jsonl
-            # Session ID is a UUID at the end of the filename
+            # Legacy: CODEX stored sessions as rollout-*.jsonl files (pre-v0.125.0)
             try:
                 for session_file in self.codex_session_dir.glob(
                     "*/*/*/rollout-*.jsonl"
                 ):
-                    # Extract the UUID from the filename (last 36 chars before .jsonl)
                     filename = session_file.name.replace(".jsonl", "")
                     file_session_id = (
                         filename[-36:] if len(filename) >= 36 else filename
@@ -8784,7 +8807,18 @@ User Request:
                         return True
             except Exception:
                 pass
-            return False
+            # v0.125.0+: session IDs are thread UUIDs — no local files exist.
+            # Accept any UUID-formatted session_id as valid (codex handles bad IDs gracefully).
+            import re as _re_uuid
+
+            return bool(
+                session_id
+                and _re_uuid.match(
+                    r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+                    session_id,
+                    _re_uuid.IGNORECASE,
+                )
+            )
         elif runtime == "devin":
             # Devin session mappings are keyed by n8n_session_id, not backend session_id
             key = n8n_session_id if n8n_session_id else session_id
@@ -8875,21 +8909,20 @@ User Request:
                 )
                 return files[0].stem if files else None
             elif runtime == "codex":
-                # CODEX stores sessions in nested date directories
-                # Filenames: rollout-YYYY-MM-DDTHH-MM-SS-SESSION_ID.jsonl
+                # v0.125.0+: thread_id captured from JSONL output in run_codex()
+                if getattr(self, "_last_codex_thread_id", None):
+                    tid = self._last_codex_thread_id
+                    self._last_codex_thread_id = None  # consume once
+                    return tid
+                # Legacy: rollout-*.jsonl files (pre-v0.125.0)
                 files = sorted(
                     self.codex_session_dir.glob("*/*/*/rollout-*.jsonl"),
                     key=lambda p: p.stat().st_mtime,
                     reverse=True,
                 )
                 if files:
-                    # Extract session ID from filename
-                    # Format: rollout-2025-12-15T22-39-34-019b242b-476d-7f90-8bfa-4eb0c7095532.jsonl
-                    # The session ID is the UUID at the end (last 36 chars before .jsonl)
                     filename = files[0].name
-                    # Remove .jsonl extension and get the last 36 characters (UUID)
                     name_without_ext = filename.replace(".jsonl", "")
-                    # Session ID should be the last UUID-like part
                     session_id = (
                         name_without_ext[-36:]
                         if len(name_without_ext) >= 36
