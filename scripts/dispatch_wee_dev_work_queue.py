@@ -61,6 +61,10 @@ ACTIVE_STATUSES = {"in-progress", "qa-review", "qa-failed"}
 # Statuses where the dispatcher can pick up the item
 ACTIONABLE_STATUSES = {"queued", "qa-failed"}
 
+# Stalled item timeout: if an item is in qa-review/in-progress/qa-failed
+# for longer than this duration, re-dispatch to recover from hangs
+STALL_TIMEOUT_MINUTES = 30
+
 DRY_RUN = False
 
 # ---------------------------------------------------------------------------
@@ -74,6 +78,50 @@ def now_iso() -> str:
 
 def log(msg: str) -> None:
     print(f"[{now_iso()}] {msg}")
+
+
+def parse_iso_datetime(iso_str):
+    """Parse ISO 8601 datetime string to datetime object."""
+    try:
+        # Handle both with/without microseconds and timezone
+        if 'Z' in iso_str:
+            iso_str = iso_str.replace('Z', '+00:00')
+        if '.' in iso_str:
+            return datetime.fromisoformat(iso_str)
+        return datetime.fromisoformat(iso_str)
+    except (ValueError, AttributeError, TypeError):
+        return None
+
+
+def check_stall_timeout(lock):
+    """Check if a stalled item has exceeded the timeout threshold.
+    
+    Returns True if the lock is in a stalled state AND has been there
+    for longer than STALL_TIMEOUT_MINUTES. This helps recover from cases
+    where wee-qa or wee-dev hangs and never completes.
+    
+    Applies to qa-review, in-progress, and qa-failed states.
+    """
+    if lock is None:
+        return False
+    
+    state = lock.get("state")
+    # Only apply timeout to states where wee-qa or wee-dev might be stuck
+    if state not in ("qa-review", "in-progress", "qa-failed"):
+        return False
+    
+    created_at = lock.get("created_at")
+    if not created_at:
+        return False
+    
+    created_time = parse_iso_datetime(created_at)
+    if not created_time:
+        return False
+    
+    now = datetime.now(timezone.utc)
+    elapsed = (now - created_time).total_seconds() / 60  # minutes
+    
+    return elapsed > STALL_TIMEOUT_MINUTES
 
 
 # ---------------------------------------------------------------------------
@@ -739,7 +787,7 @@ def main() -> int:
     # 3. Categorise
     active_item = first_with_status(items, ACTIVE_STATUSES)
     actionable = [i for i in items if i["status"] in ACTIONABLE_STATUSES]
-    # --- Stalled qa-review detection ---
+    # --- Stalled qa-review detection with timeout ---
     if active_item and active_item["status"] == "qa-review":
         if has_running_wee_qa_task():
             write_lock(
@@ -754,7 +802,19 @@ def main() -> int:
             log(f"wee-qa is actively reviewing {active_item['id']} — no action.")
             return 0
 
-        # No wee-qa running — stalled; re-dispatch
+        # No wee-qa running — check if stalled
+        lock = read_lock()
+        if check_stall_timeout(lock):
+            log(
+                f"TIMEOUT: {active_item['id']} stuck in qa-review for >{STALL_TIMEOUT_MINUTES}min. "
+                f"Escalating for manual review."
+            )
+            # Add needs-approval label to escalate to human
+            add_label(active_item["number"], "wee-dev:needs-approval")
+            clear_lock()
+            return 0
+
+        # Stalled but within timeout; re-dispatch
         log(
             f"Stalled qa-review detected for {active_item['id']} "
             f"— re-dispatching wee-qa"
