@@ -8248,7 +8248,17 @@ User Request:
         )
 
         # -- Issue #108: Load conversation history --
-        messages = self._wee_load_messages(n8n_session_id, context_prompt, resume)
+        try:
+            messages = self._wee_load_messages(n8n_session_id, context_prompt, resume)
+        except Exception as load_err:
+            # Fallback: start with empty messages if loading fails
+            print(
+                f"[Wee Native] Warning: Failed to load messages: {load_err}, starting fresh",
+                file=sys.stderr,
+            )
+            messages = []
+            if context_prompt:
+                messages.append({"role": "system", "content": context_prompt})
         messages.append({"role": "user", "content": prompt})
 
         # -- Tool definitions for agentic loop (Issue #107) --
