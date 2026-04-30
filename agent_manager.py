@@ -4925,6 +4925,7 @@ You can mention an agent in your prompt and it will auto-delegate:
             # 6. "thinking" marker + reasoning
             # 7. "codex" marker + actual response(s)
             # 8. "tokens used" metadata
+            # 9. Internal error logs (to be stripped)
 
             found_codex_marker = False
             response_lines = []
@@ -4940,6 +4941,10 @@ You can mention an agent in your prompt and it will auto-delegate:
                 # Stop at tokens metadata
                 if "tokens" in line_lower and "used" in line_lower:
                     break
+
+                # Strip internal error logs (e.g., "2026-04-29T01:38:52.799391Z ERROR codex_core::...")
+                if re.match(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}.*ERROR", line):
+                    continue
 
                 # Before codex marker, skip everything
                 if not found_codex_marker:
