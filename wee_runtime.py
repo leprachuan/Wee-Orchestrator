@@ -986,6 +986,24 @@ def _call_agent_handler(func_args: dict) -> str:
             }
         )
 
+    # Validate runtime/model compatibility to avoid impossible combinations like
+    # runtime='claude' with model='gpt-5.4-mini'. If the configured primary model
+    # looks like an OpenAI/GPT model but the runtime is Claude, switch the
+    # primary attempt to the agent's configured fallback runtime/model so the
+    # queued task doesn't ask Claude to run an OpenAI-only model identifier.
+    for _rt_cfg in runtimes_to_try:
+        try:
+            _mval = str(_rt_cfg.get("model", "") or "").lower()
+            _rval = str(_rt_cfg.get("runtime", "") or "").lower()
+        except Exception:
+            continue
+        if ("gpt-" in _mval or _mval.startswith("gpt")) and _rval == "claude":
+            _fb_rt = agent_config.get("fallback_runtime") or "copilot"
+            _fb_model = agent_config.get("fallback_model") or _rt_cfg.get("model")
+            _rt_cfg["runtime"] = _fb_rt
+            _rt_cfg["model"] = _fb_model
+            _rt_cfg["is_fallback"] = True
+
     last_error = None
 
     for runtime_config in runtimes_to_try:

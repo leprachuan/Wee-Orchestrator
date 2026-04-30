@@ -512,6 +512,33 @@ def dispatch_via_api(
     permission_mode = dispatch_config.get("permission_mode")
     yolo = dispatch_config.get("yolo", False)
 
+    # Validate runtime/model compatibility to avoid queuing impossible combos
+    # (e.g., runtime='claude' but model looks like an OpenAI/GPT model).
+    try:
+        _model_l = str(model or "").lower()
+        _runtime_l = str(runtime or "").lower()
+    except Exception:
+        _model_l = ""
+        _runtime_l = ""
+    if ("gpt-" in _model_l or _model_l.startswith("gpt")) and _runtime_l == "claude":
+        fb_rt = dispatch_config.get("fallback_runtime")
+        fb_m = dispatch_config.get("fallback_model")
+        if fb_rt and fb_rt != runtime:
+            log(
+                f"Detected incompatible runtime/model for agent {agent}: {runtime}/{model}."
+                f" Using fallback {fb_rt}/{fb_m or model} instead."
+            )
+            runtime = fb_rt
+            if fb_m:
+                model = fb_m
+        else:
+            # No explicit fallback; switch to copilot to avoid invalid combo
+            log(
+                f"Detected incompatible runtime/model for agent {agent}: {runtime}/{model}."
+                " No fallback configured — switching runtime to 'copilot'."
+            )
+            runtime = "copilot"
+
     # Prepare request
     body = {
         "prompt": prompt,
@@ -703,7 +730,10 @@ def dispatch_wee_dev(item: dict) -> dict:
         log(f"[dry-run] Would dispatch wee-dev for {item['id']}: {item['title']}")
         return {"task_id": "dry-run"}
     try:
-        task_id = dispatch_via_api("wee-dev", prompt, "gpt-5.4", 3600)
+        cfg = get_agent_dispatch_config("wee-dev")
+        model = cfg.get("model", "auto")
+        timeout = cfg.get("timeout", 3600)
+        task_id = dispatch_via_api("wee-dev", prompt, model, timeout)
         return {"task_id": task_id}
     except Exception as e:
         log(f"ERROR: Failed to dispatch wee-dev: {e}")
@@ -725,7 +755,10 @@ def dispatch_wee_qa(item: dict) -> dict:
         log(f"[dry-run] Would dispatch wee-qa for {item['id']}: {item['title']}")
         return {"task_id": "dry-run"}
     try:
-        task_id = dispatch_via_api("wee-qa", prompt, "gpt-5.4", 1800)
+        cfg = get_agent_dispatch_config("wee-qa")
+        model = cfg.get("model", "auto")
+        timeout = cfg.get("timeout", 1800)
+        task_id = dispatch_via_api("wee-qa", prompt, model, timeout)
         return {"task_id": task_id}
     except Exception as e:
         log(f"ERROR: Failed to dispatch wee-qa: {e}")
