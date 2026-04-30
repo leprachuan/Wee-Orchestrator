@@ -8253,7 +8253,8 @@ User Request:
         except Exception as load_err:
             # Fallback: start with empty messages if loading fails
             print(
-                f"[Wee Native] Warning: Failed to load messages: {load_err}, starting fresh",
+                f"[Wee Native] Warning: Failed to load messages: "
+                f"{load_err}, starting fresh",
                 file=sys.stderr,
             )
             messages = []
