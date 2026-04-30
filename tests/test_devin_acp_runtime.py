@@ -77,6 +77,24 @@ class TestDevinACPAdapterMapping(unittest.TestCase):
         self.assertEqual(adapter.existing_session_id, "devin-session-1")
         self.assertTrue(adapter.resume)
 
+    def test_session_load_replay_is_not_streamed_or_collected(self):
+        self.adapter._loading_existing_session = True
+        self.adapter._accepting_current_turn = False
+        self.adapter._handle_session_update(
+            {"update": {"sessionUpdate": "agent_message_chunk", "content": {"text": "old answer"}}}
+        )
+        self.assertEqual(self.adapter.collected_text, [])
+        self.assertEqual(self.events, [])
+
+    def test_current_turn_after_load_is_streamed_and_collected(self):
+        self.adapter._loading_existing_session = False
+        self.adapter._accepting_current_turn = True
+        self.adapter._handle_session_update(
+            {"update": {"sessionUpdate": "agent_message_chunk", "content": {"text": "new answer"}}}
+        )
+        self.assertEqual(self.adapter.collected_text, ["new answer"])
+        self.assertEqual(self.events, [("chunk", {"text": "new answer"})])
+
 
 if __name__ == "__main__":
     unittest.main()

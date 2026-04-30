@@ -35,6 +35,7 @@ class DevinACPAdapter:
     client_name: str = "wee-orchestrator-devin-acp"
     existing_session_id: Optional[str] = None
     resume: bool = False
+    ignore_replay_on_load: bool = True
 
     proc: Optional[asyncio.subprocess.Process] = None
     next_id: int = 1
@@ -45,6 +46,8 @@ class DevinACPAdapter:
     _turn_done: Optional[asyncio.Event] = None
     _prompt_result: Any = None
     _prompt_error: Optional[BaseException] = None
+    _loading_existing_session: bool = False
+    _accepting_current_turn: bool = False
 
     def run(self, prompt: str) -> str:
         """Run one ACP turn and return the final assistant text."""
@@ -84,7 +87,11 @@ class DevinACPAdapter:
             if self.resume and self.existing_session_id:
                 session_params["sessionId"] = self.existing_session_id
                 try:
-                    session = await self._rpc("session/load", session_params)
+                    self._loading_existing_session = bool(self.ignore_replay_on_load)
+                    try:
+                        session = await self._rpc("session/load", session_params)
+                    finally:
+                        self._loading_existing_session = False
                     self.session_id = self.existing_session_id
                     self._push("tool_call", {
                         "event": "status",
@@ -129,6 +136,7 @@ class DevinACPAdapter:
                     "timestamp": self._ts(),
                 })
 
+            self._accepting_current_turn = True
             prompt_task = asyncio.create_task(
                 self._rpc(
                     "session/prompt",
@@ -262,6 +270,12 @@ class DevinACPAdapter:
     def _handle_session_update(self, params: dict[str, Any]) -> None:
         update = params.get("update") or params
         kind = update.get("sessionUpdate") or update.get("type")
+        if self._loading_existing_session and not self._accepting_current_turn:
+            # ACP session/load is allowed to replay the entire prior transcript.
+            # That history is useful to Devin internally, but it must not be
+            # collected or streamed as the current response; otherwise a new
+            # follow-up can appear to answer with content from a previous turn.
+            return
         if kind == "agent_message_chunk":
             text = self._extract_text(update.get("content"))
             if text:
