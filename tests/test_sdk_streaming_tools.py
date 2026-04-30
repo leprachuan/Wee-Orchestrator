@@ -656,6 +656,8 @@ class TestClaudeSdkToolCalls(unittest.TestCase):
         self.assertEqual(tool_pushes[0][1]["name"], "bash")
         self.assertEqual(tool_pushes[1][1]["event"], "completed")
         self.assertEqual(tool_pushes[1][1]["id"], "tu_456")
+        self.assertEqual(tool_pushes[1][1]["output"], "file1.txt\nfile2.txt")
+        self.assertEqual(tool_pushes[1][1]["status"], "completed")
 
     def test_tool_result_error_tracked(self):
         """Verify ToolResultBlock with is_error=True has is_error field."""
@@ -682,6 +684,8 @@ class TestClaudeSdkToolCalls(unittest.TestCase):
         tc = tool_pushes[0][1]
         self.assertEqual(tc["event"], "completed")
         self.assertTrue(tc["is_error"])
+        self.assertEqual(tc["status"], "error")
+        self.assertEqual(tc["output"], "Permission denied")
 
     def test_multiple_tools_tracked_with_unique_ids(self):
         """Verify multiple tool calls get unique IDs."""
