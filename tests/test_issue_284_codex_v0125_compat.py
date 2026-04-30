@@ -1,17 +1,17 @@
 #!/usr/bin/env python3
 """Regression tests for issue #284 — Codex CLI v0.125.0 compatibility."""
 
+import inspect
 import json
 import sys
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import MagicMock, patch
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-import agent_manager
-from agent_manager import SessionManager
+import agent_manager  # noqa: E402
+from agent_manager import SessionManager  # noqa: E402
 
 
 class TestIssue284CodexV0125Compat(unittest.TestCase):
@@ -38,7 +38,28 @@ class TestIssue284CodexV0125Compat(unittest.TestCase):
 
         def fake_execute(cmd, *args, **kwargs):
             captured["cmd"] = cmd
-            return '{"type":"thread.started","thread_id":"aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"}\n{"type":"turn.started"}\n{"type":"item.completed","item":{"id":"i0","type":"agent_message","text":"hello"}}\n{"type":"turn.completed","usage":{}}'
+            return "\n".join(
+                [
+                    json.dumps(
+                        {
+                            "type": "thread.started",
+                            "thread_id": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+                        }
+                    ),
+                    json.dumps({"type": "turn.started"}),
+                    json.dumps(
+                        {
+                            "type": "item.completed",
+                            "item": {
+                                "id": "i0",
+                                "type": "agent_message",
+                                "text": "hello",
+                            },
+                        }
+                    ),
+                    json.dumps({"type": "turn.completed", "usage": {}}),
+                ]
+            )
 
         self.mgr._parse_mode_command = lambda p: (p, mode)
         self.mgr._resolve_permission_mode = lambda sd, m: m
@@ -63,7 +84,22 @@ class TestIssue284CodexV0125Compat(unittest.TestCase):
 
         def fake_execute(cmd, *args, **kwargs):
             captured["cmd"] = cmd
-            return '{"type":"turn.started"}\n{"type":"item.completed","item":{"id":"i0","type":"agent_message","text":"resumed"}}\n{"type":"turn.completed","usage":{}}'
+            return "\n".join(
+                [
+                    json.dumps({"type": "turn.started"}),
+                    json.dumps(
+                        {
+                            "type": "item.completed",
+                            "item": {
+                                "id": "i0",
+                                "type": "agent_message",
+                                "text": "resumed",
+                            },
+                        }
+                    ),
+                    json.dumps({"type": "turn.completed", "usage": {}}),
+                ]
+            )
 
         self.mgr._parse_mode_command = lambda p: (p, "default")
         self.mgr._resolve_permission_mode = lambda sd, m: m
@@ -86,7 +122,9 @@ class TestIssue284CodexV0125Compat(unittest.TestCase):
         """Old -p flag must not appear; --full-auto must be present."""
         cmd = self._capture_cmd_new_session()
         self.assertNotIn(
-            "-p", cmd, "Old -p flag still present — causes parse error on v0.125.0"
+            "-p",
+            cmd,
+            "Old -p flag still present; causes parse error on v0.125.0",
         )
         self.assertIn("--full-auto", cmd, "--full-auto missing from new session cmd")
 
@@ -94,7 +132,9 @@ class TestIssue284CodexV0125Compat(unittest.TestCase):
         """--verbose flag must not appear — removed in v0.125.0."""
         cmd = self._capture_cmd_new_session()
         self.assertNotIn(
-            "--verbose", cmd, "--verbose still present — causes parse error on v0.125.0"
+            "--verbose",
+            cmd,
+            "--verbose still present; causes parse error on v0.125.0",
         )
 
     def test_new_session_has_json_flag(self):
@@ -118,7 +158,7 @@ class TestIssue284CodexV0125Compat(unittest.TestCase):
         self.assertIn("--json", cmd)
 
     def test_resume_session_uses_resume_subcommand(self):
-        """v0.125.0 resume uses subcommand: codex exec ... resume <id> <prompt>."""
+        """v0.125.0 resume uses subcommand after exec options."""
         cmd = self._capture_cmd_resume_session()
         self.assertIn("resume", cmd, "resume subcommand missing")
         # resume must come AFTER exec (positional subcommand, not a flag)
@@ -137,7 +177,16 @@ class TestIssue284CodexV0125Compat(unittest.TestCase):
             [
                 '{"type":"thread.started","thread_id":"uuid-1"}',
                 '{"type":"turn.started"}',
-                '{"type":"item.completed","item":{"id":"i0","type":"agent_message","text":"The answer is 42."}}',
+                json.dumps(
+                    {
+                        "type": "item.completed",
+                        "item": {
+                            "id": "i0",
+                            "type": "agent_message",
+                            "text": "The answer is 42.",
+                        },
+                    }
+                ),
                 '{"type":"turn.completed","usage":{}}',
             ]
         )
@@ -149,8 +198,22 @@ class TestIssue284CodexV0125Compat(unittest.TestCase):
         mgr = self.mgr
         jsonl = "\n".join(
             [
-                '{"type":"item.completed","item":{"id":"i0","type":"tool_call","text":"internal"}}',
-                '{"type":"item.completed","item":{"id":"i1","type":"agent_message","text":"Real answer."}}',
+                json.dumps(
+                    {
+                        "type": "item.completed",
+                        "item": {"id": "i0", "type": "tool_call", "text": "internal"},
+                    }
+                ),
+                json.dumps(
+                    {
+                        "type": "item.completed",
+                        "item": {
+                            "id": "i1",
+                            "type": "agent_message",
+                            "text": "Real answer.",
+                        },
+                    }
+                ),
             ]
         )
         result = mgr.strip_metadata(jsonl, "codex")
@@ -181,13 +244,22 @@ class TestIssue284CodexV0125Compat(unittest.TestCase):
     # ------------------------------------------------------------------
 
     def test_run_codex_stores_thread_id_from_jsonl(self):
-        """run_codex() must populate _last_codex_thread_id from thread.started event."""
+        """run_codex() must populate _last_codex_thread_id."""
         expected_tid = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
         jsonl_output = "\n".join(
             [
                 f'{{"type":"thread.started","thread_id":"{expected_tid}"}}',
                 '{"type":"turn.started"}',
-                '{"type":"item.completed","item":{"id":"i0","type":"agent_message","text":"hi"}}',
+                json.dumps(
+                    {
+                        "type": "item.completed",
+                        "item": {
+                            "id": "i0",
+                            "type": "agent_message",
+                            "text": "hi",
+                        },
+                    }
+                ),
                 '{"type":"turn.completed","usage":{}}',
             ]
         )
@@ -213,7 +285,7 @@ class TestIssue284CodexV0125Compat(unittest.TestCase):
         )
 
     def test_get_most_recent_session_id_returns_thread_id(self):
-        """get_most_recent_session_id() must return _last_codex_thread_id and consume it."""
+        """get_most_recent_session_id() returns and consumes thread_id."""
         tid = "12345678-1234-1234-1234-123456789abc"
         self.mgr._last_codex_thread_id = tid
         result = self.mgr.get_most_recent_session_id("codex")
@@ -223,14 +295,34 @@ class TestIssue284CodexV0125Compat(unittest.TestCase):
         self.assertIsNone(result2)
 
     def test_session_exists_accepts_uuid_format_thread_id(self):
-        """session_exists() must return True for UUID-formatted thread IDs (v0.125.0+)."""
+        """session_exists() returns True for UUID thread IDs."""
         valid_uuid = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
         self.assertTrue(self.mgr.session_exists(valid_uuid, "codex"))
 
     def test_session_exists_rejects_non_uuid(self):
-        """session_exists() must return False for non-UUID session IDs with no rollout file."""
+        """session_exists() returns False for invalid thread IDs."""
         self.assertFalse(self.mgr.session_exists("not-a-uuid", "codex"))
         self.assertFalse(self.mgr.session_exists("", "codex"))
+
+    def test_background_codex_command_uses_v0125_flags(self):
+        """Background Codex tasks must use the v0.125.0 exec flags too."""
+        source = inspect.getsource(agent_manager)
+        start = source.find("def _build_bg_cmd(")
+        self.assertGreater(start, 0, "_build_bg_cmd function not found")
+        codex_branch_start = source.find('elif eff_runtime == "codex":', start)
+        self.assertGreater(
+            codex_branch_start, 0, "codex runtime branch not found in _build_bg_cmd"
+        )
+        next_branch = source.find("elif eff_runtime ==", codex_branch_start + 1)
+        if next_branch == -1:
+            next_branch = source.find("else:", codex_branch_start + 1)
+        codex_block = source[codex_branch_start:next_branch]
+
+        self.assertIn('"--json"', codex_block)
+        self.assertIn('"--skip-git-repo-check"', codex_block)
+        self.assertIn('"--full-auto"', codex_block)
+        self.assertNotIn('"-p"', codex_block)
+        self.assertNotIn('"--verbose"', codex_block)
 
 
 if __name__ == "__main__":

@@ -12045,7 +12045,12 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                     _cmd = [_oc_bin, "run", "--model", eff_model, context_prompt]
                 elif eff_runtime == "codex":
                     _codex_bin = _which_bin("codex") or "codex"
-                    _cmd = [_codex_bin, "exec"]
+                    _cmd = [
+                        _codex_bin,
+                        "exec",
+                        "--json",
+                        "--skip-git-repo-check",
+                    ]
                     if permission_mode == "elevated":
                         _cmd.extend(
                             [
@@ -12054,6 +12059,8 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                                 "shell_environment_policy.inherit=all",
                             ]
                         )
+                    else:
+                        _cmd.append("--full-auto")
                     if eff_model:
                         _cmd.extend(["-m", eff_model])
                     _cmd.append(context_prompt)
