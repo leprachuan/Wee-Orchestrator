@@ -13,8 +13,8 @@
   <link rel="icon" type="image/png" sizes="192x192" href="/static/icon-192.png" />
   <link rel="apple-touch-icon" href="/static/apple-touch-icon.png" />
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/highlight.js@11.9.0/styles/github-dark.min.css" />
-  <link rel="stylesheet" href="app.css?v=202604180001" />
-  <link rel="stylesheet" href="themes.css?v=202604180001" />
+  <link rel="stylesheet" href="app.css?v=202604270100" />
+  <link rel="stylesheet" href="themes.css?v=202604270100" />
 </head>
 <body>
   <!-- Auth overlay -->
@@ -233,6 +233,31 @@
 
     <!-- REQUEST QUEUE PANEL (right side) -->
     <aside id="request-queue-panel" class="request-queue-panel queue-minimized">
+
+      <!-- Service Status Section -->
+      <div id="service-status-section" class="service-status-section">
+        <div class="service-status-header">
+          <span class="service-status-icon">🔌</span>
+          <span class="service-status-label">Services</span>
+          <button id="btn-refresh-service-status" class="btn-refresh-status" title="Refresh status">↻</button>
+        </div>
+        <div id="service-status-items" class="service-status-items">
+          <div class="service-status-item" id="svc-item-telegram">
+            <span class="service-dot dot-loading" id="svc-dot-telegram"></span>
+            <span class="service-name">Telegram</span>
+            <span class="service-badge badge-loading" id="svc-badge-telegram">…</span>
+          </div>
+          <div class="service-status-item" id="svc-item-webex">
+            <span class="service-dot dot-loading" id="svc-dot-webex"></span>
+            <span class="service-name">WebEx</span>
+            <span class="service-badge badge-loading" id="svc-badge-webex">…</span>
+          </div>
+        </div>
+        <div class="service-status-footer">
+          <small id="service-status-node"></small>
+          <small id="service-status-timestamp">Checking…</small>
+        </div>
+      </div>
 
       <!-- Queue Section (Collapsible) -->
       <div id="queue-section" class="queue-section queue-section-collapsed">
@@ -492,25 +517,52 @@
           </div>
         </div>
 
-        <!-- Runtime Config -->
+        <!-- Runtime Configuration (Primary + Fallback) -->
         <div class="asf-section">
-          <div class="asf-section-title">⚡ Runtime Config</div>
+          <div class="asf-section-title">⚡ Runtime Configuration</div>
+          <p class="asf-hint" style="margin:0 0 12px;">Configure primary runtime/model and optional fallback for infrastructure failures (rate limits, quota, 5xx errors).</p>
           <div class="asf-grid">
+            <!-- Primary Runtime -->
             <div class="asf-field">
-              <label class="asf-label" for="asf-runtime">Runtime</label>
-              <select id="asf-runtime" class="glass-input glass-select asf-select">
+              <label class="asf-label" for="asf-primary-runtime">Primary Runtime</label>
+              <select id="asf-primary-runtime" class="glass-input glass-select asf-select">
                 <option value="">Default</option>
                 <option value="copilot">copilot</option>
+                <option value="copilot-sdk">copilot-sdk</option>
                 <option value="claude">claude</option>
+                <option value="claude-sdk">claude-sdk</option>
                 <option value="gemini">gemini</option>
                 <option value="opencode">opencode</option>
                 <option value="codex">codex</option>
+                <option value="devin">devin</option>
               </select>
             </div>
+            <!-- Primary Model -->
             <div class="asf-field">
-              <label class="asf-label" for="asf-model">Model</label>
-              <input id="asf-model" type="text" class="glass-input asf-input asf-mono" placeholder="e.g. claude-sonnet-4.6" autocomplete="off" />
+              <label class="asf-label" for="asf-primary-model">Primary Model</label>
+              <input id="asf-primary-model" type="text" class="glass-input asf-input asf-mono" placeholder="e.g. claude-sonnet-4.6" autocomplete="off" />
             </div>
+            <!-- Fallback Runtime -->
+            <div class="asf-field">
+              <label class="asf-label" for="asf-fallback-runtime">Fallback Runtime <span class="asf-hint">(optional)</span></label>
+              <select id="asf-fallback-runtime" class="glass-input glass-select asf-select">
+                <option value="">None</option>
+                <option value="copilot">copilot</option>
+                <option value="copilot-sdk">copilot-sdk</option>
+                <option value="claude">claude</option>
+                <option value="claude-sdk">claude-sdk</option>
+                <option value="gemini">gemini</option>
+                <option value="opencode">opencode</option>
+                <option value="codex">codex</option>
+                <option value="devin">devin</option>
+              </select>
+            </div>
+            <!-- Fallback Model -->
+            <div class="asf-field">
+              <label class="asf-label" for="asf-fallback-model">Fallback Model <span class="asf-hint">(optional)</span></label>
+              <input id="asf-fallback-model" type="text" class="glass-input asf-input asf-mono" placeholder="e.g. gpt-4-turbo" autocomplete="off" />
+            </div>
+            <!-- Max Concurrent -->
             <div class="asf-field">
               <label class="asf-label" for="asf-max-concurrent">Max Concurrent Tasks</label>
               <input id="asf-max-concurrent" type="number" class="glass-input asf-input" min="1" step="1" placeholder="1" autocomplete="off" />
@@ -655,7 +707,9 @@
           </div>
         </div>
 
-        <!-- Danger Zone -->
+
+
+        <- Enables embedding live interactive pages ( e.g. noVNC, Proxmox consoles Danger Zone -->
         <div class="asf-section asf-danger-section">
           <div class="asf-section-title">⚠️ Danger Zone</div>
           <button id="asf-delete-agent" class="asf-delete-btn">🗑 Delete Agent</button>
@@ -703,7 +757,7 @@
   <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/dompurify@3/dist/purify.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/highlight.js@11.9.0/highlight.min.js"></script>
-  <script src="app.js?v=202604180001" type="module"></script>
+  <script src="app.js?v=202604270100" type="module"></script>
 
     <!-- Skills slide-over panel (right side, below canvas) -->
     <aside id="skills-panel" class="skills-panel skills-hidden">

@@ -123,6 +123,7 @@ def build_executor_context(session_id: str = "", mode: str = "interactive") -> s
     Returns a markdown section agents can reference to use wee_executor.py.
     """
     import subprocess as _sp
+
     script = Path(__file__).resolve().parent.parent / "scripts" / "wee_executor.py"
     if not script.exists():
         return ""
@@ -132,11 +133,14 @@ def build_executor_context(session_id: str = "", mode: str = "interactive") -> s
     try:
         result = _sp.run(
             ["python3", str(script), "--list-capabilities", "--json"],
-            capture_output=True, text=True, timeout=5,
-            env={**__import__("os").environ, "WEE_SESSION_ID": session_id or "ctx"}
+            capture_output=True,
+            text=True,
+            timeout=5,
+            env={**__import__("os").environ, "WEE_SESSION_ID": session_id or "ctx"},
         )
         if result.returncode == 0:
             import json as _json
+
             caps = _json.loads(result.stdout)
             for cap in caps:
                 req = ", ".join(cap.get("required_args", []))
@@ -161,11 +165,12 @@ def build_executor_context(session_id: str = "", mode: str = "interactive") -> s
         "```bash\n"
         "python3 /opt/n8n-copilot-shim-dev/scripts/wee_executor.py "
         "--capability create_background_task "
-        "--args '{\"agent\": \"research\", \"prompt\": \"look up X\"}'\n"
+        '--args \'{"agent": "research", "prompt": "look up X"}\'\n'
         "```\n"
         "\n"
         "**Security:** Bearer token is hidden. WEE_SESSION_ID is set automatically.\n"
     )
+
 
 def detect_compaction(last_response: str) -> bool:
     """Return True if the response suggests context compaction occurred."""

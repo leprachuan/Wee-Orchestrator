@@ -159,8 +159,9 @@ def test_issue_24_webex_command_messages_are_rate_limited(webex_connector):
     }
 
     with (
-        patch.object(webex_connector, "_execute_command", return_value="command ok")
-        as execute_mock,
+        patch.object(
+            webex_connector, "_execute_command", return_value="command ok"
+        ) as execute_mock,
         patch.object(webex_connector, "send_message") as send_message_mock,
     ):
         webex_connector.handle_message(message)
@@ -169,3 +170,74 @@ def test_issue_24_webex_command_messages_are_rate_limited(webex_connector):
     assert execute_mock.call_count == 1
     assert send_message_mock.call_args_list[0].args == ("room-1", "command ok")
     assert "Rate limit exceeded" in send_message_mock.call_args_list[1].args[1]
+
+
+def test_issue_24_telegram_voice_messages_are_blocked_before_download(
+    telegram_connector,
+):
+    update = {
+        "message": {
+            "from": {"id": 42, "username": "tester", "is_bot": False},
+            "chat": {"id": 1001},
+            "voice": {"file_id": "voice-1", "duration": 3},
+        }
+    }
+
+    with (
+        patch.object(
+            telegram_connector, "download_file", return_value="/tmp/voice.ogg"
+        ) as download_mock,
+        patch("telegram_connector.audio_transcriber.transcribe") as transcribe_mock,
+        patch.object(
+            telegram_connector,
+            "_query_agent_with_status",
+            return_value=("voice response", None),
+        ) as query_mock,
+        patch.object(telegram_connector, "send_typing"),
+        patch.object(telegram_connector, "send_response") as send_response_mock,
+        patch.object(telegram_connector, "send_message") as send_message_mock,
+        patch.object(telegram_connector, "cleanup_files"),
+    ):
+        transcribe_mock.return_value = ("transcribed audio", "mock")
+
+        telegram_connector.handle_message(update)
+        telegram_connector.handle_message(update)
+
+    assert download_mock.call_count == 1
+    assert transcribe_mock.call_count == 1
+    assert query_mock.call_count == 1
+    send_response_mock.assert_called_once_with(1001, "voice response", None)
+    assert "Rate limit exceeded" in send_message_mock.call_args.args[1]
+
+
+def test_issue_24_webex_files_are_blocked_before_download(webex_connector):
+    message = {
+        "personId": "person-1",
+        "personEmail": "user@example.com",
+        "roomId": "room-1",
+        "text": "",
+        "files": ["https://files.example/test.png"],
+    }
+
+    with (
+        patch.object(
+            webex_connector,
+            "download_file",
+            return_value=("/tmp/test.png", "test.png"),
+        ) as download_mock,
+        patch("webex_connector.audio_transcriber.is_audio_file", return_value=False),
+        patch.object(
+            webex_connector,
+            "_query_agent_with_status",
+            return_value=("file response", None),
+        ) as query_mock,
+        patch.object(webex_connector, "send_response") as send_response_mock,
+        patch.object(webex_connector, "send_message") as send_message_mock,
+    ):
+        webex_connector.handle_message(message)
+        webex_connector.handle_message(message)
+
+    assert download_mock.call_count == 1
+    assert query_mock.call_count == 1
+    send_response_mock.assert_called_once_with("room-1", "file response", None)
+    assert "Rate limit exceeded" in send_message_mock.call_args.args[1]

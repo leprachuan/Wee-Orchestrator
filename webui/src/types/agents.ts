@@ -59,22 +59,34 @@ export interface AgentPermissions {
   runtime_overrides?: Record<string, AgentRuntimeOverride>;
 }
 
+/** Primary and fallback runtime configuration for an agent */
+export interface AgentRuntimeConfig {
+  /** Primary runtime backend (copilot | claude | gemini | opencode | codex | cursor) */
+  primary_runtime?: string;
+  /** Primary AI model identifier */
+  primary_model?: string;
+  /** Fallback runtime (used if primary fails with rate limits, quota, or infrastructure errors) */
+  fallback_runtime?: string;
+  /** Fallback AI model identifier */
+  fallback_model?: string;
+}
+
 /** A single agent configuration entry */
-export interface Agent {
+export interface Agent extends AgentRuntimeConfig {
   /** Unique identifier used in /agent set <name> */
   name: string;
   /** Human-readable description shown in agent list */
   description?: string;
   /** Working directory for agent execution */
   path: string;
-  /** Default runtime backend (copilot | claude | gemini | opencode | codex | cursor) */
-  runtime?: string;
-  /** Default AI model identifier */
-  model?: string;
   /** Maximum concurrent background tasks for this agent (>= 1) */
   max_concurrent?: number;
   /** Permission configuration for this agent */
   permissions?: AgentPermissions;
+  /** DEPRECATED: Use primary_runtime instead. Kept for backward compatibility. */
+  runtime?: string;
+  /** DEPRECATED: Use primary_model instead. Kept for backward compatibility. */
+  model?: string;
 }
 
 /** Root structure of agents.json */

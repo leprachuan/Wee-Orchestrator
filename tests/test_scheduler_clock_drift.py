@@ -134,9 +134,9 @@ class TestDriftDetection:
         executor._last_check_mono = time.monotonic() - 1
         executor._detect_clock_drift()
 
-        assert executor._wall_clock_debt > 50, (
-            f"Expected debt >50s after backward jump, got {executor._wall_clock_debt}"
-        )
+        assert (
+            executor._wall_clock_debt > 50
+        ), f"Expected debt >50s after backward jump, got {executor._wall_clock_debt}"
 
     def test_forward_drift_reduces_debt(self, executor):
         """Forward drift should reduce existing wall_clock_debt (Issue #71)."""
@@ -147,9 +147,9 @@ class TestDriftDetection:
         executor._last_check_mono = time.monotonic() - 1
         executor._detect_clock_drift()
 
-        assert executor._wall_clock_debt < 50, (
-            f"Expected debt to reduce after forward drift, got {executor._wall_clock_debt}"
-        )
+        assert (
+            executor._wall_clock_debt < 50
+        ), f"Expected debt to reduce after forward drift, got {executor._wall_clock_debt}"
 
     def test_debt_capped_at_maximum(self, executor):
         """Wall-clock debt should not exceed _DRIFT_COMPENSATION_CAP."""
@@ -160,9 +160,9 @@ class TestDriftDetection:
         executor._last_check_mono = time.monotonic() - 1
         executor._detect_clock_drift()
 
-        assert executor._wall_clock_debt <= _DRIFT_COMPENSATION_CAP, (
-            f"Debt {executor._wall_clock_debt} exceeds cap {_DRIFT_COMPENSATION_CAP}"
-        )
+        assert (
+            executor._wall_clock_debt <= _DRIFT_COMPENSATION_CAP
+        ), f"Debt {executor._wall_clock_debt} exceeds cap {_DRIFT_COMPENSATION_CAP}"
 
     def test_debt_does_not_go_negative(self, executor):
         """Forward drift should not push debt below zero."""
@@ -173,9 +173,9 @@ class TestDriftDetection:
         executor._last_check_mono = time.monotonic() - 1
         executor._detect_clock_drift()
 
-        assert executor._wall_clock_debt >= 0.0, (
-            f"Debt went negative: {executor._wall_clock_debt}"
-        )
+        assert (
+            executor._wall_clock_debt >= 0.0
+        ), f"Debt went negative: {executor._wall_clock_debt}"
 
     def test_drift_events_tracked(self, executor):
         """Significant drift events should be recorded in _drift_events."""
@@ -472,9 +472,7 @@ class TestCheckAndExecuteClockDrift:
         )
         assert new_next > datetime.now(timezone.utc)
 
-    def test_backward_jump_cooldown_prevents_rerun(
-        self, executor, tmp_scheduler_dir
-    ):
+    def test_backward_jump_cooldown_prevents_rerun(self, executor, tmp_scheduler_dir):
         """Simulate backward clock jump: job already ran, should NOT re-execute."""
         _, jobs_file, _, _ = tmp_scheduler_dir
         job = _make_job(job_id="backward-test")
@@ -542,6 +540,6 @@ class TestNoUtcnow:
     def test_no_utcnow_in_executor(self):
         executor_path = _REPO_ROOT / "scheduler" / "executor.py"
         content = executor_path.read_text()
-        assert "datetime.utcnow()" not in content, (
-            "datetime.utcnow() is deprecated - use datetime.now(timezone.utc)"
-        )
+        assert (
+            "datetime.utcnow()" not in content
+        ), "datetime.utcnow() is deprecated - use datetime.now(timezone.utc)"

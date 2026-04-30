@@ -13,8 +13,8 @@ Validates:
 
 import os
 import sys
-import threading
 import tempfile
+import threading
 import unittest
 from unittest.mock import patch
 
@@ -40,6 +40,7 @@ class TestBgIdentityResolution(unittest.TestCase):
 
     def _make_mgr(self, shared_bg_identity=None):
         from agent_manager import SessionManager
+
         mgr = SessionManager.__new__(SessionManager)
         mgr._bg_identity = shared_bg_identity
         mgr._bg_task_mgr = None
@@ -233,6 +234,7 @@ class TestBackgroundTaskIdentityStorage(unittest.TestCase):
 
     def setUp(self):
         from agent_manager import BackgroundTaskManager
+
         fd, self.tmp = tempfile.mkstemp(suffix=".json")
         os.close(fd)
         mgr = BackgroundTaskManager.__new__(BackgroundTaskManager)

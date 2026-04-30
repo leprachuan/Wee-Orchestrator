@@ -6,15 +6,12 @@ Manages session ID mapping between N8N chat sessions and AI backend sessions
 """
 
 import argparse
-import calendar
-import copy
 import hashlib
 import json
 import logging
 import os
 import re
 import secrets as _secrets
-import shlex
 import shutil
 import signal
 import subprocess
@@ -25,15 +22,9 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 from uuid import uuid4
 
-from session_manager_components import (
-    CliCommandHandler,
-    RuntimeExecutionRequest,
-    RuntimeExecutorRegistry,
-    StreamingManager,
-)
-
 # Dynamically determine the repo base directory (works regardless of where repo is cloned)
 SCRIPT_BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+MODEL_MANIFEST_PATH = Path(SCRIPT_BASE_DIR) / "model-manifest.json"
 
 # ── Theme constants (F025) ──────────────────────────────────────────────
 _BUILTIN_THEMES = [
@@ -132,43 +123,28 @@ def _sanitize_command_for_display(text: str) -> str:
 
 def _sanitize_tool_call_for_display(data: dict) -> dict:
     """Return a shallow copy of a tool_call event dict with sensitive
-    credentials redacted from the ``input`` field.  Other fields are
-    passed through unchanged."""
+    credentials redacted from the ``input`` and ``output`` fields.
+    Other fields are passed through unchanged."""
     if not isinstance(data, dict):
         return data
-    inp = data.get("input")
-    if inp is None:
-        # Also check partial_json for streaming deltas
-        pj = data.get("partial_json")
-        if pj and isinstance(pj, str):
-            sanitized = dict(data)
-            sanitized["partial_json"] = _sanitize_command_for_display(pj)
-            return sanitized
-        return data
     sanitized = dict(data)
-    if isinstance(inp, str):
-        sanitized["input"] = _sanitize_command_for_display(inp)
-    elif isinstance(inp, dict):
-        # Claude-style structured input — sanitize known fields
-        new_inp = dict(inp)
-        for field in ("command", "input", "code", "content", "url", "body"):
-            if field in new_inp and isinstance(new_inp[field], str):
-                new_inp[field] = _sanitize_command_for_display(new_inp[field])
-        sanitized["input"] = new_inp
+    inp = data.get("input")
+    if inp is not None:
+        if isinstance(inp, str):
+            sanitized["input"] = _sanitize_command_for_display(inp)
+        elif isinstance(inp, dict):
+            new_inp = dict(inp)
+            for field in ("command", "input", "code", "content", "url", "body"):
+                if field in new_inp and isinstance(new_inp[field], str):
+                    new_inp[field] = _sanitize_command_for_display(new_inp[field])
+            sanitized["input"] = new_inp
+    out = data.get("output")
+    if out is not None and isinstance(out, str):
+        sanitized["output"] = _sanitize_command_for_display(out)
+    pj = data.get("partial_json")
+    if pj and isinstance(pj, str):
+        sanitized["partial_json"] = _sanitize_command_for_display(pj)
     return sanitized
-
-
-def _split_command_args(command: str) -> List[str]:
-    """Parse a command string into argv without an implicit shell."""
-    if not isinstance(command, str) or not command.strip():
-        raise ValueError("No command provided")
-    try:
-        argv = shlex.split(command, posix=True)
-    except ValueError as exc:
-        raise ValueError(f"Invalid command syntax: {exc}") from exc
-    if not argv:
-        raise ValueError("No command provided")
-    return argv
 
 
 def _resolve_silent_default(channel: str) -> bool:
@@ -185,6 +161,138 @@ def _resolve_silent_default(channel: str) -> bool:
         return True  # not verbose = silent
     # Default: channel-based
     return channel in ("telegram", "webex")
+
+
+def _parse_claude_stream_json_line(line: str, active_tool_calls: dict) -> list:
+    """Parse one stream-json line from the Claude CLI.
+
+    Returns a list of ``(channel, event_dict)`` tuples.  The caller is
+    responsible for dispatching each tuple to the appropriate queue or
+    stream buffer.
+
+    Special channel ``"text_block_start"`` signals that a new text block
+    has begun; the caller should emit a newline separator if needed.
+
+    *active_tool_calls* is mutated in place to track in-flight tool calls.
+    """
+    import json as _json
+    import time as _time
+
+    results: list = []
+    try:
+        obj = _json.loads(line.strip())
+        evt_type = obj.get("type")
+
+        if evt_type == "stream_event":
+            event = obj.get("event") or {}
+            inner_type = event.get("type", "")
+
+            if inner_type == "content_block_start":
+                cb = event.get("content_block") or {}
+                cb_type = cb.get("type")
+                cb_index = event.get("index", 0)
+                if cb_type == "text":
+                    results.append(("text_block_start", {}))
+                elif cb_type == "tool_use":
+                    tool_id = cb.get("id", f"tool_{cb_index}")
+                    tool_name = cb.get("name", "unknown")
+                    active_tool_calls[cb_index] = {
+                        "id": tool_id,
+                        "name": tool_name,
+                        "input_parts": [],
+                        "started_at": _time.strftime(
+                            "%Y-%m-%dT%H:%M:%SZ", _time.gmtime()
+                        ),
+                    }
+                    results.append(
+                        (
+                            "tool_call",
+                            {
+                                "event": "start",
+                                "id": tool_id,
+                                "name": tool_name,
+                                "index": cb_index,
+                            },
+                        )
+                    )
+
+            elif inner_type == "content_block_delta":
+                delta = event.get("delta") or {}
+                delta_type = delta.get("type")
+                cb_index = event.get("index", 0)
+                if delta_type == "text_delta":
+                    text = delta.get("text", "")
+                    if text:
+                        results.append(("chunk", {"text": text}))
+                elif delta_type == "input_json_delta":
+                    partial = delta.get("partial_json", "")
+                    if cb_index in active_tool_calls:
+                        active_tool_calls[cb_index]["input_parts"].append(partial)
+                        results.append(
+                            (
+                                "tool_call",
+                                {
+                                    "event": "input_delta",
+                                    "id": active_tool_calls[cb_index]["id"],
+                                    "partial_json": partial,
+                                },
+                            )
+                        )
+
+            elif inner_type == "content_block_stop":
+                cb_index = event.get("index", 0)
+                if cb_index in active_tool_calls:
+                    tc_info = active_tool_calls.pop(cb_index)
+                    full_input = "".join(tc_info["input_parts"])
+                    try:
+                        parsed_input = _json.loads(full_input) if full_input else {}
+                    except (ValueError, KeyError):
+                        parsed_input = full_input
+                    results.append(
+                        (
+                            "tool_call",
+                            {
+                                "event": "input_complete",
+                                "id": tc_info["id"],
+                                "name": tc_info["name"],
+                                "input": parsed_input,
+                                "started_at": tc_info["started_at"],
+                            },
+                        )
+                    )
+
+        elif evt_type == "user":
+            # Claude CLI emits tool_result blocks in user-role messages,
+            # not assistant messages.
+            msg = obj.get("message") or {}
+            for block in msg.get("content") or []:
+                if block.get("type") == "tool_result":
+                    raw = block.get("content", "")
+                    if isinstance(raw, list):
+                        output = " ".join(
+                            p.get("text", "")
+                            for p in raw
+                            if isinstance(p, dict) and p.get("type") == "text"
+                        )
+                    else:
+                        output = str(raw) if raw else ""
+                    is_err = block.get("is_error", False)
+                    results.append(
+                        (
+                            "tool_call",
+                            {
+                                "event": "result",
+                                "id": block.get("tool_use_id", ""),
+                                "status": "error" if is_err else "completed",
+                                "output": output[:500],
+                                "is_error": is_err,
+                            },
+                        )
+                    )
+
+    except (ValueError, KeyError, AttributeError):
+        pass
+    return results
 
 
 class RateLimiter:
@@ -364,17 +472,55 @@ class AuthManager:
         self._save_sessions()
 
 
+_FALLBACK_PATTERNS = [
+    r"429",
+    r"rate.?limit",
+    r"quota.?exceeded",
+    r"401",
+    r"unauthorized",
+    r"missing.?authentication",
+    r"api[_\-]?key.?(invalid|expired|missing)",
+    r"503",
+    r"service.?unavailable",
+    r"502",
+    r"bad.?gateway",
+    r"connection.?refused",
+    r"timed?.?out",
+    r"etimedout",
+    r"overloaded",
+]
+
+# Copilot permission-mode instruction blocks (issue #190).
+# Defined as module-level constants to avoid duplication across original,
+# proactive-restart, and reactive-recovery paths in run_copilot().
+_COPILOT_ELEVATED_MODE_INSTRUCTIONS = (
+    "\n\n[ELEVATED MODE ENABLED]\n"
+    "Full permissions granted. ALL commands requiring elevated privileges MUST automatically "  # noqa: E501
+    "prefix with 'sudo' \u2014 no exceptions. This includes:\n"
+    "\u2022 Service management: sudo systemctl restart/start/stop/reload/enable/disable <service>\n"  # noqa: E501
+    "\u2022 Network commands: sudo ping, sudo ssh, sudo iptables, sudo ip, etc.\n"
+    "\u2022 System administration: sudo journalctl, sudo systemd-*, sudo chmod/chown on system paths\n"  # noqa: E501
+    "\u2022 Any command that would fail due to insufficient permissions\n"
+    "Sudo is configured without password prompt (NOPASSWD:ALL). "
+    "Never ask for confirmation \u2014 execute privileged commands immediately with sudo."  # noqa: E501
+)
+_COPILOT_SANDBOXED_MODE_INSTRUCTIONS = (
+    "\n\n[SANDBOXED MODE ENABLED]\n"
+    "Read-only access only. Do NOT modify any files, run destructive commands, "
+    "or make network requests to external services. Analysis and reporting only."
+)
+# Session expiry constants (issue #190).
+# Used in both proactive age check and reactive token expiry recovery.
+_COPILOT_SESSION_MAX_AGE_SEC = 25 * 60  # 25 minutes
+_TOKEN_EXPIRED_MARKER = "Session token expired"
+
+
 class BackgroundTaskManager:
-    """Manages background task lifecycle: creation, tracking, output capture, cleanup."""
+    """Manages background task lifecycle: creation, tracking, output capture, cleanup."""  # noqa: E501
 
     MAX_TASKS_PER_USER = int(os.environ.get("BG_MAX_TASKS_PER_USER", "5"))
-    MAX_TOTAL_TASKS = int(os.environ.get("BG_MAX_TOTAL_TASKS", "500"))
     MAX_OUTPUT_LINES = 500
-    MAX_TOOL_CALLS = 200
-    MAX_TOOL_FIELD_CHARS = int(os.environ.get("BG_MAX_TOOL_FIELD_CHARS", "4000"))
     CLEANUP_AGE_HOURS = int(os.environ.get("BG_CLEANUP_HOURS", "24"))
-    BG_CLEANUP_HOURS = int(os.environ.get("BG_CLEANUP_HOURS", "24"))
-    _cleanup_thread_started = False  # class-level default; instance __init__ overwrites
 
     def __init__(self):
         home = os.path.expanduser("~")
@@ -384,187 +530,20 @@ class BackgroundTaskManager:
         api_port = os.environ.get("API_PORT", "8001")
         env_suffix = "-dev" if api_port == "8001" else ""
         self._path = os.path.join(copilot_dir, f"background-tasks{env_suffix}.json")
-        self._lock = threading.RLock()
+        self._lock = threading.Lock()
         self._bg_events = {}  # {origin_session_id: [event_dicts]}
         self._bg_events_lock = threading.Lock()
-        self._cleanup_thread_started = False
-        self._tasks_cache = None
-        self._cache_mtime_ns = None
-        self._cache_size = None
-
-    def _start_cleanup_thread(self):
-        """Start a background thread that runs cleanup every 5 minutes."""
-        if self._cleanup_thread_started:
-            return
-        self._cleanup_thread_started = True
-
-        def _cleanup_loop():
-            while True:
-                time.sleep(300)  # 5 minutes
-                try:
-                    self.cleanup_old()
-                except Exception:
-                    pass
-
-        t = threading.Thread(target=_cleanup_loop, daemon=True)
-        t.start()
 
     def _load(self) -> list:
-        with self._lock:
-            return copy.deepcopy(self._load_unlocked())
-
-    def _ensure_cache_state(self):
-        if not hasattr(self, "_tasks_cache"):
-            self._tasks_cache = None
-        if not hasattr(self, "_cache_mtime_ns"):
-            self._cache_mtime_ns = None
-        if not hasattr(self, "_cache_size"):
-            self._cache_size = None
-
-    def _load_unlocked(self, force: bool = False) -> list:
-        self._ensure_cache_state()
-        if not force and self._tasks_cache is not None:
-            try:
-                stat = os.stat(self._path)
-                if (
-                    self._cache_mtime_ns == stat.st_mtime_ns
-                    and self._cache_size == stat.st_size
-                ):
-                    return self._tasks_cache
-            except FileNotFoundError:
-                if self._cache_mtime_ns is None:
-                    return self._tasks_cache
         try:
             with open(self._path, "r") as f:
-                tasks = json.load(f)
+                return json.load(f)
         except (FileNotFoundError, json.JSONDecodeError):
-            tasks = []
-        self._tasks_cache = tasks
-        try:
-            stat = os.stat(self._path)
-            self._cache_mtime_ns = stat.st_mtime_ns
-            self._cache_size = stat.st_size
-        except FileNotFoundError:
-            self._cache_mtime_ns = None
-            self._cache_size = None
-        return self._tasks_cache
+            return []
 
     def _save(self, tasks: list):
-        with self._lock:
-            self._save_unlocked(tasks)
-
-    def _save_unlocked(self, tasks: list):
-        """Atomic write: write to temp file then rename to avoid corruption."""
-        self._ensure_cache_state()
-        retained = self._prune_tasks(tasks)
-        normalized = self._normalize_tasks(retained)
-        tmp_path = self._path + ".tmp"
-        try:
-            with open(tmp_path, "w") as f:
-                json.dump(normalized, f, indent=2, default=str)
-            os.replace(tmp_path, self._path)
-        except Exception:
-            # If atomic rename fails, try direct write as fallback
-            try:
-                os.unlink(tmp_path)
-            except OSError:
-                pass
-            with open(self._path, "w") as f:
-                json.dump(normalized, f, indent=2, default=str)
-        self._tasks_cache = normalized
-        try:
-            stat = os.stat(self._path)
-            self._cache_mtime_ns = stat.st_mtime_ns
-            self._cache_size = stat.st_size
-        except FileNotFoundError:
-            self._cache_mtime_ns = None
-            self._cache_size = None
-
-    def _normalize_tasks(self, tasks: list) -> list:
-        normalized = []
-        for task in tasks:
-            current = dict(task)
-            if isinstance(current.get("output_lines"), list):
-                current["output_lines"] = current["output_lines"][-self.MAX_OUTPUT_LINES :]
-            else:
-                current["output_lines"] = []
-
-            tool_calls = current.get("tool_calls") or []
-            if not isinstance(tool_calls, list):
-                tool_calls = []
-            current["tool_calls"] = [
-                self._trim_tool_call(tc) for tc in tool_calls[-self.MAX_TOOL_CALLS :]
-            ]
-            normalized.append(current)
-        return normalized
-
-    def _trim_tool_call(self, tool_call: dict) -> dict:
-        trimmed = dict(tool_call or {})
-        for key in ("id", "name", "status", "runtime", "timestamp"):
-            value = trimmed.get(key)
-            if value is not None and not isinstance(value, str):
-                trimmed[key] = str(value)
-        for key in ("input", "output", "error"):
-            value = trimmed.get(key)
-            if value is None:
-                continue
-            if not isinstance(value, str):
-                value = json.dumps(value, default=str)
-            if len(value) > self.MAX_TOOL_FIELD_CHARS:
-                value = value[: self.MAX_TOOL_FIELD_CHARS] + "...[truncated]"
-            trimmed[key] = value
-        return trimmed
-
-    def _terminal_cutoff(self) -> float:
-        return time.time() - (self.CLEANUP_AGE_HOURS * 3600)
-
-    def _prune_terminal_tasks(self, tasks: list, cutoff: float = None) -> list:
-        terminal_statuses = {"completed", "failed", "killed"}
-        cutoff = self._terminal_cutoff() if cutoff is None else cutoff
-        kept = []
-        for task in tasks:
-            status = task.get("status")
-            if status not in terminal_statuses:
-                kept.append(task)
-                continue
-            completed = task.get("completed_at")
-            if not completed:
-                kept.append(task)
-                continue
-            try:
-                completed_ts = calendar.timegm(
-                    time.strptime(completed, "%Y-%m-%dT%H:%M:%SZ")
-                )
-            except (ValueError, OverflowError):
-                kept.append(task)
-                continue
-            if completed_ts > cutoff:
-                kept.append(task)
-        return kept
-
-    def _evict_oldest_terminal(self, tasks: list) -> list:
-        """Evict oldest completed/failed/killed tasks when store exceeds MAX_TOTAL_TASKS."""
-        if len(tasks) <= self.MAX_TOTAL_TASKS:
-            return tasks
-
-        terminal_statuses = {"completed", "failed", "killed"}
-        terminal_tasks = [
-            (i, t)
-            for i, t in enumerate(tasks)
-            if t.get("status") in terminal_statuses
-        ]
-
-        if not terminal_tasks:
-            return tasks
-
-        evict_count = len(tasks) - self.MAX_TOTAL_TASKS
-        terminal_tasks.sort(key=lambda x: x[1].get("completed_at", "") or x[1].get("created_at", ""))
-        evict_indices = {idx for idx, _ in terminal_tasks[:evict_count]}
-
-        return [t for i, t in enumerate(tasks) if i not in evict_indices]
-
-    def _prune_tasks(self, tasks: list) -> list:
-        return self._evict_oldest_terminal(self._prune_terminal_tasks(tasks))
+        with open(self._path, "w") as f:
+            json.dump(tasks, f, indent=2, default=str)
 
     def _user_key(self, channel: str, identity: str) -> str:
         # Strip channel prefix from identity to avoid double-prefixing
@@ -588,6 +567,9 @@ class BackgroundTaskManager:
         timeout: int = None,
         notify: bool = True,
         origin_session_id: str = None,
+        permission_mode: str = "restricted",
+        fallback_runtime: str = None,
+        fallback_model: str = None,
     ) -> dict:
         task = {
             "task_id": task_id,
@@ -615,20 +597,24 @@ class BackgroundTaskManager:
             "timeout": timeout,
             "notify": notify,
             "origin_session_id": origin_session_id,
+            "permission_mode": permission_mode,
+            "fallback_runtime": fallback_runtime,
+            "fallback_model": fallback_model,
+            "used_fallback": False,
+            "actual_runtime": None,
+            "actual_model": None,
         }
         with self._lock:
-            tasks = self._prune_tasks(self._load_unlocked())
+            tasks = self._load()
             tasks.append(task)
-            tasks = self._evict_oldest_terminal(tasks)
-            self._save_unlocked(tasks)
-        self._start_cleanup_thread()
+            self._save(tasks)
         return task
 
     def get_task(self, task_id: str) -> Optional[dict]:
         with self._lock:
-            for t in self._load_unlocked():
+            for t in self._load():
                 if t["task_id"] == task_id:
-                    return copy.deepcopy(t)
+                    return t
         return None
 
     def _identity_matches(self, task: dict, channel: str, identity: str) -> bool:
@@ -644,61 +630,13 @@ class BackgroundTaskManager:
     def list_tasks(self, channel: str, identity: str) -> list:
         with self._lock:
             return [
-                copy.deepcopy(t)
-                for t in self._load_unlocked()
-                if self._identity_matches(t, channel, identity)
+                t for t in self._load() if self._identity_matches(t, channel, identity)
             ]
 
     def list_all_tasks(self) -> list:
         """Return all tasks regardless of identity/channel."""
         with self._lock:
-            return copy.deepcopy(self._load_unlocked())
-
-    def list_task_summaries(
-        self,
-        limit: int = 50,
-        offset: int = 0,
-        status: Optional[str] = None,
-        reconcile_running: bool = False,
-    ) -> Tuple[list, int]:
-        """Return paginated task summaries without large transcript payloads."""
-        with self._lock:
-            tasks = list(self._load_unlocked())
-            if reconcile_running:
-                changed = False
-                completed_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-                for task in tasks:
-                    if task.get("status") != "running" or not task.get("pid"):
-                        continue
-                    try:
-                        os.kill(task["pid"], 0)
-                    except ProcessLookupError:
-                        task["status"] = "failed"
-                        task["error"] = "Process terminated unexpectedly"
-                        task["completed_at"] = completed_at
-                        changed = True
-                if changed:
-                    self._save_unlocked(tasks)
-            if status:
-                tasks = [t for t in tasks if t.get("status") == status]
-            tasks.sort(key=lambda t: t.get("created_at", ""), reverse=True)
-            total = len(tasks)
-            page = tasks[offset : offset + limit]
-            summaries = [
-                {
-                    "task_id": t["task_id"],
-                    "agent": t["agent"],
-                    "runtime": t["runtime"],
-                    "model": t["model"],
-                    "prompt": (t.get("prompt") or "")[:200],
-                    "status": t["status"],
-                    "created_at": t["created_at"],
-                    "completed_at": t.get("completed_at"),
-                    "error": t.get("error"),
-                }
-                for t in page
-            ]
-            return summaries, total
+            return list(self._load())
 
     def count_running(self, channel: str, identity: str, agent: str = None) -> int:
         tasks = self.list_tasks(channel, identity)
@@ -748,16 +686,16 @@ class BackgroundTaskManager:
 
     def update_task(self, task_id: str, **fields):
         with self._lock:
-            tasks = self._load_unlocked()
+            tasks = self._load()
             for t in tasks:
                 if t["task_id"] == task_id:
                     t.update(fields)
                     break
-            self._save_unlocked(tasks)
+            self._save(tasks)
 
     def append_output(self, task_id: str, line: str):
         with self._lock:
-            tasks = self._load_unlocked()
+            tasks = self._load()
             for t in tasks:
                 if t["task_id"] == task_id:
                     t["output_lines"].append(line)
@@ -765,35 +703,47 @@ class BackgroundTaskManager:
                     if len(t["output_lines"]) > self.MAX_OUTPUT_LINES:
                         t["output_lines"] = t["output_lines"][-self.MAX_OUTPUT_LINES :]
                     break
-            self._save_unlocked(tasks)
+            self._save(tasks)
+
+    MAX_TOOL_CALLS = 200
 
     def append_tool_call(self, task_id: str, tool_call: dict):
         """Append a new tool call event to the task."""
         with self._lock:
-            tasks = self._load_unlocked()
+            tasks = self._load()
             for t in tasks:
                 if t["task_id"] == task_id:
                     if "tool_calls" not in t:
                         t["tool_calls"] = []
-                    t["tool_calls"].append(self._trim_tool_call(tool_call))
+                    t["tool_calls"].append(tool_call)
                     if len(t["tool_calls"]) > self.MAX_TOOL_CALLS:
                         t["tool_calls"] = t["tool_calls"][-self.MAX_TOOL_CALLS :]
                     break
-            self._save_unlocked(tasks)
+            self._save(tasks)
 
     def update_tool_call(self, task_id: str, call_id: str, **fields):
         """Update an existing tool call by its id."""
         with self._lock:
-            tasks = self._load_unlocked()
+            tasks = self._load()
             for t in tasks:
                 if t["task_id"] == task_id:
                     for tc in t.get("tool_calls", []):
                         if tc.get("id") == call_id:
                             tc.update(fields)
-                            tc.update(self._trim_tool_call(tc))
                             break
                     break
-            self._save_unlocked(tasks)
+            self._save(tasks)
+
+    def mark_fallback_used(
+        self, task_id: str, fallback_runtime: str, fallback_model: str
+    ):
+        """Record that a task retried on a fallback runtime."""
+        self.update_task(
+            task_id,
+            used_fallback=True,
+            actual_runtime=fallback_runtime,
+            actual_model=fallback_model,
+        )
 
     def complete_task(self, task_id: str, final_response: str):
         self.update_task(
@@ -840,21 +790,37 @@ class BackgroundTaskManager:
 
     def delete_task(self, task_id: str) -> bool:
         with self._lock:
-            tasks = self._load_unlocked()
+            tasks = self._load()
             before = len(tasks)
             tasks = [t for t in tasks if t["task_id"] != task_id]
             if len(tasks) < before:
-                self._save_unlocked(tasks)
+                self._save(tasks)
                 return True
         return False
 
     def cleanup_old(self):
-        """Purge terminal tasks older than CLEANUP_AGE_HOURS and enforce MAX_TOTAL_TASKS cap."""
+        cutoff = time.time() - (self.CLEANUP_AGE_HOURS * 3600)
         with self._lock:
-            tasks = self._load_unlocked()
-            kept = self._prune_tasks(tasks)
+            tasks = self._load()
+            kept = []
+            for t in tasks:
+                if t["status"] == "running":
+                    kept.append(t)
+                    continue
+                completed = t.get("completed_at")
+                if completed:
+                    try:
+                        ct = time.mktime(time.strptime(completed, "%Y-%m-%dT%H:%M:%SZ"))
+                        if ct > cutoff:
+                            kept.append(t)
+                            continue
+                    except (ValueError, OverflowError):
+                        kept.append(t)
+                        continue
+                else:
+                    kept.append(t)
             if len(kept) < len(tasks):
-                self._save_unlocked(kept)
+                self._save(kept)
 
     def reconcile_stale_tasks(self) -> dict:
         """Reconcile orphaned tasks after a service restart.
@@ -865,7 +831,7 @@ class BackgroundTaskManager:
         now_str = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
         reconciled = {"stale_running": 0, "queued_ready": 0}
         with self._lock:
-            tasks = self._load_unlocked()
+            tasks = self._load()
             changed = False
             for t in tasks:
                 if t["status"] == "running":
@@ -884,7 +850,7 @@ class BackgroundTaskManager:
                         reconciled["stale_running"] += 1
                         changed = True
             if changed:
-                self._save_unlocked(tasks)
+                self._save(tasks)
             # Count queued tasks that are now promotable
             reconciled["queued_ready"] = sum(
                 1 for t in tasks if t["status"] == "queued"
@@ -1060,7 +1026,7 @@ def get_available_runtimes() -> List[Dict[str, str]]:
         {"id": "codex", "label": "codex"},
         {"id": "devin", "label": "devin"},
         {"id": "cursor", "label": "cursor", "icon": "🖱️"},
-        {"id": "wee", "label": "wee", "icon": "🌿"},
+        {"id": "wee", "label": "wee", "icon": "🍀"},
     ]
 
     available = [rt for rt in all_runtimes if check_runtime_available(rt["id"])]
@@ -1244,7 +1210,9 @@ class HistoryManager:
                     return s.get("messages", [])
         return None
 
-    def create_session(self, channel: str, identity: str, session_id: str) -> dict:
+    def create_session(
+        self, channel: str, identity: str, session_id: str, agent: str = ""
+    ) -> dict:
         """Create a new session entry, pruning oldest if over cap."""
         with self._lock:
             data = self._load()
@@ -1261,6 +1229,7 @@ class HistoryManager:
                 "session_id": session_id,
                 "title": "",
                 "preview": "",
+                "agent": agent or "",
                 "created_at": now,
                 "updated_at": now,
                 "messages": [],
@@ -1381,6 +1350,21 @@ class HistoryManager:
             data[key]["sessions"] = new_sessions
             self._save(data)
             return True
+
+    def update_session_agent(
+        self, channel: str, identity: str, session_id: str, agent: str
+    ) -> bool:
+        """Update the agent associated with a session."""
+        with self._lock:
+            data = self._load()
+            key = self._user_key(channel, identity)
+            for s in data.get(key, {}).get("sessions", []):
+                if s["session_id"] == session_id:
+                    s["agent"] = agent or ""
+                    s["updated_at"] = time.time()
+                    self._save(data)
+                    return True
+        return False
 
 
 class RuntimeUsageTracker:
@@ -1528,13 +1512,6 @@ class SessionManager:
     # Note: Claude Code CLI does not support dynamic model listing via flag.
     # We use CLI aliases (sonnet, haiku, opus) as primary IDs to let the CLI resolve to the latest versions.
     CLAUDE_MODELS = {
-        "Special": [
-            (
-                "auto",
-                "Auto-select Best Model",
-                ["auto"],
-            ),
-        ],
         "Anthropic Models": [
             (
                 "sonnet",
@@ -1574,6 +1551,13 @@ class SessionManager:
     }
 
     OPENCODE_MODELS = {
+        "openai-compatible": [
+            (
+                "openai-compatible/mistral-7b-instruct-v0.1",
+                "Mistral 7B Instruct v0.1",
+                ["mistral-7b"],
+            ),
+        ],
         "Meta (US Models)": [
             ("llama-3.3-70b-versatile", "Llama 3.3 70B", ["llama-3.3", "llama-3-70b"]),
             ("llama-3.1-405b", "Llama 3.1 405B", ["llama-405b"]),
@@ -1590,34 +1574,14 @@ class SessionManager:
     GEMINI_MODELS = {
         "Google Models": [
             (
-                "gemini-3.1-pro",
-                "Gemini 3.1 Pro",
-                ["pro-3.1", "gemini-3-pro", "pro-3"],
-            ),
-            (
-                "gemini-3.1-flash-live",
-                "Gemini 3.1 Flash Live",
-                ["flash-live-3.1", "gemini-3.1-flash", "flash-3.1"],
-            ),
-            (
-                "gemini-3.1-flash-lite",
-                "Gemini 3.1 Flash Lite",
-                ["flash-lite-3.1"],
-            ),
-            (
-                "gemini-3-deep-think",
-                "Gemini 3 Deep Think",
-                ["deep-think", "thinking"],
-            ),
-            (
                 "gemini-3-pro-preview",
                 "Gemini 3 Pro (Preview)",
-                ["pro-3-preview"],
+                ["gemini-3-pro", "pro-3"],
             ),
             (
                 "gemini-3-flash-preview",
                 "Gemini 3 Flash (Preview)",
-                ["flash-3-preview"],
+                ["gemini-3-flash", "flash-3"],
             ),
             (
                 "gemini-2.5-pro",
@@ -1647,18 +1611,31 @@ class SessionManager:
             ("gemini-1.5-pro-latest", "Gemini 1.5 Pro", ["gemini-1.5-pro"]),
             ("gemini-1.5-flash-latest", "Gemini 1.5 Flash", ["gemini-1.5-flash"]),
             ("gemini-2.0-flash-001", "Gemini 2.0 Flash", ["gemini-2.0-flash"]),
-            ("gemini-3.1-pro-latest", "Gemini 3.1 Pro (Latest)", ["gemini-3.1-pro"]),
         ],
     }
 
     # CODEX models configuration (from copilot CLI --model choices)
     CODEX_MODELS = {
         "OpenAI Models": [
-            ("gpt-5.4", "gpt-5.4", ["gpt-5.4"]),
-            ("gpt-5.4-mini", "GPT-5.4-Mini", ["gpt-5.4-mini"]),
-            ("gpt-5.3-codex", "gpt-5.3-codex", ["gpt-5.3-codex"]),
-            ("gpt-5.2", "gpt-5.2", ["gpt-5.2"]),
-            ("codex-auto-review", "Codex Auto Review", ["codex-auto-review"]),
+            ("gpt-5.5", "GPT-5.5", ["gpt-5.5"]),
+            ("gpt-5.4", "GPT-5.4", ["gpt-5.4", "gpt-5.4-pro"]),
+            ("gpt-5.4-mini", "GPT-5.4 Mini", ["gpt-5.4-mini"]),
+            ("gpt-5.3-codex", "GPT-5.3 Codex", ["gpt-5.3", "codex-latest"]),
+            ("gpt-5.2-codex", "GPT-5.2 Codex", ["gpt-5.2-codex"]),
+            ("gpt-5.2", "GPT-5.2", ["gpt-5.2"]),
+            ("gpt-5.1-codex-max", "GPT-5.1 Codex Max", ["gpt-5.1", "codex-max"]),
+            ("gpt-5.1-codex", "GPT-5.1 Codex", ["codex"]),
+            ("gpt-5.1", "GPT-5.1", []),
+            ("gpt-5.1-codex-mini", "GPT-5.1 Codex Mini", ["codex-mini"]),
+            ("gpt-5-mini", "GPT-5 Mini", ["gpt-5", "mini"]),
+            ("gpt-4.1", "GPT-4.1", ["gpt-4"]),
+        ],
+        "US Frontier Models (Comparison)": [
+            ("gpt-4o", "GPT-4o (Omni)", ["gpt-4o-latest"]),
+            ("gpt-4o-mini", "GPT-4o Mini", ["gpt-4o-mini-latest"]),
+            ("gpt-4-turbo", "GPT-4 Turbo", ["gpt-4-turbo-latest"]),
+            ("o1-preview", "OpenAI o1-preview", ["o1-preview-2024-09-12"]),
+            ("o1-mini", "OpenAI o1-mini", ["o1-mini-2024-09-12"]),
         ],
     }
 
@@ -1673,6 +1650,7 @@ class SessionManager:
                 ["sonnet-thinking"],
             ),
             ("claude-sonnet-4.6", "Claude Sonnet 4.6", ["sonnet-4.6"]),
+            ("claude-opus-4.7", "Claude Opus 4.7", ["opus-4.7"]),
             ("claude-opus-4.5", "Claude Opus 4.5", ["opus-4.5"]),
             ("claude-opus-4.6", "Claude Opus 4.6", ["opus-4.6", "opus"]),
             ("claude-haiku-4.5", "Claude Haiku 4.5", ["haiku-4.5", "haiku"]),
@@ -1732,85 +1710,6 @@ class SessionManager:
             ("grok-4-20-thinking", "Grok 4-20 Thinking", []),
             ("kimi-k2.5", "Kimi K2.5", ["kimi"]),
         ],
-    }
-
-    WEE_MODELS = {
-        "Ollama Models": [
-            ("ollama/granite3.3-tuned", "Granite 3.3 Tuned", ["granite", "granite3.3"]),
-            (
-                "ollama/gemma4:e4b",
-                "Gemma 4 E4B (local)",
-                ["gemma4", "gemma", "gemma4-e4b"],
-            ),
-            ("ollama/gemma4:e2b", "Gemma 4 E2B", ["gemma4-e2b"]),
-            (
-                "ollama/gemma4:e4b-nothinker",
-                "Gemma 4 E4B (No Thinker)",
-                ["gemma4-nothinker"],
-            ),
-            ("ollama/gemma4:e2b-nothinker", "Gemma 4 E2B (No Thinker)", []),
-            ("ollama/qwen3:32b", "Qwen 3 32B", ["qwen", "qwen3"]),
-            ("ollama/llama4:scout", "Llama 4 Scout", ["scout", "llama4"]),
-            ("ollama/phi4:14b", "Phi 4 14B", ["phi4", "phi"]),
-            ("ollama/deepseek-r1:32b", "DeepSeek R1 32B", ["deepseek", "deepseek-r1"]),
-            ("ollama/command-r:35b", "Command R 35B", ["command-r"]),
-        ],
-        "OpenRouter Models": [
-            (
-                "openrouter/meta-llama/llama-4-scout",
-                "Llama 4 Scout (OpenRouter)",
-                ["or-scout"],
-            ),
-            (
-                "openrouter/meta-llama/llama-4-maverick",
-                "Llama 4 Maverick (OpenRouter)",
-                ["or-maverick"],
-            ),
-            (
-                "openrouter/google/gemma-3-27b-it:free",
-                "Gemma 3 27B (OpenRouter Free)",
-                ["or-gemma"],
-            ),
-            (
-                "openrouter/qwen/qwen3-32b:free",
-                "Qwen 3 32B (OpenRouter Free)",
-                ["or-qwen"],
-            ),
-            (
-                "openrouter/deepseek/deepseek-r1:free",
-                "DeepSeek R1 (OpenRouter Free)",
-                ["or-deepseek"],
-            ),
-            (
-                "openrouter/microsoft/phi-4-reasoning-plus:free",
-                "Phi 4 Reasoning Plus (OpenRouter Free)",
-                ["or-phi"],
-            ),
-        ],
-    }
-
-    OPENROUTER_PROVIDER_PRIORITY = [
-        "OpenRouter - Anthropic",
-        "OpenRouter - OpenAI",
-        "OpenRouter - Google",
-        "OpenRouter - Meta Llama",
-        "OpenRouter - DeepSeek",
-        "OpenRouter - Qwen",
-    ]
-
-    OPENROUTER_PROVIDER_NAMES = {
-        "anthropic": "Anthropic",
-        "openai": "OpenAI",
-        "meta-llama": "Meta Llama",
-        "google": "Google",
-        "deepseek": "DeepSeek",
-        "qwen": "Qwen",
-        "microsoft": "Microsoft",
-        "mistral": "Mistral",
-        "perplexity": "Perplexity",
-        "fireworks": "Fireworks",
-        "together": "Together",
-        "replicate": "Replicate",
     }
 
     def __init__(self, config_file: Optional[str] = None, app_env: str = "PROD"):
@@ -1901,14 +1800,8 @@ class SessionManager:
         self._env_codex_models = None
         self._env_devin_models = None
         self._env_cursor_models = None
-        self._env_wee_models = None
-        self._openrouter_cache_ts = 0  # TTL timestamp for wee model discovery cache
-        self._openrouter_models_cache: Optional[Dict] = (
-            None  # cached fetch_openrouter_models() result
-        )
-        self._openrouter_models_cache_ts: float = (
-            0  # TTL timestamp for fetch_openrouter_models()
-        )
+        self._env_wee_models = None  # Cache for dynamically-discovered wee models
+        self._openrouter_cache_ts = 0  # TTL timestamp for OpenRouter discovery cache
 
         # Load command timeout from environment
         self.command_timeout = get_command_timeout()
@@ -1917,26 +1810,25 @@ class SessionManager:
         # candidates for cleanup.  Defaults to 30 min; override via env var.
         self.session_idle_timeout = int(os.environ.get("SESSION_IDLE_TIMEOUT", "1800"))
 
-        # Session map TTL — entries inactive longer than this are evicted on every save.
-        # Defaults to 30 days; override via SESSION_MAP_TTL_DAYS env var.
-        self.session_map_ttl = int(os.environ.get("SESSION_MAP_TTL_DAYS", "30")) * 86400
-
         # Lock for session map file read-modify-write to prevent TOCTOU races
         self._session_map_lock = threading.Lock()
-        self._session_map_cache: Optional[Dict] = None
 
-        # Collaborators extracted from the former monolithic SessionManager.
-        self.cli_commands = CliCommandHandler(self)
-        self.streaming = StreamingManager(self)
-        self.runtime_executors = RuntimeExecutorRegistry(self)
+        # Per-session streaming queues: session_id -> (asyncio.Queue, event_loop)
+        # Populated by the /stream API endpoint; read by _execute_subprocess_with_tracking.
+        self._stream_queues: Dict[str, tuple] = {}
 
-        # Keep the legacy attributes as aliases for compatibility with the API
-        # layer and existing tests while the internals delegate to helpers.
-        self._stream_queues = self.streaming.stream_queues
-        self._stream_buffers = self.streaming.stream_buffers
+        # Per-session stream buffers for multi-session streaming support.
+        # Buffers all chunks so disconnected clients can reconnect and replay.
+        # session_id -> _StreamBuffer
+        self._stream_buffers: Dict[str, "_StreamBuffer"] = {}
 
         # Last subprocess exit code per n8n_session_id (for debugging/monitoring)
         self._last_exit_codes: Dict[str, int] = {}
+
+        # Copilot session start times for proactive token refresh (issue #190).
+        # Maps n8n_session_id -> float (epoch seconds when session was started).
+        # Copilot session tokens expire ~30 min after creation; we restart at 25 min.
+        self._copilot_session_start: Dict[str, float] = {}
 
         # Per-session live status for mobile channel progress updates (F004).
         # Maps n8n_session_id -> {"text": str, "updated_at": float}
@@ -1945,7 +1837,8 @@ class SessionManager:
 
         # Slash command registry (F020): maps command -> {handler, description}
         # Commands with a handler callable bypass the LLM entirely.
-        self._slash_command_registry = self.cli_commands.registry
+        # Commands with handler=None are handled by the legacy if/elif chain.
+        self._slash_command_registry: Dict[str, dict] = {}
         self._init_slash_commands()
 
     # ── Live status helpers for mobile channel progress (F004) ──────────
@@ -1972,7 +1865,10 @@ class SessionManager:
 
     def _register_slash(self, command: str, handler, description: str):
         """Register a slash command in the registry."""
-        self.cli_commands.register(command, handler, description)
+        self._slash_command_registry[command] = {
+            "handler": handler,
+            "description": description,
+        }
 
     def _init_slash_commands(self):
         """Initialize the slash command registry.
@@ -1983,11 +1879,61 @@ class SessionManager:
         command, create a ``_slash_<name>`` method and
         register it below.
         """
-        self.cli_commands.initialize_default_commands()
+        self._register_slash("/help", self._slash_help, "Show available commands")
+        self._register_slash(
+            "/status", self._slash_status, "Check status of running query"
+        )
+        self._register_slash("/cancel", self._slash_cancel, "Cancel running query")
+        self._register_slash(
+            "/capabilities", self._slash_capabilities, "Show agent capabilities"
+        )
+        self._register_slash(
+            "/runtime", self._slash_runtime, "Manage runtime (list/set/current)"
+        )
+        self._register_slash(
+            "/agent", self._slash_agent, "Manage agent (list/set/current/invoke)"
+        )
+        self._register_slash(
+            "/model", self._slash_model, "Manage model (list/set/current)"
+        )
+        self._register_slash(
+            "/session", self._slash_session, "Manage session (list/reset/info)"
+        )
+        self._register_slash(
+            "/timeout", self._slash_timeout, "Get/set execution timeout"
+        )
+        self._register_slash(
+            "/render", self._slash_render, "Get/set output render format"
+        )
+        self._register_slash(
+            "/notifications",
+            self._slash_notifications,
+            "Toggle background notifications",
+        )
+        self._register_slash(
+            "/silent", self._slash_silent, "Toggle silent mode (hide tool calls)"
+        )
+        self._register_slash("/verbose", self._slash_verbose, "Toggle verbose mode")
+        self._register_slash("/mode", self._slash_mode, "Set permission mode")
+        self._register_slash("/schedule", self._slash_schedule, "Manage scheduled jobs")
+        self._register_slash(
+            "/background", self._slash_background, "Manage background tasks"
+        )
+        self._register_slash("/update", self._slash_update, "Pull latest and restart")
+        self._register_slash("/upgrade", self._slash_update, "Pull latest and restart")
+        self._register_slash("/pull", self._slash_update, "Pull latest and restart")
+        self._register_slash(
+            "/secret",
+            self._slash_secret,
+            "Manage secrets (set/delete/list)",
+        )
 
     def get_slash_commands(self) -> Dict[str, str]:
         """Return a dict of all registered slash commands and descriptions."""
-        return self.cli_commands.get_commands()
+        return {
+            cmd: entry["description"]
+            for cmd, entry in self._slash_command_registry.items()
+        }
 
     def _slash_secret(self, argument, session_data, n8n_session_id):
         """Handle /secret slash command. Values never touch the LLM."""
@@ -2026,7 +1972,7 @@ class SessionManager:
         """List stored secret names via secret_tool.py."""
         try:
             proc = subprocess.run(
-                [sys.executable, secret_tool, "list", "--backend", "pass"],
+                [sys.executable, secret_tool, "list", "--backend", "file"],
                 capture_output=True,
                 text=True,
                 timeout=10,
@@ -2601,54 +2547,133 @@ You can mention an agent in your prompt and it will auto-delegate:
             )
 
     def _slash_notifications(self, argument, session_data, n8n_session_id):
-        """Handle /notifications slash command."""
+        """Handle /notifications slash command with per-agent preferences.
+
+        Usage:
+        - /notifications                    Show all agents and their status
+        - /notifications on                 Enable notifications for all agents
+        - /notifications off                Disable notifications for all agents
+        - /notifications <agent> on         Enable notifications for agent
+        - /notifications <agent> off        Disable notifications for agent
+        - /notifications all on             Enable all agents
+        - /notifications all off            Disable all agents
+        """
         if not argument:
             argument = "current"
 
         # Resolve identity for per-user preference store
         _notif_identity = self._bg_identity or session_data.get("identity")
-        _notif_channel = session_data.get("channel", "webui")
+
+        # Load list of known agents from agents.json
+        agents_list = []
+        try:
+            if hasattr(self, "_agents"):
+                agents_list = [a.get("name") for a in self._agents if a.get("name")]
+        except Exception:
+            pass
 
         if argument == "current":
-            # Check global preference first, then per-identity, then session
-            if self._notification_mgr:
-                if self._notification_mgr.is_muted("_global"):
-                    pref = "off"
-                elif _notif_identity:
-                    pref = self._notification_mgr.get_user_pref(_notif_identity)
+            # Show per-agent preferences
+            if not self._notification_mgr or not _notif_identity:
+                return (
+                    "\u2753 Unable to retrieve notification preferences"
+                    " (not authenticated)."
+                )
+
+            agent_prefs = self._notification_mgr.get_all_agent_prefs(_notif_identity)
+            if not agent_prefs:
+                # No per-agent prefs set yet, show all agents with default "on"
+                result = "\U0001f514 **Per-Agent Notification Preferences:**\n\n"
+                result += "| Agent | Status |\n"
+                result += "|-------|--------|\n"
+                if agents_list:
+                    for agent in sorted(agents_list):
+                        pref = self._notification_mgr.get_agent_pref(
+                            _notif_identity, agent
+                        )
+                        status = "\u2705 ON" if pref == "on" else "\u274c OFF"
+                        result += f"| {agent} | {status} |\n"
                 else:
-                    pref = session_data.get("notification_preference", "all")
+                    result += "| (No agents configured) | \u2014 |\n"
             else:
-                pref = session_data.get("notification_preference", "all")
-            status = "ON (All updates)" if pref == "all" else "OFF (WebUI only)"
-            return f"🔔 **Background Notifications:** `{status}`"
+                result = "\U0001f514 **Per-Agent Notification Preferences:**\n\n"
+                result += "| Agent | Status |\n"
+                result += "|-------|--------|\n"
+                for agent in sorted(agent_prefs.keys()):
+                    pref = agent_prefs[agent]
+                    status = "\u2705 ON" if pref == "on" else "\u274c OFF"
+                    result += f"| {agent} | {status} |\n"
+                # Add agents not in prefs with default status
+                if agents_list:
+                    for agent in sorted(agents_list):
+                        if agent not in agent_prefs:
+                            result += f"| {agent} | \u2705 ON (default) |\n"
 
-        elif argument in ["on", "all"]:
-            self.update_session_field(n8n_session_id, "notification_preference", "all")
-            if self._notification_mgr:
-                # Store under specific identity if available
-                if _notif_identity:
-                    self._notification_mgr.set_user_pref(
-                        _notif_identity, _notif_channel, "all"
-                    )
-                # Always store global preference so it applies across all channels
-                self._notification_mgr.set_user_pref("_global", _notif_channel, "all")
-            return "✓ Background task notifications enabled for Telegram/WebEx."
+            return result
 
-        elif argument in ["off", "mute"]:
-            self.update_session_field(n8n_session_id, "notification_preference", "off")
-            if self._notification_mgr:
-                if _notif_identity:
-                    self._notification_mgr.set_user_pref(
-                        _notif_identity, _notif_channel, "off"
-                    )
-                # Always store global preference so it applies across all channels
-                self._notification_mgr.set_user_pref("_global", _notif_channel, "off")
-            return (
-                "✓ Background task notifications muted for Telegram/WebEx (WebUI only)."
-            )
+        elif argument in ("on", "all"):
+            # Backward-compat: /notifications on  ->  enable all agents
+            if not self._notification_mgr or not _notif_identity:
+                return "\u2753 Unable to set preferences (not authenticated)."
+            if agents_list:
+                for agent in agents_list:
+                    self._notification_mgr.set_agent_pref(_notif_identity, agent, "on")
+                return "\u2713 Notifications enabled for all agents."
+            return "\u2753 No agents found to configure."
+
+        elif argument in ("off", "mute"):
+            # Backward-compat: /notifications off  ->  disable all agents
+            if not self._notification_mgr or not _notif_identity:
+                return "\u2753 Unable to set preferences (not authenticated)."
+            if agents_list:
+                for agent in agents_list:
+                    self._notification_mgr.set_agent_pref(_notif_identity, agent, "off")
+                return "\u2713 Notifications disabled for all agents."
+            return "\u2753 No agents found to configure."
+
+        elif " " in argument:
+            # Parse "agent on/off" format
+            parts = argument.strip().split()
+            if len(parts) != 2:
+                return (
+                    "Usage: `/notifications <agent> [on|off]`"
+                    " or `/notifications all [on|off]`"
+                    " or `/notifications` to view all"
+                )
+
+            agent_name = parts[0]
+            pref_value = parts[1].lower()
+
+            if pref_value not in ["on", "off"]:
+                return f"Invalid preference: {pref_value}. Use `on` or `off`."
+
+            if not self._notification_mgr or not _notif_identity:
+                return "\u2753 Unable to set preferences (not authenticated)."
+
+            if agent_name == "all":
+                # Bulk set all agents
+                if agents_list:
+                    for agent in agents_list:
+                        self._notification_mgr.set_agent_pref(
+                            _notif_identity, agent, pref_value
+                        )
+                    verb = "enabled" if pref_value == "on" else "disabled"
+                    return f"\u2713 Notifications {verb} for all agents."
+                return "\u2753 No agents found to configure."
+            else:
+                # Set specific agent
+                self._notification_mgr.set_agent_pref(
+                    _notif_identity, agent_name, pref_value
+                )
+                status = "enabled" if pref_value == "on" else "disabled"
+                return f"\u2713 Notifications {status} for agent `{agent_name}`."
+
         else:
-            return "Usage: `/notifications [on|off]` to toggle background task notifications."
+            return (
+                "Usage: `/notifications` to view all,"
+                " or `/notifications <agent> [on|off]` to set,"
+                " or `/notifications all [on|off]` for bulk operations"
+            )
 
     def _slash_silent(self, argument, session_data, n8n_session_id):
         """Handle /silent slash command (F026)."""
@@ -2769,11 +2794,11 @@ You can mention an agent in your prompt and it will auto-delegate:
 
     def _slash_schedule(self, argument, session_data, n8n_session_id):
         """Handle /schedule slash command."""
-        if not self.SCHEDULER_ENABLED:
+        if not SCHEDULER_ENABLED:
             return "⚠️ Scheduler is not enabled on this instance."
 
         try:
-            scheduler = self._get_scheduler()
+            scheduler = _get_scheduler()
         except Exception as e:
             return f"⚠️ Scheduler unavailable: {e}"
 
@@ -3201,6 +3226,10 @@ You can mention an agent in your prompt and it will auto-delegate:
                         "max_concurrent": agent.get("max_concurrent", 1),
                         "runtime": agent.get("runtime", "copilot"),
                         "model": agent.get("model", ""),
+                        "primary_runtime": agent.get("primary_runtime"),
+                        "primary_model": agent.get("primary_model"),
+                        "fallback_runtime": agent.get("fallback_runtime"),
+                        "fallback_model": agent.get("fallback_model"),
                     }
                 return agents
         except json.JSONDecodeError as e:
@@ -3413,7 +3442,11 @@ You can mention an agent in your prompt and it will auto-delegate:
     def _copilot_static_fallback(self) -> dict:
         # Static model list used when copilot CLI is unavailable
         return {
+            "Auto": [
+                "auto",
+            ],
             "Claude Models": [
+                "claude-opus-4.7",
                 "claude-sonnet-4.6",
                 "claude-opus-4.6",
                 "claude-haiku-4.5",
@@ -3426,8 +3459,14 @@ You can mention an agent in your prompt and it will auto-delegate:
                 "gpt-5.4",
                 "gpt-5.4-mini",
                 "gpt-5.3-codex",
+                "gpt-5.2-codex",
                 "gpt-5.2",
-                "codex-auto-review",
+                "gpt-5.1-codex-max",
+                "gpt-5.1-codex",
+                "gpt-5.1",
+                "gpt-5.1-codex-mini",
+                "gpt-5-mini",
+                "gpt-4.1",
             ],
             "Google Models": [
                 "gemini-3-pro-preview",
@@ -3473,6 +3512,8 @@ You can mention an agent in your prompt and it will auto-delegate:
             if not models:
                 # Look for known models as a sanity check/fallback
                 fallback_models = [
+                    "auto",
+                    "claude-opus-4.7",
                     "claude-sonnet-4.6",
                     "claude-sonnet-4.5",
                     "claude-haiku-4.5",
@@ -3484,8 +3525,14 @@ You can mention an agent in your prompt and it will auto-delegate:
                     "gpt-5.4",
                     "gpt-5.4-mini",
                     "gpt-5.3-codex",
+                    "gpt-5.2-codex",
                     "gpt-5.2",
-                    "codex-auto-review",
+                    "gpt-5.1-codex-max",
+                    "gpt-5.1-codex",
+                    "gpt-5.1",
+                    "gpt-5.1-codex-mini",
+                    "gpt-5-mini",
+                    "gpt-4.1",
                 ]
                 found_fallbacks = [m for m in fallback_models if m in result.stdout]
                 if found_fallbacks:
@@ -3502,10 +3549,11 @@ You can mention an agent in your prompt and it will auto-delegate:
                 # copilot CLI no longer lists models in --help (choices removed in newer versions).
                 # Return the static fallback list so /model list and /model set still work.
                 return {
-                    "Special": [
+                    "Auto": [
                         "auto",
                     ],
                     "Claude Models": [
+                        "claude-opus-4.7",
                         "claude-sonnet-4.6",
                         "claude-opus-4.6",
                         "claude-haiku-4.5",
@@ -3518,8 +3566,14 @@ You can mention an agent in your prompt and it will auto-delegate:
                         "gpt-5.4",
                         "gpt-5.4-mini",
                         "gpt-5.3-codex",
+                        "gpt-5.2-codex",
                         "gpt-5.2",
-                        "codex-auto-review",
+                        "gpt-5.1-codex-max",
+                        "gpt-5.1-codex",
+                        "gpt-5.1",
+                        "gpt-5.1-codex-mini",
+                        "gpt-5-mini",
+                        "gpt-4.1",
                     ],
                     "Google Models": [
                         "gemini-3-pro-preview",
@@ -3530,9 +3584,7 @@ You can mention an agent in your prompt and it will auto-delegate:
             categorized = {}
             for m in models:
                 cat = "Other Models"
-                if m.lower() == "auto":
-                    cat = "Special"
-                elif "claude" in m.lower():
+                if "claude" in m.lower():
                     cat = "Claude Models"
                 elif "gpt" in m.lower() or re.match(r"^o\d", m.lower()):
                     cat = "GPT Models"
@@ -3597,144 +3649,106 @@ You can mention an agent in your prompt and it will auto-delegate:
             print(f"Error fetching opencode models: {e}", file=sys.stderr)
             return self._static_models_to_dict(self.OPENCODE_MODELS)
 
+    # Curated popular OpenRouter model IDs for auto-discovery filtering
+    OPENROUTER_POPULAR_MODELS = {
+        "meta-llama/llama-4-maverick",
+        "meta-llama/llama-4-scout",
+        "google/gemma-3-27b-it:free",
+        "google/gemma-4-31b-it:free",
+        "meta-llama/llama-3.3-70b-instruct:free",
+        "nvidia/nemotron-3-super-120b-a12b:free",
+        "nvidia/nemotron-nano-9b-v2:free",
+        "qwen/qwen3-coder:free",
+        "anthropic/claude-sonnet-4.6",
+        "anthropic/claude-opus-4.6",
+        "google/gemini-3.1-flash-lite-preview",
+        "google/gemini-3.1-pro-preview-customtools",
+        "openai/gpt-4.1",
+        "openai/gpt-4.1-mini",
+        "deepseek/deepseek-v3.2",
+        "qwen/qwen3.6-plus",
+        "mistralai/mistral-small-2603",
+        "cohere/command-r-plus-08-2024",
+    }
+
+    WEE_MODELS = {
+        "Wee Native (Ollama)": [
+            ("ollama/gemma4:e4b", "Ollama Gemma 4 E4B (local)", ["gemma4", "gemma"]),
+            ("ollama/qwen3", "Ollama Qwen 3 (local)", ["qwen3", "qwen"]),
+            (
+                "ollama/granite3.3-tuned",
+                "Ollama Granite 3.3 Tuned (local)",
+                ["granite", "granite3.3"],
+            ),
+        ],
+        "Wee Native (OpenRouter)": [
+            (
+                "openrouter/meta-llama/llama-4-maverick",
+                "Llama 4 Maverick via OpenRouter",
+                ["llama-4-maverick", "maverick"],
+            ),
+            (
+                "openrouter/meta-llama/llama-4-scout",
+                "Llama 4 Scout via OpenRouter",
+                ["llama-4-scout", "scout"],
+            ),
+            (
+                "openrouter/anthropic/claude-sonnet-4.6",
+                "Claude Sonnet 4.6 via OpenRouter",
+                ["or-claude-sonnet"],
+            ),
+            (
+                "openrouter/google/gemini-3.1-flash-lite-preview",
+                "Gemini 3.1 Flash Lite via OpenRouter",
+                ["or-gemini-flash"],
+            ),
+            ("openrouter/openai/gpt-4.1", "GPT-4.1 via OpenRouter", ["or-gpt-4.1"]),
+            (
+                "openrouter/deepseek/deepseek-v3.2",
+                "DeepSeek V3.2 via OpenRouter",
+                ["or-deepseek"],
+            ),
+        ],
+        "Wee Native (OpenRouter Free)": [
+            (
+                "openrouter/google/gemma-3-27b-it:free",
+                "Gemma 3 27B FREE via OpenRouter",
+                ["gemma-3-free", "gemma-free"],
+            ),
+            (
+                "openrouter/google/gemma-4-31b-it:free",
+                "Gemma 4 31B FREE via OpenRouter",
+                ["gemma-4-free"],
+            ),
+            (
+                "openrouter/meta-llama/llama-3.3-70b-instruct:free",
+                "Llama 3.3 70B FREE via OpenRouter",
+                ["llama-free"],
+            ),
+            (
+                "openrouter/nvidia/nemotron-3-super-120b-a12b:free",
+                "Nemotron 3 Super 120B FREE via OpenRouter",
+                ["nemotron-free"],
+            ),
+            (
+                "openrouter/nvidia/nemotron-nano-9b-v2:free",
+                "Nemotron Nano 9B FREE via OpenRouter",
+                ["nemotron-nano-free"],
+            ),
+            (
+                "openrouter/qwen/qwen3-coder:free",
+                "Qwen3 Coder FREE via OpenRouter",
+                ["qwen3-free", "qwen-free"],
+            ),
+        ],
+    }
+
     def _static_models_to_dict(self, static_dict: Dict) -> Dict:
         """Convert static model config {cat: [(id, desc, aliases)...]} to {cat: [id,...]}."""
         return {
             cat: [model_id for model_id, _desc, _aliases in entries]
             for cat, entries in static_dict.items()
         }
-
-    # Human-readable labels for known OpenRouter provider prefixes
-    OPENROUTER_PROVIDER_NAMES = {
-        "meta-llama": "Meta Llama",
-        "anthropic": "Anthropic",
-        "google": "Google",
-        "openai": "OpenAI",
-        "deepseek": "DeepSeek",
-        "mistralai": "Mistral AI",
-        "qwen": "Qwen",
-        "microsoft": "Microsoft",
-        "nvidia": "NVIDIA",
-        "cohere": "Cohere",
-        "perplexity": "Perplexity",
-        "x-ai": "xAI",
-        "01-ai": "01.AI",
-        "amazon": "Amazon",
-        "nousresearch": "Nous Research",
-        "liquid": "Liquid",
-        "bytedance": "ByteDance",
-    }
-
-    # Priority order for OpenRouter provider groups in the model selector
-    OPENROUTER_PROVIDER_PRIORITY = [
-        "OpenRouter - Anthropic",
-        "OpenRouter - OpenAI",
-        "OpenRouter - Google",
-        "OpenRouter - Meta Llama",
-        "OpenRouter - DeepSeek",
-        "OpenRouter - Mistral AI",
-        "OpenRouter - xAI",
-    ]
-
-    def fetch_openrouter_models(self) -> Dict:
-        """Fetch ALL available models from the OpenRouter API, grouped by provider.
-
-        Returns {category: [(model_id, description, aliases), ...]} where model_id
-        uses the "openrouter/<provider>/<name>" prefix understood by wee_runtime.py.
-
-        Resolution order:
-          1. Per-call 300s TTL cache (self._openrouter_models_cache)
-          2. Live API call to https://openrouter.ai/api/v1/models
-          3. Static WEE_MODELS["OpenRouter Models"] fallback
-
-        Authentication: keyring("openrouter", "api_key") -> OPENROUTER_API_KEY env var
-        """
-        static_fallback = {
-            "OpenRouter Models": list(self.WEE_MODELS.get("OpenRouter Models", []))
-        }
-
-        cache_ttl = 300
-        if (
-            self._openrouter_models_cache is not None
-            and time.time() - self._openrouter_models_cache_ts < cache_ttl
-        ):
-            return self._openrouter_models_cache
-
-        api_key = None
-        try:
-            import keyring as _keyring
-
-            api_key = _keyring.get_password("openrouter", "api_key")
-        except Exception:
-            pass
-        if not api_key:
-            api_key = os.getenv("OPENROUTER_API_KEY")
-
-        if not api_key:
-            print(
-                "[wee] OpenRouter: no API key available, using static fallback",
-                file=sys.stderr,
-            )
-            return static_fallback
-
-        try:
-            import urllib.request as _urlreq
-
-            req = _urlreq.Request(
-                "https://openrouter.ai/api/v1/models",
-                headers={"Authorization": "Bearer " + api_key},
-            )
-            resp = _urlreq.urlopen(req, timeout=15)
-            data = json.loads(resp.read())
-            all_models = data.get("data", [])
-
-            static_aliases = {
-                e[0]: e[2] for e in self.WEE_MODELS.get("OpenRouter Models", [])
-            }
-
-            grouped = {}
-            for m in all_models:
-                mid = m.get("id", "")
-                if not mid:
-                    continue
-                name = m.get("name", mid)
-                or_id = "openrouter/" + mid
-                aliases = static_aliases.get(or_id, [])
-
-                provider_prefix = mid.split("/")[0] if "/" in mid else mid
-                friendly = self.OPENROUTER_PROVIDER_NAMES.get(
-                    provider_prefix,
-                    provider_prefix.replace("-", " ").title(),
-                )
-                category = "OpenRouter - " + friendly
-                grouped.setdefault(category, []).append((or_id, name, aliases))
-
-            if not grouped:
-                return static_fallback
-
-            for cat in grouped:
-                grouped[cat].sort(key=lambda t: t[1].lower())
-
-            ordered = {}
-            for priority_cat in self.OPENROUTER_PROVIDER_PRIORITY:
-                if priority_cat in grouped:
-                    ordered[priority_cat] = grouped.pop(priority_cat)
-            for cat in sorted(grouped):
-                ordered[cat] = grouped[cat]
-
-            total = sum(len(v) for v in ordered.values())
-            print(
-                f"[wee] OpenRouter: discovered {total} models in {len(ordered)} groups",
-                file=sys.stderr,
-            )
-
-            self._openrouter_models_cache = ordered
-            self._openrouter_models_cache_ts = time.time()
-            return ordered
-
-        except Exception as e:
-            print(f"[wee] OpenRouter discovery failed: {e}", file=sys.stderr)
-            return static_fallback
 
     def _get_model_description(self, model_id: str, runtime: str) -> Optional[str]:
         """Look up a human-readable description for a model from static metadata."""
@@ -3956,32 +3970,18 @@ You can mention an agent in your prompt and it will auto-delegate:
     def fetch_wee_models(self) -> Dict:
         """Return available wee models: local Ollama + OpenRouter cloud models.
 
-        Resolution order:
-          1. WEE_MODELS_JSON env var (custom model list)
-          2. Live Ollama discovery + live OpenRouter discovery (300s TTL cache)
-          3. Static WEE_MODELS fallback
+        Queries OpenRouter GET /api/v1/models, filters to
+        OPENROUTER_POPULAR_MODELS, and caches for 300s. Falls back
+        to the static WEE_MODELS list on any error.
         """
-        # Check for env var override first
-        env_models = os.getenv("WEE_MODELS_JSON")
-        if env_models:
-            try:
-                models_dict = json.loads(env_models)
-                normalized = {}
-                for cat, entries in models_dict.items():
-                    normalized[cat] = [
-                        tuple(e) if isinstance(e, list) else e for e in entries
-                    ]
-                self._env_wee_models = normalized
-                return self._static_models_to_dict(normalized)
-            except (json.JSONDecodeError, ValueError):
-                pass
+        import time as _time
 
         cache_ttl = 300  # 5 minutes
 
         # Return cache if still valid
         if (
             self._env_wee_models is not None
-            and time.time() - self._openrouter_cache_ts < cache_ttl
+            and _time.time() - self._openrouter_cache_ts < cache_ttl
         ):
             return self._static_models_to_dict(self._env_wee_models)
 
@@ -3990,51 +3990,60 @@ You can mention an agent in your prompt and it will auto-delegate:
         for cat, entries in self.WEE_MODELS.items():
             result[cat] = list(entries)
 
-        # Try live Ollama discovery
+        # Try live OpenRouter discovery
         try:
-            import httpx
+            api_key = None
+            try:
+                import keyring
 
-            resp = httpx.get(
-                "http://192.168.1.101:11434/api/tags",
-                timeout=httpx.Timeout(connect=5.0, read=10.0, write=10.0, pool=10.0),
+                api_key = keyring.get_password("openrouter", "api_key")
+            except Exception:
+                pass
+            if not api_key:
+                api_key = os.environ.get("OPENROUTER_API_KEY")
+
+            if not api_key:
+                print(
+                    "[wee] No OpenRouter API key -- using static list", file=sys.stderr
+                )
+                return self._static_models_to_dict(self.WEE_MODELS)
+
+            import urllib.request
+
+            req = urllib.request.Request(
+                "https://openrouter.ai/api/v1/models",
+                headers={"Authorization": "Bearer " + api_key},
             )
-            if resp.status_code == 200:
-                tags = resp.json().get("models", [])
-                ollama_models = [(f"ollama/{t['name']}", t["name"], []) for t in tags]
-                if ollama_models:
-                    # Merge aliases from static WEE_MODELS into discovered models
-                    static_ollama = {
-                        e[0]: e for e in self.WEE_MODELS.get("Ollama Models", [])
-                    }
-                    merged_ollama = []
-                    discovered_ids = set()
-                    for or_id, name, _ in ollama_models:
-                        if or_id in static_ollama:
-                            merged_ollama.append(static_ollama[or_id])
-                        else:
-                            merged_ollama.append((or_id, name, []))
-                        discovered_ids.add(or_id)
-                    # Add static models not found via live discovery (preserves aliases)
-                    for entry in self.WEE_MODELS.get("Ollama Models", []):
-                        if entry[0] not in discovered_ids:
-                            merged_ollama.append(entry)
-                    result["Ollama Models"] = merged_ollama
-        except Exception:
-            pass
+            resp = urllib.request.urlopen(req, timeout=10)
+            data = json.loads(resp.read())
+            all_models = data.get("data", [])
 
-        # Try live OpenRouter discovery via fetch_openrouter_models()
-        try:
-            or_models = self.fetch_openrouter_models()
-            if or_models and any(v for v in or_models.values()):
-                # Remove the static OpenRouter Models key and replace with dynamic groups
-                result.pop("OpenRouter Models", None)
-                result.update(or_models)
+            discovered = []
+            for m in all_models:
+                mid = m.get("id", "")
+                if mid in self.OPENROUTER_POPULAR_MODELS:
+                    name = m.get("name", mid)
+                    or_id = "openrouter/" + mid
+                    discovered.append((or_id, name + " (OpenRouter)", []))
+
+            if discovered:
+                discovered.sort(key=lambda t: t[1])
+                result["Wee Native (OpenRouter)"] = discovered
+                print(
+                    "[wee] OpenRouter: discovered %d models" % len(discovered),
+                    file=sys.stderr,
+                )
+
+            self._env_wee_models = result
+            self._openrouter_cache_ts = _time.time()
+            return self._static_models_to_dict(result)
+
         except Exception as e:
-            print(f"[wee] OpenRouter discovery error: {e}", file=sys.stderr)
-
-        self._env_wee_models = result
-        self._openrouter_cache_ts = time.time()
-        return self._static_models_to_dict(result)
+            print(
+                "[wee] OpenRouter discovery failed, using static list: %s" % e,
+                file=sys.stderr,
+            )
+            return self._static_models_to_dict(self.WEE_MODELS)
 
     def get_models_for_runtime(self, runtime: str) -> Dict:
         """Fetch available models for a runtime, using CLI discovery where possible.
@@ -4067,57 +4076,18 @@ You can mention an agent in your prompt and it will auto-delegate:
     def load_session_map(self) -> Dict:
         """Load the N8N -> Session ID mapping"""
         if not self.session_map_file.exists():
-            self._session_map_cache = {}
             return {}
 
         try:
             with open(self.session_map_file, "r") as f:
-                data = json.load(f)
+                return json.load(f)
         except (json.JSONDecodeError, IOError):
-            data = {}
-        self._session_map_cache = data
-        return data
-
-    def _prune_session_map_ttl(self, session_map: dict) -> dict:
-        """Return a copy of session_map with entries older than session_map_ttl removed.
-
-        An entry is considered inactive if its ``last_activity`` timestamp is
-        older than ``self.session_map_ttl`` seconds.  Entries that lack a
-        ``last_activity`` field are kept so legacy data is not silently dropped.
-        """
-        now = time.time()
-        cutoff = now - self.session_map_ttl
-        pruned = {}
-        evicted = 0
-        for key, entry in session_map.items():
-            last_activity = (
-                entry.get("last_activity") if isinstance(entry, dict) else None
-            )
-            if last_activity is not None and last_activity < cutoff:
-                evicted += 1
-                continue
-            pruned[key] = entry
-        if evicted:
-            print(
-                f"[SessionMap] TTL evicted {evicted} inactive entries "
-                f"(threshold {self.session_map_ttl / 86400:.0f}d)",
-                file=__import__('sys').stderr,
-            )
-        return pruned
+            return {}
 
     def save_session_map(self, session_map: dict):
         """Save the N8N -> Session ID mapping (caller must hold _session_map_lock)"""
-        session_map = self._prune_session_map_ttl(session_map)
         with open(self.session_map_file, "w") as f:
             json.dump(session_map, f, indent=2)
-        self._session_map_cache = dict(session_map)
-
-    def get_cached_session_count(self) -> int:
-        """Return the in-memory session count without touching disk."""
-        cached = getattr(self, "_session_map_cache", None)
-        if not isinstance(cached, dict):
-            return 0
-        return len(cached)
 
     def load_session_data(self, n8n_session_id: str) -> Optional[Dict]:
         """
@@ -4262,10 +4232,7 @@ You can mention an agent in your prompt and it will auto-delegate:
                 ):
                     merged["model"] = os.getenv("CURSOR_DEFAULT_MODEL", "auto")
             elif runtime == "wee":
-                current_model = merged.get("model", "")
-                if not current_model or not self.get_model_from_name(
-                    current_model, "wee"
-                ):
+                if not merged.get("model"):
                     merged["model"] = os.getenv(
                         "WEE_DEFAULT_MODEL", "ollama/gemma4:e4b"
                     )
@@ -4513,6 +4480,11 @@ You can mention an agent in your prompt and it will auto-delegate:
             available = ", ".join(self.AGENTS.keys())
             return f"Unknown agent: '{agent}'. Available agents: {available}"
 
+        # Get agent's primary runtime/model defaults (issue #249)
+        agent_config = self.AGENTS[agent]
+        primary_runtime = agent_config.get("primary_runtime") or "copilot"
+        primary_model = agent_config.get("primary_model") or "gpt-5-mini"
+
         with self._session_map_lock:
             session_map = self.load_session_map()
 
@@ -4522,21 +4494,23 @@ You can mention an agent in your prompt and it will auto-delegate:
             if n8n_session_id not in session_map:
                 session_map[n8n_session_id] = {
                     "session_id": new_backend_session_id,
-                    "model": "gpt-5-mini",
+                    "model": primary_model,
                     "agent": agent,
-                    "runtime": "copilot",
+                    "runtime": primary_runtime,
                 }
             else:
                 if isinstance(session_map[n8n_session_id], dict):
                     session_map[n8n_session_id]["agent"] = agent
                     session_map[n8n_session_id]["session_id"] = new_backend_session_id
+                    session_map[n8n_session_id]["runtime"] = primary_runtime
+                    session_map[n8n_session_id]["model"] = primary_model
                 else:
                     # Convert old format
                     session_map[n8n_session_id] = {
                         "session_id": new_backend_session_id,
-                        "model": "gpt-5-mini",
+                        "model": primary_model,
                         "agent": agent,
-                        "runtime": "copilot",
+                        "runtime": primary_runtime,
                     }
 
             self.save_session_map(session_map)
@@ -4605,7 +4579,14 @@ You can mention an agent in your prompt and it will auto-delegate:
 
     def parse_slash_command(self, prompt: str) -> Tuple[Optional[str], Optional[str]]:
         """Parse slash commands from the prompt."""
-        return self.cli_commands.parse_slash_command(prompt)
+        if not prompt.startswith("/"):
+            return None, None
+
+        parts = prompt.split(None, 1)
+        command = parts[0].lower()
+        argument = parts[1] if len(parts) > 1 else None
+
+        return command, argument
 
     def get_model_from_name(self, name: str, runtime: str) -> Optional[str]:
         """Convert model name/alias to full model ID based on runtime.
@@ -4617,13 +4598,12 @@ You can mention an agent in your prompt and it will auto-delegate:
         name_lower = name.lower().strip("\"'")
 
         # Ensure env models are loaded/cached by triggering fetch for this runtime
-        if runtime in ("claude", "claude-sdk", "gemini", "codex", "devin", "cursor", "wee"):
+        if runtime in ("claude", "gemini", "codex", "devin", "cursor"):
             self.get_models_for_runtime(runtime)
 
         # Step 1: check env-loaded or static alias tables for all runtimes that have them.
         env_alias_map = {
             "claude": self._env_claude_models,
-            "claude-sdk": self._env_claude_models,
             "gemini": self._env_gemini_models,
             "codex": self._env_codex_models,
             "devin": self._env_devin_models,
@@ -4632,7 +4612,6 @@ You can mention an agent in your prompt and it will auto-delegate:
         }
         static_alias_map = {
             "claude": self.CLAUDE_MODELS,
-            "claude-sdk": self.CLAUDE_MODELS,
             "gemini": self.GEMINI_MODELS,
             "codex": self.CODEX_MODELS,
             "opencode": self.OPENCODE_MODELS,
@@ -4664,20 +4643,12 @@ You can mention an agent in your prompt and it will auto-delegate:
             if m.lower() == name_lower:
                 return m
 
-        # Exact match with provider prefix stripped (e.g., "gemma4:e4b" matches "ollama/gemma4:e4b")
-        for m in all_models:
-            model_lower = m.lower()
-            if "/" in model_lower:
-                suffix = model_lower.split("/", 1)[1]
-                if suffix == name_lower:
-                    return m
-
-        # Substring matching with shortest-match preference
+        # Substring matching with longest-match preference
         matches = [m for m in all_models if name_lower in m.lower()]
         if len(matches) == 1:
             return matches[0]
         if matches:
-            matches.sort(key=len)
+            matches.sort(reverse=True)
             return matches[0]
 
         return None
@@ -4940,47 +4911,58 @@ You can mention an agent in your prompt and it will auto-delegate:
                 return "\n".join(_text_parts)
 
         elif runtime == "codex":
-            # CODEX output format (when stripped of headers):
-            # 1. First response line (often echoed/repeated)
-            # 2. Header section (OpenAI Codex...)
-            # 3. Metadata (workdir, model, etc.)
-            # 4. "user" marker + user input/context
-            # 5. File listings
-            # 6. "thinking" marker + reasoning
-            # 7. "codex" marker + actual response(s)
-            # 8. "tokens used" metadata
+            import json as _json
 
-            found_codex_marker = False
-            response_lines = []
-
-            for i, line in enumerate(lines):
-                line_lower = line.lower()
-
-                # Track if we've hit the "codex" marker - only keep content after this
-                if line_lower.strip() == "codex":
-                    found_codex_marker = True
+            # v0.125.0+: output is JSONL events from --json flag
+            # Extract text from item.completed events where item.type == "agent_message"
+            jsonl_texts = []
+            for _line in lines:
+                _line = _line.strip()
+                if not _line:
+                    continue
+                try:
+                    _event = _json.loads(_line)
+                    if (
+                        _event.get("type") == "item.completed"
+                        and isinstance(_event.get("item"), dict)
+                        and _event["item"].get("type") == "agent_message"
+                    ):
+                        _text = _event["item"].get("text", "")
+                        if _text:
+                            jsonl_texts.append(_text)
+                except (ValueError, KeyError):
                     continue
 
-                # Stop at tokens metadata
-                if "tokens" in line_lower and "used" in line_lower:
-                    break
+            if jsonl_texts:
+                # Use the last agent_message (most complete response)
+                result.extend(jsonl_texts[-1].splitlines())
+            else:
+                # Fallback: legacy marker-based parsing for pre-v0.125.0 output
+                found_codex_marker = False
+                response_lines = []
 
-                # Before codex marker, skip everything
-                if not found_codex_marker:
-                    continue
+                for i, line in enumerate(lines):
+                    line_lower = line.lower()
 
-                # After codex marker, skip empty lines at start
-                if not line.strip() and not response_lines:
-                    continue
+                    if line_lower.strip() == "codex":
+                        found_codex_marker = True
+                        continue
 
-                # Keep the actual response content
-                response_lines.append(line)
+                    if "tokens" in line_lower and "used" in line_lower:
+                        break
 
-            # Clean up trailing empty lines
-            while response_lines and not response_lines[-1].strip():
-                response_lines.pop()
+                    if not found_codex_marker:
+                        continue
 
-            result.extend(response_lines)
+                    if not line.strip() and not response_lines:
+                        continue
+
+                    response_lines.append(line)
+
+                while response_lines and not response_lines[-1].strip():
+                    response_lines.pop()
+
+                result.extend(response_lines)
 
         elif runtime == "devin":
             # Devin CLI outputs the response directly to stdout.
@@ -5016,7 +4998,7 @@ You can mention an agent in your prompt and it will auto-delegate:
         return "\n".join(result)
 
     def _execute_bash_command(self, command: str, agent: str = "orchestrator") -> str:
-        """Execute a direct command without an implicit shell.
+        """Execute a bash command directly without hitting any runtime
 
         Args:
             command: The bash command to execute (without the ! prefix)
@@ -5038,10 +5020,10 @@ You can mention an agent in your prompt and it will auto-delegate:
         print(f"[Shell] Executing in {agent_dir}: {command}", file=sys.stderr)
 
         try:
-            argv = _split_command_args(command)
             # Execute the command with the configured timeout
             result = subprocess.run(
-                argv,
+                command,
+                shell=True,
                 capture_output=True,
                 text=True,
                 timeout=self.command_timeout,
@@ -5054,52 +5036,6 @@ You can mention an agent in your prompt and it will auto-delegate:
                 output += result.stderr
 
             # If there's no output, indicate success
-            if not output.strip():
-                if result.returncode == 0:
-                    output = f"✓ Command executed successfully (exit code: 0)"
-                else:
-                    output = f"✗ Command failed with exit code: {result.returncode}"
-
-            return output.strip()
-
-        except ValueError as e:
-            return f"Error: {e}"
-        except subprocess.TimeoutExpired:
-            return f"Error: Command timed out after {self.command_timeout} seconds"
-        except Exception as e:
-            return f"Error executing command: {str(e)}"
-
-    def _execute_shell_command(self, command: str, agent: str = "orchestrator") -> str:
-        """Execute a trusted shell command with full bash semantics.
-
-        This is reserved for agent-authored shell tool calls that rely on pipes,
-        redirects, and command chaining. User-controlled scheduler command mode
-        must continue to use argv parsing via _execute_bash_command.
-        """
-        if not command:
-            return "Error: No command provided. Usage: !<command>"
-
-        agent_info = self.AGENTS.get(agent)
-        if not agent_info:
-            agent_dir = str(Path.cwd())
-        else:
-            agent_dir = agent_info["path"]
-
-        print(f"[Shell] Executing in {agent_dir}: {command}", file=sys.stderr)
-
-        try:
-            result = subprocess.run(
-                ["bash", "-o", "pipefail", "-c", command],
-                capture_output=True,
-                text=True,
-                timeout=self.command_timeout,
-                cwd=agent_dir,
-            )
-
-            output = result.stdout
-            if result.stderr:
-                output += result.stderr
-
             if not output.strip():
                 if result.returncode == 0:
                     output = f"✓ Command executed successfully (exit code: 0)"
@@ -5701,7 +5637,7 @@ These commands allow you to control the agent's behavior and are processed by th
 - /runtime <runtime> - Change execution runtime (e.g., /runtime claude, /runtime opencode)
 - /timeout <seconds> - Adjust execution timeout (e.g., /timeout 600)
 - /render <format> - Change output format (e.g., /render markdown, /render html, /render telegram_html)
-- /notifications <on|off> - Toggle background task notifications for Telegram/WebEx
+- /notifications [<agent> on|off] - Manage per-agent notification preferences (e.g., /notifications research off, /notifications all on)
 - /session <id> - Continue a specific session (e.g., /session abc123)
 - /status - Check running tasks status
 - /cancel - Cancel the current running task
@@ -6022,13 +5958,20 @@ User Request:
 
     def _get_or_create_stream_buffer(self, session_id: str) -> "_StreamBuffer":
         """Get existing buffer for session or create a new one."""
-        return self.streaming.get_or_create_stream_buffer(session_id)
+        buf = self._stream_buffers.get(session_id)
+        if buf is None:
+            buf = self._StreamBuffer()
+            self._stream_buffers[session_id] = buf
+        return buf
 
     def _register_stream(
         self, session_id: str, queue, loop  # asyncio.Queue, asyncio.AbstractEventLoop
     ) -> None:
         """Register an asyncio queue for the /stream endpoint to receive chunks."""
-        self.streaming.register_stream(session_id, queue, loop)
+        self._stream_queues[session_id] = (queue, loop)
+        # Also create/get the stream buffer and add this queue as a consumer
+        buf = self._get_or_create_stream_buffer(session_id)
+        buf.add_consumer(queue, loop)
 
     def _unregister_stream(self, session_id: str, queue=None) -> None:
         """Remove the streaming queue for a session.
@@ -6038,15 +5981,26 @@ User Request:
         ``_stream_queues`` entry is removed regardless so that new streams
         can register without conflict.
         """
-        self.streaming.unregister_stream(session_id, queue=queue)
+        self._stream_queues.pop(session_id, None)
+        buf = self._stream_buffers.get(session_id)
+        if buf and queue is not None:
+            buf.remove_consumer(queue)
 
     def _cleanup_stream_buffer(self, session_id: str) -> None:
         """Remove the stream buffer entirely (called after query completes)."""
-        self.streaming.cleanup_stream_buffer(session_id)
+        self._stream_buffers.pop(session_id, None)
+        self._copilot_session_start.pop(session_id, None)
 
     def _cleanup_stale_stream_buffers(self, max_age: float = 600.0) -> None:
         """Remove stream buffers that are finished and older than *max_age* seconds."""
-        self.streaming.cleanup_stale_stream_buffers(max_age=max_age)
+        now = time.time()
+        stale = [
+            sid
+            for sid, buf in self._stream_buffers.items()
+            if buf.finished and (now - buf.created_at) > max_age
+        ]
+        for sid in stale:
+            self._stream_buffers.pop(sid, None)
 
     # ------------------------------------------------------------------
 
@@ -6061,17 +6015,716 @@ User Request:
         n8n_session_id: str,
         use_pty: bool = False,
     ) -> str:
-        """Execute a subprocess with PID tracking and streaming support."""
-        return self.streaming.execute_subprocess_with_tracking(
-            cmd,
-            cwd,
-            timeout,
-            runtime,
-            agent,
-            prompt,
-            n8n_session_id,
-            use_pty=use_pty,
-        )
+        """Execute a subprocess with PID tracking.
+
+        When a streaming queue is registered for *n8n_session_id* (via
+        _register_stream), stdout chunks are pushed to the queue in real-time
+        so the /stream SSE endpoint can forward them to the browser.  A
+        ``('done', '')`` sentinel is pushed when the process exits.
+
+        Without a queue the behaviour is identical to the original
+        communicate()-based approach (blocking, full-output return).
+
+        When *use_pty* is True and streaming is active, stdout is connected to
+        a pseudo-terminal so that runtimes whose binaries buffer stdout (e.g.
+        the Rust-based Devin CLI) flush output incrementally.
+        """
+        import threading as _threading
+
+        stream_info = self._stream_queues.get(n8n_session_id)
+        # Get the stream buffer — pushes go through the buffer which
+        # broadcasts to all connected consumer queues.
+        stream_buffer = self._stream_buffers.get(n8n_session_id)
+
+        # Allocate a PTY for stdout when streaming + use_pty are both active.
+        # This tricks compiled binaries into line-buffering their output.
+        _pty_master = None
+        if use_pty and stream_info:
+            import pty as _pty_mod
+
+            _pty_master, _pty_slave = _pty_mod.openpty()
+
+            # Configure PTY for clean streaming:
+            # 1. Set a reasonable window size so programs don't get confused by 0×0
+            # 2. Disable output post-processing (OPOST/ONLCR) to avoid extra \r
+            # 3. Disable echo to prevent input echo artifacts
+            try:
+                import fcntl as _fcntl_mod
+                import struct as _struct_mod
+                import termios as _termios_mod
+
+                # Set window size to 120 cols × 40 rows
+                _ws = _struct_mod.pack("HHHH", 40, 120, 0, 0)
+                _fcntl_mod.ioctl(_pty_master, _termios_mod.TIOCSWINSZ, _ws)
+                # Disable output processing and echo on the slave
+                _attrs = _termios_mod.tcgetattr(_pty_slave)
+                _attrs[1] &= ~_termios_mod.OPOST  # no output processing (\n stays \n)
+                _attrs[3] &= ~_termios_mod.ECHO  # no echo
+                _termios_mod.tcsetattr(_pty_slave, _termios_mod.TCSANOW, _attrs)
+            except Exception:
+                pass  # non-fatal; streaming still works with defaults
+
+        try:
+            # Set WEE_SESSION_ID so agents can use wee_executor.py
+            _sub_env = {**os.environ, "WEE_SESSION_ID": n8n_session_id}
+            if _pty_master is not None:
+                process = subprocess.Popen(
+                    cmd,
+                    stdin=subprocess.DEVNULL,
+                    stdout=_pty_slave,
+                    stderr=subprocess.PIPE,
+                    cwd=cwd,
+                    env=_sub_env,
+                )
+                os.close(_pty_slave)
+            else:
+                process = subprocess.Popen(
+                    cmd,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    cwd=cwd,
+                    bufsize=1,  # line-buffered for faster streaming chunk delivery
+                    env=_sub_env,
+                )
+
+            self.track_running_query(
+                n8n_session_id, process.pid, runtime, agent, prompt
+            )
+
+            if stream_info:
+                # ── Streaming path ──────────────────────────────────────────
+                # Read stdout and push each chunk through the stream buffer
+                # which broadcasts to all connected SSE consumers.
+                # stderr is drained in a background thread to avoid blocking.
+                queue, loop = stream_info
+                stderr_buf: list = []
+
+                def _drain_stderr() -> None:
+                    try:
+                        raw = process.stderr.read()
+                        stderr_buf.append(
+                            raw.decode("utf-8", errors="replace")
+                            if isinstance(raw, bytes)
+                            else raw
+                        )
+                    except Exception:
+                        pass
+
+                stderr_thread = _threading.Thread(target=_drain_stderr, daemon=True)
+                stderr_thread.start()
+
+                stdout_chunks: list = []
+
+                if _pty_master is not None:
+                    # ── PTY streaming path ──────────────────────────────────
+                    # Read from the PTY master fd for incremental output from
+                    # runtimes whose compiled binaries buffer stdout when not
+                    # connected to a TTY (e.g. the Rust-based Devin CLI).
+                    import codecs as _codecs
+                    import re as _re
+
+                    _ansi_escape = _re.compile(
+                        r"\x1b\[[0-9;]*[a-zA-Z]"  # CSI sequences
+                        r"|\x1b\][^\x07]*\x07"  # OSC sequences
+                        r"|\x1b\([A-Z0-9]"  # charset selection
+                    )
+                    # Tool call detection for PTY-based runtimes (Devin, etc.)
+                    _pty_tool_counter = [0]
+                    _pty_tool_pattern = _re.compile(
+                        r"(?:\[TOOL_CALL\]|\bCalling\s+tool|\bUsing\s+tool(?:\:|_)|Tool|Running|Executing|USING_TOOL)[\s:_]*(\w[\w\.]*)\s*(.*)",
+                        _re.IGNORECASE,
+                    )
+                    # Incremental decoder avoids garbled output when a
+                    # multi-byte UTF-8 character is split across reads.
+                    _utf8_decoder = _codecs.getincrementaldecoder("utf-8")("replace")
+                    try:
+                        while True:
+                            try:
+                                data = os.read(_pty_master, 4096)
+                            except OSError:
+                                # EIO when the slave side is closed (process exited)
+                                break
+                            if not data:
+                                break
+                            text = _utf8_decoder.decode(data, final=False)
+                            text = _ansi_escape.sub("", text)
+                            stdout_chunks.append(text)
+                            if text.strip():
+                                # Detect tool calls from PTY output
+                                for pty_line in text.split("\n"):
+                                    _m = _pty_tool_pattern.match(pty_line.strip())
+                                    if _m:
+                                        _pty_tool_counter[0] += 1
+                                        _tc_evt = {
+                                            "event": "detected",
+                                            "id": f"tc_{runtime}_{_pty_tool_counter[0]}",
+                                            "name": _m.group(1),
+                                            "input": _m.group(2).strip(),
+                                            "runtime": runtime,
+                                            "timestamp": time.strftime(
+                                                "%Y-%m-%dT%H:%M:%SZ", time.gmtime()
+                                            ),
+                                        }
+                                        if stream_buffer:
+                                            stream_buffer.push("tool_call", _tc_evt)
+                                        else:
+                                            loop.call_soon_threadsafe(
+                                                queue.put_nowait, ("tool_call", _tc_evt)
+                                            )
+                                if stream_buffer:
+                                    stream_buffer.push("chunk", text)
+                                else:
+                                    loop.call_soon_threadsafe(
+                                        queue.put_nowait, ("chunk", text)
+                                    )
+                    except Exception:
+                        pass
+                    finally:
+                        try:
+                            os.close(_pty_master)
+                        except OSError:
+                            pass
+                        stderr_thread.join(timeout=5)
+                        process.wait()
+                else:
+                    # ── Pipe streaming path ─────────────────────────────────
+                    import json as _json
+
+                    _claude_text_block_count = 0  # track text blocks for separators
+                    _active_tool_calls = {}  # index → {id, name, input_parts}
+                    _tool_call_counter = [0]  # mutable counter for non-Claude runtimes
+                    try:
+                        for line in process.stdout:
+                            stdout_chunks.append(line)
+                            if runtime == "claude":
+                                # Delegate stream-json parsing to module-level helper.
+                                for _ch, _ev in _parse_claude_stream_json_line(
+                                    line, _active_tool_calls
+                                ):
+                                    if _ch == "text_block_start":
+                                        if _claude_text_block_count > 0:
+                                            if stream_buffer:
+                                                stream_buffer.push(
+                                                    "chunk", {"text": "\n\n"}
+                                                )
+                                            else:
+                                                loop.call_soon_threadsafe(
+                                                    queue.put_nowait,
+                                                    ("chunk", {"text": "\n\n"}),
+                                                )
+                                        _claude_text_block_count += 1
+                                    else:
+                                        if stream_buffer:
+                                            stream_buffer.push(_ch, _ev)
+                                        else:
+                                            loop.call_soon_threadsafe(
+                                                queue.put_nowait, (_ch, _ev)
+                                            )
+                            else:
+                                # Non-Claude runtimes: detect tool call patterns from text
+                                _line_str = (
+                                    line
+                                    if isinstance(line, str)
+                                    else line.decode("utf-8", errors="replace")
+                                )
+                                _line_stripped = _line_str.strip()
+                                _tc_detected = None
+
+                                # Gemini stream-json: parse structured JSON events
+                                if runtime == "gemini" and _line_stripped.startswith(
+                                    "{"
+                                ):
+                                    try:
+                                        _gobj = _json.loads(_line_stripped)
+                                        _gtype = _gobj.get("type", "")
+                                        if (
+                                            _gtype == "message"
+                                            and _gobj.get("role") == "assistant"
+                                        ):
+                                            _content = _gobj.get("content", "")
+                                            if _content:
+                                                if stream_buffer:
+                                                    stream_buffer.push(
+                                                        "chunk", _content
+                                                    )
+                                                else:
+                                                    loop.call_soon_threadsafe(
+                                                        queue.put_nowait,
+                                                        ("chunk", _content),
+                                                    )
+                                            continue
+                                        elif _gtype == "tool_use":
+                                            _tool_call_counter[0] += 1
+                                            tc_event = {
+                                                "event": "detected",
+                                                "id": _gobj.get(
+                                                    "tool_id",
+                                                    f"tc_gemini_{_tool_call_counter[0]}",
+                                                ),
+                                                "name": _gobj.get("tool_name", "tool"),
+                                                "input": _json.dumps(
+                                                    _gobj.get("parameters", {})
+                                                ),
+                                                "runtime": "gemini",
+                                                "timestamp": _gobj.get(
+                                                    "timestamp",
+                                                    time.strftime(
+                                                        "%Y-%m-%dT%H:%M:%SZ",
+                                                        time.gmtime(),
+                                                    ),
+                                                ),
+                                            }
+                                            if stream_buffer:
+                                                stream_buffer.push(
+                                                    "tool_call", tc_event
+                                                )
+                                            else:
+                                                loop.call_soon_threadsafe(
+                                                    queue.put_nowait,
+                                                    ("tool_call", tc_event),
+                                                )
+                                            continue
+                                        elif _gtype == "tool_result":
+                                            tc_event = {
+                                                "event": "result",
+                                                "id": _gobj.get("tool_id", ""),
+                                                "status": _gobj.get(
+                                                    "status", "completed"
+                                                ),
+                                                "output": _gobj.get("output", "")[:500],
+                                            }
+                                            if stream_buffer:
+                                                stream_buffer.push(
+                                                    "tool_call", tc_event
+                                                )
+                                            else:
+                                                loop.call_soon_threadsafe(
+                                                    queue.put_nowait,
+                                                    ("tool_call", tc_event),
+                                                )
+                                            continue
+                                        elif _gtype in ("init", "result"):
+                                            continue  # skip metadata
+                                    except (ValueError, KeyError):
+                                        pass
+
+                                if runtime == "opencode":
+                                    # OpenCode tool invocation: "| ToolName args..."
+                                    import re as _re_tc
+
+                                    _oc_match = _re_tc.match(
+                                        r"^\|\s+(\w+)\b(.*)", _line_stripped
+                                    )
+                                    if _oc_match:
+                                        _oc_tool = _oc_match.group(1)
+                                        _oc_known = {
+                                            "Glob",
+                                            "Read",
+                                            "Write",
+                                            "Bash",
+                                            "Edit",
+                                            "bash",
+                                            "grep",
+                                            "find",
+                                            "Fetch",
+                                            "ListDir",
+                                            "Search",
+                                            "TodoRead",
+                                            "TodoWrite",
+                                            "WebFetch",
+                                            "Shell",
+                                            "Patch",
+                                            "MultiEdit",
+                                            "LS",
+                                            "Cat",
+                                            "Sed",
+                                            "Awk",
+                                            "Mv",
+                                            "Cp",
+                                            "Rm",
+                                            "Mkdir",
+                                        }
+                                        if (
+                                            _oc_tool in _oc_known
+                                            or _oc_tool[0].isupper()
+                                        ):
+                                            _tc_detected = {
+                                                "name": _oc_tool,
+                                                "input": _oc_match.group(2).strip(),
+                                            }
+                                    if not _tc_detected:
+                                        _oc_run = _re_tc.match(
+                                            r"^(?:Running|Executing|>)\s+(.+)",
+                                            _line_stripped,
+                                        )
+                                        if _oc_run:
+                                            _tc_detected = {
+                                                "name": "shell",
+                                                "input": _oc_run.group(1).strip(),
+                                            }
+                                elif runtime in (
+                                    "copilot",
+                                    "copilot-sdk",
+                                    "claude-sdk",
+                                    "wee",
+                                ):
+                                    # Copilot shows tool calls as "● Description" and shell cmds as "  $ cmd"
+                                    import re as _re_tc
+
+                                    # Tool call start: "● <description> [(+N)]"
+                                    _cp_tool_match = _re_tc.match(
+                                        r"^[●⬤]\s+(.+?)(?:\s+\(\+\d+\))?$",
+                                        _line_stripped,
+                                    )
+                                    if _cp_tool_match:
+                                        _desc = _cp_tool_match.group(1).strip()
+                                        # Infer tool name from description
+                                        if any(
+                                            kw in _desc.lower()
+                                            for kw in ["read", "view", "open"]
+                                        ):
+                                            _tool_name = "read"
+                                        elif any(
+                                            kw in _desc.lower()
+                                            for kw in [
+                                                "create",
+                                                "write",
+                                                "save",
+                                                "edit",
+                                                "update",
+                                                "modify",
+                                            ]
+                                        ):
+                                            _tool_name = "write"
+                                        elif any(
+                                            kw in _desc.lower()
+                                            for kw in ["delete", "remove", "rm"]
+                                        ):
+                                            _tool_name = "shell"
+                                        elif any(
+                                            kw in _desc.lower()
+                                            for kw in [
+                                                "list",
+                                                "ls",
+                                                "find",
+                                                "search",
+                                                "glob",
+                                            ]
+                                        ):
+                                            _tool_name = "glob"
+                                        elif any(
+                                            kw in _desc.lower()
+                                            for kw in [
+                                                "run",
+                                                "exec",
+                                                "install",
+                                                "deploy",
+                                                "build",
+                                                "test",
+                                            ]
+                                        ):
+                                            _tool_name = "shell"
+                                        elif any(
+                                            kw in _desc.lower()
+                                            for kw in [
+                                                "fetch",
+                                                "curl",
+                                                "http",
+                                                "api",
+                                                "download",
+                                            ]
+                                        ):
+                                            _tool_name = "web_fetch"
+                                        else:
+                                            _tool_name = "tool"
+                                        _tc_detected = {
+                                            "name": _tool_name,
+                                            "input": _desc,
+                                        }
+                                    else:
+                                        # Shell command line: "  $ <command>"
+                                        _cp_cmd_match = _re_tc.match(
+                                            r"^\$\s+(.+)", _line_stripped
+                                        )
+                                        if _cp_cmd_match:
+                                            _tc_detected = {
+                                                "name": "shell",
+                                                "input": _cp_cmd_match.group(1).strip(),
+                                            }
+                                        # Also catch "Running/Calling/Using" patterns as fallback
+                                        elif not _cp_tool_match:
+                                            _cp_legacy = _re_tc.match(
+                                                r"^(?:Running|Calling|Using)\s+(\w+)\s*(.*)",
+                                                _line_stripped,
+                                            )
+                                            if _cp_legacy:
+                                                _tc_detected = {
+                                                    "name": _cp_legacy.group(1),
+                                                    "input": _cp_legacy.group(
+                                                        2
+                                                    ).strip(),
+                                                }
+                                        # Suppress box-drawing context lines (│ cmd, └ N lines, ├ ...)
+                                        # These are tool output annotations that appear after the ● line.
+                                        # Pushing them as chunks destroys the spinning gear block in the UI.
+                                        if not _tc_detected and _re_tc.match(
+                                            r"^[│├└─]\s", _line_stripped
+                                        ):
+                                            continue
+                                elif runtime == "codex":
+                                    # Codex exec tool call patterns
+                                    import re as _re_tc
+
+                                    _cx_match = _re_tc.match(
+                                        r"^(?:Calling function|Tool|Executing|Running):\s*(\w[\w.]*)\s*(.*)",
+                                        _line_stripped,
+                                        _re_tc.IGNORECASE,
+                                    )
+                                    if _cx_match:
+                                        _tc_detected = {
+                                            "name": _cx_match.group(1),
+                                            "input": _cx_match.group(2).strip(),
+                                        }
+                                    if not _tc_detected:
+                                        # Shell command: "$ command" or "> command"
+                                        _cx_cmd = _re_tc.match(
+                                            r"^[$>]\s+(.+)", _line_stripped
+                                        )
+                                        if _cx_cmd:
+                                            _tc_detected = {
+                                                "name": "shell",
+                                                "input": _cx_cmd.group(1).strip(),
+                                            }
+                                    if not _tc_detected:
+                                        # Function-call syntax: "read_file(path=...)"
+                                        _cx_fn = _re_tc.match(
+                                            r"^(\w+)\((.+)\)\s*$", _line_stripped
+                                        )
+                                        if _cx_fn and any(
+                                            kw in _cx_fn.group(1).lower()
+                                            for kw in [
+                                                "read",
+                                                "write",
+                                                "shell",
+                                                "bash",
+                                                "exec",
+                                                "search",
+                                                "list",
+                                                "create",
+                                                "edit",
+                                                "patch",
+                                                "apply",
+                                            ]
+                                        ):
+                                            _tc_detected = {
+                                                "name": _cx_fn.group(1),
+                                                "input": _cx_fn.group(2).strip(),
+                                            }
+                                elif runtime == "gemini":
+                                    import re as _re_tc
+
+                                    # "✦ Calling tool_name(args)" or "Calling tool_name(args)"
+                                    _gm_match = _re_tc.match(
+                                        r"^[✦*]?\s*(?:Calling|Using tool|Function call|Running)\s+(\w[\w.]*)\s*(.*)",
+                                        _line_stripped,
+                                        _re_tc.IGNORECASE,
+                                    )
+                                    if _gm_match:
+                                        _tc_detected = {
+                                            "name": _gm_match.group(1),
+                                            "input": _gm_match.group(2).strip(),
+                                        }
+                                    if not _tc_detected:
+                                        # "⚡ tool_name(args)" or "tool_name(args)"
+                                        _gm_fn = _re_tc.match(
+                                            r"^[⚡✦*]?\s*(\w+)\((.+)\)\s*$",
+                                            _line_stripped,
+                                        )
+                                        if _gm_fn and any(
+                                            kw in _gm_fn.group(1).lower()
+                                            for kw in [
+                                                "read",
+                                                "write",
+                                                "shell",
+                                                "bash",
+                                                "exec",
+                                                "search",
+                                                "list",
+                                                "create",
+                                                "edit",
+                                                "file",
+                                                "run",
+                                                "cat",
+                                                "ls",
+                                                "find",
+                                                "grep",
+                                                "save",
+                                                "update",
+                                                "delete",
+                                                "fetch",
+                                                "curl",
+                                                "get",
+                                                "put",
+                                            ]
+                                        ):
+                                            _tc_detected = {
+                                                "name": _gm_fn.group(1),
+                                                "input": _gm_fn.group(2).strip(),
+                                            }
+                                    if not _tc_detected:
+                                        # "$ command" or "> command" or "Running command: cmd"
+                                        _gm_cmd = _re_tc.match(
+                                            r"^(?:[$>]\s+(.+)|Running\s+command:\s*(.+))",
+                                            _line_stripped,
+                                            _re_tc.IGNORECASE,
+                                        )
+                                        if _gm_cmd:
+                                            _cmd_text = (
+                                                _gm_cmd.group(1)
+                                                or _gm_cmd.group(2)
+                                                or ""
+                                            ).strip()
+                                            if _cmd_text:
+                                                _tc_detected = {
+                                                    "name": "shell",
+                                                    "input": _cmd_text,
+                                                }
+
+                                if _tc_detected:
+                                    _tool_call_counter[0] += 1
+                                    tc_event = {
+                                        "event": "detected",
+                                        "id": f"tc_{runtime}_{_tool_call_counter[0]}",
+                                        "name": _tc_detected["name"],
+                                        "input": _tc_detected.get("input", ""),
+                                        "runtime": runtime,
+                                        "timestamp": time.strftime(
+                                            "%Y-%m-%dT%H:%M:%SZ", time.gmtime()
+                                        ),
+                                    }
+                                    if stream_buffer:
+                                        stream_buffer.push("tool_call", tc_event)
+                                    else:
+                                        loop.call_soon_threadsafe(
+                                            queue.put_nowait, ("tool_call", tc_event)
+                                        )
+
+                                else:
+                                    # Detect [STATUS_UPDATE: ...] markers (F004)
+                                    _su_match = None
+                                    try:
+                                        _su_line = (
+                                            line
+                                            if isinstance(line, str)
+                                            else line.decode("utf-8", errors="replace")
+                                        )
+                                        _su_match = re.search(
+                                            r"\[STATUS_UPDATE[:\s]*(.+?)\]", _su_line
+                                        )
+                                    except Exception:
+                                        pass
+                                    if _su_match:
+                                        self.set_live_status(
+                                            n8n_session_id, _su_match.group(1).strip()
+                                        )
+                                    else:
+                                        # Only push as text chunk when NOT a tool call/status line
+                                        if stream_buffer:
+                                            stream_buffer.push("chunk", line)
+                                        else:
+                                            loop.call_soon_threadsafe(
+                                                queue.put_nowait, ("chunk", line)
+                                            )
+                    except Exception:
+                        pass
+                    finally:
+                        self.clear_live_status(n8n_session_id)
+                        process.stdout.close()
+                        stderr_thread.join(timeout=5)
+                        process.wait()
+
+                output = "".join(stdout_chunks) + (
+                    "".join(stderr_buf) if stderr_buf else ""
+                )
+                self.update_query_output(n8n_session_id, output)
+                # Record exit code for debugging subprocess errors.
+                # successful responses that discuss rate-limit topics (false positives).
+                self._last_exit_codes[n8n_session_id] = (
+                    process.returncode if process.returncode is not None else 0
+                )
+                # Signal the SSE generator that the subprocess is finished
+                if stream_buffer:
+                    stream_buffer.push("done", output)
+                else:
+                    loop.call_soon_threadsafe(queue.put_nowait, ("done", ""))
+                return output
+
+            else:
+                # ── Blocking path with live status capture (F004) ────────────
+                # Read stdout line-by-line instead of communicate() so we can
+                # capture [STATUS_UPDATE: ...] markers in real-time for mobile
+                # channel progress updates.
+                import threading as _thr_bl
+
+                _status_pattern = re.compile(r"\[STATUS_UPDATE[:\s]*(.+?)\]")
+                _stderr_buf_bl: list = []
+
+                def _drain_stderr_bl():
+                    try:
+                        for _err_ln in process.stderr:
+                            _stderr_buf_bl.append(_err_ln)
+                    except Exception:
+                        pass
+
+                _stderr_t = _thr_bl.Thread(target=_drain_stderr_bl, daemon=True)
+                _stderr_t.start()
+
+                _stdout_lines_bl: list = []
+                try:
+                    for _line_bl in process.stdout:
+                        _stdout_lines_bl.append(_line_bl)
+                        _su_m = _status_pattern.search(_line_bl)
+                        if _su_m:
+                            self.set_live_status(n8n_session_id, _su_m.group(1).strip())
+
+                    # Wait for process to fully exit
+                    try:
+                        process.wait(timeout=timeout)
+                    except subprocess.TimeoutExpired:
+                        process.kill()
+                        process.wait()
+                        self.clear_live_status(n8n_session_id)
+                        timeout_min = timeout / 60
+                        return f"Error: Command timed out (exceeded {timeout}s / {timeout_min:.1f}min)"
+                    finally:
+                        _stderr_t.join(timeout=5)
+
+                    output = "".join(_stdout_lines_bl) + "".join(_stderr_buf_bl)
+                    # Strip STATUS_UPDATE markers from final output
+                    output = re.sub(r"\[STATUS_UPDATE[:\s]*[^\]]*\]\s*\n?", "", output)
+                    self.update_query_output(n8n_session_id, output)
+                    self._last_exit_codes[n8n_session_id] = (
+                        process.returncode if process.returncode is not None else 0
+                    )
+                    return output
+                finally:
+                    self.clear_live_status(n8n_session_id)
+                    self.clear_running_query(n8n_session_id)
+
+        except Exception as e:
+            self.clear_running_query(n8n_session_id)
+            return f"Error: Failed to execute command: {e}"
+        finally:
+            # clear_running_query is idempotent; ensure it runs for streaming path too
+            if stream_info:
+                self.clear_running_query(n8n_session_id)
+            # Ensure PTY master fd is cleaned up even on unexpected errors
+            if _pty_master is not None:
+                try:
+                    os.close(_pty_master)
+                except OSError:
+                    pass
 
     def run_copilot(
         self,
@@ -6126,25 +6779,9 @@ User Request:
 
         # Add elevated mode instructions for unrestricted privileged access
         if mode == "elevated":
-            elevated_instruction = (
-                "\n\n[ELEVATED MODE ENABLED]\n"
-                "Full permissions granted. ALL commands requiring elevated privileges MUST automatically "
-                "prefix with 'sudo' \u2014 no exceptions. This includes:\n"
-                "\u2022 Service management: sudo systemctl restart/start/stop/reload/enable/disable <service>\n"
-                "\u2022 Network commands: sudo ping, sudo ssh, sudo iptables, sudo ip, etc.\n"
-                "\u2022 System administration: sudo journalctl, sudo systemd-*, sudo chmod/chown on system paths\n"
-                "\u2022 Any command that would fail due to insufficient permissions\n"
-                "Sudo is configured without password prompt (NOPASSWD:ALL). "
-                "Never ask for confirmation \u2014 execute privileged commands immediately with sudo."
-            )
-            context_prompt = context_prompt + elevated_instruction
+            context_prompt = context_prompt + _COPILOT_ELEVATED_MODE_INSTRUCTIONS
         elif mode == "sandboxed":
-            sandboxed_instruction = (
-                "\n\n[SANDBOXED MODE ENABLED]\n"
-                "Read-only access only. Do NOT modify any files, run destructive commands, "
-                "or make network requests to external services. Analysis and reporting only."
-            )
-            context_prompt = context_prompt + sandboxed_instruction
+            context_prompt = context_prompt + _COPILOT_SANDBOXED_MODE_INSTRUCTIONS
 
         # Expand home path for MCP config file
         mcp_config_path = os.path.expanduser("~/.copilot/mcp-config.json")
@@ -6166,10 +6803,46 @@ User Request:
             cmd.insert(4, "--allow-all-paths")
             cmd.append("--yolo")
 
+        # Proactive session age check (issue #190): Copilot session tokens expire
+        # ~30 min after creation. If the session is > 25 min old, start fresh to
+        # avoid mid-task "Session token expired" crashes on long-running tasks.
+        _session_age = time.time() - getattr(self, "_copilot_session_start", {}).get(
+            n8n_session_id, 0
+        )
+        if resume and session_id and _session_age > _COPILOT_SESSION_MAX_AGE_SEC:
+            print(
+                f"[Session] Copilot session age {_session_age:.0f}s exceeds "
+                f"{_COPILOT_SESSION_MAX_AGE_SEC}s — starting fresh to avoid token expiry",  # noqa: E501
+                file=sys.stderr,
+            )
+            resume = False
+            session_id = None
+            # Rebuild context prompt as if starting fresh
+            context_prompt = self.build_agent_context_prompt(
+                agent,
+                prompt,
+                n8n_session_id,
+                render_type,
+                effective_timeout,
+                "copilot",
+                model,
+                channel,
+            )
+            if mode == "elevated":
+                context_prompt = context_prompt + _COPILOT_ELEVATED_MODE_INSTRUCTIONS
+            elif mode == "sandboxed":
+                context_prompt = context_prompt + _COPILOT_SANDBOXED_MODE_INSTRUCTIONS
+            # Update cmd[2] so the rebuilt context_prompt is actually used
+            cmd[2] = context_prompt
+
         if resume and session_id:
             cmd.extend(["--resume", session_id])
             print(f"[Session] Resuming Copilot session: {session_id}", file=sys.stderr)
         else:
+            # Record session start time for proactive age tracking
+            getattr(self, "_copilot_session_start", {}).update(
+                {n8n_session_id: time.time()}
+            )
             print(
                 f"[Session] Starting new Copilot session in {mode} permission mode",
                 file=sys.stderr,
@@ -6178,7 +6851,85 @@ User Request:
         output = self._execute_subprocess_with_tracking(
             cmd, agent_dir, effective_timeout, "copilot", agent, prompt, n8n_session_id
         )
-        return self.strip_metadata(output, "copilot")
+        result = self.strip_metadata(output, "copilot")
+
+        # Reactive recovery (issue #190): if the session token expired mid-task,
+        # restart with a fresh session and inject accumulated context so the agent
+        # can continue rather than crashing the background task.
+        if _TOKEN_EXPIRED_MARKER in result:
+            print(
+                "[Session] Copilot session token expired — auto-restarting with fresh session",  # noqa: E501
+                file=sys.stderr,
+            )
+            # Extract work done before expiry to feed as context to the new session
+            _expiry_idx = result.index(_TOKEN_EXPIRED_MARKER)
+            _prior_work = result[:_expiry_idx].strip()
+
+            _recovery_preamble = (
+                "[SESSION RECOVERY] Your previous Copilot session token expired mid-task. "  # noqa: E501
+                "Below is the context of the original task and any work completed before the "  # noqa: E501
+                "session was interrupted. Please continue and complete all remaining work.\n\n"  # noqa: E501
+                f"ORIGINAL TASK:\n{prompt}\n\n"
+            )
+            if _prior_work:
+                _recovery_preamble += (
+                    f"PROGRESS MADE BEFORE SESSION EXPIRED (first 4000 chars):\n"
+                    f"{_prior_work[:4000]}\n\n"
+                )
+            _recovery_preamble += "Please continue from where the task was interrupted."
+
+            _recovery_context = self.build_agent_context_prompt(
+                agent,
+                _recovery_preamble,
+                n8n_session_id,
+                render_type,
+                effective_timeout,
+                "copilot",
+                model,
+                channel,
+            )
+            if mode == "elevated":
+                _recovery_context += _COPILOT_ELEVATED_MODE_INSTRUCTIONS
+            elif mode == "sandboxed":
+                _recovery_context += _COPILOT_SANDBOXED_MODE_INSTRUCTIONS
+            _recovery_cmd = [
+                self.copilot_bin,
+                "-p",
+                _recovery_context,
+                "--allow-all-tools",
+                "--no-color",
+                "--model",
+                model,
+                "--additional-mcp-config",
+                f"@{mcp_config_path}",
+            ]
+            if mode == "elevated":
+                _recovery_cmd.insert(4, "--allow-all-paths")
+                _recovery_cmd.append("--yolo")
+
+            # Record new session start for age tracking
+            getattr(self, "_copilot_session_start", {}).update(
+                {n8n_session_id: time.time()}
+            )
+            _recovery_output = self._execute_subprocess_with_tracking(
+                _recovery_cmd,
+                agent_dir,
+                effective_timeout,
+                "copilot",
+                agent,
+                _recovery_preamble,
+                n8n_session_id,
+            )
+            _stripped_recovery = self.strip_metadata(_recovery_output, "copilot")
+            if _TOKEN_EXPIRED_MARKER in _stripped_recovery:
+                print(
+                    "[Session] Recovery session also expired (double expiry >50 min) — "
+                    "returning best-effort partial output",
+                    file=sys.stderr,
+                )
+            return _stripped_recovery
+
+        return result
 
     def run_copilot_sdk(
         self,
@@ -6657,10 +7408,15 @@ User Request:
                                     "id": block.tool_use_id
                                     or f"tc_claude-sdk_{_tool_call_counter[0]}",
                                     "name": "tool",
-                                    "input": (
-                                        str(block.content)[:200]
+                                    "output": (
+                                        str(block.content)[:500]
                                         if block.content
                                         else ""
+                                    ),
+                                    "status": (
+                                        "error"
+                                        if getattr(block, "is_error", False)
+                                        else "completed"
                                     ),
                                     "is_error": getattr(block, "is_error", False),
                                     "runtime": "claude-sdk",
@@ -7002,9 +7758,10 @@ User Request:
         cmd = ["gemini"]
         if mode == "elevated":
             cmd.append("--yolo")
-        # Always use stream-json for structured output to ensure clean response extraction
-        # and consistent tool call tracking.
-        cmd.extend(["-o", "stream-json"])
+        # Use stream-json for structured tool call parsing when streaming
+        stream_info = self._stream_queues.get(n8n_session_id)
+        if stream_info:
+            cmd.extend(["-o", "stream-json"])
         cmd.append(context_prompt)
 
         # Note: Gemini CLI appears to have model handling issues with specified model names
@@ -7106,9 +7863,8 @@ User Request:
             context_prompt = context_prompt + sandboxed_instruction
 
         if resume and session_id:
-            # Resume existing session - flags must come before session_id positional arg
-            # codex exec resume supports --dangerously-bypass-approvals-and-sandbox
-            cmd = ["codex", "exec", "resume"]
+            # Resume existing session — v0.125.0+ uses `codex exec resume` subcommand
+            cmd = ["codex", "exec", "--json", "--skip-git-repo-check", "resume"]
             if mode == "elevated":
                 # Apply sandbox bypass and environment inheritance for elevated sessions
                 cmd.append("--dangerously-bypass-approvals-and-sandbox")
@@ -7121,13 +7877,17 @@ User Request:
                 file=sys.stderr,
             )
         else:
-            # Start new session - flags must come BEFORE the prompt positional arg
-            cmd = ["codex", "exec"]
+            # Start new session — v0.125.0+: --full-auto for normal mode,
+            # --dangerously-bypass-approvals-and-sandbox for elevated (they are mutually exclusive)
+            cmd = ["codex", "exec", "--json", "--skip-git-repo-check"]
             if mode == "elevated":
                 # Bypass all sandbox restrictions (sudo, DNS, network, filesystem)
                 cmd.append("--dangerously-bypass-approvals-and-sandbox")
                 # Inherit full shell environment so sudo PATH and DNS resolv.conf are available
                 cmd += ["-c", "shell_environment_policy.inherit=all"]
+            else:
+                # Non-elevated: --full-auto enables auto-execution without sandbox bypass
+                cmd.append("--full-auto")
             if model:
                 cmd += ["-m", model]
             cmd.append(context_prompt)
@@ -7143,6 +7903,23 @@ User Request:
         if "Error: CODEX command failed" in output:
             return output
 
+        # v0.125.0+: extract thread_id from JSONL thread.started event
+        import json as _json
+
+        for _line in output.splitlines():
+            _line = _line.strip()
+            if not _line:
+                continue
+            try:
+                _event = _json.loads(_line)
+                if _event.get("type") == "thread.started":
+                    _tid = _event.get("thread_id")
+                    if _tid:
+                        self._last_codex_thread_id = _tid
+                    break
+            except (ValueError, KeyError):
+                continue
+
         return self.strip_metadata(output, "codex")
 
     def run_devin(
@@ -7155,7 +7932,6 @@ User Request:
         n8n_session_id: str,
         timeout: Optional[int] = None,
         render_type: str = "text",
-        mode: str = "restricted",
     ) -> str:
         """Execute Devin CLI in non-interactive mode.
 
@@ -7163,23 +7939,13 @@ User Request:
         and allow full system access.
         """
         # Parse /mode command from prompt
-        prompt, parsed_mode = self._parse_mode_command(prompt)
+        prompt, mode = self._parse_mode_command(prompt)
 
         # Get session data once - reuse for mode and channel
         session_data = self.get_or_create_session_data(n8n_session_id)
 
-        # Prefer explicitly passed-in mode over re-deriving from session data.
-        # This ensures scheduler/background dispatches with --mode elevated
-        # propagate correctly instead of being lost to session defaults.
-        if mode != "restricted":
-            # Explicit mode was passed in (e.g. from _dispatch_single_runtime)
-            pass
-        elif parsed_mode != "restricted":
-            # /mode command was found in the prompt
-            mode = parsed_mode
-        else:
-            # Fall back to session data resolution
-            mode = self._resolve_permission_mode(session_data, parsed_mode)
+        # Resolve permission mode from session data (backward compat with yolo_mode)
+        mode = self._resolve_permission_mode(session_data, mode)
 
         agent_dir = self.AGENTS.get(agent, self.AGENTS["orchestrator"])["path"]
         effective_timeout = timeout if timeout is not None else self.command_timeout
@@ -7235,9 +8001,8 @@ User Request:
             context_prompt = context_prompt + sandboxed_instruction
 
         # -p is a boolean flag (print/non-interactive mode); prompt goes after --
-        # Permission mode: dangerous (auto-approve all) for elevated, normal for restricted/sandboxed
-        # Devin CLI valid values: normal, dangerous, bypass (NOT "auto")
-        permission_mode = "dangerous" if mode == "elevated" else "normal"
+        # Permission mode: dangerous (auto-approve all) for elevated, auto for restricted/sandboxed
+        permission_mode = "dangerous" if mode == "elevated" else "auto"
         cmd = [devin_bin, "-p"]
         if model:
             cmd += ["--model", model]
@@ -7452,7 +8217,6 @@ User Request:
         }
 
         resolved_model = model
-        print(f"[wee-runtime] Session model: {model}", file=sys.stderr)
         for prefix, (preset_base, preset_key) in _PRESETS.items():
             if model.lower().startswith(f"{prefix}/"):
                 resolved_model = model[len(prefix) + 1 :]
@@ -7465,26 +8229,17 @@ User Request:
         if not api_base:
             api_base = "http://192.168.1.101:11434/v1"
         if not api_key:
-            # Issue #153: Check OPENROUTER_API_KEY env var for OpenRouter models
-            if "openrouter" in api_base.lower():
-                api_key = os.environ.get("OPENROUTER_API_KEY")
             # Try keyring for OpenRouter
-            if not api_key and "openrouter" in api_base.lower():
+            if "openrouter" in api_base.lower():
                 try:
                     import keyring
 
                     api_key = keyring.get_password("openrouter", "api_key")
                 except Exception:
                     pass
-            # Issue #153: Raise clear error instead of defaulting to "ollama"
+                if not api_key:
+                    api_key = os.environ.get("OPENROUTER_API_KEY")
             if not api_key:
-                if "openrouter" in api_base.lower():
-                    raise ValueError(
-                        "OpenRouter API key not found. Set OPENROUTER_API_KEY "
-                        'env var or store via: python3 -c "import keyring; '
-                        "keyring.set_password('openrouter', 'api_key', "
-                        "'sk-or-...')\".\"."
-                    )
                 api_key = "ollama"
 
         print(
@@ -7507,29 +8262,30 @@ User Request:
         # Issue #111: Augment system prompt with explicit tool capability section
         # so models that ignore JSON schemas still know tools are available.
         context_prompt = self._wee_augment_system_prompt_with_tools(base_context_prompt)
-        # Issue #113: Augment system prompt with anti-hallucination rules
-        context_prompt += self._wee_anti_hallucination_prompt()
 
         # -- Streaming infrastructure --
         stream_buffer = getattr(self, "_stream_buffers", {}).get(n8n_session_id)
 
         # -- Create OpenAI client and call API --
-        # Use httpx.Timeout for granular control: fast connect failure,
-        # generous read timeout for streaming
-        import httpx
-
         client = OpenAI(
             base_url=api_base,
             api_key=api_key,
-            timeout=httpx.Timeout(
-                timeout=effective_timeout,
-                connect=15.0,
-            ),
-            max_retries=0,
+            timeout=effective_timeout,
         )
 
         # -- Issue #108: Load conversation history --
-        messages = self._wee_load_messages(n8n_session_id, context_prompt, resume)
+        try:
+            messages = self._wee_load_messages(n8n_session_id, context_prompt, resume)
+        except Exception as load_err:
+            # Fallback: start with empty messages if loading fails
+            print(
+                f"[Wee Native] Warning: Failed to load messages: "
+                f"{load_err}, starting fresh",
+                file=sys.stderr,
+            )
+            messages = []
+            if context_prompt:
+                messages.append({"role": "system", "content": context_prompt})
         messages.append({"role": "user", "content": prompt})
 
         # -- Tool definitions for agentic loop (Issue #107) --
@@ -7573,15 +8329,6 @@ User Request:
         collected_output = []
         _tool_call_counter = 0
         MAX_TOOL_ROUNDS = 10
-        # Issue #160: Track token usage across all rounds
-        _total_prompt_tokens = 0
-        _total_completion_tokens = 0
-        _usage_available = False
-
-        # Issue #160: Track token usage across tool rounds
-        _total_prompt_tokens = 0
-        _total_completion_tokens = 0
-        _usage_available = False
 
         try:
             for round_num in range(MAX_TOOL_ROUNDS + 1):
@@ -7590,8 +8337,6 @@ User Request:
                     "model": resolved_model,
                     "messages": messages,
                     "stream": True,
-                    # Issue #160: Request usage stats in streaming response
-                    "stream_options": {"include_usage": True},
                 }
                 if round_num < MAX_TOOL_ROUNDS:
                     create_kwargs["tools"] = _WEE_TOOLS
@@ -7599,28 +8344,15 @@ User Request:
                 try:
                     stream = client.chat.completions.create(**create_kwargs)
                 except Exception as tools_err:
-                    # Some models/endpoints may not support tools or stream_options
-                    retried = False
+                    # Some models/endpoints may not support tools — retry without
                     if "tools" in create_kwargs:
                         print(
                             f"[Wee Native] Tools not supported, retrying without: {tools_err}",
                             file=sys.stderr,
                         )
                         create_kwargs.pop("tools", None)
-                        try:
-                            stream = client.chat.completions.create(**create_kwargs)
-                            retried = True
-                        except Exception:
-                            pass  # fall through to stream_options removal
-                    if not retried and "stream_options" in create_kwargs:
-                        # Issue #160: Ollama/LM Studio may not support stream_options
-                        print(
-                            f"[Wee Native] stream_options not supported, retrying without: {tools_err}",
-                            file=sys.stderr,
-                        )
-                        create_kwargs.pop("stream_options", None)
                         stream = client.chat.completions.create(**create_kwargs)
-                    elif not retried:
+                    else:
                         raise
 
                 # Accumulate content and tool calls from streaming response
@@ -7628,15 +8360,6 @@ User Request:
                 tool_calls_acc = {}  # index -> {id, name, arguments}
 
                 for chunk in stream:
-                    # Issue #160: Capture usage stats from final streaming chunk
-                    if hasattr(chunk, "usage") and chunk.usage is not None:
-                        _u = chunk.usage
-                        _total_prompt_tokens += getattr(_u, "prompt_tokens", 0) or 0
-                        _total_completion_tokens += (
-                            getattr(_u, "completion_tokens", 0) or 0
-                        )
-                        _usage_available = True
-
                     if not chunk.choices:
                         continue
                     delta = chunk.choices[0].delta
@@ -7777,54 +8500,15 @@ User Request:
 
             output = "".join(collected_output)
 
-            # Issue #112: Fallback when LLM generates empty synthesis after tool execution.
-            # Some models (e.g. qwen3:8b) return zero text tokens after processing
-            # tool results, yielding output=''. Surface the last tool result instead.
-            if not output.strip():
-                tool_results = [
-                    m["content"]
-                    for m in messages
-                    if m.get("role") == "tool" and m.get("content")
-                ]
-                if tool_results:
-                    last_result = tool_results[-1]
-                    output = f"Tool execution result:\n{last_result[:4000]}"
-                    print(
-                        f"[Wee Native] Empty synthesis fallback: surfacing last tool result ({len(last_result)} chars)",
-                        file=sys.stderr,
-                    )
-                    if stream_buffer:
-                        stream_buffer.push("chunk", {"text": output})
-                elif any(m.get("role") == "tool" for m in messages):
-                    output = "(Tool executed but produced no output)"
-                    print(
-                        "[Wee Native] Empty synthesis fallback: tool produced no output",
-                        file=sys.stderr,
-                    )
-                    if stream_buffer:
-                        stream_buffer.push("chunk", {"text": output})
-
             # Issue #108: Persist conversation history
             self._wee_save_messages(n8n_session_id, messages)
-
-            # Issue #160: Build and store wee_meta with token usage and cost
-            _wee_meta = self._build_wee_meta(
-                api_base,
-                resolved_model,
-                model,
-                _total_prompt_tokens,
-                _total_completion_tokens,
-                _usage_available,
-            )
-            self.update_session_field(n8n_session_id, "_wee_meta", _wee_meta)
 
             # Push done sentinel
             if stream_buffer:
                 stream_buffer.push("done", output)
 
             print(
-                f"[Wee Native] Completed. Output length: {len(output)} chars, "
-                f"tokens: {_wee_meta.get('tokens', 'N/A')}",
+                f"[Wee Native] Completed. Output length: {len(output)} chars",
                 file=sys.stderr,
             )
             return output
@@ -7840,100 +8524,6 @@ User Request:
             return error_msg
 
     # -- Wee runtime helper methods (Issues #107, #108, #109) --
-
-    # Issue #160: Model pricing per 1M tokens (input, output) in USD
-    _WEE_MODEL_PRICING = {
-        # OpenRouter pricing (per 1M tokens)
-        "google/gemini-2.5-flash-preview": (0.15, 0.60),
-        "google/gemini-2.5-pro-preview": (1.25, 10.00),
-        "google/gemini-2.0-flash-001": (0.10, 0.40),
-        "anthropic/claude-sonnet-4": (3.00, 15.00),
-        "anthropic/claude-3.5-sonnet": (3.00, 15.00),
-        "anthropic/claude-haiku-4": (0.80, 4.00),
-        "anthropic/claude-3.5-haiku": (0.80, 4.00),
-        "openai/gpt-4.1": (2.00, 8.00),
-        "openai/gpt-4.1-mini": (0.40, 1.60),
-        "openai/gpt-4.1-nano": (0.10, 0.40),
-        "openai/gpt-4o": (2.50, 10.00),
-        "openai/gpt-4o-mini": (0.15, 0.60),
-        "meta-llama/llama-4-maverick": (0.20, 0.60),
-        "meta-llama/llama-4-scout": (0.15, 0.40),
-        "meta-llama/llama-3.3-70b-instruct": (0.10, 0.15),
-        "deepseek/deepseek-chat-v3-0324": (0.30, 0.88),
-        "deepseek/deepseek-r1": (0.55, 2.19),
-        "qwen/qwen3-235b-a22b": (0.20, 0.60),
-        "microsoft/mai-ds-r1": (0.55, 2.19),
-        "nvidia/llama-3.1-nemotron-ultra-253b-v1": (0.00, 0.00),
-    }
-
-    def _build_wee_meta(
-        self,
-        api_base: str,
-        resolved_model: str,
-        original_model: str,
-        prompt_tokens: int,
-        completion_tokens: int,
-        usage_available: bool,
-    ) -> dict:
-        """Build wee_meta dict with token usage and estimated cost (Issue #160).
-
-        Returns a dict suitable for inclusion in the SSE done event:
-        {runtime, tokens, prompt_tokens, completion_tokens, cost_label}
-        """
-        meta = {"runtime": "wee"}
-        is_ollama = "11434" in (api_base or "") or (api_base or "").startswith(
-            "http://192.168.1.101"
-        )
-        is_openrouter = "openrouter" in (api_base or "").lower()
-        is_lmstudio = "1234" in (api_base or "")
-
-        if not usage_available:
-            if is_ollama or is_lmstudio:
-                meta["cost_label"] = "local"
-            return meta
-
-        total = prompt_tokens + completion_tokens
-        meta["tokens"] = total
-        meta["prompt_tokens"] = prompt_tokens
-        meta["completion_tokens"] = completion_tokens
-
-        # Determine cost label
-        if is_ollama or is_lmstudio:
-            meta["cost_label"] = "local"
-        elif is_openrouter:
-            # Look up pricing — try full model ID, then with prefix
-            pricing = None
-            for candidate in [original_model, resolved_model]:
-                candidate_lower = candidate.lower() if candidate else ""
-                # Strip openrouter/ prefix if present
-                if candidate_lower.startswith("openrouter/"):
-                    candidate_lower = candidate_lower[len("openrouter/") :]
-                for key, val in self._WEE_MODEL_PRICING.items():
-                    if key.lower() == candidate_lower or candidate_lower.startswith(
-                        key.lower()
-                    ):
-                        pricing = val
-                        break
-                if pricing:
-                    break
-            if pricing:
-                input_cost = (prompt_tokens / 1_000_000) * pricing[0]
-                output_cost = (completion_tokens / 1_000_000) * pricing[1]
-                total_cost = input_cost + output_cost
-                if total_cost < 0.001:
-                    meta["cost_label"] = f"${total_cost:.6f}"
-                elif total_cost < 0.01:
-                    meta["cost_label"] = f"${total_cost:.4f}"
-                else:
-                    meta["cost_label"] = f"${total_cost:.2f}"
-            elif any(":free" in (original_model or "").lower() for _ in [1]):
-                meta["cost_label"] = "free"
-            else:
-                meta["cost_label"] = "est. N/A"
-        else:
-            meta["cost_label"] = ""
-
-        return meta
 
     def _wee_load_messages(
         self,
@@ -8054,18 +8644,14 @@ User Request:
     def _wee_execute_tool(self, func_name: str, func_args: dict, agent: str) -> str:
         """Execute a tool call from the wee runtime agentic loop.
 
-        Issue #107: Supports bash and python tools. Issue #111: SSH sanitization wired in.
-        Uses the same _execute_bash_command infrastructure as other runtimes.
+        Issue #107: Supports bash and python tools.  Uses the same
+        _execute_bash_command infrastructure as other runtimes.
         """
         try:
             if func_name == "bash":
                 command = func_args.get("command", "")
                 if not command:
                     return "Error: No command provided"
-                # Issue #111: Sanitize SSH commands (wire #113 fix)
-                command = self._wee_sanitize_bash_command(command)
-                if self._SHELL_GRAMMAR_RE.search(command):
-                    return self._execute_shell_command(command, agent)
                 return self._execute_bash_command(command, agent)
             elif func_name == "python":
                 code = func_args.get("code", "")
@@ -8095,60 +8681,6 @@ User Request:
             return f"Error: Tool '{func_name}' timed out"
         except Exception as e:
             return f"Error executing {func_name}: {e}"
-
-    # -- Issue #113: SSH command sanitisation and anti-hallucination --
-
-    _SSH_BIN_RE = re.compile(r"\b(ssh|scp|sftp)\b")
-    _SHELL_GRAMMAR_RE = re.compile(r"(\|\||&&|[|;<>`]|[$][(]|\n)")
-
-    # Issue #111: SSH sanitization wired into _wee_execute_tool (resolves #113 TODO).
-    # The wee runtime now has a full tool execution loop.
-    @staticmethod
-    def _wee_sanitize_bash_command(command: str) -> str:
-        """Auto-inject SSH flags to prevent host key verification failures.
-
-        When a bash command contains an ssh/scp/sftp invocation without
-        StrictHostKeyChecking already set, inject
-        ``-o StrictHostKeyChecking=accept-new`` so first-connect succeeds
-        without manual intervention.  ``accept-new`` is safer than ``no``
-        because it still rejects CHANGED keys (potential MITM).
-
-        Wired into _wee_execute_tool by Issue #111. Called on every bash tool input before
-        execution in the wee runtime tool execution loop.
-        """
-        if not command:
-            return command
-        # Quick check — does the command even mention ssh/scp/sftp?
-        if not SessionManager._SSH_BIN_RE.search(command):
-            return command
-        # Already has StrictHostKeyChecking set — leave it alone
-        if "StrictHostKeyChecking" in command:
-            return command
-
-        # Inject -o StrictHostKeyChecking=accept-new after each ssh/scp/sftp binary
-        def _inject(m):
-            return m.group(0) + " -o StrictHostKeyChecking=accept-new"
-
-        return SessionManager._SSH_BIN_RE.sub(_inject, command, count=0)
-
-    @staticmethod
-    def _wee_anti_hallucination_prompt() -> str:
-        """Issue #113: Return system-prompt section that prevents hallucinated tool output.
-
-        Smaller Ollama models tend to fabricate command output when a tool
-        call fails.  This prompt section explicitly forbids that.
-        """
-        return (
-            "\n\n[CRITICAL — Output Integrity Rules]\n"
-            "1. NEVER fabricate, invent, or hallucinate command output. If a command "
-            "fails or you cannot execute it, report the EXACT error message.\n"
-            "2. NEVER provide example or placeholder output and present it as real. "
-            'If you show an example, clearly label it as "EXAMPLE (not real output)".\n'
-            "3. When a tool call returns an error, relay the error verbatim to the user. "
-            "Do NOT attempt to guess what the successful output would have looked like.\n"
-            "4. For SSH commands: ALWAYS use ``-o StrictHostKeyChecking=accept-new`` to "
-            "avoid host-key verification failures on first connect.\n"
-        )
 
     def _get_cursor_session_id(self, n8n_session_id: str) -> Optional[str]:
         """Return the stored cursor session flag for this n8n session, or None."""
@@ -8262,14 +8794,11 @@ User Request:
         elif runtime == "gemini":
             return (self.gemini_session_dir / f"{session_id}.json").exists()
         elif runtime == "codex":
-            # CODEX stores sessions in nested date-based directories
-            # Format: ~/.codex/sessions/YYYY/MM/DD/rollout-YYYY-MM-DDTHH-MM-SS-SESSION_ID.jsonl
-            # Session ID is a UUID at the end of the filename
+            # Legacy: CODEX stored sessions as rollout-*.jsonl files (pre-v0.125.0)
             try:
                 for session_file in self.codex_session_dir.glob(
                     "*/*/*/rollout-*.jsonl"
                 ):
-                    # Extract the UUID from the filename (last 36 chars before .jsonl)
                     filename = session_file.name.replace(".jsonl", "")
                     file_session_id = (
                         filename[-36:] if len(filename) >= 36 else filename
@@ -8278,7 +8807,18 @@ User Request:
                         return True
             except Exception:
                 pass
-            return False
+            # v0.125.0+: session IDs are thread UUIDs — no local files exist.
+            # Accept any UUID-formatted session_id as valid (codex handles bad IDs gracefully).
+            import re as _re_uuid
+
+            return bool(
+                session_id
+                and _re_uuid.match(
+                    r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+                    session_id,
+                    _re_uuid.IGNORECASE,
+                )
+            )
         elif runtime == "devin":
             # Devin session mappings are keyed by n8n_session_id, not backend session_id
             key = n8n_session_id if n8n_session_id else session_id
@@ -8369,21 +8909,20 @@ User Request:
                 )
                 return files[0].stem if files else None
             elif runtime == "codex":
-                # CODEX stores sessions in nested date directories
-                # Filenames: rollout-YYYY-MM-DDTHH-MM-SS-SESSION_ID.jsonl
+                # v0.125.0+: thread_id captured from JSONL output in run_codex()
+                if getattr(self, "_last_codex_thread_id", None):
+                    tid = self._last_codex_thread_id
+                    self._last_codex_thread_id = None  # consume once
+                    return tid
+                # Legacy: rollout-*.jsonl files (pre-v0.125.0)
                 files = sorted(
                     self.codex_session_dir.glob("*/*/*/rollout-*.jsonl"),
                     key=lambda p: p.stat().st_mtime,
                     reverse=True,
                 )
                 if files:
-                    # Extract session ID from filename
-                    # Format: rollout-2025-12-15T22-39-34-019b242b-476d-7f90-8bfa-4eb0c7095532.jsonl
-                    # The session ID is the UUID at the end (last 36 chars before .jsonl)
                     filename = files[0].name
-                    # Remove .jsonl extension and get the last 36 characters (UUID)
                     name_without_ext = filename.replace(".jsonl", "")
-                    # Session ID should be the last UUID-like part
                     session_id = (
                         name_without_ext[-36:]
                         if len(name_without_ext) >= 36
@@ -8493,19 +9032,122 @@ User Request:
         """Dispatch prompt to a single runtime and return the output."""
         # Touch before dispatch to keep session alive during long operations
         self.touch_session(n8n_session_id)
-        request = RuntimeExecutionRequest(
-            runtime=runtime,
-            prompt=prompt,
-            model=model,
-            agent=agent,
-            session_id=session_id,
-            can_resume=can_resume,
-            n8n_session_id=n8n_session_id,
-            effective_timeout=effective_timeout,
-            render_type=render_type,
-            mode=mode,
-        )
-        result = self.runtime_executors.execute(request)
+
+        if runtime == "copilot":
+            result = self.run_copilot(
+                prompt,
+                model,
+                agent,
+                session_id if can_resume else None,
+                can_resume,
+                n8n_session_id,
+                effective_timeout,
+                render_type,
+            )
+        elif runtime == "copilot-sdk":
+            result = self.run_copilot_sdk(
+                prompt,
+                model,
+                agent,
+                session_id if can_resume else None,
+                can_resume,
+                n8n_session_id,
+                effective_timeout,
+                render_type,
+                mode,
+            )
+        elif runtime == "opencode":
+            result = self.run_opencode(
+                prompt,
+                model,
+                agent,
+                session_id if can_resume else None,
+                can_resume,
+                n8n_session_id,
+                effective_timeout,
+                render_type,
+            )
+        elif runtime == "claude":
+            result = self.run_claude(
+                prompt,
+                model,
+                agent,
+                session_id if can_resume else None,
+                can_resume,
+                n8n_session_id,
+                effective_timeout,
+                render_type,
+                mode,
+            )
+        elif runtime == "claude-sdk":
+            result = self.run_claude_sdk(
+                prompt,
+                model,
+                agent,
+                session_id if can_resume else None,
+                can_resume,
+                n8n_session_id,
+                effective_timeout,
+                render_type,
+                mode,
+            )
+        elif runtime == "gemini":
+            result = self.run_gemini(
+                prompt,
+                model,
+                agent,
+                session_id if can_resume else None,
+                can_resume,
+                n8n_session_id,
+                effective_timeout,
+                render_type,
+            )
+        elif runtime == "codex":
+            result = self.run_codex(
+                prompt,
+                model,
+                agent,
+                session_id if can_resume else None,
+                can_resume,
+                n8n_session_id,
+                effective_timeout,
+                render_type,
+            )
+        elif runtime == "devin":
+            result = self.run_devin(
+                prompt,
+                model,
+                agent,
+                session_id if can_resume else None,
+                can_resume,
+                n8n_session_id,
+                effective_timeout,
+                render_type,
+            )
+        elif runtime == "cursor":
+            result = self.run_cursor(
+                prompt,
+                model,
+                agent,
+                session_id if can_resume else None,
+                can_resume,
+                n8n_session_id,
+                effective_timeout,
+                render_type,
+            )
+        elif runtime == "wee":
+            result = self.run_wee_native(
+                prompt,
+                model,
+                agent,
+                session_id if can_resume else None,
+                can_resume,
+                n8n_session_id,
+                effective_timeout,
+                render_type,
+            )
+        else:
+            return f"Error: Unknown runtime '{runtime}'"
 
         # Touch after dispatch to record completion activity
         self.touch_session(n8n_session_id)
@@ -8751,28 +9393,13 @@ def _send_pairing_code(channel: str, identity: str, code: str) -> bool:
                 or os.getenv("WEBEX_BOT_TOKEN", "")
             )
             msg = f"Your pairing code is: **{code}**\nIt expires in 5 minutes."
-            # Route to the correct WebEx target based on identity format:
-            #   email       → toPersonEmail
-            #   person ID   → toPersonId  (base64 of ciscospark://us/PEOPLE/...)
-            #   anything else → roomId
+            # If identity looks like an email, use toPersonEmail; otherwise treat as roomId
             import re as _re
-            import base64 as _b64
 
             if _re.match(r"[^@]+@[^@]+\.[^@]+", identity):
                 payload = {"toPersonEmail": identity, "text": msg, "markdown": msg}
             else:
-                # Detect WebEx person IDs (base64-encoded ciscospark://us/PEOPLE/...)
-                _is_person_id = False
-                try:
-                    _padded = identity + "=" * (-len(identity) % 4)
-                    _decoded = _b64.b64decode(_padded).decode("utf-8", errors="replace")
-                    _is_person_id = "/PEOPLE/" in _decoded
-                except Exception:
-                    pass
-                if _is_person_id:
-                    payload = {"toPersonId": identity, "text": msg, "markdown": msg}
-                else:
-                    payload = {"roomId": identity, "text": msg, "markdown": msg}
+                payload = {"roomId": identity, "text": msg, "markdown": msg}
             import requests as _req
 
             resp = _req.post(
@@ -8793,7 +9420,6 @@ def _send_pairing_code(channel: str, identity: str, code: str) -> bool:
             return True
     except Exception as exc:  # noqa: BLE001
         print(f"[API] Warning: could not send pairing code via {channel}: {exc}")
-        return False
 
 
 def _get_telegram_username(user_id: str):
@@ -9295,10 +9921,10 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 await asyncio.sleep(300)
                 auth_mgr.cleanup_expired()
                 rate_limiter.cleanup()
-                await asyncio.to_thread(bg_task_mgr.cleanup_old)
+                bg_task_mgr.cleanup_old()
                 # Periodic reconciliation: promote queued tasks if slots available
                 try:
-                    _all = await asyncio.to_thread(bg_task_mgr.list_all_tasks)
+                    _all = bg_task_mgr.list_all_tasks()
                     _queued_periodic = [t for t in _all if t["status"] == "queued"]
                     _queued_periodic.sort(key=lambda t: t.get("created_at", ""))
                     for _qt in _queued_periodic:
@@ -9310,15 +9936,11 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                             "max_concurrent",
                             BackgroundTaskManager.MAX_TASKS_PER_USER,
                         )
-                        _rn = await asyncio.to_thread(
-                            bg_task_mgr.count_running, _ch, _uid, _agent
-                        )
+                        _rn = bg_task_mgr.count_running(_ch, _uid, _agent)
                         if _rn >= _mc:
                             continue
                         _nsid = str(uuid4())
-                        await asyncio.to_thread(
-                            bg_task_mgr.promote_queued_task, _qt["task_id"], _nsid
-                        )
+                        bg_task_mgr.promote_queued_task(_qt["task_id"], _nsid)
                         print(
                             f"[Periodic] Promoting queued task {_qt['task_id']}",
                             flush=True,
@@ -9335,6 +9957,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                             _qt["user_identity"],
                             _qt.get("timeout") or 900,
                             _qt.get("notify", True),
+                            _qt.get("permission_mode", "restricted"),
                         )
                 except Exception as _rec_exc:
                     print(
@@ -9373,7 +9996,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                     )
 
         # Reconcile orphaned tasks from previous process lifetime
-        _reconcile_result = await asyncio.to_thread(bg_task_mgr.reconcile_stale_tasks)
+        _reconcile_result = bg_task_mgr.reconcile_stale_tasks()
         if _reconcile_result["stale_running"] or _reconcile_result["queued_ready"]:
             print(
                 f"[Startup] Task reconciliation: "
@@ -9382,7 +10005,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 flush=True,
             )
             # Promote queued tasks that now have available slots
-            _all_tasks = await asyncio.to_thread(bg_task_mgr.list_all_tasks)
+            _all_tasks = bg_task_mgr.list_all_tasks()
             _queued = [t for t in _all_tasks if t["status"] == "queued"]
             _queued.sort(key=lambda t: t.get("created_at", ""))
             for _qt in _queued:
@@ -9393,15 +10016,11 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 _max_conc = _agent_config.get(
                     "max_concurrent", BackgroundTaskManager.MAX_TASKS_PER_USER
                 )
-                _running_now = await asyncio.to_thread(
-                    bg_task_mgr.count_running, _channel, _identity, _agent
-                )
+                _running_now = bg_task_mgr.count_running(_channel, _identity, _agent)
                 if _running_now >= _max_conc:
                     continue
                 _new_sid = str(uuid4())
-                await asyncio.to_thread(
-                    bg_task_mgr.promote_queued_task, _qt["task_id"], _new_sid
-                )
+                bg_task_mgr.promote_queued_task(_qt["task_id"], _new_sid)
                 print(
                     f"[Startup] Promoting queued task {_qt['task_id']} → running",
                     flush=True,
@@ -9418,6 +10037,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                     _qt["user_identity"],
                     _qt.get("timeout") or 900,
                     _qt.get("notify", True),
+                    _qt.get("permission_mode", "restricted"),
                 )
 
         cleanup_task = asyncio.ensure_future(_periodic_cleanup())
@@ -9482,6 +10102,8 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                         "name": name,
                         "description": info.get("description", ""),
                         "path": info.get("path", ""),
+                        "primary_runtime": info.get("primary_runtime"),
+                        "primary_model": info.get("primary_model"),
                     }
                 )
             return {"agents": agents}
@@ -9497,7 +10119,50 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             "environment": APP_ENV,
             "agents_loaded": len(session_mgr.AGENTS),
             "scheduler_enabled": SCHEDULER_ENABLED,
-            "active_sessions": session_mgr.get_cached_session_count(),
+            "active_sessions": len(session_mgr.load_session_map()),
+        }
+
+    @app.get("/api/v1/service-status")
+    async def get_service_status():
+        """Query systemctl status for connector services."""
+        import asyncio
+        import socket as _socket
+
+        env_suffix = "-dev" if APP_ENV == "DEV" else ""
+        services = {
+            "telegram": f"telegram-bot-listener{env_suffix}.service",
+            "webex": f"webex-connector{env_suffix}.service",
+        }
+
+        results = {}
+        for name, svc in services.items():
+            try:
+                proc = await asyncio.create_subprocess_exec(
+                    "systemctl",
+                    "is-active",
+                    svc,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                )
+                stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=5.0)
+                status = stdout.decode().strip()
+                results[name] = {
+                    "service": svc,
+                    "status": status,
+                    "active": status == "active",
+                }
+            except Exception as e:
+                results[name] = {
+                    "service": svc,
+                    "status": "unknown",
+                    "active": False,
+                    "error": str(e),
+                }
+
+        return {
+            "services": results,
+            "node": _socket.gethostname(),
+            "checked_at": time.time(),
         }
 
     @app.get("/api/v1/config")
@@ -9567,16 +10232,13 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 None, session_mgr.get_models_for_runtime, runtime
             )
             models = []
-            for _group, model_ids in raw.items():
+            for group_name, model_ids in raw.items():
                 for model_id in model_ids:
                     label = (
                         session_mgr._get_model_description(model_id, runtime)
                         or model_id
                     )
-                    entry = {"id": model_id, "label": label}
-                    if _group:
-                        entry["group"] = _group
-                    models.append(entry)
+                    models.append({"id": model_id, "label": label, "group": group_name})
             return {"runtime": runtime, "models": models}
         except Exception as e:
             return {"runtime": runtime, "models": [], "error": str(e)}
@@ -9650,7 +10312,9 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         # Use provided session_id or generate a new one
         session_id = body.session_id if body.session_id else str(uuid4())[:8]
         session_mgr.get_or_create_session_data(session_id, identity=user["identity"])
-        history_mgr.create_session(user["channel"], user["identity"], session_id)
+        history_mgr.create_session(
+            user["channel"], user["identity"], session_id, agent=body.agent or ""
+        )
 
         # Store channel in session so file instructions are channel-aware
         session_mgr.update_session_field(session_id, "channel", user["channel"])
@@ -9773,6 +10437,12 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         session_data = session_mgr.get_or_create_session_data(
             session_id, identity=user["identity"]
         )
+        # Sync agent to history so session list always shows current agent
+        current_agent = session_data.get("agent") or ""
+        if current_agent:
+            history_mgr.update_session_agent(
+                user["channel"], user["identity"], session_id, current_agent
+            )
         runtime = session_data.get("runtime", "copilot")
         return {
             "session_id": session_id,
@@ -9865,6 +10535,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             ("Model not found:", 422, "model_not_found"),
             ("NotFoundError:", 422, "resource_not_found"),
             ("Resource not found", 422, "resource_not_found"),
+            ("weekly rate limit", 429, "weekly_rate_limit_exceeded"),
             ("rate limit", 429, "rate_limited"),
             ("RateLimitError", 429, "rate_limited"),
             ("PermissionDeniedError", 403, "permission_denied"),
@@ -10080,18 +10751,22 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 )
 
                 session_data = session_mgr.get_or_create_session_data(session_id)
+                # Sync agent to history so session list always shows current agent
+                current_agent = session_data.get("agent") or ""
+                if current_agent:
+                    history_mgr.update_session_agent(
+                        user["channel"], user["identity"], session_id, current_agent
+                    )
                 runtime = session_data.get("runtime", "copilot")
-                _done_evt = {
-                    "type": "done",
-                    "response": result,
-                    "runtime": runtime,
-                    "model": session_data.get("model"),
-                }
-                # Issue #160: Include wee_meta (token usage + cost) if available
-                _wm = session_data.pop("_wee_meta", None)
-                if _wm:
-                    _done_evt["wee_meta"] = _wm
-                done_payload = _json.dumps(_done_evt)
+                done_payload = _json.dumps(
+                    {
+                        "type": "done",
+                        "response": result,
+                        "runtime": runtime,
+                        "model": session_data.get("model"),
+                        "agent": current_agent,
+                    }
+                )
                 yield f"data: {done_payload}\n\n"
                 done_delivered = True
             finally:
@@ -10186,17 +10861,16 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                             session_id
                         )
                         runtime = session_data.get("runtime", "copilot")
-                        _done_evt = {
-                            "type": "done",
-                            "response": (data if isinstance(data, str) else str(data)),
-                            "runtime": runtime,
-                            "model": session_data.get("model"),
-                        }
-                        # Issue #160: Include wee_meta if available
-                        _wm = session_data.pop("_wee_meta", None)
-                        if _wm:
-                            _done_evt["wee_meta"] = _wm
-                        done_payload = _json.dumps(_done_evt)
+                        done_payload = _json.dumps(
+                            {
+                                "type": "done",
+                                "response": (
+                                    data if isinstance(data, str) else str(data)
+                                ),
+                                "runtime": runtime,
+                                "model": session_data.get("model"),
+                            }
+                        )
                         yield f"data: {done_payload}\n\n"
                         return
 
@@ -10205,17 +10879,14 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                     session_data = session_mgr.get_or_create_session_data(session_id)
                     runtime = session_data.get("runtime", "copilot")
                     result = buf.done_result if isinstance(buf.done_result, str) else ""
-                    _done_evt = {
-                        "type": "done",
-                        "response": result,
-                        "runtime": runtime,
-                        "model": session_data.get("model"),
-                    }
-                    # Issue #160: Include wee_meta if available
-                    _wm = session_data.pop("_wee_meta", None)
-                    if _wm:
-                        _done_evt["wee_meta"] = _wm
-                    done_payload = _json.dumps(_done_evt)
+                    done_payload = _json.dumps(
+                        {
+                            "type": "done",
+                            "response": result,
+                            "runtime": runtime,
+                            "model": session_data.get("model"),
+                        }
+                    )
                     yield f"data: {done_payload}\n\n"
                     return
 
@@ -10246,17 +10917,14 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 session_data = session_mgr.get_or_create_session_data(session_id)
                 runtime = session_data.get("runtime", "copilot")
                 result = buf.done_result if isinstance(buf.done_result, str) else ""
-                _done_evt = {
-                    "type": "done",
-                    "response": result,
-                    "runtime": runtime,
-                    "model": session_data.get("model"),
-                }
-                # Issue #160: Include wee_meta if available
-                _wm = session_data.pop("_wee_meta", None)
-                if _wm:
-                    _done_evt["wee_meta"] = _wm
-                done_payload = _json.dumps(_done_evt)
+                done_payload = _json.dumps(
+                    {
+                        "type": "done",
+                        "response": result,
+                        "runtime": runtime,
+                        "model": session_data.get("model"),
+                    }
+                )
                 yield f"data: {done_payload}\n\n"
             finally:
                 buf.remove_consumer(queue)
@@ -10909,6 +11577,8 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             None  # human-readable task name shown in Agents panel
         )
         origin_session_id: Optional[str] = None  # chat session that initiated this task
+        fallback_runtime: Optional[str] = None  # runtime to retry with if primary fails
+        fallback_model: Optional[str] = None  # model to use with fallback runtime
 
         @field_validator("prompt")
         @classmethod
@@ -10926,6 +11596,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         output_preview=None,
         error=None,
         notify: bool = True,
+        agent: Optional[str] = None,
     ):
         """Emit a background task completion notification via notification_mgr."""
         if notification_mgr is None:
@@ -10939,6 +11610,8 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                     user_identity
                 ) or notification_mgr.is_muted("_global"):
                     notify = False
+                elif agent and notification_mgr.is_agent_muted(user_identity, agent):
+                    notify = False
 
             user_key = bg_task_mgr._user_key(channel, user_identity)
             notification_mgr.create_notification(
@@ -10950,6 +11623,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 output_preview=output_preview,
                 error=error,
                 skip_external=not notify,
+                agent=agent,
             )
             # Push in-thread event to originating session
             task = bg_task_mgr.get_task(task_id)
@@ -10996,12 +11670,12 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         )
 
         try:
-            argv = _split_command_args(command)
             result = _sp.run(
-                argv,
+                command,
                 capture_output=True,
                 text=True,
                 timeout=timeout,
+                shell=True,
                 cwd=working_dir,
             )
 
@@ -11021,9 +11695,6 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 logger.error(
                     f"[Command Mode] Run Now job {job_id} failed: exit code {result.returncode}"
                 )
-        except ValueError as e:
-            bg_task_mgr.fail_task(task_id, str(e))
-            logger.error(f"[Command Mode] Run Now job {job_id} invalid command: {e}")
         except _sp.TimeoutExpired:
             bg_task_mgr.fail_task(task_id, f"Command timed out after {timeout}s")
             logger.error(
@@ -11350,146 +12021,141 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             # to the correct binary so the chosen runtime actually executes.
             from shutil import which as _which_bin
 
-            # Set agent working directory for all runtimes
+            # Set agent working directory for all runtimes (needed by _build_bg_cmd)
             agent_dir = session_mgr.AGENTS.get(
                 agent, session_mgr.AGENTS.get("orchestrator", {})
             ).get("path", os.getcwd())
 
-            if runtime == "gemini":
-                _gemini_bin = _which_bin("gemini") or "gemini"
-                cmd = [_gemini_bin]
-                if permission_mode == "elevated":
-                    cmd.append("--yolo")
-                cmd.extend(["-o", "stream-json", "-p", context_prompt])
-                if model:
-                    cmd.extend(["--model", model])
-            elif runtime == "opencode":
-                _oc_bin = (
-                    str(session_mgr.opencode_bin)
-                    if session_mgr.opencode_bin
-                    else (_which_bin("opencode") or "opencode")
-                )
-                cmd = [_oc_bin, "run", "--model", model, context_prompt]
-            elif runtime == "codex":
-                _codex_bin = _which_bin("codex") or "codex"
-                cmd = [_codex_bin, "exec"]
-                if permission_mode == "elevated":
-                    cmd.extend(
-                        [
-                            "--dangerously-bypass-approvals-and-sandbox",
-                            "-c",
-                            "shell_environment_policy.inherit=all",
-                        ]
+            def _build_bg_cmd(eff_runtime, eff_model):
+                """Build the CLI command list for the given runtime and model."""
+                if eff_runtime == "gemini":
+                    _gemini_bin = _which_bin("gemini") or "gemini"
+                    _cmd = [_gemini_bin]
+                    if permission_mode == "elevated":
+                        _cmd.append("--yolo")
+                    _cmd.extend(["-o", "stream-json", "-p", context_prompt])
+                    if eff_model:
+                        _cmd.extend(["--model", eff_model])
+                elif eff_runtime == "opencode":
+                    _oc_bin = (
+                        str(session_mgr.opencode_bin)
+                        if session_mgr.opencode_bin
+                        else (_which_bin("opencode") or "opencode")
                     )
-                if model:
-                    cmd.extend(["-m", model])
-                cmd.append(context_prompt)
-            elif runtime == "claude":
-                _claude_bin = session_mgr.claude_bin or _which_bin("claude") or "claude"
-                _claude_perm = {
-                    "elevated": "bypassPermissions",
-                    "sandboxed": "plan",
-                }.get(permission_mode, "default")
-                cmd = [
-                    _claude_bin,
-                    "-p",
-                    context_prompt,
-                    "--output-format",
-                    "stream-json",
-                    "--verbose",
-                    "--model",
-                    model,
-                    "--permission-mode",
-                    _claude_perm,
-                ]
-            elif runtime == "devin":
-                _devin_bin = (
-                    session_mgr.devin_bin
-                    if hasattr(session_mgr, "devin_bin") and session_mgr.devin_bin
-                    else (_which_bin("devin") or "devin")
-                )
-                # Devin CLI valid values: normal, dangerous, bypass (NOT "auto").
-                # Background tasks are non-interactive (no human to approve),
-                # so always use "dangerous" to prevent tool call rejections.
-                _devin_perm = "dangerous"
-                cmd = [_devin_bin, "-p", "--permission-mode", _devin_perm]
-                if model:
-                    cmd.extend(["--model", model])
-                cmd.extend(["--", context_prompt])
-            elif runtime == "cursor":
-                _cursor_bin = (
-                    session_mgr.cursor_bin
-                    if hasattr(session_mgr, "cursor_bin") and session_mgr.cursor_bin
-                    else (_which_bin("agent") or "agent")
-                )
-                # Validate cursor model - free plans require "auto"
-                _cursor_model = model
-                if not _cursor_model or not session_mgr.get_model_from_name(
-                    _cursor_model, "cursor"
-                ):
-                    _cursor_model = os.environ.get("CURSOR_DEFAULT_MODEL", "auto")
-                cmd = [_cursor_bin, "-p", "--trust"]
-                if permission_mode == "elevated":
-                    cmd.append("--yolo")
-                cmd.extend(["--model", _cursor_model])
-                cmd.extend(["--workspace", agent_dir])
-                cmd.extend(["--", context_prompt])
-            elif runtime == "wee":
-                # Wee native runtime - uses standalone script with OpenAI SDK
-                _wee_script = os.path.join(
-                    os.path.dirname(os.path.abspath(__file__)),
-                    "wee_runtime.py",
-                )
-                cmd = [
-                    sys.executable,
-                    _wee_script,
-                    "--model",
-                    model,
-                    "--timeout",
-                    str(timeout or 300),
-                ]
-                # Resolve api_base and api_key from session/env
-                _wee_api_base = os.environ.get("WEE_API_BASE", "")
-                _wee_api_key = os.environ.get("WEE_API_KEY", "")
-                if _wee_api_base:
-                    cmd.extend(["--api-base", _wee_api_base])
-                if _wee_api_key:
-                    cmd.extend(["--api-key", _wee_api_key])
-                cmd.extend(["--system-prompt", context_prompt])
-                cmd.append(prompt)
-            elif runtime == "claude-sdk" or runtime == "copilot-sdk":
-                # SDK runtimes (claude-sdk, copilot-sdk) require in-process execution
-                # so we invoke agent_manager.py which will handle them internally
-                agent_manager_script = os.path.join(
-                    os.path.dirname(os.path.abspath(__file__)), "agent_manager.py"
-                )
-                cmd = [
-                    sys.executable,
-                    agent_manager_script,
-                    "--runtime", runtime,
-                    "--model", model,
-                    "--agent", agent,
-                    context_prompt,
-                    session_id or str(uuid4()),
-                ]
-            else:
-                # Default: copilot runtime
-                copilot_bin = (
-                    session_mgr.copilot_bin
-                    or _which_bin("copilot")
-                    or "/home/flipkey/.local/bin/copilot"
-                )
-                cmd = [
-                    copilot_bin,
-                    "-p",
-                    context_prompt,
-                    "--no-color",
-                    "--model",
-                    model,
-                    "--allow-all-tools",
-                ]
-                if permission_mode == "elevated":
-                    cmd.extend(["--allow-all-paths", "--yolo"])
+                    _cmd = [_oc_bin, "run", "--model", eff_model, context_prompt]
+                elif eff_runtime == "codex":
+                    _codex_bin = _which_bin("codex") or "codex"
+                    _cmd = [
+                        _codex_bin,
+                        "exec",
+                        "--json",
+                        "--skip-git-repo-check",
+                    ]
+                    if permission_mode == "elevated":
+                        _cmd.extend(
+                            [
+                                "--dangerously-bypass-approvals-and-sandbox",
+                                "-c",
+                                "shell_environment_policy.inherit=all",
+                            ]
+                        )
+                    else:
+                        _cmd.append("--full-auto")
+                    if eff_model:
+                        _cmd.extend(["-m", eff_model])
+                    _cmd.append(context_prompt)
+                elif eff_runtime == "claude":
+                    _claude_bin = (
+                        session_mgr.claude_bin or _which_bin("claude") or "claude"
+                    )
+                    _claude_perm = {
+                        "elevated": "bypassPermissions",
+                        "sandboxed": "plan",
+                    }.get(permission_mode, "default")
+                    _cmd = [
+                        _claude_bin,
+                        "-p",
+                        context_prompt,
+                        "--output-format",
+                        "stream-json",
+                        "--verbose",
+                        "--model",
+                        eff_model,
+                        "--permission-mode",
+                        _claude_perm,
+                    ]
+                elif eff_runtime == "devin":
+                    _devin_bin = (
+                        session_mgr.devin_bin
+                        if hasattr(session_mgr, "devin_bin") and session_mgr.devin_bin
+                        else (_which_bin("devin") or "devin")
+                    )
+                    _devin_perm = (
+                        "dangerous" if permission_mode == "elevated" else "auto"
+                    )
+                    _cmd = [_devin_bin, "-p", "--permission-mode", _devin_perm]
+                    if eff_model:
+                        _cmd.extend(["--model", eff_model])
+                    _cmd.extend(["--", context_prompt])
+                elif eff_runtime == "cursor":
+                    _cursor_bin = (
+                        session_mgr.cursor_bin
+                        if hasattr(session_mgr, "cursor_bin") and session_mgr.cursor_bin
+                        else (_which_bin("agent") or "agent")
+                    )
+                    _cursor_model = eff_model
+                    if not _cursor_model or not session_mgr.get_model_from_name(
+                        _cursor_model, "cursor"
+                    ):
+                        _cursor_model = os.environ.get("CURSOR_DEFAULT_MODEL", "auto")
+                    _cmd = [_cursor_bin, "-p", "--trust"]
+                    if permission_mode == "elevated":
+                        _cmd.append("--yolo")
+                    _cmd.extend(["--model", _cursor_model])
+                    _cmd.extend(["--workspace", agent_dir])
+                    _cmd.extend(["--", context_prompt])
+                elif eff_runtime in ("wee", "openai"):
+                    _wee_script = os.path.join(
+                        os.path.dirname(os.path.abspath(__file__)),
+                        "wee_runtime.py",
+                    )
+                    _cmd = [
+                        sys.executable,
+                        _wee_script,
+                        "--model",
+                        eff_model,
+                        "--timeout",
+                        str(timeout or 300),
+                    ]
+                    _wee_api_base = os.environ.get("WEE_API_BASE", "")
+                    _wee_api_key = os.environ.get("WEE_API_KEY", "")
+                    if _wee_api_base:
+                        _cmd.extend(["--api-base", _wee_api_base])
+                    if _wee_api_key:
+                        _cmd.extend(["--api-key", _wee_api_key])
+                    _cmd.extend(["--system-prompt", context_prompt])
+                    _cmd.append(prompt)
+                else:
+                    # Default: copilot runtime
+                    copilot_bin = (
+                        session_mgr.copilot_bin
+                        or _which_bin("copilot")
+                        or "/home/flipkey/.local/bin/copilot"
+                    )
+                    _cmd = [
+                        copilot_bin,
+                        "-p",
+                        context_prompt,
+                        "--no-color",
+                        "--model",
+                        eff_model,
+                        "--allow-all-tools",
+                    ]
+                    if permission_mode == "elevated":
+                        _cmd.extend(["--allow-all-paths", "--yolo"])
+                return _cmd
+
+            cmd = _build_bg_cmd(runtime, model)
 
             proc_timeout = (timeout or 900) + 30
             env = {
@@ -11646,7 +12312,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                             sched.save_result(
                                 job_id, job.get("name", job_id), True, final_output
                             )
-                    except:
+                    except Exception:
                         pass
                 _emit_bg_notification(
                     task_id,
@@ -11657,31 +12323,162 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                     output_preview=final_output,
                     error=None,
                     notify=notify,
+                    agent=agent,
                 )
             else:
-                error_msg = f"Task failed with code {process.returncode}: {output}"
-                bg_task_mgr.fail_task(task_id, error_msg)
-                if task_id.startswith("sched_"):
-                    try:
-                        job_id = task_id.split("_")[1]
-                        sched = _get_scheduler()
-                        job = sched.get_job(job_id).get("result")
-                        if job:
-                            sched.save_result(
-                                job_id, job.get("name", job_id), False, "", error_msg
-                            )
-                    except:
-                        pass
-                _emit_bg_notification(
-                    task_id,
-                    prompt,
-                    "failed",
-                    channel,
-                    user_identity,
-                    output_preview=None,
-                    error=error_msg,
-                    notify=notify,
+                primary_error_msg = (
+                    f"Task failed with code {process.returncode}: {output}"
                 )
+
+                # --- Fallback retry logic (Issue #243) ---
+                _is_infra_error = any(
+                    re.search(p, output, re.IGNORECASE) for p in _FALLBACK_PATTERNS
+                )
+                _task_rec = bg_task_mgr.get_task(task_id)
+                _fb_runtime = (
+                    (_task_rec or {}).get("fallback_runtime") if _task_rec else None
+                )
+                _fb_model = (
+                    (_task_rec or {}).get("fallback_model") if _task_rec else None
+                )
+                _already_fb = (
+                    (_task_rec or {}).get("used_fallback", False)
+                    if _task_rec
+                    else False
+                )
+
+                if _is_infra_error and (_fb_runtime or _fb_model) and not _already_fb:
+                    _eff_fb_runtime = _fb_runtime or runtime
+                    _eff_fb_model = _fb_model or model
+                    bg_task_mgr.append_output(
+                        task_id,
+                        f"[Fallback] Primary failed ({primary_error_msg[:120]}), retrying with runtime={_eff_fb_runtime}, model={_eff_fb_model}",
+                    )
+                    bg_task_mgr.mark_fallback_used(
+                        task_id, _eff_fb_runtime, _eff_fb_model
+                    )
+
+                    _fb_cmd = _build_bg_cmd(_eff_fb_runtime, _eff_fb_model)
+                    _fb_env = {**env, "COPILOT_RUNTIME": _eff_fb_runtime}
+                    _fb_stdout_lines = []
+                    _fb_stderr_lines = []
+
+                    _fb_proc = subprocess.Popen(
+                        _fb_cmd,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                        text=True,
+                        env=_fb_env,
+                        cwd=agent_dir,
+                        bufsize=1,
+                    )
+                    bg_task_mgr.update_task(task_id, pid=_fb_proc.pid)
+
+                    def _drain_fb_stderr():
+                        try:
+                            for _el in _fb_proc.stderr:
+                                _fb_stderr_lines.append(_el)
+                        except Exception:
+                            pass
+
+                    import threading as _fb_threading
+
+                    _fb_stderr_thread = _fb_threading.Thread(
+                        target=_drain_fb_stderr, daemon=True
+                    )
+                    _fb_stderr_thread.start()
+                    _fb_start = time.time()
+
+                    for _fl in _fb_proc.stdout:
+                        _fb_stdout_lines.append(_fl)
+                        _lt = _fl.rstrip("\n\r")
+                        if _lt:
+                            bg_task_mgr.append_output(task_id, _lt)
+                        _fb_tc = _parse_tool_call_from_line(_lt, _eff_fb_runtime)
+                        if _fb_tc:
+                            _fb_tc["runtime"] = _eff_fb_runtime
+                            bg_task_mgr.append_tool_call(task_id, _fb_tc)
+                        if time.time() - _fb_start > proc_timeout:
+                            _fb_proc.kill()
+                            break
+
+                    _fb_proc.stdout.close()
+                    _fb_stderr_thread.join(timeout=5)
+                    _fb_proc.wait()
+
+                    _fb_output = "".join(_fb_stdout_lines).strip()
+                    if _fb_stderr_lines:
+                        _fb_output += "\n[stderr]\n" + "".join(_fb_stderr_lines)
+
+                    if _fb_proc.returncode == 0:
+                        _fb_final = (
+                            session_mgr.strip_metadata(_fb_output, _eff_fb_runtime)
+                            if _fb_output
+                            else "Task completed via fallback runtime"
+                        )
+                        if not _fb_final.strip():
+                            _fb_final = (
+                                _fb_output or "Task completed via fallback runtime"
+                            )
+                        session_mgr.clear_live_status(session_id)
+                        bg_task_mgr.complete_task(task_id, _fb_final)
+                        _emit_bg_notification(
+                            task_id,
+                            prompt,
+                            "completed",
+                            channel,
+                            user_identity,
+                            output_preview=_fb_final,
+                            error=None,
+                            notify=notify,
+                            agent=agent,
+                        )
+                    else:
+                        combined_error = (
+                            f"Primary ({runtime}): {primary_error_msg[:200]}; "
+                            f"Fallback ({_eff_fb_runtime}): exit {_fb_proc.returncode}: {_fb_output[:200]}"
+                        )
+                        bg_task_mgr.fail_task(task_id, combined_error)
+                        _emit_bg_notification(
+                            task_id,
+                            prompt,
+                            "failed",
+                            channel,
+                            user_identity,
+                            output_preview=None,
+                            error=combined_error,
+                            notify=notify,
+                            agent=agent,
+                        )
+                else:
+                    error_msg = primary_error_msg
+                    bg_task_mgr.fail_task(task_id, error_msg)
+                    if task_id.startswith("sched_"):
+                        try:
+                            job_id = task_id.split("_")[1]
+                            sched = _get_scheduler()
+                            job = sched.get_job(job_id).get("result")
+                            if job:
+                                sched.save_result(
+                                    job_id,
+                                    job.get("name", job_id),
+                                    False,
+                                    "",
+                                    error_msg,
+                                )
+                        except Exception:
+                            pass
+                    _emit_bg_notification(
+                        task_id,
+                        prompt,
+                        "failed",
+                        channel,
+                        user_identity,
+                        output_preview=None,
+                        error=error_msg,
+                        notify=notify,
+                        agent=agent,
+                    )
 
         except subprocess.TimeoutExpired:
             error_msg = f"Task exceeded timeout of {timeout} seconds"
@@ -11695,6 +12492,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 output_preview=None,
                 error=error_msg,
                 notify=notify,
+                agent=agent,
             )
         except Exception as exc:
             error_msg = str(exc)
@@ -11708,6 +12506,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 output_preview=None,
                 error=error_msg,
                 notify=notify,
+                agent=agent,
             )
         finally:
             # Clean up steering file for completed task
@@ -11732,6 +12531,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                         next_q["user_identity"],
                         next_q.get("timeout") or 900,
                         next_q.get("notify", True),
+                        next_q.get("permission_mode", "restricted"),
                     )
             except Exception as promo_exc:
                 print(f"[BG] Error promoting queued task: {promo_exc}")
@@ -11753,7 +12553,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         # Resolve agent/runtime/model — default to user's current session config
         # Determine defaults by searching for ANY session for this identity across all channels
         # to inherit preferences (like notification_preference).
-        session_map = await asyncio.to_thread(session_mgr.load_session_map)
+        session_map = session_mgr.load_session_map()
         # Inherit only safe fields (never 'agent') from prior sessions — see issue #75
         defaults = _compute_bg_task_defaults(session_map, identity, channel)
 
@@ -11789,17 +12589,14 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         effective_prompt = body.prompt
 
         # Check concurrent limit — queue instead of rejecting
-        running = await asyncio.to_thread(
-            bg_task_mgr.count_running, channel, identity, agent
-        )
+        running = bg_task_mgr.count_running(channel, identity, agent)
         agent_config = session_mgr.AGENTS.get(agent, {})
         max_concurrent = agent_config.get(
             "max_concurrent", BackgroundTaskManager.MAX_TASKS_PER_USER
         )
         if running >= max_concurrent:
             # Queue the task — it will be promoted when a running task finishes
-            task = await asyncio.to_thread(
-                bg_task_mgr.create_task,
+            task = bg_task_mgr.create_task(
                 task_id=task_id,
                 session_id=session_id,
                 user_identity=identity,
@@ -11812,10 +12609,10 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 timeout=bg_timeout,
                 notify=notify_pref,
                 origin_session_id=body.origin_session_id,
+                fallback_runtime=body.fallback_runtime,
+                fallback_model=body.fallback_model,
             )
-            queue_pos = await asyncio.to_thread(
-                bg_task_mgr.count_queued, channel, identity
-            )
+            queue_pos = bg_task_mgr.count_queued(channel, identity)
             print(
                 f"[API] Task {task_id} queued (position {queue_pos}, {running}/{BackgroundTaskManager.MAX_TASKS_PER_USER} slots full)"
             )
@@ -11831,9 +12628,13 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 "timeout": bg_timeout,
             }
 
+        # Resolve permission mode (default: restricted)
+        perm_mode = body.permission_mode or "restricted"
+        if perm_mode not in ("elevated", "restricted", "sandboxed"):
+            perm_mode = "restricted"
+
         # Create task record (running immediately)
-        task = await asyncio.to_thread(
-            bg_task_mgr.create_task,
+        task = bg_task_mgr.create_task(
             task_id=task_id,
             session_id=session_id,
             user_identity=identity,
@@ -11846,12 +12647,10 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             timeout=bg_timeout,
             notify=notify_pref,
             origin_session_id=body.origin_session_id,
+            permission_mode=perm_mode,
+            fallback_runtime=body.fallback_runtime,
+            fallback_model=body.fallback_model,
         )
-
-        # Resolve permission mode (default: restricted)
-        perm_mode = body.permission_mode or "restricted"
-        if perm_mode not in ("elevated", "restricted", "sandboxed"):
-            perm_mode = "restricted"
 
         # Run in background thread using shared executor
         loop = asyncio.get_running_loop()
@@ -11895,33 +12694,51 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         return {"events": events}
 
     @app.get("/api/v1/background-tasks")
-    async def list_background_tasks(
-        request: Request,
-        limit: int = 50,
-        offset: int = 0,
-        status: str = None,
-    ):
+    async def list_background_tasks(request: Request):
         user = await authenticate(
             request,
             authorization=request.headers.get("authorization"),
             x_user_identity=request.headers.get("x-user-identity"),
             x_auth_channel=request.headers.get("x-auth-channel"),
         )
-        limit = max(1, min(limit, 200))
-        offset = max(0, offset)
-        result, total = await asyncio.to_thread(
-            bg_task_mgr.list_task_summaries,
-            limit,
-            offset,
-            status,
-            True,
-        )
-        return {
-            "tasks": result,
-            "total": total,
-            "limit": limit,
-            "offset": offset,
-        }
+        client_ip = request.client.host if request.client else "unknown"
+        if not rate_limiter.check(
+            client_ip, "bg_tasks_list", max_requests=120, window=60
+        ):
+            raise HTTPException(status_code=429, detail="Rate limit exceeded")
+        tasks = bg_task_mgr.list_all_tasks()
+        # Check if running tasks are still alive
+        for t in tasks:
+            if t["status"] == "running" and t.get("pid"):
+                try:
+                    os.kill(t["pid"], 0)
+                except ProcessLookupError:
+                    bg_task_mgr.fail_task(
+                        t["task_id"], "Process terminated unexpectedly"
+                    )
+                    t["status"] = "failed"
+        # Return summary (no full output_lines for list)
+        result = []
+        for t in tasks:
+            result.append(
+                {
+                    "task_id": t["task_id"],
+                    "agent": t["agent"],
+                    "runtime": t["runtime"],
+                    "model": t["model"],
+                    "prompt": t["prompt"][:200],
+                    "status": t["status"],
+                    "created_at": t["created_at"],
+                    "completed_at": t.get("completed_at"),
+                    "error": t.get("error"),
+                    "used_fallback": t.get("used_fallback", False),
+                    "actual_runtime": t.get("actual_runtime"),
+                    "actual_model": t.get("actual_model"),
+                    "fallback_runtime": t.get("fallback_runtime"),
+                    "fallback_model": t.get("fallback_model"),
+                }
+            )
+        return {"tasks": result}
 
     @app.get("/api/v1/background-tasks/{task_id}")
     async def get_background_task(task_id: str, request: Request):
@@ -11931,7 +12748,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             x_user_identity=request.headers.get("x-user-identity"),
             x_auth_channel=request.headers.get("x-auth-channel"),
         )
-        task = await asyncio.to_thread(bg_task_mgr.get_task, task_id)
+        task = bg_task_mgr.get_task(task_id)
         if not task:
             raise HTTPException(status_code=404, detail="Task not found")
         # Return detail with last 50 output lines
@@ -11951,6 +12768,11 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             "error": task.get("error"),
             "tool_call_count": len(tool_calls),
             "recent_tool_calls": tool_calls[-20:],
+            "used_fallback": task.get("used_fallback", False),
+            "actual_runtime": task.get("actual_runtime"),
+            "actual_model": task.get("actual_model"),
+            "fallback_runtime": task.get("fallback_runtime"),
+            "fallback_model": task.get("fallback_model"),
         }
 
     @app.get("/api/v1/background-tasks/{task_id}/transcript")
@@ -11961,7 +12783,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             x_user_identity=request.headers.get("x-user-identity"),
             x_auth_channel=request.headers.get("x-auth-channel"),
         )
-        task = await asyncio.to_thread(bg_task_mgr.get_task, task_id)
+        task = bg_task_mgr.get_task(task_id)
         if not task:
             raise HTTPException(status_code=404, detail="Task not found")
         return {
@@ -11981,7 +12803,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             x_user_identity=request.headers.get("x-user-identity"),
             x_auth_channel=request.headers.get("x-auth-channel"),
         )
-        task = await asyncio.to_thread(bg_task_mgr.get_task, task_id)
+        task = bg_task_mgr.get_task(task_id)
         if not task:
             raise HTTPException(status_code=404, detail="Task not found")
         return {
@@ -12002,7 +12824,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             x_user_identity=request.headers.get("x-user-identity"),
             x_auth_channel=request.headers.get("x-auth-channel"),
         )
-        task = await asyncio.to_thread(bg_task_mgr.get_task, task_id)
+        task = bg_task_mgr.get_task(task_id)
         if not task:
             raise HTTPException(status_code=404, detail="Task not found")
         return {
@@ -12022,23 +12844,19 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             x_user_identity=request.headers.get("x-user-identity"),
             x_auth_channel=request.headers.get("x-auth-channel"),
         )
-        task = await asyncio.to_thread(bg_task_mgr.get_task, task_id)
+        task = bg_task_mgr.get_task(task_id)
         if not task:
             raise HTTPException(status_code=404, detail="Task not found")
 
         if task["status"] in ("running", "queued"):
             was_running = task["status"] == "running"
-            await asyncio.to_thread(bg_task_mgr.kill_task, task_id)
+            bg_task_mgr.kill_task(task_id)
             # If a running task was killed, promote the next queued task
             if was_running:
-                next_q = await asyncio.to_thread(
-                    bg_task_mgr.get_next_queued, user["channel"], user["identity"]
-                )
+                next_q = bg_task_mgr.get_next_queued(user["channel"], user["identity"])
                 if next_q:
                     new_sid = str(uuid4())
-                    await asyncio.to_thread(
-                        bg_task_mgr.promote_queued_task, next_q["task_id"], new_sid
-                    )
+                    bg_task_mgr.promote_queued_task(next_q["task_id"], new_sid)
                     print(
                         f"[BG] Kill triggered promotion of queued task {next_q['task_id']}"
                     )
@@ -12060,7 +12878,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                     )
             return {"task_id": task_id, "action": "killed"}
         else:
-            await asyncio.to_thread(bg_task_mgr.delete_task, task_id)
+            bg_task_mgr.delete_task(task_id)
             return {"task_id": task_id, "action": "deleted"}
 
     # --- Background Task Steering ---
@@ -12085,7 +12903,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             x_user_identity=request.headers.get("x-user-identity"),
             x_auth_channel=request.headers.get("x-auth-channel"),
         )
-        task = await asyncio.to_thread(bg_task_mgr.get_task, task_id)
+        task = bg_task_mgr.get_task(task_id)
         if not task:
             raise HTTPException(status_code=404, detail="Task not found")
         if task["status"] != "running":
@@ -12093,9 +12911,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 status_code=409,
                 detail=f"Task is {task['status']}, not running -- cannot steer",
             )
-        path = await asyncio.to_thread(
-            bg_task_mgr.write_steering, task_id, body.instruction
-        )
+        path = bg_task_mgr.write_steering(task_id, body.instruction)
         logger.info(
             "[STEER] Steering written for task %s: %s", task_id, body.instruction[:80]
         )
@@ -12114,10 +12930,10 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             x_user_identity=request.headers.get("x-user-identity"),
             x_auth_channel=request.headers.get("x-auth-channel"),
         )
-        task = await asyncio.to_thread(bg_task_mgr.get_task, task_id)
+        task = bg_task_mgr.get_task(task_id)
         if not task:
             raise HTTPException(status_code=404, detail="Task not found")
-        content = await asyncio.to_thread(bg_task_mgr.read_steering, task_id)
+        content = bg_task_mgr.read_steering(task_id)
         return {
             "task_id": task_id,
             "has_steering": content is not None,
@@ -12300,8 +13116,6 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             mode: Optional[str] = None  # "ai" (default, uses LLM) or "command" (shell)
             task: str = ""
             notify: bool = False
-            fallback_runtime: Optional[str] = None
-            fallback_model: Optional[str] = None
             recurring: bool = True
             timeout: Optional[int] = None  # Execution timeout in seconds (default: 300)
             permission_mode: Optional[str] = (
@@ -12317,8 +13131,6 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             mode: Optional[str] = None  # "ai" (default, uses LLM) or "command" (shell)
             task: Optional[str] = None
             notify: Optional[bool] = None
-            fallback_runtime: Optional[str] = None
-            fallback_model: Optional[str] = None
             recurring: Optional[bool] = None
             enabled: Optional[bool] = None
             timeout: Optional[int] = None  # Execution timeout in seconds
@@ -12384,8 +13196,6 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 agent=body.agent,
                 runtime=body.runtime,
                 model=body.model,
-                fallback_runtime=body.fallback_runtime,
-                fallback_model=body.fallback_model,
                 mode=body.mode,
                 task=body.task,
                 notify=body.notify,
@@ -12420,7 +13230,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 client_ip, "scheduler_write", max_requests=20, window=60
             ):
                 raise HTTPException(status_code=429, detail="Rate limit exceeded")
-            updates = body.model_dump(exclude_unset=True)
+            updates = {k: v for k, v in body.model_dump().items() if v is not None}
             if not updates:
                 raise HTTPException(status_code=400, detail="No fields to update")
             result = _get_scheduler().update_job(job_id, updates)
@@ -12611,6 +13421,548 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         async def get_scheduler_job_logs(job_id: str, request: Request):
             await _require_scheduler_auth(request)
             return _get_scheduler().get_logs(job_id)
+
+    # --- TODO list API ---------------------------------------------------
+    def _resolve_todo_dir(agent_name: str | None) -> Path | None:
+        """Resolve the TODOs/ folder for a given agent.
+
+        Returns the agent-specific TODOs/ directory if it exists, else None.
+        Checks both the new folder-based structure (TODOs/) and falls back to
+        the legacy TODOs.md flat file (returned as None to signal legacy mode).
+        """
+        import json as _json
+
+        default_dir = Path("/opt/fosterbot-home/TODOs")
+        default_md = Path("/opt/fosterbot-home/TODOs.md")
+
+        def _pick(base: Path):
+            """Return folder path or md path for a given base directory."""
+            d = base / "TODOs"
+            if d.is_dir():
+                return d
+            md = base / "TODOs.md"
+            if md.exists():
+                return md
+            return None
+
+        if not agent_name:
+            if default_dir.is_dir():
+                return default_dir
+            return default_md if default_md.exists() else None
+
+        try:
+            agents_file = Path(__file__).parent / "agents.json"
+            agents_data = _json.loads(agents_file.read_text())
+            for a in agents_data.get("agents", []):
+                if a.get("name", "").lower() == agent_name.lower():
+                    agent_path = Path(a.get("path", "/opt"))
+                    result = _pick(agent_path)
+                    if result:
+                        return result
+                    # Also check <agent_path>/fosterbot-home/
+                    result = _pick(agent_path / "fosterbot-home")
+                    if result:
+                        return result
+                    # No TODOs found — return non-existent path so UI shows empty
+                    return agent_path / "TODOs"
+        except Exception:
+            pass
+        return Path(f"/opt/{agent_name}/TODOs")
+
+    def _resolve_todo_file(agent_name: str | None) -> Path:
+        """Legacy resolver — returns a Path (may be dir or md file).
+
+        Kept for backwards compatibility. New code should use _resolve_todo_dir.
+        """
+        result = _resolve_todo_dir(agent_name)
+        if result is None:
+            return Path("/opt/fosterbot-home/TODOs.md")
+        return result
+
+    def _parse_todo_file(todo_path: Path) -> dict | None:
+        """Parse a single TODO file with DUE:/LABELS: header format.
+
+        Returns a dict with description, due, labels, details, notes keys,
+        or None if the file cannot be parsed.
+        """
+        import re as _re
+
+        try:
+            lines = todo_path.read_text().splitlines()
+        except Exception:
+            return None
+
+        due = None
+        labels = []
+        detail_start = 0
+
+        for idx, line in enumerate(lines):
+            if line.startswith("DUE:"):
+                due = line[4:].strip()
+                detail_start = idx + 1
+            elif line.startswith("LABELS:"):
+                raw = line[7:].strip()
+                # Parse {LABEL1},{LABEL2} format
+                labels = [
+                    l.strip().strip("{}")
+                    for l in _re.split(r"[,\s]+", raw)
+                    if l.strip().strip("{}")
+                ]
+                detail_start = idx + 1
+            else:
+                break  # headers must be contiguous at top of file
+
+        # Everything after the headers is the details body
+        details_lines = lines[detail_start:]
+        # Strip leading blank line if present
+        while details_lines and not details_lines[0].strip():
+            details_lines = details_lines[1:]
+        details = "\n".join(details_lines).strip()
+
+        return {
+            "description": todo_path.name,
+            "due": due,
+            "labels": labels,
+            "notes": [],
+            "details": details,
+        }
+
+    def _parse_todos_from_dir(todo_dir: Path, limit: int = 100) -> list:
+        """Read TODOs from the folder-based structure (ACTIVE/ subfolder)."""
+        active_dir = todo_dir / "ACTIVE"
+        if not active_dir.is_dir():
+            return []
+        todos = []
+        for entry in sorted(active_dir.iterdir()):
+            if entry.is_file():
+                parsed = _parse_todo_file(entry)
+                if parsed:
+                    todos.append(parsed)
+                    if len(todos) >= limit:
+                        break
+        return todos
+
+    def _parse_todos_from_md(todo_file: Path, limit: int = 100) -> list:
+        """Parse active TODOs from the markdown file, return up to `limit`.
+
+        Supports both the legacy flat TODOs.md format and the new folder-based
+        structure (when todo_file is actually a directory).
+        """
+        # New folder-based structure
+        if todo_file.is_dir():
+            return _parse_todos_from_dir(todo_file, limit)
+
+        if not todo_file.exists():
+            return []
+        todos = []
+        import re
+
+        current_todo = None
+        in_details = False
+        details_lines = []
+
+        with open(todo_file) as f:
+            for line in f:
+                raw_line = line.rstrip("\n")
+                stripped = raw_line.strip()
+
+                # Check for TODO line
+                todo_line = stripped
+                if todo_line.startswith("- "):
+                    todo_line = todo_line[2:]
+
+                if (
+                    todo_line.startswith("[ ]")
+                    or todo_line.startswith("[X]")
+                    or todo_line.startswith("[x]")
+                ):
+                    # Save previous todo with details if exists
+                    if current_todo:
+                        if details_lines:
+                            current_todo["details"] = "\n".join(details_lines).strip()
+                        todos.append(current_todo)
+                        if len(todos) >= limit:
+                            current_todo = None
+                            break
+
+                    # Only keep active (non-completed) todos for this list
+                    completed = todo_line.startswith("[X]") or todo_line.startswith(
+                        "[x]"
+                    )
+
+                    if not completed:
+                        content = re.sub(r"^\[.\]\s+", "", todo_line)
+                        due = None
+                        due_match = re.search(r"\(due ([^)]+)\)", content)
+                        if due_match:
+                            due = due_match.group(1)
+                        labels = []
+                        label_match = re.search(r"\{([^}]+)\}", content)
+                        if label_match:
+                            labels = [
+                                l.strip() for l in label_match.group(1).split(",")
+                            ]
+                        # Remove due and label markers from description
+                        content = re.sub(r"\s*\(due [^)]+\)", "", content)
+                        content = re.sub(r"\s*\{[^}]+\}", "", content).strip()
+                        current_todo = {
+                            "description": content,
+                            "due": due,
+                            "labels": labels,
+                            "notes": [],
+                            "details": "",
+                        }
+                        in_details = False
+                        details_lines = []
+                    else:
+                        # Completed todo — clear state without adding to active list
+                        current_todo = None
+                        in_details = False
+                        details_lines = []
+
+                elif current_todo:
+                    # Check for Details section (inline bold format: **Details**)
+                    if stripped == "**Details**":
+                        in_details = True
+                        details_lines = []
+                    elif (
+                        in_details
+                        and stripped
+                        and not stripped.startswith("## ")
+                        and not stripped.startswith("- [")
+                    ):
+                        # Collect details until we hit a top-level section (## ) or a todo item
+                        details_lines.append(raw_line)
+                    elif raw_line.startswith("    ") and not in_details:
+                        # This is a note for the current TODO
+                        current_todo["notes"].append(raw_line.strip())
+
+        if current_todo:
+            if details_lines:
+                current_todo["details"] = "\n".join(details_lines).strip()
+            todos.append(current_todo)
+
+        return todos[:limit]
+
+    @app.get("/api/v1/todos")
+    async def get_todos(request: Request, agent: str = None, limit: int = 100):
+        await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        limit = min(max(1, limit), 200)
+        todo_path = _resolve_todo_file(agent)
+        todos = _parse_todos_from_md(todo_path, limit)
+        return {
+            "todos": todos,
+            "count": len(todos),
+            "agent": agent or "default",
+            "file": str(todo_path),
+        }
+
+    @app.post("/api/v1/todos")
+    async def create_todo(request: Request):
+        """Create a new TODO in the ACTIVE/ folder."""
+        await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        try:
+            body = await request.json()
+        except Exception:
+            return {"success": False, "error": "Invalid JSON body"}
+
+        title = (body.get("title") or "").strip()
+        due_date = (body.get("due_date") or "").strip()
+        labels = body.get("labels") or []
+        details = (body.get("details") or "").strip()
+        agent = body.get("agent")
+
+        if not title:
+            return {"success": False, "error": "Title is required"}
+
+        # Reject path traversal and dangerous chars
+        if (
+            "/" in title
+            or "\\" in title
+            or "\0" in title
+            or ".." in title
+            or "\n" in title
+            or "\r" in title
+        ):
+            return {
+                "success": False,
+                "error": (
+                    "Invalid title: must not contain"
+                    " path separators, traversal"
+                    " sequences, or control characters"
+                ),
+            }
+
+        todo_path = _resolve_todo_file(agent)
+        if not todo_path.is_dir():
+            return {
+                "success": False,
+                "error": "Folder-based TODO dir not found",
+            }
+
+        active_dir = todo_path / "ACTIVE"
+        active_dir.mkdir(parents=True, exist_ok=True)
+
+        target = active_dir / title
+        # Belt-and-suspenders path traversal check
+        resolved = target.resolve()
+        parent = active_dir.resolve()
+        if not resolved.is_relative_to(parent):
+            return {
+                "success": False,
+                "error": "Invalid title: path traversal",
+            }
+
+        if target.exists():
+            return {
+                "success": False,
+                "error": f"TODO {title!r} already exists",
+            }
+
+        # Build file content with headers
+        lines = []
+        if due_date:
+            lines.append(f"DUE: {due_date}")
+        if labels:
+            fmt = ",".join(f"{{{lb}}}" for lb in labels)
+            lines.append(f"LABELS: {fmt}")
+        if details:
+            if lines:
+                lines.append("")
+            lines.append(details)
+
+        file_content = "\n".join(lines) + "\n" if lines else ""
+        target.write_text(file_content)
+
+        return {
+            "success": True,
+            "todo": title,
+            "file": str(target),
+        }
+
+    @app.post("/api/v1/todos/{todo_title}/complete")
+    async def complete_todo(request: Request, todo_title: str):
+        """Mark a TODO as complete by moving it from ACTIVE/ to COMPLETED/."""
+        await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        try:
+            body = await request.json()
+            agent = body.get("agent")
+        except Exception:
+            agent = None
+
+        todo_path = _resolve_todo_file(agent)
+        if not todo_path.is_dir():
+            return {"success": False, "error": "Folder-based TODO structure not found"}
+
+        active_dir = todo_path / "ACTIVE"
+        completed_dir = todo_path / "COMPLETED"
+        completed_dir.mkdir(parents=True, exist_ok=True)
+
+        # Find the file (exact match or partial)
+        match = None
+        for entry in active_dir.iterdir():
+            if entry.is_file() and (
+                entry.name == todo_title or todo_title in entry.name
+            ):
+                match = entry
+                break
+
+        if not match:
+            return {
+                "success": False,
+                "error": f"TODO '{todo_title}' not found in ACTIVE/",
+            }
+
+        dest = completed_dir / match.name
+        match.rename(dest)
+        return {"success": True, "moved": str(dest), "todo": match.name}
+
+    @app.patch("/api/v1/todos/{todo_title}")
+    async def update_todo_details(request: Request, todo_title: str):
+        """Update a TODO's label, due date, and/or details."""
+        await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+
+        try:
+            body = await request.json()
+            details = body.get("details")
+            new_label = body.get("label")
+            new_due = body.get("due_date")
+            agent = body.get("agent")
+
+            todo_path = _resolve_todo_file(agent)
+
+            # --- New folder-based structure ---
+            if todo_path.is_dir():
+                active_dir = todo_path / "ACTIVE"
+                match = None
+                for entry in active_dir.iterdir():
+                    if entry.is_file() and (
+                        entry.name == todo_title or todo_title in entry.name
+                    ):
+                        match = entry
+                        break
+                if not match:
+                    return {
+                        "success": False,
+                        "error": f"TODO '{todo_title}' not found in ACTIVE/",
+                    }
+
+                # Parse existing file content
+                existing = match.read_text().splitlines()
+                header_lines = []
+                body_lines = []
+                in_body = False
+                for line in existing:
+                    if not in_body and (
+                        line.startswith("DUE:") or line.startswith("LABELS:")
+                    ):
+                        header_lines.append(line)
+                    else:
+                        in_body = True
+                        body_lines.append(line)
+
+                # Update DUE: header if new_due provided
+                if new_due is not None:
+                    header_lines = [h for h in header_lines if not h.startswith("DUE:")]
+                    if new_due.strip():
+                        header_lines.insert(0, f"DUE: {new_due.strip()}")
+
+                # Update details body if provided
+                if details is not None:
+                    body_lines = ["", details.strip()] if details.strip() else []
+
+                new_content = "\n".join(header_lines)
+                if body_lines:
+                    stripped_body = "\n".join(body_lines).strip()
+                    if stripped_body:
+                        new_content += "\n\n" + stripped_body
+                match.write_text(new_content + "\n")
+
+                # Rename file if label changed
+                result_name = match.name
+                if new_label and new_label.strip():
+                    clean = new_label.strip()
+                    # Reject path traversal and dangerous chars
+                    if (
+                        "/" in clean
+                        or "\\" in clean
+                        or "\0" in clean
+                        or ".." in clean
+                        or "\n" in clean
+                        or "\r" in clean
+                    ):
+                        return {
+                            "success": False,
+                            "error": (
+                                "Invalid label: must not"
+                                " contain path separators,"
+                                " traversal sequences,"
+                                " or control characters"
+                            ),
+                        }
+                    new_path = active_dir / clean
+                    # Belt-and-suspenders: verify resolved
+                    # path is inside active_dir
+                    resolved = new_path.resolve()
+                    parent = active_dir.resolve()
+                    if not resolved.is_relative_to(parent):
+                        return {
+                            "success": False,
+                            "error": "Invalid label:" " path traversal detected",
+                        }
+                    if clean == match.name:
+                        pass  # no rename needed
+                    elif new_path.exists():
+                        lbl = clean
+                        return {
+                            "success": False,
+                            "error": f"A TODO named" f" {lbl!r} already exists",
+                        }
+                    else:
+                        match.rename(new_path)
+                    result_name = clean
+
+                return {
+                    "success": True,
+                    "updated": True,
+                    "todo": result_name,
+                }
+
+            # --- Legacy flat-file structure ---
+            todo_file = todo_path
+            if not todo_file.exists():
+                return {"success": False, "error": "TODO file not found"}
+
+            content = todo_file.read_text()
+            lines = content.split("\n")
+
+            updated_lines = []
+            i = 0
+            while i < len(lines):
+                line = lines[i]
+                updated_lines.append(line)
+
+                stripped = line.strip()
+                if stripped.startswith("- "):
+                    stripped = stripped[2:]
+
+                if (
+                    stripped.startswith("[ ]") or stripped.startswith("[X]")
+                ) and todo_title in line:
+                    i += 1
+
+                    while i < len(lines) and lines[i].startswith("    "):
+                        updated_lines.append(lines[i])
+                        i += 1
+
+                    if i < len(lines) and (
+                        lines[i].strip() == "### Details"
+                        or lines[i].strip() == "## Details"
+                    ):
+                        i += 1
+                        while (
+                            i < len(lines) and lines[i] and not lines[i].startswith("#")
+                        ):
+                            i += 1
+
+                    if details and details.strip():
+                        updated_lines.append("")
+                        updated_lines.append("### Details")
+                        updated_lines.append("")
+                        updated_lines.extend(details.split("\n"))
+
+                    continue
+
+                i += 1
+
+            todo_file.write_text("\n".join(updated_lines))
+            return {"success": True, "updated": True, "todo": todo_title}
+
+        except Exception as e:
+            import traceback
+
+            traceback.print_exc()
+            return {"success": False, "error": str(e)}
 
     # --- Wee Canvas ───────────────────────────────────────────────────────────
     # In-memory canvas session state: session_id → {components, connections, action_watchers, pending_actions, name, created_at, last_activity}
@@ -13172,7 +14524,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 _SECRET_TOOL_PATH,
                 "list",
                 "--backend",
-                "pass",
+                "file",
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
@@ -13236,7 +14588,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 name,
                 "--value-stdin",
                 "--backend",
-                "pass",
+                "file",
                 stdin=asyncio.subprocess.PIPE,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
@@ -13288,7 +14640,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 "--name",
                 name,
                 "--backend",
-                "pass",
+                "file",
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
@@ -14472,15 +15824,17 @@ Examples:
         args.config_file, app_env=os.environ.get("APP_ENV", "PROD").upper()
     )
 
-    # Apply runtime setting first if provided (so list commands use the correct runtime)
-    if args.runtime:
-        result = manager.execute(f"/runtime set {args.runtime}", args.session_id)
-        _check_command_result(result, ["Unknown runtime", "Error"])
-
-    # Apply agent setting if provided (so list commands use the correct agent context)
+    # Apply agent setting first (so list commands use the correct agent context).
+    # Runtime is applied AFTER agent so an explicit --runtime overrides the
+    # agent's primary_runtime default (issue: agent set resets session runtime).
     if args.agent:
         result = manager.execute(f'/agent set "{args.agent}"', args.session_id)
         _check_command_result(result, ["Unknown agent", "Error"])
+
+    # Apply runtime setting after agent (overrides agent primary_runtime if both given)
+    if args.runtime:
+        result = manager.execute(f"/runtime set {args.runtime}", args.session_id)
+        _check_command_result(result, ["Unknown runtime", "Error"])
 
     # Handle list commands (these don't require a prompt but may use runtime/agent settings)
     if args.list_agents:

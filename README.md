@@ -64,7 +64,8 @@ Wee-Orchestrator is a unified AI agent platform that lets you chat with **any AI
 - **🔔 In-Thread Notifications** — Real-time task lifecycle updates (queued → running → complete) in your conversation
 - **📋 Dual-Source TODOs** — Sync TODOs between GitHub Issues (primary) and flat files (fallback) with auto-deduplication
 - **🔧 Expandable Tool Calls** — View tool invocations with collapsible output panels in WebUI; markdown rendering, error highlighting, silent mode support
-- **💰 Token Usage Tracking** — Real-time tracking of prompt/completion tokens and cost estimation across all runtimes; live stats displayed in WebUI footer
+- **💰 Token Usage Tracking** — Real-time tracking of prompt/completion tokens per turn; context window usage percentage with 75% threshold warnings; live stats via `/tokens` in the CLI REPL
+- **📐 Context Window Management** — Automatic per-model context window registry (20+ models); LLM-powered `/compact` command to summarize old history and free context space; see [Context Window Management](docs/context-window.md)
 - **🔌 Extensible Skills** — Plugin architecture for adding capabilities (Cisco Meraki, Home Assistant, etc.)
 - **⚙️ Slash Command Registry — Pure-server commands that bypass the LLM for reduced latency; auto-registers with Telegram BotFather for autocomplete; built-in `/secret` command for secure credential management
 
@@ -144,8 +145,10 @@ Then open `http://localhost:8000/ui` in your browser and pair via Telegram or We
 | `/timeout <seconds>` | Adjust execution timeout |
 | `/status` | Check running task status |
 | `/cancel` | Cancel the current running task |
+| `/compact [N]` | Compact conversation history to N% of context window (default 50%) |
 | `/schedule list` | List all scheduled jobs |
 | `/schedule add <name> \| <schedule> \| <task>` | Create a scheduled job |
+| `/tokens` | Show token usage stats and context window percentage |
 | `/help` | Show all available commands |
 
 ---
@@ -312,7 +315,6 @@ mkdir skills/my-custom-skill
   - ✅ Clear documentation
   - ✅ Security policy file
   - ✅ Public issue tracking
-
 
 #### Domain Folders
 Organize bot work by area of focus:
@@ -585,6 +587,12 @@ All AI runtimes in this system are configured with **full tool access** to enabl
   - `WEE_API_BASE` — Override API base URL (e.g., `http://192.168.1.101:11434/v1`)
   - `WEE_API_KEY` — API key for authenticated endpoints (OpenRouter, etc.)
   - `WEE_DEFAULT_MODEL` — Default model when model not specified in config
+  - `WEE_SEARXNG_URL` — SearXNG base URL for the `search` tool (default: `http://192.168.1.100:8888`)
+- **Native Tools (available in agentic `--tools` mode):**
+  - `bash` — Execute shell commands and return output
+  - `python` — Execute Python 3 code and return output
+  - `call_agent` — Delegate to a Wee Orchestrator sub-agent (quick or background mode)
+  - `search` — Web search via self-hosted SearXNG (`q`, `count` up to 20, `format` json/text); requires `WEE_SEARXNG_URL` or defaults to `http://192.168.1.100:8888` (Issue #255)
 - **Features:**
   - In-process execution using OpenAI Python SDK
   - Real-time SSE streaming to WebUI
@@ -593,72 +601,82 @@ All AI runtimes in this system are configured with **full tool access** to enabl
   - Background task subprocess execution via `wee_runtime.py`
 - **Implementation:** `run_wee_native()` in `agent_manager.py`; `wee_runtime.py` standalone CLI for background tasks
 - **Usage:** `/runtime set wee`
+
 - **Features & Improvements:**
   - OpenRouter integration: Full UI support for cloud-based models with 300s cached discovery & keyring-based API key management (Issue #119)
+  - Global notification toggle: Suppress all background task notifications with `/notifications off`; critical alerts always deliver (Issue #146)
   - Model grouping in UI: Ollama and OpenRouter models displayed in separate dropdown optgroups
-  - Dynamic OpenRouter model discovery: Live catalog fetch from OpenRouter API with per-provider grouping (Issue #157)
+  - All OpenRouter models in model listing: Removed hardcoded filter to show 350+ OpenRouter models instead of ~12 (Issue #145)
+
 - **Bug Fixes:**
   - Wrong Ollama port corrected: `11436` → `11434` (Issue #105)
   - `httpx.Timeout(connect=15s)` and `max_retries=0` added to OpenAI client for fast-fail on bad endpoints (Issue #105)
   - Model resolution fixed: `get_models_for_runtime('wee')` returns flat strings; `get_model_from_name()` strips provider prefix (`ollama/`) and prefers exact/shortest match (Issue #105)
 - **Bug Fixes (continued):**
   - OpenRouter 401 auth fixed: `OPENROUTER_API_KEY` env var + keyring resolution replaces silent `'ollama'` fallback; raises clear error when no key found (Issue #153)
-- **Issues:** [#88](../../issues/88), [#105](../../issues/105), [#119](../../issues/119), [#153](../../issues/153), [#157](../../issues/157)
+- **Issues:** [#88](../../issues/88), [#105](../../issues/105), [#119](../../issues/119), [#146](../../issues/146), [#153](../../issues/153), [#255](../../issues/255)
 
+### Context Window Management (Wee CLI)
 
-#### Wee CLI (`wee_cli.py`)
-- **Also Known As:** `wee` — standalone terminal AI assistant
-- **Description:** A user-facing command-line tool for the Wee ecosystem. Similar in style to GitHub Copilot CLI, Claude Code CLI, and Codex CLI. Supports single-shot prompts, interactive REPL, stdin piping, and tool calling via any OpenAI-compatible backend.
-- **Supported Backends:** Same as Wee Native Runtime (Ollama, OpenRouter, LM Studio)
-- **Quick Start:**
-  ```bash
-  # Single-shot
-  python3 wee_cli.py "What is the capital of France?"
-  # Interactive REPL
-  python3 wee_cli.py --interactive
-  # Pipe from stdin
-  echo "summarize this" | python3 wee_cli.py --model ollama/qwen3:8b
-  ```
-- **Key Flags:**
+The `wee` runtime includes automatic context window tracking and LLM-powered compaction via `wee_cli.py`.
 
-  | Flag | Short | Default | Description |
-  |------|-------|---------|-------------|
-  | `--model` | `-m` | `ollama/qwen3:8b` | Model ID with provider prefix |
-  | `--permission` | `-p` | `restricted` | Tool execution level: `restricted` / `auto` / `elevated` |
-  | `--output` | `-o` | `text` | Output format: `text` / `json` / `markdown` |
-  | `--tools` | `-t` | off | Enable tool calling (bash, python) |
-  | `--interactive` | `-i` | off | Enter interactive REPL mode |
-  | `--system` | `-s` | none | System prompt override |
-  | `--temperature` | `-T` | none | Sampling temperature |
-  | `--timeout` | | 120s | Request timeout |
-  | `--api-key` | `-k` | env/keyring | API key override (prefer env var) |
-  | `--api-base` | `-b` | auto | Custom API base URL |
-  | `--config` | | `~/.wee/config.json` | Config file path |
+#### TokenTracker
 
-- **Permission Levels:**
-  - `restricted` (default) — tool calls blocked; safe for untrusted input
-  - `auto` — tool calls confirmed per invocation; suitable for interactive use
-  - `elevated` — tool calls unrestricted; use in trusted automation
-- **Output Formats:**
-  - `text` (default) — plain streamed output
-  - `json` — full response as a JSON object `{"response": "...", "model": "..."}`
-  - `markdown` — rich-rendered markdown via `rich` library (falls back to plain text)
-- **Config File** (`~/.wee/config.json`):
-  ```json
-  {
-    "model": "ollama/qwen3:8b",
-    "system_prompt": "You are a helpful assistant",
-    "tools": false,
-    "permission": "restricted",
-    "output_format": "text"
-  }
-  ```
-- **Environment Variables:**
-  - `WEE_MODEL` — Default model (overridden by `--model`)
-  - `WEE_API_KEY` — API key (prefer over `--api-key` to avoid exposure in `ps aux`)
-  - `WEE_API_BASE` — API base URL override
-- **Implementation:** `wee_cli.py` (re-uses core from `wee_runtime.py`)
-- **Issues:** [#158](../../issues/158)
+`TokenTracker` monitors token usage per session and computes context window utilisation:
+
+| Field | Description |
+|-------|-------------|
+| `last_prompt_tokens` | Token count from the most recent API request |
+| `last_completion_tokens` | Token count from the most recent response |
+| `context_window` | Model's maximum context size (from registry) |
+| `percent_used()` | `last_prompt_tokens / context_window × 100` |
+
+```
+/status → Token usage: 12,400 / 128,000 tokens (9.7% used)
+```
+
+#### Model Context Window Registry
+
+Context sizes are resolved automatically from `MODEL_CONTEXT_WINDOWS` in `wee_runtime.py` (longest-match substring lookup, falls back to 4,096 tokens):
+
+| Model Family | Context Window |
+|-------------|----------------|
+| GPT-5, GPT-4.1, GPT-4.1-mini/nano | 1,047,576 |
+| GPT-4o, GPT-4-turbo, GPT-4o-mini | 128,000 |
+| Claude 3 | 200,000 |
+| Claude 2 | 100,000 |
+| Llama 3 | 131,072 |
+| Gemma 4, Gemma 3 | 131,072 |
+| Phi-3 | 128,000 |
+| DeepSeek | 65,536 |
+| Mistral, Mixtral, Qwen | 32,768 |
+| Default (unrecognised) | 4,096 |
+
+#### /compact Command
+
+Manually trigger context compaction when approaching the window limit:
+
+```
+/compact       # Compact to 50% of context window (default)
+/compact 40    # Compact to 40% of context window
+```
+
+**How it works:**
+1. Preserves the system prompt and the 6 most recent messages.
+2. Summarises older messages into a concise context-summary block using the LLM.
+3. Replaces old history with the summary + recent turns.
+4. Prints before/after message count and token estimates.
+
+```
+Compacted: 42 messages → 8 messages (8,250 → 3,100 tokens)
+```
+
+**Automatic warning** at ≥ 75% usage:
+```
+⚠️  Context window at 78.3% — consider /compact to free space.
+```
+
+**Issues:** [#273](../../issues/273)
 
 ### Security Considerations
 
@@ -939,6 +957,17 @@ Interact with the agent manager using slash commands:
 ```
 /status                    # Check status of running query for this session
 /cancel                    # Cancel running query for this session
+```
+
+#### Context Window Management
+```
+/compact           # Compact conversation history to 50% of context window (default)
+/compact 40        # Compact to 40% of context window
+```
+
+**Automatic Warnings**: When the `wee` runtime is used, context usage is tracked after each turn. A warning is printed when usage reaches ≥ 75% of the model's context window:
+```
+⚠️  Context window at 78.3% — consider /compact to free space.
 ```
 
 **Query Tracking**: When a query is executing, the agent manager tracks its process ID (PID), runtime, agent, and output. Use `/status` to check if a query is running and see recent output, or `/cancel` to terminate a long-running query.
@@ -1311,7 +1340,6 @@ For scheduling memory promotion via the task scheduler or cron:
 bash scripts/promote_all_agents_memory.sh
 ```
 
-
 **PATCH /api/v1/sessions/{id}/settings** — Update session settings
 
 Modify session-level settings like verbose mode (tool call visibility). Settings are persisted and returned in subsequent session queries.
@@ -1347,89 +1375,6 @@ Error responses:
 **Security:**
 - Requires API authentication (Bearer token)
 - Per-session settings — each user session has independent configuration
-
----
-
-### 🔧 Tool Call Visualization
-
-**Issue #115: Inline Expandable Tool Call Blocks**
-
-The WebUI now displays tool invocations with inline expandable blocks in the streaming panel. Each tool call shows a disclosure triangle (▶); clicking expands a scrollable output pane with the full tool result, markdown formatting preserved.
-
-**Features:**
-- ✅ **Expandable blocks** — Click ▶ to expand/collapse tool output
-- ✅ **Markdown rendering** — Tool results support markdown (code blocks, lists, tables)
-- ✅ **Error highlighting** — Failed tool calls shown in red
-- ✅ **Dark/light themes** — CSS automatically adapts to UI theme
-- ✅ **Silent mode integration** — Tool blocks hidden when `silent_mode=true`
-- ✅ **All runtimes supported** — Works with copilot-sdk, claude-sdk, claude, and gemini
-
-**UI Behavior:**
-- Tool started: Shows block with "Running ⌛" spinner
-- Tool completed: Output filled in, user can expand to view result
-- Tool error: Red highlight, error message displayed
-- Silent mode on: Blocks completely hidden from view
-
-**CSS Classes:**
-- `.tc-block` — Container for tool call block
-- `.tc-toggle` — Expand/collapse button (▶)
-- `.tc-output` — Scrollable output pane
-- `.tc-error` — Error state styling
-- `.tc-expanded` — Expanded state
-
-**Related Issues:**
-- [#115](../../issues/115) — Inline Expandable Tool Call Blocks (QA Approved)
-- [#87](../../issues/87) — Streaming + Tool Call support for copilot-sdk and claude-sdk
-
----
-
-### 💰 Token Usage Tracking & Cost Estimation
-
-**Issue #128: Token Usage Tracking + Cost Estimation + WebUI Footer**
-
-The WebUI now displays real-time token usage statistics in the footer after each message. Tracks cumulative prompt and completion tokens across all runtimes, calculates costs based on per-model pricing, and displays live usage summary.
-
-**Features:**
-- ✅ **Real-time tracking** — Token counts updated after each message
-- ✅ **Multi-runtime support** — Tracks tokens across copilot-sdk, claude-sdk, openrouter, wee (Ollama/OpenRouter/LM Studio)
-- ✅ **Cost estimation** — Calculates costs based on current model pricing
-- ✅ **Accuracy** — ±1% margin within expected pricing for all supported models
-- ✅ **Session-level aggregation** — Cumulative counts show total tokens and estimated costs for entire session
-- ✅ **Per-message tracking** — Individual message metadata includes token counts and partial costs
-- ✅ **WebUI footer display** — Live stats accessible without API calls (cached locally)
-
-**Displayed Metrics:**
-- **Prompt tokens:** Total tokens in all input messages
-- **Completion tokens:** Total tokens in all model responses
-- **Total tokens:** Sum of prompt + completion tokens
-- **Estimated cost:** Calculated from per-model pricing (e.g., $0.15 per 1M input tokens)
-- **Model pricing:** Retrieved from token_calculator.py (based on published pricing)
-
-**Footer Display Format:**
-```
-💰 Tokens: 1,234 prompt + 567 completion = 1,801 total | Est. cost: $0.023 | Model: claude-3.5-sonnet
-```
-
-**Token Calculation Logic:**
-1. Each runtime reports token usage after completing a message
-2. Tokens summed by type (prompt vs completion)
-3. Cost calculated: `(prompt_tokens * model_input_price + completion_tokens * model_output_price) / 1_000_000`
-4. Metadata stored in session history for audit/replay purposes
-5. Wee runtime strips internal `__WEE_META__` before counting to avoid inflating token estimates
-
-**Supported Models:**
-- **Claude (claude-sdk):** claude-3.5-sonnet, claude-3-opus, claude-3-haiku
-- **Copilot (copilot-sdk):** GPT-4o, GPT-4 Turbo, GPT-3.5 Turbo
-- **OpenRouter:** 200+ models with live pricing via OpenRouter API
-- **Wee (Ollama):** Ollama local models (token count via token_calculator.py estimate)
-- **Wee (OpenRouter):** Same as OpenRouter routing
-- **Wee (LM Studio):** LM Studio models (token estimate via calculator)
-
-**Related Issues:**
-- [#128](../../issues/128) — Token Usage Tracking + Cost Estimation + WebUI Footer (QA Approved)
-- [#91](../../issues/91) — Background task permissions (Token tracking uses elevated permissions)
-
----
 
 **POST /api/v1/query** — Stateless one-shot query endpoint
 
@@ -1491,7 +1436,6 @@ Error response body (JSON):
 }
 ```
 
-
 **Code Generation Improvements** (#68): Additional handling for empty/null responses and connection errors:
 
 | HTTP Status | Error Code | Triggers |
@@ -1547,7 +1491,6 @@ curl -s -X POST http://localhost:8000/api/v1/query \
   -d '{"prompt": "What is 2 + 2?", "runtime": "copilot", "model": "claude-haiku-4.5"}'
 ```
 
-
 **POST /api/v1/history/sessions/{session_id}/generate-title** — LLM title generation
 
 Force (re)generate a descriptive title for a session using an LLM or smart heuristic fallback. Useful when you want an immediate title refresh outside of the auto-trigger cycle.
@@ -1601,7 +1544,6 @@ curl -s -X POST http://localhost:8000/api/v1/history/sessions/abc123/generate-ti
   -H "Authorization: Bearer $API_TOKEN"
 ```
 
-
 ### Quick Start
 
 ```bash
@@ -1627,7 +1569,7 @@ python3 -m unittest discover -s tests -p "test_*.py" -v
 
 ### Test Coverage
 
-The test suite includes **209 tests** across multiple test files:
+The test suite includes **231 tests** across multiple test files:
 
 **Orchestrator Core Tests**
 
@@ -1653,7 +1595,7 @@ The test suite includes **209 tests** across multiple test files:
 
 **`tests/test_wee_runtime_agentic.py`** (68 tests) — wee_runtime.py agentic capabilities:
 - **Model Resolution** (12 tests) - Ollama/OpenRouter prefix stripping, preset resolution, cross-provider parametrization
-- **Tool Definitions** (6 tests) - Schema validation, tool registration, JSON schema correctness
+- **Tool Definitions** (7 tests) - Schema validation, tool registration, JSON schema correctness
 - **Tool Execution** (11 tests) - Bash/Python execution, error handling, output capture, timeouts
 - **SSH Sanitization** (5 tests) - Word-boundary validation, injection prevention (Issue #111)
 - **CLI Argument Parsing** (3 tests) - Flag handling, defaults, priority resolution
@@ -1665,14 +1607,20 @@ The test suite includes **209 tests** across multiple test files:
 - **Ollama Integration** (7 tests) - Live connection, single/multi-turn chat, tool calling
 - **OpenRouter Integration** (7 tests) - Live connection, API key verification, tool calling
 
+**`tests/test_issue_255_search.py`** (22 tests) — SearXNG search tool (Issue #255):
+- **Search Tool Definition** (7 tests) - Tool schema, parameter validation, registration
+- **Search Execution** (13 tests) - Text/JSON format, count limit, env var override, graceful error on unavailable SearXNG
+- **execute_tool dispatch** (1 test) - Routes `search` calls to `_execute_search`
+- **Capability prompt** (1 test) - Help text mentions `search`
+
 ### Test Results
 
 All tests pass with minimal external dependencies:
 
 ```
 Orchestrator: 141 tests, 0.185s
-Wee Runtime: 61 passed, 7 skipped (OpenRouter key), 0 failures
-Total: 202+ passed
+Wee Runtime: 83 passed, 7 skipped (OpenRouter key), 0 failures
+Total: 224+ passed
 ```
 
 Tests use mocking to isolate orchestrator functionality and avoid:
@@ -1855,7 +1803,6 @@ The scheduler is resilient to system clock adjustments (NTP corrections, manual 
 }
 ```
 
-
 ### REST API Endpoints
 
 | Method | Path | Description |
@@ -1870,6 +1817,117 @@ The scheduler is resilient to system clock adjustments (NTP corrections, manual 
 | `POST` | `/api/v1/scheduler/jobs/{id}/resume` | Resume a paused job |
 | `GET` | `/api/v1/scheduler/jobs/{id}/results` | Retrieve execution results |
 | `GET` | `/api/v1/scheduler/jobs/{id}/logs` | Retrieve execution logs |
+| `POST` | `/api/v1/scheduler/jobs/{id}/run` | Trigger job execution immediately |
+
+## Run Now Endpoint Documentation
+
+The `/api/v1/scheduler/jobs/{job_id}/run` endpoint (added in Issue #96) allows
+triggering job execution immediately, bypassing the normal schedule.
+
+### Mode Behavior
+
+Jobs can run in two modes:
+
+#### Command Mode (`mode: "command"`)
+Executes shell commands directly via subprocess:
+- No LLM invocation — direct shell execution
+- Input: `task` field contains the shell command
+- Output: stdout/stderr captured in task results
+- Working directory: `working_dir` field (default: `/opt`)
+- Timeout: `timeout` field applies
+- Results: Saved to scheduler logs/results
+
+#### AI Mode (`mode: "ai"` or default)
+Executes through the LLM pipeline:
+- Input: `task` field is a prompt for the AI
+- AI processes and executes the prompt
+- Results: Background task with full response
+- Backward compatible (default if `mode` not specified)
+
+### Examples
+
+**POST /api/v1/scheduler/jobs/{job_id}/run** — Trigger job execution immediately
+
+Command-mode request (execute shell command):
+```bash
+curl -X POST "http://localhost:8000/api/v1/scheduler/jobs/backup-db-1/run" \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json"
+```
+
+If job has:
+```json
+{
+  "id": "backup-db-1",
+  "name": "Backup Database",
+  "mode": "command",
+  "task": "pg_dump mydb | gzip > /backup/mydb_$(date +%Y%m%d).sql.gz",
+  "working_dir": "/opt/backups",
+  "timeout": 600
+}
+```
+
+Response (200 OK):
+```json
+{
+  "success": true,
+  "task_id": "sched_backup-db-1_a7f2k9",
+  "job_id": "backup-db-1",
+  "mode": "command",
+  "status": "running",
+  "agent": "command",
+  "runtime": "shell"
+}
+```
+
+AI-mode request (execute through LLM):
+```bash
+curl -X POST "http://localhost:8000/api/v1/scheduler/jobs/summary-daily-1/run" \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json"
+```
+
+If job has:
+```json
+{
+  "id": "summary-daily-1",
+  "name": "Daily Summary",
+  "mode": "ai",
+  "agent": "orchestrator",
+  "runtime": "claude",
+  "model": "claude-opus-4.6",
+  "task": "Summarize system health from /opt/HEARTBEAT.md and report any issues",
+  "timeout": 300
+}
+```
+
+Response (200 OK):
+```json
+{
+  "success": true,
+  "task_id": "sched_summary-daily-1_b4c3x2",
+  "job_id": "summary-daily-1",
+  "mode": "ai",
+  "status": "running",
+  "agent": "orchestrator",
+  "runtime": "claude"
+}
+```
+
+### Error Handling
+
+- **Job not found:** 404 with message "Not found"
+- **Rate limit exceeded:** 429 (max 20 requests/min per IP)
+- **Authentication failed:** 401 (invalid or missing bearer token)
+- **Scheduler unavailable:** 503 (scheduler daemon offline)
+
+### Result Retrieval
+
+After triggering a job, retrieve results via:
+- `GET /api/v1/scheduler/jobs/{job_id}/results` — Last execution results
+- `GET /api/v1/scheduler/jobs/{job_id}/logs` — Execution logs
+- `/api/v1/background-tasks/{task_id}` — Real-time background task status
+
 
 ### TODO Management
 
@@ -2065,7 +2123,6 @@ For scheduling memory promotion via the task scheduler or cron:
 bash scripts/promote_all_agents_memory.sh
 ```
 
-
 **PATCH /api/v1/sessions/{id}/settings** — Update session settings
 
 Modify session-level settings like verbose mode (tool call visibility). Settings are persisted and returned in subsequent session queries.
@@ -2101,7 +2158,6 @@ Error responses:
 **Security:**
 - Requires API authentication (Bearer token)
 - Per-session settings — each user session has independent configuration
-
 
 ### Quick Start
 
@@ -2378,7 +2434,6 @@ For scheduling memory promotion via the task scheduler or cron:
 bash scripts/promote_all_agents_memory.sh
 ```
 
-
 **PATCH /api/v1/sessions/{id}/settings** — Update session settings
 
 Modify session-level settings like verbose mode (tool call visibility). Settings are persisted and returned in subsequent session queries.
@@ -2414,7 +2469,6 @@ Error responses:
 **Security:**
 - Requires API authentication (Bearer token)
 - Per-session settings — each user session has independent configuration
-
 
 ### Quick Start
 

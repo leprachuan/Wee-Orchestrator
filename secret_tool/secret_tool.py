@@ -138,7 +138,9 @@ class PassBackend:
                 f"Initialise it with: PASSWORD_STORE_DIR={self.store_dir} pass init <GPG_KEY_ID>"
             )
 
-    def _run_pass(self, *args, input_data: str | None = None) -> subprocess.CompletedProcess:
+    def _run_pass(
+        self, *args, input_data: str | None = None
+    ) -> subprocess.CompletedProcess:
         env = {**os.environ, "PASSWORD_STORE_DIR": self.store_dir}
         return subprocess.run(
             ["pass", *args],
@@ -158,7 +160,10 @@ class PassBackend:
     def set(self, name: str, value: str) -> dict:
         existed = self.exists(name)
         result = self._run_pass(
-            "insert", "--force", "--multiline", self._pass_path(name),
+            "insert",
+            "--force",
+            "--multiline",
+            self._pass_path(name),
             input_data=value,
         )
         if result.returncode != 0:
@@ -215,11 +220,15 @@ class FileBackend:
             )
 
     def _get_or_create_key(self) -> bytes:
-        key = self._keyring.get_password("secret-tool-file-key", os.environ.get("USER", "root"))
+        key = self._keyring.get_password(
+            "secret-tool-file-key", os.environ.get("USER", "root")
+        )
         if key:
             return key.encode()
         k = self._Fernet.generate_key()
-        self._keyring.set_password("secret-tool-file-key", os.environ.get("USER", "root"), k.decode())
+        self._keyring.set_password(
+            "secret-tool-file-key", os.environ.get("USER", "root"), k.decode()
+        )
         return k
 
     def _load_store(self, fernet: object) -> dict:
@@ -325,7 +334,9 @@ def parse_args(argv=None):
     p_get.add_argument("--backend", choices=["pass", "keyring", "file"], default="pass")
 
     p_list = sub.add_parser("list", help="List stored secret names (no values)")
-    p_list.add_argument("--backend", choices=["pass", "keyring", "file"], default="pass")
+    p_list.add_argument(
+        "--backend", choices=["pass", "keyring", "file"], default="pass"
+    )
     p_list.add_argument(
         "--json",
         action="store_true",
@@ -357,17 +368,20 @@ def _resolve_value(args) -> str:
     return args.value
 
 
-
 def _check_keyring_status() -> dict:
     """Check if the system keyring / secret store is accessible."""
     # Strategy 1: secretstorage (D-Bus Secret Service API)
     try:
         import secretstorage
+
         conn = secretstorage.dbus_init()
         coll = secretstorage.get_default_collection(conn)
         if coll.is_locked():
-            return {"status": "locked", "backend": "gnome-keyring",
-                    "message": "GNOME Keyring is locked"}
+            return {
+                "status": "locked",
+                "backend": "gnome-keyring",
+                "message": "GNOME Keyring is locked",
+            }
         return {"status": "unlocked", "backend": "gnome-keyring"}
     except Exception:
         pass
@@ -375,40 +389,49 @@ def _check_keyring_status() -> dict:
     # Strategy 2: python-keyring probe
     try:
         import keyring
+
         keyring.get_password("secret-tool-status-probe", "__probe__")
         return {"status": "unlocked", "backend": "python-keyring"}
     except Exception as exc:
         err = str(exc).lower()
         if any(kw in err for kw in ("locked", "prompt", "dismissed")):
-            return {"status": "locked", "backend": "python-keyring",
-                    "message": "Keyring is locked"}
+            return {
+                "status": "locked",
+                "backend": "python-keyring",
+                "message": "Keyring is locked",
+            }
         if "no recommended backend" in err:
-            return {"status": "unavailable",
-                    "message": "No keyring backend available"}
+            return {"status": "unavailable", "message": "No keyring backend available"}
 
     # Strategy 3: secret-tool CLI probe (timeout = locked)
     try:
         proc = subprocess.run(
             ["secret-tool", "lookup", "wee-status-probe", "test"],
-            capture_output=True, text=True, timeout=3,
+            capture_output=True,
+            text=True,
+            timeout=3,
         )
         return {"status": "unlocked", "backend": "secret-tool"}
     except subprocess.TimeoutExpired:
-        return {"status": "locked", "backend": "secret-tool",
-                "message": "secret-tool timed out (keyring likely locked)"}
+        return {
+            "status": "locked",
+            "backend": "secret-tool",
+            "message": "secret-tool timed out (keyring likely locked)",
+        }
     except FileNotFoundError:
         pass
 
-    return {"status": "unavailable",
-            "message": "No secret store backend detected"}
+    return {"status": "unavailable", "message": "No secret store backend detected"}
 
 
 def _find_gnome_keyring_daemon():
     path = shutil.which("gnome-keyring-daemon")
     if path:
         return path
-    for candidate in ("/usr/bin/gnome-keyring-daemon",
-                      "/usr/local/bin/gnome-keyring-daemon"):
+    for candidate in (
+        "/usr/bin/gnome-keyring-daemon",
+        "/usr/local/bin/gnome-keyring-daemon",
+    ):
         if os.path.isfile(candidate):
             return candidate
     return None
@@ -437,14 +460,14 @@ def _unlock_keyring(password: str) -> dict:
     # Strategy 2: secretstorage unlock
     try:
         import secretstorage
+
         conn = secretstorage.dbus_init()
         coll = secretstorage.get_default_collection(conn)
         if coll.is_locked():
             coll.unlock()
             if not coll.is_locked():
                 return {"status": "success", "method": "secretstorage"}
-            return {"status": "error",
-                    "message": "Unlock requires interactive prompt"}
+            return {"status": "error", "message": "Unlock requires interactive prompt"}
         return {"status": "success", "message": "Keyring was already unlocked"}
     except Exception:
         pass
@@ -457,6 +480,7 @@ def _unlock_keyring(password: str) -> dict:
             "or log in to the desktop session."
         ),
     }
+
 
 def main(argv=None):
     args = parse_args(argv)

@@ -14,14 +14,14 @@ import sys
 import threading
 import unittest
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 os.environ.setdefault("API_SHARED_KEY", "test_key_123")
 
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
 
-from agent_manager import SessionManager
+from agent_manager import SessionManager  # noqa: E402
 
 
 def _make_mgr():
@@ -40,7 +40,9 @@ def _make_mgr():
     return mgr
 
 
-def _run_wee_native_capturing_key(mgr, model, session_id="test-153", env_override=None, **session_overrides):
+def _run_wee_native_capturing_key(
+    mgr, model, session_id="test-153", env_override=None, **session_overrides
+):
     """Run run_wee_native, capturing the api_key passed to OpenAI client."""
     session_data = {
         "runtime": "wee",
@@ -64,10 +66,14 @@ def _run_wee_native_capturing_key(mgr, model, session_id="test-153", env_overrid
             else:
                 env[k] = v
 
-    with patch.object(mgr, "get_or_create_session_data", return_value=session_data), \
-         patch.object(mgr, "build_agent_context_prompt", return_value="You are helpful."), \
-         patch("openai.OpenAI", side_effect=fake_openai), \
-         patch.dict(os.environ, env, clear=True):
+    with (
+        patch.object(mgr, "get_or_create_session_data", return_value=session_data),
+        patch.object(
+            mgr, "build_agent_context_prompt", return_value="You are helpful."
+        ),
+        patch("openai.OpenAI", side_effect=fake_openai),
+        patch.dict(os.environ, env, clear=True),
+    ):
         try:
             mgr.run_wee_native(
                 prompt="hello",
@@ -89,6 +95,7 @@ def _run_wee_native_capturing_key(mgr, model, session_id="test-153", env_overrid
 # agent_manager.py tests
 # ---------------------------------------------------------------------------
 
+
 class TestAgentManagerOpenRouterEnvVar(unittest.TestCase):
     """Issue #153: OPENROUTER_API_KEY env var is used when set."""
 
@@ -99,7 +106,10 @@ class TestAgentManagerOpenRouterEnvVar(unittest.TestCase):
                 mgr,
                 "openrouter/meta-llama/llama-4-scout",
                 session_id="test-153-env",
-                env_override={"OPENROUTER_API_KEY": "sk-or-env-test-key", "WEE_API_KEY": None},
+                env_override={
+                    "OPENROUTER_API_KEY": "sk-or-env-test-key",
+                    "WEE_API_KEY": None,
+                },
             )
         self.assertEqual(captured.get("api_key"), "sk-or-env-test-key")
         self.assertIn("openrouter.ai", captured.get("base_url", ""))
@@ -111,7 +121,10 @@ class TestAgentManagerOpenRouterEnvVar(unittest.TestCase):
                 mgr,
                 "openrouter/deepseek/deepseek-r1:free",
                 session_id="test-153-env-priority",
-                env_override={"OPENROUTER_API_KEY": "sk-or-env-wins", "WEE_API_KEY": None},
+                env_override={
+                    "OPENROUTER_API_KEY": "sk-or-env-wins",
+                    "WEE_API_KEY": None,
+                },
             )
         self.assertEqual(captured.get("api_key"), "sk-or-env-wins")
 
@@ -136,16 +149,22 @@ class TestAgentManagerOpenRouterMissingKeyRaises(unittest.TestCase):
 
     def test_missing_key_raises_value_error(self):
         mgr = _make_mgr()
-        session_data = {"runtime": "wee", "model": "openrouter/qwen/qwen3-32b:free", "channel": "api"}
+        session_data = {
+            "runtime": "wee",
+            "model": "openrouter/qwen/qwen3-32b:free",
+            "channel": "api",
+        }
         mgr.session_map["test-153-missing"] = session_data
         env = {k: v for k, v in os.environ.items()}
         env.pop("OPENROUTER_API_KEY", None)
         env.pop("WEE_API_KEY", None)
 
-        with patch.object(mgr, "get_or_create_session_data", return_value=session_data), \
-             patch.object(mgr, "build_agent_context_prompt", return_value="test"), \
-             patch.dict(os.environ, env, clear=True), \
-             patch("keyring.get_password", return_value=None):
+        with (
+            patch.object(mgr, "get_or_create_session_data", return_value=session_data),
+            patch.object(mgr, "build_agent_context_prompt", return_value="test"),
+            patch.dict(os.environ, env, clear=True),
+            patch("keyring.get_password", return_value=None),
+        ):
             with self.assertRaises(ValueError) as ctx:
                 mgr.run_wee_native(
                     prompt="hello",
@@ -163,7 +182,11 @@ class TestAgentManagerOpenRouterMissingKeyRaises(unittest.TestCase):
     def test_missing_key_does_not_use_ollama(self):
         """Regression: 'ollama' must NOT be used as the OpenRouter API key."""
         mgr = _make_mgr()
-        session_data = {"runtime": "wee", "model": "openrouter/meta-llama/llama-4-scout", "channel": "api"}
+        session_data = {
+            "runtime": "wee",
+            "model": "openrouter/meta-llama/llama-4-scout",
+            "channel": "api",
+        }
         mgr.session_map["test-153-no-ollama"] = session_data
         env = {k: v for k, v in os.environ.items()}
         env.pop("OPENROUTER_API_KEY", None)
@@ -175,11 +198,13 @@ class TestAgentManagerOpenRouterMissingKeyRaises(unittest.TestCase):
             captured["api_key"] = api_key
             raise RuntimeError("stop_early")
 
-        with patch.object(mgr, "get_or_create_session_data", return_value=session_data), \
-             patch.object(mgr, "build_agent_context_prompt", return_value="test"), \
-             patch("openai.OpenAI", side_effect=fake_openai), \
-             patch.dict(os.environ, env, clear=True), \
-             patch("keyring.get_password", return_value=None):
+        with (
+            patch.object(mgr, "get_or_create_session_data", return_value=session_data),
+            patch.object(mgr, "build_agent_context_prompt", return_value="test"),
+            patch("openai.OpenAI", side_effect=fake_openai),
+            patch.dict(os.environ, env, clear=True),
+            patch("keyring.get_password", return_value=None),
+        ):
             try:
                 mgr.run_wee_native(
                     prompt="hello",
@@ -197,7 +222,8 @@ class TestAgentManagerOpenRouterMissingKeyRaises(unittest.TestCase):
             except RuntimeError:
                 # If we hit fake_openai, api_key must NOT be "ollama"
                 self.assertNotEqual(
-                    captured.get("api_key"), "ollama",
+                    captured.get("api_key"),
+                    "ollama",
                     "OpenRouter must not fall back to 'ollama' API key",
                 )
 
@@ -239,7 +265,8 @@ class TestAgentManagerExplicitApiKeyPriority(unittest.TestCase):
 # wee_runtime.py tests
 # ---------------------------------------------------------------------------
 
-import importlib.util
+import importlib.util  # noqa: E402
+
 _wrt_spec = importlib.util.spec_from_file_location(
     "wee_runtime_module",
     str(REPO / "wee_runtime.py"),
@@ -257,9 +284,13 @@ class TestWeeRuntimeOpenRouterEnvVar(unittest.TestCase):
         env["OPENROUTER_API_KEY"] = "sk-or-wee-env"
         env.pop("WEE_API_KEY", None)
 
-        with patch.dict(os.environ, env, clear=True), \
-             patch("keyring.get_password", return_value=None):
-            _, _, key = resolve_model_and_endpoint("openrouter/meta-llama/llama-4-scout")
+        with (
+            patch.dict(os.environ, env, clear=True),
+            patch("keyring.get_password", return_value=None),
+        ):
+            _, _, key = resolve_model_and_endpoint(
+                "openrouter/meta-llama/llama-4-scout"
+            )
 
         self.assertEqual(key, "sk-or-wee-env")
 
@@ -268,9 +299,13 @@ class TestWeeRuntimeOpenRouterEnvVar(unittest.TestCase):
         env["OPENROUTER_API_KEY"] = "sk-or-env-priority"
         env.pop("WEE_API_KEY", None)
 
-        with patch.dict(os.environ, env, clear=True), \
-             patch("keyring.get_password", return_value="sk-or-keyring"):
-            _, _, key = resolve_model_and_endpoint("openrouter/deepseek/deepseek-r1:free")
+        with (
+            patch.dict(os.environ, env, clear=True),
+            patch("keyring.get_password", return_value="sk-or-keyring"),
+        ):
+            _, _, key = resolve_model_and_endpoint(
+                "openrouter/deepseek/deepseek-r1:free"
+            )
 
         self.assertEqual(key, "sk-or-env-priority")
 
@@ -283,8 +318,10 @@ class TestWeeRuntimeOpenRouterKeyring(unittest.TestCase):
         env.pop("OPENROUTER_API_KEY", None)
         env.pop("WEE_API_KEY", None)
 
-        with patch.dict(os.environ, env, clear=True), \
-             patch("keyring.get_password", return_value="sk-or-from-keyring"):
+        with (
+            patch.dict(os.environ, env, clear=True),
+            patch("keyring.get_password", return_value="sk-or-from-keyring"),
+        ):
             _, _, key = resolve_model_and_endpoint("openrouter/qwen/qwen3-32b:free")
 
         self.assertEqual(key, "sk-or-from-keyring")
@@ -298,8 +335,10 @@ class TestWeeRuntimeOpenRouterMissingKeyExits(unittest.TestCase):
         env.pop("OPENROUTER_API_KEY", None)
         env.pop("WEE_API_KEY", None)
 
-        with patch.dict(os.environ, env, clear=True), \
-             patch("keyring.get_password", return_value=None):
+        with (
+            patch.dict(os.environ, env, clear=True),
+            patch("keyring.get_password", return_value=None),
+        ):
             with self.assertRaises(SystemExit) as ctx:
                 resolve_model_and_endpoint("openrouter/meta-llama/llama-4-scout")
         self.assertEqual(ctx.exception.code, 1)
@@ -310,11 +349,17 @@ class TestWeeRuntimeOpenRouterMissingKeyExits(unittest.TestCase):
         env.pop("OPENROUTER_API_KEY", None)
         env.pop("WEE_API_KEY", None)
 
-        with patch.dict(os.environ, env, clear=True), \
-             patch("keyring.get_password", return_value=None):
+        with (
+            patch.dict(os.environ, env, clear=True),
+            patch("keyring.get_password", return_value=None),
+        ):
             try:
-                _, _, key = resolve_model_and_endpoint("openrouter/google/gemma-3-27b-it:free")
-                self.assertNotEqual(key, "ollama", "Must not fall back to 'ollama' for OpenRouter")
+                _, _, key = resolve_model_and_endpoint(
+                    "openrouter/google/gemma-3-27b-it:free"
+                )
+                self.assertNotEqual(
+                    key, "ollama", "Must not fall back to 'ollama' for OpenRouter"
+                )
             except SystemExit:
                 pass  # correct behavior
 

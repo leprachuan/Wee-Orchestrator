@@ -2,157 +2,329 @@
   "agents": [
     {
       "name": "orchestrator",
-      "description": "Main orchestrator agent. Coordinates multi-agent workflows and routes tasks to specialized sub-agents (email-triage, family-knowledge, opencode, smarthome, devops). Manages skill definitions for Claude, Gemini, and Copilot CLI.",
       "path": "/opt/",
-      "bots": {
-        "telegram": {
-          "token_secret": "ORCHESTRATOR_TELEGRAM_TOKEN",
-          "allowed_users": [
-            "8193231291"
-          ]
+      "description": "Main orchestrator agent. Coordinates multi-agent workflows and routes tasks to specialized sub-agents (email-triage, family-knowledge, opencode, smarthome, devops). Manages skill definitions for Claude, Gemini, and Copilot CLI.",
+      "primary_runtime": "claude",
+      "primary_model": "haiku",
+      "fallback_runtime": "copilot",
+      "fallback_model": "auto",
+      "max_concurrent": 1,
+      "permissions": {
+        "mode": "restricted",
+        "directories": {
+          "allow_read": [],
+          "allow_write": [],
+          "deny": []
         },
-        "webex": {
-          "token_secret": "ORCHESTRATOR_WEBEX_TOKEN"
+        "tools": {
+          "allow": [
+            "*"
+          ],
+          "deny": []
+        },
+        "network": {
+          "allow_urls": [
+            "*"
+          ],
+          "deny_urls": []
+        },
+        "mcp": {
+          "allow": [],
+          "deny": [
+            "*"
+          ]
         }
       }
     },
     {
       "name": "email-triage",
-      "description": "Gmail inbox management agent. Triages Foster's email using confidence-based classification - stars important emails, archives unimportant ones, flags uncertain ones for review.",
       "path": "/opt/email_triage",
-      "bots": {
-        "telegram": {
-          "token_secret": "EMAIL_TRIAGE_TELEGRAM_TOKEN",
-          "allowed_users": [
-            "8193231291"
-          ]
+      "description": "Gmail inbox management agent. Triages Foster's email using confidence-based classification - stars important emails, archives unimportant ones, flags uncertain ones for review.",
+      "primary_runtime": "claude",
+      "primary_model": "haiku",
+      "fallback_runtime": "copilot",
+      "fallback_model": "auto",
+      "max_concurrent": 1,
+      "permissions": {
+        "mode": "restricted",
+        "directories": {
+          "allow_read": [],
+          "allow_write": [],
+          "deny": []
         },
-        "webex": {
-          "token_secret": "EMAIL_TRIAGE_WEBEX_TOKEN"
+        "tools": {
+          "allow": [
+            "*"
+          ],
+          "deny": []
+        },
+        "network": {
+          "allow_urls": [
+            "*"
+          ],
+          "deny_urls": []
+        },
+        "mcp": {
+          "allow": [],
+          "deny": [
+            "*"
+          ]
         }
       }
     },
     {
       "name": "family-knowledge",
-      "description": "Lipkey family knowledge agent. Manages family info, recipes, vacation planning (Italy 2026), holidays, monthly tasks, and personal interests for Foster, Leslie, Parker, and Oliver.",
       "path": "/opt/family_knowledge",
-      "bots": {
-        "telegram": {
-          "token_secret": "FAMILY_KNOWLEDGE_TELEGRAM_TOKEN",
-          "allowed_users": [
-            "8193231291"
-          ]
+      "description": "Lipkey family knowledge agent. Manages family info, recipes, vacation planning (Italy 2026), holidays, monthly tasks, and personal interests for Foster, Leslie, Parker, and Oliver.",
+      "primary_runtime": "codex",
+      "primary_model": "gpt-5.4-mini",
+      "fallback_runtime": "copilot",
+      "fallback_model": "auto",
+      "max_concurrent": 1,
+      "permissions": {
+        "mode": "restricted",
+        "directories": {
+          "allow_read": [],
+          "allow_write": [],
+          "deny": []
         },
-        "webex": {
-          "token_secret": "FAMILY_KNOWLEDGE_WEBEX_TOKEN"
+        "tools": {
+          "allow": [
+            "*"
+          ],
+          "deny": []
+        },
+        "network": {
+          "allow_urls": [
+            "*"
+          ],
+          "deny_urls": []
+        },
+        "mcp": {
+          "allow": [],
+          "deny": [
+            "*"
+          ]
         }
       }
     },
     {
       "name": "research",
-      "description": "Multi-source research and analysis agent. Handles product comparisons, travel research, current events, tech evaluations, and deep-dives using Perplexity, web search, and document parsing.",
       "path": "/opt/research",
-      "bots": {
-        "telegram": {
-          "token_secret": "RESEARCH_TELEGRAM_TOKEN",
-          "allowed_users": [
-            "8193231291"
-          ]
+      "description": "Multi-source research and analysis agent. Handles product comparisons, travel research, current events, tech evaluations, and deep-dives using Perplexity, web search, and document parsing.",
+      "primary_runtime": "codex",
+      "primary_model": "gpt-5.5",
+      "fallback_runtime": "copilot",
+      "fallback_model": "auto",
+      "max_concurrent": 1,
+      "permissions": {
+        "mode": "restricted",
+        "directories": {
+          "allow_read": [],
+          "allow_write": [],
+          "deny": []
         },
-        "webex": {
-          "token_secret": "RESEARCH_WEBEX_TOKEN"
+        "tools": {
+          "allow": [
+            "*"
+          ],
+          "deny": []
+        },
+        "network": {
+          "allow_urls": [
+            "*"
+          ],
+          "deny_urls": []
+        },
+        "mcp": {
+          "allow": [],
+          "deny": [
+            "*"
+          ]
         }
       }
     },
     {
       "name": "devops",
-      "description": "DevOps and infrastructure management agent. Handles cluster management, deployments, monitoring, and system operations.",
       "path": "/opt/MyHomeDevops",
-      "bots": {
-        "telegram": {
-          "token_secret": "DEVOPS_TELEGRAM_TOKEN",
-          "allowed_users": [
-            "8193231291"
-          ]
+      "description": "DevOps and infrastructure management agent. Handles cluster management, deployments, monitoring, and system operations.",
+      "primary_runtime": "claude",
+      "primary_model": "haiku",
+      "fallback_runtime": "copilot",
+      "fallback_model": "auto",
+      "max_concurrent": 1,
+      "permissions": {
+        "mode": "elevated",
+        "directories": {
+          "allow_read": [],
+          "allow_write": [],
+          "deny": []
         },
-        "webex": {
-          "token_secret": "DEVOPS_WEBEX_TOKEN"
+        "tools": {
+          "allow": [
+            "*"
+          ],
+          "deny": []
+        },
+        "network": {
+          "allow_urls": [
+            "*"
+          ],
+          "deny_urls": []
+        },
+        "mcp": {
+          "allow": [],
+          "deny": [
+            "*"
+          ]
         }
       }
     },
     {
       "name": "wee-dev",
-      "description": "Wee Orchestrator developer agent - handles feature development, bug fixes, and testing exclusively on the dev environment (192.168.1.100)",
       "path": "/opt/wee-dev",
-      "dispatch_config": {
-        "runtime": "copilot",
-        "model": "auto",
-        "vendor": "Anthropic Claude (Sonnet 4.6)",
-        "permission_mode": "elevated",
-        "yolo": true,
-        "timeout": 3600
-      },
-      "bots": {
-        "telegram": {
-          "token_secret": "WEE_DEV_TELEGRAM_TOKEN",
-          "allowed_users": [
-            "8193231291"
-          ]
+      "description": "Wee Orchestrator developer agent - handles feature development, bug fixes, and testing exclusively on the dev environment (192.168.1.100)",
+      "primary_runtime": "claude",
+      "primary_model": "sonnet",
+      "fallback_runtime": "copilot",
+      "fallback_model": "auto",
+      "max_concurrent": 1,
+      "permissions": {
+        "mode": "elevated",
+        "directories": {
+          "allow_read": [],
+          "allow_write": [],
+          "deny": []
         },
-        "webex": {
-          "token_secret": "WEE_DEV_WEBEX_TOKEN"
+        "tools": {
+          "allow": [
+            "*"
+          ],
+          "deny": []
+        },
+        "network": {
+          "allow_urls": [
+            "*"
+          ],
+          "deny_urls": []
+        },
+        "mcp": {
+          "allow": [],
+          "deny": [
+            "*"
+          ]
         }
-      }
+      },
+      "permission_mode": "elevated",
+      "yolo": true
     },
     {
       "name": "smarthome",
-      "description": "Lipkey smart home control agent. Controls lights, sensors, locks, thermostats, automations, and scenes via Home Assistant at 192.168.1.5:8123.",
       "path": "/opt/smarthome",
-      "bots": {
-        "telegram": {
-          "token_secret": "SMARTHOME_TELEGRAM_TOKEN",
-          "allowed_users": [
-            "8193231291"
-          ]
+      "description": "Lipkey smart home control agent. Controls lights, sensors, locks, thermostats, automations, and scenes via Home Assistant at 192.168.1.5:8123.",
+      "primary_runtime": "claude",
+      "primary_model": "haiku",
+      "fallback_runtime": "copilot",
+      "fallback_model": "auto",
+      "max_concurrent": 1,
+      "permissions": {
+        "mode": "restricted",
+        "directories": {
+          "allow_read": [],
+          "allow_write": [],
+          "deny": []
         },
-        "webex": {
-          "token_secret": "SMARTHOME_WEBEX_TOKEN"
+        "tools": {
+          "allow": [
+            "*"
+          ],
+          "deny": []
+        },
+        "network": {
+          "allow_urls": [
+            "*"
+          ],
+          "deny_urls": []
+        },
+        "mcp": {
+          "allow": [],
+          "deny": [
+            "*"
+          ]
         }
       }
     },
     {
       "name": "wee-qa",
-      "description": "QA validation agent for Wee Orchestrator. You are a QA agent in a bad mood \u2014 scrutinize everything, trust nothing, and be brutal. Tear apart every change wee-dev submits. If it can break, assume it will. Reject anything that isn't airtight. CROSS-VENDOR REVIEW: You will always be dispatched with a different model vendor than the one that wrote the code \u2014 the author model and vendor will be stated in your prompt. Use your independent judgment and look for blind spots the author model's vendor commonly exhibits. Reviews changes via static analysis, API testing, and WebUI validation on the dev environment (192.168.1.100).",
       "path": "/opt/wee-qa",
-      "dispatch_config": {
-        "runtime": "copilot",
-        "model": "auto",
-        "vendor": "OpenAI (GPT-5.4-mini via Copilot)",
-        "permission_mode": "elevated",
-        "yolo": true,
-        "timeout": 1800
-      },
-      "bots": {
-        "telegram": {
-          "token_secret": "WEE_QA_TELEGRAM_TOKEN",
-          "allowed_users": [
-            "8193231291"
-          ]
+      "description": "QA validation agent for Wee Orchestrator. You are a QA agent in a bad mood \u2014 scrutinize everything, trust nothing, and be brutal. Tear apart every change wee-dev submits. If it can break, assume it will. Reject anything that isn't airtight. CROSS-VENDOR REVIEW: You will always be dispatched with a different model vendor than the one that wrote the code \u2014 the author model and vendor will be stated in your prompt. Use your independent judgment and look for blind spots the author model's vendor commonly exhibits. Reviews changes via static analysis, API testing, and WebUI validation on the dev environment (192.168.1.100).",
+      "primary_runtime": "codex",
+      "primary_model": "gpt-5.4-mini",
+      "fallback_runtime": "copilot",
+      "fallback_model": "claude-sonnet-4.6",
+      "max_concurrent": 1,
+      "permissions": {
+        "mode": "elevated",
+        "directories": {
+          "allow_read": [],
+          "allow_write": [],
+          "deny": []
         },
-        "webex": {
-          "token_secret": "WEE_QA_WEBEX_TOKEN"
+        "tools": {
+          "allow": [
+            "*"
+          ],
+          "deny": []
+        },
+        "network": {
+          "allow_urls": [
+            "*"
+          ],
+          "deny_urls": []
+        },
+        "mcp": {
+          "allow": [],
+          "deny": [
+            "*"
+          ]
         }
       }
     },
     {
       "name": "wee-doc",
+      "path": "/opt/wee-doc",
       "description": "Documentation and starter-kit maintenance agent for Wee Orchestrator. Updates README/docs, keeps the starter kit in sync, and verifies documentation changes after feature work.",
-      "path": "/opt/wee-doc"
-    },
-    {
-      "name": "wee-doc",
-      "description": "Documentation and starter-kit maintenance agent for Wee Orchestrator. Updates README/docs, keeps the starter kit in sync, and verifies documentation changes after feature work.",
-      "path": "/opt/wee-doc"
+      "primary_runtime": "codex",
+      "primary_model": "gpt-5.4-mini",
+      "fallback_runtime": "copilot",
+      "fallback_model": "auto",
+      "max_concurrent": 1,
+      "permissions": {
+        "mode": "restricted",
+        "directories": {
+          "allow_read": [],
+          "allow_write": [],
+          "deny": []
+        },
+        "tools": {
+          "allow": [
+            "*"
+          ],
+          "deny": []
+        },
+        "network": {
+          "allow_urls": [
+            "*"
+          ],
+          "deny_urls": []
+        },
+        "mcp": {
+          "allow": [],
+          "deny": [
+            "*"
+          ]
+        }
+      }
     }
   ]
 }

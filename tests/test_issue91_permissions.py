@@ -113,16 +113,21 @@ class TestCopilotSdkModeParameter(unittest.TestCase):
     def test_copilot_sdk_accepts_mode_param(self):
         """run_copilot_sdk signature should include mode parameter."""
         import inspect
+
         from agent_manager import SessionManager
+
         sig = inspect.signature(SessionManager.run_copilot_sdk)
         param_names = list(sig.parameters.keys())
-        self.assertIn("mode", param_names,
-                       "run_copilot_sdk must accept 'mode' parameter")
+        self.assertIn(
+            "mode", param_names, "run_copilot_sdk must accept 'mode' parameter"
+        )
 
     def test_copilot_sdk_mode_default_is_none(self):
         """mode parameter should default to None."""
         import inspect
+
         from agent_manager import SessionManager
+
         sig = inspect.signature(SessionManager.run_copilot_sdk)
         mode_param = sig.parameters["mode"]
         self.assertIs(mode_param.default, None)
@@ -149,19 +154,26 @@ class TestBackgroundTaskElevatedPermissions(unittest.TestCase):
         mgr._bg_task_mgr.get_task.return_value = None
 
         mgr._execute_background_task(
-            "task-123", "sess-123", "test prompt",
-            "orchestrator", "copilot", "gpt-5", "api"
+            "task-123",
+            "sess-123",
+            "test prompt",
+            "orchestrator",
+            "copilot",
+            "gpt-5",
+            "api",
         )
 
         # Verify permissions were set to elevated
         perm_calls = [
-            call for call in mgr.update_session_field.call_args_list
+            call
+            for call in mgr.update_session_field.call_args_list
             if call[0][1] == "permissions"
         ]
         self.assertTrue(len(perm_calls) > 0, "permissions should be set")
         self.assertEqual(
-            perm_calls[0][0][2], {"mode": "elevated"},
-            "Background tasks must have elevated permissions"
+            perm_calls[0][0][2],
+            {"mode": "elevated"},
+            "Background tasks must have elevated permissions",
         )
 
     def test_bg_task_permissions_set_before_execute(self):
@@ -183,14 +195,18 @@ class TestBackgroundTaskElevatedPermissions(unittest.TestCase):
         mgr._bg_task_mgr.get_task.return_value = None
 
         mgr._execute_background_task(
-            "task-456", "sess-456", "test prompt",
-            "orchestrator", "copilot-sdk", "gpt-5", "telegram"
+            "task-456",
+            "sess-456",
+            "test prompt",
+            "orchestrator",
+            "copilot-sdk",
+            "gpt-5",
+            "telegram",
         )
 
         perm_idx = call_order.index("set:permissions")
         exec_idx = call_order.index("execute")
-        self.assertLess(perm_idx, exec_idx,
-                         "permissions must be set before execute()")
+        self.assertLess(perm_idx, exec_idx, "permissions must be set before execute()")
 
 
 # =========================================================================
@@ -239,15 +255,24 @@ class TestDispatchPassesModeToSdkRuntimes(unittest.TestCase):
         #     session_id, can_resume, n8n_session_id, effective_timeout,
         #     render_type, mode)
         mgr._dispatch_single_runtime(
-            "copilot-sdk", "test prompt", "gpt-5", "orchestrator",
-            None, False, "n8n-sess-1", 300, "text", "elevated"
+            "copilot-sdk",
+            "test prompt",
+            "gpt-5",
+            "orchestrator",
+            None,
+            False,
+            "n8n-sess-1",
+            300,
+            "text",
+            "elevated",
         )
 
         call_args = mgr.run_copilot_sdk.call_args
         self.assertIsNotNone(call_args, "run_copilot_sdk should be called")
         all_args = call_args[0]  # positional args
-        self.assertIn("elevated", all_args,
-                       "mode='elevated' must be passed to run_copilot_sdk")
+        self.assertIn(
+            "elevated", all_args, "mode='elevated' must be passed to run_copilot_sdk"
+        )
 
     def test_dispatch_passes_mode_to_claude_sdk(self):
         """claude-sdk dispatch call should include mode argument."""
@@ -255,15 +280,24 @@ class TestDispatchPassesModeToSdkRuntimes(unittest.TestCase):
         mgr.run_claude_sdk = MagicMock(return_value="claude output")
 
         mgr._dispatch_single_runtime(
-            "claude-sdk", "test prompt", "claude-sonnet-4.6", "orchestrator",
-            None, False, "n8n-sess-2", 300, "text", "elevated"
+            "claude-sdk",
+            "test prompt",
+            "claude-sonnet-4.6",
+            "orchestrator",
+            None,
+            False,
+            "n8n-sess-2",
+            300,
+            "text",
+            "elevated",
         )
 
         call_args = mgr.run_claude_sdk.call_args
         self.assertIsNotNone(call_args, "run_claude_sdk should be called")
         all_args = call_args[0]
-        self.assertIn("elevated", all_args,
-                       "mode='elevated' must be passed to run_claude_sdk")
+        self.assertIn(
+            "elevated", all_args, "mode='elevated' must be passed to run_claude_sdk"
+        )
 
     def test_dispatch_restricted_mode_to_copilot_sdk(self):
         """copilot-sdk should receive restricted mode when set."""
@@ -271,14 +305,25 @@ class TestDispatchPassesModeToSdkRuntimes(unittest.TestCase):
         mgr.run_copilot_sdk = MagicMock(return_value="output")
 
         mgr._dispatch_single_runtime(
-            "copilot-sdk", "test prompt", "gpt-5", "orchestrator",
-            None, False, "n8n-sess-3", 300, "text", "restricted"
+            "copilot-sdk",
+            "test prompt",
+            "gpt-5",
+            "orchestrator",
+            None,
+            False,
+            "n8n-sess-3",
+            300,
+            "text",
+            "restricted",
         )
 
         call_args = mgr.run_copilot_sdk.call_args
         all_args = call_args[0]
-        self.assertIn("restricted", all_args,
-                       "mode='restricted' must be passed to run_copilot_sdk")
+        self.assertIn(
+            "restricted",
+            all_args,
+            "mode='restricted' must be passed to run_copilot_sdk",
+        )
 
 
 if __name__ == "__main__":

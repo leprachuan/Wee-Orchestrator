@@ -428,6 +428,33 @@ html, body {
 }
 .session-item:hover .session-rename-btn { visibility: visible; }
 .session-rename-btn:hover { background: rgba(62,207,142,0.3); }
+/* Agent badge in session list */
+.session-agent-badge {
+  display: inline-block;
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  padding: 1px 5px;
+  border-radius: 3px;
+  margin-right: 4px;
+  vertical-align: middle;
+  line-height: 1.5;
+  opacity: 0.9;
+  color: #fff;
+  background: rgba(99,102,241,0.5);
+  border: 1px solid rgba(99,102,241,0.4);
+}
+/* Per-agent color coding */
+.session-agent-badge[data-agent="orchestrator"] { background: rgba(62,207,142,0.4); border-color: rgba(62,207,142,0.5); }
+.session-agent-badge[data-agent="wee-dev"]      { background: rgba(96,165,250,0.4); border-color: rgba(96,165,250,0.5); }
+.session-agent-badge[data-agent="wee-qa"]       { background: rgba(251,146,60,0.4); border-color: rgba(251,146,60,0.5); }
+.session-agent-badge[data-agent="email-triage"] { background: rgba(167,139,250,0.4); border-color: rgba(167,139,250,0.5); }
+.session-agent-badge[data-agent="research"]     { background: rgba(34,211,238,0.4); border-color: rgba(34,211,238,0.5); }
+.session-agent-badge[data-agent="devops"]       { background: rgba(251,191,36,0.4); border-color: rgba(251,191,36,0.5); color: #1a1a1a; }
+.session-agent-badge[data-agent="family-knowledge"] { background: rgba(244,114,182,0.4); border-color: rgba(244,114,182,0.5); }
+.session-agent-badge[data-agent="smarthome"]    { background: rgba(52,211,153,0.4); border-color: rgba(52,211,153,0.5); }
+.session-agent-badge[data-agent="wee-doc"]      { background: rgba(156,163,175,0.4); border-color: rgba(156,163,175,0.5); }
 
 /* Inline rename input */
 .session-rename-input {
@@ -1284,6 +1311,13 @@ html, body {
   align-items: center;
   gap: 6px;
 }
+.bg-sidebar-item .session-title .bg-task-title-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .bg-sidebar-item .session-preview {
   font-size: 11px;
 }
@@ -1331,6 +1365,36 @@ html, body {
 .bg-status-failed    { background: rgba(255,95,109,0.15);  color: #ff8888; border: 1px solid rgba(255,95,109,0.3);  }
 .bg-status-killed    { background: rgba(245,197,66,0.15);  color: #f5c542; border: 1px solid rgba(245,197,66,0.3);  }
 .bg-status-queued    { background: rgba(139,120,255,0.15); color: #b8a9ff; border: 1px solid rgba(139,120,255,0.3); }
+
+/* Fallback indicator badge — shown when a task retried on a secondary runtime */
+.bg-fallback-badge {
+  display: inline-block;
+  font-size: 10px;
+  font-weight: 600;
+  padding: 1px 6px;
+  border-radius: 8px;
+  margin-left: 6px;
+  background: rgba(245,197,66,0.15);
+  color: #f5c542;
+  border: 1px solid rgba(245,197,66,0.35);
+  vertical-align: middle;
+  cursor: default;
+}
+.bg-fallback-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.bg-fallback-route {
+  font-size: 12px;
+  font-family: var(--font-mono);
+  color: var(--text-secondary);
+}
+.bg-fallback-tip {
+  font-size: 11px;
+  color: var(--text-muted);
+  font-style: italic;
+}
 
 .bg-card-agent {
   font-size: 11px;
@@ -7051,4 +7115,112 @@ html, body {
   background: rgba(80, 160, 255, 0.12);
   color: #6cb4ff;
   border: 1px solid rgba(80, 160, 255, 0.2);
+}
+
+/* ── Service Status Section ──────────────────────────────────────────── */
+.service-status-section {
+  display: flex;
+  flex-direction: column;
+  padding: 10px 12px 8px;
+  border-bottom: 1px solid var(--glass-border);
+  flex-shrink: 0;
+  gap: 6px;
+}
+
+.request-queue-panel.queue-minimized .service-status-section {
+  display: none;
+}
+
+.service-status-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.service-status-icon {
+  font-size: 13px;
+}
+
+.service-status-label {
+  color: var(--text-primary);
+  flex: 1;
+}
+
+.btn-refresh-status {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 14px;
+  padding: 0 2px;
+  line-height: 1;
+  transition: color 0.2s, transform 0.3s;
+  border-radius: 4px;
+}
+
+.btn-refresh-status:hover {
+  color: var(--accent);
+  background: rgba(255,255,255,0.06);
+}
+
+.btn-refresh-status.spinning {
+  transform: rotate(360deg);
+  transition: transform 0.5s linear;
+}
+
+.service-status-items {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.service-status-item {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 12px;
+}
+
+.service-name {
+  flex: 1;
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+
+.service-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.dot-loading { background: var(--text-muted); opacity: 0.5; }
+.dot-active  { background: #4ade80; box-shadow: 0 0 6px rgba(74,222,128,0.6); }
+.dot-inactive{ background: #f87171; box-shadow: 0 0 6px rgba(248,113,113,0.6); }
+.dot-failed  { background: #fb923c; box-shadow: 0 0 6px rgba(251,146,60,0.6); }
+.dot-unknown { background: var(--text-muted); }
+
+.service-badge {
+  font-size: 10px;
+  font-weight: 600;
+  padding: 1px 6px;
+  border-radius: 4px;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.badge-loading  { background: rgba(255,255,255,0.08); color: var(--text-muted); }
+.badge-active   { background: rgba(74,222,128,0.15);  color: #4ade80; }
+.badge-inactive { background: rgba(248,113,113,0.15); color: #f87171; }
+.badge-failed   { background: rgba(251,146,60,0.15);  color: #fb923c; }
+.badge-unknown  { background: rgba(255,255,255,0.08); color: var(--text-muted); }
+
+.service-status-footer {
+  display: flex;
+  justify-content: space-between;
+  font-size: 10px;
+  color: var(--text-muted);
+  margin-top: 2px;
 }
