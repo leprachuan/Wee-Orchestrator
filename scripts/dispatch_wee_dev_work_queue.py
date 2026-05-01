@@ -481,6 +481,9 @@ def dispatch_via_api(
     prompt: str,
     model: str,
     timeout: int,
+    runtime: str = None,
+    permission_mode: str = None,
+    yolo: bool = None,
 ) -> str:
     """Dispatch work via the background-tasks API (visible, tracked, notifiable).
 
@@ -506,11 +509,18 @@ def dispatch_via_api(
     if not api_key:
         raise RuntimeError("API_SHARED_KEY not found in /opt/n8n-copilot-shim/.env")
 
-    # Get dispatch config for the agent
+    # Use provided parameters or get from dispatch config
     dispatch_config = get_agent_dispatch_config(agent)
-    runtime = dispatch_config.get("runtime", "claude")
-    permission_mode = dispatch_config.get("permission_mode")
-    yolo = dispatch_config.get("yolo", False)
+    if runtime is None:
+        runtime = dispatch_config.get("runtime", "claude")
+    if permission_mode is None:
+        permission_mode = dispatch_config.get("permission_mode")
+    if yolo is None:
+        yolo = dispatch_config.get("yolo", False)
+
+    # Get fallback config
+    fallback_runtime = dispatch_config.get("fallback_runtime")
+    fallback_model = dispatch_config.get("fallback_model")
 
     # Prepare request
     body = {
@@ -525,6 +535,10 @@ def dispatch_via_api(
         body["permission_mode"] = permission_mode
     if yolo:
         body["yolo"] = yolo
+    if fallback_runtime is not None:
+        body["fallback_runtime"] = fallback_runtime
+    if fallback_model is not None:
+        body["fallback_model"] = fallback_model
 
     # Sign request for authentication
     import json as _json
@@ -669,20 +683,7 @@ def has_running_wee_dev_task() -> bool:
     return False
 
 
-def has_running_wee_qa_task() -> bool:
-    """Return True if a wee-qa task from the lock file is still active."""
-    lock = read_lock()
-    if lock is None:
-        return False
-    # Check task_id first (API dispatch - new default)
-    task_id = lock.get("wee_qa_task_id")
-    if task_id is not None:
-        return _is_bg_task_running(task_id)
-    # Fall back to PID check (subprocess dispatch - deprecated)
-    pid = lock.get("wee_qa_pid")
-    return pid is not None and _is_pid_alive(int(pid))
-
-
+# 
 # ---------------------------------------------------------------------------
 # Dispatch helpers
 # ---------------------------------------------------------------------------
@@ -690,46 +691,36 @@ def has_running_wee_qa_task() -> bool:
 
 def dispatch_wee_dev(item: dict) -> dict:
     """Dispatch wee-dev via background-tasks API (visible, tracked, audited)."""
+    dev_cfg = get_agent_dispatch_config("wee-dev")
+    
     prompt = (
         f"Work on GitHub issue #{item['number']} in {REPO}: {item['title']}.\n\n"
         f"Issue body:\n{item['body'][:2000]}\n\n"
         "Read the full issue on GitHub for details. Implement the fix/feature "
         "on the dev host (192.168.1.100) in /opt/n8n-copilot-shim-dev/. "
         "Follow /opt/wee-dev/AGENTS.md. When implementation is complete, "
-        "dispatch wee-qa for review. Update the GitHub issue labels and add "
+        "add the label 'wee-dev:qa-review' to the issue — the dispatcher will "
+        "pick it up and dispatch wee-qa. Update the GitHub issue labels and add "
         "comments as you progress. Do not work on more than this one issue."
     )
     if DRY_RUN:
-        log(f"[dry-run] Would dispatch wee-dev for {item['id']}: {item['title']}")
+        log(f"[dry-run] Would dispatch wee-dev for {item['id']}: {item['title']} (runtime={dev_cfg['runtime']})")
         return {"task_id": "dry-run"}
     try:
-        task_id = dispatch_via_api("wee-dev", prompt, "gpt-5.4", 3600)
+        task_id = dispatch_via_api(
+            "wee-dev",
+            prompt,
+            dev_cfg["model"],
+            dev_cfg["timeout"],
+            runtime=dev_cfg["runtime"],
+            permission_mode=dev_cfg.get("permission_mode"),
+            yolo=dev_cfg.get("yolo"),
+        )
         return {"task_id": task_id}
     except Exception as e:
         log(f"ERROR: Failed to dispatch wee-dev: {e}")
         raise
 
-
-def dispatch_wee_qa(item: dict) -> dict:
-    """Dispatch wee-qa via background-tasks API (visible, tracked, audited)."""
-    prompt = (
-        f"QA review for GitHub issue #{item['number']} in {REPO}: "
-        f"{item['title']}. "
-        "Changes are on dev host 192.168.1.100 in /opt/n8n-copilot-shim-dev/. "
-        "Run tests, check code quality, verify the implementation matches the "
-        "issue requirements. If QA passes, add label wee-dev:qa-review → close "
-        "the issue with the commit SHA. If QA fails, add label wee-dev:qa-failed "
-        "and comment with the failures."
-    )
-    if DRY_RUN:
-        log(f"[dry-run] Would dispatch wee-qa for {item['id']}: {item['title']}")
-        return {"task_id": "dry-run"}
-    try:
-        task_id = dispatch_via_api("wee-qa", prompt, "gpt-5.4", 1800)
-        return {"task_id": task_id}
-    except Exception as e:
-        log(f"ERROR: Failed to dispatch wee-qa: {e}")
-        raise
 
 
 # ---------------------------------------------------------------------------
