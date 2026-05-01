@@ -21,7 +21,9 @@ def _load_module(name: str, path: Path):
     return module
 
 
-management = _load_module("issue21_scheduler_management", REPO / "scheduler" / "management.py")
+management = _load_module(
+    "issue21_scheduler_management", REPO / "scheduler" / "management.py"
+)
 TaskScheduler = management.TaskScheduler
 
 

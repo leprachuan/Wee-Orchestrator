@@ -1,0 +1,17 @@
+{
+  "max_retries_per_model": 3,
+  "retry_backoff_seconds": [2, 5, 10],
+  "free_model_fallback_chain": [
+    "openrouter/meta-llama/llama-4-scout:free",
+    "openrouter/meta-llama/llama-4-maverick:free",
+    "openrouter/mistralai/mistral-7b-instruct:free",
+    "openrouter/google/gemma-3-27b-it:free",
+    "openrouter/microsoft/phi-4-reasoning:free",
+    "openrouter/deepseek/deepseek-r1:free",
+    "openrouter/qwen/qwen3-8b:free",
+    "openrouter/qwen/qwq-32b:free",
+    "openrouter/nvidia/llama-3.1-nemotron-ultra-253b:free",
+    "openrouter/google/gemma-3n-e4b-it:free",
+    "openrouter/google/gemma-3-12b-it:free"
+  ]
+}

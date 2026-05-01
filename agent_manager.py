@@ -968,6 +968,7 @@ def check_runtime_available(runtime: str) -> bool:
         "gemini": "gemini",
         "codex": "codex",
         "devin": "devin",
+        "devin-acp": "devin",
         "cursor": "agent",  # Cursor uses 'agent' binary
         "opencode": "opencode",
         "wee": "openai",  # OpenAI-compatible API (no binary needed),
@@ -1025,6 +1026,7 @@ def get_available_runtimes() -> List[Dict[str, str]]:
         {"id": "gemini", "label": "gemini"},
         {"id": "codex", "label": "codex"},
         {"id": "devin", "label": "devin"},
+        {"id": "devin-acp", "label": "devin-acp", "icon": "🤖"},
         {"id": "cursor", "label": "cursor", "icon": "🖱️"},
         {"id": "wee", "label": "wee", "icon": "🍀"},
     ]
@@ -1507,7 +1509,6 @@ class SessionManager:
     MAX_PROMPT_LENGTH = 200  # Maximum chars to store from prompt
     MAX_OUTPUT_LENGTH = 500  # Maximum chars to store from output
     MAX_OUTPUT_DISPLAY = 300  # Maximum chars to display in status output
-    _WEE_DEFAULT_CONTEXT_LIMIT = 4096
 
     # Model configurations
     # Note: Claude Code CLI does not support dynamic model listing via flag.
@@ -2257,13 +2258,14 @@ You can mention an agent in your prompt and it will auto-delegate:
                 "gemini",
                 "codex",
                 "devin",
+                "devin-acp",
                 "cursor",
                 "wee",
             ]:
                 return (
                     f"Unknown runtime: '{new_runtime}'. Use "
                     "copilot, copilot-sdk, opencode, claude, claude-sdk, "
-                    "gemini, codex, devin, cursor, or wee."
+                    "gemini, codex, devin, devin-acp, cursor, or wee."
                 )
 
             # Capture previous session state before any updates
@@ -2338,7 +2340,7 @@ You can mention an agent in your prompt and it will auto-delegate:
                 default_model = "gemini-1.5-flash"
             elif new_runtime == "codex":
                 default_model = "gpt-5.4"
-            elif new_runtime == "devin":
+            elif new_runtime in ("devin", "devin-acp"):
                 default_model = os.getenv("DEVIN_DEFAULT_MODEL", "claude-sonnet-4")
             elif new_runtime == "cursor":
                 default_model = os.getenv("CURSOR_DEFAULT_MODEL", "auto")
@@ -3760,6 +3762,7 @@ You can mention an agent in your prompt and it will auto-delegate:
             "gemini": self._env_gemini_models,
             "codex": self._env_codex_models,
             "devin": self._env_devin_models,
+            "devin-acp": self._env_devin_models,
             "cursor": self._env_cursor_models,
             "wee": self._env_wee_models,
         }
@@ -3778,6 +3781,7 @@ You can mention an agent in your prompt and it will auto-delegate:
             "codex": self.CODEX_MODELS,
             "opencode": self.OPENCODE_MODELS,
             "devin": self.DEVIN_MODELS,
+            "devin-acp": self.DEVIN_MODELS,
             "cursor": self.CURSOR_MODELS,
             "wee": self.WEE_MODELS,
         }
@@ -4062,6 +4066,7 @@ You can mention an agent in your prompt and it will auto-delegate:
             "gemini": self.fetch_gemini_models,
             "codex": self.fetch_codex_models,
             "devin": self.fetch_devin_models,
+            "devin-acp": self.fetch_devin_models,
             "cursor": self.fetch_cursor_models,
             "wee": self.fetch_wee_models,
         }
@@ -4139,7 +4144,7 @@ You can mention an agent in your prompt and it will auto-delegate:
             default_model = "gemini-1.5-flash"
         elif default_runtime == "codex":
             default_model = "gpt-5.4"
-        elif default_runtime == "devin":
+        elif default_runtime in ("devin", "devin-acp"):
             default_model = os.getenv("DEVIN_DEFAULT_MODEL", "claude-sonnet-4")
         elif default_runtime == "cursor":
             default_model = os.getenv("CURSOR_DEFAULT_MODEL", "auto")
@@ -4218,7 +4223,7 @@ You can mention an agent in your prompt and it will auto-delegate:
                     current_model, "codex"
                 ):
                     merged["model"] = "gpt-5.4"
-            elif runtime == "devin":
+            elif runtime in ("devin", "devin-acp"):
                 current_model = merged.get("model", "")
                 if not current_model or not self.get_model_from_name(
                     current_model, "devin"
@@ -4248,6 +4253,7 @@ You can mention an agent in your prompt and it will auto-delegate:
                 "copilot",
                 "copilot-sdk",
                 "devin",
+                "devin-acp",
                 "cursor",
                 "wee",
             ]:
@@ -4599,7 +4605,7 @@ You can mention an agent in your prompt and it will auto-delegate:
         name_lower = name.lower().strip("\"'")
 
         # Ensure env models are loaded/cached by triggering fetch for this runtime
-        if runtime in ("claude", "gemini", "codex", "devin", "cursor"):
+        if runtime in ("claude", "gemini", "codex", "devin", "devin-acp", "cursor"):
             self.get_models_for_runtime(runtime)
 
         # Step 1: check env-loaded or static alias tables for all runtimes that have them.
@@ -4608,6 +4614,7 @@ You can mention an agent in your prompt and it will auto-delegate:
             "gemini": self._env_gemini_models,
             "codex": self._env_codex_models,
             "devin": self._env_devin_models,
+            "devin-acp": self._env_devin_models,
             "cursor": self._env_cursor_models,
             "wee": self._env_wee_models,
         }
@@ -4617,6 +4624,7 @@ You can mention an agent in your prompt and it will auto-delegate:
             "codex": self.CODEX_MODELS,
             "opencode": self.OPENCODE_MODELS,
             "devin": self.DEVIN_MODELS,
+            "devin-acp": self.DEVIN_MODELS,
             "cursor": self.CURSOR_MODELS,
             "wee": self.WEE_MODELS,
         }
@@ -6875,7 +6883,7 @@ User Request:
             cmd[2] = context_prompt
 
         if resume and session_id:
-            cmd.append(f"--resume={session_id}")
+            cmd.extend(["--resume", session_id])
             print(f"[Session] Resuming Copilot session: {session_id}", file=sys.stderr)
         else:
             # Record session start time for proactive age tracking
@@ -7679,7 +7687,7 @@ User Request:
         ]
 
         if resume and session_id:
-            cmd.append(f"--resume={session_id}")
+            cmd.extend(["--resume", session_id])
             print(f"[Session] Resuming Claude session: {session_id}", file=sys.stderr)
         elif session_id:
             cmd.extend(["--session-id", session_id])
@@ -7811,7 +7819,7 @@ User Request:
         # The session_id parameter is not used since Gemini manages sessions internally.
         # Using "--resume latest" automatically continues with the most recent session.
         if resume:
-            cmd.append("--resume=latest")
+            cmd.extend(["--resume", "latest"])
             print(f"[Session] Resuming Gemini session (latest)", file=sys.stderr)
         else:
             print(
@@ -7942,18 +7950,24 @@ User Request:
         if "Error: CODEX command failed" in output:
             return output
 
-        stripped = self.strip_metadata(output, "codex")
-        if not stripped.strip() and output.strip():
-            _exit_code = self._last_exit_codes.get(n8n_session_id, 0)
-            if _exit_code:
-                print(
-                    "[Session] WARNING: Codex returned non-zero exit and no assistant text. "
-                    "Returning raw output so the UI shows the actual error.",
-                    file=sys.stderr,
-                )
-                return output
+        # v0.125.0+: extract thread_id from JSONL thread.started event
+        import json as _json
 
-        return stripped
+        for _line in output.splitlines():
+            _line = _line.strip()
+            if not _line:
+                continue
+            try:
+                _event = _json.loads(_line)
+                if _event.get("type") == "thread.started":
+                    _tid = _event.get("thread_id")
+                    if _tid:
+                        self._last_codex_thread_id = _tid
+                    break
+            except (ValueError, KeyError):
+                continue
+
+        return self.strip_metadata(output, "codex")
 
     def run_devin(
         self,
@@ -8073,6 +8087,99 @@ User Request:
         if "Error: Devin command failed" in output:
             return output
 
+        return self.strip_metadata(output, "devin")
+
+    def run_devin_acp(
+        self,
+        prompt: str,
+        model: str,
+        agent: str,
+        session_id: Optional[str],
+        resume: bool,
+        n8n_session_id: str,
+        timeout: Optional[int] = None,
+        render_type: str = "text",
+        mode: str = "restricted",
+    ) -> str:
+        """Execute Devin via ACP JSON-RPC stdio and stream structured updates."""
+        prompt, parsed_mode = self._parse_mode_command(prompt)
+        session_data = self.get_or_create_session_data(n8n_session_id)
+        if mode != "restricted":
+            pass
+        elif parsed_mode != "restricted":
+            mode = parsed_mode
+        else:
+            mode = self._resolve_permission_mode(session_data, parsed_mode)
+
+        agent_dir = self.AGENTS.get(agent, self.AGENTS["orchestrator"])["path"]
+        effective_timeout = timeout if timeout is not None else self.command_timeout
+        channel = session_data.get("channel", "webui")
+        devin_bin = self.devin_bin or "devin"
+
+        context_prompt = self.build_agent_context_prompt(
+            agent,
+            prompt,
+            n8n_session_id,
+            render_type,
+            effective_timeout,
+            "devin-acp",
+            model,
+            channel,
+        )
+        if mode == "elevated":
+            context_prompt += (
+                "\n\n[ELEVATED MODE ENABLED]\n"
+                "Full permissions granted. Execute required work without asking for confirmation."
+            )
+        elif mode == "sandboxed":
+            context_prompt += (
+                "\n\n[SANDBOXED MODE ENABLED]\n"
+                "Read-only access only. Do NOT modify files or run destructive commands."
+            )
+
+        stream_buffer = getattr(self, "_stream_buffers", {}).get(n8n_session_id)
+        tracked_pid = {"pid": None}
+
+        def _push(kind, data):
+            if stream_buffer:
+                stream_buffer.push(kind, data)
+
+        def _on_pid(pid: int):
+            tracked_pid["pid"] = pid
+            self.track_running_query(n8n_session_id, pid, "devin-acp", agent, prompt)
+
+        try:
+            from devin_acp_runtime import DevinACPAdapter
+
+            existing_devin_session_id = self._get_devin_session_id(n8n_session_id)
+            adapter = DevinACPAdapter(
+                devin_bin=devin_bin,
+                cwd=agent_dir,
+                model=model,
+                mode=mode,
+                timeout=effective_timeout,
+                stream_push=_push,
+                on_pid=_on_pid,
+                existing_session_id=existing_devin_session_id,
+                resume=bool(resume and existing_devin_session_id),
+            )
+            output = adapter.run(context_prompt)
+            if adapter.session_id:
+                self.devin_session_dir.mkdir(exist_ok=True)
+                mapping_file = self.devin_session_dir / f"{n8n_session_id}.json"
+                with open(mapping_file, "w") as f:
+                    json.dump({"devin_session_id": adapter.session_id}, f)
+                print(
+                    f"[Session] Stored devin-acp session mapping: {n8n_session_id[:8]}... → {adapter.session_id[:8]}...",
+                    file=sys.stderr,
+                )
+        except Exception as exc:
+            output = f"Error (Devin ACP): {type(exc).__name__}: {exc}"
+        finally:
+            self.clear_running_query(n8n_session_id)
+
+        if stream_buffer:
+            stream_buffer.push("done", output)
         return self.strip_metadata(output, "devin")
 
     def run_cursor(
@@ -8320,9 +8427,6 @@ User Request:
             if context_prompt:
                 messages.append({"role": "system", "content": context_prompt})
         messages.append({"role": "user", "content": prompt})
-        messages = self._wee_maybe_compact(
-            client, n8n_session_id, messages, resolved_model, context_prompt
-        )
 
         # -- Tool definitions for agentic loop (Issue #107) --
         _WEE_TOOLS = [
@@ -8387,39 +8491,7 @@ User Request:
                             file=sys.stderr,
                         )
                         create_kwargs.pop("tools", None)
-                        try:
-                            stream = client.chat.completions.create(**create_kwargs)
-                        except Exception as retry_err:
-                            if self._wee_is_free_model(model) and (
-                                "429" in str(retry_err)
-                                or "rate limit" in str(retry_err).lower()
-                            ):
-                                fallback_cfg = self._wee_load_free_config() or {}
-                                fallback_chain = (
-                                    fallback_cfg.get("free_model_fallback_chain") or []
-                                )
-                                fallback_model = next(iter(fallback_chain), None)
-                                if not fallback_model:
-                                    raise
-                                (
-                                    fallback_base,
-                                    fallback_key,
-                                    fallback_resolved_model,
-                                ) = self._wee_resolve_endpoint(
-                                    fallback_model, api_base, api_key
-                                )
-                                client = OpenAI(
-                                    base_url=fallback_base,
-                                    api_key=fallback_key,
-                                    timeout=effective_timeout,
-                                )
-                                resolved_model = fallback_resolved_model
-                                create_kwargs["model"] = resolved_model
-                                stream = client.chat.completions.create(
-                                    **create_kwargs
-                                )
-                            else:
-                                raise
+                        stream = client.chat.completions.create(**create_kwargs)
                     else:
                         raise
 
@@ -8709,168 +8781,6 @@ User Request:
         )
         return system_prompt + tool_section
 
-    @staticmethod
-    def _wee_estimate_tokens(messages: list, model: str = "") -> int:
-        """Estimate token usage for wee runtime messages."""
-        from wee_runtime import count_message_tokens
-
-        return count_message_tokens(messages or [], model)
-
-    def _wee_get_context_limit(self, model: str) -> int:
-        """Resolve the context window size for a wee model."""
-        normalized = (model or "").lower()
-        known_windows = [
-            ("gemma4", 128000),
-            ("llama-4-scout", 131072),
-            ("llama-3.1", 131072),
-            ("128k", 128000),
-            ("32k", 32768),
-        ]
-        for needle, limit in known_windows:
-            if needle in normalized:
-                return limit
-        return self._WEE_DEFAULT_CONTEXT_LIMIT
-
-    def _wee_save_transcript(self, n8n_session_id: str, messages: list) -> str:
-        """Persist a transcript snapshot used by compaction summaries."""
-        safe_session = re.sub(r"[^A-Za-z0-9._-]+", "_", n8n_session_id or "unknown")
-        safe_session = safe_session.strip("._") or "unknown"
-        transcript_dir = (
-            Path(__file__).resolve().parent / "logs" / "transcripts" / safe_session
-        )
-        transcript_dir.mkdir(parents=True, exist_ok=True)
-        timestamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
-        transcript_path = transcript_dir / f"transcript_{timestamp}.json"
-        with open(transcript_path, "w", encoding="utf-8") as f:
-            json.dump(messages, f, indent=2, ensure_ascii=False)
-        return str(transcript_path)
-
-    def _wee_compact_context(
-        self,
-        client,
-        n8n_session_id: str,
-        messages: list,
-        model: str,
-        system_prompt: str,
-    ) -> list:
-        """Summarize older wee conversation context and preserve recent turns."""
-        system_msgs = [m for m in messages if m.get("role") == "system"]
-        non_system = [m for m in messages if m.get("role") != "system"]
-        if len(non_system) <= 1:
-            return messages
-
-        transcript_path = self._wee_save_transcript(n8n_session_id, messages)
-        to_summarize = non_system[:-1]
-        latest_message = non_system[-1]
-        if not to_summarize:
-            return messages
-
-        def _summary_snippet(text: str, limit: int = 700) -> str:
-            text = str(text)
-            if len(text) <= limit:
-                return text
-            head = max(1, int(limit * 0.6))
-            tail = max(1, limit - head - 5)
-            return f"{text[:head]} ... {text[-tail:]}"
-
-        transcript_lines = []
-        for msg in to_summarize:
-            role = msg.get("role", "")
-            content = msg.get("content") or ""
-            if isinstance(content, list):
-                content = " ".join(
-                    part.get("text", "") for part in content if isinstance(part, dict)
-                )
-            if role in ("user", "assistant") and content:
-                prefix = "User" if role == "user" else "Assistant"
-                transcript_lines.append(f"{prefix}: {_summary_snippet(content)}")
-        if not transcript_lines:
-            return messages
-
-        summary_prompt = (
-            "Summarize the following conversation history concisely. Preserve all "
-            "key facts, decisions, file paths, and errors so the conversation can "
-            "continue coherently.\n\nConversation:\n"
-            + "\n".join(transcript_lines)
-        )
-        try:
-            response = client.chat.completions.create(
-                model=model,
-                messages=[{"role": "user", "content": summary_prompt}],
-                stream=False,
-            )
-            summary_text = response.choices[0].message.content or ""
-        except Exception as exc:
-            summary_text = f"[Compaction error: {exc}]"
-
-        summary_message = {
-            "role": "assistant",
-            "content": (
-                "[Earlier conversation summary]\n"
-                f"{summary_text or 'Earlier conversation summarized.'}\n\n"
-                f"Full transcript: {transcript_path}"
-            ),
-        }
-        return system_msgs + [summary_message, latest_message]
-
-    def _wee_maybe_compact(
-        self,
-        client,
-        n8n_session_id: str,
-        messages: list,
-        model: str,
-        system_prompt: str,
-        threshold: float = 0.75,
-    ) -> list:
-        """Compact wee context when estimated token usage crosses threshold."""
-        if threshold >= 1.0:
-            return messages
-        context_limit = self._wee_get_context_limit(model)
-        if context_limit <= 0:
-            return messages
-        estimated_tokens = self._wee_estimate_tokens(messages, model)
-        if estimated_tokens < int(context_limit * threshold):
-            return messages
-        return self._wee_compact_context(
-            client, n8n_session_id, messages, model, system_prompt
-        )
-
-    def _wee_load_free_config(self) -> dict:
-        """Compatibility shim for wee free-model fallback tests."""
-        return {}
-
-    def _wee_is_free_model(self, model: str) -> bool:
-        """Compatibility shim for wee free-model fallback tests."""
-        return ":free" in (model or "").lower() or "openrouter/free" in (
-            model or ""
-        ).lower()
-
-    def _wee_resolve_endpoint(
-        self, model: str, api_base: Optional[str], api_key: Optional[str]
-    ) -> Tuple[str, str, str]:
-        """Compatibility shim returning the resolved endpoint tuple."""
-        _presets = {
-            "ollama": ("http://192.168.1.101:11434/v1", "ollama"),
-            "openrouter": ("https://openrouter.ai/api/v1", None),
-            "lmstudio": ("http://localhost:1234/v1", "lm-studio"),
-        }
-        resolved_model = model
-        resolved_base = api_base
-        resolved_key = api_key
-        for prefix, (preset_base, preset_key) in _presets.items():
-            if model.lower().startswith(f"{prefix}/"):
-                resolved_model = model[len(prefix) + 1 :]
-                if not resolved_base:
-                    resolved_base = preset_base
-                if not resolved_key and preset_key:
-                    resolved_key = preset_key
-                break
-        if not resolved_base:
-            resolved_base = _presets["ollama"][0]
-        if not resolved_key:
-            resolved_key = "ollama"
-        return resolved_base, resolved_key, resolved_model
-
     def _wee_execute_tool(self, func_name: str, func_args: dict, agent: str) -> str:
         """Execute a tool call from the wee runtime agentic loop.
 
@@ -9037,12 +8947,22 @@ User Request:
                         return True
             except Exception:
                 pass
-            # Do not treat arbitrary UUIDs as resumable Codex sessions.
-            # The transient thread.started ID is not sufficient for
-            # `codex exec resume` and leads to empty assistant messages.
-            return False
-        elif runtime == "devin":
-            # Devin session mappings are keyed by n8n_session_id, not backend session_id
+            # v0.125.0+: session IDs are thread UUIDs — no local files exist.
+            # Accept any UUID-formatted session_id as valid (codex handles bad IDs gracefully).
+            import re as _re_uuid
+
+            return bool(
+                session_id
+                and _re_uuid.match(
+                    r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+                    session_id,
+                    _re_uuid.IGNORECASE,
+                )
+            )
+        elif runtime in ("devin", "devin-acp"):
+            # Devin session mappings are keyed by n8n_session_id, not backend session_id.
+            # devin-acp stores the ACP sessionId in the same mapping file so follow-up
+            # turns can call session/load and retain conversation context.
             key = n8n_session_id if n8n_session_id else session_id
             return (self.devin_session_dir / f"{key}.json").exists()
         elif runtime == "cursor":
@@ -9131,7 +9051,12 @@ User Request:
                 )
                 return files[0].stem if files else None
             elif runtime == "codex":
-                # Legacy/persisted local Codex sessions.
+                # v0.125.0+: thread_id captured from JSONL output in run_codex()
+                if getattr(self, "_last_codex_thread_id", None):
+                    tid = self._last_codex_thread_id
+                    self._last_codex_thread_id = None  # consume once
+                    return tid
+                # Legacy: rollout-*.jsonl files (pre-v0.125.0)
                 files = sorted(
                     self.codex_session_dir.glob("*/*/*/rollout-*.jsonl"),
                     key=lambda p: p.stat().st_mtime,
@@ -9340,6 +9265,19 @@ User Request:
                 n8n_session_id,
                 effective_timeout,
                 render_type,
+                mode,
+            )
+        elif runtime == "devin-acp":
+            result = self.run_devin_acp(
+                prompt,
+                model,
+                agent,
+                session_id if can_resume else None,
+                can_resume,
+                n8n_session_id,
+                effective_timeout,
+                render_type,
+                mode,
             )
         elif runtime == "cursor":
             result = self.run_cursor(
@@ -9449,7 +9387,7 @@ User Request:
         # For Gemini, we always try to resume the latest session for context retention
         if current_runtime == "gemini":
             can_resume = True  # Always attempt to resume latest Gemini session
-        elif current_runtime == "devin":
+        elif current_runtime in ("devin", "devin-acp"):
             # Devin handles its own session resumption internally via
             # _get_devin_session_id(); pass n8n_session_id for correct lookup
             can_resume = (
@@ -9504,6 +9442,7 @@ User Request:
             "copilot",
             "opencode",
             "gemini",
+            "codex",
         ):
             new_id = self.get_most_recent_session_id(current_runtime, agent)
             if new_id:
@@ -10294,16 +10233,6 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             ],
         )
 
-    @app.middleware("http")
-    async def _webui_no_cache_middleware(request: Request, call_next):
-        response = await call_next(request)
-        path = request.url.path or ""
-        if path == "/ui" or path.startswith("/ui/"):
-            response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate"
-            response.headers["Pragma"] = "no-cache"
-            response.headers["Expires"] = "0"
-        return response
-
     # ---- generic exception handler ----
     @app.exception_handler(Exception)
     async def _global_exception_handler(request: Request, exc: Exception):
@@ -10442,6 +10371,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             "gemini",
             "codex",
             "devin",
+            "devin-acp",
             "cursor",
             "wee",
         }
@@ -12835,8 +12765,8 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 timeout=bg_timeout,
                 notify=notify_pref,
                 origin_session_id=body.origin_session_id,
-                fallback_runtime=body.fallback_runtime,
-                fallback_model=body.fallback_model,
+                fallback_runtime=body.fallback_runtime or agent_config.get("fallback_runtime"),
+                fallback_model=body.fallback_model or agent_config.get("fallback_model"),
             )
             queue_pos = bg_task_mgr.count_queued(channel, identity)
             print(
@@ -12874,8 +12804,8 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             notify=notify_pref,
             origin_session_id=body.origin_session_id,
             permission_mode=perm_mode,
-            fallback_runtime=body.fallback_runtime,
-            fallback_model=body.fallback_model,
+            fallback_runtime=body.fallback_runtime or agent_config.get("fallback_runtime"),
+            fallback_model=body.fallback_model or agent_config.get("fallback_model"),
         )
 
         # Run in background thread using shared executor

@@ -10,14 +10,13 @@ import logging
 import mimetypes
 import os
 import re
-import signal
 import ssl
 import sys
 import threading
 import time
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 from urllib.parse import unquote
 
 import pika
@@ -25,31 +24,19 @@ import requests
 
 import agent_manager
 import audio_transcriber
-from connector_rate_limiter import ConnectorRateLimiter
+from base_connector import BaseConfig, BaseConnector
 
 logger = logging.getLogger(__name__)
 
 
-class WebEXConfig:
-    """Manages WebEX connector configuration"""
+class WebEXConfig(BaseConfig):
+    """Manages WebEX connector configuration."""
 
     def __init__(self, config_file: str = "webex_config.json"):
-        self.config_file = Path(config_file)
-        self.config = self._load_config()
-
-    def _load_config(self) -> Dict:
-        """Load configuration from file or create defaults"""
-        if self.config_file.exists():
-            try:
-                with open(self.config_file, "r") as f:
-                    return json.load(f)
-            except Exception as e:
-                print(f"Error loading config: {e}", file=sys.stderr)
-                return self._default_config()
-        return self._default_config()
+        super().__init__(config_file)
 
     def _default_config(self) -> Dict:
-        """Return default configuration"""
+        """Return default WebEX configuration."""
         return {
             "token": os.environ.get("WEBEX_BOT_TOKEN", ""),
             "rabbitmq_host": os.environ.get("RABBITMQ_HOST", "192.168.0.85"),
@@ -58,100 +45,22 @@ class WebEXConfig:
             "rabbitmq_password": os.environ.get("RABBITMQ_PASSWORD", ""),
             "rabbitmq_queue": os.environ.get("RABBITMQ_QUEUE", "webex"),
             "rabbitmq_vhost": "/",
+            "rabbitmq_queue_passive": False,  # Set True for brokers where bot only has CONSUME permission  # noqa: E501
             "allowed_users": [],  # List of WebEX person IDs allowed to chat
             "user_pairings": {},  # Maps WebEX person ID to session info
             "enable_auto_pair": False,  # Auto-pair new users
             "default_agent": os.environ.get("COPILOT_DEFAULT_AGENT", "orchestrator"),
             "default_model": os.environ.get("COPILOT_DEFAULT_MODEL", "gpt-5-mini"),
-            "pinned_users": {},  # Maps person_id (str) to {"agent": "name"} - locks user to that agent
+            "pinned_users": {},  # Maps person_id (str) to {"agent": "name"}
             "yolo_allowed_users": [],  # Person IDs permitted to enable /mode yolo; empty = all allowed
         }
 
-    def save(self):
-        """Save configuration to file"""
-        try:
-            with open(self.config_file, "w") as f:
-                json.dump(self.config, f, indent=2)
-        except Exception as e:
-            print(f"Error saving config: {e}", file=sys.stderr)
 
-    def is_user_allowed(self, person_id: str) -> bool:
-        """Check if user is allowed to chat"""
-        if not self.config["allowed_users"]:
-            return True  # No restrictions if list is empty
-        return person_id in self.config["allowed_users"]
+class WebEXConnector(BaseConnector):
+    """Main WebEX connector class — listens to RabbitMQ queue."""
 
-    def get_user_session(self, person_id: str) -> Optional[Dict]:
-        """Get session info for a user"""
-        return self.config["user_pairings"].get(person_id)
-
-    def set_user_session(self, person_id: str, session_info: Dict):
-        """Store session info for a user"""
-        self.config["user_pairings"][person_id] = session_info
-        self.save()
-
-    def get_user_timeout(self, person_id: str) -> int:
-        """Get timeout for user (default 300s)"""
-        session = self.get_user_session(person_id)
-        if session:
-            return session.get("timeout", 300)
-        return 300
-
-    def set_user_timeout(self, person_id: str, timeout: int):
-        """Set timeout for user"""
-        session = self.get_user_session(person_id)
-        if session:
-            session["timeout"] = max(30, min(timeout, 3600))  # Clamp 30-3600s
-            self.set_user_session(person_id, session)
-
-    def allow_user(self, person_id: str):
-        """Add user to allowed list"""
-        if person_id not in self.config["allowed_users"]:
-            self.config["allowed_users"].append(person_id)
-            self.save()
-
-    def deny_user(self, person_id: str):
-        """Remove user from allowed list"""
-        if person_id in self.config["allowed_users"]:
-            self.config["allowed_users"].remove(person_id)
-            self.save()
-
-    def is_user_pinned(self, person_id: str) -> bool:
-        """Check if user is pinned to a specific agent"""
-        return person_id in self.config.get("pinned_users", {})
-
-    def get_pinned_agent(self, person_id: str) -> Optional[str]:
-        """Get the pinned agent for a user, or None if not pinned"""
-        pinned = self.config.get("pinned_users", {}).get(person_id)
-        if pinned:
-            return pinned.get("agent")
-        return None
-
-    def get_pinned_runtime(self, person_id: str) -> Optional[str]:
-        """Get the pinned runtime for a user, or None if not set"""
-        pinned = self.config.get("pinned_users", {}).get(person_id)
-        if pinned:
-            return pinned.get("runtime")
-        return None
-
-    def get_pinned_model(self, person_id: str) -> Optional[str]:
-        """Get the pinned model for a user, or None if not set"""
-        pinned = self.config.get("pinned_users", {}).get(person_id)
-        if pinned:
-            return pinned.get("model")
-        return None
-
-    def is_yolo_allowed(self, person_id: str) -> bool:
-        """Check if user is permitted to enable /mode yolo.
-        If yolo_allowed_users is empty, all users are allowed (backward compatible)."""
-        yolo_users = self.config.get("yolo_allowed_users", [])
-        if not yolo_users:
-            return True
-        return person_id in yolo_users
-
-
-class WebEXConnector:
-    """Main WebEX connector class - listens to RabbitMQ queue"""
+    connector_name = "WebEX connector"
+    channel_name = "webex"
 
     def __init__(self, token: str, config_file: str = "webex_config.json"):
         """
@@ -167,90 +76,24 @@ class WebEXConnector:
         config_token = self.config.config.get("token", "")
         self.token = config_token if config_token else token
 
-        # Keep persistent SessionManager per session_id for context persistence
-        self.session_managers = {}  # {session_id: SessionManager}
-
         # Save token to config if only provided via env/arg
         if token and not config_token:
             self.config.config["token"] = token
             self.config.save()
 
-        # API mode configuration
-        self.use_api = os.getenv("USE_API", "false").lower() == "true"
+        # API mode configuration (WebEX uses api_url for both Copilot API and RabbitMQ)
         self.api_url = os.getenv("API_URL", "http://127.0.0.1:8001")
-        self.api_shared_key = os.getenv("API_SHARED_KEY", "")
 
-        self.running = False
         self.rabbitmq_connection = None
         self.rabbitmq_channel = None
         self.cleanup_thread = None
-        self.user_rate_limiter = ConnectorRateLimiter()
-        self.shutdown_event = threading.Event()
-        self._active_request_lock = threading.Lock()
-        self._active_requests = 0
-        self._active_requests_drained = threading.Event()
-        self._active_requests_drained.set()
-        self.shutdown_timeout = self._load_shutdown_timeout()
+        self._init_shared_state()
 
         if not self.config.config.get("allowed_users"):
             print(
                 "⚠️  WARNING: allowed_users is empty — ALL WebEx users can interact with this bot!",
                 file=sys.stderr,
             )
-
-    def _install_signal_handlers(self):
-        """Install SIGTERM/SIGINT handlers when running on the main thread."""
-        for sig in (signal.SIGTERM, signal.SIGINT):
-            try:
-                signal.signal(sig, self._handle_shutdown_signal)
-            except ValueError:
-                logger.debug("Skipping %s handler outside main thread", sig)
-
-    def _handle_shutdown_signal(self, signum, _frame):
-        """Stop consuming new messages and let in-flight requests finish."""
-        signame = signal.Signals(signum).name
-        print(
-            f"\nReceived {signame}; draining active WebEX requests before shutdown...",
-            file=sys.stderr,
-        )
-        self._request_shutdown(signame)
-
-    def _load_shutdown_timeout(self) -> Optional[float]:
-        """Return an optional shutdown drain timeout from the environment."""
-        raw_timeout = os.environ.get("CONNECTOR_SHUTDOWN_TIMEOUT_SECONDS", "").strip()
-        if not raw_timeout:
-            return None
-
-        timeout = float(raw_timeout)
-        if timeout <= 0:
-            return None
-        return timeout
-
-    def _request_shutdown(self, reason: str = "shutdown"):
-        """Mark the connector as shutting down and stop queue consumption."""
-        if self.shutdown_event.is_set():
-            return
-        self.shutdown_event.set()
-        self.running = False
-        print(f"[INFO] WebEX connector shutdown requested: {reason}", file=sys.stderr)
-        self._stop_consuming_async()
-
-    def _begin_active_request(self) -> bool:
-        """Track a request that must complete before shutdown finishes."""
-        with self._active_request_lock:
-            if self.shutdown_event.is_set():
-                return False
-            self._active_requests += 1
-            self._active_requests_drained.clear()
-            return True
-
-    def _finish_active_request(self):
-        """Mark a tracked request as complete."""
-        with self._active_request_lock:
-            if self._active_requests > 0:
-                self._active_requests -= 1
-            if self._active_requests == 0:
-                self._active_requests_drained.set()
 
     def _wait_for_active_requests(
         self, component: str = "WebEX connector", timeout: Optional[float] = None
@@ -280,7 +123,9 @@ class WebEXConnector:
     def _stop_consuming(self):
         """Stop RabbitMQ consumption on the current channel if possible."""
         try:
-            if self.rabbitmq_channel and getattr(self.rabbitmq_channel, "is_open", True):
+            if self.rabbitmq_channel and getattr(
+                self.rabbitmq_channel, "is_open", True
+            ):
                 self.rabbitmq_channel.stop_consuming()
         except Exception as e:
             print(f"[WARN] Failed to stop RabbitMQ consumption: {e}", file=sys.stderr)
@@ -295,72 +140,42 @@ class WebEXConnector:
         except Exception:
             self._stop_consuming()
 
-    def _get_user_rate_limit_settings(self) -> Tuple[int, int]:
-        """Return connector-side per-user rate limit settings."""
-        max_requests = self.config.config.get(
-            "user_rate_limit_max_requests",
-            int(os.environ.get("CONNECTOR_USER_RATE_LIMIT_MAX_REQUESTS", "20")),
-        )
-        window_seconds = self.config.config.get(
-            "user_rate_limit_window_seconds",
-            int(os.environ.get("CONNECTOR_USER_RATE_LIMIT_WINDOW_SECONDS", "60")),
-        )
-        return max(1, int(max_requests)), max(1, int(window_seconds))
+    @property
+    def _safe_file_dirs(self):
+        """Allowed download directories for WebEX file sends."""
+        return [
+            Path("/opt/n8n-copilot-shim-dev/webex_downloads").resolve(),
+            Path("/tmp/webui_ai_media").resolve(),
+        ]
 
-    def _check_user_rate_limit(self, person_id: str) -> Tuple[bool, Optional[str]]:
-        """Check whether this user can issue another agent-bound request."""
-        max_requests, window_seconds = self._get_user_rate_limit_settings()
-        allowed, retry_after = self.user_rate_limiter.check(
-            person_id, "agent_requests", max_requests, window_seconds
-        )
-        if allowed:
-            return True, None
+    @property
+    def _max_file_bytes(self) -> int:
+        return 100 * 1024 * 1024  # 100 MB (WebEX limit)
 
-        logger.warning(
-            "WebEx connector rate limit hit for user %s (%s requests/%ss)",
-            person_id,
-            max_requests,
-            window_seconds,
-        )
-        return (
-            False,
-            "⚠️ Rate limit exceeded. Please wait "
-            f"{retry_after} seconds before sending another request.",
-        )
+    @property
+    def _copilot_api_url(self) -> str:
+        return self.api_url
 
-    def get_session_manager(self, session_id: str):
-        """Get or create SessionManager for session_id"""
-        if session_id not in self.session_managers:
-            from agent_manager import SessionManager
+    def _make_session_id(self, user_id) -> str:
+        return f"webex_{user_id}"
 
-            self.session_managers[session_id] = SessionManager()
-        return self.session_managers[session_id]
+    def _get_user_identity(self, user_id) -> str:
+        return f"webex_{user_id}"
 
-    def _evict_session_manager(self, session_id: str):
-        """Remove cached SessionManager so next call gets a fresh one"""
-        if session_id in self.session_managers:
-            del self.session_managers[session_id]
-            print(
-                f"[DEBUG] Evicted cached SessionManager for: {session_id}",
-                file=sys.stderr,
-            )
+    def _send_channel_status(self, channel_id, text: str):
+        return self.send_message(channel_id, text)
 
-    def _enforce_pinned_session(self, person_id: str, session_id: str):
-        """For pinned users, push pinned agent/runtime/model into the SessionManager.
-        Must be called before every query or command so the SessionManager's session
-        data always reflects the pinned values regardless of what the user has set."""
-        if not self.config.is_user_pinned(person_id):
-            return
-        session_mgr = self.get_session_manager(session_id)
-        pinned_agent = self.config.get_pinned_agent(person_id)
-        if pinned_agent:
-            session_mgr.update_session_field(session_id, "agent", pinned_agent)
-        pinned_runtime = self.config.get_pinned_runtime(person_id)
-        if pinned_runtime:
-            session_mgr.update_session_field(session_id, "runtime", pinned_runtime)
-        pinned_model = self.config.get_pinned_model(person_id)
-        if pinned_model:
-            session_mgr.update_session_field(session_id, "model", pinned_model)
+    def _edit_channel_status(self, channel_id, msg_id, text: str):
+        # WebEX edit_message has reversed arg order: (msg_id, room_id, text)
+        self.edit_message(msg_id, channel_id, text)
+
+    def _send_channel_typing(self, channel_id):
+        self.send_typing(channel_id)
+
+    def _request_shutdown(self, reason: str = "shutdown"):
+        """Override to also stop RabbitMQ consumption on shutdown."""
+        super()._request_shutdown(reason)
+        self._stop_consuming_async()
 
     def _execute_via_api(
         self, query: str, session_id: str, user_identity: str, channel: str
@@ -471,10 +286,15 @@ class WebEXConnector:
                         result["connected"] = False
                         return
 
-                    # Declare queue (durable)
-                    channel.queue_declare(
-                        queue=self.config.config["rabbitmq_queue"], durable=True
-                    )
+                    passive = self.config.config.get("rabbitmq_queue_passive", False)
+                    if passive:
+                        channel.queue_declare(
+                            queue=self.config.config["rabbitmq_queue"], passive=True
+                        )
+                    else:
+                        channel.queue_declare(
+                            queue=self.config.config["rabbitmq_queue"], durable=True
+                        )
                     channel.basic_qos(prefetch_count=1)
 
                     if self.shutdown_event.is_set():
@@ -879,137 +699,6 @@ class WebEXConnector:
             self.send_message(room_id, f"⚠️ Error sending image: {str(e)}")
         return None
 
-    def _resolve_image_path(self, url: str) -> str:
-        """Resolve /ai-media/ paths to local filesystem paths and strip ANSI codes.
-
-        Handles LLM-mangled session IDs by fuzzy-matching directory names
-        when the exact path doesn't exist.
-        """
-        # Strip any ANSI escape codes that might leak from CLI output
-        url = re.sub(r"\x1b\[[0-9;]*m", "", url)
-        if url.startswith("/ai-media/"):
-            resolved = url.replace("/ai-media/", "/tmp/webui_ai_media/", 1)
-            # If exact path exists, use it
-            if os.path.exists(resolved):
-                return resolved
-            # LLM may mangle the session ID in the path — try fuzzy directory match
-            base_dir = "/tmp/webui_ai_media"
-            parts = resolved[len(base_dir) + 1 :].split(
-                "/", 1
-            )  # [session_dir, filename]
-            if len(parts) == 2:
-                session_dir_name, filename = parts
-                try:
-                    # Find directories that share a long common prefix with the mangled name
-                    candidates = []
-                    for d in os.listdir(base_dir):
-                        if not os.path.isdir(os.path.join(base_dir, d)):
-                            continue
-                        # Check if first 20 chars match (enough to identify the session)
-                        prefix_len = min(20, len(session_dir_name), len(d))
-                        if d[:prefix_len] == session_dir_name[:prefix_len]:
-                            candidate_path = os.path.join(base_dir, d, filename)
-                            if os.path.isfile(candidate_path):
-                                candidates.append(candidate_path)
-                    if len(candidates) == 1:
-                        print(
-                            f"[DEBUG] Fuzzy-matched image path: {resolved} -> {candidates[0]}",
-                            file=sys.stderr,
-                            flush=True,
-                        )
-                        return candidates[0]
-                    elif len(candidates) > 1:
-                        # Multiple matches — pick most recent
-                        best = max(candidates, key=os.path.getmtime)
-                        print(
-                            f"[DEBUG] Fuzzy-matched image path (newest of {len(candidates)}): {resolved} -> {best}",
-                            file=sys.stderr,
-                            flush=True,
-                        )
-                        return best
-                except OSError as e:
-                    logger.debug(f"Failed to check file modification time: {e}")
-            return resolved
-        return url
-
-    def extract_image_urls(self, text: str) -> tuple:
-        """Extract image URLs from text/HTML/Markdown and return (image_data, remaining_text).
-
-        Supports:
-        - ![caption](url) - Markdown syntax with caption
-        - <img src="url"/> - HTML img tags
-        - Bare URL - https://example.com/image.jpg
-        - Local paths - /ai-media/session/image.png (mapped to /tmp/webui_ai_media/)
-
-        Returns:
-            Tuple of (image_data, remaining_text) where:
-            - image_data: List of (url, caption) tuples
-            - remaining_text: Text with image references removed
-        """
-        image_data = []
-        remaining = text
-
-        # Match markdown syntax: ![caption](url)
-        md_pattern = r"!\[([^\]]*)\]\(([^)]+)\)"
-        for match in re.finditer(md_pattern, remaining):
-            caption = match.group(1).strip()
-            url = self._resolve_image_path(match.group(2).strip())
-            if url not in [img[0] for img in image_data]:
-                image_data.append((url, caption))
-            remaining = remaining.replace(match.group(0), "").strip()
-
-        # Match <img> tags
-        img_tag_pattern = r'<img\s+[^>]*src=["\']([^"\']+)["\'][^>]*/?\s*>'
-        for match in re.finditer(img_tag_pattern, remaining, re.IGNORECASE):
-            url = self._resolve_image_path(match.group(1).strip())
-            if url not in [img[0] for img in image_data]:
-                image_data.append((url, ""))
-            remaining = remaining.replace(match.group(0), "").strip()
-
-        # Match bare URLs (http/https ending in image extensions)
-        url_pattern = (
-            r'(https?://[^\s\[\]<>"]+\.(?:jpg|jpeg|png|gif|webp)(?:\?[^\s<>"]*)?)'
-        )
-        for match in re.finditer(url_pattern, remaining, re.IGNORECASE):
-            url = match.group(1)
-            if url not in [img[0] for img in image_data]:
-                image_data.append((url, ""))
-                remaining = remaining.replace(url, "").strip()
-
-        return image_data, remaining
-
-    def extract_file_paths(self, text: str) -> tuple:
-        """Extract file paths from [FILE:...] markers.
-
-        Supports:
-        - [FILE:/path/to/file.ext] - file without caption
-        - [FILE:/path/to/file.ext:Caption text] - file with caption
-
-        Returns:
-            Tuple of (file_data, remaining_text) where:
-            - file_data: List of (path, caption) tuples
-            - remaining_text: Text with all file references removed
-        """
-        # Match [FILE:path] or [FILE:path:caption]
-        file_pattern = r"\[FILE:([^\]:]+)(?::([^\]]*))?\]"
-
-        file_data = []  # List of (path, caption) tuples
-        remaining = text
-
-        for match in re.finditer(file_pattern, remaining):
-            file_path = match.group(1).strip()
-            caption = match.group(2).strip() if match.group(2) else ""
-
-            # Validate path before adding
-            if self._is_safe_file_path(file_path):
-                file_data.append((file_path, caption))
-                remaining = remaining.replace(match.group(0), "").strip()
-            else:
-                # Keep marker in text as error indicator
-                print(f"[WARN] Unsafe file path rejected: {file_path}", file=sys.stderr)
-
-        return file_data, remaining
-
     def get_person_info(self, person_id: str) -> Optional[Dict]:
         """Get WebEX person info by ID"""
         try:
@@ -1024,54 +713,6 @@ class WebEXConnector:
         except Exception as e:
             print(f"Error getting person info: {e}", file=sys.stderr)
         return None
-
-    def _is_safe_file_path(self, file_path: str) -> bool:
-        """Validate file path for security.
-
-        Checks:
-        - File exists
-        - File is within allowed directories (webex_downloads, /tmp/webui_ai_media)
-        - No path traversal attacks
-        - File size within limits (100MB - WebEX limit)
-        """
-        try:
-            allowed_dirs = [
-                Path("/opt/n8n-copilot-shim-dev/webex_downloads").resolve(),
-                Path("/tmp/webui_ai_media").resolve(),
-            ]
-            file_path_obj = Path(file_path).resolve()
-
-            # Check file exists
-            if not file_path_obj.exists():
-                print(f"[WARN] File does not exist: {file_path}", file=sys.stderr)
-                return False
-
-            # Check file is in any allowed directory
-            is_safe = False
-            for allowed_dir in allowed_dirs:
-                try:
-                    is_safe = file_path_obj.is_relative_to(allowed_dir)
-                except AttributeError:
-                    is_safe = str(file_path_obj).startswith(str(allowed_dir))
-                if is_safe:
-                    break
-
-            if not is_safe:
-                print(
-                    f"[WARN] File outside allowed directories: {file_path}",
-                    file=sys.stderr,
-                )
-                return False
-
-            # Check file size (100MB limit - WebEX max)
-            if file_path_obj.stat().st_size > 100 * 1024 * 1024:
-                print(f"[WARN] File exceeds 100MB limit: {file_path}", file=sys.stderr)
-                return False
-
-            return True
-        except Exception as e:
-            print(f"[WARN] Error validating file path: {e}", file=sys.stderr)
-            return False
 
     def download_file(self, file_url: str, person_id: str) -> Optional[tuple]:
         """Download file from WebEX and store it. Returns (file_path, filename) tuple or None."""
@@ -1416,6 +1057,66 @@ class WebEXConnector:
             )
             self.send_file(room_id, file_path, caption)
 
+    @staticmethod
+    def _unwrap_payload(
+        payload: Dict, payload_key: Optional[str] = None, max_depth: int = 4
+    ) -> Any:
+        """
+        Unwrap nested payload structures from RabbitMQ messages.
+
+        Supports:
+        1. Single-level unwrap: payload_key="data"
+        2. Dotted path unwrap: payload_key="data.message_data"
+        3. Auto-unwrap: after payload_key match, unwraps nested message_data if present
+
+        Args:
+            payload: The raw message dict from RabbitMQ
+            payload_key: Optional key path to unwrap (supports dot notation)
+            max_depth: Maximum nesting depth to unwrap (safety limit)
+
+        Returns:
+            The unwrapped payload dict
+
+        Note:
+            The ``depth`` counter is shared between Step 1 (dotted-path traversal) and
+            Step 2 (auto-unwrap loop). Step 1 depth increments count against the shared
+            budget, limiting Step 2 iterations. max_depth applies to total combined depth.
+        """
+        if not isinstance(payload, dict):
+            return payload
+
+        current = payload
+        depth = 0
+
+        # Step 1: Unwrap via payload_key if provided
+        if payload_key:
+            # Support dotted paths: "data.message_data" -> ["data", "message_data"]
+            keys = payload_key.split(".")
+            for key in keys:
+                if (
+                    isinstance(current, dict)
+                    and key in current
+                    and isinstance(current[key], dict)
+                ):
+                    current = current[key]
+                    depth += 1
+                else:
+                    # Key not found or not a dict, stop unwrapping
+                    break
+
+        # Step 2: Auto-unwrap nested message_data if present after primary unwrap.
+        if payload_key and current is not payload:
+            while (
+                isinstance(current, dict)
+                and "message_data" in current
+                and isinstance(current["message_data"], dict)
+                and depth < max_depth
+            ):
+                current = current["message_data"]
+                depth += 1
+
+        return current
+
     def handle_message(self, message_data: Dict) -> bool:
         """Process incoming WebEX message from RabbitMQ."""
         if not self._begin_active_request():
@@ -1430,14 +1131,6 @@ class WebEXConnector:
             text = message_data.get("text", "").strip()
             person_email = message_data.get("personEmail", "unknown")
             files = message_data.get("files", [])
-
-            if not person_id or not room_id:
-                print(f"[DEBUG] Incomplete message: {message_data}", file=sys.stderr)
-                return True
-
-            if not self.config.is_user_allowed(person_id):
-                self.send_message(room_id, "❌ You are not authorized to use this bot.")
-                return True
 
             # Handle files with optional caption
             file_path = None
@@ -1508,6 +1201,14 @@ class WebEXConnector:
                 else:
                     self.send_message(room_id, "❌ Failed to download file")
                     return True
+
+            if not person_id or not room_id:
+                print(f"[DEBUG] Incomplete message: {message_data}", file=sys.stderr)
+                return True
+
+            if not self.config.is_user_allowed(person_id):
+                self.send_message(room_id, "❌ You are not authorized to use this bot.")
+                return True
 
             if not text:
                 print(f"[DEBUG] Incomplete message: {message_data}", file=sys.stderr)
@@ -1611,10 +1312,6 @@ class WebEXConnector:
                     )
                 else:
                     # Regular slash commands
-                    allowed, rate_limit_message = self._check_user_rate_limit(person_id)
-                    if not allowed:
-                        self.send_message(room_id, rate_limit_message)
-                        return True
                     timeout = self.config.get_user_timeout(person_id)
                     response = self._execute_command(
                         text, session_id, timeout, user_identity=person_id
@@ -1645,10 +1342,6 @@ class WebEXConnector:
             else:
                 # Check for bash command (!)
                 if text.startswith("!"):
-                    allowed, rate_limit_message = self._check_user_rate_limit(person_id)
-                    if not allowed:
-                        self.send_message(room_id, rate_limit_message)
-                        return True
                     timeout = self.config.get_user_timeout(person_id)
                     response = self._execute_command(
                         text, session_id, timeout, user_identity=person_id
@@ -1656,10 +1349,6 @@ class WebEXConnector:
                     self.send_message(room_id, response)
                 else:
                     # Route regular messages to agent_manager with status updates
-                    allowed, rate_limit_message = self._check_user_rate_limit(person_id)
-                    if not allowed:
-                        self.send_message(room_id, rate_limit_message)
-                        return True
                     timeout = self.config.get_user_timeout(person_id)
                     response, status_msg_id = self._query_agent_with_status(
                         text,
@@ -1674,178 +1363,11 @@ class WebEXConnector:
 
         except Exception as e:
             print(f"Error handling message: {e}", file=sys.stderr)
-            if "room_id" in locals() and room_id:
+            if room_id:
                 self.send_message(room_id, f"❌ Error: {str(e)[:100]}")
             return not self.shutdown_event.is_set()
         finally:
             self._finish_active_request()
-
-    def _execute_command(
-        self,
-        command: str,
-        session_id: str,
-        timeout: int = 300,
-        user_identity: str = None,
-    ) -> str:
-        """Execute slash command via agent_manager.execute() with timeout support"""
-        result_container = {"response": None, "done": False}
-        effective_identity = user_identity or session_id
-
-        def run_command():
-            try:
-                if self.use_api:
-                    result_container["response"] = self._execute_via_api(
-                        command, session_id, effective_identity, "webex"
-                    )
-                else:
-                    session_mgr = self.get_session_manager(session_id)
-                    result_container["response"] = session_mgr.execute(
-                        command, session_id
-                    )
-                result_container["done"] = True
-            except Exception as e:
-                import traceback
-
-                tb_str = traceback.format_exc()
-                print(f"Error in _execute_command: {tb_str}", file=sys.stderr)
-                result_container["response"] = f"Error: {str(e)[:150]}"
-                result_container["done"] = True
-
-        cmd_thread = threading.Thread(target=run_command, daemon=True)
-        cmd_thread.start()
-
-        elapsed = 0
-        while not result_container["done"] and elapsed < timeout:
-            time.sleep(1)
-            elapsed += 1
-
-        cmd_thread.join(timeout=5)
-        return result_container["response"] or "Error: Command timed out"
-
-    def _poll_live_status(self, session_id: str) -> Optional[str]:
-        """Poll the live-status endpoint for real-time LLM progress (F004).
-
-        Returns the latest status text, or None if no live status is available.
-        """
-        try:
-            headers = {
-                "Authorization": f"Bearer shared_{self.api_shared_key}",
-            }
-            resp = requests.get(
-                f"{self.api_url}/api/v1/sessions/{session_id}/live-status",
-                headers=headers,
-                timeout=3,
-            )
-            if resp.status_code == 200:
-                data = resp.json()
-                return data.get("status")
-        except Exception:
-            pass
-        return None
-
-    def _query_agent_with_status(
-        self,
-        query: str,
-        agent: str,
-        model: str,
-        person_id: str,
-        room_id: str,
-        timeout: int = 300,
-    ) -> tuple:
-        """Query agent with live status updates at 30s intervals.
-
-        Polls the live-status API endpoint for LLM-generated progress updates
-        (F004). Falls back to static messages if no live status is available.
-
-        Returns (response_text, status_msg_id) where status_msg_id tracks
-        the status message for potential editing with the final response.
-        """
-        result_container = {"response": None, "done": False}
-
-        # Determine session ID for live-status polling
-        _poll_session_id = f"webex_{person_id}"
-
-        # Fallback static status messages (used when no live status from LLM)
-        status_msgs = [
-            "Still working on it...",
-            "Sorry it's taking so long, still working on it...",
-            "Still processing, hang tight...",
-            "Almost there, still working...",
-            "Continuing to work on this...",
-        ]
-
-        def run_query():
-            print(f"[DEBUG] Query to agent: {query[:200]}", file=sys.stderr)
-            result_container["response"] = self._query_agent(
-                query, agent, model, person_id, timeout
-            )
-            result_container["done"] = True
-
-        query_thread = threading.Thread(target=run_query, daemon=True)
-        query_thread.start()
-
-        elapsed = 0
-        status_idx = 0
-        status_msg_id = None
-        _last_live_status = None  # Track last live status to avoid redundant edits
-        while not result_container["done"] and elapsed < timeout:
-            # Send typing indicator every 5 seconds to keep it alive
-            if elapsed % 5 == 0:
-                self.send_typing(room_id)
-
-            if elapsed >= 30 and (elapsed - 30) % 10 == 0:
-                # Poll live-status endpoint for LLM-generated progress
-                live_status = self._poll_live_status(_poll_session_id)
-
-                if live_status and live_status != _last_live_status:
-                    # Use LLM-generated status update
-                    msg = f"⚙️ {live_status}"
-                    _last_live_status = live_status
-                elif elapsed == 30 or (elapsed > 30 and (elapsed - 30) % 30 == 0):
-                    # Fall back to static message on 30s boundaries
-                    msg = status_msgs[status_idx % len(status_msgs)]
-                    status_idx += 1
-                else:
-                    msg = None
-
-                if msg:
-                    if status_msg_id:
-                        self.edit_message(status_msg_id, room_id, msg)
-                    else:
-                        status_msg_id = self.send_message(room_id, msg)
-                    self.send_typing(room_id)
-
-            time.sleep(1)
-            elapsed += 1
-
-        query_thread.join(timeout=5)
-        return (result_container["response"] or "Error: Query timed out", status_msg_id)
-
-    def _query_agent(
-        self, query: str, agent: str, model: str, person_id: str, timeout: int = 300
-    ) -> str:
-        """Query the agent_manager with user session tied to person ID"""
-        try:
-            session_id = f"webex_{person_id}"
-
-            print(
-                f"[DEBUG] Using persistent session_mgr for: {session_id}",
-                file=sys.stderr,
-            )
-
-            if self.use_api:
-                result = self._execute_via_api(query, session_id, session_id, "webex")
-            else:
-                session_mgr = self.get_session_manager(session_id)
-                result = session_mgr.execute(query, session_id)
-
-            return result if result else "No response from agent"
-        except Exception as e:
-            import traceback
-
-            tb_str = traceback.format_exc()
-            print(f"Error in _query_agent: {tb_str}", file=sys.stderr)
-            return f"Error: {str(e)[:150]}"
 
     def listen_to_queue(self, poll_interval: int = 1):
         """Listen to RabbitMQ queue for WebEX messages"""
@@ -1881,15 +1403,14 @@ class WebEXConnector:
                     )
 
                     # Support configurable payload unwrapping for gateway wrappers
+                    # Supports dotted paths (e.g., "data.message_data") and
+                    # auto-unwraps nested message_data after primary key match
                     payload_key = self.config.config.get("rabbitmq_payload_key")
-                    if (
-                        payload_key
-                        and payload_key in message_data
-                        and isinstance(message_data[payload_key], dict)
-                    ):
-                        message_data = message_data[payload_key]
+                    original_payload = message_data
+                    message_data = self._unwrap_payload(message_data, payload_key)
+                    if payload_key and message_data is not original_payload:
                         print(
-                            f"[DEBUG] Unwrapped payload from key '{payload_key}'",
+                            f"[DEBUG] Unwrapped payload using key '{payload_key}'",
                             file=sys.stderr,
                         )
 
@@ -1903,8 +1424,7 @@ class WebEXConnector:
 
                     tb_str = traceback.format_exc()
                     print(
-                        "[ERROR] Exception processing WebEX message:",
-                        file=sys.stderr,
+                        "[ERROR] Exception processing WebEX message:", file=sys.stderr
                     )
                     print(tb_str, file=sys.stderr)
                     if self.shutdown_event.is_set():

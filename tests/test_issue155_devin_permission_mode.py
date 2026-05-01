@@ -5,8 +5,7 @@ Tests verify:
 2. "auto" is never passed to Devin CLI (only normal, dangerous, bypass)
 3. _dispatch_single_runtime() passes mode to run_devin()
 4. Background task dispatch always uses "dangerous" for Devin (non-interactive)
-5. Mode propagation chain: scheduler --mode elevated -> run_devin()
-   -> --permission-mode dangerous
+5. Mode propagation chain: scheduler --mode elevated -> run_devin() -> --permission-mode dangerous  # noqa: E501
 """
 
 import inspect
@@ -214,7 +213,7 @@ class TestIssue155ModePropagation(unittest.TestCase):
         )
 
     def test_run_devin_explicit_mode_not_overridden_by_session(self):
-        """Explicit mode param must take priority over session data."""
+        """When mode='elevated' is explicitly passed, session data must NOT override it."""  # noqa: E501
         cmd = self._run_devin_with_mode("elevated")
         perm_idx = cmd.index("--permission-mode")
         actual_perm = cmd[perm_idx + 1]
@@ -225,7 +224,7 @@ class TestIssue155ModePropagation(unittest.TestCase):
         )
 
     def test_run_devin_prompt_mode_elevated_when_no_explicit_mode(self):
-        """Prompt /mode elevated must be used when no explicit mode is passed."""
+        """When mode=restricted (default) but prompt has /mode elevated, use elevated."""  # noqa: E501
         cmd = self._run_devin_with_mode(None, mock_parse_mode_result="elevated")
         perm_idx = cmd.index("--permission-mode")
         actual_perm = cmd[perm_idx + 1]

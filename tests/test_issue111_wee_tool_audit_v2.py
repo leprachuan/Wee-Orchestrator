@@ -2,7 +2,7 @@
 """Additional regression tests for Issue #111: wee runtime tool & skill execution audit.
 
 Tests added by Issue #111 implementation:
- 8. SSH sanitization wired into _wee_execute_tool (bash commands with ssh get flags injected)
+ 8. SSH sanitization wired into _wee_execute_tool (bash commands with ssh get flags injected)  # noqa: E501
  9. SSH sanitization wired into wee_runtime.py execute_tool (standalone CLI)
 10. SSH sanitization NOT applied when StrictHostKeyChecking already present
 11. Skills context loaded via build_agent_context_prompt for wee runtime
@@ -11,23 +11,23 @@ Tests added by Issue #111 implementation:
 14. Tool fallback: when tools not supported, retry without tools (no crash)
 15. Multi-round tool loop: model can issue multiple rounds of tool calls
 16. wee_runtime.py _WEE_TOOL_CAPABILITY_PROMPT constant exists
-17. wee_runtime.py effective_system_prompt includes tool capability when --tools flag used
+17. wee_runtime.py effective_system_prompt includes tool capability when --tools flag used  # noqa: E501
 18. _wee_execute_tool handles unknown tool names gracefully
 19. _wee_execute_tool handles empty command/code gracefully
 20. Tool result appended to conversation history for context persistence
 """
+
 import json
-import os
 import sys
 import threading
 import unittest
 from pathlib import Path
-from unittest.mock import MagicMock, call, patch
+from unittest.mock import MagicMock, patch
 
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
 
-from agent_manager import SessionManager
+from agent_manager import SessionManager  # noqa: E402
 
 
 def _make_mgr():
@@ -91,7 +91,7 @@ class TestIssue111SSHSanitization(unittest.TestCase):
     """Issue #111: SSH sanitization wired into tool execution."""
 
     def test_ssh_sanitization_wired_into_wee_execute_tool(self):
-        """Issue #111: _wee_execute_tool must call _wee_sanitize_bash_command for bash tools."""
+        """Issue #111: _wee_execute_tool must call _wee_sanitize_bash_command for bash tools."""  # noqa: E501
         mgr = _make_mgr()
         sanitize_calls = []
 
@@ -101,26 +101,41 @@ class TestIssue111SSHSanitization(unittest.TestCase):
             sanitize_calls.append(command)
             return original_sanitize(command)
 
-        with patch.object(mgr, "_wee_sanitize_bash_command", side_effect=track_sanitize):
+        with patch.object(
+            mgr, "_wee_sanitize_bash_command", side_effect=track_sanitize
+        ):
             with patch.object(mgr, "_execute_bash_command", return_value="ok"):
-                mgr._wee_execute_tool("bash", {"command": "ssh root@192.168.1.100 uptime"}, "orchestrator")
+                mgr._wee_execute_tool(
+                    "bash", {"command": "ssh root@192.168.1.100 uptime"}, "orchestrator"
+                )
 
-        self.assertEqual(len(sanitize_calls), 1, "Sanitize must be called once for bash tool")
-        self.assertIn("ssh", sanitize_calls[0], "Command with ssh must be passed to sanitize")
+        self.assertEqual(
+            len(sanitize_calls), 1, "Sanitize must be called once for bash tool"
+        )
+        self.assertIn(
+            "ssh", sanitize_calls[0], "Command with ssh must be passed to sanitize"
+        )
 
     def test_ssh_sanitization_injects_flags(self):
         """Issue #111: SSH command gets StrictHostKeyChecking flag injected."""
         mgr = _make_mgr()
         result = mgr._wee_sanitize_bash_command("ssh root@192.168.1.100 uptime")
-        self.assertIn("StrictHostKeyChecking=accept-new", result,
-                       "SSH command must get StrictHostKeyChecking injected")
+        self.assertIn(
+            "StrictHostKeyChecking=accept-new",
+            result,
+            "SSH command must get StrictHostKeyChecking injected",
+        )
 
     def test_ssh_sanitization_no_double_inject(self):
         """Issue #111: Don't inject StrictHostKeyChecking if already present."""
         mgr = _make_mgr()
         cmd = "ssh -o StrictHostKeyChecking=no root@192.168.1.100 uptime"
         result = mgr._wee_sanitize_bash_command(cmd)
-        self.assertEqual(result, cmd, "Must not modify command that already has StrictHostKeyChecking")
+        self.assertEqual(
+            result,
+            cmd,
+            "Must not modify command that already has StrictHostKeyChecking",
+        )
 
     def test_ssh_sanitization_not_applied_to_non_ssh(self):
         """Issue #111: Non-SSH bash commands pass through unchanged."""
@@ -133,15 +148,21 @@ class TestIssue111SSHSanitization(unittest.TestCase):
         """Issue #111: SCP commands also get sanitized."""
         mgr = _make_mgr()
         result = mgr._wee_sanitize_bash_command("scp file.txt root@192.168.1.100:/tmp/")
-        self.assertIn("StrictHostKeyChecking=accept-new", result,
-                       "SCP command must get StrictHostKeyChecking injected")
+        self.assertIn(
+            "StrictHostKeyChecking=accept-new",
+            result,
+            "SCP command must get StrictHostKeyChecking injected",
+        )
 
     def test_ssh_sanitization_handles_sftp(self):
         """Issue #111: SFTP commands also get sanitized."""
         mgr = _make_mgr()
         result = mgr._wee_sanitize_bash_command("sftp root@192.168.1.100")
-        self.assertIn("StrictHostKeyChecking=accept-new", result,
-                       "SFTP command must get StrictHostKeyChecking injected")
+        self.assertIn(
+            "StrictHostKeyChecking=accept-new",
+            result,
+            "SFTP command must get StrictHostKeyChecking injected",
+        )
 
 
 class TestIssue111WeeRuntimeCLI(unittest.TestCase):
@@ -150,6 +171,7 @@ class TestIssue111WeeRuntimeCLI(unittest.TestCase):
     def test_wee_tool_capability_prompt_constant_exists(self):
         """Issue #111: _WEE_TOOL_CAPABILITY_PROMPT must exist in wee_runtime.py."""
         import wee_runtime
+
         self.assertTrue(
             hasattr(wee_runtime, "_WEE_TOOL_CAPABILITY_PROMPT"),
             "wee_runtime must have _WEE_TOOL_CAPABILITY_PROMPT constant",
@@ -157,12 +179,19 @@ class TestIssue111WeeRuntimeCLI(unittest.TestCase):
         prompt = wee_runtime._WEE_TOOL_CAPABILITY_PROMPT
         self.assertIn("bash", prompt.lower(), "Tool prompt must mention bash")
         self.assertIn("python", prompt.lower(), "Tool prompt must mention python")
-        self.assertIn("IMPORTANT", prompt, "Tool prompt must include CRITICAL directive")
+        self.assertIn(
+            "IMPORTANT", prompt, "Tool prompt must include CRITICAL directive"
+        )
 
     def test_wee_runtime_execute_tool_calls_sanitize(self):
-        """Issue #111: wee_runtime.py execute_tool calls sanitize_bash_command for bash."""
+        """Issue #111: wee_runtime.py execute_tool calls sanitize_bash_command for bash."""  # noqa: E501
         import wee_runtime
-        with patch.object(wee_runtime, "sanitize_bash_command", wraps=wee_runtime.sanitize_bash_command) as mock_sanitize:
+
+        with patch.object(
+            wee_runtime,
+            "sanitize_bash_command",
+            wraps=wee_runtime.sanitize_bash_command,
+        ) as mock_sanitize:
             with patch("subprocess.run") as mock_run:
                 mock_run.return_value = MagicMock(stdout="ok", stderr="", returncode=0)
                 wee_runtime.execute_tool("bash", {"command": "ssh root@host ls"})
@@ -171,12 +200,17 @@ class TestIssue111WeeRuntimeCLI(unittest.TestCase):
     def test_wee_runtime_anti_hallucination_prompt_exists(self):
         """Issue #111: _ANTI_HALLUCINATION_PROMPT must exist in wee_runtime.py."""
         import wee_runtime
+
         self.assertTrue(
             hasattr(wee_runtime, "_ANTI_HALLUCINATION_PROMPT"),
             "wee_runtime must have _ANTI_HALLUCINATION_PROMPT constant",
         )
         prompt = wee_runtime._ANTI_HALLUCINATION_PROMPT
-        self.assertIn("fabricate", prompt.lower(), "Anti-hallucination prompt must forbid fabrication")
+        self.assertIn(
+            "fabricate",
+            prompt.lower(),
+            "Anti-hallucination prompt must forbid fabrication",
+        )
 
 
 class TestIssue111ToolExecution(unittest.TestCase):
@@ -187,7 +221,9 @@ class TestIssue111ToolExecution(unittest.TestCase):
         mgr = _make_mgr()
         result = mgr._wee_execute_tool("unknown_tool", {"arg": "value"}, "orchestrator")
         self.assertIn("Error", result, "Unknown tool must return error")
-        self.assertIn("unknown_tool", result, "Error must mention the unknown tool name")
+        self.assertIn(
+            "unknown_tool", result, "Error must mention the unknown tool name"
+        )
 
     def test_empty_bash_command_returns_error(self):
         """Issue #111: Empty bash command returns error."""
@@ -209,6 +245,7 @@ class TestIssue111ToolExecution(unittest.TestCase):
         session_data = {"runtime": "wee", "model": "ollama/qwen3:8b", "channel": "api"}
 
         call_count = [0]
+
         def mock_create(**kwargs):
             call_count[0] += 1
             if call_count[0] == 1 and "tools" in kwargs:
@@ -221,7 +258,9 @@ class TestIssue111ToolExecution(unittest.TestCase):
 
         with patch.object(mgr, "get_or_create_session_data", return_value=session_data):
             with patch.object(mgr, "build_agent_context_prompt", return_value="sys"):
-                with patch.object(mgr, "load_session_map", return_value={sid: session_data}):
+                with patch.object(
+                    mgr, "load_session_map", return_value={sid: session_data}
+                ):
                     with patch.object(mgr, "save_session_map"):
                         result = mgr.run_wee_native(
                             prompt="test",
@@ -233,7 +272,11 @@ class TestIssue111ToolExecution(unittest.TestCase):
                             timeout=30,
                         )
 
-        self.assertIn("Fallback response", result, "Must return response even when tools not supported")
+        self.assertIn(
+            "Fallback response",
+            result,
+            "Must return response even when tools not supported",
+        )
 
     @patch("openai.OpenAI")
     def test_multi_round_tool_calls(self, mock_openai_cls):
@@ -243,12 +286,21 @@ class TestIssue111ToolExecution(unittest.TestCase):
         session_data = {"runtime": "wee", "model": "ollama/qwen3:8b", "channel": "api"}
 
         call_count = [0]
+
         def mock_create(**kwargs):
             call_count[0] += 1
             if call_count[0] == 1:
-                return iter(_make_tool_call_chunks("tc1", "bash", json.dumps({"command": "whoami"})))
+                return iter(
+                    _make_tool_call_chunks(
+                        "tc1", "bash", json.dumps({"command": "whoami"})
+                    )
+                )
             elif call_count[0] == 2:
-                return iter(_make_tool_call_chunks("tc2", "bash", json.dumps({"command": "hostname"})))
+                return iter(
+                    _make_tool_call_chunks(
+                        "tc2", "bash", json.dumps({"command": "hostname"})
+                    )
+                )
             return iter([_make_text_chunk("You are root on myhost")])
 
         mock_client = MagicMock()
@@ -256,6 +308,7 @@ class TestIssue111ToolExecution(unittest.TestCase):
         mock_openai_cls.return_value = mock_client
 
         tool_calls = []
+
         def mock_execute(fn, args, agent):
             tool_calls.append(fn)
             if "whoami" in args.get("command", ""):
@@ -264,10 +317,14 @@ class TestIssue111ToolExecution(unittest.TestCase):
 
         with patch.object(mgr, "get_or_create_session_data", return_value=session_data):
             with patch.object(mgr, "build_agent_context_prompt", return_value="sys"):
-                with patch.object(mgr, "load_session_map", return_value={sid: session_data}):
+                with patch.object(
+                    mgr, "load_session_map", return_value={sid: session_data}
+                ):
                     with patch.object(mgr, "save_session_map"):
-                        with patch.object(mgr, "_wee_execute_tool", side_effect=mock_execute):
-                            result = mgr.run_wee_native(
+                        with patch.object(
+                            mgr, "_wee_execute_tool", side_effect=mock_execute
+                        ):
+                            result = mgr.run_wee_native(  # noqa: F841
                                 prompt="Who am I and what host?",
                                 model="ollama/qwen3:8b",
                                 agent="orchestrator",
@@ -277,7 +334,9 @@ class TestIssue111ToolExecution(unittest.TestCase):
                                 timeout=30,
                             )
 
-        self.assertEqual(len(tool_calls), 2, "Two tool calls should be made in two rounds")
+        self.assertEqual(
+            len(tool_calls), 2, "Two tool calls should be made in two rounds"
+        )
 
     @patch("openai.OpenAI")
     def test_tool_results_in_conversation_history(self, mock_openai_cls):
@@ -289,11 +348,14 @@ class TestIssue111ToolExecution(unittest.TestCase):
 
         call_count = [0]
         captured_messages = []
+
         def mock_create(**kwargs):
             call_count[0] += 1
             captured_messages.append(list(kwargs.get("messages", [])))
             if call_count[0] == 1:
-                return iter(_make_tool_call_chunks("tc1", "bash", json.dumps({"command": "ls"})))
+                return iter(
+                    _make_tool_call_chunks("tc1", "bash", json.dumps({"command": "ls"}))
+                )
             return iter([_make_text_chunk("done")])
 
         mock_client = MagicMock()
@@ -302,9 +364,13 @@ class TestIssue111ToolExecution(unittest.TestCase):
 
         with patch.object(mgr, "get_or_create_session_data", return_value=session_data):
             with patch.object(mgr, "build_agent_context_prompt", return_value="sys"):
-                with patch.object(mgr, "load_session_map", return_value={sid: session_data}):
+                with patch.object(
+                    mgr, "load_session_map", return_value={sid: session_data}
+                ):
                     with patch.object(mgr, "save_session_map"):
-                        with patch.object(mgr, "_wee_execute_tool", return_value="file1\nfile2"):
+                        with patch.object(
+                            mgr, "_wee_execute_tool", return_value="file1\nfile2"
+                        ):
                             mgr.run_wee_native(
                                 prompt="ls",
                                 model="ollama/qwen3:8b",
@@ -319,19 +385,27 @@ class TestIssue111ToolExecution(unittest.TestCase):
         self.assertGreater(len(captured_messages), 1, "Must have at least 2 API calls")
         second_call_msgs = captured_messages[1]
         tool_msgs = [m for m in second_call_msgs if m.get("role") == "tool"]
-        self.assertGreater(len(tool_msgs), 0, "Second call must include tool result message")
-        self.assertIn("file1", tool_msgs[0]["content"], "Tool result must contain execution output")
+        self.assertGreater(
+            len(tool_msgs), 0, "Second call must include tool result message"
+        )
+        self.assertIn(
+            "file1",
+            tool_msgs[0]["content"],
+            "Tool result must contain execution output",
+        )
 
 
 class TestIssue111SystemPrompt(unittest.TestCase):
     """Issue #111: System prompt completeness checks."""
 
     def test_augmented_prompt_includes_critical_directive(self):
-        """Issue #111: Augmented system prompt must include CRITICAL about not refusing."""
+        """Issue #111: Augmented system prompt must include CRITICAL about not refusing."""  # noqa: E501
         mgr = _make_mgr()
         result = mgr._wee_augment_system_prompt_with_tools("base")
         self.assertIn("CRITICAL", result, "Must include CRITICAL directive")
-        self.assertIn("NEVER refuse", result, "Must tell model to never refuse tool use")
+        self.assertIn(
+            "NEVER refuse", result, "Must tell model to never refuse tool use"
+        )
 
     def test_anti_hallucination_prompt_includes_key_rules(self):
         """Issue #111: Anti-hallucination prompt covers all key rules."""
@@ -339,16 +413,21 @@ class TestIssue111SystemPrompt(unittest.TestCase):
         self.assertIn("fabricate", result.lower(), "Must forbid fabrication")
         self.assertIn("placeholder", result.lower(), "Must forbid placeholder output")
         self.assertIn("error", result.lower(), "Must require relaying errors verbatim")
-        self.assertIn("StrictHostKeyChecking", result, "Must mention SSH flag requirement")
+        self.assertIn(
+            "StrictHostKeyChecking", result, "Must mention SSH flag requirement"
+        )
 
     @patch("openai.OpenAI")
-    def test_full_system_prompt_includes_both_tool_and_anti_hallucination(self, mock_openai_cls):
-        """Issue #111: Combined system prompt has tool declaration + anti-hallucination."""
+    def test_full_system_prompt_includes_both_tool_and_anti_hallucination(
+        self, mock_openai_cls
+    ):
+        """Issue #111: Combined system prompt has tool declaration + anti-hallucination."""  # noqa: E501
         mgr = _make_mgr()
         sid = "test_111_full_prompt"
         session_data = {"runtime": "wee", "model": "ollama/qwen3:8b", "channel": "api"}
 
         captured_messages = []
+
         def mock_create(**kwargs):
             captured_messages.extend(kwargs.get("messages", []))
             return iter([_make_text_chunk("ok")])
@@ -358,8 +437,12 @@ class TestIssue111SystemPrompt(unittest.TestCase):
         mock_openai_cls.return_value = mock_client
 
         with patch.object(mgr, "get_or_create_session_data", return_value=session_data):
-            with patch.object(mgr, "build_agent_context_prompt", return_value="You are Wee."):
-                with patch.object(mgr, "load_session_map", return_value={sid: session_data}):
+            with patch.object(
+                mgr, "build_agent_context_prompt", return_value="You are Wee."
+            ):
+                with patch.object(
+                    mgr, "load_session_map", return_value={sid: session_data}
+                ):
                     with patch.object(mgr, "save_session_map"):
                         mgr.run_wee_native(
                             prompt="hi",
@@ -378,7 +461,11 @@ class TestIssue111SystemPrompt(unittest.TestCase):
         self.assertIn("bash", sys_content.lower(), "System must declare bash tool")
         self.assertIn("python", sys_content.lower(), "System must declare python tool")
         # Anti-hallucination
-        self.assertIn("fabricate", sys_content.lower(), "System must include anti-hallucination rules")
+        self.assertIn(
+            "fabricate",
+            sys_content.lower(),
+            "System must include anti-hallucination rules",
+        )
         # Original context preserved
         self.assertIn("You are Wee.", sys_content, "Original context must be preserved")
 
@@ -394,17 +481,24 @@ class TestIssue111SkillsLoading(unittest.TestCase):
         session_data = {"runtime": "wee", "model": "ollama/qwen3:8b", "channel": "api"}
 
         context_calls = []
+
         def capture_context(*args, **kwargs):
             context_calls.append({"args": args, "kwargs": kwargs})
             return "context prompt"
 
         mock_client = MagicMock()
-        mock_client.chat.completions.create.return_value = iter([_make_text_chunk("ok")])
+        mock_client.chat.completions.create.return_value = iter(
+            [_make_text_chunk("ok")]
+        )
         mock_openai_cls.return_value = mock_client
 
         with patch.object(mgr, "get_or_create_session_data", return_value=session_data):
-            with patch.object(mgr, "build_agent_context_prompt", side_effect=capture_context):
-                with patch.object(mgr, "load_session_map", return_value={sid: session_data}):
+            with patch.object(
+                mgr, "build_agent_context_prompt", side_effect=capture_context
+            ):
+                with patch.object(
+                    mgr, "load_session_map", return_value={sid: session_data}
+                ):
                     with patch.object(mgr, "save_session_map"):
                         mgr.run_wee_native(
                             prompt="test",
@@ -418,30 +512,45 @@ class TestIssue111SkillsLoading(unittest.TestCase):
 
         self.assertEqual(len(context_calls), 1)
         kwargs = context_calls[0]["kwargs"]
-        self.assertEqual(kwargs.get("runtime"), "wee",
-                         "build_agent_context_prompt must be called with runtime='wee'")
+        self.assertEqual(
+            kwargs.get("runtime"),
+            "wee",
+            "build_agent_context_prompt must be called with runtime='wee'",
+        )
 
     def test_load_agent_skills_returns_skills_when_present(self):
-        """Issue #111: load_agent_skills returns skill context for agents with skills."""
+        """Issue #111: load_agent_skills returns skill context for agents with skills."""  # noqa: E501
         mgr = _make_mgr()
         import tempfile
+
         with tempfile.TemporaryDirectory() as tmpdir:
             skill_dir = Path(tmpdir) / ".github" / "skills" / "test-skill"
             skill_dir.mkdir(parents=True)
             skill_md = skill_dir / "SKILL.md"
-            skill_md.write_text("---\nname: test-skill\ndescription: A test skill\n---\n# Test Skill\n")
+            skill_md.write_text(
+                "---\nname: test-skill\ndescription: A test skill\n---\n# Test Skill\n"
+            )
 
             result = mgr.load_agent_skills(tmpdir)
-            self.assertIn("test-skill", result, "Skills context must include skill name")
-            self.assertIn("A test skill", result, "Skills context must include description")
+            self.assertIn(
+                "test-skill", result, "Skills context must include skill name"
+            )
+            self.assertIn(
+                "A test skill", result, "Skills context must include description"
+            )
 
     def test_load_agent_skills_returns_no_skill_entries_when_no_skills(self):
-        """Issue #111: load_agent_skills returns no skill entries when no skills directory."""
+        """Issue #111: load_agent_skills returns no skill entries when no skills directory."""  # noqa: E501
         mgr = _make_mgr()
         import tempfile
+
         with tempfile.TemporaryDirectory() as tmpdir:
             result = mgr.load_agent_skills(tmpdir)
-            self.assertNotIn("[Agent Skills - Available]", result, "No skills means no Available Skills section")
+            self.assertNotIn(
+                "[Agent Skills - Available]",
+                result,
+                "No skills means no Available Skills section",
+            )
 
 
 if __name__ == "__main__":

@@ -1,0 +1,25 @@
+#!/bin/bash
+# Post-checkout hook: Prevent accidental checkout to non-main branches on PRODUCTION
+
+BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "unknown")
+PROD_REPO="/opt/n8n-copilot-shim"
+CURRENT_DIR="$(pwd)"
+
+# Only enforce on production repo - absolute path
+if [[ "$CURRENT_DIR" == "$PROD_REPO" ]]; then
+    if [[ "$BRANCH" != "main" ]]; then
+        echo ""
+        echo "╔════════════════════════════════════════════════════════════════╗"
+        echo "║  ❌ PRODUCTION SAFETY LOCK VIOLATED                             ║"
+        echo "║  Production repo is locked to 'main' branch only                ║"
+        echo "║  Current branch: $BRANCH"
+        echo "╚════════════════════════════════════════════════════════════════╝"
+        echo ""
+        echo "Resetting to main..."
+        git checkout main 2>/dev/null
+        echo "Reset complete. You are now on: $(git branch --show-current)"
+        exit 1
+    fi
+fi
+
+exit 0

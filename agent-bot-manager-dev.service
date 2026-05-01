@@ -1,0 +1,18 @@
+[Unit]
+Description=Wee Orchestrator — Per-Agent Bot Manager (Dev)
+After=network.target agent-manager-api-dev.service
+Wants=agent-manager-api-dev.service
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/n8n-copilot-shim-dev
+ExecStart=/usr/bin/python3 /opt/n8n-copilot-shim-dev/agent_bot_manager.py --config /opt/n8n-copilot-shim-dev/agents.json --api-url https://127.0.0.1:8001 --reload-interval 30
+Restart=on-failure
+RestartSec=5
+EnvironmentFile=/opt/n8n-copilot-shim-dev/agent-bot-manager.env
+Environment=PYTHONUNBUFFERED=1
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

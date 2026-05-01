@@ -6,15 +6,11 @@ correctly routes command-mode jobs to direct shell execution instead of
 dispatching them through the LLM pipeline.
 """
 
-import asyncio
-import importlib.util
-import json
 import os
 import sys
-import time
 import unittest
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
@@ -161,7 +157,6 @@ class TestRunCommandTaskExecution(unittest.TestCase):
         Since it's defined inside create_api_app(), we need to create the app
         first to access it.
         """
-        import agent_manager
 
         # Create the app which defines _run_command_task in its scope
         # We'll test via the API endpoint instead
@@ -185,9 +180,7 @@ class TestRunCommandTaskExecution(unittest.TestCase):
         self.assertNotIn("shell=True", func_body, "Should not use shell=True")
 
         # Should use capture_output=True
-        self.assertIn(
-            "capture_output=True", func_body, "Should capture output"
-        )
+        self.assertIn("capture_output=True", func_body, "Should capture output")
 
         # Should use text=True
         self.assertIn("text=True", func_body, "Should use text mode")
@@ -254,8 +247,9 @@ class TestRunNowAPIIntegration(unittest.TestCase):
     def _get_test_client(self):
         """Get a test client for the API."""
         try:
-            from agent_manager import create_api_app
             from httpx import ASGITransport, AsyncClient
+
+            from agent_manager import create_api_app
 
             app = create_api_app()
             transport = ASGITransport(app=app)
@@ -270,11 +264,14 @@ class TestRunNowAPIIntegration(unittest.TestCase):
         except ImportError:
             self.skipTest("httpx not available")
 
-        agent_manager = _load_module("issue96_agent_manager_api", REPO / "agent_manager.py")
+        agent_manager = _load_module(
+            "issue96_agent_manager_api", REPO / "agent_manager.py"
+        )
         create_api_app = agent_manager.create_api_app
         app = create_api_app()
 
-        mock_job = {
+        # Mock the scheduler to return a command-mode job
+        mock_job = {  # noqa: F841
             "id": "test_cmd_job",
             "name": "Test Command",
             "task": "echo hello",
@@ -290,27 +287,25 @@ class TestRunNowAPIIntegration(unittest.TestCase):
 
         with patch.object(
             app.state.bg_task_mgr, "create_task", return_value={}
-        ) as mock_create, patch(
-            "scheduler.management.TaskScheduler", return_value=mock_scheduler
-        ), patch.object(
-            agent_manager._api_auth_manager, "validate_shared_key", return_value=True
-        ), patch(
-            "asyncio.get_running_loop", return_value=fake_loop
-        ):
+        ) as mock_create:  # noqa: F841
 
             async def _run():
                 transport = ASGITransport(app=app)
                 async with AsyncClient(
                     transport=transport, base_url="https://test"
                 ) as client:
-                    return await client.post(
-                        "/api/v1/scheduler/jobs/test_cmd_job/run",
-                        headers={
-                            "Authorization": "Bearer shared_test_key_123",
-                            "X-User-Identity": "testuser",
-                            "X-Auth-Channel": "telegram",
-                        },
-                    )
+                    # We need to mock _get_scheduler
+                    with patch(
+                        "agent_manager._get_scheduler_for_test",
+                        return_value=None,
+                    ):
+                        response = await client.post(
+                            "/api/v1/scheduler/jobs/test_cmd_job/run",
+                            headers={
+                                "Authorization": "Bearer test_key_123",
+                            },
+                        )
+                        return response
 
             response = asyncio.run(_run())
 

@@ -823,9 +823,13 @@ function renderSessionList() {
 
     const title   = s.title   || s.session_id;
     const preview = s.preview || '';
+    const agentName = s.agent || '';
+    const agentBadge = agentName
+      ? `<span class="session-agent-badge" data-agent="${escHtml(agentName)}" title="${escHtml(agentName)}">${escHtml(agentName)}</span>`
+      : '';
 
     item.innerHTML =
-      `<div class="session-title" title="Double-click to rename">${escHtml(title)}</div>` +
+      `<div class="session-title" title="Double-click to rename">${agentBadge}${escHtml(title)}</div>` +
       `<div class="session-preview">${escHtml(preview)}</div>` +
       `<button class="session-rename-btn" data-id="${escHtml(s.session_id)}" title="Rename">✏️</button>` +
       `<button class="session-delete-btn" data-id="${escHtml(s.session_id)}" title="Delete">✕</button>`;
@@ -865,15 +869,22 @@ function startInlineRename(item, sessionId, currentTitle) {
   input.value = currentTitle;
   input.maxLength = 120;
 
+  // Preserve the agent badge element before clearing title
+  const existingBadge = titleEl.querySelector('.session-agent-badge');
+  const badgeHtml = existingBadge ? existingBadge.outerHTML : '';
   titleEl.textContent = '';
   titleEl.appendChild(input);
   input.focus();
   input.select();
 
+  const _rebuildTitle = (text) => {
+    titleEl.innerHTML = badgeHtml + escHtml(text);
+  };
+
   const commitRename = async () => {
     const newTitle = input.value.trim();
     if (!newTitle || newTitle === currentTitle) {
-      titleEl.textContent = currentTitle;
+      _rebuildTitle(currentTitle);
       return;
     }
     try {
@@ -881,9 +892,9 @@ function startInlineRename(item, sessionId, currentTitle) {
       // Update local state
       const sess = STATE.sessions.find(s => s.session_id === sessionId);
       if (sess) sess.title = newTitle;
-      titleEl.textContent = newTitle;
+      _rebuildTitle(newTitle);
     } catch (err) {
-      titleEl.textContent = currentTitle;
+      _rebuildTitle(currentTitle);
       console.error('Rename failed:', err);
     }
   };
@@ -1598,7 +1609,7 @@ async function sendMessageStreaming(query, sessionId) {
               if (_timingText) {
                 const timingDiv = document.createElement('div');
                 timingDiv.className = 'message-timing';
-                timingDiv.appendChild(_timingText);
+                timingDiv.innerHTML = _timingText;
                 streamBubble.appendChild(timingDiv);
               }
               streamBubble.appendChild(createTtsButton(streamBubble));
@@ -1959,20 +1970,18 @@ async function loadEarlierMessages() {
 
 /**
  * Build timing/token footer text for assistant messages (Issue #128).
+ * Always returns string|null — never a DocumentFragment (Issue #198).
  */
 function buildTimingText(elapsedSec, weeMeta) {
-  const frag = document.createDocumentFragment();
   const base = elapsedSec != null ? `Generated in ${elapsedSec.toFixed(1)}s` : null;
   if (!weeMeta) {
-    if (base) frag.appendChild(document.createTextNode(`⏱️ ${base}`));
-    return frag.childNodes.length ? frag : null;
+    return base ? `⏱️ ${base}` : null;
   }
   const runtime = weeMeta.runtime || '';
   const tokens = weeMeta.tokens;
   const costLabel = weeMeta.cost_label || '';
   if (runtime === 'copilot-sdk' || costLabel === 'copilot') {
-    frag.appendChild(document.createTextNode(base ? `⏱️ ${base} · copilot request` : 'copilot request'));
-    return frag;
+    return base ? `⏱️ ${base} · copilot request` : 'copilot request';
   }
   if (tokens != null) {
     const tokenStr = tokens.toLocaleString();
@@ -1988,15 +1997,10 @@ function buildTimingText(elapsedSec, weeMeta) {
       tooltip = `Input: ${pTokens.toLocaleString()} tokens\nOutput: ${cTokens.toLocaleString()} tokens\nTotal: ${tokenStr} tokens`;
       if (costLabel && costLabel.startsWith('$')) tooltip += `\nEst. cost: ${costLabel}`;
     }
-    if (base) frag.appendChild(document.createTextNode(`⏱️ ${base} · `));
-    const span = document.createElement('span');
-    span.setAttribute('title', tooltip);
-    span.textContent = `${tokenStr} tokens${costStr}`;
-    frag.appendChild(span);
-    return frag;
+    const span = `<span title="${tooltip}">${tokenStr} tokens${costStr}</span>`;
+    return base ? `⏱️ ${base} · ${span}` : span;
   }
-  if (base) frag.appendChild(document.createTextNode(`⏱️ ${base}`));
-  return frag.childNodes.length ? frag : null;
+  return base ? `⏱️ ${base}` : null;
 }
 
 async function renderMessage(role, content, files = [], timing = null, weeMeta = null) {
@@ -2060,7 +2064,7 @@ async function renderMessage(role, content, files = [], timing = null, weeMeta =
     if (_rmTimingText) {
       const timingDiv = document.createElement('div');
       timingDiv.className = 'message-timing';
-      timingDiv.appendChild(_rmTimingText);
+      timingDiv.innerHTML = _rmTimingText;
       bubble.appendChild(timingDiv);
     }
   }
@@ -2351,10 +2355,18 @@ document.addEventListener('DOMContentLoaded', () => {
   notifToggle.addEventListener('change', () => {
     setNotificationsEnabled(notifToggle.checked);
   });
+  // Sync toggle state from backend on page load (Issue #146)
+  syncNotificationToggleFromBackend();
 
   // --- Request Queue ---
-  $('btn-toggle-queue').addEventListener('click', toggleQueuePanel);
-  $('btn-pause-queue').addEventListener('click', toggleQueuePause);
+  const btnToggleQueue = $('btn-toggle-queue');
+  if (btnToggleQueue) {
+    btnToggleQueue.addEventListener('click', toggleQueuePanel);
+  }
+  const btnPauseQueue = $('btn-pause-queue');
+  if (btnPauseQueue) {
+    btnPauseQueue.addEventListener('click', toggleQueuePause);
+  }
   
   // --- Queue Section (Collapsible) ---
   const btnToggleQueueSection = $('btn-toggle-queue-section');
@@ -3114,7 +3126,7 @@ function renderJobEditForm(job, container) {
   const fbRtEl = document.getElementById('sched-fallback-runtime');
   const fbModelEl = document.getElementById('sched-fallback-model');
   if (fbRtEl && job && job.fallback_runtime) fbRtEl.value = job.fallback_runtime;
-  if (fbModelEl && job && job.fallback_model) fbModelEl.value = job.fallback_model;
+  if (fbModelEl) populateFallbackModelDropdown(fbModelEl, fbRtEl?.value || '', job?.fallback_model || '');
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -3252,14 +3264,14 @@ function buildJobForm(job) {
         <div style="margin-top:8px">
           <div class="form-group">
             <label>Fallback Runtime</label>
-            <select id="sched-fallback-runtime" name="fallback_runtime">
+            <select class="glass-input glass-select" id="sched-fallback-runtime" name="fallback_runtime">
               <option value="">None (no fallback)</option>
             </select>
             <small>Used if primary runtime fails (rate limit, auth error, timeout)</small>
           </div>
           <div class="form-group">
             <label>Fallback Model</label>
-            <select id="sched-fallback-model" name="fallback_model">
+            <select class="glass-input glass-select" id="sched-fallback-model" name="fallback_model">
               <option value="">None (no fallback)</option>
             </select>
             <small>Used with fallback runtime</small>
@@ -3356,29 +3368,43 @@ async function populateModelDropdown(container, runtime) {
   }
 }
 
-function populateFallbackRuntimeDropdown(selectEl) {
-  const runtimes = ['copilot','claude','claude-sdk','gemini','opencode','wee','ollama'];
+async function populateFallbackRuntimeDropdown(selectEl, current = '') {
+  let runtimes = ['copilot','claude','claude-sdk','gemini','opencode','wee'];
+  try {
+    const data = await apiRequest('GET', '/runtimes');
+    const apiRuntimes = (data.runtimes || []).map(r => r.id).filter(Boolean);
+    if (apiRuntimes.length) runtimes = apiRuntimes;
+  } catch (e) {
+    // Keep the conservative fallback list when the API is unavailable.
+  }
+  current = current || selectEl.value;
   selectEl.innerHTML = '<option value="">None (no fallback)</option>';
   runtimes.forEach(r => {
     const opt = document.createElement('option');
     opt.value = r; opt.textContent = r;
+    if (r === current) opt.selected = true;
     selectEl.appendChild(opt);
   });
 }
 
-function populateFallbackModelDropdown(selectEl) {
-  const models = [
-    'claude-haiku-4.5','claude-sonnet-4.6','claude-opus-4.6',
-    'gpt-4.1','gpt-5-mini','gpt-5.2',
-    'gemini-1.5-pro','gemini-2.0-flash',
-    'sonnet','haiku','opus'
-  ];
+async function populateFallbackModelDropdown(selectEl, runtime = '', current = '') {
+  const selectedRuntime = runtime || document.getElementById('sched-fallback-runtime')?.value || 'copilot';
   selectEl.innerHTML = '<option value="">None (no fallback)</option>';
-  models.forEach(m => {
+  try {
+    const data = await apiRequest('GET', `/models?runtime=${encodeURIComponent(selectedRuntime)}`);
+    const models = data.models || [];
+    models.forEach(m => {
+      const opt = document.createElement('option');
+      opt.value = m.id; opt.textContent = m.label || m.id;
+      if (m.id === current) opt.selected = true;
+      selectEl.appendChild(opt);
+    });
+  } catch (e) {
+    if (!current) return;
     const opt = document.createElement('option');
-    opt.value = m; opt.textContent = m;
+    opt.value = current; opt.textContent = current; opt.selected = true;
     selectEl.appendChild(opt);
-  });
+  }
 }
 
 function wireJobForm(container, onSubmit) {
@@ -3387,6 +3413,9 @@ function wireJobForm(container, onSubmit) {
   const fbModelEl = document.getElementById('sched-fallback-model');
   if (fbRtEl) populateFallbackRuntimeDropdown(fbRtEl);
   if (fbModelEl) populateFallbackModelDropdown(fbModelEl);
+  if (fbRtEl && fbModelEl) {
+    fbRtEl.addEventListener('change', () => populateFallbackModelDropdown(fbModelEl, fbRtEl.value));
+  }
 
   const form = container.querySelector('#sched-job-form');
   const errEl = container.querySelector('#sched-form-error');
@@ -3747,9 +3776,12 @@ function renderBgTasksSidebar() {
     const prompt = escHtml((t.prompt || '').slice(0, 80));
     const agentLabel = escHtml(t.agent || '?');
     const dateStr = fmtDate(t.created_at);
+    const fallbackBadge = t.used_fallback
+      ? `<span class="bg-fallback-badge" title="Primary runtime failed; retried with ${escHtml(t.actual_runtime || '')}/${escHtml(t.actual_model || '')}">↩ Retried</span>`
+      : '';
     return `
       <div class="session-item bg-sidebar-item ${active}" onclick="selectBgTask('${t.task_id}')">
-        <div class="session-title">${icon} ${prompt || '(no prompt)'}</div>
+        <div class="session-title"><span class="bg-task-title-text">${icon} ${prompt || '(no prompt)'}</span>${fallbackBadge}</div>
         <div class="session-preview">${agentLabel} · ${statusLabel}${elapsed} · ${dateStr}</div>
       </div>`;
   }).join('');
@@ -3876,6 +3908,14 @@ async function loadBgTaskDetail(taskId) {
                 <span class="bg-detail-meta-label">Runtime</span>
                 <span class="bg-detail-meta-value">${runtimeIconHTML(t.runtime)}${escHtml(t.runtime || '?')} / ${escHtml(t.model || '?')}</span>
               </div>
+              ${t.used_fallback ? `<div class="bg-detail-meta-row">
+                <span class="bg-detail-meta-label">Fallback</span>
+                <span class="bg-detail-meta-value bg-fallback-detail" title="Primary runtime failed; task completed on fallback runtime">
+                  <span class="bg-fallback-badge">↩ Retried</span>
+                  <span class="bg-fallback-route">${runtimeIconHTML(t.runtime)}${escHtml(t.runtime || '?')} / ${escHtml(t.model || '?')} → ${runtimeIconHTML(t.actual_runtime || '')}${escHtml(t.actual_runtime || '?')} / ${escHtml(t.actual_model || '?')}</span>
+                  <span class="bg-fallback-tip">Primary failed; completed on fallback runtime</span>
+                </span>
+              </div>` : ''}
               <div class="bg-detail-meta-row">
                 <span class="bg-detail-meta-label">Started</span>
                 <span class="bg-detail-meta-value">${fmtDate(t.created_at)}</span>
@@ -4330,6 +4370,21 @@ function isNotificationsEnabled() {
 
 function setNotificationsEnabled(val) {
   localStorage.setItem('wee_notifications_enabled', val ? 'true' : 'false');
+  // Sync to backend global toggle
+  apiRequest('PUT', '/settings/notifications', { notifications_enabled: !!val })
+    .catch(() => { /* best-effort sync */ });
+}
+
+/** Fetch the global notification toggle from the backend and sync localStorage. */
+async function syncNotificationToggleFromBackend() {
+  try {
+    const data = await apiRequest('GET', '/settings/notifications');
+    if (data && typeof data.notifications_enabled === 'boolean') {
+      localStorage.setItem('wee_notifications_enabled', data.notifications_enabled ? 'true' : 'false');
+      const toggle = $('notif-enabled-toggle');
+      if (toggle) toggle.checked = data.notifications_enabled;
+    }
+  } catch { /* backend unavailable — keep localStorage value */ }
 }
 
 async function fetchNotifications() {
@@ -6031,8 +6086,10 @@ if (document.readyState !== 'loading') {
     name:        () => document.getElementById('asf-name'),
     path:        () => document.getElementById('asf-path'),
     description: () => document.getElementById('asf-description'),
-    runtime:     () => document.getElementById('asf-runtime'),
-    model:       () => document.getElementById('asf-model'),
+    primaryRuntime:   () => document.getElementById('asf-primary-runtime'),
+    primaryModel:     () => document.getElementById('asf-primary-model'),
+    fallbackRuntime:  () => document.getElementById('asf-fallback-runtime'),
+    fallbackModel:    () => document.getElementById('asf-fallback-model'),
     maxConcurrent: () => document.getElementById('asf-max-concurrent'),
     permMode:    () => document.getElementById('asf-perm-mode'),
   };
@@ -6178,8 +6235,10 @@ if (document.readyState !== 'loading') {
     set(F.name,        agent.name);
     set(F.path,        agent.path);
     set(F.description, agent.description);
-    set(F.runtime,     agent.runtime);
-    set(F.model,       agent.model);
+    set(F.primaryRuntime,   agent.primary_runtime || agent.runtime);
+    set(F.primaryModel,     agent.primary_model || agent.model);
+    set(F.fallbackRuntime,  agent.fallback_runtime);
+    set(F.fallbackModel,    agent.fallback_model);
     const mcEl = F.maxConcurrent();
     if (mcEl) mcEl.value = agent.max_concurrent != null ? String(agent.max_concurrent) : '1';
 
@@ -6206,8 +6265,10 @@ if (document.readyState !== 'loading') {
       name:        get(F.name),
       path:        get(F.path),
       description: get(F.description) || undefined,
-      runtime:     get(F.runtime)     || undefined,
-      model:       get(F.model)       || undefined,
+      primary_runtime:  get(F.primaryRuntime)   || undefined,
+      primary_model:    get(F.primaryModel)     || undefined,
+      fallback_runtime: get(F.fallbackRuntime)  || undefined,
+      fallback_model:   get(F.fallbackModel)    || undefined,
       max_concurrent: (() => {
         const el = F.maxConcurrent();
         if (!el || el.value.trim() === '') return undefined;
@@ -6452,7 +6513,7 @@ if (document.readyState !== 'loading') {
 
   // Dirty detection on basic text fields
   if (modalSettings) {
-    ['asf-name','asf-path','asf-description','asf-runtime','asf-model','asf-max-concurrent'].forEach(id => {
+    ['asf-name','asf-path','asf-description','asf-primary-runtime','asf-primary-model','asf-fallback-runtime','asf-fallback-model','asf-max-concurrent'].forEach(id => {
       const el = document.getElementById(id);
       if (el) el.addEventListener('input', updateDirtyIndicator);
     });
@@ -6615,6 +6676,8 @@ if (document.readyState !== 'loading') {
     });
   }
 })();
+
+
 
 // ─── Skills Manager Panel ────────────────────────────────────────────────────
 // Mirrors the Canvas pushover panel pattern.
@@ -7178,3 +7241,66 @@ function closeAgentsPanel() {
   clearInterval(_agentsRefreshTimer);
   _agentsRefreshTimer = null;
 }
+
+// ── Service Status Panel ──────────────────────────────────────────────────────
+let _svcStatusPollInterval = null;
+const SVC_POLL_MS = 30000;
+
+function _formatSvcTimestamp(ts) {
+  const d = new Date(ts * 1000);
+  return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+}
+
+function _applySvcStatus(name, info) {
+  const dot   = document.getElementById('svc-dot-' + name);
+  const badge = document.getElementById('svc-badge-' + name);
+  if (!dot || !badge) return;
+
+  const status = info.status || 'unknown';
+  const dotClass   = status === 'active'   ? 'dot-active'
+                   : status === 'inactive' ? 'dot-inactive'
+                   : status === 'failed'   ? 'dot-failed'
+                   : 'dot-unknown';
+  const badgeClass = status === 'active'   ? 'badge-active'
+                   : status === 'inactive' ? 'badge-inactive'
+                   : status === 'failed'   ? 'badge-failed'
+                   : 'badge-unknown';
+
+  dot.className   = 'service-dot ' + dotClass;
+  badge.className = 'service-badge ' + badgeClass;
+  badge.textContent = status;
+}
+
+async function fetchServiceStatus() {
+  const refreshBtn = document.getElementById('btn-refresh-service-status');
+  if (refreshBtn) {
+    refreshBtn.classList.add('spinning');
+    setTimeout(function() { refreshBtn.classList.remove('spinning'); }, 600);
+  }
+
+  try {
+    const data = await apiRequest('GET', '/service-status');
+    const services = data.services || {};
+    for (const name of Object.keys(services)) {
+      _applySvcStatus(name, services[name]);
+    }
+    const tsEl   = document.getElementById('service-status-timestamp');
+    const nodeEl = document.getElementById('service-status-node');
+    if (tsEl)   tsEl.textContent = 'Updated ' + _formatSvcTimestamp(data.checked_at);
+    if (nodeEl) nodeEl.textContent = data.node ? 'node: ' + data.node : '';
+  } catch (err) {
+    const tsEl = document.getElementById('service-status-timestamp');
+    if (tsEl) tsEl.textContent = 'Status unavailable';
+  }
+}
+
+function _initServiceStatus() {
+  const refreshBtn = document.getElementById('btn-refresh-service-status');
+  if (refreshBtn) {
+    refreshBtn.addEventListener('click', function() { fetchServiceStatus(); });
+  }
+  fetchServiceStatus();
+  _svcStatusPollInterval = setInterval(fetchServiceStatus, SVC_POLL_MS);
+}
+
+document.addEventListener('DOMContentLoaded', _initServiceStatus);

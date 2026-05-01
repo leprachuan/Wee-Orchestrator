@@ -10,12 +10,12 @@ Tests verify:
 - claude-sdk: sandboxed mode maps to plan
 """
 
+import asyncio
 import os
 import sys
 import types
 import unittest
-from unittest.mock import MagicMock, patch, AsyncMock
-import asyncio
+from unittest.mock import AsyncMock, MagicMock, patch
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)) + "/..")
 os.environ.setdefault("API_SHARED_KEY", "test_key_123")
@@ -24,6 +24,7 @@ os.environ.setdefault("API_SHARED_KEY", "test_key_123")
 def _get_session_mgr():
     """Create a minimal SessionManager for testing."""
     from agent_manager import SessionManager
+
     mgr = SessionManager.__new__(SessionManager)
     mgr.mode = None
     mgr.command_timeout = 300
@@ -68,6 +69,7 @@ class TestCopilotSDKPermissions(unittest.TestCase):
 
         # Track create_session calls
         create_calls = []
+
         async def fake_create_session(**kwargs):
             create_calls.append(kwargs)
             return session_mock
@@ -128,12 +130,19 @@ class TestCopilotSDKPermissions(unittest.TestCase):
         session_module.ElicitationContext = dict
         session_module.ElicitationResult = dict
 
-        with patch.dict("sys.modules", {
-            "copilot": perm_module,
-            "copilot.session": session_module,
-        }):
-            with patch.object(mgr, "get_or_create_session_data", return_value=session_data):
-                with patch.object(mgr, "build_agent_context_prompt", return_value="test prompt"):
+        with patch.dict(
+            "sys.modules",
+            {
+                "copilot": perm_module,
+                "copilot.session": session_module,
+            },
+        ):
+            with patch.object(
+                mgr, "get_or_create_session_data", return_value=session_data
+            ):
+                with patch.object(
+                    mgr, "build_agent_context_prompt", return_value="test prompt"
+                ):
                     mgr.run_copilot_sdk(
                         prompt="test",
                         model="gpt-4o",
@@ -152,7 +161,9 @@ class TestCopilotSDKPermissions(unittest.TestCase):
         captured = {}
         self._run_sdk_with_mock("elevated", captured)
         configs = captured["subprocess_configs"]
-        self.assertEqual(len(configs), 1, "SubprocessConfig should be created for elevated mode")
+        self.assertEqual(
+            len(configs), 1, "SubprocessConfig should be created for elevated mode"
+        )
         self.assertIn("--allow-all-paths", configs[0].cli_args)
 
     def test_elevated_mode_passes_yolo_flag(self):
@@ -160,7 +171,9 @@ class TestCopilotSDKPermissions(unittest.TestCase):
         captured = {}
         self._run_sdk_with_mock("elevated", captured)
         configs = captured["subprocess_configs"]
-        self.assertEqual(len(configs), 1, "SubprocessConfig should be created for elevated mode")
+        self.assertEqual(
+            len(configs), 1, "SubprocessConfig should be created for elevated mode"
+        )
         self.assertIn("--yolo", configs[0].cli_args)
 
     def test_restricted_mode_no_dangerous_flags(self):
@@ -168,7 +181,11 @@ class TestCopilotSDKPermissions(unittest.TestCase):
         captured = {}
         self._run_sdk_with_mock("restricted", captured)
         configs = captured["subprocess_configs"]
-        self.assertEqual(len(configs), 0, "SubprocessConfig should NOT be created for restricted mode")
+        self.assertEqual(
+            len(configs),
+            0,
+            "SubprocessConfig should NOT be created for restricted mode",
+        )
 
     def test_elevated_mode_sets_user_input_handler(self):
         """Elevated mode must provide on_user_input_request to auto-approve prompts."""
@@ -198,6 +215,7 @@ class TestCopilotSDKPermissions(unittest.TestCase):
 
     def test_auto_approve_user_input_handler_returns_yes(self):
         """Auto-approve user input handler returns first choice or 'yes'."""
+
         # Simulate what the handler does
         def _auto_approve(request, invocation):
             if request.get("choices"):
@@ -217,6 +235,7 @@ class TestCopilotSDKPermissions(unittest.TestCase):
 
     def test_auto_approve_elicitation_returns_accept(self):
         """Auto-approve elicitation handler returns action=accept."""
+
         def _auto_elicit(context):
             return {"action": "accept"}
 
@@ -237,19 +256,25 @@ class TestClaudeSDKPermissions(unittest.TestCase):
         resolved_modes = []
 
         original_resolve = mgr._resolve_permission_mode
+
         def tracking_resolve(sd, pm="restricted"):
             result = original_resolve(sd, pm)
-            resolved_modes.append({"session_data": sd, "prompt_mode": pm, "result": result})
+            resolved_modes.append(
+                {"session_data": sd, "prompt_mode": pm, "result": result}
+            )
             return result
+
         mgr._resolve_permission_mode = tracking_resolve
 
         # Mock claude SDK
         claude_sdk_module = types.ModuleType("claude_ai.sdk")
         mock_query = AsyncMock()
+
         # Return empty async iterator
         async def empty_agen(*args, **kwargs):
             return
             yield  # make it an async generator
+
         claude_sdk_module.query = empty_agen
         claude_sdk_module.ClaudeAgentOptions = MagicMock(return_value=MagicMock())
         claude_sdk_module.AssistantMessage = type("AssistantMessage", (), {})
@@ -258,8 +283,12 @@ class TestClaudeSDKPermissions(unittest.TestCase):
         claude_sdk_module.ToolResultBlock = type("ToolResultBlock", (), {})
 
         with patch.dict("sys.modules", {"claude_ai.sdk": claude_sdk_module}):
-            with patch.object(mgr, "get_or_create_session_data", return_value=session_data):
-                with patch.object(mgr, "build_agent_context_prompt", return_value="test prompt"):
+            with patch.object(
+                mgr, "get_or_create_session_data", return_value=session_data
+            ):
+                with patch.object(
+                    mgr, "build_agent_context_prompt", return_value="test prompt"
+                ):
                     try:
                         mgr.run_claude_sdk(
                             prompt="test",
@@ -274,21 +303,32 @@ class TestClaudeSDKPermissions(unittest.TestCase):
                     except Exception:
                         pass  # Expected — we care about the args, not the result
 
-        self.assertTrue(len(resolved_modes) > 0, "_resolve_permission_mode must have been called")
+        self.assertTrue(
+            len(resolved_modes) > 0, "_resolve_permission_mode must have been called"
+        )
         call = resolved_modes[0]
         # session_data must be a dict (the real session data), not a string (mode value)
-        self.assertIsInstance(call["session_data"], dict,
-            "_resolve_permission_mode first arg must be session_data dict, not a string mode")
-        self.assertIsInstance(call["prompt_mode"], str,
-            "_resolve_permission_mode second arg must be a string mode")
+        self.assertIsInstance(
+            call["session_data"],
+            dict,
+            "_resolve_permission_mode first arg must be session_data dict, not a string mode",
+        )
+        self.assertIsInstance(
+            call["prompt_mode"],
+            str,
+            "_resolve_permission_mode second arg must be a string mode",
+        )
 
     def test_elevated_session_resolves_to_elevated_mode(self):
         """When session has elevated permissions, claude-sdk must use bypassPermissions."""
         mgr = _get_session_mgr()
         session_data = {"permissions": {"mode": "elevated"}}
         result = mgr._resolve_permission_mode(session_data, "restricted")
-        self.assertEqual(result, "elevated",
-            "Session with elevated permissions must resolve to elevated mode")
+        self.assertEqual(
+            result,
+            "elevated",
+            "Session with elevated permissions must resolve to elevated mode",
+        )
 
     def test_restricted_session_resolves_to_restricted_mode(self):
         """When session has restricted permissions, claude-sdk must use default SDK mode."""
@@ -300,17 +340,22 @@ class TestClaudeSDKPermissions(unittest.TestCase):
     def test_permission_mode_mapping_elevated_to_bypass(self):
         """Elevated mode must map to bypassPermissions for claude-sdk."""
         # This mirrors the logic in run_claude_sdk
-        for mode, expected in [("elevated", "bypassPermissions"),
-                                ("sandboxed", "plan"),
-                                ("restricted", "default")]:
+        for mode, expected in [
+            ("elevated", "bypassPermissions"),
+            ("sandboxed", "plan"),
+            ("restricted", "default"),
+        ]:
             if mode == "elevated":
                 sdk_perm = "bypassPermissions"
             elif mode == "sandboxed":
                 sdk_perm = "plan"
             else:
                 sdk_perm = "default"
-            self.assertEqual(sdk_perm, expected,
-                f"Mode {mode!r} must map to {expected!r} for claude-sdk")
+            self.assertEqual(
+                sdk_perm,
+                expected,
+                f"Mode {mode!r} must map to {expected!r} for claude-sdk",
+            )
 
 
 if __name__ == "__main__":

@@ -286,6 +286,16 @@ class TestSessionPersistence(unittest.TestCase):
         )
 
 
+    def test_unavailable_primary_no_backup(self):
+        """When default runtime is unavailable and no backup is specified, execution should return an error."""
+        # Temporarily set an unknown default runtime
+        with patch.dict(os.environ, {"COPILOT_DEFAULT_RUNTIME": "definitely-not-installed"}):
+            manager = SessionManager(str(self.config_file))
+            # Execute a simple prompt; since the runtime is unknown, the dispatcher should return an error
+            result = manager.execute("Hello world", "test_unavailable_runtime_session")
+            self.assertIn("Unknown runtime", result)
+
+
 class TestSlashCommands(unittest.TestCase):
     """Test slash command parsing and execution"""
 
@@ -667,9 +677,9 @@ class TestModelResolution(unittest.TestCase):
         self.assertEqual(result, "opus")
 
     def test_get_codex_model_alias(self):
-        """Test codex static alias resolution"""
-        result = self.manager.get_model_from_name("codex-mini", "codex")
-        self.assertEqual(result, "gpt-5.1-codex-mini")
+        """Codex aliases resolve from the manifest before static fallbacks."""
+        result = self.manager.get_model_from_name("gpt-5.4-mini", "codex")
+        self.assertEqual(result, "gpt-5.4-mini")
 
     def test_get_gemini_model_alias(self):
         """Test gemini static alias resolution"""
@@ -714,7 +724,7 @@ class TestDynamicModelListing(unittest.TestCase):
         self.assertIn("Sonnet", desc)
 
     def test_get_model_description_known_codex(self):
-        desc = self.manager._get_model_description("gpt-5.1-codex", "codex")
+        desc = self.manager._get_model_description("gpt-5.5", "codex")
         self.assertIsNotNone(desc)
 
     def test_get_model_description_unknown_model(self):
@@ -762,18 +772,47 @@ class TestDynamicModelListing(unittest.TestCase):
         all_ids = [m for group in result.values() for m in group]
         self.assertTrue(any("gpt" in m for m in all_ids))
 
+    @patch.dict(
+        os.environ,
+        {
+            "CODEX_MODELS_JSON": json.dumps(
+                {
+                    "OpenAI Models": [
+                        ["gpt-9-test", "GPT-9 Test", ["gpt-9", "codex-test"]]
+                    ]
+                }
+            )
+        },
+        clear=False,
+    )
+    def test_codex_models_json_overrides_alias_and_description_metadata(self):
+        self.manager._env_codex_models = None
+        missing_manifest = self.temp_path / "missing-model-manifest.json"
+
+        with patch.object(agent_manager, "MODEL_MANIFEST_PATH", missing_manifest):
+            listed = self.manager.fetch_codex_models()
+            self.assertEqual(listed, {"OpenAI Models": ["gpt-9-test"]})
+            self.assertEqual(
+                self.manager.get_model_from_name("codex-test", "codex"),
+                "gpt-9-test",
+            )
+            self.assertEqual(
+                self.manager._get_model_description("gpt-9-test", "codex"),
+                "GPT-9 Test",
+            )
+
     # ── fetch_opencode_models fallback ────────────────────────────────────────
 
     @patch("subprocess.run")
     def test_fetch_opencode_fallback_on_nonzero_exit(self, mock_run):
-        """fetch_opencode_models falls back to static when CLI exits non-zero."""
+        """fetch_opencode_models falls back to manifest when CLI exits non-zero."""
         mock_run.return_value = MagicMock(returncode=1, stdout="", stderr="error")
         result = self.manager.fetch_opencode_models()
         self.assertIsInstance(result, dict)
-        # Should return static dict (non-empty)
+        # Should return manifest fallback (non-empty)
         self.assertTrue(len(result) > 0)
         all_ids = [m for group in result.values() for m in group]
-        self.assertIn("grok-2", all_ids)
+        self.assertIn("openai-compatible/mistral-7b-instruct-v0.1", all_ids)
 
     @patch("subprocess.run")
     def test_fetch_opencode_fallback_on_empty_output(self, mock_run):

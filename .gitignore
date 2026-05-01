@@ -101,3 +101,12 @@ certs/
 .task-scheduler/
 .canvas-sessions/
 sessions.db
+
+# Backup files
+*.bak
+
+# Stale log files
+logs/wee_executor.log
+
+# Transcript storage (contains sensitive session data)
+logs/transcripts/

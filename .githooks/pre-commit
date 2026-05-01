@@ -1,0 +1,10 @@
+#!/bin/bash
+# Pre-commit hook: Warn if not on main branch in production
+
+BRANCH=$(git rev-parse --abbrev-ref HEAD)
+if [[ "$BRANCH" != "main" ]]; then
+    echo "⚠️  WARNING: You are committing to branch '$BRANCH', not 'main'"
+    echo "Production changes should only be committed to main."
+    exit 1
+fi
+exit 0
