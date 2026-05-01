@@ -163,9 +163,7 @@ def _resolve_silent_default(channel: str) -> bool:
     return channel in ("telegram", "webex")
 
 
-def _parse_claude_stream_json_line(
-    line: str, active_tool_calls: dict
-) -> list:
+def _parse_claude_stream_json_line(line: str, active_tool_calls: dict) -> list:
     """Parse one stream-json line from the Claude CLI.
 
     Returns a list of ``(channel, event_dict)`` tuples.  The caller is
@@ -247,9 +245,7 @@ def _parse_claude_stream_json_line(
                     tc_info = active_tool_calls.pop(cb_index)
                     full_input = "".join(tc_info["input_parts"])
                     try:
-                        parsed_input = (
-                            _json.loads(full_input) if full_input else {}
-                        )
+                        parsed_input = _json.loads(full_input) if full_input else {}
                     except (ValueError, KeyError):
                         parsed_input = full_input
                     results.append(
@@ -276,8 +272,7 @@ def _parse_claude_stream_json_line(
                         output = " ".join(
                             p.get("text", "")
                             for p in raw
-                            if isinstance(p, dict)
-                            and p.get("type") == "text"
+                            if isinstance(p, dict) and p.get("type") == "text"
                         )
                     else:
                         output = str(raw) if raw else ""
@@ -1512,6 +1507,7 @@ class SessionManager:
     MAX_PROMPT_LENGTH = 200  # Maximum chars to store from prompt
     MAX_OUTPUT_LENGTH = 500  # Maximum chars to store from output
     MAX_OUTPUT_DISPLAY = 300  # Maximum chars to display in status output
+    _WEE_DEFAULT_CONTEXT_LIMIT = 4096
 
     # Model configurations
     # Note: Claude Code CLI does not support dynamic model listing via flag.
@@ -4916,47 +4912,58 @@ You can mention an agent in your prompt and it will auto-delegate:
                 return "\n".join(_text_parts)
 
         elif runtime == "codex":
-            # CODEX output format (when stripped of headers):
-            # 1. First response line (often echoed/repeated)
-            # 2. Header section (OpenAI Codex...)
-            # 3. Metadata (workdir, model, etc.)
-            # 4. "user" marker + user input/context
-            # 5. File listings
-            # 6. "thinking" marker + reasoning
-            # 7. "codex" marker + actual response(s)
-            # 8. "tokens used" metadata
+            import json as _json
 
-            found_codex_marker = False
-            response_lines = []
-
-            for i, line in enumerate(lines):
-                line_lower = line.lower()
-
-                # Track if we've hit the "codex" marker - only keep content after this
-                if line_lower.strip() == "codex":
-                    found_codex_marker = True
+            # v0.125.0+: output is JSONL events from --json flag
+            # Extract text from item.completed events where item.type == "agent_message"
+            jsonl_texts = []
+            for _line in lines:
+                _line = _line.strip()
+                if not _line:
+                    continue
+                try:
+                    _event = _json.loads(_line)
+                    if (
+                        _event.get("type") == "item.completed"
+                        and isinstance(_event.get("item"), dict)
+                        and _event["item"].get("type") == "agent_message"
+                    ):
+                        _text = _event["item"].get("text", "")
+                        if _text:
+                            jsonl_texts.append(_text)
+                except (ValueError, KeyError):
                     continue
 
-                # Stop at tokens metadata
-                if "tokens" in line_lower and "used" in line_lower:
-                    break
+            if jsonl_texts:
+                # Use the last agent_message (most complete response)
+                result.extend(jsonl_texts[-1].splitlines())
+            else:
+                # Fallback: legacy marker-based parsing for pre-v0.125.0 output
+                found_codex_marker = False
+                response_lines = []
 
-                # Before codex marker, skip everything
-                if not found_codex_marker:
-                    continue
+                for i, line in enumerate(lines):
+                    line_lower = line.lower()
 
-                # After codex marker, skip empty lines at start
-                if not line.strip() and not response_lines:
-                    continue
+                    if line_lower.strip() == "codex":
+                        found_codex_marker = True
+                        continue
 
-                # Keep the actual response content
-                response_lines.append(line)
+                    if "tokens" in line_lower and "used" in line_lower:
+                        break
 
-            # Clean up trailing empty lines
-            while response_lines and not response_lines[-1].strip():
-                response_lines.pop()
+                    if not found_codex_marker:
+                        continue
 
-            result.extend(response_lines)
+                    if not line.strip() and not response_lines:
+                        continue
+
+                    response_lines.append(line)
+
+                while response_lines and not response_lines[-1].strip():
+                    response_lines.pop()
+
+                result.extend(response_lines)
 
         elif runtime == "devin":
             # Devin CLI outputs the response directly to stdout.
@@ -6008,6 +6015,7 @@ User Request:
         prompt: str,
         n8n_session_id: str,
         use_pty: bool = False,
+        stdin_text: str = "",
     ) -> str:
         """Execute a subprocess with PID tracking.
 
@@ -6064,9 +6072,10 @@ User Request:
             if _pty_master is not None:
                 process = subprocess.Popen(
                     cmd,
-                    stdin=subprocess.DEVNULL,
+                    stdin=subprocess.PIPE if stdin_text else subprocess.DEVNULL,
                     stdout=_pty_slave,
                     stderr=subprocess.PIPE,
+                    text=True,
                     cwd=cwd,
                     env=_sub_env,
                 )
@@ -6074,6 +6083,7 @@ User Request:
             else:
                 process = subprocess.Popen(
                     cmd,
+                    stdin=subprocess.PIPE if stdin_text else None,
                     stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE,
                     text=True,
@@ -6085,6 +6095,14 @@ User Request:
             self.track_running_query(
                 n8n_session_id, process.pid, runtime, agent, prompt
             )
+
+            # Send stdin data if provided (for runtimes in interactive mode)
+            if stdin_text and process.stdin:
+                try:
+                    process.stdin.write(stdin_text)
+                    process.stdin.close()
+                except (BrokenPipeError, OSError):
+                    pass  # Process may have exited or closed stdin
 
             if stream_info:
                 # ── Streaming path ──────────────────────────────────────────
@@ -6467,6 +6485,44 @@ User Request:
                                         ):
                                             continue
                                 elif runtime == "codex":
+                                    # Codex v0.125+ emits JSONL transport frames when
+                                    # exec is invoked with --json. Parse assistant text
+                                    # here so the WebUI streams human-readable content
+                                    # instead of raw thread/turn metadata.
+                                    if _line_stripped.startswith("{"):
+                                        try:
+                                            _cx_obj = _json.loads(_line_stripped)
+                                        except (ValueError, KeyError):
+                                            _cx_obj = None
+                                        if _cx_obj:
+                                            _cx_type = _cx_obj.get("type", "")
+                                            if (
+                                                _cx_type == "item.completed"
+                                                and isinstance(_cx_obj.get("item"), dict)
+                                                and _cx_obj["item"].get("type")
+                                                == "agent_message"
+                                            ):
+                                                _cx_text = _cx_obj["item"].get("text", "")
+                                                if _cx_text:
+                                                    if stream_buffer:
+                                                        stream_buffer.push(
+                                                            "chunk", _cx_text
+                                                        )
+                                                    else:
+                                                        loop.call_soon_threadsafe(
+                                                            queue.put_nowait,
+                                                            ("chunk", _cx_text),
+                                                        )
+                                                continue
+                                            if _cx_type in (
+                                                "thread.started",
+                                                "thread.completed",
+                                                "turn.started",
+                                                "turn.completed",
+                                                "item.started",
+                                            ):
+                                                continue
+
                                     # Codex exec tool call patterns
                                     import re as _re_tc
 
@@ -6782,8 +6838,6 @@ User Request:
 
         cmd = [
             self.copilot_bin,
-            "-p",
-            context_prompt,
             "--allow-all-tools",
             "--no-color",
             "--model",
@@ -6794,15 +6848,17 @@ User Request:
 
         # Add elevated flags for full access
         if mode == "elevated":
-            cmd.insert(4, "--allow-all-paths")
+            cmd.insert(2, "--allow-all-paths")
             cmd.append("--yolo")
 
         # Proactive session age check (issue #190): Copilot session tokens expire
         # ~30 min after creation. If the session is > 25 min old, start fresh to
         # avoid mid-task "Session token expired" crashes on long-running tasks.
-        _session_age = time.time() - getattr(self, "_copilot_session_start", {}).get(
-            n8n_session_id, 0
-        )
+        # Use None as default so we can distinguish "unknown start time" from "just started".
+        # If no start time is recorded (e.g. after a service restart), treat age as 0
+        # to allow resumption rather than forcing a new session every time.
+        _start_time = getattr(self, "_copilot_session_start", {}).get(n8n_session_id)
+        _session_age = time.time() - _start_time if _start_time is not None else 0
         if resume and session_id and _session_age > _COPILOT_SESSION_MAX_AGE_SEC:
             print(
                 f"[Session] Copilot session age {_session_age:.0f}s exceeds "
@@ -6826,24 +6882,30 @@ User Request:
                 context_prompt = context_prompt + _COPILOT_ELEVATED_MODE_INSTRUCTIONS
             elif mode == "sandboxed":
                 context_prompt = context_prompt + _COPILOT_SANDBOXED_MODE_INSTRUCTIONS
-            # Update cmd[2] so the rebuilt context_prompt is actually used
-            cmd[2] = context_prompt
 
         if resume and session_id:
-            cmd.extend(["--resume", session_id])
+            cmd.append(f"--resume={session_id}")
             print(f"[Session] Resuming Copilot session: {session_id}", file=sys.stderr)
         else:
+            # Name the session after the n8n_session_id so --resume works on next call.
+            # Copilot session names must be alphanumeric+hyphens; strip unsafe chars.
+            _copilot_name = re.sub(r"[^A-Za-z0-9\-]", "-", n8n_session_id)[:64]
+            cmd.append(f"--name={_copilot_name}")
             # Record session start time for proactive age tracking
             getattr(self, "_copilot_session_start", {}).update(
                 {n8n_session_id: time.time()}
             )
+            # Immediately store the session name in session_map so the next call
+            # can resume without relying on get_most_recent_session_id (race-prone).
+            self.update_session_field(n8n_session_id, "session_id", _copilot_name)
             print(
-                f"[Session] Starting new Copilot session in {mode} permission mode",
+                f"[Session] Starting new Copilot session '{_copilot_name}' in {mode} permission mode",  # noqa: E501
                 file=sys.stderr,
             )
 
         output = self._execute_subprocess_with_tracking(
-            cmd, agent_dir, effective_timeout, "copilot", agent, prompt, n8n_session_id
+            cmd, agent_dir, effective_timeout, "copilot", agent, prompt, n8n_session_id,
+            stdin_text=context_prompt
         )
         result = self.strip_metadata(output, "copilot")
 
@@ -6886,25 +6948,26 @@ User Request:
                 _recovery_context += _COPILOT_ELEVATED_MODE_INSTRUCTIONS
             elif mode == "sandboxed":
                 _recovery_context += _COPILOT_SANDBOXED_MODE_INSTRUCTIONS
+            _recovery_copilot_name = re.sub(r"[^A-Za-z0-9\-]", "-", n8n_session_id)[:64]
             _recovery_cmd = [
                 self.copilot_bin,
-                "-p",
-                _recovery_context,
                 "--allow-all-tools",
                 "--no-color",
                 "--model",
                 model,
                 "--additional-mcp-config",
                 f"@{mcp_config_path}",
+                f"--name={_recovery_copilot_name}",
             ]
             if mode == "elevated":
-                _recovery_cmd.insert(4, "--allow-all-paths")
+                _recovery_cmd.insert(2, "--allow-all-paths")
                 _recovery_cmd.append("--yolo")
 
-            # Record new session start for age tracking
+            # Record new session start for age tracking and update session_id
             getattr(self, "_copilot_session_start", {}).update(
                 {n8n_session_id: time.time()}
             )
+            self.update_session_field(n8n_session_id, "session_id", _recovery_copilot_name)
             _recovery_output = self._execute_subprocess_with_tracking(
                 _recovery_cmd,
                 agent_dir,
@@ -6913,6 +6976,7 @@ User Request:
                 agent,
                 _recovery_preamble,
                 n8n_session_id,
+                stdin_text=_recovery_context,
             )
             _stripped_recovery = self.strip_metadata(_recovery_output, "copilot")
             if _TOKEN_EXPIRED_MARKER in _stripped_recovery:
@@ -7634,7 +7698,7 @@ User Request:
         ]
 
         if resume and session_id:
-            cmd.extend(["--resume", session_id])
+            cmd.append(f"--resume={session_id}")
             print(f"[Session] Resuming Claude session: {session_id}", file=sys.stderr)
         elif session_id:
             cmd.extend(["--session-id", session_id])
@@ -7766,7 +7830,7 @@ User Request:
         # The session_id parameter is not used since Gemini manages sessions internally.
         # Using "--resume latest" automatically continues with the most recent session.
         if resume:
-            cmd.extend(["--resume", "latest"])
+            cmd.append("--resume=latest")
             print(f"[Session] Resuming Gemini session (latest)", file=sys.stderr)
         else:
             print(
@@ -7857,9 +7921,8 @@ User Request:
             context_prompt = context_prompt + sandboxed_instruction
 
         if resume and session_id:
-            # Resume existing session - flags must come before session_id positional arg
-            # codex exec resume supports --dangerously-bypass-approvals-and-sandbox
-            cmd = ["codex", "exec", "resume"]
+            # Resume existing session — v0.125.0+ uses `codex exec resume` subcommand
+            cmd = ["codex", "exec", "--json", "--skip-git-repo-check", "resume"]
             if mode == "elevated":
                 # Apply sandbox bypass and environment inheritance for elevated sessions
                 cmd.append("--dangerously-bypass-approvals-and-sandbox")
@@ -7872,13 +7935,17 @@ User Request:
                 file=sys.stderr,
             )
         else:
-            # Start new session - flags must come BEFORE the prompt positional arg
-            cmd = ["codex", "exec"]
+            # Start new session — v0.125.0+: --full-auto for normal mode,
+            # --dangerously-bypass-approvals-and-sandbox for elevated (they are mutually exclusive)
+            cmd = ["codex", "exec", "--json", "--skip-git-repo-check"]
             if mode == "elevated":
                 # Bypass all sandbox restrictions (sudo, DNS, network, filesystem)
                 cmd.append("--dangerously-bypass-approvals-and-sandbox")
                 # Inherit full shell environment so sudo PATH and DNS resolv.conf are available
                 cmd += ["-c", "shell_environment_policy.inherit=all"]
+            else:
+                # Non-elevated: --full-auto enables auto-execution without sandbox bypass
+                cmd.append("--full-auto")
             if model:
                 cmd += ["-m", model]
             cmd.append(context_prompt)
@@ -7894,7 +7961,18 @@ User Request:
         if "Error: CODEX command failed" in output:
             return output
 
-        return self.strip_metadata(output, "codex")
+        stripped = self.strip_metadata(output, "codex")
+        if not stripped.strip() and output.strip():
+            _exit_code = self._last_exit_codes.get(n8n_session_id, 0)
+            if _exit_code:
+                print(
+                    "[Session] WARNING: Codex returned non-zero exit and no assistant text. "
+                    "Returning raw output so the UI shows the actual error.",
+                    file=sys.stderr,
+                )
+                return output
+
+        return stripped
 
     def run_devin(
         self,
@@ -8261,6 +8339,9 @@ User Request:
             if context_prompt:
                 messages.append({"role": "system", "content": context_prompt})
         messages.append({"role": "user", "content": prompt})
+        messages = self._wee_maybe_compact(
+            client, n8n_session_id, messages, resolved_model, context_prompt
+        )
 
         # -- Tool definitions for agentic loop (Issue #107) --
         _WEE_TOOLS = [
@@ -8325,7 +8406,39 @@ User Request:
                             file=sys.stderr,
                         )
                         create_kwargs.pop("tools", None)
-                        stream = client.chat.completions.create(**create_kwargs)
+                        try:
+                            stream = client.chat.completions.create(**create_kwargs)
+                        except Exception as retry_err:
+                            if self._wee_is_free_model(model) and (
+                                "429" in str(retry_err)
+                                or "rate limit" in str(retry_err).lower()
+                            ):
+                                fallback_cfg = self._wee_load_free_config() or {}
+                                fallback_chain = (
+                                    fallback_cfg.get("free_model_fallback_chain") or []
+                                )
+                                fallback_model = next(iter(fallback_chain), None)
+                                if not fallback_model:
+                                    raise
+                                (
+                                    fallback_base,
+                                    fallback_key,
+                                    fallback_resolved_model,
+                                ) = self._wee_resolve_endpoint(
+                                    fallback_model, api_base, api_key
+                                )
+                                client = OpenAI(
+                                    base_url=fallback_base,
+                                    api_key=fallback_key,
+                                    timeout=effective_timeout,
+                                )
+                                resolved_model = fallback_resolved_model
+                                create_kwargs["model"] = resolved_model
+                                stream = client.chat.completions.create(
+                                    **create_kwargs
+                                )
+                            else:
+                                raise
                     else:
                         raise
 
@@ -8615,6 +8728,168 @@ User Request:
         )
         return system_prompt + tool_section
 
+    @staticmethod
+    def _wee_estimate_tokens(messages: list, model: str = "") -> int:
+        """Estimate token usage for wee runtime messages."""
+        from wee_runtime import count_message_tokens
+
+        return count_message_tokens(messages or [], model)
+
+    def _wee_get_context_limit(self, model: str) -> int:
+        """Resolve the context window size for a wee model."""
+        normalized = (model or "").lower()
+        known_windows = [
+            ("gemma4", 128000),
+            ("llama-4-scout", 131072),
+            ("llama-3.1", 131072),
+            ("128k", 128000),
+            ("32k", 32768),
+        ]
+        for needle, limit in known_windows:
+            if needle in normalized:
+                return limit
+        return self._WEE_DEFAULT_CONTEXT_LIMIT
+
+    def _wee_save_transcript(self, n8n_session_id: str, messages: list) -> str:
+        """Persist a transcript snapshot used by compaction summaries."""
+        safe_session = re.sub(r"[^A-Za-z0-9._-]+", "_", n8n_session_id or "unknown")
+        safe_session = safe_session.strip("._") or "unknown"
+        transcript_dir = (
+            Path(__file__).resolve().parent / "logs" / "transcripts" / safe_session
+        )
+        transcript_dir.mkdir(parents=True, exist_ok=True)
+        timestamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
+        transcript_path = transcript_dir / f"transcript_{timestamp}.json"
+        with open(transcript_path, "w", encoding="utf-8") as f:
+            json.dump(messages, f, indent=2, ensure_ascii=False)
+        return str(transcript_path)
+
+    def _wee_compact_context(
+        self,
+        client,
+        n8n_session_id: str,
+        messages: list,
+        model: str,
+        system_prompt: str,
+    ) -> list:
+        """Summarize older wee conversation context and preserve recent turns."""
+        system_msgs = [m for m in messages if m.get("role") == "system"]
+        non_system = [m for m in messages if m.get("role") != "system"]
+        if len(non_system) <= 1:
+            return messages
+
+        transcript_path = self._wee_save_transcript(n8n_session_id, messages)
+        to_summarize = non_system[:-1]
+        latest_message = non_system[-1]
+        if not to_summarize:
+            return messages
+
+        def _summary_snippet(text: str, limit: int = 700) -> str:
+            text = str(text)
+            if len(text) <= limit:
+                return text
+            head = max(1, int(limit * 0.6))
+            tail = max(1, limit - head - 5)
+            return f"{text[:head]} ... {text[-tail:]}"
+
+        transcript_lines = []
+        for msg in to_summarize:
+            role = msg.get("role", "")
+            content = msg.get("content") or ""
+            if isinstance(content, list):
+                content = " ".join(
+                    part.get("text", "") for part in content if isinstance(part, dict)
+                )
+            if role in ("user", "assistant") and content:
+                prefix = "User" if role == "user" else "Assistant"
+                transcript_lines.append(f"{prefix}: {_summary_snippet(content)}")
+        if not transcript_lines:
+            return messages
+
+        summary_prompt = (
+            "Summarize the following conversation history concisely. Preserve all "
+            "key facts, decisions, file paths, and errors so the conversation can "
+            "continue coherently.\n\nConversation:\n"
+            + "\n".join(transcript_lines)
+        )
+        try:
+            response = client.chat.completions.create(
+                model=model,
+                messages=[{"role": "user", "content": summary_prompt}],
+                stream=False,
+            )
+            summary_text = response.choices[0].message.content or ""
+        except Exception as exc:
+            summary_text = f"[Compaction error: {exc}]"
+
+        summary_message = {
+            "role": "assistant",
+            "content": (
+                "[Earlier conversation summary]\n"
+                f"{summary_text or 'Earlier conversation summarized.'}\n\n"
+                f"Full transcript: {transcript_path}"
+            ),
+        }
+        return system_msgs + [summary_message, latest_message]
+
+    def _wee_maybe_compact(
+        self,
+        client,
+        n8n_session_id: str,
+        messages: list,
+        model: str,
+        system_prompt: str,
+        threshold: float = 0.75,
+    ) -> list:
+        """Compact wee context when estimated token usage crosses threshold."""
+        if threshold >= 1.0:
+            return messages
+        context_limit = self._wee_get_context_limit(model)
+        if context_limit <= 0:
+            return messages
+        estimated_tokens = self._wee_estimate_tokens(messages, model)
+        if estimated_tokens < int(context_limit * threshold):
+            return messages
+        return self._wee_compact_context(
+            client, n8n_session_id, messages, model, system_prompt
+        )
+
+    def _wee_load_free_config(self) -> dict:
+        """Compatibility shim for wee free-model fallback tests."""
+        return {}
+
+    def _wee_is_free_model(self, model: str) -> bool:
+        """Compatibility shim for wee free-model fallback tests."""
+        return ":free" in (model or "").lower() or "openrouter/free" in (
+            model or ""
+        ).lower()
+
+    def _wee_resolve_endpoint(
+        self, model: str, api_base: Optional[str], api_key: Optional[str]
+    ) -> Tuple[str, str, str]:
+        """Compatibility shim returning the resolved endpoint tuple."""
+        _presets = {
+            "ollama": ("http://192.168.1.101:11434/v1", "ollama"),
+            "openrouter": ("https://openrouter.ai/api/v1", None),
+            "lmstudio": ("http://localhost:1234/v1", "lm-studio"),
+        }
+        resolved_model = model
+        resolved_base = api_base
+        resolved_key = api_key
+        for prefix, (preset_base, preset_key) in _presets.items():
+            if model.lower().startswith(f"{prefix}/"):
+                resolved_model = model[len(prefix) + 1 :]
+                if not resolved_base:
+                    resolved_base = preset_base
+                if not resolved_key and preset_key:
+                    resolved_key = preset_key
+                break
+        if not resolved_base:
+            resolved_base = _presets["ollama"][0]
+        if not resolved_key:
+            resolved_key = "ollama"
+        return resolved_base, resolved_key, resolved_model
+
     def _wee_execute_tool(self, func_name: str, func_args: dict, agent: str) -> str:
         """Execute a tool call from the wee runtime agentic loop.
 
@@ -8768,14 +9043,11 @@ User Request:
         elif runtime == "gemini":
             return (self.gemini_session_dir / f"{session_id}.json").exists()
         elif runtime == "codex":
-            # CODEX stores sessions in nested date-based directories
-            # Format: ~/.codex/sessions/YYYY/MM/DD/rollout-YYYY-MM-DDTHH-MM-SS-SESSION_ID.jsonl
-            # Session ID is a UUID at the end of the filename
+            # Legacy: CODEX stored sessions as rollout-*.jsonl files (pre-v0.125.0)
             try:
                 for session_file in self.codex_session_dir.glob(
                     "*/*/*/rollout-*.jsonl"
                 ):
-                    # Extract the UUID from the filename (last 36 chars before .jsonl)
                     filename = session_file.name.replace(".jsonl", "")
                     file_session_id = (
                         filename[-36:] if len(filename) >= 36 else filename
@@ -8784,6 +9056,9 @@ User Request:
                         return True
             except Exception:
                 pass
+            # Do not treat arbitrary UUIDs as resumable Codex sessions.
+            # The transient thread.started ID is not sufficient for
+            # `codex exec resume` and leads to empty assistant messages.
             return False
         elif runtime == "devin":
             # Devin session mappings are keyed by n8n_session_id, not backend session_id
@@ -8875,21 +9150,15 @@ User Request:
                 )
                 return files[0].stem if files else None
             elif runtime == "codex":
-                # CODEX stores sessions in nested date directories
-                # Filenames: rollout-YYYY-MM-DDTHH-MM-SS-SESSION_ID.jsonl
+                # Legacy/persisted local Codex sessions.
                 files = sorted(
                     self.codex_session_dir.glob("*/*/*/rollout-*.jsonl"),
                     key=lambda p: p.stat().st_mtime,
                     reverse=True,
                 )
                 if files:
-                    # Extract session ID from filename
-                    # Format: rollout-2025-12-15T22-39-34-019b242b-476d-7f90-8bfa-4eb0c7095532.jsonl
-                    # The session ID is the UUID at the end (last 36 chars before .jsonl)
                     filename = files[0].name
-                    # Remove .jsonl extension and get the last 36 characters (UUID)
                     name_without_ext = filename.replace(".jsonl", "")
-                    # Session ID should be the last UUID-like part
                     session_id = (
                         name_without_ext[-36:]
                         if len(name_without_ext) >= 36
@@ -9254,7 +9523,6 @@ User Request:
             "copilot",
             "opencode",
             "gemini",
-            "codex",
         ):
             new_id = self.get_most_recent_session_id(current_runtime, agent)
             if new_id:
@@ -10044,6 +10312,16 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 "X-Auth-Channel",
             ],
         )
+
+    @app.middleware("http")
+    async def _webui_no_cache_middleware(request: Request, call_next):
+        response = await call_next(request)
+        path = request.url.path or ""
+        if path == "/ui" or path.startswith("/ui/"):
+            response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate"
+            response.headers["Pragma"] = "no-cache"
+            response.headers["Expires"] = "0"
+        return response
 
     # ---- generic exception handler ----
     @app.exception_handler(Exception)
@@ -12012,7 +12290,12 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                     _cmd = [_oc_bin, "run", "--model", eff_model, context_prompt]
                 elif eff_runtime == "codex":
                     _codex_bin = _which_bin("codex") or "codex"
-                    _cmd = [_codex_bin, "exec"]
+                    _cmd = [
+                        _codex_bin,
+                        "exec",
+                        "--json",
+                        "--skip-git-repo-check",
+                    ]
                     if permission_mode == "elevated":
                         _cmd.extend(
                             [
@@ -12021,6 +12304,8 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                                 "shell_environment_policy.inherit=all",
                             ]
                         )
+                    else:
+                        _cmd.append("--full-auto")
                     if eff_model:
                         _cmd.extend(["-m", eff_model])
                     _cmd.append(context_prompt)

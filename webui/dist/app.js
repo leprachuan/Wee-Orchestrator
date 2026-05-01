@@ -1469,6 +1469,63 @@ function isInternalMarkerLine(line) {
   return INTERNAL_LINE_MARKERS.some(m => line.includes(m));
 }
 
+function looksLikeCodexTransportFrames(text) {
+  if (!text || !text.trim()) return false;
+  const trimmed = text.trim();
+  return (
+    trimmed.includes('"type":"thread.started"') ||
+    trimmed.includes('"type":"turn.started"') ||
+    trimmed.includes('"type":"turn.completed"') ||
+    trimmed.includes('"type":"item.completed"') ||
+    trimmed.includes('"type": "thread.started"') ||
+    trimmed.includes('"type": "turn.started"') ||
+    trimmed.includes('"type": "turn.completed"') ||
+    trimmed.includes('"type": "item.completed"')
+  );
+}
+
+function normalizeCodexStreamText(text) {
+  const raw = String(text || '');
+  if (!raw.trim()) return '';
+  if (!looksLikeCodexTransportFrames(raw)) return raw;
+
+  const out = [];
+  for (const line of raw.split('\n')) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    if (!trimmed.startsWith('{')) {
+      out.push(line);
+      continue;
+    }
+    try {
+      const evt = JSON.parse(trimmed);
+      if (
+        evt.type === 'item.completed' &&
+        evt.item &&
+        evt.item.type === 'agent_message' &&
+        typeof evt.item.text === 'string'
+      ) {
+        if (evt.item.text) out.push(evt.item.text);
+        continue;
+      }
+      if (
+        evt.type === 'thread.started' ||
+        evt.type === 'thread.completed' ||
+        evt.type === 'turn.started' ||
+        evt.type === 'turn.completed' ||
+        evt.type === 'item.started'
+      ) {
+        continue;
+      }
+    } catch {
+      out.push(line);
+      continue;
+    }
+    out.push(line);
+  }
+  return out.join('\n');
+}
+
 function detectToolCallLine(line) {
   const s = line.trimStart();
   if (/^[●⬤•]\s+/.test(s)) return true;
@@ -1537,7 +1594,9 @@ async function sendMessageStreaming(query, sessionId) {
 
           } else if (evt.type === 'chunk' && streamBubble) {
             // Concatenate text directly — newlines are already embedded in the deltas
-            rawText += evt.text;
+            const chunkText = normalizeCodexStreamText(evt.text);
+            if (!chunkText) continue;
+            rawText += chunkText;
 
             // Show formatted text while streaming so it feels instant
             streamBubble.classList.add('streaming');
@@ -1596,11 +1655,13 @@ async function sendMessageStreaming(query, sessionId) {
             const sessionData = STATE.sessionStreams[sessionId];
             const elapsedMs = sendEndTime - (sessionData?.startTime || sendEndTime);
             const elapsedSec = elapsedMs / 1000;
-            // Use accumulated streaming text when available (captures all
-            // turns in multi-tool responses); fall back to done payload.
-            const finalContent = rawText.trim()
-              ? rawText
-              : (evt.response || '(no response)');
+            // Prefer the cleaned done payload when streamed content looks like
+            // Codex transport JSONL frames; otherwise keep the accumulated text.
+            const doneResponse = evt.response || '(no response)';
+            const normalizedRawText = normalizeCodexStreamText(rawText);
+            const finalContent = normalizedRawText.trim()
+              ? normalizedRawText
+              : doneResponse;
             if (streamBubble) {
               streamBubble.classList.remove('streaming');
               applyMarkdownToBubble(streamBubble, finalContent);
@@ -1715,7 +1776,9 @@ async function reconnectToStream(sessionId) {
               ({ row: streamRow, bubble: streamBubble } = createStreamingBubble());
 
             } else if (evt.type === 'chunk' && streamBubble) {
-              rawText += evt.text;
+              const chunkText = normalizeCodexStreamText(evt.text);
+              if (!chunkText) continue;
+              rawText += chunkText;
               streamBubble.classList.add('streaming');
               let formatted = rawText
                 .replace(/</g, '&lt;')
@@ -1765,9 +1828,11 @@ async function reconnectToStream(sessionId) {
 
             } else if (evt.type === 'done') {
               cleanupAllToolSpinners();
-              const finalContent = rawText.trim()
-                ? rawText
-                : (evt.response || '(no response)');
+              const doneResponse = evt.response || '(no response)';
+              const normalizedRawText = normalizeCodexStreamText(rawText);
+              const finalContent = normalizedRawText.trim()
+                ? normalizedRawText
+                : doneResponse;
               if (streamBubble) {
                 streamBubble.classList.remove('streaming');
                 applyMarkdownToBubble(streamBubble, finalContent);

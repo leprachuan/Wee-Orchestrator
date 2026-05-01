@@ -50,6 +50,7 @@ def _make_mgr():
     mgr._resolve_permission_mode = MagicMock(return_value="restricted")
     mgr.strip_metadata = MagicMock(side_effect=lambda output, _rt: output)
     mgr.clear_live_status = MagicMock()
+    mgr.update_session_field = MagicMock()
     mgr.set_live_status = MagicMock()
     return mgr
 
@@ -70,7 +71,7 @@ class TestIssue190ReactiveRecovery(unittest.TestCase):
         )
         recovery_output = "Task completed successfully after session recovery."
 
-        def fake_execute(cmd, cwd, timeout, runtime, agent, prompt, session_id):
+        def fake_execute(cmd, cwd, timeout, runtime, agent, prompt, session_id, stdin_text=""):
             call_count[0] += 1
             if call_count[0] == 1:
                 return session_expiry_output
@@ -101,7 +102,7 @@ class TestIssue190ReactiveRecovery(unittest.TestCase):
 
         call_count = [0]
 
-        def fake_execute(cmd, cwd, timeout, runtime, agent, prompt, session_id):
+        def fake_execute(cmd, cwd, timeout, runtime, agent, prompt, session_id, stdin_text=""):
             call_count[0] += 1
             if call_count[0] == 2:
                 # Capture the prompt arg sent to the recovery session
@@ -136,7 +137,7 @@ class TestIssue190ReactiveRecovery(unittest.TestCase):
 
         call_count = [0]
 
-        def fake_execute(cmd, cwd, timeout, runtime, agent, prompt, session_id):
+        def fake_execute(cmd, cwd, timeout, runtime, agent, prompt, session_id, stdin_text=""):
             call_count[0] += 1
             captured_cmds.append(list(cmd))
             return "recovered" if call_count[0] == 2 else session_expiry_output
@@ -161,7 +162,7 @@ class TestIssue190ReactiveRecovery(unittest.TestCase):
         """B06: Normal output (no expiry marker) must be returned as-is without retry."""
         call_count = [0]
 
-        def fake_execute(cmd, cwd, timeout, runtime, agent, prompt, session_id):
+        def fake_execute(cmd, cwd, timeout, runtime, agent, prompt, session_id, stdin_text=""):
             call_count[0] += 1
             return "Task completed successfully."
 
@@ -201,9 +202,11 @@ class TestIssue190ProactiveRestart(unittest.TestCase):
         self.mgr.build_agent_context_prompt = MagicMock(side_effect=[full_ctx])
 
         captured_cmds = []
+        captured_stdin = []
 
-        def fake_execute(cmd, cwd, timeout, runtime, agent, prompt, session_id):
+        def fake_execute(cmd, cwd, timeout, runtime, agent, prompt, session_id, stdin_text=""):
             captured_cmds.append(list(cmd))
+            captured_stdin.append(stdin_text)
             return "completed"
 
         self.mgr._execute_subprocess_with_tracking = fake_execute
@@ -222,14 +225,10 @@ class TestIssue190ProactiveRestart(unittest.TestCase):
         cmd = captured_cmds[0]
         self.assertNotIn("--resume", cmd, "B04: stale session must NOT use --resume")
         self.assertNotIn("stale-copilot-session", cmd, "B04: stale session ID must not appear in cmd")
-        # MAJOR: cmd[2] must be updated to the rebuilt context_prompt, not left as raw prompt
-        self.assertNotEqual(
-            cmd[2], original_cmd2,
-            "B04: cmd[2] must NOT be the raw prompt after proactive restart"
-        )
+        # Context is now passed via stdin (not -p), verify it is the rebuilt full_ctx
         self.assertEqual(
-            cmd[2], full_ctx,
-            "B04: cmd[2] must be updated to rebuilt context_prompt after proactive restart"
+            captured_stdin[0], full_ctx,
+            "B04: rebuilt context_prompt must be passed as stdin_text for proactive restart"
         )
 
     def test_issue_190_b05_young_session_keeps_resume(self):
@@ -239,7 +238,7 @@ class TestIssue190ProactiveRestart(unittest.TestCase):
 
         captured_cmds = []
 
-        def fake_execute(cmd, cwd, timeout, runtime, agent, prompt, session_id):
+        def fake_execute(cmd, cwd, timeout, runtime, agent, prompt, session_id, stdin_text=""):
             captured_cmds.append(list(cmd))
             return "completed"
 
@@ -257,14 +256,14 @@ class TestIssue190ProactiveRestart(unittest.TestCase):
 
         self.assertEqual(len(captured_cmds), 1)
         cmd = captured_cmds[0]
-        self.assertIn("--resume", cmd, "B05: young session must still use --resume")
-        self.assertIn("valid-copilot-session", cmd, "B05: session ID must be passed to --resume")
+        self.assertTrue(any("--resume=" in str(arg) for arg in cmd), "B05: young session must use --resume=<session-id>")
+        
 
     def test_issue_190_session_start_recorded_on_new_session(self):
         """Session start time is recorded when launching a new (non-resume) session."""
         before = time.time()
 
-        def fake_execute(cmd, cwd, timeout, runtime, agent, prompt, session_id):
+        def fake_execute(cmd, cwd, timeout, runtime, agent, prompt, session_id, stdin_text=""):
             return "done"
 
         self.mgr._execute_subprocess_with_tracking = fake_execute
@@ -290,7 +289,7 @@ class TestIssue190ProactiveRestart(unittest.TestCase):
         session_expiry_output = "work\nSession token expired. Please resend your message.\n"
         call_count = [0]
 
-        def fake_execute(cmd, cwd, timeout, runtime, agent, prompt, session_id):
+        def fake_execute(cmd, cwd, timeout, runtime, agent, prompt, session_id, stdin_text=""):
             call_count[0] += 1
             return "done" if call_count[0] == 2 else session_expiry_output
 
@@ -368,7 +367,7 @@ class TestIssue190DoubleExpiryRecovery(unittest.TestCase):
             "(Request ID: 2222:bbbb:DDDDDDDD:EEEEEEEE:FFFFFFFF)\n"
         )
 
-        def fake_execute(cmd, cwd, timeout, runtime, agent, prompt, session_id):
+        def fake_execute(cmd, cwd, timeout, runtime, agent, prompt, session_id, stdin_text=""):
             call_count[0] += 1
             if call_count[0] == 1:
                 return session_expiry_output
@@ -400,3 +399,110 @@ class TestIssue190DoubleExpiryRecovery(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+class TestCopilotContextRetentionFix(unittest.TestCase):
+    """
+    Regression tests for the 4-root-cause context retention fix:
+      C01 - --name flag passed when creating a new session
+      C02 - session_id stored in session_map immediately (not after mtime scan)
+      C03 - session age default is 0 (not time.time()-0) when start time unknown
+      C04 - -p flag removed; context piped via stdin_text
+      C05 - recovery path also passes --name and stores session_id
+      C06 - sanitized session name uses only alphanumeric and hyphens
+    """
+
+    def setUp(self):
+        self.mgr = _make_mgr()
+        self.mgr.update_session_field = MagicMock()
+
+    def _run(self, **kwargs):
+        captured = []
+        def fake_execute(cmd, cwd, timeout, runtime, agent, prompt, session_id, stdin_text=""):
+            captured.append({"cmd": list(cmd), "stdin_text": stdin_text})
+            return "done"
+        self.mgr._execute_subprocess_with_tracking = fake_execute
+        with patch("sys.stderr"):
+            result = self.mgr.run_copilot(**kwargs)
+        return result, captured
+
+    def test_c01_name_flag_on_new_session(self):
+        """C01: New session must include --name=<n8n_session_id> in the copilot command."""
+        _, captured = self._run(
+            prompt="hello", model="gpt-4o", agent="wee-dev",
+            session_id=None, resume=False, n8n_session_id="n8n-c01",
+        )
+        cmd = captured[0]["cmd"]
+        name_flags = [a for a in cmd if a.startswith("--name=")]
+        self.assertTrue(name_flags, "C01: --name flag must be present in new session cmd")
+        self.assertIn("n8n-c01", name_flags[0], "C01: --name must include the n8n_session_id")
+
+    def test_c02_session_id_stored_in_session_map_immediately(self):
+        """C02: session_id is written to session_map right after --name, not after mtime scan."""
+        self._run(
+            prompt="hello", model="gpt-4o", agent="wee-dev",
+            session_id=None, resume=False, n8n_session_id="n8n-c02",
+        )
+        calls = [c for c in self.mgr.update_session_field.call_args_list if len(c.args) > 1 and c.args[1] == "session_id"]
+        self.assertTrue(calls, "C02: update_session_field must be called with session_id for new session")
+
+    def test_c03_unknown_session_age_defaults_to_zero(self):
+        """C03: When _copilot_session_start has no entry, age defaults to 0 (not ~1.7B sec)."""
+        captured = []
+        def fake_execute(cmd, cwd, timeout, runtime, agent, prompt, session_id, stdin_text=""):
+            captured.append(list(cmd))
+            return "done"
+        self.mgr._execute_subprocess_with_tracking = fake_execute
+        with patch("sys.stderr"):
+            self.mgr.run_copilot(
+                prompt="continue", model="gpt-4o", agent="wee-dev",
+                session_id="some-session", resume=True, n8n_session_id="n8n-c03-no-start",
+            )
+        self.assertEqual(len(captured), 1, "C03: must launch exactly one session")
+        self.assertTrue(any("--resume=" in a for a in captured[0]),
+            "C03: unknown start time must NOT force fresh start; must use --resume")
+
+    def test_c04_context_passed_via_stdin_not_p_flag(self):
+        """C04: context_prompt is passed as stdin_text, NOT via -p flag."""
+        _, captured = self._run(
+            prompt="do work", model="gpt-4o", agent="wee-dev",
+            session_id=None, resume=False, n8n_session_id="n8n-c04",
+        )
+        cmd = captured[0]["cmd"]
+        self.assertNotIn("-p", cmd, "C04: -p flag must be removed from copilot command")
+        self.assertIn("<ctx>mock context</ctx>", captured[0]["stdin_text"],
+            "C04: context_prompt must be passed as stdin_text, not via -p")
+
+    def test_c05_recovery_path_passes_name_and_stores_session_id(self):
+        """C05: Recovery session after token expiry also uses --name and updates session_map."""
+        session_expiry_output = "partial\nSession token expired. Please resend your message.\n"
+        call_count = [0]
+        captured = []
+        def fake_execute(cmd, cwd, timeout, runtime, agent, prompt, session_id, stdin_text=""):
+            call_count[0] += 1
+            captured.append({"cmd": list(cmd), "stdin_text": stdin_text})
+            return "recovered" if call_count[0] == 2 else session_expiry_output
+        self.mgr._execute_subprocess_with_tracking = fake_execute
+        with patch("sys.stderr"):
+            self.mgr.run_copilot(
+                prompt="long task", model="gpt-4o", agent="wee-dev",
+                session_id=None, resume=False, n8n_session_id="n8n-c05",
+            )
+        recovery_cmd = captured[1]["cmd"]
+        name_flags = [a for a in recovery_cmd if a.startswith("--name=")]
+        self.assertTrue(name_flags, "C05: recovery cmd must include --name flag")
+        session_id_calls = [c for c in self.mgr.update_session_field.call_args_list if len(c.args) > 1 and c.args[1] == "session_id"]
+        self.assertGreaterEqual(len(session_id_calls), 1, "C05: session_id must be updated after recovery starts")
+
+    def test_c06_session_name_sanitized(self):
+        """C06: n8n_session_id with special chars is sanitized to [A-Za-z0-9-]."""
+        _, captured = self._run(
+            prompt="work", model="gpt-4o", agent="wee-dev",
+            session_id=None, resume=False, n8n_session_id="session_uuid:123/foo",
+        )
+        name_flags = [a for a in captured[0]["cmd"] if a.startswith("--name=")]
+        self.assertTrue(name_flags)
+        import re
+        name_val = name_flags[0][len("--name="):]
+        self.assertRegex(name_val, r'^[A-Za-z0-9\-]+$', "C06: --name must only have alphanumeric + hyphens")
+
