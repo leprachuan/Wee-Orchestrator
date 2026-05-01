@@ -1469,6 +1469,21 @@ function isInternalMarkerLine(line) {
   return INTERNAL_LINE_MARKERS.some(m => line.includes(m));
 }
 
+function looksLikeCodexTransportFrames(text) {
+  if (!text || !text.trim()) return false;
+  const trimmed = text.trim();
+  return (
+    trimmed.includes('"type":"thread.started"') ||
+    trimmed.includes('"type":"turn.started"') ||
+    trimmed.includes('"type":"turn.completed"') ||
+    trimmed.includes('"type":"item.completed"') ||
+    trimmed.includes('"type": "thread.started"') ||
+    trimmed.includes('"type": "turn.started"') ||
+    trimmed.includes('"type": "turn.completed"') ||
+    trimmed.includes('"type": "item.completed"')
+  );
+}
+
 function detectToolCallLine(line) {
   const s = line.trimStart();
   if (/^[●⬤•]\s+/.test(s)) return true;
@@ -1596,11 +1611,12 @@ async function sendMessageStreaming(query, sessionId) {
             const sessionData = STATE.sessionStreams[sessionId];
             const elapsedMs = sendEndTime - (sessionData?.startTime || sendEndTime);
             const elapsedSec = elapsedMs / 1000;
-            // Use accumulated streaming text when available (captures all
-            // turns in multi-tool responses); fall back to done payload.
-            const finalContent = rawText.trim()
+            // Prefer the cleaned done payload when streamed content looks like
+            // Codex transport JSONL frames; otherwise keep the accumulated text.
+            const doneResponse = evt.response || '(no response)';
+            const finalContent = (rawText.trim() && !looksLikeCodexTransportFrames(rawText))
               ? rawText
-              : (evt.response || '(no response)');
+              : doneResponse;
             if (streamBubble) {
               streamBubble.classList.remove('streaming');
               applyMarkdownToBubble(streamBubble, finalContent);
