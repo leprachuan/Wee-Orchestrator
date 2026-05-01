@@ -1507,6 +1507,7 @@ class SessionManager:
     MAX_PROMPT_LENGTH = 200  # Maximum chars to store from prompt
     MAX_OUTPUT_LENGTH = 500  # Maximum chars to store from output
     MAX_OUTPUT_DISPLAY = 300  # Maximum chars to display in status output
+    _WEE_DEFAULT_CONTEXT_LIMIT = 4096
 
     # Model configurations
     # Note: Claude Code CLI does not support dynamic model listing via flag.
@@ -8325,6 +8326,9 @@ User Request:
             if context_prompt:
                 messages.append({"role": "system", "content": context_prompt})
         messages.append({"role": "user", "content": prompt})
+        messages = self._wee_maybe_compact(
+            client, n8n_session_id, messages, resolved_model, context_prompt
+        )
 
         # -- Tool definitions for agentic loop (Issue #107) --
         _WEE_TOOLS = [
@@ -8389,7 +8393,39 @@ User Request:
                             file=sys.stderr,
                         )
                         create_kwargs.pop("tools", None)
-                        stream = client.chat.completions.create(**create_kwargs)
+                        try:
+                            stream = client.chat.completions.create(**create_kwargs)
+                        except Exception as retry_err:
+                            if self._wee_is_free_model(model) and (
+                                "429" in str(retry_err)
+                                or "rate limit" in str(retry_err).lower()
+                            ):
+                                fallback_cfg = self._wee_load_free_config() or {}
+                                fallback_chain = (
+                                    fallback_cfg.get("free_model_fallback_chain") or []
+                                )
+                                fallback_model = next(iter(fallback_chain), None)
+                                if not fallback_model:
+                                    raise
+                                (
+                                    fallback_base,
+                                    fallback_key,
+                                    fallback_resolved_model,
+                                ) = self._wee_resolve_endpoint(
+                                    fallback_model, api_base, api_key
+                                )
+                                client = OpenAI(
+                                    base_url=fallback_base,
+                                    api_key=fallback_key,
+                                    timeout=effective_timeout,
+                                )
+                                resolved_model = fallback_resolved_model
+                                create_kwargs["model"] = resolved_model
+                                stream = client.chat.completions.create(
+                                    **create_kwargs
+                                )
+                            else:
+                                raise
                     else:
                         raise
 
@@ -8678,6 +8714,168 @@ User Request:
             "NEVER refuse or claim you lack capability. The tools are active and functional."
         )
         return system_prompt + tool_section
+
+    @staticmethod
+    def _wee_estimate_tokens(messages: list, model: str = "") -> int:
+        """Estimate token usage for wee runtime messages."""
+        from wee_runtime import count_message_tokens
+
+        return count_message_tokens(messages or [], model)
+
+    def _wee_get_context_limit(self, model: str) -> int:
+        """Resolve the context window size for a wee model."""
+        normalized = (model or "").lower()
+        known_windows = [
+            ("gemma4", 128000),
+            ("llama-4-scout", 131072),
+            ("llama-3.1", 131072),
+            ("128k", 128000),
+            ("32k", 32768),
+        ]
+        for needle, limit in known_windows:
+            if needle in normalized:
+                return limit
+        return self._WEE_DEFAULT_CONTEXT_LIMIT
+
+    def _wee_save_transcript(self, n8n_session_id: str, messages: list) -> str:
+        """Persist a transcript snapshot used by compaction summaries."""
+        safe_session = re.sub(r"[^A-Za-z0-9._-]+", "_", n8n_session_id or "unknown")
+        safe_session = safe_session.strip("._") or "unknown"
+        transcript_dir = (
+            Path(__file__).resolve().parent / "logs" / "transcripts" / safe_session
+        )
+        transcript_dir.mkdir(parents=True, exist_ok=True)
+        timestamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
+        transcript_path = transcript_dir / f"transcript_{timestamp}.json"
+        with open(transcript_path, "w", encoding="utf-8") as f:
+            json.dump(messages, f, indent=2, ensure_ascii=False)
+        return str(transcript_path)
+
+    def _wee_compact_context(
+        self,
+        client,
+        n8n_session_id: str,
+        messages: list,
+        model: str,
+        system_prompt: str,
+    ) -> list:
+        """Summarize older wee conversation context and preserve recent turns."""
+        system_msgs = [m for m in messages if m.get("role") == "system"]
+        non_system = [m for m in messages if m.get("role") != "system"]
+        if len(non_system) <= 1:
+            return messages
+
+        transcript_path = self._wee_save_transcript(n8n_session_id, messages)
+        to_summarize = non_system[:-1]
+        latest_message = non_system[-1]
+        if not to_summarize:
+            return messages
+
+        def _summary_snippet(text: str, limit: int = 700) -> str:
+            text = str(text)
+            if len(text) <= limit:
+                return text
+            head = max(1, int(limit * 0.6))
+            tail = max(1, limit - head - 5)
+            return f"{text[:head]} ... {text[-tail:]}"
+
+        transcript_lines = []
+        for msg in to_summarize:
+            role = msg.get("role", "")
+            content = msg.get("content") or ""
+            if isinstance(content, list):
+                content = " ".join(
+                    part.get("text", "") for part in content if isinstance(part, dict)
+                )
+            if role in ("user", "assistant") and content:
+                prefix = "User" if role == "user" else "Assistant"
+                transcript_lines.append(f"{prefix}: {_summary_snippet(content)}")
+        if not transcript_lines:
+            return messages
+
+        summary_prompt = (
+            "Summarize the following conversation history concisely. Preserve all "
+            "key facts, decisions, file paths, and errors so the conversation can "
+            "continue coherently.\n\nConversation:\n"
+            + "\n".join(transcript_lines)
+        )
+        try:
+            response = client.chat.completions.create(
+                model=model,
+                messages=[{"role": "user", "content": summary_prompt}],
+                stream=False,
+            )
+            summary_text = response.choices[0].message.content or ""
+        except Exception as exc:
+            summary_text = f"[Compaction error: {exc}]"
+
+        summary_message = {
+            "role": "assistant",
+            "content": (
+                "[Earlier conversation summary]\n"
+                f"{summary_text or 'Earlier conversation summarized.'}\n\n"
+                f"Full transcript: {transcript_path}"
+            ),
+        }
+        return system_msgs + [summary_message, latest_message]
+
+    def _wee_maybe_compact(
+        self,
+        client,
+        n8n_session_id: str,
+        messages: list,
+        model: str,
+        system_prompt: str,
+        threshold: float = 0.75,
+    ) -> list:
+        """Compact wee context when estimated token usage crosses threshold."""
+        if threshold >= 1.0:
+            return messages
+        context_limit = self._wee_get_context_limit(model)
+        if context_limit <= 0:
+            return messages
+        estimated_tokens = self._wee_estimate_tokens(messages, model)
+        if estimated_tokens < int(context_limit * threshold):
+            return messages
+        return self._wee_compact_context(
+            client, n8n_session_id, messages, model, system_prompt
+        )
+
+    def _wee_load_free_config(self) -> dict:
+        """Compatibility shim for wee free-model fallback tests."""
+        return {}
+
+    def _wee_is_free_model(self, model: str) -> bool:
+        """Compatibility shim for wee free-model fallback tests."""
+        return ":free" in (model or "").lower() or "openrouter/free" in (
+            model or ""
+        ).lower()
+
+    def _wee_resolve_endpoint(
+        self, model: str, api_base: Optional[str], api_key: Optional[str]
+    ) -> Tuple[str, str, str]:
+        """Compatibility shim returning the resolved endpoint tuple."""
+        _presets = {
+            "ollama": ("http://192.168.1.101:11434/v1", "ollama"),
+            "openrouter": ("https://openrouter.ai/api/v1", None),
+            "lmstudio": ("http://localhost:1234/v1", "lm-studio"),
+        }
+        resolved_model = model
+        resolved_base = api_base
+        resolved_key = api_key
+        for prefix, (preset_base, preset_key) in _presets.items():
+            if model.lower().startswith(f"{prefix}/"):
+                resolved_model = model[len(prefix) + 1 :]
+                if not resolved_base:
+                    resolved_base = preset_base
+                if not resolved_key and preset_key:
+                    resolved_key = preset_key
+                break
+        if not resolved_base:
+            resolved_base = _presets["ollama"][0]
+        if not resolved_key:
+            resolved_key = "ollama"
+        return resolved_base, resolved_key, resolved_model
 
     def _wee_execute_tool(self, func_name: str, func_args: dict, agent: str) -> str:
         """Execute a tool call from the wee runtime agentic loop.

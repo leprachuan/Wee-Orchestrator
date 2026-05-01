@@ -299,6 +299,17 @@ class TestTokenTracker(unittest.TestCase):
         self.assertIn("total: 150", summary)
         self.assertIn("turns: 1", summary)
 
+    def test_summary_includes_context_window(self):
+        t = TokenTracker(context_window=1000)
+        usage = MagicMock()
+        usage.prompt_tokens = 250
+        usage.completion_tokens = 50
+        usage.total_tokens = 300
+        t.update(usage)
+        summary = t.summary()
+        self.assertIn("Context window", summary)
+        self.assertIn("25.0% used", summary)
+
 
 class TestModelResolutionViaCLI(unittest.TestCase):
     """Test model resolution through the CLI."""
@@ -518,6 +529,79 @@ class TestREPLCommands(unittest.TestCase):
                 permission="restricted",
             )
         mock_chat.assert_not_called()
+
+    @patch("wee_cli.get_context_window", return_value=1000)
+    @patch("wee_cli.compact_messages")
+    @patch("wee_cli.count_message_tokens", side_effect=[900, 250])
+    @patch("wee_cli._make_client")
+    @patch("wee_cli._init_readline")
+    @patch("wee_cli._save_readline")
+    @patch("wee_cli.chat_stream", return_value="response text")
+    def test_compact_command(
+        self,
+        mock_chat,
+        mock_save,
+        mock_init,
+        mock_client,
+        mock_count_tokens,
+        mock_compact,
+        mock_context_window,
+    ):
+        mock_compact.return_value = (
+            [
+                {"role": "system", "content": "sys"},
+                {"role": "user", "content": "[Earlier conversation summary]\nsummary"},
+                {"role": "assistant", "content": "Understood."},
+            ],
+            "summary",
+        )
+        with patch("builtins.input", side_effect=["hello", "/compact", "exit"]):
+            from wee_cli import run_interactive
+
+            run_interactive(
+                model="test",
+                api_base="http://localhost/v1",
+                api_key="test",
+                tools_enabled=False,
+                temperature=None,
+                timeout=60,
+                system_prompt="sys",
+                output_format="text",
+                permission="restricted",
+            )
+        mock_chat.assert_called_once()
+        mock_compact.assert_called_once()
+
+    @patch("wee_cli.get_context_window", return_value=1000)
+    @patch("wee_cli._make_client")
+    @patch("wee_cli._init_readline")
+    @patch("wee_cli._save_readline")
+    @patch("wee_cli.chat_stream", return_value="response text")
+    def test_model_switch_updates_context_window(
+        self,
+        mock_chat,
+        mock_save,
+        mock_init,
+        mock_client,
+        mock_context_window,
+    ):
+        with patch("wee_cli.resolve_model_and_endpoint", return_value=("new-model", "http://localhost/v1", "test")):
+            with patch("builtins.input", side_effect=["/model new-model", "/tokens", "exit"]):
+                with patch("sys.stderr", new_callable=StringIO) as fake_err:
+                    from wee_cli import run_interactive
+
+                    run_interactive(
+                        model="test",
+                        api_base="http://localhost/v1",
+                        api_key="test",
+                        tools_enabled=False,
+                        temperature=None,
+                        timeout=60,
+                        system_prompt="sys",
+                        output_format="text",
+                        permission="restricted",
+                    )
+        self.assertIn("Context window", fake_err.getvalue())
 
     @patch("wee_cli._make_client")
     @patch("wee_cli._init_readline")
@@ -989,6 +1073,7 @@ class TestREPLHelp(unittest.TestCase):
         self.assertIn("/history", REPL_HELP)
         self.assertIn("/model", REPL_HELP)
         self.assertIn("/tokens", REPL_HELP)
+        self.assertIn("/compact", REPL_HELP)
         self.assertIn("/system", REPL_HELP)
         self.assertIn("/help", REPL_HELP)
         self.assertIn("exit", REPL_HELP)

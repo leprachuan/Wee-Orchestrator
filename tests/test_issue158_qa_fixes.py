@@ -99,9 +99,14 @@ def test_nit1_api_key_help_warns_env():
     fake_rt.PROVIDER_PRESETS = {}
     fake_rt._ANTI_HALLUCINATION_PROMPT = ""
     fake_rt._WEE_TOOLS = []
+    fake_rt.COMPACT_TRIGGER_FRACTION = 0.75
     fake_rt.MAX_TOOL_ROUNDS = 1
     fake_rt.TOOL_TIMEOUT = 10
+    fake_rt.compact_messages = lambda **kw: (kw["messages"], "")
+    fake_rt.count_message_tokens = lambda messages, model="": 0
     fake_rt.execute_tool = lambda *a, **kw: ""
+    fake_rt.get_context_window = lambda model: 4096
+    fake_rt.list_available_models = lambda *a, **kw: []
     fake_rt.resolve_model_and_endpoint = lambda *a, **kw: ("m", "http://x", "k")
     sys.modules["wee_runtime"] = fake_rt
     try:
@@ -131,8 +136,13 @@ def _make_wee_cli_module():
     fake_rt = types.ModuleType("wee_runtime")
     fake_rt._ANTI_HALLUCINATION_PROMPT = ""
     fake_rt._WEE_TOOLS = []
+    fake_rt.COMPACT_TRIGGER_FRACTION = 0.75
     fake_rt.MAX_TOOL_ROUNDS = 3
+    fake_rt.compact_messages = lambda **kw: (kw["messages"], "")
+    fake_rt.count_message_tokens = lambda messages, model="": 0
     fake_rt.execute_tool = MagicMock(return_value="tool output")
+    fake_rt.get_context_window = lambda model: 4096
+    fake_rt.list_available_models = lambda *a, **kw: []
     fake_rt.resolve_model_and_endpoint = lambda *a, **kw: (
         "model",
         "http://base",

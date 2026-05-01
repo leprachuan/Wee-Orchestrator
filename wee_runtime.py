@@ -221,6 +221,14 @@ def compact_messages(
                 break
             idx -= 1
 
+    def _summary_snippet(text: str, limit: int = 500) -> str:
+        text = str(text)
+        if len(text) <= limit:
+            return text
+        head = max(1, int(limit * 0.65))
+        tail = max(1, limit - head - 5)
+        return f"{text[:head]} ... {text[-tail:]}"
+
     transcript_lines = []
     for m in to_summarize:
         role = m.get("role", "")
@@ -231,7 +239,7 @@ def compact_messages(
             )
         if role in ("user", "assistant") and content:
             prefix = "User" if role == "user" else "Assistant"
-            transcript_lines.append(f"{prefix}: {str(content)[:500]}")
+            transcript_lines.append(f"{prefix}: {_summary_snippet(content)}")
 
     if not transcript_lines:
         return messages, ""
