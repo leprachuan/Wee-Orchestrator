@@ -38,8 +38,12 @@ sys.path.insert(0, _HERE)
 from wee_runtime import _WEE_TOOLS  # noqa: E402
 from wee_runtime import (  # noqa: E402
     _ANTI_HALLUCINATION_PROMPT,
+    COMPACT_TRIGGER_FRACTION,
     MAX_TOOL_ROUNDS,
+    compact_messages,
+    count_message_tokens,
     execute_tool,
+    get_context_window,
     list_available_models,
     resolve_model_and_endpoint,
 )
@@ -665,6 +669,7 @@ Wee CLI Interactive Mode — Commands:
   /model list         List all available models
   /model list PROVIDER List models from specific provider (ollama, openrouter, lmstudio)
   /tokens             Show token usage
+  /compact [PCT]      Summarize old context to target percent of window (default 50)
   /system PROMPT      Set system prompt
   /config             Show current configuration
   /tools              Show tool status
@@ -708,7 +713,8 @@ def run_interactive(
     _init_readline()
 
     client = _make_client(api_base, api_key, timeout)
-    token_tracker = TokenTracker()
+    context_window = get_context_window(model)
+    token_tracker = TokenTracker(context_window=context_window)
     messages, effective_system = _prepare_session_messages(
         system_prompt, existing_messages
     )
@@ -733,6 +739,9 @@ def run_interactive(
 
         if not user_input:
             continue
+
+        if user_input.lower() in ("exit", "quit"):
+            break
 
         # Handle slash commands
         if user_input.startswith("/"):
@@ -791,11 +800,68 @@ def run_interactive(
                     resolved_model, api_base, api_key = resolve_model_and_endpoint(arg)
                     client = _make_client(api_base, api_key, timeout)
                     model = resolved_model  # Use resolved model for API calls
+                    token_tracker.context_window = get_context_window(model)
                     _print_info(f"Model switched: {old_model} → {model}")
                 continue
 
             elif cmd == "/tokens":
                 _print_info(token_tracker.summary())
+                continue
+
+            elif cmd == "/compact":
+                if arg:
+                    try:
+                        target_pct = int(arg)
+                    except ValueError:
+                        _print_error("Invalid compact target. Use an integer 10-90.")
+                        continue
+                else:
+                    target_pct = 50
+
+                if target_pct < 10 or target_pct > 90:
+                    _print_error("Compact target must be between 10 and 90.")
+                    continue
+
+                current_window = token_tracker.context_window or get_context_window(model)
+                token_tracker.context_window = current_window
+                before_tokens = count_message_tokens(messages, model)
+                target_tokens = max(1, int(current_window * (target_pct / 100.0)))
+
+                compacted, summary = compact_messages(
+                    messages=messages,
+                    target_tokens=target_tokens,
+                    model=model,
+                    client=client,
+                )
+                if compacted == messages and not summary:
+                    _print_info("Compaction skipped — history is already short.")
+                    continue
+
+                after_tokens = count_message_tokens(compacted, model)
+                before_count = len(messages)
+                messages = compacted
+                token_tracker = TokenTracker(context_window=current_window)
+                if session_name:
+                    save_session_data(
+                        session_name,
+                        _session_payload(
+                            messages,
+                            model_for_persistence,
+                            system_prompt,
+                            tools_enabled,
+                            temperature,
+                            timeout,
+                            output_format,
+                            permission,
+                        ),
+                    )
+                _print_info(
+                    f"Compacted: {before_count} → {len(messages)} messages, "
+                    f"~{before_tokens:,} → ~{after_tokens:,} tokens"
+                )
+                if summary:
+                    preview = summary if len(summary) <= 240 else summary[:240] + "..."
+                    _print_info(f"Summary: {preview}")
                 continue
 
             elif cmd == "/system":
@@ -1027,7 +1093,15 @@ def run_interactive(
                         timeout,
                         output_format,
                         permission,
-                    ),
+                        ),
+                    )
+            if (
+                token_tracker.context_window
+                and token_tracker.percent_used() >= COMPACT_TRIGGER_FRACTION * 100
+            ):
+                _print_info(
+                    f"⚠ Context at {token_tracker.percent_used():.1f}% — "
+                    "consider /compact to free space."
                 )
         except KeyboardInterrupt:
             print("\n[interrupted]")
@@ -1088,7 +1162,7 @@ def run_single_shot(
 ):
     """Run a single prompt and exit."""
     client = _make_client(api_base, api_key, timeout)
-    token_tracker = TokenTracker()
+    token_tracker = TokenTracker(context_window=get_context_window(model))
     messages, _ = _prepare_session_messages(system_prompt, existing_messages)
 
     messages.append({"role": "user", "content": prompt})
