@@ -6473,6 +6473,44 @@ User Request:
                                         ):
                                             continue
                                 elif runtime == "codex":
+                                    # Codex v0.125+ emits JSONL transport frames when
+                                    # exec is invoked with --json. Parse assistant text
+                                    # here so the WebUI streams human-readable content
+                                    # instead of raw thread/turn metadata.
+                                    if _line_stripped.startswith("{"):
+                                        try:
+                                            _cx_obj = _json.loads(_line_stripped)
+                                        except (ValueError, KeyError):
+                                            _cx_obj = None
+                                        if _cx_obj:
+                                            _cx_type = _cx_obj.get("type", "")
+                                            if (
+                                                _cx_type == "item.completed"
+                                                and isinstance(_cx_obj.get("item"), dict)
+                                                and _cx_obj["item"].get("type")
+                                                == "agent_message"
+                                            ):
+                                                _cx_text = _cx_obj["item"].get("text", "")
+                                                if _cx_text:
+                                                    if stream_buffer:
+                                                        stream_buffer.push(
+                                                            "chunk", _cx_text
+                                                        )
+                                                    else:
+                                                        loop.call_soon_threadsafe(
+                                                            queue.put_nowait,
+                                                            ("chunk", _cx_text),
+                                                        )
+                                                continue
+                                            if _cx_type in (
+                                                "thread.started",
+                                                "thread.completed",
+                                                "turn.started",
+                                                "turn.completed",
+                                                "item.started",
+                                            ):
+                                                continue
+
                                     # Codex exec tool call patterns
                                     import re as _re_tc
 
