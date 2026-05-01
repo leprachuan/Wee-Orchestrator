@@ -6854,9 +6854,11 @@ User Request:
         # Proactive session age check (issue #190): Copilot session tokens expire
         # ~30 min after creation. If the session is > 25 min old, start fresh to
         # avoid mid-task "Session token expired" crashes on long-running tasks.
-        _session_age = time.time() - getattr(self, "_copilot_session_start", {}).get(
-            n8n_session_id, 0
-        )
+        # Use None as default so we can distinguish "unknown start time" from "just started".
+        # If no start time is recorded (e.g. after a service restart), treat age as 0
+        # to allow resumption rather than forcing a new session every time.
+        _start_time = getattr(self, "_copilot_session_start", {}).get(n8n_session_id)
+        _session_age = time.time() - _start_time if _start_time is not None else 0
         if resume and session_id and _session_age > _COPILOT_SESSION_MAX_AGE_SEC:
             print(
                 f"[Session] Copilot session age {_session_age:.0f}s exceeds "
@@ -6885,12 +6887,19 @@ User Request:
             cmd.append(f"--resume={session_id}")
             print(f"[Session] Resuming Copilot session: {session_id}", file=sys.stderr)
         else:
+            # Name the session after the n8n_session_id so --resume works on next call.
+            # Copilot session names must be alphanumeric+hyphens; strip unsafe chars.
+            _copilot_name = re.sub(r"[^A-Za-z0-9\-]", "-", n8n_session_id)[:64]
+            cmd.append(f"--name={_copilot_name}")
             # Record session start time for proactive age tracking
             getattr(self, "_copilot_session_start", {}).update(
                 {n8n_session_id: time.time()}
             )
+            # Immediately store the session name in session_map so the next call
+            # can resume without relying on get_most_recent_session_id (race-prone).
+            self.update_session_field(n8n_session_id, "session_id", _copilot_name)
             print(
-                f"[Session] Starting new Copilot session in {mode} permission mode",
+                f"[Session] Starting new Copilot session '{_copilot_name}' in {mode} permission mode",  # noqa: E501
                 file=sys.stderr,
             )
 
@@ -6939,25 +6948,26 @@ User Request:
                 _recovery_context += _COPILOT_ELEVATED_MODE_INSTRUCTIONS
             elif mode == "sandboxed":
                 _recovery_context += _COPILOT_SANDBOXED_MODE_INSTRUCTIONS
+            _recovery_copilot_name = re.sub(r"[^A-Za-z0-9\-]", "-", n8n_session_id)[:64]
             _recovery_cmd = [
                 self.copilot_bin,
-                "-p",
-                _recovery_context,
                 "--allow-all-tools",
                 "--no-color",
                 "--model",
                 model,
                 "--additional-mcp-config",
                 f"@{mcp_config_path}",
+                f"--name={_recovery_copilot_name}",
             ]
             if mode == "elevated":
-                _recovery_cmd.insert(4, "--allow-all-paths")
+                _recovery_cmd.insert(2, "--allow-all-paths")
                 _recovery_cmd.append("--yolo")
 
-            # Record new session start for age tracking
+            # Record new session start for age tracking and update session_id
             getattr(self, "_copilot_session_start", {}).update(
                 {n8n_session_id: time.time()}
             )
+            self.update_session_field(n8n_session_id, "session_id", _recovery_copilot_name)
             _recovery_output = self._execute_subprocess_with_tracking(
                 _recovery_cmd,
                 agent_dir,
@@ -6966,6 +6976,7 @@ User Request:
                 agent,
                 _recovery_preamble,
                 n8n_session_id,
+                stdin_text=_recovery_context,
             )
             _stripped_recovery = self.strip_metadata(_recovery_output, "copilot")
             if _TOKEN_EXPIRED_MARKER in _stripped_recovery:
