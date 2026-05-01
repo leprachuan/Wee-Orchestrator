@@ -6015,6 +6015,7 @@ User Request:
         prompt: str,
         n8n_session_id: str,
         use_pty: bool = False,
+        stdin_text: str = "",
     ) -> str:
         """Execute a subprocess with PID tracking.
 
@@ -6071,9 +6072,10 @@ User Request:
             if _pty_master is not None:
                 process = subprocess.Popen(
                     cmd,
-                    stdin=subprocess.DEVNULL,
+                    stdin=subprocess.PIPE if stdin_text else subprocess.DEVNULL,
                     stdout=_pty_slave,
                     stderr=subprocess.PIPE,
+                    text=True,
                     cwd=cwd,
                     env=_sub_env,
                 )
@@ -6081,6 +6083,7 @@ User Request:
             else:
                 process = subprocess.Popen(
                     cmd,
+                    stdin=subprocess.PIPE if stdin_text else None,
                     stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE,
                     text=True,
@@ -6092,6 +6095,14 @@ User Request:
             self.track_running_query(
                 n8n_session_id, process.pid, runtime, agent, prompt
             )
+
+            # Send stdin data if provided (for runtimes in interactive mode)
+            if stdin_text and process.stdin:
+                try:
+                    process.stdin.write(stdin_text)
+                    process.stdin.close()
+                except (BrokenPipeError, OSError):
+                    pass  # Process may have exited or closed stdin
 
             if stream_info:
                 # ── Streaming path ──────────────────────────────────────────
@@ -6827,8 +6838,6 @@ User Request:
 
         cmd = [
             self.copilot_bin,
-            "-p",
-            context_prompt,
             "--allow-all-tools",
             "--no-color",
             "--model",
@@ -6839,7 +6848,7 @@ User Request:
 
         # Add elevated flags for full access
         if mode == "elevated":
-            cmd.insert(4, "--allow-all-paths")
+            cmd.insert(2, "--allow-all-paths")
             cmd.append("--yolo")
 
         # Proactive session age check (issue #190): Copilot session tokens expire
@@ -6871,8 +6880,6 @@ User Request:
                 context_prompt = context_prompt + _COPILOT_ELEVATED_MODE_INSTRUCTIONS
             elif mode == "sandboxed":
                 context_prompt = context_prompt + _COPILOT_SANDBOXED_MODE_INSTRUCTIONS
-            # Update cmd[2] so the rebuilt context_prompt is actually used
-            cmd[2] = context_prompt
 
         if resume and session_id:
             cmd.append(f"--resume={session_id}")
@@ -6888,7 +6895,8 @@ User Request:
             )
 
         output = self._execute_subprocess_with_tracking(
-            cmd, agent_dir, effective_timeout, "copilot", agent, prompt, n8n_session_id
+            cmd, agent_dir, effective_timeout, "copilot", agent, prompt, n8n_session_id,
+            stdin_text=context_prompt
         )
         result = self.strip_metadata(output, "copilot")
 
