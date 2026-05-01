@@ -283,7 +283,7 @@ def get_agent_dispatch_config(agent_name: str) -> dict:
         yolo = agent_name in ("wee-dev", "wee-qa")
     return {
         "runtime": agent.get("primary_runtime", "copilot"),
-        "model": agent.get("primary_model", "auto"),
+        "model": agent.get("primary_model") or None,
         "fallback_runtime": agent.get("fallback_runtime"),
         "fallback_model": agent.get("fallback_model"),
         "permission_mode": permission_mode,
@@ -302,17 +302,18 @@ def dispatch_via_api(agent: str, prompt: str, cfg: dict) -> str:
         "prompt": prompt,
         "agent": agent,
         "runtime": cfg["runtime"],
-        "model": cfg["model"],
         "timeout": cfg.get("timeout", 3600),
         "notify": False,
     }
+    if cfg.get("model"):
+        body["model"] = cfg["model"]
     if cfg.get("permission_mode"):
         body["permission_mode"] = cfg["permission_mode"]
     if cfg.get("yolo"):
         body["yolo"] = cfg["yolo"]
     if cfg.get("fallback_runtime"):
         body["fallback_runtime"] = cfg["fallback_runtime"]
-    if cfg.get("fallback_model"):
+    if cfg.get("fallback_model") and cfg["fallback_model"] != "auto":
         body["fallback_model"] = cfg["fallback_model"]
 
     payload_json = json.dumps(body, sort_keys=True)
@@ -471,11 +472,28 @@ def dispatch_wee_qa(item: dict, state: dict) -> None:
 
 def run_pipeline(items: list[dict], state: dict) -> None:
     # -----------------------------------------------------------------------
-    # wee-dev slot: one in-progress wee-dev task at a time
+    # Check for any running wee-dev or wee-qa tasks (serial execution)
+    # -----------------------------------------------------------------------
+    any_wee_dev_running = any(
+        is_task_running(get_issue_state(state, i["number"]).get("wee_dev_task_id", ""))
+        for i in items
+    )
+    any_wee_qa_running = any(
+        is_task_running(get_issue_state(state, i["number"]).get("wee_qa_task_id", ""))
+        for i in items
+    )
+
+    if any_wee_dev_running or any_wee_qa_running:
+        log(f"wee-dev/wee-qa serial enforcement: dev_running={any_wee_dev_running}, qa_running={any_wee_qa_running} — skipping dispatch")
+        return  # Serial: wait for current task to finish
+
+    # -----------------------------------------------------------------------
+    # wee-dev slot: one task at a time
     # -----------------------------------------------------------------------
     in_progress = [i for i in items if i["status"] == "in-progress"]
     qa_failed = [i for i in items if i["status"] == "qa-failed"]
     queued = [i for i in items if i["status"] == "queued"]
+
 
     wee_dev_dispatched = False
 
@@ -543,7 +561,7 @@ def run_pipeline(items: list[dict], state: dict) -> None:
         log("No wee-dev work to do.")
 
     # -----------------------------------------------------------------------
-    # wee-qa slot: can run in parallel with wee-dev (different issue)
+    # wee-qa slot: only dispatch if no wee-dev is running (serial execution)
     # -----------------------------------------------------------------------
     qa_review = [i for i in items if i["status"] == "qa-review"]
 
