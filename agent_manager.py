@@ -12521,12 +12521,15 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         runtime = body.runtime or defaults.get("runtime", get_default_runtime())
         raw_model = body.model or defaults.get("model", get_default_model())
         resolved_model = session_mgr.get_model_from_name(raw_model, runtime)
-        if body.model and not resolved_model:
+        # Reject explicit "auto" (placeholder, not a real model ID) and
+        # any model name that cannot be resolved to a known model.
+        if body.model and (body.model.lower() == "auto" or not resolved_model):
             raise HTTPException(
                 status_code=422,
                 detail=(
                     f"Invalid model '{body.model}' for runtime '{runtime}'. "
-                    f"Use GET /api/v1/models?runtime={runtime} to list available models."
+                    f"Use GET /api/v1/models?runtime={runtime}"
+                    " to list available models."
                 ),
             )
         model = resolved_model or raw_model
