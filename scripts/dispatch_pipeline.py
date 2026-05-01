@@ -114,6 +114,29 @@ def ensure_labels() -> None:
             log(f"Created label {name!r}")
 
 
+def fetch_issue_comments(issue_number: int) -> str:
+    """Fetch all comments for an issue and format them."""
+    try:
+        raw = gh(
+            "issue", "view", str(issue_number), "--repo", REPO,
+            "--json", "comments",
+        )
+        data = json.loads(raw)
+        comments = data.get("comments", [])
+        if not comments:
+            return ""
+        
+        formatted = []
+        for comment in comments:
+            author = comment.get("author", {}).get("login", "unknown")
+            body = comment.get("body", "")
+            formatted.append(f"**@{author}:**\n{body}")
+        return "\n\n---\n\n".join(formatted)
+    except Exception as e:
+        log(f"WARNING: Failed to fetch comments for #{issue_number}: {e}")
+        return ""
+
+
 def fetch_issues() -> list[dict]:
     """Fetch all open issues labelled wee-dev, sorted oldest first."""
     raw = gh(
@@ -364,15 +387,24 @@ def passes_safety_gate(item: dict) -> bool:
 
 
 def build_wee_dev_prompt(item: dict) -> str:
+    # Fetch comments if available
+    comments = fetch_issue_comments(item["number"])
+    comments_section = f"\n\n## Issue Comments (context from previous discussion):\n{comments}" if comments else ""
+    
     return (
         f"Work on GitHub issue #{item['number']} in {REPO}: {item['title']}.\n\n"
-        f"Issue body:\n{item['body']}\n\n"
-        "Read the full issue on GitHub for complete details. Implement the fix/feature "
-        "on the dev host (192.168.1.100) in /opt/n8n-copilot-shim-dev/. "
-        "Follow /opt/wee-dev/AGENTS.md for all git workflow rules. "
-        "When implementation is complete and tests pass, add the label "
-        "'wee-dev:qa-review' to the issue — the dispatcher will pick it up for wee-qa. "
-        "Do not dispatch wee-qa yourself. Do not work on more than this one issue."
+        f"## Issue Description:\n{item['body']}"
+        f"{comments_section}\n\n"
+        "## Task:\n"
+        "1. Read the full issue body and all comments above to understand requirements and context.\n"
+        "2. Implement the fix/feature on the dev host (192.168.1.100) in /opt/n8n-copilot-shim-dev/.\n"
+        "3. Follow /opt/wee-dev/AGENTS.md for all git workflow rules.\n"
+        "4. Leave clear notes on this GitHub issue as you work (use /comment command or GitHub UI).\n"
+        "   - **IMPORTANT: Never put secrets, API keys, passwords, or credentials in GitHub issues.**\n"
+        "   - Do leave implementation notes, decisions made, test results, and commit SHAs.\n"
+        "5. When implementation is complete and tests pass, add the label 'wee-dev:qa-review' to the issue.\n"
+        "6. The dispatcher will pick it up for wee-qa. Do not dispatch wee-qa yourself.\n"
+        "7. Do not work on more than one issue at a time."
     )
 
 
@@ -396,17 +428,25 @@ def dispatch_wee_dev(item: dict, state: dict) -> None:
 
 
 def build_wee_qa_prompt(item: dict) -> str:
+    # Fetch comments if available
+    comments = fetch_issue_comments(item["number"])
+    comments_section = f"\n\n## Issue Discussion:\n{comments}" if comments else ""
+    
     return (
         f"QA review for GitHub issue #{item['number']} in {REPO}: {item['title']}.\n\n"
-        f"Issue body:\n{item['body']}\n\n"
-        "Read the full issue on GitHub. The implementation is on dev host 192.168.1.100 "
-        "in /opt/n8n-copilot-shim-dev/. Run the full test suite, check code quality "
-        "(flake8/black), verify the implementation matches issue requirements. "
-        "When done: if QA passes, add label 'wee-dev:approved' and post a comment "
-        "with 'VERDICT: APPROVE' and the passing test count. "
-        "If QA fails, add label 'wee-dev:qa-failed' and post a comment with "
-        "'VERDICT: REJECT' and specific failure details. "
-        "Remove the 'wee-dev:qa-review' label when you start reviewing."
+        f"## Issue Description:\n{item['body']}"
+        f"{comments_section}\n\n"
+        "## Task:\n"
+        "1. Read the full issue and discussion above to understand what was implemented.\n"
+        "2. The implementation is on dev host 192.168.1.100 in /opt/n8n-copilot-shim-dev/.\n"
+        "3. Run the full test suite, check code quality (flake8/black), verify requirements are met.\n"
+        "4. Leave notes on this GitHub issue as you work.\n"
+        "   - **IMPORTANT: Never put secrets, API keys, passwords, or credentials in GitHub issues.**\n"
+        "   - Do leave test results, code quality findings, and specific pass/fail details.\n"
+        "5. When QA is complete:\n"
+        "   - If APPROVED: Add label 'wee-dev:approved', remove 'wee-dev:qa-review', post comment: 'VERDICT: APPROVE' + test count + summary.\n"
+        "   - If REJECTED: Add label 'wee-dev:qa-failed', remove 'wee-dev:qa-review', post comment: 'VERDICT: REJECT' + specific failures.\n"
+        "6. Do NOT merge or close the issue — wee-dev handles that after approval."
     )
 
 
