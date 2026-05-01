@@ -15,7 +15,7 @@ import sys
 import unittest
 from unittest.mock import MagicMock, patch
 
-os.environ.setdefault("API_SHARED_KEY", "test_key_292")
+os.environ["API_SHARED_KEY"] = "test_key_292"  # force-override so test is hermetic
 os.environ.setdefault("APP_ENV", "DEV")
 os.environ.setdefault("API_PORT", "8099")
 

@@ -85,6 +85,29 @@ def minutes_since(iso_str: str) -> float | None:
     return (datetime.now(timezone.utc) - t).total_seconds() / 60
 
 
+# Alias retained for test imports that used the old dispatch_wee_dev_work_queue name.
+parse_iso_datetime = parse_iso
+
+# States where stall-timeout detection applies (waiting on an external agent).
+_STALL_STATES = {"qa-review", "in-progress", "qa-failed"}
+
+
+def check_stall_timeout(lock: dict | None) -> bool:
+    """Return True when a lock entry has been in a stall-eligible state longer
+    than STALL_TIMEOUT_MINUTES, indicating the responsible agent is stuck."""
+    if lock is None:
+        return False
+    if lock.get("state") not in _STALL_STATES:
+        return False
+    created_at = lock.get("created_at")
+    if not created_at:
+        return False
+    mins = minutes_since(created_at)
+    if mins is None:
+        return False
+    return mins >= STALL_TIMEOUT_MINUTES
+
+
 # ---------------------------------------------------------------------------
 # GitHub helpers
 # ---------------------------------------------------------------------------
