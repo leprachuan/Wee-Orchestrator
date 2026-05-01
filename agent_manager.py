@@ -6875,7 +6875,7 @@ User Request:
             cmd[2] = context_prompt
 
         if resume and session_id:
-            cmd.extend(["--resume", session_id])
+            cmd.append(f"--resume={session_id}")
             print(f"[Session] Resuming Copilot session: {session_id}", file=sys.stderr)
         else:
             # Record session start time for proactive age tracking
@@ -7679,7 +7679,7 @@ User Request:
         ]
 
         if resume and session_id:
-            cmd.extend(["--resume", session_id])
+            cmd.append(f"--resume={session_id}")
             print(f"[Session] Resuming Claude session: {session_id}", file=sys.stderr)
         elif session_id:
             cmd.extend(["--session-id", session_id])
@@ -7811,7 +7811,7 @@ User Request:
         # The session_id parameter is not used since Gemini manages sessions internally.
         # Using "--resume latest" automatically continues with the most recent session.
         if resume:
-            cmd.extend(["--resume", "latest"])
+            cmd.append("--resume=latest")
             print(f"[Session] Resuming Gemini session (latest)", file=sys.stderr)
         else:
             print(
