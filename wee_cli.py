@@ -478,7 +478,10 @@ class ThinkingBuffer:
         return "".join(output_parts)
 
     def flush(self) -> str:
-        """Flush remaining buffer at stream end. Returns any pending non-thinking text."""
+        """Flush remaining buffer at stream end.
+
+        Returns any pending non-thinking text.
+        """
         remaining = self._buf
         self._buf = ""
         if self.in_thinking:
