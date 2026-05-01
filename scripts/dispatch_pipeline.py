@@ -473,19 +473,18 @@ def dispatch_wee_qa(item: dict, state: dict) -> None:
 def run_pipeline(items: list[dict], state: dict) -> None:
     # -----------------------------------------------------------------------
     # Check for any running wee-dev or wee-qa tasks (serial execution)
+    # Labels provide the source of truth: in-progress OR qa-review means agent is working
     # -----------------------------------------------------------------------
-    any_wee_dev_running = any(
-        is_task_running(get_issue_state(state, i["number"]).get("wee_dev_task_id", ""))
-        for i in items
-    )
-    any_wee_qa_running = any(
-        is_task_running(get_issue_state(state, i["number"]).get("wee_qa_task_id", ""))
-        for i in items
-    )
-
-    if any_wee_dev_running or any_wee_qa_running:
-        log(f"wee-dev/wee-qa serial enforcement: dev_running={any_wee_dev_running}, qa_running={any_wee_qa_running} — skipping dispatch")
-        return  # Serial: wait for current task to finish
+    
+    # Count how many issues have active agent work
+    active_dev = [i for i in items if i["status"] == "in-progress"]
+    active_qa = [i for i in items if i["status"] == "qa-review"]
+    
+    if active_dev or active_qa:
+        active_label = f"{'in-progress' if active_dev else 'qa-review'}"
+        active_issues = [i["id"] for i in (active_dev or active_qa)]
+        log(f"Serial enforcement: {active_label} work on {active_issues} — skipping dispatch")
+        return  # Serial: wait for current work to complete
 
     # -----------------------------------------------------------------------
     # wee-dev slot: one task at a time
