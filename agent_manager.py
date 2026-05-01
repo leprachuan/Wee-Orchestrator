@@ -12519,7 +12519,17 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
 
         agent = body.agent or defaults.get("agent", get_default_agent())
         runtime = body.runtime or defaults.get("runtime", get_default_runtime())
-        model = body.model or defaults.get("model", get_default_model())
+        raw_model = body.model or defaults.get("model", get_default_model())
+        resolved_model = session_mgr.get_model_from_name(raw_model, runtime)
+        if body.model and not resolved_model:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    f"Invalid model '{body.model}' for runtime '{runtime}'. "
+                    f"Use GET /api/v1/models?runtime={runtime} to list available models."
+                ),
+            )
+        model = resolved_model or raw_model
 
         task_id = f"bg_{str(uuid4())[:8]}"
         session_id = str(uuid4())  # Must be valid UUID format for Copilot CLI
