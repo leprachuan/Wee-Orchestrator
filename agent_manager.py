@@ -7942,24 +7942,18 @@ User Request:
         if "Error: CODEX command failed" in output:
             return output
 
-        # v0.125.0+: extract thread_id from JSONL thread.started event
-        import json as _json
+        stripped = self.strip_metadata(output, "codex")
+        if not stripped.strip() and output.strip():
+            _exit_code = self._last_exit_codes.get(n8n_session_id, 0)
+            if _exit_code:
+                print(
+                    "[Session] WARNING: Codex returned non-zero exit and no assistant text. "
+                    "Returning raw output so the UI shows the actual error.",
+                    file=sys.stderr,
+                )
+                return output
 
-        for _line in output.splitlines():
-            _line = _line.strip()
-            if not _line:
-                continue
-            try:
-                _event = _json.loads(_line)
-                if _event.get("type") == "thread.started":
-                    _tid = _event.get("thread_id")
-                    if _tid:
-                        self._last_codex_thread_id = _tid
-                    break
-            except (ValueError, KeyError):
-                continue
-
-        return self.strip_metadata(output, "codex")
+        return stripped
 
     def run_devin(
         self,
@@ -9043,18 +9037,10 @@ User Request:
                         return True
             except Exception:
                 pass
-            # v0.125.0+: session IDs are thread UUIDs — no local files exist.
-            # Accept any UUID-formatted session_id as valid (codex handles bad IDs gracefully).
-            import re as _re_uuid
-
-            return bool(
-                session_id
-                and _re_uuid.match(
-                    r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
-                    session_id,
-                    _re_uuid.IGNORECASE,
-                )
-            )
+            # Do not treat arbitrary UUIDs as resumable Codex sessions.
+            # The transient thread.started ID is not sufficient for
+            # `codex exec resume` and leads to empty assistant messages.
+            return False
         elif runtime == "devin":
             # Devin session mappings are keyed by n8n_session_id, not backend session_id
             key = n8n_session_id if n8n_session_id else session_id
@@ -9145,12 +9131,7 @@ User Request:
                 )
                 return files[0].stem if files else None
             elif runtime == "codex":
-                # v0.125.0+: thread_id captured from JSONL output in run_codex()
-                if getattr(self, "_last_codex_thread_id", None):
-                    tid = self._last_codex_thread_id
-                    self._last_codex_thread_id = None  # consume once
-                    return tid
-                # Legacy: rollout-*.jsonl files (pre-v0.125.0)
+                # Legacy/persisted local Codex sessions.
                 files = sorted(
                     self.codex_session_dir.glob("*/*/*/rollout-*.jsonl"),
                     key=lambda p: p.stat().st_mtime,
@@ -9523,7 +9504,6 @@ User Request:
             "copilot",
             "opencode",
             "gemini",
-            "codex",
         ):
             new_id = self.get_most_recent_session_id(current_runtime, agent)
             if new_id:
@@ -10313,6 +10293,16 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 "X-Auth-Channel",
             ],
         )
+
+    @app.middleware("http")
+    async def _webui_no_cache_middleware(request: Request, call_next):
+        response = await call_next(request)
+        path = request.url.path or ""
+        if path == "/ui" or path.startswith("/ui/"):
+            response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate"
+            response.headers["Pragma"] = "no-cache"
+            response.headers["Expires"] = "0"
+        return response
 
     # ---- generic exception handler ----
     @app.exception_handler(Exception)

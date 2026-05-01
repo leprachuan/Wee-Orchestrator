@@ -240,15 +240,39 @@ class TestIssue284CodexV0125Compat(unittest.TestCase):
         self.assertIn("Legacy response text.", result)
 
     # ------------------------------------------------------------------
-    # Thread ID extraction and session plumbing
+    # Session plumbing
     # ------------------------------------------------------------------
 
-    def test_run_codex_stores_thread_id_from_jsonl(self):
-        """run_codex() must populate _last_codex_thread_id."""
-        expected_tid = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+    def test_run_codex_returns_raw_error_when_resume_fails(self):
+        """Failed Codex resumes must surface the raw error, not an empty reply."""
+        self.mgr._last_exit_codes = {"sess1": 1}
+        error_output = (
+            "Error: thread/resume: thread/resume failed: "
+            "no rollout found for thread id aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+        )
+
+        self.mgr._parse_mode_command = lambda p: (p, "default")
+        self.mgr._resolve_permission_mode = lambda sd, m: m
+        self.mgr.get_or_create_session_data = lambda sid: {"channel": "webui"}
+        self.mgr.build_agent_context_prompt = lambda *a, **kw: "test prompt"
+        self.mgr._execute_subprocess_with_tracking = lambda *a, **kw: error_output
+        self.mgr.strip_metadata = SessionManager.strip_metadata.__get__(self.mgr)
+
+        result = self.mgr.run_codex(
+            prompt="hi",
+            model="gpt-4o",
+            agent="orchestrator",
+            session_id="aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+            resume=True,
+            n8n_session_id="sess1",
+        )
+        self.assertEqual(result, error_output)
+
+    def test_run_codex_still_extracts_agent_message_text(self):
+        """Successful Codex runs should still return assistant text."""
         jsonl_output = "\n".join(
             [
-                f'{{"type":"thread.started","thread_id":"{expected_tid}"}}',
+                '{"type":"thread.started","thread_id":"aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"}',
                 '{"type":"turn.started"}',
                 json.dumps(
                     {
@@ -270,8 +294,9 @@ class TestIssue284CodexV0125Compat(unittest.TestCase):
         self.mgr.build_agent_context_prompt = lambda *a, **kw: "test prompt"
         self.mgr._execute_subprocess_with_tracking = lambda *a, **kw: jsonl_output
         self.mgr.strip_metadata = SessionManager.strip_metadata.__get__(self.mgr)
+        self.mgr._last_exit_codes = {}
 
-        self.mgr.run_codex(
+        result = self.mgr.run_codex(
             prompt="hi",
             model="gpt-4o",
             agent="orchestrator",
@@ -279,25 +304,12 @@ class TestIssue284CodexV0125Compat(unittest.TestCase):
             resume=False,
             n8n_session_id="sess1",
         )
-        self.assertEqual(
-            getattr(self.mgr, "_last_codex_thread_id", None),
-            expected_tid,
-        )
+        self.assertEqual(result, "hi")
 
-    def test_get_most_recent_session_id_returns_thread_id(self):
-        """get_most_recent_session_id() returns and consumes thread_id."""
-        tid = "12345678-1234-1234-1234-123456789abc"
-        self.mgr._last_codex_thread_id = tid
-        result = self.mgr.get_most_recent_session_id("codex")
-        self.assertEqual(result, tid)
-        # Must be consumed — second call returns None (no rollout files exist)
-        result2 = self.mgr.get_most_recent_session_id("codex")
-        self.assertIsNone(result2)
-
-    def test_session_exists_accepts_uuid_format_thread_id(self):
-        """session_exists() returns True for UUID thread IDs."""
+    def test_session_exists_rejects_uuid_thread_id_without_rollout(self):
+        """Bare thread UUIDs are not valid resumable Codex sessions."""
         valid_uuid = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
-        self.assertTrue(self.mgr.session_exists(valid_uuid, "codex"))
+        self.assertFalse(self.mgr.session_exists(valid_uuid, "codex"))
 
     def test_session_exists_rejects_non_uuid(self):
         """session_exists() returns False for invalid thread IDs."""
