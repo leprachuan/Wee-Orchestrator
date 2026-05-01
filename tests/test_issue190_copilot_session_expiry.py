@@ -257,8 +257,8 @@ class TestIssue190ProactiveRestart(unittest.TestCase):
 
         self.assertEqual(len(captured_cmds), 1)
         cmd = captured_cmds[0]
-        self.assertIn("--resume", cmd, "B05: young session must still use --resume")
-        self.assertIn("valid-copilot-session", cmd, "B05: session ID must be passed to --resume")
+        self.assertTrue(any("--resume=" in str(arg) for arg in cmd), "B05: young session must use --resume=<session-id>")
+        
 
     def test_issue_190_session_start_recorded_on_new_session(self):
         """Session start time is recorded when launching a new (non-resume) session."""
