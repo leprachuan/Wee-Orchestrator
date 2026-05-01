@@ -472,22 +472,55 @@ def dispatch_wee_qa(item: dict, state: dict) -> None:
 
 def run_pipeline(items: list[dict], state: dict) -> None:
     # -----------------------------------------------------------------------
-    # Check for any running wee-dev or wee-qa tasks (serial execution)
-    # Labels provide the source of truth: in-progress OR qa-review means agent is working
+    # Determine what is actively running vs stalled (label stuck after task done)
     # -----------------------------------------------------------------------
     
-    # Count how many issues have active agent work
-    active_dev = [i for i in items if i["status"] == "in-progress"]
-    active_qa = [i for i in items if i["status"] == "qa-review"]
-    
-    if active_dev or active_qa:
-        active_label = f"{'in-progress' if active_dev else 'qa-review'}"
-        active_issues = [i["id"] for i in (active_dev or active_qa)]
-        log(f"Serial enforcement: {active_label} work on {active_issues} — skipping dispatch")
-        return  # Serial: wait for current work to complete
+    stalled_qa = []   # qa-review items whose task completed without transitioning label
+    stalled_dev = []  # in-progress items whose task completed without transitioning label
+
+    for item in items:
+        issue_state = get_issue_state(state, item["number"])
+
+        if item["status"] == "in-progress":
+            task_id = issue_state.get("wee_dev_task_id")
+            dispatched_at = issue_state.get("wee_dev_dispatched_at")
+            mins = minutes_since(dispatched_at) if dispatched_at else None
+            if task_id and is_task_running(task_id):
+                log(f"wee-dev running task={task_id} for {item['id']} — skipping dispatch")
+                return  # Serial: active task running
+            if mins is not None and mins < STALL_TIMEOUT_MINUTES:
+                log(f"wee-dev task for {item['id']} ended {mins:.1f}min ago — waiting for label transition")
+                return  # Too recent to re-dispatch
+            stalled_dev.append(item)
+            log(f"wee-dev task for {item['id']} stalled (completed without label transition)")
+
+        elif item["status"] == "qa-review":
+            task_id = issue_state.get("wee_qa_task_id")
+            dispatched_at = issue_state.get("wee_qa_dispatched_at")
+            mins = minutes_since(dispatched_at) if dispatched_at else None
+            if task_id and is_task_running(task_id):
+                log(f"wee-qa running task={task_id} for {item['id']} — skipping dispatch")
+                return  # Serial: active task running
+            if mins is not None and mins < STALL_TIMEOUT_MINUTES:
+                log(f"wee-qa task for {item['id']} ended {mins:.1f}min ago — waiting for label transition")
+                return  # Too recent to re-dispatch
+            stalled_qa.append(item)
+            log(f"wee-qa task for {item['id']} stalled (completed without label transition)")
 
     # -----------------------------------------------------------------------
-    # wee-dev slot: one task at a time
+    # Priority 1: Re-dispatch wee-qa for stalled qa-review items
+    # -----------------------------------------------------------------------
+    if stalled_qa:
+        item = stalled_qa[0]
+        log(f"Re-dispatching wee-qa for stalled {item['id']}: {item['title']}")
+        try:
+            dispatch_wee_qa(item, state)
+        except Exception as exc:
+            log(f"ERROR: Failed to re-dispatch wee-qa for {item['id']}: {exc}")
+        return  # Serial: one dispatch per cycle
+
+    # -----------------------------------------------------------------------
+    # wee-dev slot: one task at a time (handles stalled, qa-failed, queued)
     # -----------------------------------------------------------------------
     in_progress = [i for i in items if i["status"] == "in-progress"]
     qa_failed = [i for i in items if i["status"] == "qa-failed"]
@@ -560,8 +593,12 @@ def run_pipeline(items: list[dict], state: dict) -> None:
         log("No wee-dev work to do.")
 
     # -----------------------------------------------------------------------
-    # wee-qa slot: only dispatch if no wee-dev is running (serial execution)
+    # wee-qa slot: only runs if wee-dev did NOT dispatch this cycle (serial)
     # -----------------------------------------------------------------------
+    if wee_dev_dispatched:
+        log("wee-dev dispatched this cycle — skipping wee-qa (serial enforcement)")
+        return
+
     qa_review = [i for i in items if i["status"] == "qa-review"]
 
     if not qa_review:
