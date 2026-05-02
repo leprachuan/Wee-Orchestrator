@@ -3222,7 +3222,7 @@ You can mention an agent in your prompt and it will auto-delegate:
                         )
                         continue
                     agents[name] = {
-                        "path": agent.get("path", ""),
+                        "path": os.path.expanduser(agent.get("path", "")),
                         "description": agent.get("description", ""),
                         "max_concurrent": agent.get("max_concurrent", 1),
                         "runtime": agent.get("runtime", "copilot"),
@@ -6498,11 +6498,15 @@ User Request:
                                             _cx_type = _cx_obj.get("type", "")
                                             if (
                                                 _cx_type == "item.completed"
-                                                and isinstance(_cx_obj.get("item"), dict)
+                                                and isinstance(
+                                                    _cx_obj.get("item"), dict
+                                                )
                                                 and _cx_obj["item"].get("type")
                                                 == "agent_message"
                                             ):
-                                                _cx_text = _cx_obj["item"].get("text", "")
+                                                _cx_text = _cx_obj["item"].get(
+                                                    "text", ""
+                                                )
                                                 if _cx_text:
                                                     if stream_buffer:
                                                         stream_buffer.push(
@@ -6904,8 +6908,14 @@ User Request:
             )
 
         output = self._execute_subprocess_with_tracking(
-            cmd, agent_dir, effective_timeout, "copilot", agent, prompt, n8n_session_id,
-            stdin_text=context_prompt
+            cmd,
+            agent_dir,
+            effective_timeout,
+            "copilot",
+            agent,
+            prompt,
+            n8n_session_id,
+            stdin_text=context_prompt,
         )
         result = self.strip_metadata(output, "copilot")
 
@@ -6967,7 +6977,9 @@ User Request:
             getattr(self, "_copilot_session_start", {}).update(
                 {n8n_session_id: time.time()}
             )
-            self.update_session_field(n8n_session_id, "session_id", _recovery_copilot_name)
+            self.update_session_field(
+                n8n_session_id, "session_id", _recovery_copilot_name
+            )
             _recovery_output = self._execute_subprocess_with_tracking(
                 _recovery_cmd,
                 agent_dir,
@@ -8434,9 +8446,7 @@ User Request:
                                 )
                                 resolved_model = fallback_resolved_model
                                 create_kwargs["model"] = resolved_model
-                                stream = client.chat.completions.create(
-                                    **create_kwargs
-                                )
+                                stream = client.chat.completions.create(**create_kwargs)
                             else:
                                 raise
                     else:
@@ -8809,8 +8819,7 @@ User Request:
         summary_prompt = (
             "Summarize the following conversation history concisely. Preserve all "
             "key facts, decisions, file paths, and errors so the conversation can "
-            "continue coherently.\n\nConversation:\n"
-            + "\n".join(transcript_lines)
+            "continue coherently.\n\nConversation:\n" + "\n".join(transcript_lines)
         )
         try:
             response = client.chat.completions.create(
@@ -8860,9 +8869,10 @@ User Request:
 
     def _wee_is_free_model(self, model: str) -> bool:
         """Compatibility shim for wee free-model fallback tests."""
-        return ":free" in (model or "").lower() or "openrouter/free" in (
-            model or ""
-        ).lower()
+        return (
+            ":free" in (model or "").lower()
+            or "openrouter/free" in (model or "").lower()
+        )
 
     def _wee_resolve_endpoint(
         self, model: str, api_base: Optional[str], api_key: Optional[str]
