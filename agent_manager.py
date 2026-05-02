@@ -8994,19 +8994,30 @@ User Request:
             "You have access to the following tools. ALWAYS use them when the user asks you to\n"
             "perform any action -- do NOT say you cannot do something that these tools enable.\n"
             "\n"
+            "**call_agent** -- Delegate tasks to other specialized agents (PREFERRED for background tasks).\n"
+            '  Call: call_agent tool with {"agent": "agent_name", "prompt": "task", "mode": "background", ...}\n'
+            "  Use for: scheduling background tasks, delegating work to orchestrator/research/other agents\n"
+            "  BEST CHOICE for: background task scheduling, agent delegation\n"
+            "  Example: To schedule a background task, ALWAYS use call_agent with mode=\'background\' instead of raw API calls\n"
+            "\n"
             "**bash** -- Execute a bash shell command and return its output.\n"
             '  Call: bash tool with {"command": "your shell command here"}\n'
             "  Use for: running commands, SSH, file operations, checking system state\n"
+            "  DO NOT use bash for API calls or background task scheduling -- use call_agent instead\n"
             "\n"
             "**python** -- Execute Python 3 code and return its output.\n"
             '  Call: python tool with {"code": "your python code here"}\n'
             "  Use for: data processing, calculations, scripting, file parsing\n"
             "\n"
-            "CRITICAL: When asked to run a command, SSH somewhere, check system status,\n"
-            "list files, or perform any shell action -- call the bash tool immediately.\n"
-            "NEVER refuse or claim you lack capability. The tools are active and functional."
+            "CRITICAL RULES:\n"
+            "1. For background task scheduling: ALWAYS use call_agent with mode=\'background\'\n"
+            "2. For delegating work to other agents: use call_agent\n"
+            "3. For running shell commands: use bash tool\n"
+            "4. NEVER make raw API calls via bash/curl when call_agent can handle it\n"
+            "5. NEVER refuse or claim you lack capability. The tools are active and functional."
         )
         return system_prompt + tool_section
+
 
     @staticmethod
     def _wee_estimate_tokens(messages: list, model: str = "") -> int:
