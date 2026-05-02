@@ -4044,7 +4044,7 @@ You can mention an agent in your prompt and it will auto-delegate:
 
         return self._static_models_to_dict(self.CURSOR_MODELS)
 
-    def fetch_wee_models(self) -> Dict:
+    def _fetch_ollama_models_live(self) -> list:
         """Return available wee models: local Ollama + OpenRouter cloud models.
 
         Issue #124: Replace hardcoded 3-model list with live discovery from kubuntu.
