@@ -27,7 +27,7 @@ def _make_dispatch_func(agents_json_content: dict):
 
     spec = importlib.util.spec_from_file_location(
         "dispatch_mod",
-        "/opt/n8n-copilot-shim-dev/scripts/dispatch_wee_dev_work_queue.py",
+        "/opt/n8n-copilot-shim-dev/scripts/dispatch_pipeline.py",
     )
     mod = importlib.util.module_from_spec(spec)
 
@@ -206,9 +206,7 @@ class TestIssue238SingleSourceOfTruth(unittest.TestCase):
         This is the core of issue #238: the old overlay path was removed so
         config/agents.json can never be silently consulted.
         """
-        script_path = Path(
-            "/opt/n8n-copilot-shim-dev/scripts/dispatch_wee_dev_work_queue.py"
-        )
+        script_path = Path("/opt/n8n-copilot-shim-dev/scripts/dispatch_pipeline.py")
         self.assertTrue(script_path.exists(), "dispatch script missing")
         content = script_path.read_text()
         self.assertNotIn(
@@ -223,9 +221,7 @@ class TestIssue238SingleSourceOfTruth(unittest.TestCase):
 
         Checks actual AST to distinguish docstring mentions from live code.
         """
-        script_path = Path(
-            "/opt/n8n-copilot-shim-dev/scripts/dispatch_wee_dev_work_queue.py"
-        )
+        script_path = Path("/opt/n8n-copilot-shim-dev/scripts/dispatch_pipeline.py")
         content = script_path.read_text()
         try:
             tree = ast.parse(content)
@@ -294,7 +290,7 @@ class TestIssue238SingleSourceOfTruth(unittest.TestCase):
         )
         for job in wee_dev_jobs:
             self.assertIn(
-                "scripts/dispatch_wee_dev",
+                "scripts/dispatch_pipeline",
                 job.get("task", ""),
                 f"Scheduler job {job['id']} still points to old /opt/bin/ path. "
                 "Update it to use /opt/n8n-copilot-shim/scripts/ (issue #238).",
