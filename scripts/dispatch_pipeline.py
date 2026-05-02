@@ -83,7 +83,7 @@ def get_issue_state(state: dict, issue_number: int) -> dict:
 
 
 def set_issue_field(state: dict, issue_number: int, field: str, value) -> None:
-    state[str(issue_number)][field] = value
+    get_issue_state(state, issue_number)[field] = value
     save_state(state)
 
 
@@ -214,13 +214,15 @@ def _load_agents_config() -> dict:
 
 def get_agent_dispatch_config(agent_name: str) -> dict:
     """Get dispatch config for an agent from agents.json."""
-    agents = _load_agents_config()
-    agent = agents.get(agent_name, {})
+    config = _load_agents_config()
+    agents_list = config.get("agents", [])
+    agent = next((a for a in agents_list if a.get("name") == agent_name), {})
+    permissions = agent.get("permissions", {})
     return {
         "runtime": agent.get("primary_runtime", "copilot"),
         "model": agent.get("primary_model", "auto"),
         "timeout": agent.get("timeout", 3600),
-        "permission_mode": agent.get("permission_mode", "restricted"),
+        "permission_mode": agent.get("permission_mode") or permissions.get("mode", "restricted"),
         "yolo": agent.get("yolo", False),
         "fallback_runtime": agent.get("fallback_runtime"),
         "fallback_model": agent.get("fallback_model"),
@@ -254,7 +256,8 @@ def dispatch_via_api(agent: str, prompt: str, cfg: dict) -> str:
         body["permission_mode"] = cfg["permission_mode"]
     if cfg.get("yolo"):
         body["yolo"] = cfg["yolo"]
-    if cfg.get("fallback_runtime"):
+    # Only send fallback if it's different from primary runtime
+    if cfg.get("fallback_runtime") and cfg.get("fallback_runtime") != cfg["runtime"]:
         body["fallback_runtime"] = cfg["fallback_runtime"]
     if resolved_fallback_model:
         body["fallback_model"] = resolved_fallback_model
@@ -397,9 +400,9 @@ def run_pipeline() -> None:
     needs_approval = [i for i in items if get_issue_status(i) == "needs-approval"]
     queued = [i for i in items if get_issue_status(i) == "queued"]
 
-    log(f"  in-progress: {', '.join(f'#{i['number']}' for i in in_progress) or '(none)'}")
-    log(f"  needs-approval: {', '.join(f'#{i['number']}' for i in needs_approval) or '(none)'}")
-    log(f"  queued: {', '.join(f'#{i['number']}' for i in queued) or '(none)'}")
+    log("  in-progress: " + (", ".join(f"#{i['number']}" for i in in_progress) or "(none)"))
+    log("  needs-approval: " + (", ".join(f"#{i['number']}" for i in needs_approval) or "(none)"))
+    log("  queued: " + (", ".join(f"#{i['number']}" for i in queued) or "(none)"))
 
     # Handle in-progress (check for stall)
     if in_progress:

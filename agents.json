@@ -10,7 +10,7 @@
       "fallback_model": "auto",
       "max_concurrent": 1,
       "permissions": {
-        "mode": "restricted",
+        "mode": "elevated",
         "directories": {
           "allow_read": [],
           "allow_write": [],
@@ -46,7 +46,7 @@
       "fallback_model": "auto",
       "max_concurrent": 1,
       "permissions": {
-        "mode": "restricted",
+        "mode": "elevated",
         "directories": {
           "allow_read": [],
           "allow_write": [],
