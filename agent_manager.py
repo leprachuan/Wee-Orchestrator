@@ -8388,7 +8388,10 @@ User Request:
                 "type": "function",
                 "function": {
                     "name": "bash",
-                    "description": "Execute a bash shell command and return its output.",
+                    "description": (
+                        "Execute a bash shell command. NOTE: For delegating tasks to specialized "
+                        "agents (devops, research, email-triage, etc), use call_agent instead."
+                    ),
                     "parameters": {
                         "type": "object",
                         "properties": {
@@ -8405,7 +8408,10 @@ User Request:
                 "type": "function",
                 "function": {
                     "name": "python",
-                    "description": "Execute Python 3 code and return the output.",
+                    "description": (
+                        "Execute Python 3 code locally. NOTE: For running tasks in dedicated agent "
+                        "environments (devops, research, email-triage, etc), use call_agent instead."
+                    ),
                     "parameters": {
                         "type": "object",
                         "properties": {
@@ -8415,6 +8421,80 @@ User Request:
                             }
                         },
                         "required": ["code"],
+                    },
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "call_agent",
+                    "description": (
+                        "PREFERRED: Call a Wee Orchestrator agent to execute a task asynchronously. "
+                        "Use for delegating work to specialized agents: devops, email-triage, "
+                        "family-knowledge, research, wee-dev, wee-qa, wee-doc. Supports runtime/model "
+                        "overrides. Returns task_id for background mode or result for quick mode."
+                    ),
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "agent": {
+                                "type": "string",
+                                "description": "Agent name to call (e.g., 'devops', 'research')",
+                            },
+                            "prompt": {
+                                "type": "string",
+                                "description": "Task prompt or instruction for the agent",
+                            },
+                            "mode": {
+                                "type": "string",
+                                "enum": ["quick", "background"],
+                                "description": "'quick' waits for result, 'background' returns task_id",
+                            },
+                            "runtime": {
+                                "type": "string",
+                                "description": "AI runtime to use (e.g., 'copilot', 'claude', 'wee')",
+                            },
+                            "model": {
+                                "type": "string",
+                                "description": "Model to use (e.g., 'claude-haiku-4.5', 'ollama/qwen3.5-64k:latest')",
+                            },
+                        },
+                        "required": ["agent", "prompt"],
+                    },
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "list_background_tasks",
+                    "description": "List all background tasks currently running or recently completed.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "status": {
+                                "type": "string",
+                                "enum": ["running", "completed", "all"],
+                                "description": "Filter by task status (default: 'all')",
+                            },
+                        },
+                        "required": [],
+                    },
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "check_task_status",
+                    "description": "Check the status of a background task.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "task_id": {
+                                "type": "string",
+                                "description": "The task ID (e.g., 'bg_c24fad3e')",
+                            },
+                        },
+                        "required": ["task_id"],
                     },
                 },
             },

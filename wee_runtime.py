@@ -373,7 +373,10 @@ _WEE_TOOLS = [
         "type": "function",
         "function": {
             "name": "bash",
-            "description": "Execute a bash shell command and return its output.",
+            "description": (
+                "Execute a bash shell command. NOTE: For delegating tasks to specialized "
+                "agents (devops, research, email-triage, etc), use call_agent instead."
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -390,7 +393,10 @@ _WEE_TOOLS = [
         "type": "function",
         "function": {
             "name": "python",
-            "description": "Execute Python 3 code and return the output.",
+            "description": (
+                "Execute Python 3 code locally. NOTE: For running tasks in dedicated agent "
+                "environments (devops, research, email-triage, etc), use call_agent instead."
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -483,9 +489,10 @@ _WEE_TOOLS = [
         "function": {
             "name": "call_agent",
             "description": (
-                "Call a Wee Orchestrator agent to execute a task. Use for delegating"
-                " work to specialized agents (devops, email-triage, family-knowledge,"
-                " research, smarthome, wee-dev, wee-qa, wee-doc)."
+                "PREFERRED: Call a Wee Orchestrator agent to execute a task asynchronously. "
+                "Use for delegating work to specialized agents: devops, email-triage, "
+                "family-knowledge, research, wee-dev, wee-qa, wee-doc. Supports runtime/model "
+                "overrides. Returns task_id for background mode or result for quick mode."
             ),
             "parameters": {
                 "type": "object",
