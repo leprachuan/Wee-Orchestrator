@@ -259,8 +259,8 @@ class TestIssue292DispatchPipelineAutoModel(unittest.TestCase):
 
     def _capture_body(self, cfg):
         import json
-        import sys
         import os
+        import sys
 
         scripts_dir = os.path.join(
             os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "scripts"
