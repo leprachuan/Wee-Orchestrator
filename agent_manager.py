@@ -3085,11 +3085,19 @@ You can mention an agent in your prompt and it will auto-delegate:
         if running >= BackgroundTaskManager.MAX_TASKS_PER_USER:
             return f"❌ Maximum {BackgroundTaskManager.MAX_TASKS_PER_USER} concurrent background tasks allowed."
 
-        bg_timeout = (
-            bg_timeout_override
-            if bg_timeout_override is not None
-            else get_bg_command_timeout()
-        )
+        # Priority: explicit timeout= > dispatch_config.timeout > default
+
+        if bg_timeout_override is not None:
+
+            bg_timeout = bg_timeout_override
+
+        else:
+
+            agent_config = self.AGENTS.get(bg_agent, {})
+
+            dispatch_config = agent_config.get("dispatch_config", {})
+
+            bg_timeout = dispatch_config.get("timeout", get_bg_command_timeout())
         task_id = f"bg_{str(uuid4())[:8]}"
         bg_session_id = f"bg_{str(uuid4())[:8]}"
         self._bg_task_mgr.create_task(
@@ -3290,7 +3298,7 @@ You can mention an agent in your prompt and it will auto-delegate:
                 "fallback_model": agent.get("fallback_model"),
                 "permission_mode": agent.get("permission_mode"),
                 "yolo": agent.get("yolo", False),
-                        "dispatch_config": agent.get("dispatch_config", {}),
+                "dispatch_config": agent.get("dispatch_config", {}),
             }
 
         if not fresh and self.AGENTS:
