@@ -187,6 +187,7 @@ MODEL_CONTEXT_WINDOWS: dict = {
     "gemma2": 8192,
     "gemma": 8192,
     # Alibaba Qwen
+    "qwen3.5-64k": 64000,
     "qwen3": 32768,
     "qwen2": 32768,
     "qwen": 32768,
