@@ -45,7 +45,7 @@ def get_issue_state(state: dict, issue_number: int) -> dict:
     return state[key]
 
 def set_issue_field(state: dict, issue_number: int, field: str, value) -> None:
-    state[str(issue_number)][field] = value
+    get_issue_state(state, issue_number)[field] = value
     save_state(state)
 
 def _load_api_key() -> str:
