@@ -148,6 +148,8 @@ def fetch_issues() -> list[dict]:
     items = []
     for issue in issues:
         label_names = {lbl["name"] for lbl in issue.get("labels", [])}
+        # Clean up stale conflicting labels (e.g., both in-progress + qa-review)
+        _cleanup_stale_labels(issue["number"], label_names)
         status = _resolve_status(label_names)
         items.append({
             "number": issue["number"],
@@ -163,16 +165,41 @@ def fetch_issues() -> list[dict]:
 
 
 def _resolve_status(labels: set[str]) -> str:
+    # Check in order of advancement — later pipeline stages win over earlier ones
+    # so that a task with both in-progress + qa-review is treated as qa-review.
     for label, status in [
-        ("wee-dev:in-progress", "in-progress"),
+        ("wee-dev:approved", "approved"),
         ("wee-dev:qa-review", "qa-review"),
         ("wee-dev:qa-failed", "qa-failed"),
-        ("wee-dev:approved", "approved"),
+        ("wee-dev:in-progress", "in-progress"),
         ("wee-dev:queued", "queued"),
     ]:
         if label in labels:
             return status
     return "queued"
+
+
+def _cleanup_stale_labels(issue: int, labels: set[str]) -> None:
+    """Remove stale state labels when an issue has conflicting states.
+    
+    This handles race conditions where wee-dev/wee-qa add a new state label
+    but forget to remove the old one (e.g., both in-progress + qa-review).
+    The rule: keep only the most advanced state label, remove earlier ones.
+    """
+    state_labels = [
+        "wee-dev:approved",
+        "wee-dev:qa-review",
+        "wee-dev:qa-failed",
+        "wee-dev:in-progress",
+        "wee-dev:queued",
+    ]
+    found_labels = [l for l in state_labels if l in labels]
+    
+    # If more than one state label exists, keep the first (most advanced) and remove others
+    if len(found_labels) > 1:
+        for stale_label in found_labels[1:]:
+            log(f"Cleaning up stale label {stale_label!r} from #{issue} (keeping {found_labels[0]!r})")
+            remove_label(issue, stale_label)
 
 
 def add_label(issue: int, label: str) -> None:
@@ -313,7 +340,7 @@ def dispatch_via_api(agent: str, prompt: str, cfg: dict) -> str:
         body["yolo"] = cfg["yolo"]
     if cfg.get("fallback_runtime"):
         body["fallback_runtime"] = cfg["fallback_runtime"]
-    if cfg.get("fallback_model") and cfg["fallback_model"] != "auto":
+    if cfg.get("fallback_model"):
         body["fallback_model"] = cfg["fallback_model"]
 
     payload_json = json.dumps(body, sort_keys=True)
@@ -388,19 +415,15 @@ def passes_safety_gate(item: dict) -> bool:
 
 
 def build_wee_dev_prompt(item: dict) -> str:
-    # Fetch comments if available
-    comments = fetch_issue_comments(item["number"])
-    comments_section = f"\n\n## Issue Comments (context from previous discussion):\n{comments}" if comments else ""
-    
     return (
         f"Work on GitHub issue #{item['number']} in {REPO}: {item['title']}.\n\n"
-        f"## Issue Description:\n{item['body']}"
-        f"{comments_section}\n\n"
+        f"Read the full issue (body + all comments) directly from GitHub before starting:\n"
+        f"  gh issue view {item['number']} --repo {REPO} --comments\n\n"
         "## Task:\n"
-        "1. Read the full issue body and all comments above to understand requirements and context.\n"
+        "1. Read the issue on GitHub to understand all requirements and context.\n"
         "2. Implement the fix/feature on the dev host (192.168.1.100) in /opt/n8n-copilot-shim-dev/.\n"
         "3. Follow /opt/wee-dev/AGENTS.md for all git workflow rules.\n"
-        "4. Leave clear notes on this GitHub issue as you work (use /comment command or GitHub UI).\n"
+        "4. Leave clear notes on this GitHub issue as you work.\n"
         "   - **IMPORTANT: Never put secrets, API keys, passwords, or credentials in GitHub issues.**\n"
         "   - Do leave implementation notes, decisions made, test results, and commit SHAs.\n"
         "5. When implementation is complete and tests pass, add the label 'wee-dev:qa-review' to the issue.\n"
@@ -429,16 +452,12 @@ def dispatch_wee_dev(item: dict, state: dict) -> None:
 
 
 def build_wee_qa_prompt(item: dict) -> str:
-    # Fetch comments if available
-    comments = fetch_issue_comments(item["number"])
-    comments_section = f"\n\n## Issue Discussion:\n{comments}" if comments else ""
-    
     return (
         f"QA review for GitHub issue #{item['number']} in {REPO}: {item['title']}.\n\n"
-        f"## Issue Description:\n{item['body']}"
-        f"{comments_section}\n\n"
+        f"Read the full issue (body + all comments) directly from GitHub before starting:\n"
+        f"  gh issue view {item['number']} --repo {REPO} --comments\n\n"
         "## Task:\n"
-        "1. Read the full issue and discussion above to understand what was implemented.\n"
+        "1. Read the issue on GitHub to understand all requirements and what was implemented.\n"
         "2. The implementation is on dev host 192.168.1.100 in /opt/n8n-copilot-shim-dev/.\n"
         "3. Run the full test suite, check code quality (flake8/black), verify requirements are met.\n"
         "4. Leave notes on this GitHub issue as you work.\n"
@@ -502,10 +521,23 @@ def run_pipeline(items: list[dict], state: dict) -> None:
                 log(f"wee-qa running task={task_id} for {item['id']} — skipping dispatch")
                 return  # Serial: active task running
             if mins is not None and mins < STALL_TIMEOUT_MINUTES:
-                log(f"wee-qa task for {item['id']} ended {mins:.1f}min ago — waiting for label transition")
-                return  # Too recent to re-dispatch
-            stalled_qa.append(item)
-            log(f"wee-qa task for {item['id']} stalled (completed without label transition)")
+                # Stale label edge case: wee-qa may have updated labels just after this
+                # cycle began. Check if the actual label on GitHub has changed (stale cache).
+                # Fetch fresh labels for this issue to detect label transition.
+                fresh_labels = set(get_issue_labels(item["number"]))
+                fresh_status = _resolve_status(fresh_labels)
+                if fresh_status != "qa-review":
+                    # Labels HAVE changed! Process the new status instead.
+                    log(f"wee-qa task for {item['id']} ended {mins:.1f}min ago — labels have transitioned from qa-review to {fresh_status} (refreshed)")
+                    item["status"] = fresh_status  # Update item to reflect actual GitHub state
+                    # Fall through to process the new status (don't return early)
+                else:
+                    log(f"wee-qa task for {item['id']} ended {mins:.1f}min ago — waiting for label transition")
+                    return  # Too recent to re-dispatch
+            # If we get here and status is still qa-review, check for stall
+            if item["status"] == "qa-review":
+                stalled_qa.append(item)
+                log(f"wee-qa task for {item['id']} stalled (completed without label transition)")
 
     # -----------------------------------------------------------------------
     # Priority 1: Re-dispatch wee-qa for stalled qa-review items
