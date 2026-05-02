@@ -13224,6 +13224,8 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             bg_timeout,
             notify_pref,
             perm_mode,
+            body.fallback_runtime,
+            body.fallback_model,
         )
 
         return {
