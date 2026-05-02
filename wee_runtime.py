@@ -457,9 +457,7 @@ _WEE_TOOLS = [
                     },
                     "content": {
                         "type": "string",
-                        "description": (
-                            "New content to write, replace, or insert."
-                        ),
+                        "description": ("New content to write, replace, or insert."),
                     },
                     "create_if_missing": {
                         "type": "boolean",
@@ -469,9 +467,7 @@ _WEE_TOOLS = [
                     },
                     "new_text": {
                         "type": "string",
-                        "description": (
-                            "Legacy alias for content. Prefer 'content'."
-                        ),
+                        "description": ("Legacy alias for content. Prefer 'content'."),
                     },
                     "old_text": {
                         "type": "string",
@@ -692,7 +688,10 @@ def _updated_text_from_line_operation(
         if start_line < 0:
             return None, "Error: start_line must be >= 0 for insert_after"
         if start_line > total_lines:
-            return None, f"Error: start_line {start_line} exceeds file length {total_lines}"
+            return (
+                None,
+                f"Error: start_line {start_line} exceeds file length {total_lines}",
+            )
         if not isinstance(content, str):
             return None, "Error: edit_file requires string 'content' for insert_after"
         insert_at = start_line
@@ -707,7 +706,10 @@ def _updated_text_from_line_operation(
         action = "deleted"
         if operation == "replace_lines":
             if not isinstance(content, str):
-                return None, "Error: edit_file requires string 'content' for replace_lines"
+                return (
+                    None,
+                    "Error: edit_file requires string 'content' for replace_lines",
+                )
             replacement = [content]
             action = "replaced"
         updated_lines = lines[: start_line - 1] + replacement + lines[end_line:]
@@ -786,9 +788,7 @@ def _execute_edit_file(func_args: dict) -> str:
             action = "created"
 
     try:
-        fd, tmp_path = tempfile.mkstemp(
-            prefix=".wee-edit-", dir=parent_dir, text=True
-        )
+        fd, tmp_path = tempfile.mkstemp(prefix=".wee-edit-", dir=parent_dir, text=True)
         try:
             with os.fdopen(fd, "w", encoding="utf-8") as f:
                 f.write(updated)
@@ -1028,6 +1028,7 @@ def _list_background_tasks_handler(func_args: dict) -> str:
         req.add_header("Authorization", f"Bearer {token}")
 
         import ssl
+
         ctx = ssl.create_default_context()
         ctx.check_hostname = False
         ctx.verify_mode = ssl.CERT_NONE
@@ -1090,6 +1091,7 @@ def _check_task_status_handler(func_args: dict) -> str:
         req.add_header("Authorization", f"Bearer {token}")
 
         import ssl
+
         ctx = ssl.create_default_context()
         ctx.check_hostname = False
         ctx.verify_mode = ssl.CERT_NONE
@@ -1165,7 +1167,7 @@ def _call_agent_handler(func_args: dict) -> str:
 
     # Get agent config for fallback info
     agent_config = _get_agent_config(agent)
-    
+
     # Override runtime and model if provided as parameters
     if override_runtime:
         agent_config["primary_runtime"] = override_runtime
@@ -1185,7 +1187,7 @@ def _call_agent_handler(func_args: dict) -> str:
             # Use http for localhost/127.0.0.1, https for remote
             protocol = "http" if api_host in ("127.0.0.1", "localhost") else "https"
         api_url = f"{protocol}://{api_host}:{api_port}"
-    
+
     token = os.environ.get(
         "WEE_ORCHESTRATOR_TOKEN", "shared_R6R6wReORUV6bouLntScMTowbsh30Rzqa3hzjs3bWgU"
     )
