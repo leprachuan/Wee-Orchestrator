@@ -158,17 +158,14 @@ def is_task_running(task_id: str) -> bool:
 
 def build_wee_dev_prompt(item: dict) -> str:
     return (f"Work on GitHub issue #{item['number']} in {REPO}: {item['title']}.\n\n"
-        f"Issue body:\n{item['body']}\n\n"
-        "## Your task:\n"
+        "Read the full issue and all comments, then progress it towards closure.\n\n"
+        "Steps:\n"
         f"1. Read: gh issue view {item['number']} --repo {REPO} --comments\n"
-        "2. Develop on dev host (192.168.1.100): /opt/n8n-copilot-shim-dev/\n"
-        "3. Work on dev branch (git checkout dev && git pull)\n"
-        "4. Test your changes locally\n"
-        "5. Commit & push to dev branch\n"
-        "6. Leave notes on GitHub (commit SHA, test results)\n"
-        "7. Remove 'wee-dev' label when done\n"
-        "8. Close the issue\n\n"
-        "⚠️ Never put secrets/keys in GitHub. Work on ONE issue at a time.")
+        "2. Implement the fix/feature on dev host (192.168.1.100)\n"
+        "3. Test locally, then commit and push to dev branch\n"
+        "4. Leave a comment with your work summary\n"
+        "5. Close the issue\n\n"
+        "⚠️ Never put secrets/keys in GitHub.")
 
 def dispatch_wee_dev(item: dict, state: dict) -> None:
     cfg = get_agent_dispatch_config("wee-dev")
