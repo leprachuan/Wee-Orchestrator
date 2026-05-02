@@ -414,27 +414,45 @@ def passes_safety_gate(item: dict) -> bool:
 # ---------------------------------------------------------------------------
 
 
-def build_wee_dev_prompt(item: dict) -> str:
-    return (
-        f"Work on GitHub issue #{item['number']} in {REPO}: {item['title']}.\n\n"
-        f"Read the full issue (body + all comments) directly from GitHub before starting:\n"
-        f"  gh issue view {item['number']} --repo {REPO} --comments\n\n"
-        "## Task:\n"
-        "1. Read the issue on GitHub to understand all requirements and context.\n"
-        "2. Implement the fix/feature on the dev host (192.168.1.100) in /opt/n8n-copilot-shim-dev/.\n"
-        "3. Follow /opt/wee-dev/AGENTS.md for all git workflow rules.\n"
-        "4. Leave clear notes on this GitHub issue as you work.\n"
-        "   - **IMPORTANT: Never put secrets, API keys, passwords, or credentials in GitHub issues.**\n"
-        "   - Do leave implementation notes, decisions made, test results, and commit SHAs.\n"
-        "5. When implementation is complete and tests pass, add the label 'wee-dev:qa-review' to the issue.\n"
-        "6. The dispatcher will pick it up for wee-qa. Do not dispatch wee-qa yourself.\n"
-        "7. Do not work on more than one issue at a time."
-    )
+def build_wee_dev_prompt(item: dict, merge_approved: bool = False) -> str:
+    if merge_approved:
+        return (
+            f"Merge and close GitHub issue #{item['number']} in {REPO}: {item['title']}.\n\n"
+            f"This issue was approved by wee-qa. Your task:\n"
+            "1. Read the current PR branch and status:\n"
+            f"  gh issue view {item['number']} --repo {REPO} --comments\n\n"
+            "2. Locate the PR associated with this issue (check issue comments and linked PRs).\n"
+            "3. Merge the PR to the main branch using the dev host (192.168.1.100):\n"
+            "   - Switch to the dev host and the dev repo\n"
+            "   - Ensure the PR is based on dev (feature branch → dev)\n"
+            "   - Merge the feature branch to dev via: gh pr merge <pr_number> --merge --repo {REPO}\n"
+            "4. Close the issue by removing all wee-dev labels and closing it:\n"
+            "   - gh issue edit {item['number']} --repo {REPO} --remove-label wee-dev,wee-dev:in-progress,wee-dev:approved\n"
+            "   - gh issue close {item['number']} --repo {REPO}\n"
+            "5. Post a final comment linking the merged commit SHA.\n\n"
+            "⚠️ Do not modify code or create new issues — only merge and close."
+        )
+    else:
+        return (
+            f"Work on GitHub issue #{item['number']} in {REPO}: {item['title']}.\n\n"
+            f"Read the full issue (body + all comments) directly from GitHub before starting:\n"
+            f"  gh issue view {item['number']} --repo {REPO} --comments\n\n"
+            "## Task:\n"
+            "1. Read the issue on GitHub to understand all requirements and context.\n"
+            "2. Implement the fix/feature on the dev host (192.168.1.100) in /opt/n8n-copilot-shim-dev/.\n"
+            "3. Follow /opt/wee-dev/AGENTS.md for all git workflow rules.\n"
+            "4. Leave clear notes on this GitHub issue as you work.\n"
+            "   - **IMPORTANT: Never put secrets, API keys, passwords, or credentials in GitHub issues.**\n"
+            "   - Do leave implementation notes, decisions made, test results, and commit SHAs.\n"
+            "5. When implementation is complete and tests pass, add the label 'wee-dev:qa-review' to the issue.\n"
+            "6. The dispatcher will pick it up for wee-qa. Do not dispatch wee-qa yourself.\n"
+            "7. Do not work on more than one issue at a time."
+        )
 
 
-def dispatch_wee_dev(item: dict, state: dict) -> None:
+def dispatch_wee_dev(item: dict, state: dict, merge_approved: bool = False) -> None:
     cfg = get_agent_dispatch_config("wee-dev")
-    prompt = build_wee_dev_prompt(item)
+    prompt = build_wee_dev_prompt(item, merge_approved=merge_approved)
 
     if DRY_RUN:
         log(f"[dry-run] Would dispatch wee-dev for {item['id']} (runtime={cfg['runtime']})")
@@ -496,6 +514,8 @@ def run_pipeline(items: list[dict], state: dict) -> None:
     
     stalled_qa = []   # qa-review items whose task completed without transitioning label
     stalled_dev = []  # in-progress items whose task completed without transitioning label
+    wee_dev_blocked = False  # Set if wee-dev has a running or recent task
+    wee_qa_blocked = False   # Set if wee-qa has a running or recent task
 
     for item in items:
         issue_state = get_issue_state(state, item["number"])
@@ -505,11 +525,13 @@ def run_pipeline(items: list[dict], state: dict) -> None:
             dispatched_at = issue_state.get("wee_dev_dispatched_at")
             mins = minutes_since(dispatched_at) if dispatched_at else None
             if task_id and is_task_running(task_id):
-                log(f"wee-dev running task={task_id} for {item['id']} — skipping dispatch")
-                return  # Serial: active task running
+                log(f"wee-dev running task={task_id} for {item['id']} — blocking wee-dev dispatch")
+                wee_dev_blocked = True
+                continue  # Don't return — allow approved items to still be processed
             if mins is not None and mins < STALL_TIMEOUT_MINUTES:
                 log(f"wee-dev task for {item['id']} ended {mins:.1f}min ago — waiting for label transition")
-                return  # Too recent to re-dispatch
+                wee_dev_blocked = True  # Block wee-dev dispatch this cycle
+                continue
             stalled_dev.append(item)
             log(f"wee-dev task for {item['id']} stalled (completed without label transition)")
 
@@ -518,8 +540,9 @@ def run_pipeline(items: list[dict], state: dict) -> None:
             dispatched_at = issue_state.get("wee_qa_dispatched_at")
             mins = minutes_since(dispatched_at) if dispatched_at else None
             if task_id and is_task_running(task_id):
-                log(f"wee-qa running task={task_id} for {item['id']} — skipping dispatch")
-                return  # Serial: active task running
+                log(f"wee-qa running task={task_id} for {item['id']} — blocking wee-qa dispatch")
+                wee_qa_blocked = True
+                continue
             if mins is not None and mins < STALL_TIMEOUT_MINUTES:
                 # Stale label edge case: wee-qa may have updated labels just after this
                 # cycle began. Check if the actual label on GitHub has changed (stale cache).
@@ -533,7 +556,8 @@ def run_pipeline(items: list[dict], state: dict) -> None:
                     # Fall through to process the new status (don't return early)
                 else:
                     log(f"wee-qa task for {item['id']} ended {mins:.1f}min ago — waiting for label transition")
-                    return  # Too recent to re-dispatch
+                    wee_qa_blocked = True
+                    continue
             # If we get here and status is still qa-review, check for stall
             if item["status"] == "qa-review":
                 stalled_qa.append(item)
@@ -552,7 +576,7 @@ def run_pipeline(items: list[dict], state: dict) -> None:
         return  # Serial: one dispatch per cycle
 
     # -----------------------------------------------------------------------
-    # wee-dev slot: one task at a time (handles stalled, qa-failed, queued)
+    # wee-dev slot: one task at a time (handles stalled, qa-failed, queued, approved)
     # -----------------------------------------------------------------------
     in_progress = [i for i in items if i["status"] == "in-progress"]
     qa_failed = [i for i in items if i["status"] == "qa-failed"]
@@ -562,14 +586,18 @@ def run_pipeline(items: list[dict], state: dict) -> None:
 
     wee_dev_dispatched = False
 
+    # Skip all wee-dev dispatch if wee-dev is currently blocked
+    if wee_dev_blocked:
+        log("wee-dev is blocked (running/recent task) — skipping dispatch this cycle")
+    
     # Priority: Approved items first (merge and close)
-    if approved:
+    elif approved:
         item = approved[0]
         log(f"Dispatching wee-dev to merge+close approved {item['id']}: {item['title']}")
         transition(item["number"], "wee-dev:approved", "wee-dev:in-progress",
                    f"✅ QA approved; wee-dev merging PR and closing issue ({now_iso()}).")
         try:
-            dispatch_wee_dev(item, state)
+            dispatch_wee_dev(item, state, merge_approved=True)
             wee_dev_dispatched = True
         except Exception as exc:
             log(f"ERROR: Failed to dispatch wee-dev to merge approved: {exc}")
