@@ -12410,8 +12410,8 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         @field_validator("prompt")
         @classmethod
         def validate_prompt(cls, v):
-            if len(v) > 10000:
-                raise ValueError("Prompt must be 10,000 characters or less")
+            if len(v) > 200000:
+                raise ValueError("Prompt must be 200,000 characters or less")
             return v
 
     def _emit_bg_notification(
