@@ -10646,6 +10646,8 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                             _qt.get("timeout") or 900,
                             _qt.get("notify", True),
                             _qt.get("permission_mode", "restricted"),
+                            _qt.get("fallback_runtime"),
+                            _qt.get("fallback_model"),
                         )
                 except Exception as _rec_exc:
                     print(
@@ -10724,6 +10726,8 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                     _qt["channel"],
                     _qt["user_identity"],
                     _qt.get("timeout") or 900,
+                    _qt.get("fallback_runtime"),
+                    _qt.get("fallback_model"),
                     _qt.get("notify", True),
                     _qt.get("permission_mode", "restricted"),
                 )
@@ -13668,8 +13672,8 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             bg_timeout,
             notify_pref,
             perm_mode,
-            bg_fallback_runtime,
-            bg_fallback_model,
+            body.fallback_runtime,
+            body.fallback_model,
         )
 
         return {
