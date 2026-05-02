@@ -1022,106 +1022,6 @@ def check_runtime_available(runtime: str) -> bool:
     return False
 
 
-
-# ── Runtime Disable/Enable Manager ──────────────────────────────────────
-
-class DisabledRuntimesManager:
-    """Manages disabled runtimes - persisted in a JSON file."""
-    
-    def __init__(self, config_dir: str = ".settings"):
-        self.config_dir = Path(config_dir)
-        self.config_dir.mkdir(exist_ok=True)
-        self.config_file = self.config_dir / "disabled_runtimes.json"
-        self._load()
-    
-    def _load(self):
-        """Load disabled runtimes from config file."""
-        if self.config_file.exists():
-            try:
-                with open(self.config_file, 'r') as f:
-                    data = json.load(f)
-                    self.disabled_runtimes = set(data.get("disabled", []))
-            except Exception as e:
-                logging.warning(f"Failed to load disabled runtimes: {e}")
-                self.disabled_runtimes = set()
-        else:
-            self.disabled_runtimes = set()
-    
-    def _save(self):
-        """Save disabled runtimes to config file."""
-        try:
-            with open(self.config_file, 'w') as f:
-                json.dump({"disabled": sorted(list(self.disabled_runtimes))}, f, indent=2)
-        except Exception as e:
-            logging.error(f"Failed to save disabled runtimes: {e}")
-    
-    def is_disabled(self, runtime_id: str) -> bool:
-        """Check if a runtime is disabled."""
-        return runtime_id in self.disabled_runtimes
-    
-    def disable(self, runtime_id: str) -> bool:
-        """Disable a runtime. Returns True if changed."""
-        if runtime_id not in self.disabled_runtimes:
-            self.disabled_runtimes.add(runtime_id)
-            self._save()
-            return True
-        return False
-    
-    def enable(self, runtime_id: str) -> bool:
-        """Enable a runtime. Returns True if changed."""
-        if runtime_id in self.disabled_runtimes:
-            self.disabled_runtimes.discard(runtime_id)
-            self._save()
-            return True
-        return False
-    
-    def set_disabled(self, disabled_list: List[str]):
-        """Set the entire list of disabled runtimes."""
-        self.disabled_runtimes = set(disabled_list)
-        self._save()
-    
-    def get_disabled(self) -> List[str]:
-        """Get list of disabled runtimes."""
-        return sorted(list(self.disabled_runtimes))
-
-
-# Global instance
-_disabled_runtimes_manager = None
-
-def get_disabled_runtimes_manager() -> DisabledRuntimesManager:
-    """Get or create the global DisabledRuntimesManager instance."""
-    global _disabled_runtimes_manager
-    if _disabled_runtimes_manager is None:
-        _disabled_runtimes_manager = DisabledRuntimesManager()
-    return _disabled_runtimes_manager
-
-
-def get_all_runtimes() -> List[Dict[str, str]]:
-    """Get list of all runtimes (both available and unavailable).
-    
-    Returns:
-        List of all runtime dicts with 'id', 'label', and 'available' keys
-    """
-    all_runtimes = [
-        {"id": "copilot", "label": "copilot"},
-        {"id": "copilot-sdk", "label": "copilot-sdk", "icon": "🤖"},
-        {"id": "opencode", "label": "opencode"},
-        {"id": "claude", "label": "claude"},
-        {"id": "claude-sdk", "label": "claude-sdk", "icon": "🧠"},
-        {"id": "gemini", "label": "gemini"},
-        {"id": "codex", "label": "codex"},
-        {"id": "devin", "label": "devin"},
-        {"id": "cursor", "label": "cursor", "icon": "🖱️"},
-        {"id": "wee", "label": "wee", "icon": "🍀"},
-    ]
-    
-    # Add availability status
-    for rt in all_runtimes:
-        rt["available"] = check_runtime_available(rt["id"])
-    
-    return all_runtimes
-
-
 def get_available_runtimes() -> List[Dict[str, str]]:
     """Get list of available runtimes on this system.
 
@@ -1142,11 +1042,6 @@ def get_available_runtimes() -> List[Dict[str, str]]:
     ]
 
     available = [rt for rt in all_runtimes if check_runtime_available(rt["id"])]
-    
-    # Filter out disabled runtimes
-    disabled_mgr = get_disabled_runtimes_manager()
-    available = [rt for rt in available if not disabled_mgr.is_disabled(rt["id"])]
-    
     return available
 
 
@@ -11066,46 +10961,6 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         runtimes = get_available_runtimes()
         return {"runtimes": runtimes}
 
-    class DisabledRuntimesRequest(BaseModel):
-        disabled: List[str]
-
-    @app.get("/api/v1/all-runtimes")
-    async def get_all_runtimes_endpoint():
-        """Return list of all runtimes with availability status."""
-        all_runtimes = get_all_runtimes()
-        disabled_mgr = get_disabled_runtimes_manager()
-        # Add disabled status to each runtime
-        for rt in all_runtimes:
-            rt["disabled"] = disabled_mgr.is_disabled(rt["id"])
-        return {"runtimes": all_runtimes}
-
-    @app.get("/api/v1/settings/disabled-runtimes")
-    async def get_disabled_runtimes_endpoint(request: Request):
-        """Return list of disabled runtimes."""
-        await authenticate(
-            request,
-            authorization=request.headers.get("authorization"),
-            x_user_identity=request.headers.get("x-user-identity"),
-            x_auth_channel=request.headers.get("x-auth-channel"),
-        )
-        disabled_mgr = get_disabled_runtimes_manager()
-        return {"disabled": disabled_mgr.get_disabled()}
-
-    @app.put("/api/v1/settings/disabled-runtimes")
-    async def set_disabled_runtimes_endpoint(
-        body: DisabledRuntimesRequest, request: Request
-    ):
-        """Set the list of disabled runtimes."""
-        await authenticate(
-            request,
-            authorization=request.headers.get("authorization"),
-            x_user_identity=request.headers.get("x-user-identity"),
-            x_auth_channel=request.headers.get("x-auth-channel"),
-        )
-        disabled_mgr = get_disabled_runtimes_manager()
-        disabled_mgr.set_disabled(body.disabled)
-        return {"disabled": disabled_mgr.get_disabled(), "message": "Disabled runtimes updated"}
-
     @app.get("/api/v1/models")
     async def get_models(runtime: str = "copilot"):
         """Return available models for the specified runtime.
@@ -14250,9 +14105,6 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
 
     class NotificationSettingsRequest(BaseModel):
         notifications_enabled: bool
-    class DisabledRuntimesRequest(BaseModel):
-        disabled: List[str]
-
 
     @app.get("/api/v1/settings/notifications")
     async def get_notification_settings(request: Request):

@@ -196,3 +196,52 @@ export async function reloadServices(): Promise<{ status: string; message: strin
   }
   return resp.json();
 }
+
+/**
+ * Get all runtimes (available and unavailable) with their disabled status.
+ * @returns Array of runtimes with id, label, available, and disabled flags
+ */
+export async function getAllRuntimes(): Promise<{ runtimes: Array<{ id: string; label: string; available: boolean; disabled: boolean; icon?: string }> }> {
+  const resp = await fetch(`${API_BASE}/all-runtimes`, {
+    headers: { 'Accept': 'application/json' },
+    credentials: 'include',
+  });
+  if (!resp.ok) {
+    throw new Error(`Failed to load all runtimes: ${resp.status} ${resp.statusText}`);
+  }
+  return resp.json();
+}
+
+/**
+ * Get the list of disabled runtimes.
+ * @returns Array of runtime IDs that are currently disabled
+ */
+export async function getDisabledRuntimes(): Promise<{ disabled: string[] }> {
+  const resp = await fetch(`${API_BASE}/settings/disabled-runtimes`, {
+    headers: { 'Accept': 'application/json' },
+    credentials: 'include',
+  });
+  if (!resp.ok) {
+    throw new Error(`Failed to load disabled runtimes: ${resp.status} ${resp.statusText}`);
+  }
+  return resp.json();
+}
+
+/**
+ * Set the list of disabled runtimes.
+ * @param disabled - Array of runtime IDs to disable
+ * @returns Server response with updated disabled list
+ */
+export async function setDisabledRuntimes(disabled: string[]): Promise<{ disabled: string[]; message: string }> {
+  const resp = await fetch(`${API_BASE}/settings/disabled-runtimes`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    credentials: 'include',
+    body: JSON.stringify({ disabled }),
+  });
+  if (!resp.ok) {
+    const detail = await resp.text();
+    throw new Error(`Failed to set disabled runtimes (${resp.status}): ${detail}`);
+  }
+  return resp.json();
+}
