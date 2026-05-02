@@ -414,45 +414,27 @@ def passes_safety_gate(item: dict) -> bool:
 # ---------------------------------------------------------------------------
 
 
-def build_wee_dev_prompt(item: dict, merge_approved: bool = False) -> str:
-    if merge_approved:
-        return (
-            f"Merge and close GitHub issue #{item['number']} in {REPO}: {item['title']}.\n\n"
-            f"This issue was approved by wee-qa. Your task:\n"
-            "1. Read the current PR branch and status:\n"
-            f"  gh issue view {item['number']} --repo {REPO} --comments\n\n"
-            "2. Locate the PR associated with this issue (check issue comments and linked PRs).\n"
-            "3. Merge the PR to the main branch using the dev host (192.168.1.100):\n"
-            "   - Switch to the dev host and the dev repo\n"
-            "   - Ensure the PR is based on dev (feature branch → dev)\n"
-            "   - Merge the feature branch to dev via: gh pr merge <pr_number> --merge --repo {REPO}\n"
-            "4. Close the issue by removing all wee-dev labels and closing it:\n"
-            "   - gh issue edit {item['number']} --repo {REPO} --remove-label wee-dev,wee-dev:in-progress,wee-dev:approved\n"
-            "   - gh issue close {item['number']} --repo {REPO}\n"
-            "5. Post a final comment linking the merged commit SHA.\n\n"
-            "⚠️ Do not modify code or create new issues — only merge and close."
-        )
-    else:
-        return (
-            f"Work on GitHub issue #{item['number']} in {REPO}: {item['title']}.\n\n"
-            f"Read the full issue (body + all comments) directly from GitHub before starting:\n"
-            f"  gh issue view {item['number']} --repo {REPO} --comments\n\n"
-            "## Task:\n"
-            "1. Read the issue on GitHub to understand all requirements and context.\n"
-            "2. Implement the fix/feature on the dev host (192.168.1.100) in /opt/n8n-copilot-shim-dev/.\n"
-            "3. Follow /opt/wee-dev/AGENTS.md for all git workflow rules.\n"
-            "4. Leave clear notes on this GitHub issue as you work.\n"
-            "   - **IMPORTANT: Never put secrets, API keys, passwords, or credentials in GitHub issues.**\n"
-            "   - Do leave implementation notes, decisions made, test results, and commit SHAs.\n"
-            "5. When implementation is complete and tests pass, add the label 'wee-dev:qa-review' to the issue.\n"
-            "6. The dispatcher will pick it up for wee-qa. Do not dispatch wee-qa yourself.\n"
-            "7. Do not work on more than one issue at a time."
-        )
+def build_wee_dev_prompt(item: dict) -> str:
+    return (
+        f"Work on GitHub issue #{item['number']} in {REPO}: {item['title']}.\n\n"
+        f"Read the full issue (body + all comments) directly from GitHub before starting:\n"
+        f"  gh issue view {item['number']} --repo {REPO} --comments\n\n"
+        "## Task:\n"
+        "1. Read the issue on GitHub to understand all requirements and context.\n"
+        "2. Implement the fix/feature on the dev host (192.168.1.100) in /opt/n8n-copilot-shim-dev/.\n"
+        "3. Follow /opt/wee-dev/AGENTS.md for all git workflow rules.\n"
+        "4. Leave clear notes on this GitHub issue as you work.\n"
+        "   - **IMPORTANT: Never put secrets, API keys, passwords, or credentials in GitHub issues.**\n"
+        "   - Do leave implementation notes, decisions made, test results, and commit SHAs.\n"
+        "5. When implementation is complete and tests pass, add the label 'wee-dev:qa-review' to the issue.\n"
+        "6. The dispatcher will pick it up for wee-qa. Do not dispatch wee-qa yourself.\n"
+        "7. Do not work on more than one issue at a time."
+    )
 
 
-def dispatch_wee_dev(item: dict, state: dict, merge_approved: bool = False) -> None:
+def dispatch_wee_dev(item: dict, state: dict) -> None:
     cfg = get_agent_dispatch_config("wee-dev")
-    prompt = build_wee_dev_prompt(item, merge_approved=merge_approved)
+    prompt = build_wee_dev_prompt(item)
 
     if DRY_RUN:
         log(f"[dry-run] Would dispatch wee-dev for {item['id']} (runtime={cfg['runtime']})")
@@ -482,10 +464,14 @@ def build_wee_qa_prompt(item: dict) -> str:
         "   - **IMPORTANT: Never put secrets, API keys, passwords, or credentials in GitHub issues.**\n"
         "   - Do leave test results, code quality findings, and specific pass/fail details.\n"
         "5. When QA is complete:\n"
-        "   - If APPROVED: Add label 'wee-dev:approved', remove 'wee-dev:qa-review', post comment: 'VERDICT: APPROVE' + test count + summary.\n"
+        "   - If APPROVED:\n"
+        "     a. Merge the PR to dev: gh pr merge <pr_number> --merge --repo {REPO}\n"
+        "     b. Close the issue: gh issue close {item['number']} --repo {REPO}\n"
+        "     c. Add comment: 'VERDICT: APPROVE ✅' + test count + summary.\n"
         "   - If REJECTED: Add label 'wee-dev:qa-failed', remove 'wee-dev:qa-review', post comment: 'VERDICT: REJECT' + specific failures.\n"
-        "6. Do NOT merge or close the issue — wee-dev handles that after approval."
+        "6. wee-qa is responsible for merging approved PRs and closing issues. Do not add 'wee-dev:approved' label."
     )
+
 
 
 def dispatch_wee_qa(item: dict, state: dict) -> None:
@@ -581,7 +567,6 @@ def run_pipeline(items: list[dict], state: dict) -> None:
     in_progress = [i for i in items if i["status"] == "in-progress"]
     qa_failed = [i for i in items if i["status"] == "qa-failed"]
     queued = [i for i in items if i["status"] == "queued"]
-    approved = [i for i in items if i["status"] == "approved"]
 
 
     wee_dev_dispatched = False
@@ -590,21 +575,6 @@ def run_pipeline(items: list[dict], state: dict) -> None:
     if wee_dev_blocked:
         log("wee-dev is blocked (running/recent task) — skipping dispatch this cycle")
     
-    # Priority: Approved items first (merge and close)
-    elif approved:
-        item = approved[0]
-        log(f"Dispatching wee-dev to merge+close approved {item['id']}: {item['title']}")
-        transition(item["number"], "wee-dev:approved", "wee-dev:in-progress",
-                   f"✅ QA approved; wee-dev merging PR and closing issue ({now_iso()}).")
-        try:
-            dispatch_wee_dev(item, state, merge_approved=True)
-            wee_dev_dispatched = True
-        except Exception as exc:
-            log(f"ERROR: Failed to dispatch wee-dev to merge approved: {exc}")
-            # Roll back label
-            transition(item["number"], "wee-dev:in-progress", "wee-dev:approved",
-                       "⚠️ Dispatcher failed to dispatch merge; reverted to approved.")
-
     elif in_progress:
         item = in_progress[0]
         issue_state = get_issue_state(state, item["number"])
