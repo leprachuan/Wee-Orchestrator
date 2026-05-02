@@ -8319,10 +8319,17 @@ User Request:
         stream_buffer = getattr(self, "_stream_buffers", {}).get(n8n_session_id)
 
         # -- Create OpenAI client and call API --
+        import httpx as _httpx_wee
         client = OpenAI(
             base_url=api_base,
             api_key=api_key,
-            timeout=effective_timeout,
+            timeout=_httpx_wee.Timeout(
+                connect=15.0,
+                read=float(effective_timeout),
+                write=30.0,
+                pool=15.0,
+            ),
+            max_retries=0,
         )
 
         # -- Issue #108: Load conversation history --
@@ -10479,6 +10486,9 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             models = []
             for group_name, model_ids in raw.items():
                 for model_id in model_ids:
+                    # Support both flat strings and (id, desc, aliases) tuples
+                    if isinstance(model_id, tuple):
+                        model_id = model_id[0]
                     label = (
                         session_mgr._get_model_description(model_id, runtime)
                         or model_id
