@@ -11836,7 +11836,9 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         permission_mode: Optional[str] = (
             None  # elevated, restricted (default), sandboxed
         )
-        yolo: Optional[bool] = None  # If True, grants elevated mode; if False, prevents it
+        yolo: Optional[bool] = (
+            None  # If True, grants elevated mode; if False, prevents it
+        )
         description: Optional[str] = (
             None  # human-readable task name shown in Agents panel
         )
@@ -12909,7 +12911,6 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 "timeout": bg_timeout,
             }
 
-
         # Create task record (running immediately)
         task = bg_task_mgr.create_task(
             task_id=task_id,
@@ -13398,7 +13399,10 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             permission_mode: Optional[str] = (
                 None  # elevated, restricted (default), sandboxed
             )
-        yolo: Optional[bool] = None  # If True, grants elevated mode; if False, prevents it
+
+        yolo: Optional[bool] = (
+            None  # If True, grants elevated mode; if False, prevents it
+        )
 
         class UpdateJobRequest(BaseModel):
             name: Optional[str] = None
@@ -13415,7 +13419,10 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             permission_mode: Optional[str] = (
                 None  # elevated, restricted (default), sandboxed
             )
-        yolo: Optional[bool] = None  # If True, grants elevated mode; if False, prevents it
+
+        yolo: Optional[bool] = (
+            None  # If True, grants elevated mode; if False, prevents it
+        )
 
         class ValidateScheduleRequest(BaseModel):
             schedule: str
