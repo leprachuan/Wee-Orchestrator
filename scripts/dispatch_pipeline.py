@@ -93,8 +93,9 @@ def _load_agents_config() -> dict:
         return json.load(f)
 
 def get_agent_dispatch_config(agent_name: str) -> dict:
-    agents = _load_agents_config()
-    agent = agents.get(agent_name, {})
+    config = _load_agents_config()
+    agents_list = config.get("agents", [])
+    agent = next((a for a in agents_list if a.get("name") == agent_name), {})
     permissions = agent.get("permissions", {})
     return {
         "runtime": agent.get("primary_runtime", "copilot"),
