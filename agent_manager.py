@@ -12324,6 +12324,8 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         timeout: int = None,
         notify: bool = True,
         permission_mode: str = "restricted",
+        fallback_runtime: str = None,
+        fallback_model: str = None,
     ):
         """Blocking function that runs a background task in a subprocess.
         Called from a thread pool executor.
@@ -12575,6 +12577,158 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                     "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
                 }
             return None
+
+        # Fallback eligibility patterns for bg tasks (Issue #219).
+        # All patterns use \b word boundaries so tokens embedded inside
+        # underscore-separated identifiers (e.g. status_code_429_count,
+        # unauthorized_users, timeout_value, api_key_invalid_count) are NOT
+        # matched.  Python's \w class includes '_', so \b fires only at
+        # alphanumeric↔non-alphanumeric transitions, not at '_' boundaries.
+        _BG_FALLBACK_PATTERNS = [
+            re.compile(p, re.IGNORECASE)
+            for p in [
+                r"\b429\b",
+                r"\brate[\s\-]?limit(?:ed|ing)?\b",
+                r"\bquota[\s\-]exceeded\b",
+                r"\b401\b",
+                r"\bunauthorized\b",
+                r"\bmissing[\s\-]authentication\b",
+                r"\bapi[\s_\-]?key[\s_\-]?(?:invalid|expired|missing)\b",
+                r"\b503\b",
+                r"\bservice[\s\-]unavailable\b",
+                r"\b502\b",
+                r"\bbad[\s\-]gateway\b",
+                r"\bconnection[\s\-]refused\b",
+                r"\btimed?\s*out\b",
+                r"\betimedout\b",
+                r"\boverloaded\b",
+            ]
+        ]
+
+        # Errors starting with Python application-exception prefixes are
+        # not infrastructure failures; exclude them so test-assertion text
+        # like "AssertionError: expected fixture text 503 …" doesn't trigger
+        # a fallback retry.
+        _BG_EXCLUSION_RE = re.compile(
+            r"^(?:assert(?:ion)?error|typeerror|valueerror|keyerror"
+            r"|attributeerror|nameerror|runtimeerror)\s*:",
+            re.IGNORECASE,
+        )
+
+        def _is_bg_fallback_eligible(error_text):
+            if not error_text:
+                return False
+            if _BG_EXCLUSION_RE.match(error_text.strip()):
+                return False
+            for pat in _BG_FALLBACK_PATTERNS:
+                if pat.search(error_text):
+                    return True
+            return False
+
+        def _build_bg_cmd(rt, mdl, ctx_prompt, perm_mode):
+            from shutil import which as _which_bin
+
+            _agent_dir = session_mgr.AGENTS.get(
+                agent, session_mgr.AGENTS.get("orchestrator", {})
+            ).get("path", os.getcwd())
+
+            if rt == "gemini":
+                _gemini_bin = _which_bin("gemini") or "gemini"
+                _cmd = [_gemini_bin]
+                if perm_mode == "elevated":
+                    _cmd.append("--yolo")
+                _cmd.extend(["-o", "stream-json", "-p", ctx_prompt])
+                if mdl:
+                    _cmd.extend(["--model", mdl])
+            elif rt == "opencode":
+                _oc_bin = (
+                    str(session_mgr.opencode_bin)
+                    if session_mgr.opencode_bin
+                    else (_which_bin("opencode") or "opencode")
+                )
+                _cmd = [_oc_bin, "run", "--model", mdl, ctx_prompt]
+            elif rt == "codex":
+                _codex_bin = _which_bin("codex") or "codex"
+                _cmd = [_codex_bin, "exec"]
+                if perm_mode == "elevated":
+                    _cmd.extend([
+                        "--dangerously-bypass-approvals-and-sandbox",
+                        "-c",
+                        "shell_environment_policy.inherit=all",
+                    ])
+                if mdl:
+                    _cmd.extend(["-m", mdl])
+                _cmd.append(ctx_prompt)
+            elif rt == "claude":
+                _claude_bin = session_mgr.claude_bin or _which_bin("claude") or "claude"
+                _claude_perm = {
+                    "elevated": "bypassPermissions",
+                    "sandboxed": "plan",
+                }.get(perm_mode, "default")
+                _cmd = [
+                    _claude_bin, "-p", ctx_prompt,
+                    "--output-format", "stream-json",
+                    "--verbose", "--model", mdl,
+                    "--permission-mode", _claude_perm,
+                ]
+            elif rt == "devin":
+                _devin_bin = (
+                    session_mgr.devin_bin
+                    if hasattr(session_mgr, "devin_bin") and session_mgr.devin_bin
+                    else (_which_bin("devin") or "devin")
+                )
+                _devin_perm = "dangerous"
+                _cmd = [_devin_bin, "-p", "--permission-mode", _devin_perm]
+                if mdl:
+                    _cmd.extend(["--model", mdl])
+                _cmd.extend(["--", ctx_prompt])
+            elif rt == "cursor":
+                _cursor_bin = (
+                    session_mgr.cursor_bin
+                    if hasattr(session_mgr, "cursor_bin") and session_mgr.cursor_bin
+                    else (_which_bin("agent") or "agent")
+                )
+                _cursor_model = mdl
+                if not _cursor_model or not session_mgr.get_model_from_name(_cursor_model, "cursor"):
+                    _cursor_model = os.environ.get("CURSOR_DEFAULT_MODEL", "auto")
+                _cmd = [_cursor_bin, "-p", "--trust"]
+                if perm_mode == "elevated":
+                    _cmd.append("--yolo")
+                _cmd.extend(["--model", _cursor_model, "--workspace", _agent_dir, "--", ctx_prompt])
+            elif rt == "wee":
+                _wee_script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "wee_runtime.py")
+                _cmd = [sys.executable, _wee_script, "--model", mdl, "--timeout", str(timeout or 300)]
+                _wee_api_base = os.environ.get("WEE_API_BASE", "")
+                _wee_api_key = os.environ.get("WEE_API_KEY", "")
+                if _wee_api_base:
+                    _cmd.extend(["--api-base", _wee_api_base])
+                if _wee_api_key:
+                    _cmd.extend(["--api-key", _wee_api_key])
+                _cmd.extend(["--system-prompt", ctx_prompt])
+                _cmd.append(prompt)
+            elif rt in ("claude-sdk", "copilot-sdk"):
+                _am_script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "agent_manager.py")
+                _cmd = [sys.executable, _am_script, "--runtime", rt, "--model", mdl, "--agent", agent, ctx_prompt, session_id or str(uuid4())]
+            else:
+                copilot_bin = (
+                    session_mgr.copilot_bin
+                    or _which_bin("copilot")
+                    or "/home/flipkey/.local/bin/copilot"
+                )
+                _cmd = [copilot_bin, "-p", ctx_prompt, "--no-color", "--model", mdl, "--allow-all-tools"]
+                if perm_mode == "elevated":
+                    _cmd.extend(["--allow-all-paths", "--yolo"])
+
+            _proc_timeout = (timeout or 900) + 30
+            _env = {
+                **os.environ,
+                "COPILOT_AGENT": agent,
+                "COPILOT_RUNTIME": rt,
+                "WEE_AGENT_DIR": _agent_dir,
+                "WEE_SESSION_ID": session_id,
+                "WEE_TASK_ID": task_id,
+            }
+            return _cmd, _env, _proc_timeout, _agent_dir
 
         try:
             # Build full context prompt with agent/runtime/channel metadata
@@ -13285,6 +13439,8 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             bg_timeout,
             notify_pref,
             perm_mode,
+            bg_fallback_runtime,
+            bg_fallback_model,
         )
 
         return {
@@ -13492,6 +13648,8 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                         next_q.get("timeout") or 900,
                         next_q.get("notify", True),
                         next_q.get("permission_mode", "restricted"),
+                        next_q.get("fallback_runtime"),
+                        next_q.get("fallback_model"),
                     )
             return {"task_id": task_id, "action": "killed"}
         else:
@@ -14041,6 +14199,8 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                     status="running",
                     timeout=timeout,
                     notify=job.get("notify", False),
+                    fallback_runtime=job.get("fallback_runtime"),
+                    fallback_model=job.get("fallback_model"),
                 )
 
                 loop = asyncio.get_running_loop()
@@ -14058,6 +14218,8 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                     timeout,
                     job.get("notify", False),
                     perm_mode,
+                    job.get("fallback_runtime"),
+                    job.get("fallback_model"),
                 )
 
                 return {
