@@ -4,10 +4,10 @@
 import json
 import os
 import sys
-from pathlib import Path
-from unittest import mock
+from pathlib import Path  # noqa: F401
+from unittest import mock  # noqa: F401
 
-import pytest
+import pytest  # noqa: F401
 
 sys.path.insert(0, "/opt/n8n-copilot-shim-dev")
 
@@ -130,7 +130,7 @@ def test_issue_295_reload_preserves_all_fields(tmp_path):
     from agent_manager import SessionManager
 
     mgr = SessionManager()
-    agents = mgr._load_agents_config(config_file)
+    mgr._load_agents_config(config_file)  # noqa: F841
 
     # Reload and verify all fields
     success, msg = mgr.reload_agents_from_disk()
