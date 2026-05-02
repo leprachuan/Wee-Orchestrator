@@ -4045,37 +4045,6 @@ You can mention an agent in your prompt and it will auto-delegate:
         return self._static_models_to_dict(self.CURSOR_MODELS)
 
     def fetch_wee_models(self) -> Dict:
-        """Return available wee models: local Ollama + OpenRouter cloud models.
-
-        Issue #124: Replace hardcoded 3-model list with live discovery from kubuntu.
-        Returns model names suitable for ollama/<name> ID format.
-        """
-        import time as _time
-        import urllib.request as _urllib_req
-
-        ollama_ttl = 60
-        if self._ollama_models_cache and _time.time() - self._ollama_cache_ts < ollama_ttl:
-            return self._ollama_models_cache
-
-        ollama_url = os.environ.get("WEE_OLLAMA_HOST", "http://192.168.1.101:11434") + "/api/tags"
-        try:
-            req = _urllib_req.Request(ollama_url)
-            resp = _urllib_req.urlopen(req, timeout=5)
-            data = json.loads(resp.read())
-            names = [m["name"] for m in data.get("models", []) if m.get("name")]
-            self._ollama_models_cache = names
-            self._ollama_cache_ts = _time.time()
-            print(
-                f"[wee] Ollama: discovered {len(names)} models from {ollama_url}",
-                file=sys.stderr,
-            )
-            return names
-        except Exception as e:
-            print(f"[wee] Ollama discovery failed ({ollama_url}): {e}", file=sys.stderr)
-            # Return cached data even if stale, or empty list
-            return self._ollama_models_cache or []
-
-    def fetch_wee_models(self) -> Dict:
         """Return available wee models: local Ollama (live) + OpenRouter cloud models.
 
         Issue #124: Ollama models are fetched live from kubuntu (60s TTL cache).
