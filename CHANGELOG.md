@@ -563,6 +563,35 @@ switcher when using the wee runtime, alongside local Ollama models.
 
 - **Tests** (34 new tests in tests/test_issue119_openrouter.py)
 
+## [Issue #114] Feature: Wee Runtime Model Auto-Discovery
+**Status:** QA Approved (Commit: edd2219)
+
+### Summary
+Adds automatic model discovery for the **wee** native runtime. Polls configured Ollama and OpenAI-compatible hosts at startup and on demand, with TTL caching (60s default), singleton pattern, and graceful offline fallback to last-known models. Model list is surfaced in the /api/v1/models endpoint and runtime dispatch.
+
+### Changes
+- **wee_model_discovery.py** - New module for model auto-discovery
+  - WeeModelDiscovery class with TTL cache (default 60s), thread-safe via threading.Lock
+  - discover_all() - polls all configured hosts, returns group_label to model_ids; offline hosts fall back to last-known cached models (bug-fixed in edd2219)
+  - discover_all_enriched() - always-live poll with metadata (size, modified_at); force param accepted for API compat but has no cache effect (documented in edd2219)
+  - get_discovery() - global singleton accessor
+  - Config via WEE_DISCOVERY_HOSTS env var (JSON array); defaults to Ollama on 192.168.1.101:11434 and LM Studio on 192.168.1.101:11437
+  - Cache invalidation via invalidate_cache()
+- **agent_manager.py** - _fetch_wee_models() uses discovery module; returns flat strings; integrated into get_models_for_runtime('wee') and /api/v1/models endpoint
+
+### Bug Fix (edd2219 - QA Round 2)
+- Offline fallback ordering bug: old_cached was read AFTER self._cache was overwritten with the fresh (failed) result, so fallback always returned an empty list. Fixed by saving old_cached = self._cache.get(cache_key) BEFORE the fresh discovery write.
+
+### Tests
+- **30 tests** in tests/test_issue114_model_discovery.py (1172 total pass)
+  - Init, singleton, env override, Ollama/OpenAI discovery, caching (TTL hit/miss/force/invalidate), offline fallback regression, host status, _fetch_wee_models, tuple handling, thread safety, enriched metadata
+
+### Test Results
+- 1172 total tests pass, 9 skipped, 0 failures
+- All 30 Issue #114 tests pass (100%)
+- No BLOCKERs or MAJORs
+
+
 ## [Issue #100] Feature: GitHub Issues Integration for TODO Endpoints
 **Status:** ✅ QA Approved (Commit: ca21379)
 

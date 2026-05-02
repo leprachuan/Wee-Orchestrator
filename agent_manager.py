@@ -10488,6 +10488,42 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         except Exception as e:
             return {"runtime": runtime, "models": [], "error": str(e)}
 
+    @app.get("/api/v1/wee/models")
+    async def get_wee_models(force: bool = False):
+        """Return discovered wee models with enriched metadata.
+
+        Queries Ollama and OpenAI-compatible hosts, returns models grouped
+        by provider with size, status, and modification time.
+
+        Query params:
+            force: bypass cache and re-discover (default false)
+        """
+        try:
+            from wee_model_discovery import get_discovery
+            discovery = get_discovery()
+            enriched = discovery.discover_all_enriched(force=force)
+            host_status = discovery.get_host_status()
+            return {
+                "runtime": "wee",
+                "providers": enriched,
+                "host_status": host_status,
+            }
+        except Exception as e:
+            return {"runtime": "wee", "providers": {}, "error": str(e)}
+
+    @app.post("/api/v1/wee/models/refresh")
+    async def refresh_wee_models():
+        """Force refresh the wee model cache."""
+        try:
+            from wee_model_discovery import get_discovery
+            discovery = get_discovery()
+            discovery.invalidate_cache()
+            result = discovery.discover_all(force=True)
+            total = sum(len(v) for v in result.values())
+            return {"status": "refreshed", "total_models": total, "providers": result}
+        except Exception as e:
+            return {"status": "error", "error": str(e)}
+
     @app.post("/api/v1/auth/request-pairing")
     async def request_pairing(body: PairingRequest, request: Request):
         client_ip = request.client.host if request.client else "unknown"
