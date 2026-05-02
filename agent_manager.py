@@ -4724,6 +4724,17 @@ You can mention an agent in your prompt and it will auto-delegate:
 
         # Substring matching with longest-match preference
         matches = [m for m in all_models if name_lower in m.lower()]
+        
+        # Issue #142 B01: For wee runtime, exclude multi-namespace models from substring
+        # matching (e.g., "openrouter/openai/gpt-5-mini" has 2+ slashes = multi-namespace)
+        if runtime == "wee" and matches:
+            single_ns = [m for m in matches if m.count("/") == 1]
+            # If multi-namespace models exist, don't use any substring matches for wee
+            has_multi_ns = any(m.count("/") >= 2 for m in matches)
+            if has_multi_ns:
+                # Don't use substring matching when multi-namespace models are present
+                matches = single_ns if single_ns else []
+        
         if len(matches) == 1:
             return matches[0]
         if matches:
@@ -6382,7 +6393,7 @@ User Request:
                                                 "status": _gobj.get(
                                                     "status", "completed"
                                                 ),
-                                                "output": _gobj.get("output", "")[:500],
+                                                "output": _gobj.get("output", "")[:2000],
                                             }
                                             if stream_buffer:
                                                 stream_buffer.push(
@@ -7253,6 +7264,7 @@ User Request:
                             "id": f"tc_copilot-sdk_{_tool_call_counter[0]}",
                             "name": str(tool_name),
                             "input": "",
+                            "output": tool_output,
                             "runtime": "copilot-sdk",
                             "timestamp": time.strftime(
                                 "%Y-%m-%dT%H:%M:%SZ", time.gmtime()
@@ -7539,6 +7551,9 @@ User Request:
                                 if stream_buffer:
                                     stream_buffer.push("tool_call", tc_evt)
                             elif isinstance(block, ToolResultBlock):
+                                _block_content = block.content
+                                if isinstance(_block_content, list):
+                                    _block_content = " ".join(getattr(b, "text", str(b)) for b in _block_content)
                                 tc_evt = {
                                     "event": "completed",
                                     "id": block.tool_use_id
@@ -8659,15 +8674,27 @@ User Request:
                     except (ValueError, _json.JSONDecodeError):
                         func_args = {"raw": func_args_str}
 
-                    # Issue #109: Emit tool start event to SSE stream
+                    # Issue #109 / #142: Emit tool start event to SSE stream
                     tc_start_event = {
                         "id": tc_id,
                         "name": func_name,
-                        "arguments": func_args,
+                        "event": "detected",
+                        "input": func_args,
                         "status": "running",
                     }
                     if stream_buffer:
                         stream_buffer.push("tool_call", tc_start_event)
+
+                    # Issue #142: Track tool call in bg_task_mgr for Tasks panel
+                    if bg_task_id and self._bg_task_mgr:
+                        self._bg_task_mgr.append_tool_call(bg_task_id, {
+                            "id": tc_id,
+                            "name": func_name,
+                            "input": _json.dumps(func_args) if isinstance(func_args, dict) else str(func_args),
+                            "status": "running",
+                            "runtime": "wee",
+                            "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                        })
 
                     print(
                         f"[Wee Native] Tool: {func_name}({_json.dumps(func_args)[:200]})",
@@ -8677,16 +8704,26 @@ User Request:
                     # Execute the tool
                     tool_result = self._wee_execute_tool(func_name, func_args, agent)
 
-                    # Issue #109: Emit tool complete event to SSE stream
+                    # Issue #109 / #142: Emit tool complete event to SSE stream
                     tc_done_event = {
                         "id": tc_id,
                         "name": func_name,
-                        "arguments": func_args,
-                        "result": tool_result[:2000] if tool_result else "",
+                        "event": "result",
+                        "input": func_args,
+                        "output": tool_result[:2000] if tool_result else "",
                         "status": "complete",
                     }
                     if stream_buffer:
                         stream_buffer.push("tool_call", tc_done_event)
+
+                    # Issue #142: Update tool call completion in bg_task_mgr
+                    if bg_task_id and self._bg_task_mgr:
+                        self._bg_task_mgr.update_tool_call(
+                            bg_task_id,
+                            tc_id,
+                            status="completed",
+                            output=str(tool_result[:500]) if tool_result else "",
+                        )
 
                     # Append tool result to conversation for next round
                     messages.append(
@@ -9462,6 +9499,8 @@ User Request:
         # Background tasks run unattended — grant elevated permissions so
         # SDK runtimes (copilot-sdk, claude-sdk) don't block on approval gates
         self.update_session_field(session_id, "permissions", {"mode": "elevated"})
+        # Issue #142: Store task_id so run_wee_native can track tool calls
+        self.update_session_field(session_id, "bg_task_id", task_id)
         if timeout is not None:
             self.update_session_field(session_id, "timeout", timeout)
         try:
@@ -12735,8 +12774,36 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             start_time = time.time()
 
             for line in process.stdout:
-                stdout_lines.append(line)
                 line_text = line.rstrip("\n\r")
+
+                # Issue #142: Handle wee runtime structured tool call events
+                # These JSON lines are for tool tracking only — skip them from output
+                if runtime == "wee" and line_text.strip().startswith('{"__wee_tc__"'):
+                    try:
+                        _wee_tc = _json.loads(line_text.strip())
+                        if _wee_tc.get("__wee_tc__") == "start":
+                            _tool_call_counter += 1
+                            _tc_input = _wee_tc.get("input", {})
+                            bg_task_mgr.append_tool_call(task_id, {
+                                "id": _wee_tc.get("id", f"bg_{task_id[:8]}_{_tool_call_counter}"),
+                                "name": _wee_tc.get("name", "tool"),
+                                "input": _json.dumps(_tc_input) if isinstance(_tc_input, dict) else str(_tc_input),
+                                "status": "running",
+                                "runtime": "wee",
+                                "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                            })
+                        elif _wee_tc.get("__wee_tc__") == "done":
+                            bg_task_mgr.update_tool_call(
+                                task_id,
+                                _wee_tc.get("id", ""),
+                                status="completed",
+                                output=str(_wee_tc.get("output", ""))[:500],
+                            )
+                    except (ValueError, KeyError, TypeError):
+                        pass
+                    continue  # Don't include tool-tracking JSON in output
+
+                stdout_lines.append(line)
 
                 # Append to output_lines for live log viewing
                 if line_text:

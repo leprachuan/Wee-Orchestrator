@@ -19,8 +19,6 @@ from unittest.mock import MagicMock, PropertyMock, patch
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
 
-from agent_manager import SessionManager
-
 
 def _make_mgr():
     """Create a minimal SessionManager for testing."""
@@ -189,7 +187,7 @@ class TestWeeSessionHistory(unittest.TestCase):
 
         with patch.object(mgr, "load_session_map", return_value=dict(mgr.session_map)):
             with patch.object(mgr, "save_session_map"):
-                result = _run_wee(mgr, sid, prompt="What is my secret?", resume=True)
+                _run_wee(mgr, sid, prompt="What is my secret?", resume=True)
 
         # Check that the API was called with full history
         call_kwargs = mock_client.chat.completions.create.call_args[1]
@@ -227,7 +225,7 @@ class TestWeeSessionHistory(unittest.TestCase):
 
         with patch.object(mgr, "load_session_map", return_value=dict(mgr.session_map)):
             with patch.object(mgr, "save_session_map"):
-                result = _run_wee(mgr, sid, prompt="New question", resume=False)
+                _run_wee(mgr, sid, prompt="New question", resume=False)
 
         call_kwargs = mock_client.chat.completions.create.call_args[1]
         api_messages = call_kwargs["messages"]
@@ -305,7 +303,7 @@ class TestWeeToolCalling(unittest.TestCase):
 
     @patch("openai.OpenAI")
     def test_tool_call_loop_executes_bash(self, mock_openai_cls):
-        """When Ollama returns a tool call, it should be executed and result sent back."""
+        """Tool call agentic loop works with bash execution."""
         mgr = _make_mgr()
         mock_client = MagicMock()
         mock_openai_cls.return_value = mock_client
@@ -880,7 +878,7 @@ class TestWeeContextPersistenceDispatch(unittest.TestCase):
             "channel": "api",
         }
 
-        # -- Turn 1: user sets a nickname -----------------------------------------------
+        # -- Turn 1: user sets a nickname ----------------------------------------
         turn1_chunk = _make_text_chunk(
             "Understood. I will call you Purple People Eater for this session."
         )
@@ -891,7 +889,8 @@ class TestWeeContextPersistenceDispatch(unittest.TestCase):
                 _run_wee(
                     mgr,
                     sid,
-                    prompt="Call me purple people eater for the duration of this session.",
+                    prompt="Call me purple people eater for the duration"
+                    "            of this session.",
                     resume=False,
                 )
                 self.assertTrue(
@@ -910,7 +909,7 @@ class TestWeeContextPersistenceDispatch(unittest.TestCase):
             "Turn-1 user message must be in saved history",
         )
 
-        # -- Turn 2: load history, ensure context is present ----------------------------
+        # -- Turn 2: load history, ensure context is present ---------------------
         mgr.session_map[sid]["wee_messages"] = history_after_t1
 
         turn2_chunk = _make_text_chunk("You asked me to call you Purple People Eater!")
@@ -944,7 +943,7 @@ class TestWeeContextPersistenceDispatch(unittest.TestCase):
         )
 
     def test_can_resume_wee_dispatch_path(self):
-        """Regression: can_resume must be True on second wee turn even with session_id=None.
+        """Resume wee turn: can_resume True even with session_id=None.
 
         Directly tests that the fixed elif current_runtime == 'wee' branch
         returns True while the old else branch returned False.

@@ -10,6 +10,11 @@ Validates:
 - Default model assignment
 """
 
+from agent_manager import (
+    SessionManager,
+    check_runtime_available,
+    get_available_runtimes,
+)
 import os
 import sys
 import threading
